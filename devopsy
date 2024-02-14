@@ -34,6 +34,4 @@ if [ -f $devopsy_dir/compose.override.yaml ]; then
   compose_files="$compose_files -f $devopsy_dir/compose.override.yaml"
 fi
 
-$compose_files
-
 docker compose $compose_files "$@"
