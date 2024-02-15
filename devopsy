@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/bin/sh
 
 # https://unix.stackexchange.com/a/293477
-find.devopsy() {
+finddevopsy() {
   # from: https://www.npmjs.com/package/find-config#algorithm
   # 1. If X/file.ext exists and is a regular file, return it. STOP
   # 2. If X has a parent directory, change X to parent. GO TO 1
@@ -13,11 +13,11 @@ find.devopsy() {
     false
   else
     # a subshell so that we don't affect the caller's $PWD
-    (cd .. && find.devopsy "$1")
+    (cd .. && finddevopsy "$1")
   fi
 }
 
-devopsy_dir=$(find.devopsy .devopsy)
+devopsy_dir=$(finddevopsy .devopsy)
 
 if [ -z $devopsy_dir ]; then
   echo -e "\033[0;31m.devopsy/ not found anywhere up this project.\033[0m"
@@ -33,8 +33,11 @@ if [ -f $devopsy_dir/compose.override.yaml ]; then
   compose_files="$compose_files -f $devopsy_dir/compose.override.yaml"
 fi
 
-if [ -x "$devopsy_dir/commands/$1" ]; then
-  $devopsy_dir/commands/$1 "$@"
+if [ "$DEVOPSY_CLI_COMMAND" != "$1" ] && [ -x "$devopsy_dir/commands/$1" ]; then
+  cmd=$1
+  shift
+  export DEVOPSY_CLI_COMMAND=$cmd
+  $devopsy_dir/commands/$cmd "$@"
 else
   docker compose $compose_files "$@"
 fi
