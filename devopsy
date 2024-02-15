@@ -34,7 +34,7 @@ if [ -f $devopsy_dir/compose.override.yaml ]; then
 fi
 
 if [ -x "$devopsy_dir/commands/$1" ]; then
-  $devopsy_dir/commands/$1
+  $devopsy_dir/commands/$1 "$@"
 else
   docker compose $compose_files "$@"
 fi
