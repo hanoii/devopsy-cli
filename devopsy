@@ -23,7 +23,6 @@ if [ -z $devopsy_dir ]; then
   echo -e "\033[0;31m.devopsy/ not found anywhere up this project.\033[0m"
   exit 100
 fi
-echo -e "\033[0;32mUsing $devopsy_dir ...\033[0m"
 
 if [ ! -f $devopsy_dir/compose.yaml ]; then
   echo -e "\033[0;31m$devopsy_dir/compose.yml not found in the current directory.\033[0m"
@@ -34,4 +33,8 @@ if [ -f $devopsy_dir/compose.override.yaml ]; then
   compose_files="$compose_files -f $devopsy_dir/compose.override.yaml"
 fi
 
-docker compose $compose_files "$@"
+if [ -x "$devopsy_dir/commands/$1" ]; then
+  $devopsy_dir/commands/$1
+else
+  docker compose $compose_files "$@"
+fi
