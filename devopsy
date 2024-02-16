@@ -17,27 +17,28 @@ finddevopsy() {
   fi
 }
 
-devopsy_dir=$(finddevopsy .devopsy)
+DEVOPSY_PROJECT_DIR=$(finddevopsy .devopsy)
 
-if [ -z $devopsy_dir ]; then
+if [ -z $DEVOPSY_PROJECT_DIR ]; then
   echo -e "\033[0;31m.devopsy/ not found anywhere up this project.\033[0m"
   exit 100
 fi
 
-if [ ! -f $devopsy_dir/compose.yaml ]; then
-  echo -e "\033[0;31m$devopsy_dir/compose.yml not found in the current directory.\033[0m"
+if [ ! -f $DEVOPSY_PROJECT_DIR/compose.yaml ]; then
+  echo -e "\033[0;31m$DEVOPSY_PROJECT_DIR/compose.yml not found in the current directory.\033[0m"
   exit 1
 fi
-compose_files="$compose_files -f $devopsy_dir/compose.yaml"
-if [ -f $devopsy_dir/compose.override.yaml ]; then
-  compose_files="$compose_files -f $devopsy_dir/compose.override.yaml"
+compose_files="$compose_files -f $DEVOPSY_PROJECT_DIR/compose.yaml"
+if [ -f $DEVOPSY_PROJECT_DIR/compose.override.yaml ]; then
+  compose_files="$compose_files -f $DEVOPSY_PROJECT_DIR/compose.override.yaml"
 fi
 
-if [ "$DEVOPSY_CLI_COMMAND" != "$1" ] && [ -x "$devopsy_dir/commands/$1" ]; then
+if [ "$DEVOPSY_CLI_COMMAND" != "$1" ] && [ -x "$DEVOPSY_PROJECT_DIR/commands/$1" ]; then
   cmd=$1
   shift
+  export DEVOPSY_PROJECT_DIR
   export DEVOPSY_CLI_COMMAND=$cmd
-  $devopsy_dir/commands/$cmd "$@"
+  $DEVOPSY_PROJECT_DIR/commands/$cmd "$@"
 else
   docker compose $compose_files "$@"
 fi
