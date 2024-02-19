@@ -40,5 +40,7 @@ if [ "$DEVOPSY_CLI_COMMAND" != "$1" ] && [ -x "$DEVOPSY_PROJECT_DIR/commands/$1"
   export DEVOPSY_CLI_COMMAND=$cmd
   $DEVOPSY_PROJECT_DIR/commands/$cmd "$@"
 else
-  docker compose $compose_files "$@"
+  cmd="docker compose $compose_files"
+  >&2 echo "[0;36mRunning '$cmd $@'...[0m"
+  $cmd "$@"
 fi
