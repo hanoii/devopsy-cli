@@ -24,6 +24,12 @@ if [ -z $DEVOPSY_PROJECT_DIR ]; then
   exit 100
 fi
 
+if [ -f "$DEVOPSY_PROJECT_DIR/.env" ]; then
+  set -a
+  . "$DEVOPSY_PROJECT_DIR/.env"
+  set +a
+fi
+
 if [ ! -f $DEVOPSY_PROJECT_DIR/compose.yaml ]; then
   echo -e "\033[0;31m$DEVOPSY_PROJECT_DIR/compose.yml not found in the current directory.\033[0m"
   exit 1
