@@ -66,9 +66,11 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   work, a file does (observed, not confirmed in compose's source).
 - `.env` values in double quotes are interpolated when loaded (compose's
   parser): `"$HOME"` becomes the value of HOME.
-- The GoReleaser upload to GitHub can fail with "already_exists" when a first
-  upload succeeded but its response was lost (v0.5.0). Check the release's
-  assets and install it before assuming a broken release.
+- GitHub has delivered the same tag push several times (v0.5.0: 4 release
+  runs, v0.6.0: 3), and the runs raced on uploads ("already_exists"). The
+  release workflow now queues runs per tag and GoReleaser replaces existing
+  artifacts. If a release run still fails, check the release's assets and
+  install it before assuming a broken release.
 - Traefik picks up a new container a couple of seconds after `up` returns:
   wait before querying its API in tests.
 

@@ -20,6 +20,11 @@ archives:
       - LICENSE
       - README.md
 
+release:
+  # A repeated run for the same tag replaces the identical files instead of
+  # failing with "already_exists".
+  replace_existing_artifacts: true
+
 checksum:
   name_template: checksums.txt
 
