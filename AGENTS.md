@@ -35,12 +35,52 @@ user-facing behavior and keep it in sync with any change to it.
   here.
 - `install.sh` stays POSIX `sh` (dash, busybox ash).
 
+## Design decisions
+
+The workspace README (`../devopsy/README.md` locally) describes how the repos
+fit together, and `../devopsy/ROADMAP.md` the open ideas.
+
+- devopsy is compose plus environment variables. It never generates or
+  rewrites compose files: if a feature needs that, it is the wrong feature.
+  Everything it computes is visible with `devopsy print-env`.
+- An environment is a target: a server path, so its own compose project,
+  data and public URL (`<project>.<DEVOPSY_PUBLIC_DOMAIN>`). Branches are
+  only what gets released into one; no branch concept in the core.
+- Remote commands run through the `current` symlink, never a release path:
+  compose stores bind-mount paths in containers, and pruned releases would
+  break them (for example after a reboot). `release` switches `current`
+  first, runs the command, and switches back when it fails.
+- Releases are full tar streams over SSH (catalyze, the largest project,
+  compresses to about 3 MB). No rsync: macOS ships openrsync without the
+  needed features.
+- `.devopsy/target.env` is written into each release from targets.yaml, so
+  per-target values apply however devopsy runs on the server, and rollbacks
+  restore them. `shared/.env` is always linked so server edits apply without
+  a release.
+
+## Gotchas
+
+- Compose reads `--env-file` more than once: `<(devopsy print-env)` does not
+  work, a file does (observed, not confirmed in compose's source).
+- `.env` values in double quotes are interpolated when loaded (compose's
+  parser): `"$HOME"` becomes the value of HOME.
+- The GoReleaser upload to GitHub can fail with "already_exists" when a first
+  upload succeeded but its response was lost (v0.5.0). Check the release's
+  assets and install it before assuming a broken release.
+- Traefik picks up a new container a couple of seconds after `up` returns:
+  wait before querying its API in tests.
+
 ## Checks
 
 ```sh
 go vet ./... && go test -count=1 ./...
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
+
+End to end, against a real server: an OrbStack Debian 13 machine set up with
+devopsy-server (see its AGENTS.md), a linux/arm64 build installed in it, and
+a test project whose `.devopsy/targets.local.yaml` points at
+`devopsy@devopsy-test@orb`. OrbStack's SSH needs no keys.
 
 ## Releases
 
