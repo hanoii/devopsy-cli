@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs devopsy built from this checkout, so it is always the repository's
+# code, uncommitted changes included. Symlink it into your PATH:
+#
+#   ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy
+#
+# Go's build cache makes the build instant when nothing changed. Needs Go.
+set -eu
+self=$(readlink -f "$0")
+repo=$(cd "$(dirname "$self")/.." && pwd)
+bin=${XDG_CACHE_HOME:-$HOME/.cache}/devopsy-dev/devopsy
+version=$(git -C "$repo" describe --tags --always --dirty 2>/dev/null || echo dev)
+(cd "$repo" && go build -ldflags "-X main.version=$version" -o "$bin" ./cmd/devopsy)
+exec "$bin" "$@"

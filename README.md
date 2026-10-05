@@ -22,6 +22,15 @@ installs it to `/usr/local/bin` when it can, otherwise `~/.local/bin`. Set
 Releases are on the [releases page](https://github.com/hanoii/devopsy-cli/releases).
 To build from source: `go build -o devopsy ./cmd/devopsy`.
 
+To always run a checkout's latest code, uncommitted changes included, symlink
+`scripts/devopsy` into your `PATH` instead. It rebuilds on every run, which
+Go's build cache makes instant when nothing changed, and needs Go:
+
+```sh
+ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy
+devopsy version   # like v0.5.0-2-g1a2b3c4-dirty
+```
+
 ## Project layout
 
 ```
