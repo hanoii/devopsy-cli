@@ -42,6 +42,7 @@ devopsy logs -f web
 devopsy deploy         # runs .devopsy/commands/deploy if it exists
 devopsy help           # lists the custom commands
 devopsy version        # devopsy's version, then compose's inside a project
+devopsy print-env      # the variables devopsy loads and computes
 ```
 
 ### Custom commands
@@ -71,6 +72,31 @@ devopsy also sets, for compose files and custom commands:
 - `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>` when the server
   has a public domain, else `<project>.localhost`. Set it yourself to
   override.
+- `DEVOPSY_HOST_RULE`: a Traefik rule for the public host plus
+  `DEVOPSY_DOMAINS`, a space or comma separated list you set per environment,
+  usually in its `.env`. For example
+  ``Host(`shop.vm1.example.com`) || Host(`example.org`)``.
+
+A router label then needs no per-environment hosts. Defaults keep the file
+usable with plain `docker compose`:
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.${DEVOPSY_PROJECT_NAME:-app}.rule=${DEVOPSY_HOST_RULE:-Host(`app.localhost`)}
+```
+
+devopsy only adds environment variables; it never changes compose files.
+`devopsy print-env` prints what it loads and computes, in `.env` format, to
+run plain compose with exactly the same values:
+
+```sh
+devopsy print-env > /tmp/devopsy.env
+docker compose -f .devopsy/compose.yaml --env-file /tmp/devopsy.env config
+```
+
+Use a file: compose reads `--env-file` more than once, so `<(devopsy
+print-env)` does not work.
 
 On a server, `/etc/devopsy/devopsy.env` holds server-wide settings, like
 `DEVOPSY_PUBLIC_DOMAIN`, written by devopsy-server. The project's `.env` and

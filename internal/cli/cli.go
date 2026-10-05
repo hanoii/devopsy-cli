@@ -40,6 +40,11 @@ type Plan struct {
 	Notice string
 }
 
+// Output is returned when devopsy only prints something to stdout.
+type Output struct{ Text string }
+
+func (o *Output) Error() string { return o.Text }
+
 // Help is returned when devopsy only has to print usage.
 type Help struct {
 	Text string
@@ -67,11 +72,14 @@ func FindProjectDir(dir string) (string, error) {
 type Env struct {
 	keys   []string
 	values map[string]string
+	// marked keys are the ones devopsy loaded or computed: what print-env
+	// shows.
+	marked map[string]bool
 }
 
 // NewEnv builds an Env from os.Environ-style entries.
 func NewEnv(environ []string) *Env {
-	e := &Env{values: map[string]string{}}
+	e := &Env{values: map[string]string{}, marked: map[string]bool{}}
 	for _, kv := range environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -94,6 +102,21 @@ func (e *Env) Set(k, v string) {
 		e.keys = append(e.keys, k)
 	}
 	e.values[k] = v
+}
+
+// Mark records k as loaded or computed by devopsy.
+func (e *Env) Mark(k string) { e.marked[k] = true }
+
+// Marked returns the marked keys that are set, sorted.
+func (e *Env) Marked() []string {
+	var keys []string
+	for k := range e.marked {
+		if _, ok := e.values[k]; ok {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Environ returns KEY=value entries.
@@ -125,8 +148,42 @@ func LoadDotenv(env *Env, file string) error {
 		if _, ok := env.Lookup(k); !ok {
 			env.Set(k, vars[k])
 		}
+		env.Mark(k)
 	}
 	return nil
+}
+
+// hostnameRe accepts what a Traefik Host() takes, wildcards included.
+var hostnameRe = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
+
+// HostRule builds a Traefik rule matching hosts, in order, without
+// duplicates.
+func HostRule(hosts []string) (string, error) {
+	seen := map[string]bool{}
+	var parts []string
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" || seen[h] {
+			continue
+		}
+		if !hostnameRe.MatchString(h) {
+			return "", fmt.Errorf("%q is not a hostname", h)
+		}
+		seen[h] = true
+		parts = append(parts, "Host(`"+h+"`)")
+	}
+	return strings.Join(parts, " || "), nil
+}
+
+// DotenvLine formats KEY=value so compose's .env parser reads value back
+// unchanged: single quotes, or double quotes with escapes when the value
+// has a single quote.
+func DotenvLine(k, v string) string {
+	if !strings.Contains(v, "'") {
+		return k + "='" + v + "'"
+	}
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "\n", `\n`)
+	return k + `="` + r.Replace(v) + `"`
 }
 
 var projectNameChars = regexp.MustCompile("[a-z0-9_-]")
@@ -188,7 +245,9 @@ func usage(projectDir string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Usage: devopsy <command> [args...]\n\n")
 	fmt.Fprintf(&b, "Runs a custom command from %s/commands/ if one exists,\n", projectDir)
-	fmt.Fprintf(&b, "otherwise passes everything to docker compose.\n")
+	fmt.Fprintf(&b, "otherwise passes everything to docker compose.\n\n")
+	fmt.Fprintf(&b, "  devopsy print-env    the variables devopsy loads and computes, in .env format\n")
+	fmt.Fprintf(&b, "  devopsy @<target>    run on a server, see 'devopsy @<target> help'\n")
 	if cmds := CustomCommands(projectDir); len(cmds) > 0 {
 		fmt.Fprintf(&b, "\nCustom commands:\n")
 		for _, c := range cmds {
@@ -254,6 +313,23 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		}
 		env.Set("DEVOPSY_PUBLIC_HOST", name+"."+domain)
 	}
+	// A Traefik rule for the public host and DEVOPSY_DOMAINS (space or comma
+	// separated), so labels need no per-environment hosts.
+	if _, ok := env.Lookup("DEVOPSY_HOST_RULE"); !ok {
+		public, _ := env.Lookup("DEVOPSY_PUBLIC_HOST")
+		domains, _ := env.Lookup("DEVOPSY_DOMAINS")
+		hosts := append([]string{public}, strings.FieldsFunc(domains, func(r rune) bool {
+			return r == ' ' || r == ',' || r == '\t' || r == '\n'
+		})...)
+		rule, err := HostRule(hosts)
+		if err != nil {
+			return nil, &ExitError{Code: 1, Msg: "DEVOPSY_DOMAINS: " + err.Error()}
+		}
+		env.Set("DEVOPSY_HOST_RULE", rule)
+	}
+	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_PUBLIC_HOST", "DEVOPSY_HOST_RULE"} {
+		env.Mark(k)
+	}
 
 	if len(args) == 0 {
 		return nil, &Help{Text: usage(projectDir), Code: 1}
@@ -261,6 +337,13 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	switch args[0] {
 	case "help", "-h", "--help":
 		return nil, &Help{Text: usage(projectDir), Code: 0}
+	case "print-env":
+		var b strings.Builder
+		for _, k := range env.Marked() {
+			v, _ := env.Lookup(k)
+			b.WriteString(DotenvLine(k, v) + "\n")
+		}
+		return nil, &Output{Text: b.String()}
 	}
 
 	// A custom command can call `devopsy <same name>` to reach the compose
