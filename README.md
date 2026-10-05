@@ -63,6 +63,19 @@ devopsy also loads it for custom commands, with compose's own parser, so both
 see the same values. Variables already set in your environment win over
 `.env`, as they do in compose.
 
+### Variables for compose files
+
+devopsy also sets, for compose files and custom commands:
+
+- `DEVOPSY_PROJECT_NAME`: the compose project name.
+- `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>` when the server
+  has a public domain, else `<project>.localhost`. Set it yourself to
+  override.
+
+On a server, `/etc/devopsy/devopsy.env` holds server-wide settings, like
+`DEVOPSY_PUBLIC_DOMAIN`, written by devopsy-server. The project's `.env` and
+your environment win over it. See devopsy-traefik for routing public URLs.
+
 ### Project name
 
 Set a top-level `name:` in `compose.yaml`. Without one, devopsy uses the name
@@ -105,6 +118,11 @@ and `mnt/` is always there: put the server's `.env` (secrets) and
 `compose.override.yaml` in `shared/`. A local `.env`, `mnt/` and
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
+
+Several environments of one project live side by side as several targets,
+each with its own path: its own compose project, containers, data and public
+URL (`<target directory>.<server's public domain>`, printed after each
+release).
 
 Each release records its commit, branch, uncommitted changes and who made it,
 shown by `releases`. When `compose.yaml` has no top-level `name:`, the project

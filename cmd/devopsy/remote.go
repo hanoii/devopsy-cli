@@ -54,13 +54,20 @@ func runRemote(cwd string, args []string, color bool) int {
 
 	// Without a top-level name, compose would name the project after the
 	// release directory, so fix it to the target directory's name.
-	projectName := ""
+	// urlName is the name the public URL uses, when it is known here: not when
+	// compose.yaml's name depends on the server's environment.
+	projectName, urlName := "", ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" {
 		projectName = v
-	} else if named, err := cli.HasTopLevelName(filepath.Join(projectDir, "compose.yaml")); err != nil {
+	} else if raw, err := cli.TopLevelName(filepath.Join(projectDir, "compose.yaml")); err != nil {
 		return fail(err.Error())
-	} else if !named {
+	} else if raw == "" {
 		projectName = cli.NormalizeProjectName(filepath.Base(t.Path))
+	} else if !strings.Contains(raw, "$") {
+		urlName = raw
+	}
+	if urlName == "" {
+		urlName = projectName
 	}
 
 	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
@@ -84,7 +91,7 @@ func runRemote(cwd string, args []string, color bool) int {
 
 	case "rollback":
 		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
-		return ssh(remote.ActivateScript(t, "", true, projectName, args[1:]), nil, tty)
+		return ssh(remote.ActivateScript(t, "", true, projectName, urlName, args[1:]), nil, tty)
 
 	case "release":
 		projectRoot := filepath.Dir(projectDir)
@@ -110,7 +117,7 @@ func runRemote(cwd string, args []string, color bool) int {
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
 			return code
 		}
-		return ssh(remote.ActivateScript(t, record.ID, false, projectName, args[1:]), nil, tty)
+		return ssh(remote.ActivateScript(t, record.ID, false, projectName, urlName, args[1:]), nil, tty)
 
 	default:
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)

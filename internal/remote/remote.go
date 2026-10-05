@@ -341,7 +341,10 @@ mv "$rel.tmp" "$rel"
 // there (if any) and goes back to the previous release when that fails.
 // Then it prunes old releases. rollback picks the release before current
 // instead of id.
-func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
+//
+// urlName, when known, is the compose project name: with the server's
+// DEVOPSY_PUBLIC_DOMAIN, the script ends with the release's public URL.
+func ActivateScript(t *Target, id string, rollback bool, projectName, urlName string, args []string) string {
 	s := fmt.Sprintf(prelude, Quote(t.Path)) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 `
@@ -386,6 +389,11 @@ fi
   [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
 done
 `, Keep+1)
+	if urlName != "" {
+		s += `domain=$(sed -n 's/^DEVOPSY_PUBLIC_DOMAIN=//p' /etc/devopsy/devopsy.env 2>/dev/null | tail -n 1)
+[ -z "$domain" ] || echo "devopsy: https://"` + Quote(urlName) + `".$domain"
+`
+	}
 	return s
 }
 

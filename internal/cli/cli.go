@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+	"github.com/compose-spec/compose-go/v2/template"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -137,20 +138,31 @@ func NormalizeProjectName(s string) string {
 	return strings.TrimLeft(s, "_-")
 }
 
-// HasTopLevelName reports whether a compose file sets `name:`.
-func HasTopLevelName(composeFile string) (bool, error) {
+// TopLevelName returns a compose file's `name:`, uninterpolated, or "".
+func TopLevelName(composeFile string) (string, error) {
 	data, err := os.ReadFile(composeFile)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	var doc struct {
 		Name string `yaml:"name"`
 	}
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return false, &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", composeFile, err)}
+		return "", &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", composeFile, err)}
 	}
-	return doc.Name != "", nil
+	return doc.Name, nil
 }
+
+// HasTopLevelName reports whether a compose file sets `name:`.
+func HasTopLevelName(composeFile string) (bool, error) {
+	name, err := TopLevelName(composeFile)
+	return name != "", err
+}
+
+// ServerEnvFile holds server-wide settings, like DEVOPSY_PUBLIC_DOMAIN, that
+// devopsy-server writes. Lowest precedence: the caller's environment and the
+// project's .env win. DEVOPSY_SERVER_ENV points elsewhere.
+const ServerEnvFile = "/etc/devopsy/devopsy.env"
 
 // CustomCommands lists the executable files in commands/.
 func CustomCommands(projectDir string) []string {
@@ -203,18 +215,44 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	if err := LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
 		return nil, err
 	}
+	serverEnv := ServerEnvFile
+	if v, ok := env.Lookup("DEVOPSY_SERVER_ENV"); ok {
+		serverEnv = v
+	}
+	if serverEnv != "" {
+		if err := LoadDotenv(env, serverEnv); err != nil {
+			return nil, err
+		}
+	}
 
 	// Without a top-level name, compose would name every project after the
 	// .devopsy directory and they would all collide. Use the directory that
 	// contains it, as compose does for a compose.yaml at a project's root.
-	if v, _ := env.Lookup("COMPOSE_PROJECT_NAME"); v == "" {
-		named, err := HasTopLevelName(composeFile)
+	name, _ := env.Lookup("COMPOSE_PROJECT_NAME")
+	if name == "" {
+		raw, err := TopLevelName(composeFile)
 		if err != nil {
 			return nil, err
 		}
-		if !named {
-			env.Set("COMPOSE_PROJECT_NAME", NormalizeProjectName(filepath.Base(filepath.Dir(projectDir))))
+		if raw != "" {
+			if name, err = template.Substitute(raw, env.Lookup); err != nil {
+				return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("%s: name: %v", composeFile, err)}
+			}
+		} else {
+			name = NormalizeProjectName(filepath.Base(filepath.Dir(projectDir)))
+			env.Set("COMPOSE_PROJECT_NAME", name)
 		}
+	}
+
+	// For compose files: the project name and its public hostname, <name>.<the
+	// server's DEVOPSY_PUBLIC_DOMAIN>, or <name>.localhost without one.
+	env.Set("DEVOPSY_PROJECT_NAME", name)
+	if _, ok := env.Lookup("DEVOPSY_PUBLIC_HOST"); !ok {
+		domain, _ := env.Lookup("DEVOPSY_PUBLIC_DOMAIN")
+		if domain == "" {
+			domain = "localhost"
+		}
+		env.Set("DEVOPSY_PUBLIC_HOST", name+"."+domain)
 	}
 
 	if len(args) == 0 {
