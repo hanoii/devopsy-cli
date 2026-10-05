@@ -26,6 +26,9 @@ user-facing behavior and keep it in sync with any change to it.
   signals, the terminal and exit codes belong to that command.
 - Messages go to stderr. Compose output stays on stdout.
 - Few dependencies; prefer the standard library. Linux and macOS only.
+- Variable precedence: caller's environment, `.devopsy/.env` (on servers
+  `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
+  `/etc/devopsy/devopsy.env`.
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
   No rsync: macOS ships openrsync. Releases are complete copies.
 - Project-specific behavior belongs in a project's `.devopsy/commands/`, not
