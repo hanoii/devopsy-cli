@@ -7,6 +7,12 @@ on:
 permissions:
   contents: write
 
+# GitHub has delivered the same tag push several times (v0.5.0, v0.6.0): runs
+# for a tag queue instead of racing on the uploads.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
