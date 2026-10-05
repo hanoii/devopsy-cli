@@ -137,8 +137,8 @@ func NormalizeProjectName(s string) string {
 	return strings.TrimLeft(s, "_-")
 }
 
-// hasTopLevelName reports whether a compose file sets `name:`.
-func hasTopLevelName(composeFile string) (bool, error) {
+// HasTopLevelName reports whether a compose file sets `name:`.
+func HasTopLevelName(composeFile string) (bool, error) {
 	data, err := os.ReadFile(composeFile)
 	if err != nil {
 		return false, err
@@ -208,7 +208,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	// .devopsy directory and they would all collide. Use the directory that
 	// contains it, as compose does for a compose.yaml at a project's root.
 	if v, _ := env.Lookup("COMPOSE_PROJECT_NAME"); v == "" {
-		named, err := hasTopLevelName(composeFile)
+		named, err := HasTopLevelName(composeFile)
 		if err != nil {
 			return nil, err
 		}

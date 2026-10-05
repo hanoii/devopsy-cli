@@ -10,6 +10,9 @@ user-facing behavior and keep it in sync with any change to it.
   end-to-end tests that run the built binary against a fake `docker`.
 - `internal/cli/`: finds the project, loads `.env` and decides what to run
   (`Build` returns a `Plan`; it never executes). Unit-tested.
+- `internal/remote/`: `@target` support: targets.yaml, packing a release, and
+  the POSIX `sh` scripts run on the server over SSH. Scripts are checked with
+  `sh -n` in tests; keep them POSIX and GNU coreutils based (`mv -T`).
 - `install.sh`: POSIX `sh` installer that downloads a release.
 - `.goreleaser.yaml` and `.github/workflows/`: CI and release builds.
 
@@ -23,6 +26,8 @@ user-facing behavior and keep it in sync with any change to it.
   signals, the terminal and exit codes belong to that command.
 - Messages go to stderr. Compose output stays on stdout.
 - Few dependencies; prefer the standard library. Linux and macOS only.
+- Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
+  No rsync: macOS ships openrsync. Releases are complete copies.
 - Project-specific behavior belongs in a project's `.devopsy/commands/`, not
   here.
 - `install.sh` stays POSIX `sh` (dash, busybox ash).

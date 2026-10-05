@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 
 	"golang.org/x/term"
@@ -41,6 +42,10 @@ func run() int {
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1
+	}
+
+	if len(args) > 0 && strings.HasPrefix(args[0], "@") {
+		return runRemote(cwd, args, color)
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())

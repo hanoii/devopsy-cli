@@ -70,6 +70,55 @@ of the directory containing `.devopsy/`, normalized as compose does
 (`My Proj` becomes `myproj`). Otherwise compose would call every project
 `devopsy`. `COMPOSE_PROJECT_NAME` still overrides both.
 
+## Remote targets
+
+`devopsy @<target> ...` runs devopsy on a server over SSH, from your machine
+or from CI. Define targets in `.devopsy/targets.yaml`:
+
+```yaml
+prod:
+  host: devopsy@203.0.113.10    # any SSH destination or ~/.ssh/config alias
+  path: /srv/myapp              # absolute, writable by that user
+  mode: image                   # image (default) or build
+```
+
+```sh
+devopsy @prod release deploy   # upload a new release, run `devopsy deploy` there
+devopsy @prod logs -f web      # any command runs in the current release
+devopsy @prod releases         # list releases, * marks the current one
+devopsy @prod rollback up -d   # back to the previous release, then `up -d`
+```
+
+`release` uploads the project as a new release, links the server's shared
+files into it and makes it current. With a command, it runs `devopsy
+<command>` there, and goes back to the previous release when that fails, with
+the command's exit code. It keeps the last 5 releases.
+
+- **image** mode uploads `.devopsy/` only: images come from a registry.
+- **build** mode uploads the whole project, as git sees it: tracked and
+  untracked files, minus gitignored ones, with uncommitted changes. Compose
+  then builds on the server.
+
+On the server, the target path holds `releases/`, a `current` symlink and
+`shared/`. Everything in `shared/` is linked into each release's `.devopsy/`,
+and `mnt/` is always there: put the server's `.env` (secrets) and
+`compose.override.yaml` in `shared/`. A local `.env`, `mnt/` and
+`compose.override.yaml` are never uploaded. Commands run through `current`, so
+bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
+
+Each release records its commit, branch, uncommitted changes and who made it,
+shown by `releases`. When `compose.yaml` has no top-level `name:`, the project
+is named after the target directory, here `myapp`.
+
+The server needs `devopsy`, Docker, `tar` and `flock`;
+[devopsy-server](https://github.com/hanoii/devopsy-server) sets that up. In CI,
+set `DEVOPSY_SSH_COMMAND` to pass SSH options, like git's `GIT_SSH_COMMAND`:
+
+```sh
+DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" \
+  devopsy @prod release deploy
+```
+
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).
