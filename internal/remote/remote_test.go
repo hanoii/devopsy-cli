@@ -193,9 +193,9 @@ func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "/srv/it's app", Mode: ModeImage}
 	scripts := map[string]string{
 		"upload":       UploadScript(tg, "20261005120000"),
-		"activate":     ActivateScript(tg, "20261005120000", false, "", nil),
-		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", []string{"deploy", "a b"}),
-		"rollback+cmd": ActivateScript(tg, "", true, "", []string{"up", "-d"}),
+		"activate":     ActivateScript(tg, "20261005120000", false, "", "", nil),
+		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", "app", []string{"deploy", "a b"}),
+		"rollback+cmd": ActivateScript(tg, "", true, "", "shop", []string{"up", "-d"}),
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
 	}

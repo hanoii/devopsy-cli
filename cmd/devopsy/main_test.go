@@ -45,7 +45,7 @@ func runDevopsy(t *testing.T, dir string, env []string, args ...string) (string,
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin"}, env...)
+	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_SERVER_ENV="}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {

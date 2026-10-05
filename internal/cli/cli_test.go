@@ -43,6 +43,11 @@ func envValue(t *testing.T, env []string, key string) (string, bool) {
 
 const minimalCompose = "services:\n  web:\n    image: busybox\n"
 
+// build is Build without the machine's real server settings file.
+func build(cwd string, args []string, environ []string) (*Plan, error) {
+	return Build(cwd, args, append([]string{"DEVOPSY_SERVER_ENV="}, environ...))
+}
+
 func TestFindProjectDirFromSubdirectory(t *testing.T) {
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
 	sub := filepath.Join(root, "a", "b")
@@ -68,7 +73,7 @@ func TestFindProjectDirMissing(t *testing.T) {
 
 func TestBuildComposePassthrough(t *testing.T) {
 	root := project(t, "My Proj", map[string]string{"compose.yaml": minimalCompose})
-	plan, err := Build(root, []string{"config", "--services", "x y"}, nil)
+	plan, err := build(root, []string{"config", "--services", "x y"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +95,7 @@ func TestBuildOverrideFile(t *testing.T) {
 		"compose.yaml":         minimalCompose,
 		"compose.override.yml": "services: {}\n",
 	})
-	plan, err := Build(root, []string{"ps"}, nil)
+	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +107,7 @@ func TestBuildOverrideFile(t *testing.T) {
 
 func TestBuildKeepsTopLevelName(t *testing.T) {
 	root := project(t, "app", map[string]string{"compose.yaml": "name: fixed\n" + minimalCompose})
-	plan, err := Build(root, []string{"ps"}, nil)
+	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +121,7 @@ func TestBuildDotenvCallerWins(t *testing.T) {
 		"compose.yaml": minimalCompose,
 		".env":         "# comment\nFOO=from_env\nBAR=\"quoted value\"\nexport BAZ=baz\nREF=${BAR}-x\n",
 	})
-	plan, err := Build(root, []string{"ps"}, []string{"FOO=caller"})
+	plan, err := build(root, []string{"ps"}, []string{"FOO=caller"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +143,7 @@ func TestBuildCustomCommand(t *testing.T) {
 		"commands/deploy*": "#!/bin/sh\n",
 		"commands/notexec": "#!/bin/sh\n",
 	})
-	plan, err := Build(root, []string{"deploy", "a b", "c"}, nil)
+	plan, err := build(root, []string{"deploy", "a b", "c"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +156,7 @@ func TestBuildCustomCommand(t *testing.T) {
 	}
 
 	// Not executable: compose.
-	plan, err = Build(root, []string{"notexec"}, nil)
+	plan, err = build(root, []string{"notexec"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +172,7 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 		"commands/top*": "#!/bin/sh\n",
 	})
 	// Inside commands/up, `devopsy up` reaches compose...
-	plan, err := Build(root, []string{"up", "-d"}, []string{"DEVOPSY_CLI_COMMAND=up"})
+	plan, err := build(root, []string{"up", "-d"}, []string{"DEVOPSY_CLI_COMMAND=up"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +180,7 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 		t.Fatalf("recursed into the custom command: %+v", plan)
 	}
 	// ...while another custom command still runs.
-	plan, err = Build(root, []string{"top"}, []string{"DEVOPSY_CLI_COMMAND=up"})
+	plan, err = build(root, []string{"top"}, []string{"DEVOPSY_CLI_COMMAND=up"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +199,7 @@ func TestBuildHelp(t *testing.T) {
 		if args != "" {
 			argv = []string{args}
 		}
-		_, err := Build(root, argv, nil)
+		_, err := build(root, argv, nil)
 		var h *Help
 		if !errors.As(err, &h) || h.Code != code || !strings.Contains(h.Text, "  deploy\n") {
 			t.Errorf("%q: got %v", args, err)
@@ -204,7 +209,7 @@ func TestBuildHelp(t *testing.T) {
 
 func TestBuildMissingCompose(t *testing.T) {
 	root := project(t, "app", map[string]string{".env": "A=1\n"})
-	_, err := Build(root, []string{"ps"}, nil)
+	_, err := build(root, []string{"ps"}, nil)
 	var e *ExitError
 	if !errors.As(err, &e) || e.Code != 1 {
 		t.Fatalf("want ExitError 1, got %v", err)
@@ -220,5 +225,69 @@ func TestNormalizeProjectName(t *testing.T) {
 		if got := NormalizeProjectName(in); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestBuildPublicHost(t *testing.T) {
+	root := project(t, "My App", map[string]string{"compose.yaml": minimalCompose})
+	server := filepath.Join(t.TempDir(), "devopsy.env")
+	if err := os.WriteFile(server, []byte("DEVOPSY_PUBLIC_DOMAIN=vm1.example.com\nFOO=server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := Build(root, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"DEVOPSY_PROJECT_NAME": "myapp",
+		"DEVOPSY_PUBLIC_HOST":  "myapp.vm1.example.com",
+		"FOO":                  "server",
+	} {
+		if got, _ := envValue(t, plan.Env, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+
+	// Without a server domain: <name>.localhost.
+	plan, err = build(root, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); got != "myapp.localhost" {
+		t.Errorf("local host %q", got)
+	}
+
+	// The project's .env and the caller win over the server file.
+	root2 := project(t, "app", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "FOO=project\n",
+	})
+	plan, err = Build(root2, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server, "DEVOPSY_PUBLIC_HOST=custom.example.org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := envValue(t, plan.Env, "FOO"); got != "project" {
+		t.Errorf("FOO = %q, want project", got)
+	}
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); got != "custom.example.org" {
+		t.Errorf("caller's DEVOPSY_PUBLIC_HOST not kept: %q", got)
+	}
+}
+
+func TestBuildProjectNameFromCompose(t *testing.T) {
+	root := project(t, "app", map[string]string{
+		"compose.yaml": "name: shop-${STAGE:-dev}\n" + minimalCompose,
+		".env":         "STAGE=prod\n",
+	})
+	plan, err := build(root, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_PROJECT_NAME"); got != "shop-prod" {
+		t.Errorf("DEVOPSY_PROJECT_NAME = %q, want shop-prod", got)
+	}
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); got != "shop-prod.localhost" {
+		t.Errorf("DEVOPSY_PUBLIC_HOST = %q", got)
 	}
 }
