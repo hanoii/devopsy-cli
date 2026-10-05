@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,9 @@ const remoteUsage = `Usage: devopsy @<target> <command> [args...]
   rollback [cmd...]   make the release before the current one current again,
                       same cmd handling
   releases            list the releases on the server
+  domains [--retry]   check the environment's public host and DEVOPSY_DOMAINS:
+                      DNS, acme-dns challenge, certificate, and what to do
+                      next; --retry asks Traefik for missing certificates
   <anything else>     run 'devopsy <anything else>' in the current release
 
 Targets are defined in .devopsy/targets.yaml.
@@ -90,6 +94,10 @@ func runRemote(cwd string, args []string, color bool) int {
 		fmt.Print(remote.FormatReleases(out.String()))
 		return code
 
+	case "domains":
+		retry := len(args) > 1 && args[1] == "--retry"
+		return runDomains(t, projectName, retry, color)
+
 	case "rollback":
 		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
 		return ssh(remote.ActivateScript(t, "", true, projectName, urlName, args[1:]), nil, tty)
@@ -142,4 +150,75 @@ func targetEnv(t *remote.Target) []byte {
 		b.WriteString(cli.DotenvLine(k, t.Env[k]) + "\n")
 	}
 	return []byte(b.String())
+}
+
+// runDomains implements `devopsy @target domains [--retry]`.
+func runDomains(t *remote.Target, projectName string, retry bool, color bool) int {
+	fail := func(msg string) int {
+		cli.Fprint(os.Stderr, red, msg, color)
+		return 1
+	}
+	check := func() ([]remote.DomainReport, *remote.Facts, int) {
+		var out bytes.Buffer
+		code, err := remote.SSH(t, remote.DomainsScript(t, projectName), bytes.NewReader(nil), &out, false)
+		if err != nil {
+			return nil, nil, fail(err.Error())
+		}
+		if code != 0 {
+			return nil, nil, code
+		}
+		facts, err := remote.ParseFacts(out.String())
+		if err != nil {
+			return nil, nil, fail(err.Error())
+		}
+		checker := remote.PublicChecker()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		// The server's addresses: as its public host resolves (right behind
+		// NAT too), then as it reports itself.
+		var serverIPs []string
+		if facts.Env["DEVOPSY_PUBLIC_DOMAIN"] != "" {
+			if ips, err := checker.LookupIP(ctx, facts.Env["DEVOPSY_PUBLIC_HOST"]); err == nil {
+				serverIPs = append(serverIPs, ips...)
+			}
+		}
+		if facts.ServerIP != "" {
+			serverIPs = append(serverIPs, facts.ServerIP)
+		}
+		return remote.Check(ctx, facts, checker, serverIPs), facts, 0
+	}
+
+	reports, facts, code := check()
+	if code != 0 {
+		return code
+	}
+	fmt.Print(remote.FormatReports(reports))
+	if !retry {
+		return 0
+	}
+
+	pending := map[string][]string{}
+	for _, r := range reports {
+		if r.Routed && !r.Cert.Valid && r.Resolver != "" {
+			pending[r.Resolver] = append(pending[r.Resolver], r.Host)
+		}
+	}
+	if len(pending) == 0 {
+		cli.Fprint(os.Stderr, cyan, "Nothing to retry.", color)
+		return 0
+	}
+	project := cli.NormalizeProjectName(facts.Env["DEVOPSY_PROJECT_NAME"])
+	if code, err := remote.SSH(t, remote.RetryScript(facts.TraefikDir, project, pending, time.Now()), bytes.NewReader(nil), nil, false); err != nil {
+		return fail(err.Error())
+	} else if code != 0 {
+		return code
+	}
+	cli.Fprint(os.Stderr, cyan, "Asked Traefik to request the missing certificates. Checking again in 45 seconds...", color)
+	time.Sleep(45 * time.Second)
+	reports, _, code = check()
+	if code != 0 {
+		return code
+	}
+	fmt.Print(remote.FormatReports(reports))
+	return 0
 }

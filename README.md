@@ -150,6 +150,7 @@ devopsy @prod release deploy   # upload a new release, run `devopsy deploy` ther
 devopsy @prod logs -f web      # any command runs in the current release
 devopsy @prod releases         # list releases, * marks the current one
 devopsy @prod rollback up -d   # back to the previous release, then `up -d`
+devopsy @prod domains          # per host: DNS, challenge, certificate, next step
 ```
 
 `release` uploads the project as a new release, links the server's shared
@@ -169,6 +170,14 @@ overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
 `compose.override.yaml`, are linked from the next release on. A local `.env`, `mnt/` and
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
+
+`domains` checks the environment's public host and `DEVOPSY_DOMAINS` from
+where you run it: DNS through 1.1.1.1, the acme-dns challenge CNAME when the
+router uses `acmedns`, and the certificate the server actually presents for
+each name, verified like a browser would. It ends each host with what to do
+next, like the CNAME to create or "certificate ready: point its DNS at ...".
+`domains --retry` asks Traefik to request missing certificates again, through
+a small file in its dynamic configuration, without restarting it.
 
 Several environments of one project live side by side as several targets,
 each with its own path: its own compose project, containers, data and public
