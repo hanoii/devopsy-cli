@@ -31,8 +31,15 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// TargetsFile is the targets definition, inside .devopsy/.
+// TargetsFile is the targets definition, inside .devopsy/. Committed.
 const TargetsFile = "targets.yaml"
+
+// LocalTargetsFile adds or replaces whole targets, for one machine. Not
+// committed, never released.
+const LocalTargetsFile = "targets.local.yaml"
+
+// TargetEnvFile is written into each release from the target's env.
+const TargetEnvFile = "target.env"
 
 // Keep is how many releases stay on the server.
 const Keep = 5
@@ -52,23 +59,47 @@ type Target struct {
 	// Path is the absolute directory on the server.
 	Path string `yaml:"path"`
 	Mode string `yaml:"mode"`
+	// Env is written into each release as .devopsy/target.env: per-target,
+	// committed, non-secret settings like DEVOPSY_DOMAINS.
+	Env map[string]string `yaml:"env"`
 }
 
-var targetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+var (
+	targetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	envName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
-// LoadTarget reads one target from projectDir/targets.yaml.
-func LoadTarget(projectDir, name string) (*Target, error) {
-	file := filepath.Join(projectDir, TargetsFile)
+func readTargets(file string) (map[string]*Target, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%s not found: define the target %q there", file, name)
-		}
 		return nil, err
 	}
 	var targets map[string]*Target
 	if err := yaml.Unmarshal(data, &targets); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	return targets, nil
+}
+
+// LoadTarget reads one target from projectDir/targets.yaml.
+func LoadTarget(projectDir, name string) (*Target, error) {
+	file := filepath.Join(projectDir, TargetsFile)
+	targets, err := readTargets(file)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if targets == nil {
+		targets = map[string]*Target{}
+	}
+	local, err := readTargets(filepath.Join(projectDir, LocalTargetsFile))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for n, t := range local {
+		targets[n] = t
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("%s not found: define the target %q there", file, name)
 	}
 	t, ok := targets[name]
 	if !ok || t == nil {
@@ -97,6 +128,11 @@ func LoadTarget(projectDir, name string) (*Target, error) {
 	default:
 		return nil, fmt.Errorf("target %q: mode must be %q or %q", name, ModeImage, ModeBuild)
 	}
+	for k := range t.Env {
+		if !envName.MatchString(k) {
+			return nil, fmt.Errorf("target %q: env: %q is not a variable name", name, k)
+		}
+	}
 	return t, nil
 }
 
@@ -108,6 +144,8 @@ func excluded(rel string) bool {
 	case rel == ".git" || strings.HasPrefix(rel, ".git/"):
 		return true
 	case rel == ".devopsy/.env",
+		rel == ".devopsy/"+LocalTargetsFile,
+		rel == ".devopsy/"+TargetEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",
 		rel == ".devopsy/mnt" || strings.HasPrefix(rel, ".devopsy/mnt/"):
@@ -178,7 +216,8 @@ func Files(projectRoot, mode string) ([]string, error) {
 
 // Pack writes files (from Files) as a gzipped tar to w, keeping modes and
 // symlinks.
-func Pack(w io.Writer, projectRoot string, files []string, record []byte) error {
+// extra are generated files, path: content, added after the project's.
+func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]byte) error {
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	for _, rel := range files {
@@ -214,12 +253,18 @@ func Pack(w io.Writer, projectRoot string, files []string, record []byte) error 
 			}
 		}
 	}
-	if record != nil {
-		hdr := &tar.Header{Name: RecordFile, Mode: 0o644, Size: int64(len(record)), ModTime: time.Now()}
+	names := make([]string, 0, len(extra))
+	for name := range extra {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		content := extra[name]
+		hdr := &tar.Header{Name: name, Mode: 0o644, Size: int64(len(content)), ModTime: time.Now()}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if _, err := tw.Write(record); err != nil {
+		if _, err := tw.Write(content); err != nil {
 			return err
 		}
 	}
@@ -360,6 +405,8 @@ done)
 		s += "id=" + Quote(id) + "\n"
 	}
 	s += `rel="$base/releases/$id"
+# Always linked, so editing the server's .env applies without a new release.
+touch "$base/shared/.env"
 for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
   rm -rf "$rel/.devopsy/${f##*/}"

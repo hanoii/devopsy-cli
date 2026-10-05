@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,7 +113,10 @@ func runRemote(cwd string, args []string, color bool) int {
 
 		pr, pw := io.Pipe()
 		go func() {
-			pw.CloseWithError(remote.Pack(pw, projectRoot, files, record.JSON()))
+			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
+				remote.RecordFile:                  record.JSON(),
+				".devopsy/" + remote.TargetEnvFile: targetEnv(t),
+			}))
 		}()
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
 			return code
@@ -122,4 +126,20 @@ func runRemote(cwd string, args []string, color bool) int {
 	default:
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)
 	}
+}
+
+// targetEnv renders a target's env as the release's .devopsy/target.env.
+func targetEnv(t *remote.Target) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Written by devopsy from the %q target in targets.yaml. Do not edit:\n", t.Name)
+	fmt.Fprintf(&b, "# change targets.yaml and release again, or override in .env.\n")
+	keys := make([]string, 0, len(t.Env))
+	for k := range t.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(cli.DotenvLine(k, t.Env[k]) + "\n")
+	}
+	return []byte(b.String())
 }

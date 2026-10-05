@@ -274,6 +274,11 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	if err := LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
 		return nil, err
 	}
+	// Per-target settings, written into each release by `devopsy @target
+	// release` from targets.yaml. Below .env, so a server can override them.
+	if err := LoadDotenv(env, filepath.Join(projectDir, "target.env")); err != nil {
+		return nil, err
+	}
 	serverEnv := ServerEnvFile
 	if v, ok := env.Lookup("DEVOPSY_SERVER_ENV"); ok {
 		serverEnv = v

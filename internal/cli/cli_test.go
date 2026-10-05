@@ -364,3 +364,28 @@ func TestPrintEnvRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTargetEnvPrecedence(t *testing.T) {
+	root := project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "OVERRIDE=from_env\n",
+		"target.env":   "DEVOPSY_DOMAINS='example.org'\nOVERRIDE='from_target'\nFROM_TARGET='yes'\n",
+	})
+	server := filepath.Join(t.TempDir(), "devopsy.env")
+	if err := os.WriteFile(server, []byte("FROM_TARGET=server\nDEVOPSY_PUBLIC_DOMAIN=vm1.example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Build(root, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"OVERRIDE":          "from_env",
+		"FROM_TARGET":       "yes",
+		"DEVOPSY_HOST_RULE": "Host(`shop.vm1.example.com`) || Host(`example.org`)",
+	} {
+		if got, _ := envValue(t, plan.Env, k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+}

@@ -82,6 +82,8 @@ func gitProject(t *testing.T) string {
 	write(t, filepath.Join(root, ".devopsy", ".env"), "SECRET=1\n")
 	write(t, filepath.Join(root, ".devopsy", "compose.override.yaml"), "services: {}\n")
 	write(t, filepath.Join(root, ".devopsy", "mnt", "data", "db"), "data\n")
+	write(t, filepath.Join(root, ".devopsy", LocalTargetsFile), "mine: {}\n")
+	write(t, filepath.Join(root, ".devopsy", TargetEnvFile), "STRAY=1\n")
 	if err := os.Symlink("app.php", filepath.Join(root, "link.php")); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +138,8 @@ func TestPack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := Pack(&buf, root, files, []byte(`{"id":"x"}`)); err != nil {
+	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), ".devopsy/" + TargetEnvFile: []byte("A='1'\n")}
+	if err := Pack(&buf, root, files, extra); err != nil {
 		t.Fatal(err)
 	}
 	gz, err := gzip.NewReader(&buf)
@@ -158,13 +161,13 @@ func TestPack(t *testing.T) {
 		b, _ := io.ReadAll(tr)
 		contents[hdr.Name] = string(b)
 	}
-	if len(entries) != len(files)+1 {
+	if len(entries) != len(files)+2 {
 		t.Fatalf("%d entries for %d files", len(entries), len(files))
 	}
 	if h := entries["link.php"]; h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "app.php" {
 		t.Fatalf("symlink not kept: %+v", h)
 	}
-	if contents[RecordFile] != `{"id":"x"}` || contents["app.php"] != "<?php\n" {
+	if contents[RecordFile] != `{"id":"x"}` || contents[".devopsy/target.env"] != "A='1'\n" || contents["app.php"] != "<?php\n" {
 		t.Fatalf("contents: %q", contents)
 	}
 }
@@ -217,5 +220,53 @@ func TestFormatReleases(t *testing.T) {
 	}
 	if FormatReleases("") != "No releases yet.\n" {
 		t.Error("empty output")
+	}
+}
+
+func TestLoadTargetEnvAndLocal(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, TargetsFile), `
+prod:
+  host: vm1
+  path: /srv/app
+  env:
+    DEVOPSY_DOMAINS: example.org
+staging:
+  host: vm1
+  path: /srv/app-staging
+badenv:
+  host: vm1
+  path: /srv/x
+  env:
+    "NOT VALID": x
+`)
+	write(t, filepath.Join(dir, LocalTargetsFile), `
+staging:
+  host: my-test-vm
+  path: /srv/mine
+mine:
+  host: laptop-vm
+  path: /srv/mine
+`)
+	prod, err := LoadTarget(dir, "prod")
+	if err != nil || prod.Env["DEVOPSY_DOMAINS"] != "example.org" {
+		t.Fatalf("prod: %+v %v", prod, err)
+	}
+	staging, err := LoadTarget(dir, "staging")
+	if err != nil || staging.Host != "my-test-vm" || staging.Path != "/srv/mine" {
+		t.Fatalf("local override: %+v %v", staging, err)
+	}
+	if _, err := LoadTarget(dir, "mine"); err != nil {
+		t.Fatalf("local-only target: %v", err)
+	}
+	if _, err := LoadTarget(dir, "badenv"); err == nil {
+		t.Fatal("invalid env name: want an error")
+	}
+
+	// Only a local file is enough.
+	only := t.TempDir()
+	write(t, filepath.Join(only, LocalTargetsFile), "x:\n  host: h\n  path: /srv/x\n")
+	if _, err := LoadTarget(only, "x"); err != nil {
+		t.Fatalf("local file only: %v", err)
 	}
 }

@@ -119,7 +119,22 @@ prod:
   host: devopsy@203.0.113.10    # any SSH destination or ~/.ssh/config alias
   path: /srv/myapp              # absolute, writable by that user
   mode: image                   # image (default) or build
+  env:                          # per-target settings, not secrets
+    DEVOPSY_DOMAINS: example.org www.example.org
+staging:
+  host: devopsy@203.0.113.10
+  path: /srv/myapp-staging
 ```
+
+Commit `targets.yaml`: CI deploys from it. It holds no secrets; to keep
+server addresses out of the repository, use `~/.ssh/config` aliases as hosts.
+`.devopsy/targets.local.yaml` (gitignore it) adds or replaces whole targets
+for one machine, like a personal test server, and is never uploaded.
+
+A target's `env` is written into each release as `.devopsy/target.env`, which
+devopsy loads after `.env` and before the server-wide settings. So it applies
+however devopsy runs on the server, and a rollback brings back that release's
+values. Change it in `targets.yaml` and release again.
 
 ```sh
 devopsy @prod release deploy   # upload a new release, run `devopsy deploy` there
@@ -139,9 +154,10 @@ the command's exit code. It keeps the last 5 releases.
   then builds on the server.
 
 On the server, the target path holds `releases/`, a `current` symlink and
-`shared/`. Everything in `shared/` is linked into each release's `.devopsy/`,
-and `mnt/` is always there: put the server's `.env` (secrets) and
-`compose.override.yaml` in `shared/`. A local `.env`, `mnt/` and
+`shared/`. Everything in `shared/` is linked into each release's `.devopsy/`.
+`shared/.env` and `shared/mnt/` always exist: edit `.env` (secrets,
+overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
+`compose.override.yaml`, are linked from the next release on. A local `.env`, `mnt/` and
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 
