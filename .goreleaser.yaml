@@ -1,0 +1,31 @@
+# Builds release binaries for every v* tag. See .github/workflows/release.yml.
+version: 2
+project_name: devopsy
+
+builds:
+  - main: ./cmd/devopsy
+    binary: devopsy
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  # No version in the name, so install.sh can use releases/latest/download.
+  - name_template: devopsy_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
