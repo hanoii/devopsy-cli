@@ -1,16 +1,39 @@
 #!/bin/sh
-# Installs the devopsy CLI.
+# Installs the devopsy CLI from its GitHub releases.
 #
 #   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
 #
 # Variables:
-#   DEVOPSY_VERSION      Git ref to install (branch or tag). Default: main.
-#   DEVOPSY_INSTALL_DIR  Where to put the script. Default: /usr/local/bin when
+#   DEVOPSY_VERSION      Release tag, like v0.2.0. Default: latest ("main" also
+#                        means latest, for older setups).
+#   DEVOPSY_INSTALL_DIR  Where to put the binary. Default: /usr/local/bin when
 #                        writable or when running as root, else ~/.local/bin.
 set -eu
 
-version=${DEVOPSY_VERSION:-main}
-url="https://raw.githubusercontent.com/hanoii/devopsy-cli/$version/devopsy"
+repo=https://github.com/hanoii/devopsy-cli
+
+die() {
+  echo "install.sh: $*" >&2
+  exit 1
+}
+
+version=${DEVOPSY_VERSION:-latest}
+case $version in
+  latest | main) base=$repo/releases/latest/download ;;
+  *) base=$repo/releases/download/$version ;;
+esac
+
+case $(uname -s) in
+  Linux) os=linux ;;
+  Darwin) os=darwin ;;
+  *) die "unsupported OS: $(uname -s)" ;;
+esac
+case $(uname -m) in
+  x86_64 | amd64) arch=amd64 ;;
+  aarch64 | arm64) arch=arm64 ;;
+  *) die "unsupported architecture: $(uname -m)" ;;
+esac
+archive=devopsy_${os}_${arch}.tar.gz
 
 if [ -n "${DEVOPSY_INSTALL_DIR:-}" ]; then
   dir=$DEVOPSY_INSTALL_DIR
@@ -20,29 +43,38 @@ else
   dir=$HOME/.local/bin
 fi
 
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$url" -o "$tmp"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$tmp" "$url"
+fetch() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    die "curl or wget is required"
+  fi
+}
+
+fetch "$base/$archive" "$tmp/$archive" || die "could not download $base/$archive"
+fetch "$base/checksums.txt" "$tmp/checksums.txt" || die "could not download $base/checksums.txt"
+
+expected=$(awk -v f="$archive" '$2 == f { print $1 }' "$tmp/checksums.txt")
+[ -n "$expected" ] || die "$archive is not in checksums.txt"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
 else
-  echo "install.sh: curl or wget is required" >&2
-  exit 1
+  actual=$(shasum -a 256 "$tmp/$archive" | awk '{ print $1 }')
 fi
+[ "$expected" = "$actual" ] || die "checksum mismatch for $archive"
 
-# A wrong ref returns an HTML error page or nothing at all.
-if ! head -n 1 "$tmp" | grep -q '^#!/bin/sh'; then
-  echo "install.sh: $url did not return the devopsy script" >&2
-  exit 1
-fi
-
+tar -xzf "$tmp/$archive" -C "$tmp" devopsy
 mkdir -p "$dir"
-chmod 755 "$tmp"
-mv "$tmp" "$dir/devopsy"
-trap - EXIT
-echo "Installed devopsy ($version) to $dir/devopsy"
+# Through a temporary name, so a running devopsy is never half-written.
+cp "$tmp/devopsy" "$dir/.devopsy.new"
+chmod 755 "$dir/.devopsy.new"
+mv "$dir/.devopsy.new" "$dir/devopsy"
+echo "Installed $("$dir/devopsy" version | head -n 1) to $dir/devopsy"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
