@@ -51,7 +51,11 @@ func run() int {
 	plan, err := cli.Build(cwd, args, os.Environ())
 	var help *cli.Help
 	var exitErr *cli.ExitError
+	var output *cli.Output
 	switch {
+	case errors.As(err, &output):
+		fmt.Print(output.Text)
+		return 0
 	case errors.As(err, &help):
 		fmt.Fprint(os.Stderr, help.Text)
 		return help.Code

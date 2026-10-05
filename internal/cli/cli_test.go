@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"os"
 	"path/filepath"
 	"slices"
@@ -289,5 +291,76 @@ func TestBuildProjectNameFromCompose(t *testing.T) {
 	}
 	if got, _ := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); got != "shop-prod.localhost" {
 		t.Errorf("DEVOPSY_PUBLIC_HOST = %q", got)
+	}
+}
+
+func TestHostRule(t *testing.T) {
+	got, err := HostRule([]string{"shop.vm1.example.com", "Example.org", "", "example.org", "*.shop.example.org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Host(`shop.vm1.example.com`) || Host(`example.org`) || Host(`*.shop.example.org`)"
+	if got != want {
+		t.Fatalf("got %s\nwant %s", got, want)
+	}
+	for _, bad := range []string{"a`b.com", "with space.com", "-bad.com", "a..b"} {
+		if _, err := HostRule([]string{bad}); err == nil {
+			t.Errorf("%q: want an error", bad)
+		}
+	}
+}
+
+func TestBuildHostRule(t *testing.T) {
+	root := project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "DEVOPSY_DOMAINS=\"example.org, www.example.org\"\n",
+	})
+	plan, err := build(root, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Host(`shop.localhost`) || Host(`example.org`) || Host(`www.example.org`)"
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); got != want {
+		t.Fatalf("got %s", got)
+	}
+
+	root = project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "DEVOPSY_DOMAINS=bad`host\n",
+	})
+	var e *ExitError
+	if _, err := build(root, []string{"ps"}, nil); !errors.As(err, &e) {
+		t.Fatalf("invalid domain: %v", err)
+	}
+}
+
+func TestPrintEnvRoundTrip(t *testing.T) {
+	root := project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "PLAIN=a b\nTRICKY=placeholder\nDEVOPSY_DOMAINS=example.org\n",
+	})
+	// The caller's value wins and is printed, quotes, $ and backslash included.
+	_, err := build(root, []string{"print-env"}, []string{"CALLER_ONLY=1", "PLAIN=caller", `TRICKY=it's "x" $HOME \ end`})
+	var out *Output
+	if !errors.As(err, &out) {
+		t.Fatalf("want Output, got %v", err)
+	}
+	if strings.Contains(out.Text, "CALLER_ONLY") {
+		t.Errorf("caller-only variable printed:\n%s", out.Text)
+	}
+	parsed, err := dotenv.UnmarshalWithLookup(out.Text, nil)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.Text)
+	}
+	for k, want := range map[string]string{
+		"PLAIN":                "caller",
+		"TRICKY":               `it's "x" $HOME \ end`,
+		"COMPOSE_PROJECT_NAME": "shop",
+		"DEVOPSY_PUBLIC_HOST":  "shop.localhost",
+		"DEVOPSY_HOST_RULE":    "Host(`shop.localhost`) || Host(`example.org`)",
+	} {
+		if parsed[k] != want {
+			t.Errorf("%s = %q, want %q\n%s", k, parsed[k], want, out.Text)
+		}
 	}
 }
