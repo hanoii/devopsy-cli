@@ -27,6 +27,12 @@ user-facing behavior and keep it in sync with any change to it.
 - devopsy replaces itself with the command it runs (`syscall.Exec`), so
   signals, the terminal and exit codes belong to that command.
 - Messages go to stderr. Compose output stays on stdout.
+- Built-ins are flags (`--help`, `--version`, `--env`) or `@target`, never
+  words: words are project commands, then docker compose commands, so nothing
+  clashes (`devopsy version` once printed devopsy's version and then ran
+  compose's). Never add a word built-in. Help (bare `devopsy`) lists
+  built-ins, remote commands, project commands with their `## Description:`
+  and the compose fallback.
 - Few dependencies; prefer the standard library. Linux and macOS only.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
@@ -44,7 +50,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 
 - devopsy is compose plus environment variables. It never generates or
   rewrites compose files: if a feature needs that, it is the wrong feature.
-  Everything it computes is visible with `devopsy print-env`.
+  Everything it computes is visible with `devopsy --env`.
 - An environment is a target: a server path, so its own compose project,
   data and public URL (`<project>.<DEVOPSY_PUBLIC_DOMAIN>`). Branches are
   only what gets released into one; no branch concept in the core.
@@ -60,7 +66,8 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   restore them. `shared/.env` is always linked so server edits apply without
   a release.
 
-- `devopsy @target domains`: the server only reports facts (print-env,
+- `devopsy @target domains`: the server only reports facts (`print-env`, the
+  old name of `--env`, kept so any server version answers;
   Traefik's routers from its local API, acme-dns registrations, its IP); DNS
   (through 1.1.1.1), certificates (a real TLS connection to the server per
   name, verified against system roots) and Cloudflare's proxy (its ranges,
@@ -71,7 +78,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 
 ## Gotchas
 
-- Compose reads `--env-file` more than once: `<(devopsy print-env)` does not
+- Compose reads `--env-file` more than once: `<(devopsy --env)` does not
   work, a file does (observed, not confirmed in compose's source).
 - `.env` values in double quotes are interpolated when loaded (compose's
   parser): `"$HOME"` becomes the value of HOME.

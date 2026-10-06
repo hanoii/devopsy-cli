@@ -31,20 +31,29 @@ func run() int {
 	color := term.IsTerminal(int(os.Stderr.Fd()))
 	args := os.Args[1:]
 
-	// `devopsy version` also prints compose's, which it passes through to
-	// inside a project.
-	isVersion := len(args) > 0 && args[0] == "version"
-	if isVersion {
-		fmt.Printf("devopsy %s\n", version)
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1
 	}
 
-	if len(args) > 0 && strings.HasPrefix(args[0], "@") {
+	// Built-ins are flags, so they never clash with project commands or
+	// docker compose commands, which are words.
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		projectDir, _ := cli.FindProjectDir(cwd)
+		fmt.Print(cli.Usage(projectDir))
+		return 0
+	}
+	if args[0] == "--version" {
+		fmt.Printf("devopsy %s\n", version)
+		if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
+			fmt.Printf("docker compose %s\n", strings.TrimSpace(string(out)))
+		} else {
+			fmt.Println("docker compose: not available")
+		}
+		return 0
+	}
+	if strings.HasPrefix(args[0], "@") {
 		return runRemote(cwd, args, color)
 	}
 
@@ -60,9 +69,6 @@ func run() int {
 		fmt.Fprint(os.Stderr, help.Text)
 		return help.Code
 	case errors.As(err, &exitErr):
-		if isVersion && exitErr.Code == 100 {
-			return 0
-		}
 		cli.Fprint(os.Stderr, red, exitErr.Msg, color)
 		return exitErr.Code
 	case err != nil:

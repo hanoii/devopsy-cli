@@ -28,7 +28,7 @@ Go's build cache makes instant when nothing changed, and needs Go:
 
 ```sh
 ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy
-devopsy version   # like v0.5.0-2-g1a2b3c4-dirty
+devopsy --version   # like v0.5.0-2-g1a2b3c4-dirty
 ```
 
 ## Project layout
@@ -49,14 +49,27 @@ my-project/
 devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f .devopsy/compose.override.yaml] up -d
 devopsy logs -f web
 devopsy deploy         # runs .devopsy/commands/deploy if it exists
-devopsy help           # lists the custom commands
-devopsy version        # devopsy's version, then compose's inside a project
-devopsy print-env      # the variables devopsy loads and computes
+devopsy                # help: built-ins, the project's commands, and the rest
+devopsy --version      # devopsy's and docker compose's versions
+devopsy --env          # the variables devopsy loads and computes
 ```
+
+devopsy's own features are flags (`--help`, `--version`, `--env`) or start
+with `@` (targets), so they never clash with words: a word is a project
+command if `.devopsy/commands/` has it, else a docker compose command.
+`devopsy version` is `docker compose version`.
 
 ### Custom commands
 
-Any executable file in `.devopsy/commands/` becomes a command. It runs with
+Any executable file in `.devopsy/commands/` becomes a command. A
+`## Description:` line near its top is shown by `devopsy`, as in ddev:
+
+```sh
+#!/bin/sh
+## Description: Pull images and roll out
+```
+
+ It runs with
 the project's `.env` loaded and these variables set:
 
 - `DEVOPSY_PROJECT_DIR`: absolute path to `.devopsy/`.
@@ -96,16 +109,16 @@ labels:
 ```
 
 devopsy only adds environment variables; it never changes compose files.
-`devopsy print-env` prints what it loads and computes, in `.env` format, to
+`devopsy --env` prints what it loads and computes, in `.env` format, to
 run plain compose with exactly the same values:
 
 ```sh
-devopsy print-env > /tmp/devopsy.env
+devopsy --env > /tmp/devopsy.env
 docker compose -f .devopsy/compose.yaml --env-file /tmp/devopsy.env config
 ```
 
 Use a file: compose reads `--env-file` more than once, so `<(devopsy
-print-env)` does not work.
+--env)` does not work.
 
 On a server, `/etc/devopsy/devopsy.env` holds server-wide settings, like
 `DEVOPSY_PUBLIC_DOMAIN`, written by devopsy-server. The project's `.env` and

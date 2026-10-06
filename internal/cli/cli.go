@@ -241,19 +241,73 @@ func isExecutableFile(path string) bool {
 	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
 }
 
-func usage(projectDir string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Usage: devopsy <command> [args...]\n\n")
-	fmt.Fprintf(&b, "Runs a custom command from %s/commands/ if one exists,\n", projectDir)
-	fmt.Fprintf(&b, "otherwise passes everything to docker compose.\n\n")
-	fmt.Fprintf(&b, "  devopsy print-env    the variables devopsy loads and computes, in .env format\n")
-	fmt.Fprintf(&b, "  devopsy @<target>    run on a server, see 'devopsy @<target> help'\n")
-	if cmds := CustomCommands(projectDir); len(cmds) > 0 {
-		fmt.Fprintf(&b, "\nCustom commands:\n")
-		for _, c := range cmds {
-			fmt.Fprintf(&b, "  %s\n", c)
+// CommandDescription reads a command's `## Description:` line, as ddev does,
+// from the top of the file.
+func CommandDescription(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.SplitN(string(data), "\n", 40)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) > 15 && strings.EqualFold(line[:15], "## Description:") {
+			return strings.TrimSpace(line[15:])
 		}
 	}
+	return ""
+}
+
+// RemoteHelp describes `devopsy @<target>` commands.
+const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devopsy/targets.yaml):
+  release [cmd...]     upload the project as a new release and make it current;
+                       with cmd, run 'devopsy cmd' there, going back to the
+                       previous release if it fails
+  rollback [cmd...]    make the previous release current again, same cmd handling
+  releases             list the releases on the server
+  domains [--retry]    DNS, challenge and certificate per host, and what next;
+                       --retry asks Traefik for missing certificates
+  <anything else>      run 'devopsy <anything else>' in the current release
+`
+
+// Usage is devopsy's help. projectDir is "" outside a project.
+func Usage(projectDir string) string {
+	var b strings.Builder
+	b.WriteString(`devopsy: docker compose for projects with a .devopsy/ directory.
+
+Usage:
+  devopsy <command> [args...]     a project command, else docker compose <command>
+  devopsy @<target> <command>     the same on a server
+
+Built-in:
+  --help, -h     this help
+  --version      devopsy's and docker compose's versions
+  --env          the variables devopsy loads and computes, in .env format
+
+`)
+	b.WriteString(RemoteHelp)
+	b.WriteString("\n")
+	if projectDir == "" {
+		b.WriteString("Not in a devopsy project: no .devopsy/ in this directory or above.\n\n")
+	} else {
+		cmds := CustomCommands(projectDir)
+		fmt.Fprintf(&b, "Project commands (%s):\n", filepath.Join(projectDir, "commands"))
+		if len(cmds) == 0 {
+			b.WriteString("  none\n")
+		}
+		width := 0
+		for _, c := range cmds {
+			width = max(width, len(c))
+		}
+		for _, c := range cmds {
+			desc := CommandDescription(filepath.Join(projectDir, "commands", c))
+			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(`Anything else runs as docker compose, with the project's files:
+  devopsy up -d, devopsy ps, devopsy logs -f <service>, devopsy version...
+`)
 	return b.String()
 }
 
@@ -337,12 +391,14 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 
 	if len(args) == 0 {
-		return nil, &Help{Text: usage(projectDir), Code: 1}
+		return nil, &Help{Text: Usage(projectDir), Code: 0}
 	}
 	switch args[0] {
-	case "help", "-h", "--help":
-		return nil, &Help{Text: usage(projectDir), Code: 0}
-	case "print-env":
+	case "-h", "--help":
+		return nil, &Help{Text: Usage(projectDir), Code: 0}
+	// print-env: the name before --env, still used by older devopsy calling
+	// newer servers.
+	case "--env", "print-env":
 		var b strings.Builder
 		for _, k := range env.Marked() {
 			v, _ := env.Lookup(k)
