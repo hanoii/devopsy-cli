@@ -47,9 +47,14 @@ user-facing behavior and keep it in sync with any change to it.
 - Targets come from the project's `targets.local.yaml`, then `targets.yaml`,
   then the user-level `~/.config/devopsy/targets.yaml` (never `~/.devopsy`:
   project discovery would take the home directory for a project). User-level
-  targets refuse release and rollback. A target path without `current` but
-  with `.devopsy/` is a plain directory: commands run there, release scripts
-  refuse before creating anything.
+  targets refuse release and rollback. Hosts can come from variables, so
+  public repositories need not name servers: `DEVOPSY_TARGET_HOST_<NAME>`
+  replaces a target's host, `DEVOPSY_TARGET_HOST` fills in a missing one,
+  from the caller's environment, then the project's `.env` (read for this
+  only; user-level targets ignore it, so a project cannot redirect them).
+  A target path without `current` but with `.devopsy/` is a plain
+  directory: commands run there, release scripts refuse before creating
+  anything.
 - Releases write `COMPOSE_PROJECT_NAME` into `target.env` when compose.yaml has
   no name: devopsy run by hand in `current` named the project "current".
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
