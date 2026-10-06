@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -53,8 +54,16 @@ type Router struct {
 	Rule string `json:"rule"`
 	TLS  *struct {
 		CertResolver string `json:"certResolver"`
+		// Domains are the certificates the router requests besides its
+		// rule's hosts, like the public wildcard's *.<domain>.
+		Domains []struct {
+			Main string `json:"main"`
+		} `json:"domains"`
 	} `json:"tls"`
 }
+
+// hostRule matches the hosts in a router rule: Host(`a`), not HostRegexp.
+var hostRule = regexp.MustCompile("Host\\(`([^`]+)`\\)")
 
 // ParseFacts reads DomainsScript output.
 func ParseFacts(out string) (*Facts, error) {
@@ -125,9 +134,89 @@ func (f *Facts) Hosts() []string {
 	return hosts
 }
 
+// ServerHosts is every host Traefik routes, for `domains` on the server's
+// own Traefik: wildcard certificates ("*.<domain>") first, then hosts by
+// name. Routers that only exist to request a certificate (the wildcard's
+// reserved name, --retry's) are not hosts of their own.
+func (f *Facts) ServerHosts() []string {
+	seen := map[string]bool{}
+	var wildcards, hosts []string
+	for _, r := range f.Routers {
+		if strings.HasPrefix(r.Name, "devopsy-retry-") {
+			continue
+		}
+		if r.TLS != nil {
+			for _, d := range r.TLS.Domains {
+				if w := strings.ToLower(d.Main); strings.HasPrefix(w, "*.") && !seen[w] {
+					seen[w] = true
+					wildcards = append(wildcards, w)
+				}
+			}
+		}
+	}
+	// Each wildcard's reserved name is checked as the wildcard.
+	for _, w := range wildcards {
+		seen[f.probe(w)] = true
+	}
+	for _, r := range f.Routers {
+		if strings.HasPrefix(r.Name, "devopsy-retry-") {
+			continue
+		}
+		for _, m := range hostRule.FindAllStringSubmatch(r.Rule, -1) {
+			h := strings.ToLower(m[1])
+			if !seen[h] {
+				seen[h] = true
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	sort.Strings(wildcards)
+	sort.Strings(hosts)
+	return append(wildcards, hosts...)
+}
+
+// wildcardRouter returns the router requesting the wildcard certificate
+// host, like *.vm1.example.com.
+func (f *Facts) wildcardRouter(host string) *Router {
+	for i, r := range f.Routers {
+		if r.TLS == nil {
+			continue
+		}
+		for _, d := range r.TLS.Domains {
+			if strings.EqualFold(d.Main, host) {
+				return &f.Routers[i]
+			}
+		}
+	}
+	return nil
+}
+
+// probe is the name checks look up and connect to for host: itself, or for a
+// wildcard a name it covers, the one its router matches.
+func (f *Facts) probe(host string) string {
+	if !strings.HasPrefix(host, "*.") {
+		return host
+	}
+	if r := f.wildcardRouter(host); r != nil {
+		for _, m := range hostRule.FindAllStringSubmatch(r.Rule, -1) {
+			if strings.HasSuffix(strings.ToLower(m[1]), host[1:]) {
+				return strings.ToLower(m[1])
+			}
+		}
+	}
+	return "devopsy-wildcard" + host[1:]
+}
+
 // Resolver returns the cert resolver of the router serving host, "" when no
-// router serves it. Routers with TLS win over their HTTP twins.
+// router serves it. Routers with TLS win over their HTTP twins. A wildcard's
+// is the resolver of the router requesting it.
 func (f *Facts) Resolver(host string) (resolver string, routed bool) {
+	if strings.HasPrefix(host, "*.") {
+		if r := f.wildcardRouter(host); r != nil {
+			return r.TLS.CertResolver, true
+		}
+		return "", false
+	}
 	needle := "Host(`" + host + "`)"
 	for _, r := range f.Routers {
 		if !strings.Contains(strings.ToLower(r.Rule), strings.ToLower(needle)) {
@@ -312,15 +401,16 @@ type DomainReport struct {
 	Live          bool
 }
 
-// Check builds a report per host. serverIPs are the addresses that count as
-// this server.
-func Check(ctx context.Context, f *Facts, c Checker, serverIPs []string) []DomainReport {
+// Check builds a report per host (f.Hosts() for a project, f.ServerHosts()
+// for the server's Traefik). serverIPs are the addresses that count as this
+// server.
+func Check(ctx context.Context, f *Facts, c Checker, serverIPs []string, hosts []string) []DomainReport {
 	var reports []DomainReport
 	connectIP := ""
 	if len(serverIPs) > 0 {
 		connectIP = serverIPs[0]
 	}
-	for _, host := range f.Hosts() {
+	for _, host := range hosts {
 		r := checkHost(ctx, f, c, serverIPs, connectIP, host)
 		reports = append(reports, r)
 	}
@@ -335,8 +425,11 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 	{
 		r := DomainReport{Host: host}
 		r.Resolver, r.Routed = f.Resolver(host)
+		// A wildcard is checked through a name it covers; its challenge is the
+		// domain's.
+		name, base := f.probe(host), strings.TrimPrefix(host, "*.")
 
-		ips, err := c.LookupIP(ctx, host)
+		ips, err := c.LookupIP(ctx, name)
 		r.IPs = ips
 		if err != nil {
 			r.DNSError = err.Error()
@@ -357,7 +450,7 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 			}
 			if proxy != "" && c.Get != nil {
 				r.Proxy = proxy
-				status, err := c.Get(ctx, ips[0], host)
+				status, err := c.Get(ctx, ips[0], name)
 				r.ProxyStatus = status
 				if err != nil {
 					r.ProxyError = err.Error()
@@ -366,14 +459,14 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 		}
 
 		if r.Resolver == "acmedns" {
-			r.ChallengeWant = f.Accounts[host]
-			if cname, err := c.LookupCNAME(ctx, "_acme-challenge."+host); err == nil && cname != "_acme-challenge."+host {
+			r.ChallengeWant = f.Accounts[base]
+			if cname, err := c.LookupCNAME(ctx, "_acme-challenge."+base); err == nil && cname != "_acme-challenge."+base {
 				r.ChallengeHave = cname
 			}
 		}
 
 		if connectIP != "" {
-			info, err := c.Cert(ctx, connectIP, host)
+			info, err := c.Cert(ctx, connectIP, name)
 			r.Cert = info
 			if err != nil {
 				r.CertError = err.Error()
@@ -402,7 +495,7 @@ func nextStep(r DomainReport, ip string) (string, bool) {
 		case r.ChallengeWant == "":
 			return "not registered with acme-dns yet: run with --retry", false
 		case !strings.EqualFold(r.ChallengeHave, r.ChallengeWant):
-			return fmt.Sprintf("create, where its DNS is hosted: _acme-challenge.%s. CNAME %s.", r.Host, r.ChallengeWant), false
+			return fmt.Sprintf("create, where its DNS is hosted: _acme-challenge.%s. CNAME %s.", strings.TrimPrefix(r.Host, "*."), r.ChallengeWant), false
 		default:
 			return "challenge CNAME in place: run with --retry", false
 		}

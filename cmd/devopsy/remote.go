@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -213,7 +214,13 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		if facts.ServerIP != "" {
 			serverIPs = append(serverIPs, facts.ServerIP)
 		}
-		return remote.Check(ctx, facts, checker, serverIPs), facts, 0
+		// On the server's own Traefik, every domain on the server; on a
+		// project, its own.
+		hosts := facts.Hosts()
+		if path.Clean(t.Path) == path.Clean(facts.TraefikDir) {
+			hosts = facts.ServerHosts()
+		}
+		return remote.Check(ctx, facts, checker, serverIPs, hosts), facts, 0
 	}
 
 	var project string

@@ -326,6 +326,8 @@ For the environment's public host and each of DEVOPSY_DOMAINS: the
 certificate resolver, DNS (through 1.1.1.1, Cloudflare's proxy recognized),
 the acme-dns challenge CNAME when it applies, and the certificate the server
 presents, verified like a browser would. Ends each host with what to do next.
+On the server's Traefik target (like @vm1-traefik), every host the server
+routes instead, and its public wildcard certificate.
 
   --retry   ask Traefik to request missing certificates again, without a
             restart, then check again. The request is removed once every
