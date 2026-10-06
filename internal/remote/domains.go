@@ -397,7 +397,30 @@ func RetryScript(traefikDir, project string, byResolver map[string][]string, now
 			fmt.Fprintf(&y, "          - main: '%s'\n", h)
 		}
 	}
-	file := traefikDir + "/.devopsy/mnt/dynamic/devopsy-retry-" + project + ".yaml"
+	file := RetryFile(traefikDir, project)
 	return fmt.Sprintf("set -eu\nprintf '%%s' %s > %s.tmp\nmv %s.tmp %s\n",
 		Quote(y.String()), Quote(file), Quote(file), Quote(file))
+}
+
+// RetryFile is where RetryScript writes, for a project.
+func RetryFile(traefikDir, project string) string {
+	return traefikDir + "/.devopsy/mnt/dynamic/devopsy-retry-" + project + ".yaml"
+}
+
+// CleanupRetryScript removes a project's retry file, if any, and prints
+// "removed" when it did. Once the certificates exist the file is only
+// clutter: Traefik keeps and renews them without it.
+func CleanupRetryScript(traefikDir, project string) string {
+	f := Quote(RetryFile(traefikDir, project))
+	return "set -eu\nif [ -e " + f + " ]; then rm -f " + f + "; echo removed; fi\n"
+}
+
+// AllCertified reports whether every routed host has a valid certificate.
+func AllCertified(reports []DomainReport) bool {
+	for _, r := range reports {
+		if r.Routed && !r.Cert.Valid {
+			return false
+		}
+	}
+	return true
 }
