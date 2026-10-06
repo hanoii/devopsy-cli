@@ -287,7 +287,8 @@ Uploads the project to the target as a new release and makes it current.
     files, minus gitignored ones, uncommitted changes included).
 
 The release links the server's shared/ (.env, mnt/...) and writes
-.devopsy/target.env from the target's env in targets.yaml. With a command,
+.devopsy/target.env from the target's env in targets.yaml, plus
+DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. With a command,
 it then runs 'devopsy <command> [args...]' in the new release; if that fails,
 the previous release becomes current again and devopsy exits with the
 command's code. The last 5 releases are kept.

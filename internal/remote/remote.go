@@ -360,6 +360,16 @@ func NewRecord(projectRoot, mode string, now time.Time) Record {
 	return r
 }
 
+// DirtyOutsideDevopsy reports uncommitted changes in the project outside
+// .devopsy/: in image mode they are not released, since the image is the
+// commit's.
+func DirtyOutsideDevopsy(projectRoot string) bool {
+	cmd := exec.Command("git", "status", "--porcelain", "--", ".", ":(exclude).devopsy")
+	cmd.Dir = projectRoot
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
 func whoami() string {
 	user := os.Getenv("USER")
 	if user == "" {

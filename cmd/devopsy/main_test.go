@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // End-to-end: build the binary and run it against a fake docker that prints
@@ -177,5 +179,23 @@ func TestUserTargets(t *testing.T) {
 	out, code = runDevopsy(t, t.TempDir(), env, "@missing", "ps")
 	if code == 0 || !strings.Contains(out, "vm1-traefik") {
 		t.Errorf("missing target (%d):\n%s", code, out)
+	}
+}
+
+func TestTargetEnv(t *testing.T) {
+	tg := &remote.Target{Name: "prod", Env: map[string]string{"DEVOPSY_DOMAINS": "example.org"}}
+	got := string(targetEnv(tg, "app-prod", "0123abc"))
+	for _, want := range []string{"COMPOSE_PROJECT_NAME='app-prod'\n", "DEVOPSY_RELEASE_COMMIT='0123abc'\n", "DEVOPSY_DOMAINS='example.org'\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Outside git there is no commit; a target's own value wins.
+	if got := string(targetEnv(tg, "", "")); strings.Contains(got, "DEVOPSY_RELEASE_COMMIT") {
+		t.Errorf("no commit:\n%s", got)
+	}
+	tg.Env["DEVOPSY_RELEASE_COMMIT"] = "pinned"
+	if got := string(targetEnv(tg, "", "0123abc")); strings.Count(got, "DEVOPSY_RELEASE_COMMIT") != 1 || !strings.Contains(got, "'pinned'") {
+		t.Errorf("target override:\n%s", got)
 	}
 }
