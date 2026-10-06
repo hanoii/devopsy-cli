@@ -32,6 +32,15 @@ func run() int {
 	color := term.IsTerminal(int(os.Stderr.Fd()))
 	args := os.Args[1:]
 
+	// --verbose (-v) goes before everything else, and is passed on through
+	// DEVOPSY_VERBOSE to nested devopsy calls: project commands calling
+	// devopsy, and devopsy on servers.
+	for len(args) > 0 && (args[0] == "--verbose" || args[0] == "-v") {
+		os.Setenv(cli.VerboseEnv, "1")
+		args = args[1:]
+	}
+	verbose := cli.IsVerbose(os.Getenv(cli.VerboseEnv))
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
@@ -62,7 +71,7 @@ func run() int {
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
-		return runRemote(cwd, args, color)
+		return runRemote(cwd, args, color, verbose)
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())
@@ -84,6 +93,11 @@ func run() int {
 		return 1
 	}
 
+	if verbose {
+		for _, line := range plan.Verbose {
+			cli.Fprint(os.Stderr, "", line, color)
+		}
+	}
 	if plan.Notice != "" {
 		cli.Fprint(os.Stderr, cyan, plan.Notice, color)
 	}

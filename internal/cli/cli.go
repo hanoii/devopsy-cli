@@ -36,8 +36,12 @@ type Plan struct {
 	// Args includes argv[0].
 	Args []string
 	Env  []string
-	// Notice is printed to stderr before executing, if not empty.
+	// Notice is printed to stderr before executing, if not empty. Secrets
+	// are masked.
 	Notice string
+	// Verbose lines are printed to stderr before Notice with --verbose.
+	// Secrets are masked.
+	Verbose []string
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -75,11 +79,14 @@ type Env struct {
 	// marked keys are the ones devopsy loaded or computed: what print-env
 	// shows.
 	marked map[string]bool
+	// origin is the first dotenv file that defines a key, even when the
+	// caller's environment set it first.
+	origin map[string]string
 }
 
 // NewEnv builds an Env from os.Environ-style entries.
 func NewEnv(environ []string) *Env {
-	e := &Env{values: map[string]string{}, marked: map[string]bool{}}
+	e := &Env{values: map[string]string{}, marked: map[string]bool{}, origin: map[string]string{}}
 	for _, kv := range environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -149,6 +156,9 @@ func LoadDotenv(env *Env, file string) error {
 			env.Set(k, vars[k])
 		}
 		env.Mark(k)
+		if _, ok := env.origin[k]; !ok {
+			env.origin[k] = file
+		}
 	}
 	return nil
 }
@@ -349,6 +359,8 @@ Built-in:
   --version      devopsy's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
   --upgrade [v]  replace devopsy with the latest release, or release v
+  --verbose, -v  before anything else: also print what devopsy found and runs
+                 (DEVOPSY_VERBOSE=1 does the same)
 
 `)
 	b.WriteString(RemoteHelp)
@@ -391,12 +403,23 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 
 	env := NewEnv(environ)
 	env.Set("DEVOPSY_PROJECT_DIR", projectDir)
-	if err := LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
+	verbose := []string{"devopsy: project " + projectDir}
+	load := func(file string) error {
+		if err := LoadDotenv(env, file); err != nil {
+			return err
+		}
+		if _, err := os.Stat(file); err == nil {
+			verbose = append(verbose, "devopsy: loaded "+file)
+		}
+		return nil
+	}
+	dotenvFile := filepath.Join(projectDir, ".env")
+	if err := load(dotenvFile); err != nil {
 		return nil, err
 	}
 	// Per-target settings, written into each release by `devopsy @target
 	// release` from targets.yaml. Below .env, so a server can override them.
-	if err := LoadDotenv(env, filepath.Join(projectDir, "target.env")); err != nil {
+	if err := load(filepath.Join(projectDir, "target.env")); err != nil {
 		return nil, err
 	}
 	serverEnv := ServerEnvFile
@@ -404,7 +427,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		serverEnv = v
 	}
 	if serverEnv != "" {
-		if err := LoadDotenv(env, serverEnv); err != nil {
+		if err := load(serverEnv); err != nil {
 			return nil, err
 		}
 	}
@@ -477,12 +500,15 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	// command it wraps, without recursing into itself.
 	current, _ := env.Lookup("DEVOPSY_CLI_COMMAND")
 	custom := filepath.Join(projectDir, "commands", args[0])
+	secrets := NewSecrets(env, dotenvFile)
 	if current != args[0] && isExecutableFile(custom) {
 		env.Set("DEVOPSY_CLI_COMMAND", args[0])
+		cmdArgs := append([]string{custom}, args[1:]...)
 		return &Plan{
-			Path: custom,
-			Args: append([]string{custom}, args[1:]...),
-			Env:  env.Environ(),
+			Path:    custom,
+			Args:    cmdArgs,
+			Env:     env.Environ(),
+			Verbose: maskAll(secrets, append(verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
 		}, nil
 	}
 
@@ -496,11 +522,20 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 	composeArgs = append(composeArgs, args...)
 	return &Plan{
-		Path:   "docker",
-		Args:   composeArgs,
-		Env:    env.Environ(),
-		Notice: fmt.Sprintf("Running '%s'...", strings.Join(composeArgs, " ")),
+		Path:    "docker",
+		Args:    composeArgs,
+		Env:     env.Environ(),
+		Notice:  secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(composeArgs, " "))),
+		Verbose: maskAll(secrets, verbose),
 	}, nil
+}
+
+func maskAll(s *Secrets, lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = s.Mask(l)
+	}
+	return out
 }
 
 // Fprint writes msg to w, in color when color is set.

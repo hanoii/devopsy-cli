@@ -26,8 +26,11 @@ user-facing behavior and keep it in sync with any change to it.
   passing everything else to `docker compose` untouched.
 - devopsy replaces itself with the command it runs (`syscall.Exec`), so
   signals, the terminal and exit codes belong to that command.
-- Messages go to stderr. Compose output stays on stdout.
-- Built-ins are flags (`--help`, `--version`, `--env`) or `@target`, never
+- Messages go to stderr. Compose output stays on stdout. Anything printed
+  that can contain arguments or scripts goes through `cli.Secrets` (values
+  from `.env` and secret-named variables): the compose notice printed every
+  command, passwords included, into terminals and CI logs.
+- Built-ins are flags (`--help`, `--version`, `--env`, `--verbose`) or `@target`, never
   words: words are project commands, then docker compose commands, so nothing
   clashes (`devopsy version` once printed devopsy's version and then ran
   compose's). Never add a word built-in. Help (bare `devopsy`) lists

@@ -411,3 +411,62 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 		}
 	}
 }
+
+// Secrets never reach the notice or the verbose lines: values from .env,
+// even when the caller sets them, and variables named like secrets.
+func TestBuildMasksSecrets(t *testing.T) {
+	root := project(t, "app", map[string]string{
+		"compose.yaml":     minimalCompose,
+		".env":             "DB_PASSWORD=from-dotenv-secret\nOVERRIDDEN=dotenv-value-x\nSHORT=abc\n",
+		"commands/deploy*": "#!/bin/sh\n",
+	})
+	caller := []string{"OVERRIDDEN=caller-value-xyz", "API_TOKEN=caller-token-123", "PLAIN=caller-plain-value"}
+	args := []string{"exec", "db", "mariadb", "-pfrom-dotenv-secret", "caller-value-xyz", "caller-token-123", "abc", "caller-plain-value"}
+	plan, err := build(root, args, caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"from-dotenv-secret", "caller-value-xyz", "caller-token-123"} {
+		if strings.Contains(plan.Notice, secret) {
+			t.Fatalf("notice shows %q: %s", secret, plan.Notice)
+		}
+	}
+	// Short values and ordinary variables stay readable; the arguments
+	// themselves are untouched.
+	if !strings.Contains(plan.Notice, "-p*** *** *** abc caller-plain-value'") {
+		t.Fatalf("notice %s", plan.Notice)
+	}
+	if !slices.Contains(plan.Args, "-pfrom-dotenv-secret") {
+		t.Fatalf("args were masked: %q", plan.Args)
+	}
+
+	plan, err = build(root, []string{"deploy", "from-dotenv-secret"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := plan.Verbose[len(plan.Verbose)-1]
+	if !strings.HasSuffix(last, "commands/deploy ***'") {
+		t.Fatalf("verbose %q", plan.Verbose)
+	}
+}
+
+func TestBuildVerbose(t *testing.T) {
+	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, ".env": "A=1\n"})
+	plan, err := build(root, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, ProjectDirName)
+	want := []string{"devopsy: project " + dir, "devopsy: loaded " + filepath.Join(dir, ".env")}
+	if !slices.Equal(plan.Verbose, want) {
+		t.Fatalf("verbose\n got %q\nwant %q", plan.Verbose, want)
+	}
+}
+
+func TestIsVerbose(t *testing.T) {
+	for v, want := range map[string]bool{"1": true, "true": true, "TRUE": true, "yes": true, "on": true, "": false, "0": false, "false": false, "no": false} {
+		if got := IsVerbose(v); got != want {
+			t.Errorf("IsVerbose(%q) = %v", v, got)
+		}
+	}
+}

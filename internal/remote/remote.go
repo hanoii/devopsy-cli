@@ -448,13 +448,23 @@ func quoteAll(args []string) string {
 	return strings.Join(q, " ")
 }
 
+// Verbose makes devopsy on the server verbose too (DEVOPSY_VERBOSE, which
+// older versions ignore).
+var Verbose bool
+
+// Trace, when set, receives each SSH command and the script it runs.
+var Trace func(string)
+
 // devopsyCall is the remote devopsy invocation, with the project name fixed
 // when compose.yaml has none (the release directory would name it). With
 // exec, the shell is replaced by devopsy.
 func devopsyCall(projectName string, args []string, exec bool) string {
 	env := ""
+	if Verbose {
+		env = "DEVOPSY_VERBOSE=1 "
+	}
 	if projectName != "" {
-		env = "COMPOSE_PROJECT_NAME=" + Quote(projectName) + " "
+		env += "COMPOSE_PROJECT_NAME=" + Quote(projectName) + " "
 	}
 	if exec {
 		env += "exec "
@@ -649,6 +659,9 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 		args = append(args, "-T")
 	}
 	args = append(args, t.Host, "sh -c "+Quote(script))
+	if Trace != nil {
+		Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", args[0], t.Host, strings.TrimRight(script, "\n")))
+	}
 
 	var cmd *exec.Cmd
 	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {

@@ -19,7 +19,7 @@ import (
 )
 
 // runRemote handles `devopsy @target ...`.
-func runRemote(cwd string, args []string, color bool) int {
+func runRemote(cwd string, args []string, color, verbose bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
@@ -29,12 +29,21 @@ func runRemote(cwd string, args []string, color bool) int {
 	projectDir, _ := cli.FindProjectDir(cwd)
 	// The project's .env can set target hosts (DEVOPSY_TARGET_HOST...).
 	var projectEnv func(string) (string, bool)
+	env := cli.NewEnv(os.Environ())
+	dotenvFile := ""
 	if projectDir != "" {
-		env := cli.NewEnv(os.Environ())
-		if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
+		dotenvFile = filepath.Join(projectDir, ".env")
+		if err := cli.LoadDotenv(env, dotenvFile); err != nil {
 			return fail(err.Error())
 		}
 		projectEnv = env.Lookup
+	}
+	if verbose {
+		// What runs over SSH, with the project's secrets masked. devopsy on
+		// the server is verbose too.
+		secrets := cli.NewSecrets(env, dotenvFile)
+		remote.Verbose = true
+		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
 	}
 	t, err := remote.LoadTarget(projectDir, strings.TrimPrefix(args[0], "@"), projectEnv)
 	if err != nil {
