@@ -41,6 +41,11 @@ user-facing behavior and keep it in sync with any change to it.
   release and ran `devopsy --help` on the server. Keep a help entry for every
   server subcommand.
 - Few dependencies; prefer the standard library. Linux and macOS only.
+- `--upgrade` (internal/update) reads the same release files as `install.sh`:
+  keep archive names and `checksums.txt` as they are. The daily release
+  check runs in a detached `devopsy --upgrade-check`, because devopsy
+  replaces itself with the command right away; only release builds (plain
+  `X.Y.Z` versions) upgrade or check.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
   `/etc/devopsy/devopsy.env`.

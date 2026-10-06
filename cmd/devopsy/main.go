@@ -54,6 +54,13 @@ func run() int {
 		}
 		return 0
 	}
+	if args[0] == "--upgrade" {
+		return runUpgrade(args[1:], color)
+	}
+	if args[0] == upgradeCheck {
+		return runUpgradeCheck()
+	}
+	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
 		return runRemote(cwd, args, color)
 	}

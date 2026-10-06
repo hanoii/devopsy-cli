@@ -17,7 +17,16 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh 
 It downloads the latest release for your platform, checks its checksum and
 installs it to `/usr/local/bin` when it can, otherwise `~/.local/bin`. Set
 `DEVOPSY_VERSION` to install a specific release, like `v0.1.0`, and
-`DEVOPSY_INSTALL_DIR` to choose the directory. Run it again to upgrade.
+`DEVOPSY_INSTALL_DIR` to choose the directory.
+
+To upgrade, run `devopsy --upgrade` (`sudo devopsy --upgrade` when root owns
+the binary, as on servers), or `devopsy --upgrade v0.9.0` for a specific
+release, older ones included. It checks the checksum like `install.sh` and
+replaces the binary in one step. At a terminal, devopsy checks for a new
+release once a day, in the background so no command waits, and says when
+there is one from then on; never in CI, and `DEVOPSY_NO_UPDATE_CHECK=1`
+turns it off. Builds from
+source neither upgrade nor check.
 
 Releases are on the [releases page](https://github.com/hanoii/devopsy-cli/releases).
 To build from source: `go build -o devopsy ./cmd/devopsy`.
@@ -52,9 +61,11 @@ devopsy deploy         # runs .devopsy/commands/deploy if it exists
 devopsy                # help: built-ins, the project's commands, and the rest
 devopsy --version      # devopsy's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
+devopsy --upgrade      # replace devopsy with the latest release
 ```
 
-devopsy's own features are flags (`--help`, `--version`, `--env`) or start
+devopsy's own features are flags (`--help`, `--version`, `--env`,
+`--upgrade`) or start
 with `@` (targets), so they never clash with words: a word is a project
 command if `.devopsy/commands/` has it, else a docker compose command.
 `devopsy version` is `docker compose version`.
