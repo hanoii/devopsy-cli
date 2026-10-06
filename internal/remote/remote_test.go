@@ -25,6 +25,7 @@ func write(t *testing.T, path, content string) {
 }
 
 func TestLoadTarget(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, TargetsFile), `
 prod:
@@ -62,7 +63,7 @@ nohost:
 			t.Errorf("%s: want an error", name)
 		}
 	}
-	if _, err := LoadTarget(t.TempDir(), "prod"); err == nil || !strings.Contains(err.Error(), "not found") {
+	if _, err := LoadTarget(t.TempDir(), "prod"); err == nil || !strings.Contains(err.Error(), "no targets defined") {
 		t.Errorf("no targets file: %v", err)
 	}
 }
@@ -224,6 +225,7 @@ func TestFormatReleases(t *testing.T) {
 }
 
 func TestLoadTargetEnvAndLocal(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, TargetsFile), `
 prod:
@@ -268,5 +270,91 @@ mine:
 	write(t, filepath.Join(only, LocalTargetsFile), "x:\n  host: h\n  path: /srv/x\n")
 	if _, err := LoadTarget(only, "x"); err != nil {
 		t.Fatalf("local file only: %v", err)
+	}
+}
+
+func TestLoadTargetUserFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	write(t, filepath.Join(home, TargetsFile), `
+vm1-traefik:
+  host: devopsy@vm1
+  path: /srv/traefik
+prod:
+  host: user-level
+  path: /srv/user-prod
+`)
+	project := t.TempDir()
+	write(t, filepath.Join(project, TargetsFile), "prod:\n  host: vm1\n  path: /srv/app\n")
+
+	prod, err := LoadTarget(project, "prod")
+	if err != nil || prod.User || prod.Host != "vm1" {
+		t.Fatalf("project target must win: %+v %v", prod, err)
+	}
+	tr, err := LoadTarget(project, "vm1-traefik")
+	if err != nil || !tr.User || tr.File != filepath.Join(home, TargetsFile) {
+		t.Fatalf("user target from a project: %+v %v", tr, err)
+	}
+	if tr, err := LoadTarget("", "vm1-traefik"); err != nil || !tr.User {
+		t.Fatalf("user target outside a project: %+v %v", tr, err)
+	}
+	if _, err := LoadTarget("", "missing"); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
+		t.Fatalf("missing target should list the others: %v", err)
+	}
+}
+
+// fakeDevopsy puts a devopsy on PATH that prints where it runs.
+func fakeDevopsy(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte("#!/bin/sh\necho \"ran in $PWD: $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + bin + ":/usr/bin:/bin"
+}
+
+func TestPlainDirectories(t *testing.T) {
+	path := fakeDevopsy(t)
+	run := func(script string) (string, error) {
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{path}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	plain := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(plain, ".devopsy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "vm1-traefik", Host: "h", Path: plain}
+	if out, err := run(RunScript(tg, "", []string{"proxies"})); err != nil || !strings.Contains(out, "ran in "+plain+": proxies") {
+		t.Fatalf("plain run: %v\n%s", err, out)
+	}
+	for name, script := range map[string]string{
+		"upload":   UploadScript(tg, "20261006000000"),
+		"rollback": ActivateScript(tg, "", true, "", "", nil),
+		"releases": ReleasesScript(tg),
+	} {
+		out, err := run(script)
+		if err == nil || !strings.Contains(out, "plain devopsy directory") {
+			t.Errorf("%s on a plain directory must refuse: %v\n%s", name, err, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(plain, "releases")); err == nil {
+		t.Error("refusing must not create releases/")
+	}
+
+	released := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(released, "current"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tr := &Target{Name: "prod", Host: "h", Path: released}
+	if out, err := run(RunScript(tr, "", []string{"ps"})); err != nil || !strings.Contains(out, "ran in "+released+"/current: ps") {
+		t.Fatalf("release run: %v\n%s", err, out)
+	}
+
+	empty := &Target{Name: "new", Host: "h", Path: t.TempDir()}
+	if out, err := run(RunScript(empty, "", []string{"ps"})); err == nil || !strings.Contains(out, "no release and no .devopsy/") {
+		t.Fatalf("empty: %v\n%s", err, out)
 	}
 }

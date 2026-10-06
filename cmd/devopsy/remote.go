@@ -24,10 +24,8 @@ func runRemote(cwd string, args []string, color bool) int {
 		return 1
 	}
 
-	projectDir, err := cli.FindProjectDir(cwd)
-	if err != nil {
-		return fail(err.Error())
-	}
+	// Outside a project only user-level targets exist.
+	projectDir, _ := cli.FindProjectDir(cwd)
 	t, err := remote.LoadTarget(projectDir, strings.TrimPrefix(args[0], "@"))
 	if err != nil {
 		return fail(err.Error())
@@ -42,9 +40,12 @@ func runRemote(cwd string, args []string, color bool) int {
 	// release directory, so fix it to the target directory's name.
 	// urlName is the name the public URL uses, when it is known here: not when
 	// compose.yaml's name depends on the server's environment.
+	// A user-level target belongs to no local project: the server's own
+	// files name it (target.env in releases, the directory otherwise).
 	projectName, urlName := "", ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" {
 		projectName = v
+	} else if t.User {
 	} else if raw, err := cli.TopLevelName(filepath.Join(projectDir, "compose.yaml")); err != nil {
 		return fail(err.Error())
 	} else if raw == "" {
@@ -71,6 +72,12 @@ func runRemote(cwd string, args []string, color bool) int {
 		return 0
 	}
 
+	// A user-level target belongs to no project, so nothing may be released
+	// to it from wherever devopsy happens to run.
+	if t.User && (args[0] == "release" || args[0] == "rollback") {
+		return fail(fmt.Sprintf("@%s is a user-level target (%s): %s needs a target defined by the project, in .devopsy/targets.yaml", t.Name, t.File, args[0]))
+	}
+
 	switch args[0] {
 	case "releases":
 		var out bytes.Buffer
@@ -78,8 +85,11 @@ func runRemote(cwd string, args []string, color bool) int {
 		if err != nil {
 			return fail(err.Error())
 		}
+		if code != 0 {
+			return code
+		}
 		fmt.Print(remote.FormatReleases(out.String()))
-		return code
+		return 0
 
 	case "domains":
 		retry := len(args) > 1 && args[1] == "--retry"
@@ -110,7 +120,7 @@ func runRemote(cwd string, args []string, color bool) int {
 		go func() {
 			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
 				remote.RecordFile:                  record.JSON(),
-				".devopsy/" + remote.TargetEnvFile: targetEnv(t),
+				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName),
 			}))
 		}()
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
@@ -124,10 +134,15 @@ func runRemote(cwd string, args []string, color bool) int {
 }
 
 // targetEnv renders a target's env as the release's .devopsy/target.env.
-func targetEnv(t *remote.Target) []byte {
+func targetEnv(t *remote.Target, projectName string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by devopsy from the %q target in targets.yaml. Do not edit:\n", t.Name)
 	fmt.Fprintf(&b, "# change targets.yaml and release again, or override in .env.\n")
+	// The project's name, when devopsy derives it from the target path: so it is
+	// the same however devopsy runs on the server, not "current".
+	if projectName != "" && t.Env["COMPOSE_PROJECT_NAME"] == "" {
+		b.WriteString(cli.DotenvLine("COMPOSE_PROJECT_NAME", projectName) + "\n")
+	}
 	keys := make([]string, 0, len(t.Env))
 	for k := range t.Env {
 		keys = append(keys, k)

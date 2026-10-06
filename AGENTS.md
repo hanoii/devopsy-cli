@@ -41,6 +41,14 @@ user-facing behavior and keep it in sync with any change to it.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
   `/etc/devopsy/devopsy.env`.
+- Targets come from the project's `targets.local.yaml`, then `targets.yaml`,
+  then the user-level `~/.config/devopsy/targets.yaml` (never `~/.devopsy`:
+  project discovery would take the home directory for a project). User-level
+  targets refuse release and rollback. A target path without `current` but
+  with `.devopsy/` is a plain directory: commands run there, release scripts
+  refuse before creating anything.
+- Releases write `COMPOSE_PROJECT_NAME` into `target.env` when compose.yaml has
+  no name: devopsy run by hand in `current` named the project "current".
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
   No rsync: macOS ships openrsync. Releases are complete copies.
 - Project-specific behavior belongs in a project's `.devopsy/commands/`, not

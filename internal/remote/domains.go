@@ -22,9 +22,7 @@ import (
 // Traefik's routers (its local API) and the acme-dns registrations. The
 // checks themselves run locally, so the server needs nothing extra.
 func DomainsScript(t *Target, projectName string) string {
-	return fmt.Sprintf(`set -eu
-cd %s/current 2>/dev/null || { echo "devopsy: no release on %s yet: run 'devopsy @%s release' first" >&2; exit 1; }
-traefik=/srv/traefik
+	return "set -eu\n" + enter(t) + fmt.Sprintf(`traefik=/srv/traefik
 v=$(sed -n 's/^DEVOPSY_TRAEFIK_DIR=//p' /etc/devopsy/devopsy.env 2>/dev/null | tail -n 1)
 [ -z "$v" ] || traefik=$v
 api=$(sed -n 's/^DEVOPSY_API_PORT=//p' "$traefik/.devopsy/.env" 2>/dev/null | tail -n 1)
@@ -36,7 +34,7 @@ ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { pri
 curl -fsS "http://$api/api/http/routers?per_page=1000" 2>/dev/null | fact routers || echo "routers	"
 cat "$traefik/.devopsy/mnt/letsencrypt/acme-dns-accounts.json" 2>/dev/null | fact accounts || echo "accounts	"
 printf '%%s' "$traefik" | fact traefik
-`, Quote(t.Path), t.Path, t.Name, devopsyCall(projectName, nil, false))
+`, devopsyCall(projectName, nil, false))
 }
 
 // Facts is what DomainsScript reports.
