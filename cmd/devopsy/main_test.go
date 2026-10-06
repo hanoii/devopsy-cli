@@ -129,3 +129,25 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("bare devopsy outside (%d):\n%s", code, out)
 	}
 }
+
+// `@target <subcommand> --help` explains and never touches the server, even
+// for a target that does not exist.
+func TestRemoteSubcommandHelp(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dot := filepath.Join(tmp, "app", ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  host: nowhere.invalid\n  path: /srv/app\n", 0o644)
+	for _, sub := range []string{"release", "rollback", "releases", "domains"} {
+		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
+		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
+			t.Errorf("%s --help (%d):\n%s", sub, code, out)
+		}
+	}
+	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
+	if code != 0 || !strings.Contains(out, "<command> --help") {
+		t.Errorf("@prod --help (%d):\n%s", code, out)
+	}
+}

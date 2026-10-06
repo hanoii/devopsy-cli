@@ -164,6 +164,7 @@ devopsy @prod logs -f web      # any command runs in the current release
 devopsy @prod releases         # list releases, * marks the current one
 devopsy @prod rollback up -d   # back to the previous release, then `up -d`
 devopsy @prod domains          # per host: DNS, challenge, certificate, next step
+devopsy @prod release --help   # details of any of these
 ```
 
 `release` uploads the project as a new release, links the server's shared

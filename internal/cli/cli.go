@@ -268,7 +268,59 @@ const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devops
   domains [--retry]    DNS, challenge and certificate per host, and what next;
                        --retry asks Traefik for missing certificates
   <anything else>      run 'devopsy <anything else>' in the current release
+
+  devopsy @<target> <command> --help   details of release, rollback, releases, domains
 `
+
+// RemoteCommandHelp is the detailed help of each `devopsy @<target>`
+// subcommand, shown by `devopsy @<target> <subcommand> --help`.
+var RemoteCommandHelp = map[string]string{
+	"release": `Usage: devopsy @<target> release [command [args...]]
+
+Uploads the project to the target as a new release and makes it current.
+
+  - image mode (default): uploads .devopsy/; images come from a registry.
+  - build mode: uploads the project as git sees it (tracked and untracked
+    files, minus gitignored ones, uncommitted changes included).
+
+The release links the server's shared/ (.env, mnt/...) and writes
+.devopsy/target.env from the target's env in targets.yaml. With a command,
+it then runs 'devopsy <command> [args...]' in the new release; if that fails,
+the previous release becomes current again and devopsy exits with the
+command's code. The last 5 releases are kept.
+
+Examples:
+  devopsy @prod release deploy
+  devopsy @staging release up -d --wait
+`,
+	"rollback": `Usage: devopsy @<target> rollback [command [args...]]
+
+Makes the release before the current one current again (skipping failed
+ones), then runs 'devopsy <command> [args...]' there if given, going back
+again if it fails. Rolling back restores that release's files and target env,
+not data.
+
+Example:
+  devopsy @prod rollback deploy
+`,
+	"releases": `Usage: devopsy @<target> releases
+
+Lists the releases on the target, newest first: id, who made it, mode,
+branch and commit (+dirty when made with uncommitted changes), and FAILED for
+releases whose command failed. * marks the current one.
+`,
+	"domains": `Usage: devopsy @<target> domains [--retry]
+
+For the environment's public host and each of DEVOPSY_DOMAINS: the
+certificate resolver, DNS (through 1.1.1.1, Cloudflare's proxy recognized),
+the acme-dns challenge CNAME when it applies, and the certificate the server
+presents, verified like a browser would. Ends each host with what to do next.
+
+  --retry   ask Traefik to request missing certificates again, without a
+            restart, then check again. The request is removed once every
+            certificate exists.
+`,
+}
 
 // Usage is devopsy's help. projectDir is "" outside a project.
 func Usage(projectDir string) string {
