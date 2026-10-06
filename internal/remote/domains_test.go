@@ -189,3 +189,54 @@ func TestCleanupRetry(t *testing.T) {
 		t.Fatal("a routed host has no certificate")
 	}
 }
+
+func TestCheckProxied(t *testing.T) {
+	out := factLine("env", "DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='cf-ok.org cf-526.org cf-down.org'\n") +
+		factLine("ip", "203.0.113.10") +
+		factLine("routers", `[{"name":"websecure-shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`cf-ok.org`"+`) || Host(`+"`cf-526.org`"+`) || Host(`+"`cf-down.org`"+`)","tls":{"certResolver":"acmedns"}}]`) +
+		factLine("accounts", `{}`) + factLine("traefik", "/srv/traefik")
+	f, err := ParseFacts(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]int{"cf-ok.org": 200, "cf-526.org": 526, "cf-down.org": 522}
+	c := Checker{
+		LookupIP: func(_ context.Context, h string) ([]string, error) {
+			if h == "shop.vm1.example.com" {
+				return []string{"203.0.113.10"}, nil
+			}
+			return []string{"104.21.74.195", "172.67.162.100"}, nil
+		},
+		LookupCNAME: func(_ context.Context, h string) (string, error) { return h, nil },
+		Cert: func(_ context.Context, _, h string) (CertInfo, error) {
+			return CertInfo{Valid: h != "cf-526.org", Issuer: "Let's Encrypt YR2"}, nil
+		},
+		Proxy: func(ip string) string {
+			if strings.HasPrefix(ip, "104.") || strings.HasPrefix(ip, "172.67.") {
+				return "Cloudflare"
+			}
+			return ""
+		},
+		Get: func(_ context.Context, _, h string) (int, error) { return status[h], nil },
+	}
+	got := map[string]DomainReport{}
+	for _, r := range Check(context.Background(), f, c, []string{"203.0.113.10"}) {
+		got[r.Host] = r
+	}
+	if r := got["cf-ok.org"]; !r.Live || r.Proxy != "Cloudflare" {
+		t.Errorf("cf-ok.org: %+v", r)
+	}
+	if r := got["cf-526.org"]; r.Live || !strings.Contains(r.Next, "526") {
+		t.Errorf("cf-526.org: %q", r.Next)
+	}
+	if r := got["cf-down.org"]; r.Live || !strings.Contains(r.Next, "cannot reach the server (522)") {
+		t.Errorf("cf-down.org: %q", r.Next)
+	}
+	text := FormatReports([]DomainReport{got["shop.vm1.example.com"], got["cf-ok.org"]})
+	if strings.Contains(text, "challenge") {
+		t.Errorf("challenge line for hosts with valid certificates and no record:\n%s", text)
+	}
+	if !strings.Contains(text, "(Cloudflare proxy, HTTP 200 through it)") {
+		t.Errorf("proxy not shown:\n%s", text)
+	}
+}

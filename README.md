@@ -174,7 +174,10 @@ bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 `domains` checks the environment's public host and `DEVOPSY_DOMAINS` from
 where you run it: DNS through 1.1.1.1, the acme-dns challenge CNAME when the
 router uses `acmedns`, and the certificate the server actually presents for
-each name, verified like a browser would. It ends each host with what to do
+each name, verified like a browser would. A domain behind Cloudflare's proxy
+resolves to Cloudflare, so `domains` recognizes its ranges and requests the
+site through the proxy instead, reporting Cloudflare's origin errors (521,
+522, 525, 526) with what they mean. It ends each host with what to do
 next, like the CNAME to create or "certificate ready: point its DNS at ...".
 `domains --retry` asks Traefik to request missing certificates again, through
 a small file in its dynamic configuration, without restarting it. Once every

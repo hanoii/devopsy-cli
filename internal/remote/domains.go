@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -154,11 +156,48 @@ type Checker struct {
 	LookupIP    func(ctx context.Context, host string) ([]string, error)
 	LookupCNAME func(ctx context.Context, host string) (string, error)
 	Cert        func(ctx context.Context, ip, host string) (CertInfo, error)
+	// Proxy reports which CDN proxy an IP belongs to, "" for none.
+	Proxy func(ip string) string
+	// Get requests https://host/ through ip, as a browser would reach it, and
+	// returns the HTTP status.
+	Get func(ctx context.Context, ip, host string) (int, error)
+}
+
+// cloudflareRanges is Cloudflare's published IPv4 list
+// (https://www.cloudflare.com/ips-v4), used when it cannot be fetched.
+var cloudflareRanges = []string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+}
+
+// cloudflareNets fetches Cloudflare's current ranges, falling back to the
+// built-in list.
+func cloudflareNets(ctx context.Context) []*net.IPNet {
+	ranges := cloudflareRanges
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://www.cloudflare.com/ips-v4", nil)
+	client := &http.Client{Timeout: 5 * time.Second}
+	if resp, err := client.Do(req); err == nil {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		if fetched := strings.Fields(string(body)); resp.StatusCode == 200 && len(fetched) > 0 {
+			ranges = fetched
+		}
+	}
+	var nets []*net.IPNet
+	for _, r := range ranges {
+		if _, n, err := net.ParseCIDR(r); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
 }
 
 // PublicChecker resolves through 1.1.1.1, as the rest of the Internet sees
 // DNS, and verifies certificates against the system's trusted roots.
-func PublicChecker() Checker {
+func PublicChecker(ctx context.Context) Checker {
+	cf := cloudflareNets(ctx)
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -178,6 +217,38 @@ func PublicChecker() Checker {
 		LookupCNAME: func(ctx context.Context, host string) (string, error) {
 			c, err := r.LookupCNAME(ctx, host)
 			return strings.TrimSuffix(c, "."), err
+		},
+		Proxy: func(ip string) string {
+			parsed := net.ParseIP(ip)
+			for _, n := range cf {
+				if parsed != nil && n.Contains(parsed) {
+					return "Cloudflare"
+				}
+			}
+			return ""
+		},
+		Get: func(ctx context.Context, ip, host string) (int, error) {
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			client := &http.Client{
+				Timeout: 15 * time.Second,
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+						return dialer.DialContext(ctx, network, net.JoinHostPort(ip, "443"))
+					},
+					TLSClientConfig: &tls.Config{ServerName: host},
+				},
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", "https://"+host+"/", nil)
+			if err != nil {
+				return 0, err
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return 0, err
+			}
+			resp.Body.Close()
+			return resp.StatusCode, nil
 		},
 		Cert: func(ctx context.Context, ip, host string) (CertInfo, error) {
 			d := tls.Dialer{
@@ -229,6 +300,11 @@ type DomainReport struct {
 	IPs      []string
 	DNSError string
 	OnServer bool
+	// Proxy names the CDN proxy the host resolves to, like Cloudflare, and
+	// ProxyStatus is the HTTP status through it (0 when unreachable).
+	Proxy       string
+	ProxyStatus int
+	ProxyError  string
 	// acme-dns: the CNAME the challenge needs, what it is now.
 	ChallengeWant string
 	ChallengeHave string
@@ -274,6 +350,22 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 				}
 			}
 		}
+		if !r.OnServer && len(ips) > 0 && c.Proxy != nil {
+			proxy := c.Proxy(ips[0])
+			for _, ip := range ips {
+				if c.Proxy(ip) != proxy {
+					proxy = ""
+				}
+			}
+			if proxy != "" && c.Get != nil {
+				r.Proxy = proxy
+				status, err := c.Get(ctx, ips[0], host)
+				r.ProxyStatus = status
+				if err != nil {
+					r.ProxyError = err.Error()
+				}
+			}
+		}
 
 		if r.Resolver == "acmedns" {
 			r.ChallengeWant = f.Accounts[host]
@@ -301,6 +393,8 @@ func nextStep(r DomainReport, ip string) (string, bool) {
 		return "no Traefik router serves it: is the site running, with its rule from DEVOPSY_HOST_RULE?", false
 	case r.Cert.Valid && r.OnServer:
 		return "live", true
+	case r.Proxy != "":
+		return proxyStep(r, ip)
 	case r.Cert.Valid:
 		return fmt.Sprintf("certificate ready: point its DNS at %s (A record) to switch", ip), false
 	}
@@ -324,6 +418,27 @@ func nextStep(r DomainReport, ip string) (string, bool) {
 	}
 }
 
+// proxyStep judges a host behind a CDN proxy. The proxy reaches the server
+// itself, so DNS pointing elsewhere is expected. Its 52x statuses are
+// Cloudflare's origin errors.
+func proxyStep(r DomainReport, ip string) (string, bool) {
+	switch {
+	case r.ProxyStatus == 0:
+		return fmt.Sprintf("%s proxy did not answer: %s", r.Proxy, r.ProxyError), false
+	case r.ProxyStatus == 521 || r.ProxyStatus == 522 || r.ProxyStatus == 523:
+		return fmt.Sprintf("%s cannot reach the server (%d): check its DNS origin is %s and ports 80 and 443 are open", r.Proxy, r.ProxyStatus, ip), false
+	case r.ProxyStatus == 525:
+		return fmt.Sprintf("%s's TLS handshake with the server fails (525): does the server have a certificate for this name?", r.Proxy), false
+	case r.ProxyStatus == 526:
+		return fmt.Sprintf("%s rejects the server's certificate (526): get a valid one first, or set its SSL mode to Full", r.Proxy), false
+	case r.ProxyStatus >= 520 && r.ProxyStatus <= 530:
+		return fmt.Sprintf("%s reports an origin error (%d)", r.Proxy, r.ProxyStatus), false
+	case !r.Cert.Valid:
+		return fmt.Sprintf("served through %s, but the server has no valid certificate for it: with SSL mode Full (strict) that fails; run with --retry", r.Proxy), false
+	}
+	return "live", true
+}
+
 // FormatReports renders reports for people.
 func FormatReports(reports []DomainReport) string {
 	var b strings.Builder
@@ -344,11 +459,15 @@ func FormatReports(reports []DomainReport) string {
 			dns = "does not resolve"
 		case r.OnServer:
 			dns += " (this server)"
+		case r.Proxy != "":
+			dns += fmt.Sprintf(" (%s proxy, HTTP %d through it)", r.Proxy, r.ProxyStatus)
 		default:
 			dns += " (not this server)"
 		}
 		fmt.Fprintf(&b, "  dns          %s\n", dns)
-		if r.ChallengeWant != "" || r.Resolver == "acmedns" {
+		// The challenge only matters while there is no valid certificate, or
+		// when the record exists (renewals use it).
+		if r.Resolver == "acmedns" && (!r.Cert.Valid || r.ChallengeHave != "") {
 			have := r.ChallengeHave
 			if have == "" {
 				have = "missing"
