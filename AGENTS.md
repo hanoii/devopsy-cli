@@ -101,7 +101,10 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   then a request through it) are checked locally, so servers need nothing
   extra. `--retry` writes a uniquely named router into Traefik's dynamic
   directory (Traefik only retries on a configuration change) and the file is
-  removed once every routed host has a valid certificate.
+  removed once every routed host has a valid certificate. When the target's
+  path is the server's Traefik directory (`DEVOPSY_TRAEFIK_DIR`, reported by
+  the server), `domains` checks every routed host and the public wildcard
+  instead, through the reserved name its router matches.
 
 ## Gotchas
 
@@ -116,6 +119,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   install it before assuming a broken release.
 - Traefik picks up a new container a couple of seconds after `up` returns:
   wait before querying its API in tests.
+- Go's HTTPS connection to github.com took 1.5 s where curl took 0.5 s
+  (October 2026): too slow for a check before every command, hence the
+  detached `--upgrade-check`.
 
 ## Checks
 
@@ -128,6 +134,17 @@ End to end, against a real server: an OrbStack Debian 13 machine set up with
 devopsy-server (see its AGENTS.md), a linux/arm64 build installed in it, and
 a test project whose `.devopsy/targets.local.yaml` points at
 `devopsy@devopsy-test@orb`. OrbStack's SSH needs no keys.
+
+`--upgrade` and the release notice only work in release builds: test them
+with a build that pretends to be older, against the real releases:
+
+```sh
+go build -ldflags "-X main.version=0.8.0" -o /tmp/devopsy ./cmd/devopsy
+/tmp/devopsy --upgrade
+```
+
+The binary it installs is the real release, so it only knows the flags that
+release had. The notice needs a terminal: `script -q out ./devopsy ps`.
 
 ## Releases
 
