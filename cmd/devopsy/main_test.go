@@ -199,6 +199,18 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	}
 }
 
+// Builds from source (version "dev" here) never replace themselves.
+func TestUpgradeDevelopmentBuild(t *testing.T) {
+	out, code := runDevopsy(t, t.TempDir(), nil, "--upgrade")
+	if code == 0 || !strings.Contains(out, "development build") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+	out, _ = runDevopsy(t, t.TempDir(), nil, "--help")
+	if !strings.Contains(out, "--upgrade") {
+		t.Errorf("help does not list --upgrade:\n%s", out)
+	}
+}
+
 func TestTargetEnv(t *testing.T) {
 	tg := &remote.Target{Name: "prod", Env: map[string]string{"DEVOPSY_DOMAINS": "example.org"}}
 	got := string(targetEnv(tg, "app-prod", "0123abc"))
