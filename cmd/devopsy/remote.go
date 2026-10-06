@@ -65,6 +65,12 @@ func runRemote(cwd string, args []string, color bool) int {
 		return code
 	}
 
+	// `devopsy @t release --help` explains instead of releasing.
+	if help, ok := cli.RemoteCommandHelp[args[0]]; ok && len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+		fmt.Print(help)
+		return 0
+	}
+
 	switch args[0] {
 	case "releases":
 		var out bytes.Buffer

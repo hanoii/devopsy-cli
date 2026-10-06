@@ -33,6 +33,10 @@ user-facing behavior and keep it in sync with any change to it.
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
   and the compose fallback.
+- `devopsy @<target> <subcommand> --help` must only print help
+  (`cli.RemoteCommandHelp`): before it existed, `release --help` made a
+  release and ran `devopsy --help` on the server. Keep a help entry for every
+  server subcommand.
 - Few dependencies; prefer the standard library. Linux and macOS only.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
