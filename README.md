@@ -278,6 +278,12 @@ a small file in its dynamic configuration, without restarting it. Once every
 routed host has a valid certificate, `domains` removes that file again:
 Traefik keeps and renews the certificates without it.
 
+Run on the server's Traefik target instead (a user-level target for
+`/srv/traefik`, like `devopsy @vm1-traefik domains`), it checks the whole
+server: every host Traefik routes, and the public wildcard
+(`*.<public domain>`) with its challenge CNAME, through the reserved name its
+router matches. `--retry` there covers the wildcard too.
+
 Several environments of one project live side by side as several targets,
 each with its own path: its own compose project, containers, data and public
 URL (`<target directory>.<server's public domain>`, printed after each

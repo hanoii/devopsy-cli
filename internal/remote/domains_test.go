@@ -92,7 +92,7 @@ func TestCheckNextSteps(t *testing.T) {
 			return CertInfo{Issuer: "TRAEFIK DEFAULT CERT"}, nil
 		},
 	}
-	reports := Check(context.Background(), f, c, []string{server, f.ServerIP})
+	reports := Check(context.Background(), f, c, []string{server, f.ServerIP}, f.Hosts())
 	got := map[string]DomainReport{}
 	for _, r := range reports {
 		got[r.Host] = r
@@ -220,7 +220,7 @@ func TestCheckProxied(t *testing.T) {
 		Get: func(_ context.Context, _, h string) (int, error) { return status[h], nil },
 	}
 	got := map[string]DomainReport{}
-	for _, r := range Check(context.Background(), f, c, []string{"203.0.113.10"}) {
+	for _, r := range Check(context.Background(), f, c, []string{"203.0.113.10"}, f.Hosts()) {
 		got[r.Host] = r
 	}
 	if r := got["cf-ok.org"]; !r.Live || r.Proxy != "Cloudflare" {
@@ -238,5 +238,47 @@ func TestCheckProxied(t *testing.T) {
 	}
 	if !strings.Contains(text, "(Cloudflare proxy, HTTP 200 through it)") {
 		t.Errorf("proxy not shown:\n%s", text)
+	}
+}
+
+// On the server's own Traefik, domains covers every routed host and the
+// public wildcard, checked through its reserved name.
+func TestServerHosts(t *testing.T) {
+	routers := `[
+  {"name":"acme-http@internal","rule":"PathPrefix(` + "`/.well-known/acme-challenge/`" + `)","tls":null},
+  {"name":"web-to-websecure@internal","rule":"HostRegexp(` + "`^.+$`" + `)","tls":null},
+  {"name":"devopsy-public-wildcard@file","rule":"Host(` + "`devopsy-wildcard.vm1.example.com`" + `)","tls":{"certResolver":"acmedns","domains":[{"main":"*.vm1.example.com"}]}},
+  {"name":"devopsy-retry-shop-acmedns-1@file","rule":"Host(` + "`devopsy-retry-1.invalid`" + `)","tls":{"certResolver":"acmedns","domains":[{"main":"nocname.org"}]}},
+  {"name":"shop@docker","rule":"Host(` + "`shop.vm1.example.com`" + `) || Host(` + "`Live.org`" + `)","tls":{"certResolver":"letsencrypt1"}},
+  {"name":"websecure-shop@docker","rule":"Host(` + "`shop.vm1.example.com`" + `) || Host(` + "`live.org`" + `)","tls":{"certResolver":"letsencrypt1"}}
+]`
+	f, err := ParseFacts(factLine("env", "DEVOPSY_PROJECT_NAME='traefik-main'\n") + factLine("routers", routers) +
+		factLine("accounts", `{"*.vm1.example.com":{"fulldomain":"wild.acme-vm1.example.com"}}`) + factLine("traefik", "/srv/traefik"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := f.ServerHosts()
+	if got := strings.Join(hosts, " "); got != "*.vm1.example.com live.org shop.vm1.example.com" {
+		t.Fatalf("hosts: %s", got)
+	}
+	server := "203.0.113.10"
+	var connected, challenged []string
+	c := Checker{
+		LookupIP: func(_ context.Context, h string) ([]string, error) { return []string{server}, nil },
+		LookupCNAME: func(_ context.Context, h string) (string, error) {
+			challenged = append(challenged, h)
+			return "wild.acme-vm1.example.com.", nil
+		},
+		Cert: func(_ context.Context, ip, h string) (CertInfo, error) {
+			connected = append(connected, h)
+			return CertInfo{Valid: true, Issuer: "Let's Encrypt R13"}, nil
+		},
+	}
+	reports := Check(context.Background(), f, c, []string{server}, hosts)
+	if r := reports[0]; r.Host != "*.vm1.example.com" || r.Resolver != "acmedns" || !r.Live || r.ChallengeWant != "wild.acme-vm1.example.com" {
+		t.Errorf("wildcard: %+v", r)
+	}
+	if connected[0] != "devopsy-wildcard.vm1.example.com" || challenged[0] != "_acme-challenge.vm1.example.com" {
+		t.Errorf("wildcard checked through %v, challenge %v", connected, challenged)
 	}
 }
