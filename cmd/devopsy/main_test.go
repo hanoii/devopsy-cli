@@ -45,7 +45,7 @@ func runDevopsy(t *testing.T, dir string, env []string, args ...string) (string,
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_SERVER_ENV="}, env...)
+	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -149,5 +149,33 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
 	if code != 0 || !strings.Contains(out, "<command> --help") {
 		t.Errorf("@prod --help (%d):\n%s", code, out)
+	}
+}
+
+// User-level targets refuse release and rollback before touching SSH, and
+// work outside a project.
+func TestUserTargets(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: nowhere.invalid\n  path: /srv/traefik\n", 0o644)
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(tmp, "app", ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	env := []string{"DEVOPSY_HOME=" + home}
+	for _, sub := range []string{"release", "rollback"} {
+		out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "@vm1-traefik", sub)
+		if code == 0 || !strings.Contains(out, "is a user-level target") {
+			t.Errorf("%s (%d):\n%s", sub, code, out)
+		}
+	}
+	// Outside a project the target resolves (help needs no SSH).
+	out, code := runDevopsy(t, t.TempDir(), env, "@vm1-traefik", "--help")
+	if code != 0 || !strings.Contains(out, "On a server") {
+		t.Errorf("outside a project (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, t.TempDir(), env, "@missing", "ps")
+	if code == 0 || !strings.Contains(out, "vm1-traefik") {
+		t.Errorf("missing target (%d):\n%s", code, out)
 	}
 }

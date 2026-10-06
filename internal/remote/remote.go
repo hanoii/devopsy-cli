@@ -41,6 +41,25 @@ const LocalTargetsFile = "targets.local.yaml"
 // TargetEnvFile is written into each release from the target's env.
 const TargetEnvFile = "target.env"
 
+// UserTargetsFile is the user-level targets file:
+// $XDG_CONFIG_HOME/devopsy/targets.yaml (~/.config/devopsy/targets.yaml), or
+// $DEVOPSY_HOME/targets.yaml. Its targets work from any directory, for running
+// commands on servers, never for release or rollback. Not ~/.devopsy: devopsy
+// would take the home directory for a project.
+func UserTargetsFile() string {
+	if h := os.Getenv("DEVOPSY_HOME"); h != "" {
+		return filepath.Join(h, TargetsFile)
+	}
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "devopsy", TargetsFile)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "devopsy", TargetsFile)
+}
+
 // Keep is how many releases stay on the server.
 const Keep = 5
 
@@ -62,6 +81,10 @@ type Target struct {
 	// Env is written into each release as .devopsy/target.env: per-target,
 	// committed, non-secret settings like DEVOPSY_DOMAINS.
 	Env map[string]string `yaml:"env"`
+	// User is set for targets from the user-level file.
+	User bool `yaml:"-"`
+	// File is where the target was defined.
+	File string `yaml:"-"`
 }
 
 var (
@@ -83,23 +106,48 @@ func readTargets(file string) (map[string]*Target, error) {
 
 // LoadTarget reads one target from projectDir/targets.yaml.
 func LoadTarget(projectDir, name string) (*Target, error) {
-	file := filepath.Join(projectDir, TargetsFile)
-	targets, err := readTargets(file)
-	if err != nil && !os.IsNotExist(err) {
+	// Lowest precedence first: the user-level file, then the project's
+	// targets.yaml, then its targets.local.yaml.
+	targets := map[string]*Target{}
+	var files []string
+	load := func(file string, user bool) error {
+		if file == "" {
+			return nil
+		}
+		found, err := readTargets(file)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		files = append(files, file)
+		for n, t := range found {
+			if t != nil {
+				t.User = user
+				t.File = file
+			}
+			targets[n] = t
+		}
+		return nil
+	}
+	if err := load(UserTargetsFile(), true); err != nil {
 		return nil, err
 	}
-	if targets == nil {
-		targets = map[string]*Target{}
-	}
-	local, err := readTargets(filepath.Join(projectDir, LocalTargetsFile))
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	for n, t := range local {
-		targets[n] = t
+	if projectDir != "" {
+		if err := load(filepath.Join(projectDir, TargetsFile), false); err != nil {
+			return nil, err
+		}
+		if err := load(filepath.Join(projectDir, LocalTargetsFile), false); err != nil {
+			return nil, err
+		}
 	}
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("%s not found: define the target %q there", file, name)
+		where := UserTargetsFile()
+		if projectDir != "" {
+			where = filepath.Join(projectDir, TargetsFile) + " or " + where
+		}
+		return nil, fmt.Errorf("no targets defined: define %q in %s", name, where)
 	}
 	t, ok := targets[name]
 	if !ok || t == nil {
@@ -108,7 +156,7 @@ func LoadTarget(projectDir, name string) (*Target, error) {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		return nil, fmt.Errorf("no target %q in %s (targets: %s)", name, file, strings.Join(names, ", "))
+		return nil, fmt.Errorf("no target %q in %s (targets: %s)", name, strings.Join(files, ", "), strings.Join(names, ", "))
 	}
 	t.Name = name
 	if !targetName.MatchString(name) {
@@ -362,6 +410,10 @@ func devopsyCall(projectName string, args []string, exec bool) string {
 // Shell helpers shared by the scripts. $base is the target path.
 const prelude = `set -eu
 base=%s
+if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
+  exit 1
+fi
 mkdir -p "$base/releases" "$base/shared/mnt"
 make_current() { ln -sfn "$1" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 lock() {
@@ -444,12 +496,24 @@ done
 	return s
 }
 
-// RunScript runs args in the current release.
+// enter changes to where commands run: the current release, or the path
+// itself for a plain devopsy directory (like /srv/traefik, a git clone).
+func enter(t *Target) string {
+	return fmt.Sprintf(`base=%s
+if [ -d "$base/current" ]; then
+  cd "$base/current"
+elif [ -d "$base/.devopsy" ]; then
+  cd "$base"
+else
+  echo "devopsy: %s has no release and no .devopsy/ project: run 'devopsy @%s release' first" >&2
+  exit 1
+fi
+`, Quote(t.Path), t.Path, t.Name)
+}
+
+// RunScript runs args in the current release, or in a plain directory.
 func RunScript(t *Target, projectName string, args []string) string {
-	return fmt.Sprintf(`set -eu
-cd %s/current 2>/dev/null || { echo "devopsy: no release on %s yet: run 'devopsy @%s release' first" >&2; exit 1; }
-%s
-`, Quote(t.Path), t.Path, t.Name, devopsyCall(projectName, args, true))
+	return "set -eu\n" + enter(t) + devopsyCall(projectName, args, true) + "\n"
 }
 
 // ReleasesScript prints one line per release: id, current flag, failed flag
@@ -457,6 +521,10 @@ cd %s/current 2>/dev/null || { echo "devopsy: no release on %s yet: run 'devopsy
 func ReleasesScript(t *Target) string {
 	return fmt.Sprintf(`set -eu
 base=%s
+if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  echo "devopsy: $base is a plain devopsy directory, without releases" >&2
+  exit 1
+fi
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do

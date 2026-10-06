@@ -153,10 +153,37 @@ server addresses out of the repository, use `~/.ssh/config` aliases as hosts.
 `.devopsy/targets.local.yaml` (gitignore it) adds or replaces whole targets
 for one machine, like a personal test server, and is never uploaded.
 
+### User-level targets and plain directories
+
+`~/.config/devopsy/targets.yaml` (or `$DEVOPSY_HOME/targets.yaml`) holds
+targets you use from any directory, for running commands on servers. They
+never `release` or `rollback`: those need a target the project defines. A
+project's own targets win over user-level ones with the same name.
+
+A target's path can also be a plain devopsy directory, without releases: a
+git clone like each server's `/srv/traefik`, or anything maintained in place.
+Commands then run in the path itself, and `release`, `rollback` and
+`releases` refuse. Together:
+
+```yaml
+# ~/.config/devopsy/targets.yaml
+vm1-traefik:
+  host: devopsy@203.0.113.10
+  path: /srv/traefik
+```
+
+```sh
+devopsy @vm1-traefik proxies add cloudflare   # from anywhere
+devopsy @vm1-traefik logs -f traefik
+```
+
 A target's `env` is written into each release as `.devopsy/target.env`, which
 devopsy loads after `.env` and before the server-wide settings. So it applies
 however devopsy runs on the server, and a rollback brings back that release's
-values. Change it in `targets.yaml` and release again.
+values. Change it in `targets.yaml` and release again. When `compose.yaml` has
+no `name:`, `target.env` also fixes `COMPOSE_PROJECT_NAME` to the target
+directory's name, so devopsy run by hand on the server, in `current`, still
+finds the project.
 
 ```sh
 devopsy @prod release deploy   # upload a new release, run `devopsy deploy` there
