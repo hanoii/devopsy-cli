@@ -171,9 +171,9 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		if err != nil {
 			return nil, nil, fail(err.Error())
 		}
-		checker := remote.PublicChecker()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		checker := remote.PublicChecker(ctx)
 		// The server's addresses: as its public host resolves (right behind
 		// NAT too), then as it reports itself.
 		var serverIPs []string
