@@ -62,13 +62,39 @@ devopsy                # help: built-ins, the project's commands, and the rest
 devopsy --version      # devopsy's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
 devopsy --upgrade      # replace devopsy with the latest release
+devopsy -v deploy      # --verbose: also what devopsy found and runs
 ```
 
 devopsy's own features are flags (`--help`, `--version`, `--env`,
-`--upgrade`) or start
+`--upgrade`, `--verbose`) or start
 with `@` (targets), so they never clash with words: a word is a project
 command if `.devopsy/commands/` has it, else a docker compose command.
 `devopsy version` is `docker compose version`.
+
+### Output and secrets
+
+Before running docker compose, devopsy prints the command (`Running 'docker
+compose ...'...`) to stderr. Secrets in it are masked as `***`: every value
+from the project's `.env` (on servers `shared/.env`), even when the caller's
+environment overrides it, and every variable named like a secret (`PASSWORD`,
+`SECRET`, `TOKEN`, `SALT`, `AUTH`, `KEY`...), as CI sets them. Values shorter
+than 8 characters are left alone. Only the message is masked: the command
+gets its arguments unchanged.
+
+Masking is a safety net, not a reason to pass secrets as arguments: they still
+show in `ps` and shell history. Expand them inside the container instead,
+where compose already set them:
+
+```sh
+devopsy exec -T database sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot'
+```
+
+`--verbose` (or `-v`, before anything else) also prints the project
+directory, the env files loaded and the project command run, and for
+`@target`, each SSH command with the script it runs, secrets masked the same
+way. `DEVOPSY_VERBOSE=1` (or `true`) does the same; the flag sets it, so
+devopsy called from project commands and devopsy on the server are verbose
+too.
 
 ### Custom commands
 
