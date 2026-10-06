@@ -159,3 +159,33 @@ func TestDomainsAndRetryScripts(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+func TestCleanupRetry(t *testing.T) {
+	traefik := t.TempDir()
+	dir := filepath.Join(traefik, ".devopsy", "mnt", "dynamic")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := RetryFile(traefik, "shop")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"removed\n", ""} {
+		out, err := exec.Command("sh", "-c", CleanupRetryScript(traefik, "shop")).Output()
+		if err != nil || string(out) != want {
+			t.Fatalf("run %d: %q %v", i, out, err)
+		}
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("file still there")
+	}
+
+	reports := []DomainReport{{Routed: true, Cert: CertInfo{Valid: true}}, {Routed: false}}
+	if !AllCertified(reports) {
+		t.Fatal("all routed hosts are certified")
+	}
+	reports = append(reports, DomainReport{Routed: true})
+	if AllCertified(reports) {
+		t.Fatal("a routed host has no certificate")
+	}
+}

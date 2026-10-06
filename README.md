@@ -177,7 +177,9 @@ router uses `acmedns`, and the certificate the server actually presents for
 each name, verified like a browser would. It ends each host with what to do
 next, like the CNAME to create or "certificate ready: point its DNS at ...".
 `domains --retry` asks Traefik to request missing certificates again, through
-a small file in its dynamic configuration, without restarting it.
+a small file in its dynamic configuration, without restarting it. Once every
+routed host has a valid certificate, `domains` removes that file again:
+Traefik keeps and renews the certificates without it.
 
 Several environments of one project live side by side as several targets,
 each with its own path: its own compose project, containers, data and public

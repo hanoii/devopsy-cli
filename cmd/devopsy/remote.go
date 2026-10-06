@@ -188,12 +188,27 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		return remote.Check(ctx, facts, checker, serverIPs), facts, 0
 	}
 
+	var project string
+
 	reports, facts, code := check()
 	if code != 0 {
 		return code
 	}
 	fmt.Print(remote.FormatReports(reports))
+	project = cli.NormalizeProjectName(facts.Env["DEVOPSY_PROJECT_NAME"])
+
+	// A previous --retry's file is only clutter once every certificate exists.
+	cleanup := func(reports []remote.DomainReport) {
+		if !remote.AllCertified(reports) {
+			return
+		}
+		var out bytes.Buffer
+		if _, err := remote.SSH(t, remote.CleanupRetryScript(facts.TraefikDir, project), bytes.NewReader(nil), &out, false); err == nil && strings.TrimSpace(out.String()) == "removed" {
+			cli.Fprint(os.Stderr, cyan, "All certificates exist: removed the retry file from Traefik's configuration.", color)
+		}
+	}
 	if !retry {
+		cleanup(reports)
 		return 0
 	}
 
@@ -207,7 +222,6 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		cli.Fprint(os.Stderr, cyan, "Nothing to retry.", color)
 		return 0
 	}
-	project := cli.NormalizeProjectName(facts.Env["DEVOPSY_PROJECT_NAME"])
 	if code, err := remote.SSH(t, remote.RetryScript(facts.TraefikDir, project, pending, time.Now()), bytes.NewReader(nil), nil, false); err != nil {
 		return fail(err.Error())
 	} else if code != 0 {
@@ -220,5 +234,6 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		return code
 	}
 	fmt.Print(remote.FormatReports(reports))
+	cleanup(reports)
 	return 0
 }
