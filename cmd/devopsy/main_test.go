@@ -140,7 +140,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
 	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  host: nowhere.invalid\n  path: /srv/app\n", 0o644)
-	for _, sub := range []string{"release", "rollback", "releases", "domains"} {
+	for _, sub := range []string{"release", "rollback", "releases", "domains", "--shell"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
 			t.Errorf("%s --help (%d):\n%s", sub, code, out)

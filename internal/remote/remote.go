@@ -516,6 +516,12 @@ func RunScript(t *Target, projectName string, args []string) string {
 	return "set -eu\n" + enter(t) + devopsyCall(projectName, args, true) + "\n"
 }
 
+// ShellScript opens the user's login shell where commands run: the current
+// release, or the path itself for a plain directory.
+func ShellScript(t *Target) string {
+	return "set -eu\n" + enter(t) + `exec "${SHELL:-/bin/sh}" -l` + "\n"
+}
+
 // ReleasesScript prints one line per release: id, current flag, failed flag
 // and the record JSON, tab separated.
 func ReleasesScript(t *Target) string {

@@ -202,6 +202,7 @@ func TestScriptsParse(t *testing.T) {
 		"rollback+cmd": ActivateScript(tg, "", true, "", "shop", []string{"up", "-d"}),
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
+		"shell":        ShellScript(tg),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -351,6 +352,17 @@ func TestPlainDirectories(t *testing.T) {
 	tr := &Target{Name: "prod", Host: "h", Path: released}
 	if out, err := run(RunScript(tr, "", []string{"ps"})); err != nil || !strings.Contains(out, "ran in "+released+"/current: ps") {
 		t.Fatalf("release run: %v\n%s", err, out)
+	}
+
+	// --shell opens $SHELL where commands run.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "fakeshell"), []byte("#!/bin/sh\necho \"shell $* in $PWD\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for dir, tg := range map[string]*Target{plain: tg, released + "/current": tr} {
+		if out, err := run("SHELL=" + bin + "/fakeshell; " + ShellScript(tg)); err != nil || !strings.Contains(out, "shell -l in "+dir) {
+			t.Errorf("shell in %s: %v\n%s", dir, err, out)
+		}
 	}
 
 	empty := &Target{Name: "new", Host: "h", Path: t.TempDir()}

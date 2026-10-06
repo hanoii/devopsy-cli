@@ -32,7 +32,10 @@ user-facing behavior and keep it in sync with any change to it.
   clashes (`devopsy version` once printed devopsy's version and then ran
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
-  and the compose fallback.
+  and the compose fallback. After `@target`, `release`, `rollback`,
+  `releases` and `domains` are words, kept as they are; new ones are flags: `--shell`
+  is one so `devopsy @prod shell` stays a project's command (a shell in a
+  container needs the project's service and user; devopsy cannot know them).
 - `devopsy @<target> <subcommand> --help` must only print help
   (`cli.RemoteCommandHelp`): before it existed, `release --help` made a
   release and ran `devopsy --help` on the server. Keep a help entry for every
