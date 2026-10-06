@@ -370,3 +370,37 @@ func TestPlainDirectories(t *testing.T) {
 		t.Fatalf("empty: %v\n%s", err, out)
 	}
 }
+
+func TestDirtyOutsideDevopsy(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	repo := t.TempDir()
+	root := filepath.Join(repo, "app")
+	git := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	write(t, filepath.Join(root, ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(root, "index.php"), "<?php\n")
+	write(t, filepath.Join(repo, "elsewhere.txt"), "x\n")
+	git("add", "-A")
+	git("commit", "-q", "-m", "init")
+
+	if DirtyOutsideDevopsy(root) {
+		t.Error("clean tree reported dirty")
+	}
+	write(t, filepath.Join(root, ".devopsy", "compose.yaml"), "services: {web: {}}\n")
+	write(t, filepath.Join(repo, "elsewhere.txt"), "changed\n")
+	if DirtyOutsideDevopsy(root) {
+		t.Error("changes in .devopsy/ or outside the project count as dirty")
+	}
+	write(t, filepath.Join(root, "index.php"), "<?php echo 1;\n")
+	if !DirtyOutsideDevopsy(root) {
+		t.Error("a changed project file is not reported")
+	}
+}

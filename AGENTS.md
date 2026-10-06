@@ -79,7 +79,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 - `.devopsy/target.env` is written into each release from targets.yaml, so
   per-target values apply however devopsy runs on the server, and rollbacks
   restore them. `shared/.env` is always linked so server edits apply without
-  a release.
+  a release. It also carries `DEVOPSY_RELEASE_COMMIT` (from git, unless the
+  target's env sets it) for image tags: with a fixed tag, image-mode
+  rollbacks would pull the newest image again.
 
 - `devopsy @target domains`: the server only reports facts (`print-env`, the
   old name of `--env`, kept so any server version answers;

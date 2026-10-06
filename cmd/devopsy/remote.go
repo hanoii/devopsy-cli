@@ -121,12 +121,16 @@ func runRemote(cwd string, args []string, color bool) int {
 		}
 		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s...",
 			record.ID, t.Name, t.Host, t.Path, len(files), src), color)
+		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
+			cli.Fprint(os.Stderr, yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
+				record.Commit[:min(10, len(record.Commit))]), color)
+		}
 
 		pr, pw := io.Pipe()
 		go func() {
 			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
 				remote.RecordFile:                  record.JSON(),
-				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName),
+				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
 			}))
 		}()
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
@@ -140,7 +144,8 @@ func runRemote(cwd string, args []string, color bool) int {
 }
 
 // targetEnv renders a target's env as the release's .devopsy/target.env.
-func targetEnv(t *remote.Target, projectName string) []byte {
+// commit is the release's git commit, if any.
+func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by devopsy from the %q target in targets.yaml. Do not edit:\n", t.Name)
 	fmt.Fprintf(&b, "# change targets.yaml and release again, or override in .env.\n")
@@ -148,6 +153,12 @@ func targetEnv(t *remote.Target, projectName string) []byte {
 	// the same however devopsy runs on the server, not "current".
 	if projectName != "" && t.Env["COMPOSE_PROJECT_NAME"] == "" {
 		b.WriteString(cli.DotenvLine("COMPOSE_PROJECT_NAME", projectName) + "\n")
+	}
+	// The commit released, for image tags: in image mode, compose.yaml can
+	// use the image CI built from that commit, so each release, and each
+	// rollback, runs its own image.
+	if commit != "" && t.Env["DEVOPSY_RELEASE_COMMIT"] == "" {
+		b.WriteString(cli.DotenvLine("DEVOPSY_RELEASE_COMMIT", commit) + "\n")
 	}
 	keys := make([]string, 0, len(t.Env))
 	for k := range t.Env {

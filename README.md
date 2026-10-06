@@ -183,7 +183,8 @@ however devopsy runs on the server, and a rollback brings back that release's
 values. Change it in `targets.yaml` and release again. When `compose.yaml` has
 no `name:`, `target.env` also fixes `COMPOSE_PROJECT_NAME` to the target
 directory's name, so devopsy run by hand on the server, in `current`, still
-finds the project.
+finds the project. From a git checkout, it also sets `DEVOPSY_RELEASE_COMMIT`
+to the commit released (see image tags below).
 
 ```sh
 devopsy @prod release deploy   # upload a new release, run `devopsy deploy` there
@@ -214,6 +215,20 @@ files into it and makes it current. With a command, it runs `devopsy
 the command's exit code. It keeps the last 5 releases.
 
 - **image** mode uploads `.devopsy/` only: images come from a registry.
+  Tag them with the commit, so each release and each rollback runs its own
+  image (a fixed `:latest` would make a rollback pull the newest image
+  again):
+
+  ```yaml
+  image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}
+  ```
+
+  CI builds and pushes `ghcr.io/me/app:$GITHUB_SHA`, then runs `devopsy @prod
+  release deploy` from the same checkout; the project's `deploy` pulls and
+  starts it. The image is the commit's: uncommitted changes outside
+  `.devopsy/` are not in it, and `release` warns when there are some. Locally the variable is unset, so the tag is
+  `local`. If the image was never pushed, the pull fails and the release goes
+  back to the previous one.
 - **build** mode uploads the whole project, as git sees it: tracked and
   untracked files, minus gitignored ones, with uncommitted changes. Compose
   then builds on the server.
