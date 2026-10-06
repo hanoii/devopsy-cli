@@ -17,22 +17,6 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-const remoteUsage = `Usage: devopsy @<target> <command> [args...]
-
-  release [cmd...]    upload the project as a new release and make it current;
-                      with cmd, run 'devopsy cmd' there and go back to the
-                      previous release if it fails
-  rollback [cmd...]   make the release before the current one current again,
-                      same cmd handling
-  releases            list the releases on the server
-  domains [--retry]   check the environment's public host and DEVOPSY_DOMAINS:
-                      DNS, acme-dns challenge, certificate, and what to do
-                      next; --retry asks Traefik for missing certificates
-  <anything else>     run 'devopsy <anything else>' in the current release
-
-Targets are defined in .devopsy/targets.yaml.
-`
-
 // runRemote handles `devopsy @target ...`.
 func runRemote(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
@@ -49,11 +33,8 @@ func runRemote(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	args = args[1:]
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Fprint(os.Stderr, remoteUsage)
-		if len(args) == 0 {
-			return 1
-		}
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Print(cli.RemoteHelp)
 		return 0
 	}
 

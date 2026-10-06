@@ -108,8 +108,24 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("outside a project (%d):\n%s", code, out)
 	}
 
-	out, code = runDevopsy(t, t.TempDir(), nil, "version")
-	if code != 0 || !strings.Contains(out, "devopsy dev") {
-		t.Fatalf("version outside a project (%d):\n%s", code, out)
+	out, code = runDevopsy(t, t.TempDir(), nil, "--version")
+	if code != 0 || !strings.Contains(out, "devopsy dev") || !strings.Contains(out, "docker compose") {
+		t.Fatalf("--version outside a project (%d):\n%s", code, out)
+	}
+
+	// The word goes to compose, devopsy prints nothing of its own.
+	out, code = runDevopsy(t, sub, nil, "version")
+	if code != 0 || strings.Contains(out, "devopsy dev") || !strings.Contains(out, "[version]") {
+		t.Fatalf("version word (%d):\n%s", code, out)
+	}
+
+	// Bare devopsy: help, anywhere, exit 0.
+	out, code = runDevopsy(t, sub, nil)
+	if code != 0 || !strings.Contains(out, "Project commands (") || !strings.Contains(out, "show") {
+		t.Fatalf("bare devopsy in a project (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, t.TempDir(), nil)
+	if code != 0 || !strings.Contains(out, "Not in a devopsy project") {
+		t.Fatalf("bare devopsy outside (%d):\n%s", code, out)
 	}
 }

@@ -191,20 +191,42 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 	}
 }
 
-func TestBuildHelp(t *testing.T) {
+func TestUsage(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
-		"commands/deploy*": "#!/bin/sh\n",
+		"commands/deploy*": "#!/bin/sh\n## Description: Pull and roll out\n",
+		"commands/plain*":  "#!/bin/sh\n",
 	})
-	for args, code := range map[string]int{"": 1, "help": 0, "--help": 0} {
-		var argv []string
-		if args != "" {
-			argv = []string{args}
+	text := Usage(filepath.Join(root, ProjectDirName))
+	for _, want := range []string{"Built-in:", "--version", "--env", "On a server", "Project commands (", "deploy  Pull and roll out", "  plain", "Anything else runs as docker compose"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
 		}
-		_, err := build(root, argv, nil)
+	}
+	if !strings.Contains(Usage(""), "Not in a devopsy project") {
+		t.Error("outside a project")
+	}
+}
+
+func TestBuildWordsAreNotBuiltins(t *testing.T) {
+	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
+	// version and help are compose commands now; built-ins are flags.
+	for _, word := range []string{"version", "help"} {
+		plan, err := build(root, []string{word}, nil)
+		if err != nil || plan.Path != "docker" || plan.Args[len(plan.Args)-1] != word {
+			t.Errorf("%s: %+v %v", word, plan, err)
+		}
+	}
+	for _, flag := range []string{"--help", "-h"} {
 		var h *Help
-		if !errors.As(err, &h) || h.Code != code || !strings.Contains(h.Text, "  deploy\n") {
-			t.Errorf("%q: got %v", args, err)
+		if _, err := build(root, []string{flag}, nil); !errors.As(err, &h) || h.Code != 0 {
+			t.Errorf("%s: %v", flag, err)
+		}
+	}
+	for _, env := range []string{"--env", "print-env"} {
+		var out *Output
+		if _, err := build(root, []string{env}, nil); !errors.As(err, &out) || !strings.Contains(out.Text, "COMPOSE_PROJECT_NAME='app'") {
+			t.Errorf("%s: %v", env, err)
 		}
 	}
 }
@@ -340,7 +362,7 @@ func TestPrintEnvRoundTrip(t *testing.T) {
 		".env":         "PLAIN=a b\nTRICKY=placeholder\nDEVOPSY_DOMAINS=example.org\n",
 	})
 	// The caller's value wins and is printed, quotes, $ and backslash included.
-	_, err := build(root, []string{"print-env"}, []string{"CALLER_ONLY=1", "PLAIN=caller", `TRICKY=it's "x" $HOME \ end`})
+	_, err := build(root, []string{"--env"}, []string{"CALLER_ONLY=1", "PLAIN=caller", `TRICKY=it's "x" $HOME \ end`})
 	var out *Output
 	if !errors.As(err, &out) {
 		t.Fatalf("want Output, got %v", err)
