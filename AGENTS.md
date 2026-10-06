@@ -60,6 +60,15 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   restore them. `shared/.env` is always linked so server edits apply without
   a release.
 
+- `devopsy @target domains`: the server only reports facts (print-env,
+  Traefik's routers from its local API, acme-dns registrations, its IP); DNS
+  (through 1.1.1.1), certificates (a real TLS connection to the server per
+  name, verified against system roots) and Cloudflare's proxy (its ranges,
+  then a request through it) are checked locally, so servers need nothing
+  extra. `--retry` writes a uniquely named router into Traefik's dynamic
+  directory (Traefik only retries on a configuration change) and the file is
+  removed once every routed host has a valid certificate.
+
 ## Gotchas
 
 - Compose reads `--env-file` more than once: `<(devopsy print-env)` does not
