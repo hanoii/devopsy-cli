@@ -73,7 +73,8 @@ const (
 type Target struct {
 	Name string `yaml:"-"`
 	// Host is the SSH destination, like deploy@203.0.113.10 or an alias from
-	// ~/.ssh/config.
+	// ~/.ssh/config. DEVOPSY_TARGET_HOST_<NAME> replaces it, and
+	// DEVOPSY_TARGET_HOST sets it when targets.yaml has none (see LoadTarget).
 	Host string `yaml:"host"`
 	// Path is the absolute directory on the server.
 	Path string `yaml:"path"`
@@ -104,8 +105,34 @@ func readTargets(file string) (map[string]*Target, error) {
 	return targets, nil
 }
 
+// HostVar is the variable that replaces the host of the target name:
+// DEVOPSY_TARGET_HOST_ and the name in upper case, anything but letters and
+// digits as "_" (vm1-traefik: DEVOPSY_TARGET_HOST_VM1_TRAEFIK).
+func HostVar(name string) string {
+	suffix := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		}
+		return '_'
+	}, name)
+	return DefaultHostVar + "_" + suffix
+}
+
+// DefaultHostVar sets the host of targets that define none.
+const DefaultHostVar = "DEVOPSY_TARGET_HOST"
+
 // LoadTarget reads one target from projectDir/targets.yaml.
-func LoadTarget(projectDir, name string) (*Target, error) {
+//
+// Hosts can come from variables, so a public repository need not name its
+// servers: HostVar(name) replaces the target's host, and DefaultHostVar sets
+// it when the target has none. They are read from the caller's environment,
+// then, for the project's own targets, from projectEnv (its .devopsy/.env;
+// nil for none). User-level targets ignore projectEnv: a project's settings
+// must not redirect them.
+func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool)) (*Target, error) {
 	// Lowest precedence first: the user-level file, then the project's
 	// targets.yaml, then its targets.local.yaml.
 	targets := map[string]*Target{}
@@ -162,8 +189,26 @@ func LoadTarget(projectDir, name string) (*Target, error) {
 	if !targetName.MatchString(name) {
 		return nil, fmt.Errorf("target name %q: use letters, digits, '.', '_' and '-'", name)
 	}
-	if t.Host == "" || t.Path == "" {
-		return nil, fmt.Errorf("target %q: host and path are required", name)
+	lookup := func(k string) string {
+		if v, ok := os.LookupEnv(k); ok {
+			return v
+		}
+		if projectEnv != nil && !t.User {
+			v, _ := projectEnv(k)
+			return v
+		}
+		return ""
+	}
+	if v := lookup(HostVar(name)); v != "" {
+		t.Host = v
+	} else if t.Host == "" {
+		t.Host = lookup(DefaultHostVar)
+	}
+	if t.Host == "" {
+		return nil, fmt.Errorf("target %q: no host: set host in %s, or %s or %s in the environment or .devopsy/.env", name, t.File, HostVar(name), DefaultHostVar)
+	}
+	if t.Path == "" {
+		return nil, fmt.Errorf("target %q: path is required", name)
 	}
 	if !path.IsAbs(t.Path) || path.Clean(t.Path) == "/" {
 		return nil, fmt.Errorf("target %q: path must be an absolute directory, not /", name)

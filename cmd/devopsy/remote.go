@@ -26,7 +26,16 @@ func runRemote(cwd string, args []string, color bool) int {
 
 	// Outside a project only user-level targets exist.
 	projectDir, _ := cli.FindProjectDir(cwd)
-	t, err := remote.LoadTarget(projectDir, strings.TrimPrefix(args[0], "@"))
+	// The project's .env can set target hosts (DEVOPSY_TARGET_HOST...).
+	var projectEnv func(string) (string, bool)
+	if projectDir != "" {
+		env := cli.NewEnv(os.Environ())
+		if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
+			return fail(err.Error())
+		}
+		projectEnv = env.Lookup
+	}
+	t, err := remote.LoadTarget(projectDir, strings.TrimPrefix(args[0], "@"), projectEnv)
 	if err != nil {
 		return fail(err.Error())
 	}

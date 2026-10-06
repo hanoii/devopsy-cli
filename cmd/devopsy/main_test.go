@@ -182,6 +182,23 @@ func TestUserTargets(t *testing.T) {
 	}
 }
 
+// A target's host can come from the project's .env, read before connecting.
+func TestTargetHostFromDotenv(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_TARGET_HOST=devopsy@from-dotenv\n", 0o644)
+	// echo stands in for ssh: it prints the destination.
+	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
+	if code != 0 || !strings.Contains(out, "-T devopsy@from-dotenv sh -c") {
+		t.Errorf("(%d):\n%s", code, out)
+	}
+}
+
 func TestTargetEnv(t *testing.T) {
 	tg := &remote.Target{Name: "prod", Env: map[string]string{"DEVOPSY_DOMAINS": "example.org"}}
 	got := string(targetEnv(tg, "app-prod", "0123abc"))

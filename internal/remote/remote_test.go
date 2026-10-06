@@ -48,22 +48,22 @@ root:
 nohost:
   path: /srv/x
 `)
-	tg, err := LoadTarget(dir, "prod")
+	tg, err := LoadTarget(dir, "prod", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tg.Mode != ModeImage || tg.Path != "/srv/app" || tg.Name != "prod" {
 		t.Fatalf("prod: %+v", tg)
 	}
-	if tg, err := LoadTarget(dir, "build"); err != nil || tg.Mode != ModeBuild {
+	if tg, err := LoadTarget(dir, "build", nil); err != nil || tg.Mode != ModeBuild {
 		t.Fatalf("build: %+v %v", tg, err)
 	}
 	for _, name := range []string{"bad-mode", "relative", "root", "nohost", "missing"} {
-		if _, err := LoadTarget(dir, name); err == nil {
+		if _, err := LoadTarget(dir, name, nil); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
-	if _, err := LoadTarget(t.TempDir(), "prod"); err == nil || !strings.Contains(err.Error(), "no targets defined") {
+	if _, err := LoadTarget(t.TempDir(), "prod", nil); err == nil || !strings.Contains(err.Error(), "no targets defined") {
 		t.Errorf("no targets file: %v", err)
 	}
 }
@@ -251,25 +251,25 @@ mine:
   host: laptop-vm
   path: /srv/mine
 `)
-	prod, err := LoadTarget(dir, "prod")
+	prod, err := LoadTarget(dir, "prod", nil)
 	if err != nil || prod.Env["DEVOPSY_DOMAINS"] != "example.org" {
 		t.Fatalf("prod: %+v %v", prod, err)
 	}
-	staging, err := LoadTarget(dir, "staging")
+	staging, err := LoadTarget(dir, "staging", nil)
 	if err != nil || staging.Host != "my-test-vm" || staging.Path != "/srv/mine" {
 		t.Fatalf("local override: %+v %v", staging, err)
 	}
-	if _, err := LoadTarget(dir, "mine"); err != nil {
+	if _, err := LoadTarget(dir, "mine", nil); err != nil {
 		t.Fatalf("local-only target: %v", err)
 	}
-	if _, err := LoadTarget(dir, "badenv"); err == nil {
+	if _, err := LoadTarget(dir, "badenv", nil); err == nil {
 		t.Fatal("invalid env name: want an error")
 	}
 
 	// Only a local file is enough.
 	only := t.TempDir()
 	write(t, filepath.Join(only, LocalTargetsFile), "x:\n  host: h\n  path: /srv/x\n")
-	if _, err := LoadTarget(only, "x"); err != nil {
+	if _, err := LoadTarget(only, "x", nil); err != nil {
 		t.Fatalf("local file only: %v", err)
 	}
 }
@@ -288,19 +288,76 @@ prod:
 	project := t.TempDir()
 	write(t, filepath.Join(project, TargetsFile), "prod:\n  host: vm1\n  path: /srv/app\n")
 
-	prod, err := LoadTarget(project, "prod")
+	prod, err := LoadTarget(project, "prod", nil)
 	if err != nil || prod.User || prod.Host != "vm1" {
 		t.Fatalf("project target must win: %+v %v", prod, err)
 	}
-	tr, err := LoadTarget(project, "vm1-traefik")
+	tr, err := LoadTarget(project, "vm1-traefik", nil)
 	if err != nil || !tr.User || tr.File != filepath.Join(home, TargetsFile) {
 		t.Fatalf("user target from a project: %+v %v", tr, err)
 	}
-	if tr, err := LoadTarget("", "vm1-traefik"); err != nil || !tr.User {
+	if tr, err := LoadTarget("", "vm1-traefik", nil); err != nil || !tr.User {
 		t.Fatalf("user target outside a project: %+v %v", tr, err)
 	}
-	if _, err := LoadTarget("", "missing"); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
+	if _, err := LoadTarget("", "missing", nil); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
 		t.Fatalf("missing target should list the others: %v", err)
+	}
+}
+
+func TestLoadTargetHostVars(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	write(t, filepath.Join(home, TargetsFile), "vm1-traefik:\n  path: /srv/traefik\n")
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, TargetsFile), `
+prod:
+  path: /srv/app-prod
+staging-eu:
+  host: devopsy@staging
+  path: /srv/app-staging
+`)
+	env := map[string]string{}
+	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	host := func(name string) string {
+		t.Helper()
+		tg, err := LoadTarget(dir, name, projectEnv)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		return tg.Host
+	}
+
+	if got := HostVar("staging-eu"); got != "DEVOPSY_TARGET_HOST_STAGING_EU" {
+		t.Errorf("HostVar: %s", got)
+	}
+	if got := host("prod"); !strings.Contains(got, "DEVOPSY_TARGET_HOST_PROD or DEVOPSY_TARGET_HOST") {
+		t.Errorf("no host should name the variables: %s", got)
+	}
+	// The default only fills in missing hosts; a target's own variable
+	// replaces any.
+	env["DEVOPSY_TARGET_HOST"] = "devopsy@default"
+	if got := host("prod"); got != "devopsy@default" {
+		t.Errorf("default: %s", got)
+	}
+	if got := host("staging-eu"); got != "devopsy@staging" {
+		t.Errorf("default must not replace a host: %s", got)
+	}
+	env["DEVOPSY_TARGET_HOST_STAGING_EU"] = "devopsy@eu"
+	if got := host("staging-eu"); got != "devopsy@eu" {
+		t.Errorf("target variable: %s", got)
+	}
+	// The caller's environment wins over the project's .env.
+	t.Setenv("DEVOPSY_TARGET_HOST_STAGING_EU", "devopsy@caller")
+	if got := host("staging-eu"); got != "devopsy@caller" {
+		t.Errorf("caller: %s", got)
+	}
+	// User-level targets ignore the project's .env.
+	if got := host("vm1-traefik"); !strings.HasPrefix(got, "error: ") {
+		t.Errorf("user target used the project's .env: %s", got)
+	}
+	t.Setenv("DEVOPSY_TARGET_HOST_VM1_TRAEFIK", "devopsy@vm1")
+	if got := host("vm1-traefik"); got != "devopsy@vm1" {
+		t.Errorf("user target from the caller: %s", got)
 	}
 }
 

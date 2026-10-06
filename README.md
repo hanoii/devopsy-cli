@@ -148,10 +148,23 @@ staging:
   path: /srv/myapp-staging
 ```
 
-Commit `targets.yaml`: CI deploys from it. It holds no secrets; to keep
-server addresses out of the repository, use `~/.ssh/config` aliases as hosts.
+Commit `targets.yaml`: CI deploys from it. It holds no secrets.
 `.devopsy/targets.local.yaml` (gitignore it) adds or replaces whole targets
 for one machine, like a personal test server, and is never uploaded.
+
+To keep server addresses out of the repository, leave `host` out and set it
+with variables, in your environment or `.devopsy/.env` (CI sets them in its
+environment):
+
+```sh
+DEVOPSY_TARGET_HOST=devopsy@203.0.113.10        # targets without a host
+DEVOPSY_TARGET_HOST_STAGING=devopsy@203.0.113.20  # replaces staging's host
+```
+
+The per-target variable is `DEVOPSY_TARGET_HOST_` and the target's name in
+upper case, with anything but letters and digits as `_` (`staging-eu`:
+`DEVOPSY_TARGET_HOST_STAGING_EU`). It replaces any host; `DEVOPSY_TARGET_HOST`
+only fills in a missing one. `~/.ssh/config` aliases work as hosts too.
 
 ### User-level targets and plain directories
 
