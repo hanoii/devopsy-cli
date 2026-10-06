@@ -79,6 +79,12 @@ func runRemote(cwd string, args []string, color bool) int {
 	}
 
 	switch args[0] {
+	case "--shell":
+		if len(args) > 1 {
+			return fail("--shell takes no arguments: for one command, use 'devopsy @" + t.Name + " <command>'")
+		}
+		return ssh(remote.ShellScript(t), nil, tty)
+
 	case "releases":
 		var out bytes.Buffer
 		code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)

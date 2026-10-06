@@ -267,9 +267,12 @@ const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devops
   releases             list the releases on the server
   domains [--retry]    DNS, challenge and certificate per host, and what next;
                        --retry asks Traefik for missing certificates
+  --shell              a shell on the server, in the current release (or the
+                       plain directory)
   <anything else>      run 'devopsy <anything else>' in the current release
 
-  devopsy @<target> <command> --help   details of release, rollback, releases, domains
+  devopsy @<target> <command> --help   details of release, rollback, releases,
+                                       domains, --shell
 `
 
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
@@ -308,6 +311,13 @@ Example:
 Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases whose command failed. * marks the current one.
+`,
+	"--shell": `Usage: devopsy @<target> --shell
+
+Opens your login shell on the target's host, over SSH, in the current
+release, or in the target's path for a plain devopsy directory (like
+/srv/traefik). devopsy and docker compose work there as on any project. For
+a shell in a container, use compose: devopsy @<target> exec <service> bash.
 `,
 	"domains": `Usage: devopsy @<target> domains [--retry]
 

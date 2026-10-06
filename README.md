@@ -191,8 +191,22 @@ devopsy @prod logs -f web      # any command runs in the current release
 devopsy @prod releases         # list releases, * marks the current one
 devopsy @prod rollback up -d   # back to the previous release, then `up -d`
 devopsy @prod domains          # per host: DNS, challenge, certificate, next step
+devopsy @prod --shell          # a shell on the server, in the current release
 devopsy @prod release --help   # details of any of these
 ```
+
+`--shell` opens your login shell on the server where commands run: the
+current release, or the path itself for a plain directory. For a shell in a
+container, use compose, `devopsy @prod exec <service> bash`, or a project
+command that knows the service and user. `--shell` is built into the local
+devopsy and only needs `sh` on the server, so it works with any target and
+server version.
+
+On a server, project commands come from the current release
+(`current/.devopsy/commands/`), so a new or changed command arrives with the
+next release. `devopsy @prod release` alone uploads and switches without
+running anything; running containers keep going, so use `release deploy`
+when anything else changed.
 
 `release` uploads the project as a new release, links the server's shared
 files into it and makes it current. With a command, it runs `devopsy
