@@ -104,6 +104,15 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		return ssh(remote.ShellScript(t), nil, tty)
 
+	case "--vars":
+		// A user-level target belongs to no project: its values never come
+		// from the .env of whatever project devopsy runs in.
+		lookup := os.LookupEnv
+		if !t.User && projectEnv != nil {
+			lookup = projectEnv
+		}
+		return runVars(t, args[1:], lookup, color)
+
 	case "releases":
 		var out bytes.Buffer
 		code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)

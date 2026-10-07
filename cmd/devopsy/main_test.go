@@ -270,3 +270,80 @@ func TestRemoteVerbose(t *testing.T) {
 		t.Errorf("not verbose by default (%d):\n%s", code, out)
 	}
 }
+
+// --vars end to end, with an ssh that runs the script locally.
+func TestRemoteVars(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// ssh -T <host> 'sh -c <script>': run the last argument here.
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	server := filepath.Join(tmp, "srv", "app-prod")
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  host: devopsy@server\n  path: "+server+"\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "REG_USER=deploy\nREG_PASSWORD='p@ss word'\n", 0o644)
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}
+	run := func(stdin string, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = append([]string{"DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		return string(out), code
+	}
+
+	// From the project's .env, then from stdin.
+	if out, code := run("", "@prod", "--vars", "set", "REG_USER", "REG_PASSWORD"); code != 0 || !strings.Contains(out, "Set REG_USER, REG_PASSWORD in devopsy@server:"+server+"/shared/.env") {
+		t.Fatalf("set (%d):\n%s", code, out)
+	}
+	if out, code := run("from-stdin\n", "@prod", "--vars", "set", "TOKEN"); code != 0 {
+		t.Fatalf("set from stdin (%d):\n%s", code, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(server, "shared", ".env"))
+	if want := "REG_USER='deploy'\nREG_PASSWORD='p@ss word'\nTOKEN='from-stdin'\n"; string(got) != want {
+		t.Fatalf(".env\n got %q\nwant %q", got, want)
+	}
+
+	if out, code := run("", "@prod", "--vars"); code != 0 || !strings.Contains(out, "REG_PASSWORD\nREG_USER\nTOKEN\n") || strings.Contains(out, "p@ss") {
+		t.Fatalf("list (%d):\n%s", code, out)
+	}
+	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "p@ss word\n" {
+		t.Fatalf("get (%d): %q", code, out)
+	}
+	if out, code := run("", "@prod", "--vars", "unset", "TOKEN"); code != 0 || !strings.Contains(out, "Unset TOKEN") {
+		t.Fatalf("unset (%d):\n%s", code, out)
+	}
+	if out, code := run("", "@prod", "--vars", "get", "TOKEN"); code == 0 || !strings.Contains(out, "TOKEN is not set") {
+		t.Fatalf("get unset (%d):\n%s", code, out)
+	}
+
+	// Values never go in arguments.
+	if out, code := run("", "@prod", "--vars", "set", "A=b"); code == 0 || !strings.Contains(out, "not a variable name") {
+		t.Fatalf("value in argument (%d):\n%s", code, out)
+	}
+	// Several keys and no value anywhere: refuse rather than guess.
+	if out, code := run("x", "@prod", "--vars", "set", "X1", "X2"); code == 0 || !strings.Contains(out, "X1 is not set") {
+		t.Fatalf("missing values (%d):\n%s", code, out)
+	}
+
+	// A user-level target never takes values from the project's .env.
+	home := t.TempDir()
+	box := filepath.Join(tmp, "srv", "box")
+	write(t, filepath.Join(home, "targets.yaml"), "box:\n  host: devopsy@server\n  path: "+box+"\n", 0o644)
+	env = append(env, "DEVOPSY_HOME="+home)
+	if out, code := run("other\n", "@box", "--vars", "set", "REG_USER"); code != 0 {
+		t.Fatalf("user-level set (%d):\n%s", code, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(box, "shared", ".env")); string(got) != "REG_USER='other'\n" {
+		t.Fatalf("user-level .env %q", got)
+	}
+}

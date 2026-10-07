@@ -186,10 +186,10 @@ func HostRule(hosts []string) (string, error) {
 }
 
 // DotenvLine formats KEY=value so compose's .env parser reads value back
-// unchanged: single quotes, or double quotes with escapes when the value
-// has a single quote.
+// unchanged, on one line: single quotes, or double quotes with escapes when
+// the value has a single quote or a newline.
 func DotenvLine(k, v string) string {
-	if !strings.Contains(v, "'") {
+	if !strings.ContainsAny(v, "'\n") {
 		return k + "='" + v + "'"
 	}
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "\n", `\n`)
@@ -279,10 +279,13 @@ const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devops
                        --retry asks Traefik for missing certificates
   --shell              a shell on the server, in the current release (or the
                        plain directory)
+  --vars [get|set|unset KEY...]
+                       the server's variables (shared/.env): names, one value,
+                       or set and unset them; values never go in arguments
   <anything else>      run 'devopsy <anything else>' in the current release
 
   devopsy @<target> <command> --help   details of release, rollback, releases,
-                                       domains, --shell
+                                       domains, --shell, --vars
 `
 
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
@@ -329,6 +332,30 @@ Opens your login shell on the target's host, over SSH, in the current
 release, or in the target's path for a plain devopsy directory (like
 /srv/traefik). devopsy and docker compose work there as on any project. For
 a shell in a container, use compose: devopsy @<target> exec <service> bash.
+`,
+	"--vars": `Usage: devopsy @<target> --vars [get KEY | set KEY... | unset KEY...]
+
+The target's variables on the server: shared/.env for an environment with
+releases (it can be set before the first release), or .devopsy/.env for a
+plain directory like /srv/traefik. These are its secrets and overrides,
+linked into every release; targets.yaml's env goes to target.env instead.
+
+  --vars              the names, values hidden
+  --vars get KEY      one value, on stdout
+  --vars set KEY...   each value from your environment, else the project's
+                      .env (not for user-level targets), else a hidden
+                      prompt, else stdin (one key only). Existing keys are
+                      replaced in place, new ones appended.
+  --vars unset KEY... remove them
+
+Values never go in arguments: they travel on SSH's stdin, so they stay out
+of ps, shell history and CI logs. Running containers keep their values:
+apply with 'devopsy @<target> up -d' or the next release.
+
+Examples:
+  devopsy @prod --vars set REGISTRY_USER REGISTRY_PASSWORD   # copy from local .env
+  printf '%s' "$TOKEN" | devopsy @prod --vars set CF_DNS_API_TOKEN
+  devopsy @vm1-traefik --vars
 `,
 	"domains": `Usage: devopsy @<target> domains [--retry]
 
