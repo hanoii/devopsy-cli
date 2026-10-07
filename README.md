@@ -8,6 +8,51 @@ right files. Anything it doesn't know becomes a `docker compose` command.
 It is a single static binary for Linux and macOS (amd64 and arm64), with no
 dependencies besides Docker and the Compose plugin.
 
+## Opinions
+
+devopsy decides a few things for you, and the rest of this README follows
+from them:
+
+- **Compose plus environment variables.** devopsy never generates or
+  rewrites compose files. It only adds variables, all visible with
+  `devopsy --env`, so plain `docker compose` sees exactly what it sees.
+  Configuration is environment variables, with a fixed precedence: caller,
+  `.env`, the target's `env`, the server's `/etc/devopsy/devopsy.env`.
+- **An environment is a server path.** Each target is a directory on a
+  server, so its own compose project, data and public URL. There is no
+  branch concept: a branch is only what you release into a target. Hence
+  released projects' compose files have no `name:`; devopsy names the
+  project after the path.
+- **Push over SSH, never pull.** A release is uploaded from your machine or
+  CI. The server needs no access to the repository and nothing listens for
+  webhooks. Locally devopsy only needs `ssh`; on the server, `devopsy`,
+  `tar` and `flock`.
+- **Releases are complete directories.** Each one is a full copy, and
+  `current` switches to it at the end, then back if the release steps fail.
+  Secrets and data live in `shared/`, outside releases, so rollbacks keep
+  them. Remote commands run through `current`.
+- **Steps are explicit.** `release` and `rollback` run the steps each target
+  names in `targets.yaml`; without them they refuse, rather than upload a
+  release nothing applies.
+- **Project behavior lives in the project.** Anything that depends on a
+  project's services, users or data is a command in its
+  `.devopsy/commands/`, not a devopsy feature. devopsy does not build or
+  push images either; it only helps decide when to (`--context-hash`).
+- **Traefik only where it helps.** Releases and commands do not depend on
+  a proxy. `DEVOPSY_HOST_RULE` is a Traefik rule as a plain variable, which
+  projects are free to ignore, and `@target domains` is
+  [devopsy-traefik](https://github.com/hanoii/devopsy-traefik)'s companion:
+  it checks hosts from outside, where only the CLI is installed.
+- **Words are yours.** devopsy's own features are flags or `@target`, so a
+  word is always a project command, then a compose command.
+- **Secrets stay out of sight.** Values from `.env` and secret-named
+  variables are masked in everything devopsy prints, and `--vars` sends
+  values over SSH's stdin, never as arguments.
+
+Other practices, like container UIDs, certificate resolvers or where data
+lives, are recommendations: see the
+[devopsy workspace](https://github.com/hanoii/devopsy) and its recipes.
+
 ## Install
 
 ```sh
