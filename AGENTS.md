@@ -110,6 +110,13 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   target's env sets it) for image tags: with a fixed tag, image-mode
   rollbacks would pull the newest image again.
 
+- `devopsy --context-hash`: a pure helper, git and compose.yaml in, a hash
+  out, so projects can reuse images by content (see README). devopsy does
+  not build or push images: owning the build was deferred (ROADMAP,
+  "Content-addressed images"). Errors only ever go towards a new hash: a
+  file kept that Docker ignores costs a rebuild, a file dropped that Docker
+  sends would reuse a stale image. Hence Docker's own matcher, and refusing
+  what it cannot hash (`additional_contexts`, `build:` in an override).
 - `devopsy @target --vars`: secrets go into `shared/.env` (or a plain
   directory's `.devopsy/.env`) over SSH's stdin, never as arguments. The
   scripts only need `sh`, `awk` and `flock` on the server, so any server

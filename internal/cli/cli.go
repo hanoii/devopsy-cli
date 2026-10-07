@@ -385,6 +385,10 @@ Built-in:
   --help, -h     this help
   --version      devopsy's, docker's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
+  --context-hash [service]
+                 a hash of what the service's image is built from at HEAD
+                 (build context minus dockerignore, Dockerfile, build:), to
+                 reuse an image across commits; see README
   --upgrade [v]  replace devopsy with the latest release, or release v
   --completion <shell>
                  shell completion for bash, zsh or fish; see README
@@ -541,6 +545,19 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 			b.WriteString(DotenvLine(k, v) + "\n")
 		}
 		return nil, &Output{Text: b.String()}
+	case "--context-hash":
+		if len(args) > 2 {
+			return nil, &ExitError{Code: 1, Msg: "usage: devopsy --context-hash [service]"}
+		}
+		service := ""
+		if len(args) == 2 {
+			service = args[1]
+		}
+		hash, err := ContextHash(p, service)
+		if err != nil {
+			return nil, &ExitError{Code: 1, Msg: "--context-hash: " + err.Error()}
+		}
+		return nil, &Output{Text: hash + "\n"}
 	}
 
 	// A custom command can call `devopsy <same name>` to reach the compose

@@ -79,6 +79,7 @@ var builtins = []Candidate{
 	{"--help", "devopsy's help", GroupDevopsy},
 	{"--version", "devopsy's and docker compose's versions", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes", GroupDevopsy},
+	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
 	{"--completion", "a shell completion script", GroupDevopsy},

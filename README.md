@@ -89,13 +89,14 @@ devopsy deploy         # runs .devopsy/commands/deploy if it exists
 devopsy                # help: built-ins, the project's commands, and the rest
 devopsy --version      # devopsy's, docker's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
+devopsy --context-hash [service]   # a hash of what the service's image is built from
 devopsy --upgrade      # replace devopsy with the latest release
 devopsy --completion fish   # a shell completion script (bash, zsh, fish)
 devopsy -v deploy      # --verbose: also what devopsy found and runs
 ```
 
 devopsy's own features are flags (`--help`, `--version`, `--env`,
-`--upgrade`, `--verbose`, `--completion`) or start
+`--context-hash`, `--upgrade`, `--verbose`, `--completion`) or start
 with `@` (targets), so they never clash with words: a word is a project
 command if `.devopsy/commands/` has it, else a docker compose command.
 `devopsy version` is `docker compose version`.
@@ -185,6 +186,33 @@ docker compose -f .devopsy/compose.yaml --env-file /tmp/devopsy.env config
 
 Use a file: compose reads `--env-file` more than once, so `<(devopsy
 --env)` does not work.
+
+### Context hash
+
+`devopsy --context-hash [service]` prints a hash of what the service's image
+is built from at the git commit `HEAD`, like Platform's tree id: build an
+image only when the hash is new, and reuse it across commits that only touch
+other files (`.devopsy/`, `.ddev/`...). The service defaults to the only one
+with a `build:` section. It covers:
+
+- the files git tracks in the build context, minus what the dockerignore
+  Docker uses leaves out (`<Dockerfile>.dockerignore` next to the
+  Dockerfile, else `.dockerignore` in the context), matched with Docker's own
+  rules (moby's patternmatcher);
+- the Dockerfile, even when it is ignored or outside the context;
+- the `build:` section, interpolated, so build args count by value.
+
+Not covered: base images, images in `COPY --from` and anything the build
+downloads: rebuild with `--pull` for those. Neither are uncommitted or
+untracked files: build from a git export of `HEAD` (`git archive`), or the
+hash does not describe the image. `additional_contexts` and a `build:` in
+`compose.override.yaml` are refused. devopsy builds nothing itself; a
+project's own command decides, for example:
+
+```sh
+tag=ctx-$(devopsy --context-hash app)
+docker buildx imagetools inspect "$image:$tag" >/dev/null 2>&1 || build_and_push
+```
 
 On a server, `/etc/devopsy/devopsy.env` holds server-wide settings, like
 `DEVOPSY_PUBLIC_DOMAIN`, written by devopsy-server. The project's `.env` and
