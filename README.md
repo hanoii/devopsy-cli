@@ -432,7 +432,10 @@ router uses `acmedns`, and the certificate the server actually presents for
 each name, verified like a browser would. A domain behind Cloudflare's proxy
 resolves to Cloudflare, so `domains` recognizes its ranges and requests the
 site through the proxy instead, reporting Cloudflare's origin errors (521,
-522, 525, 526) with what they mean. It ends each host with what to do
+522, 525, 526) with what they mean. Any other answer, even the site's own
+401, means the proxy reaches the server: without a valid certificate there,
+its SSL mode is not Full (strict) and the certificate is still pending, which
+Traefik requests when the router changes. It ends each host with what to do
 next, like the CNAME to create or "certificate ready: point its DNS at ...".
 `domains --retry` asks Traefik to request missing certificates again, through
 a small file in its dynamic configuration, without restarting it. Once every

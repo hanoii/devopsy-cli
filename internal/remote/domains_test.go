@@ -191,15 +191,15 @@ func TestCleanupRetry(t *testing.T) {
 }
 
 func TestCheckProxied(t *testing.T) {
-	out := factLine("env", "DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='cf-ok.org cf-526.org cf-down.org'\n") +
+	out := factLine("env", "DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='cf-ok.org cf-526.org cf-down.org cf-pending.org'\n") +
 		factLine("ip", "203.0.113.10") +
-		factLine("routers", `[{"name":"websecure-shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`cf-ok.org`"+`) || Host(`+"`cf-526.org`"+`) || Host(`+"`cf-down.org`"+`)","tls":{"certResolver":"acmedns"}}]`) +
+		factLine("routers", `[{"name":"websecure-shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`cf-ok.org`"+`) || Host(`+"`cf-526.org`"+`) || Host(`+"`cf-down.org`"+`) || Host(`+"`cf-pending.org`"+`)","tls":{"certResolver":"acmedns"}}]`) +
 		factLine("accounts", `{}`) + factLine("traefik", "/srv/traefik")
 	f, err := ParseFacts(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := map[string]int{"cf-ok.org": 200, "cf-526.org": 526, "cf-down.org": 522}
+	status := map[string]int{"cf-ok.org": 200, "cf-526.org": 526, "cf-down.org": 522, "cf-pending.org": 401}
 	c := Checker{
 		LookupIP: func(_ context.Context, h string) ([]string, error) {
 			if h == "shop.vm1.example.com" {
@@ -209,7 +209,7 @@ func TestCheckProxied(t *testing.T) {
 		},
 		LookupCNAME: func(_ context.Context, h string) (string, error) { return h, nil },
 		Cert: func(_ context.Context, _, h string) (CertInfo, error) {
-			return CertInfo{Valid: h != "cf-526.org", Issuer: "Let's Encrypt YR2"}, nil
+			return CertInfo{Valid: h != "cf-526.org" && h != "cf-pending.org", Issuer: "Let's Encrypt YR2"}, nil
 		},
 		Proxy: func(ip string) string {
 			if strings.HasPrefix(ip, "104.") || strings.HasPrefix(ip, "172.67.") {
@@ -231,6 +231,10 @@ func TestCheckProxied(t *testing.T) {
 	}
 	if r := got["cf-down.org"]; r.Live || !strings.Contains(r.Next, "cannot reach the server (522)") {
 		t.Errorf("cf-down.org: %q", r.Next)
+	}
+	// The app's own 401 through the proxy: served, but no certificate yet.
+	if r := got["cf-pending.org"]; r.Live || !strings.Contains(r.Next, "not Full (strict)") || !strings.Contains(r.Next, "--retry") {
+		t.Errorf("cf-pending.org: %q", r.Next)
 	}
 	text := FormatReports([]DomainReport{got["shop.vm1.example.com"], got["cf-ok.org"]})
 	if strings.Contains(text, "challenge") {
