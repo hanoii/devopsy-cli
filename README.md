@@ -166,7 +166,10 @@ they never clash with words: a word is a project command if
 naming the project's commands. `devopsy version` is `docker compose
 version`. devopsy learns compose's commands from compose itself and caches
 them, so a new compose's new commands just work. Arguments that start with
-a flag (`devopsy --profile tools up`) go to compose unchecked.
+a flag (`devopsy --profile tools up`) go to compose unchecked, and `--` is
+the escape hatch: `devopsy -- <args>` (or `devopsy @prod -- <args>`) is
+`docker compose <args>` with the project's files, even when a project
+command has that name or devopsy does not know the word.
 
 ### Output and secrets
 

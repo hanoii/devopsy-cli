@@ -161,6 +161,9 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return Result{Directive: DirectiveNoFileComp}
 	case strings.HasPrefix(first, "@"):
 		return completeRemote(cwd, projectDir, strings.TrimPrefix(first, "@"), words[1:], environ)
+	case first == "--":
+		// Compose's, whatever the project's commands are.
+		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}
 	case strings.HasPrefix(first, "-"):
 		return Result{Directive: DirectiveNoFileComp}
 	}
@@ -251,6 +254,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return none
 	case "--shell-host", "--releases", "--help", "-h":
 		return none
+	case "--":
+		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}
 	}
 	return completeCommand(cwd, projectDir, words, environ)
 }

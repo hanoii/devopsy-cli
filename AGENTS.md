@@ -45,7 +45,9 @@ user-facing behavior and keep it in sync with any change to it.
   refreshed when a word is missing, since compose's commands only change with
   its version), else an error, never compose's usage dump. Arguments starting
   with a flag go to compose unchecked: compose's global flags take values
-  devopsy would have to know. Flags that need a target say so without one.
+  devopsy would have to know. `devopsy -- <args>` is the escape hatch:
+  straight to compose, past project commands and the check. Flags that
+  need a target say so without one.
 - `--shell` opens a container shell: the project's `shell` capability, else
   bash or sh in the named service, the one labeled `devopsy.shell=true`, or
   the only running one. `--shell-host` (the server's own shell) is never
