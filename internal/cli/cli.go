@@ -424,6 +424,10 @@ Built-in:
                  a hash of what the service's image is built from at HEAD
                  (build context minus dockerignore, Dockerfile, build:), to
                  reuse an image across commits; see README
+  --debug [targets [name] | capabilities | labels]
+                 what devopsy sees and computes: versions, the project,
+                 targets with where each value comes from, the capabilities
+                 it calls and their contracts, the labels it reads
   --upgrade [v]  replace devopsy with the latest release, or release v
   --completion <shell>
                  shell completion for bash, zsh or fish; see README

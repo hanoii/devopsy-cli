@@ -96,6 +96,10 @@ type Target struct {
 	File string `yaml:"-"`
 	// nulls are its env keys set to null: they remove a default.
 	nulls map[string]bool
+	// From says where each value came from, for --debug: "host", "path",
+	// "mode", "source", "release", "rollback", "env.KEY". A file, "defaults
+	// in" a file, or a variable.
+	From map[string]string `yaml:"-"`
 }
 
 // Steps are what `release` or `rollback` runs, in three phases, so the
@@ -203,6 +207,13 @@ func readTargetsFile(file string) (*targetsFile, error) {
 		for k := range f.nulls[name] {
 			delete(t.Env, k)
 		}
+		if t != nil {
+			from := file
+			if name == DefaultsKey {
+				from = "defaults in " + file
+			}
+			t.From = origins(t, from)
+		}
 		if name == DefaultsKey {
 			if t != nil && (t.Host != "" || t.Path != "") {
 				return nil, fmt.Errorf("%s: defaults: host and path belong to each target", file)
@@ -213,6 +224,26 @@ func readTargetsFile(file string) (*targetsFile, error) {
 		f.targets[name] = t
 	}
 	return f, nil
+}
+
+// origins marks every value t sets as coming from from.
+func origins(t *Target, from string) map[string]string {
+	o := map[string]string{}
+	set := func(field string, ok bool) {
+		if ok {
+			o[field] = from
+		}
+	}
+	set("host", t.Host != "")
+	set("path", t.Path != "")
+	set("mode", t.Mode != "")
+	set("source", t.Source != "")
+	set("release", t.Release != nil)
+	set("rollback", t.Rollback != nil)
+	for k := range t.Env {
+		o["env."+k] = from
+	}
+	return o
 }
 
 // nullEnv lists the env keys a target node sets to null (KEY: ~).
@@ -243,6 +274,17 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 		return over
 	}
 	t := *over
+	from := map[string]string{}
+	for k, v := range base.From {
+		from[k] = v
+	}
+	for k := range nulls {
+		delete(from, "env."+k)
+	}
+	for k, v := range over.From {
+		from[k] = v
+	}
+	t.From = from
 	if t.Mode == "" {
 		t.Mode = base.Mode
 	}
@@ -465,10 +507,15 @@ func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool))
 		}
 		return ""
 	}
+	if t.From == nil {
+		t.From = map[string]string{}
+	}
 	if v := lookup(HostVar(name)); v != "" {
 		t.Host = v
+		t.From["host"] = HostVar(name)
 	} else if t.Host == "" {
 		t.Host = lookup(DefaultHostVar)
+		t.From["host"] = DefaultHostVar
 	}
 	if t.Host == "" {
 		return nil, fmt.Errorf("target %q: no host: set host in %s, or %s or %s in the environment or .devopsy/.env", name, t.File, HostVar(name), DefaultHostVar)
@@ -485,6 +532,7 @@ func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool))
 		// Build works for every project, image only for those that never
 		// build: a wrong build uploads extra files, a wrong image fails.
 		t.Mode = ModeBuild
+		t.From["mode"] = "devopsy's default"
 	case ModeImage, ModeBuild:
 	default:
 		return nil, fmt.Errorf("target %q: mode must be %q or %q", name, ModeImage, ModeBuild)

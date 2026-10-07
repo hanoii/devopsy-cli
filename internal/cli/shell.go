@@ -186,3 +186,59 @@ func labelValue(n yaml.Node, key string) (string, bool) {
 	}
 	return "", false
 }
+
+// DevopsyLabels lists the devopsy.* labels of each service in the compose
+// files of the project at projectDir (its .devopsy/), for --debug.
+func DevopsyLabels(projectDir string) (map[string]map[string]string, error) {
+	p := &loadedProject{dir: projectDir, composeFile: filepath.Join(projectDir, "compose.yaml")}
+	files := []string{p.composeFile}
+	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
+		if fi, err := os.Stat(filepath.Join(projectDir, name)); err == nil && fi.Mode().IsRegular() {
+			files = append(files, filepath.Join(projectDir, name))
+			break
+		}
+	}
+	out := map[string]map[string]string{}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		var doc struct {
+			Services map[string]struct {
+				Labels yaml.Node `yaml:"labels"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		for name, s := range doc.Services {
+			for k, v := range labelMap(s.Labels) {
+				if strings.HasPrefix(k, "devopsy.") {
+					if out[name] == nil {
+						out[name] = map[string]string{}
+					}
+					out[name][k] = v
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// labelMap reads a compose labels node, a list of "k=v" or a map.
+func labelMap(n yaml.Node) map[string]string {
+	m := map[string]string{}
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, item := range n.Content {
+			k, v, _ := strings.Cut(item.Value, "=")
+			m[k] = strings.TrimSpace(v)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			m[n.Content[i].Value] = strings.TrimSpace(n.Content[i+1].Value)
+		}
+	}
+	return m
+}
