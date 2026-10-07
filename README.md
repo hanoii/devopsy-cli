@@ -48,7 +48,14 @@ fish. Load it from your shell's startup file:
 ```sh
 source <(devopsy --completion bash)   # ~/.bashrc (bash 4 or later)
 source <(devopsy --completion zsh)    # ~/.zshrc, after compinit
-devopsy --completion fish | source    # ~/.config/fish/config.fish
+```
+
+In fish, add a one-line completion file. Fish loads it at the first Tab after
+`devopsy` in each shell, so shells start no slower, and each shell gets the
+installed devopsy's script:
+
+```fish
+echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fish/completions/devopsy.fish
 ```
 
 It completes targets (`@prod`, user-level ones included, with their host and
@@ -66,7 +73,11 @@ compose's. zsh lists each in its own group (unless your `group-name` and
 later) keeps the order but shows names only.
 
 The scripts are small and ask devopsy (`devopsy --complete <words>`) at every
-Tab, so upgrading devopsy upgrades completion, even in a saved script.
+Tab, so candidates follow the installed devopsy right away, even in open
+shells. A new release can still change how a script shows them: loaded as
+above, new shells get it, and `devopsy --completion fish | source` (or the
+`source` line for bash and zsh) updates an open one. A script saved to a file
+(`devopsy --completion fish > ...`) only changes when you save it again.
 
 ## Project layout
 

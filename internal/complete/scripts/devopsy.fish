@@ -1,8 +1,8 @@
-# devopsy completion for fish. Load it from ~/.config/fish/config.fish:
+# devopsy completion for fish. Load it at the first Tab after devopsy in each
+# shell, from the installed devopsy, with a one-line completion file:
 #
-#   devopsy --completion fish | source
+#   echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fish/completions/devopsy.fish
 #
-# or save it: devopsy --completion fish > ~/.config/fish/completions/devopsy.fish
 # It asks devopsy itself (devopsy --complete <words>) for targets, commands,
 # flags and, through docker compose, services.
 
