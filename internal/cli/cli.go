@@ -383,7 +383,7 @@ Usage:
 
 Built-in:
   --help, -h     this help
-  --version      devopsy's and docker compose's versions
+  --version      devopsy's, docker's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
   --upgrade [v]  replace devopsy with the latest release, or release v
   --completion <shell>

@@ -57,6 +57,7 @@ func run() int {
 	}
 	if args[0] == "--version" {
 		fmt.Printf("devopsy %s\n", version)
+		fmt.Println(dockerVersion())
 		if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
 			fmt.Printf("docker compose %s\n", strings.TrimSpace(string(out)))
 		} else {
@@ -124,4 +125,21 @@ func run() int {
 	}
 	cli.Fprint(os.Stderr, red, fmt.Sprintf("%s: %v", plan.Args[0], err), color)
 	return 126
+}
+
+// dockerVersion is the docker client's version and, when the daemon answers,
+// the server's: they differ when DOCKER_HOST or a context points elsewhere.
+func dockerVersion() string {
+	// docker version exits 1 without a daemon, but still prints the client.
+	out, _ := exec.Command("docker", "version", "--format", "{{.Client.Version}}|{{if .Server}}{{.Server.Version}}{{end}}").Output()
+	client, server, _ := strings.Cut(strings.TrimSpace(string(out)), "|")
+	switch {
+	case client == "":
+		return "docker: not available"
+	case server == "":
+		return "docker " + client + " (daemon not reachable)"
+	case server == client:
+		return "docker " + client
+	}
+	return "docker " + client + " (server " + server + ")"
 }

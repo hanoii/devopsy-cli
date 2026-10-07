@@ -87,7 +87,7 @@ devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f .devopsy/co
 devopsy logs -f web
 devopsy deploy         # runs .devopsy/commands/deploy if it exists
 devopsy                # help: built-ins, the project's commands, and the rest
-devopsy --version      # devopsy's and docker compose's versions
+devopsy --version      # devopsy's, docker's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
 devopsy --upgrade      # replace devopsy with the latest release
 devopsy --completion fish   # a shell completion script (bash, zsh, fish)
