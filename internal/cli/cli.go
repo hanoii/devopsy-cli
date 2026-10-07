@@ -386,6 +386,8 @@ Built-in:
   --version      devopsy's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
   --upgrade [v]  replace devopsy with the latest release, or release v
+  --completion <shell>
+                 shell completion for bash, zsh or fish; see README
   --verbose, -v  before anything else: also print what devopsy found and runs
                  (DEVOPSY_VERBOSE=1 does the same)
 
@@ -416,9 +418,16 @@ Built-in:
 	return b.String()
 }
 
-// Build decides what to run for args (without argv[0]), from cwd and the
-// caller's environment.
-func Build(cwd string, args []string, environ []string) (*Plan, error) {
+// loadedProject is a project with its environment loaded.
+type loadedProject struct {
+	dir, composeFile, dotenvFile string
+	env                          *Env
+	verbose                      []string
+}
+
+// loadProject finds the project from cwd and loads its environment over the
+// caller's.
+func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	projectDir, err := FindProjectDir(cwd)
 	if err != nil {
 		return nil, err
@@ -505,6 +514,17 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_PUBLIC_HOST", "DEVOPSY_HOST_RULE"} {
 		env.Mark(k)
 	}
+	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose}, nil
+}
+
+// Build decides what to run for args (without argv[0]), from cwd and the
+// caller's environment.
+func Build(cwd string, args []string, environ []string) (*Plan, error) {
+	p, err := loadProject(cwd, environ)
+	if err != nil {
+		return nil, err
+	}
+	projectDir, env, verbose, dotenvFile := p.dir, p.env, p.verbose, p.dotenvFile
 
 	if len(args) == 0 {
 		return nil, &Help{Text: Usage(projectDir), Code: 0}
@@ -539,22 +559,34 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		}, nil
 	}
 
-	composeArgs := []string{"docker", "compose", "-f", composeFile}
+	plan := p.compose(args)
+	plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+	plan.Verbose = maskAll(secrets, verbose)
+	return plan, nil
+}
+
+// compose plans `docker compose` with the project's files and args.
+func (p *loadedProject) compose(args []string) *Plan {
+	composeArgs := []string{"docker", "compose", "-f", p.composeFile}
 	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
-		override := filepath.Join(projectDir, name)
+		override := filepath.Join(p.dir, name)
 		if fi, err := os.Stat(override); err == nil && fi.Mode().IsRegular() {
 			composeArgs = append(composeArgs, "-f", override)
 			break
 		}
 	}
-	composeArgs = append(composeArgs, args...)
-	return &Plan{
-		Path:    "docker",
-		Args:    composeArgs,
-		Env:     env.Environ(),
-		Notice:  secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(composeArgs, " "))),
-		Verbose: maskAll(secrets, verbose),
-	}, nil
+	return &Plan{Path: "docker", Args: append(composeArgs, args...), Env: p.env.Environ()}
+}
+
+// Compose plans `docker compose` args with the project's files and
+// environment, never a project command, and prints nothing: for shell
+// completion.
+func Compose(cwd string, args []string, environ []string) (*Plan, error) {
+	p, err := loadProject(cwd, environ)
+	if err != nil {
+		return nil, err
+	}
+	return p.compose(args), nil
 }
 
 func maskAll(s *Secrets, lines []string) []string {

@@ -13,6 +13,9 @@ user-facing behavior and keep it in sync with any change to it.
 - `internal/remote/`: `@target` support: targets.yaml, packing a release, and
   the POSIX `sh` scripts run on the server over SSH. Scripts are checked with
   `sh -n` in tests; keep them POSIX and GNU coreutils based (`mv -T`).
+- `internal/complete/`: shell completion: the candidates for the words
+  after `devopsy`, and the bash, zsh and fish scripts (embedded) that ask
+  for them.
 - `install.sh`: POSIX `sh` installer that downloads a release.
 - `scripts/devopsy`: runs devopsy built from the checkout; developers
   symlink it into their PATH.
@@ -45,6 +48,16 @@ user-facing behavior and keep it in sync with any change to it.
   release and ran `devopsy --help` on the server. Keep a help entry for every
   server subcommand.
 - Few dependencies; prefer the standard library. Linux and macOS only.
+- Completion logic lives in Go (`internal/complete`), never in the shell
+  scripts: they only pass words to the hidden `devopsy --complete` and show
+  what it prints, cobra's protocol (`value<TAB>description` lines, then
+  `:<directive>`). That lets docker compose's own completion (`docker
+  __complete compose -f ...`, docker's CLI is cobra) pass through for
+  compose's commands, flags and services. devopsy adds a third field, the
+  group (target, project, devopsy, compose for the delegate's), which the zsh
+  and fish scripts use to set them apart. Completion never connects to
+  servers: after `@target`, services come from the local compose files.
+  New built-ins and `@target` subcommands go in its lists too.
 - `--upgrade` (internal/update) reads the same release files as `install.sh`:
   keep archive names and `checksums.txt` as they are. The daily release
   check runs in a detached `devopsy --upgrade-check`, because devopsy

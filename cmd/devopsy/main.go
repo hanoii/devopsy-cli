@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/complete"
 )
 
 // Set at build time by GoReleaser.
@@ -68,6 +69,12 @@ func run() int {
 	}
 	if args[0] == upgradeCheck {
 		return runUpgradeCheck()
+	}
+	if args[0] == complete.Flag {
+		return runComplete(cwd, args[1:])
+	}
+	if args[0] == "--completion" {
+		return runCompletion(args[1:], color)
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
