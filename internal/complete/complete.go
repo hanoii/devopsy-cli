@@ -195,9 +195,15 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		}
 	}
 	// A user-level target is not this project: its commands and services
-	// are unknown here.
-	if target != nil && target.User {
+	// are its source's, when it names one, else unknown.
+	user := target != nil && target.User
+	if user {
 		projectDir = ""
+		if src := target.SourceDir(); src != "" {
+			if dir, err := cli.FindProjectDir(src); err == nil && filepath.Dir(dir) == filepath.Clean(src) {
+				projectDir, cwd = dir, src
+			}
+		}
 	}
 	cur := words[len(words)-1]
 	none := Result{Directive: DirectiveNoFileComp}
@@ -240,7 +246,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			r.Candidates = []Candidate{{"get", "one value", GroupDevopsy}, {"set", "set variables", GroupDevopsy}, {"unset", "remove variables", GroupDevopsy}}
 		case words[1] == "set" && strings.HasPrefix(cur, "-"):
 			r.Candidates = []Candidate{{"--show", "echo what you type at the prompt", GroupDevopsy}}
-		case words[1] == "set" && projectDir != "":
+		case words[1] == "set" && projectDir != "" && !user:
+			// A user-level target never takes values from a project's .env.
 			// The keys of the project's .env: what set copies from.
 			for _, k := range dotenvKeys(filepath.Join(projectDir, ".env"), words[2:len(words)-1]) {
 				r.Candidates = append(r.Candidates, Candidate{Value: k})

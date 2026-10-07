@@ -242,10 +242,7 @@ func (t *Target) ReleasesHere(projectDir string) (bool, string) {
 	if t.Source == "" {
 		return false, fmt.Sprintf("@%s is a user-level target (%s) without source: release and rollback need a target defined by the project, in .devopsy/targets.yaml, or source: <the project's directory> on it", t.Name, t.File)
 	}
-	want := t.Source
-	if home, err := os.UserHomeDir(); err == nil && (want == "~" || strings.HasPrefix(want, "~/")) {
-		want = filepath.Join(home, strings.TrimPrefix(want, "~"))
-	}
+	want := t.SourceDir()
 	here := ""
 	if projectDir != "" {
 		here = filepath.Dir(projectDir)
@@ -257,6 +254,16 @@ func (t *Target) ReleasesHere(projectDir string) (bool, string) {
 		here = "outside a project"
 	}
 	return false, fmt.Sprintf("@%s releases only from its source, %s (%s); here: %s", t.Name, t.Source, t.File, here)
+}
+
+// SourceDir is a user-level target's source, with "~/" expanded; "" when it
+// has none.
+func (t *Target) SourceDir() string {
+	dir := t.Source
+	if home, err := os.UserHomeDir(); err == nil && (dir == "~" || strings.HasPrefix(dir, "~/")) {
+		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+	}
+	return dir
 }
 
 // samePath compares two directories after resolving symbolic links.
