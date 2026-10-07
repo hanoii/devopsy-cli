@@ -525,7 +525,9 @@ func proxyStep(r DomainReport, ip string) (string, bool) {
 	case r.ProxyStatus >= 520 && r.ProxyStatus <= 530:
 		return fmt.Sprintf("%s reports an origin error (%d)", r.Proxy, r.ProxyStatus), false
 	case !r.Cert.Valid:
-		return fmt.Sprintf("served through %s, but the server has no valid certificate for it: with SSL mode Full (strict) that fails; run with --retry", r.Proxy), false
+		// The proxy got an answer from the server despite its invalid
+		// certificate, so its SSL mode is not Full (strict).
+		return fmt.Sprintf("served through %s (its SSL mode is not Full (strict)), but the server has no certificate for it yet: Traefik requests one when its router changes, check again in a minute, else run with --retry; get one before switching to Full (strict)", r.Proxy), false
 	}
 	return "live", true
 }
