@@ -420,12 +420,15 @@ the only one running:
 services:
   app:
     labels:
-      - devopsy.shell=true
+      - devopsy.shell=true       # the default service
+      - devopsy.shell.user=app   # its shell's user, when not the service's own
 ```
 
-Options go to `docker compose exec`, like `devopsy --shell app --user
-root`. A project that needs more (another user, a login script) implements
-the `shell` capability instead (see Capabilities).
+`devopsy.shell.user` is for images that start as root and drop to another
+user in their entrypoint, which `docker compose exec` skips. Options go to
+`docker compose exec`, like `devopsy --shell app --user root`, which wins
+over the label. A project that needs more (a login script, another
+program) implements the `shell` capability instead (see Capabilities).
 
 `--shell-host` opens your login shell on the server itself, where commands
 run: the current release, or the path itself for a plain directory. It never

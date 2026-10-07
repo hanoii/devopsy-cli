@@ -50,7 +50,9 @@ user-facing behavior and keep it in sync with any change to it.
   need a target say so without one.
 - `--shell` opens a container shell: the project's `shell` capability, else
   bash or sh in the named service, the one labeled `devopsy.shell=true`, or
-  the only running one. `--shell-host` (the server's own shell) is never
+  the only running one, as its `devopsy.shell.user` label says if any.
+  Small per-project choices are compose labels, read from the compose
+  files: the capability is for behavior a label cannot express. `--shell-host` (the server's own shell) is never
   overridable: it is the way in when the project is broken.
 - `devopsy @<target> <subcommand> --help` must only print help
   (`cli.RemoteCommandHelp`): before it existed, `--release --help` made a

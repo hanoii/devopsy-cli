@@ -121,6 +121,25 @@ func TestShell(t *testing.T) {
 		t.Fatalf("named service with options: %q", plan.Args)
 	}
 
+	// devopsy.shell.user: the service's shell user, unless given.
+	userCompose := "services:\n  app:\n    image: x\n    labels:\n      devopsy.shell: \"true\"\n      devopsy.shell.user: app\n  db:\n    image: y\n"
+	withUser := project(t, "withuser", map[string]string{"compose.yaml": userCompose})
+	for args, want := range map[string][]string{
+		"--shell":                 {"exec", "--user", "app", "app"},
+		"--shell app --user root": {"exec", "--user", "root", "app"},
+		"--shell app -uroot":      {"exec", "-uroot", "app"},
+		"--shell db":              {"exec", "db"},
+	} {
+		plan, err := build(withUser, strings.Fields(args), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		got := plan.Args[len(plan.Args)-len(want)-3 : len(plan.Args)-3]
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", args, got, want)
+		}
+	}
+
 	// Map labels in the override, and two labeled services.
 	write := func(p, s string) {
 		if err := os.WriteFile(filepath.Join(root, ProjectDirName, p), []byte(s), 0o644); err != nil {

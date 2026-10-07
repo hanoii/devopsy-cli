@@ -11,8 +11,13 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// ShellLabel marks the service `devopsy --shell` opens by default.
-const ShellLabel = "devopsy.shell"
+// ShellLabel marks the service `devopsy --shell` opens by default, and
+// ShellUserLabel the user a service's shell runs as, when not its own: an
+// image whose entrypoint drops from root, which compose exec skips.
+const (
+	ShellLabel     = "devopsy.shell"
+	ShellUserLabel = "devopsy.shell.user"
+)
 
 // shellCommand runs bash where the image has it, else sh.
 const shellCommand = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
@@ -52,11 +57,11 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		service, args = args[0], args[1:]
 	}
+	services, labeled, users, err := composeServices(p)
+	if err != nil {
+		return nil, &ExitError{Code: 1, Msg: "--shell: " + err.Error()}
+	}
 	if service == "" {
-		services, labeled, err := composeServices(p)
-		if err != nil {
-			return nil, &ExitError{Code: 1, Msg: "--shell: " + err.Error()}
-		}
 		switch {
 		case len(labeled) == 1:
 			service = labeled[0]
@@ -71,10 +76,23 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 			}
 		}
 	}
+	if user := users[service]; user != "" && !hasUserOption(args) {
+		args = append([]string{"--user", user}, args...)
+	}
 	plan := p.compose(append(append([]string{"exec"}, args...), service, "sh", "-c", shellCommand))
 	plan.Notice = secrets.Mask(fmt.Sprintf("Running 'docker compose exec %s' (a shell)...", strings.TrimSpace(strings.Join(args, " ")+" "+service)))
 	plan.Verbose = maskAll(secrets, p.verbose)
 	return plan, nil
+}
+
+// hasUserOption reports whether exec options already choose a user.
+func hasUserOption(args []string) bool {
+	for _, a := range args {
+		if a == "-u" || a == "--user" || strings.HasPrefix(a, "--user=") || (strings.HasPrefix(a, "-u") && len(a) > 2) {
+			return true
+		}
+	}
+	return false
 }
 
 // Services lists the services in the compose files of the project at
@@ -83,7 +101,7 @@ func Services(projectDir string) []string {
 	if projectDir == "" {
 		return nil
 	}
-	services, _, err := composeServices(&loadedProject{dir: projectDir, composeFile: filepath.Join(projectDir, "compose.yaml")})
+	services, _, _, err := composeServices(&loadedProject{dir: projectDir, composeFile: filepath.Join(projectDir, "compose.yaml")})
 	if err != nil {
 		return nil
 	}
@@ -91,9 +109,10 @@ func Services(projectDir string) []string {
 }
 
 // composeServices reads the services of the project's compose file and its
-// override, and those labeled devopsy.shell=true, both sorted. Labels are
-// lists ("k=v") or maps, as compose allows.
-func composeServices(p *loadedProject) (services, labeled []string, err error) {
+// override, those labeled devopsy.shell=true, both sorted, and each
+// service's devopsy.shell.user. Labels are lists ("k=v") or maps, as compose
+// allows.
+func composeServices(p *loadedProject) (services, labeled []string, users map[string]string, err error) {
 	files := []string{p.composeFile}
 	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
 		if fi, err := os.Stat(filepath.Join(p.dir, name)); err == nil && fi.Mode().IsRegular() {
@@ -103,10 +122,11 @@ func composeServices(p *loadedProject) (services, labeled []string, err error) {
 	}
 	all := map[string]bool{}
 	marked := map[string]bool{}
+	users = map[string]string{}
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		var doc struct {
 			Services map[string]struct {
@@ -114,12 +134,15 @@ func composeServices(p *loadedProject) (services, labeled []string, err error) {
 			} `yaml:"services"`
 		}
 		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", file, err)
+			return nil, nil, nil, fmt.Errorf("%s: %w", file, err)
 		}
 		for name, s := range doc.Services {
 			all[name] = true
 			if v, ok := labelValue(s.Labels, ShellLabel); ok {
 				marked[name] = v == "true"
+			}
+			if v, ok := labelValue(s.Labels, ShellUserLabel); ok {
+				users[name] = v
 			}
 		}
 	}
@@ -131,7 +154,7 @@ func composeServices(p *loadedProject) (services, labeled []string, err error) {
 	}
 	sort.Strings(services)
 	sort.Strings(labeled)
-	return services, labeled, nil
+	return services, labeled, users, nil
 }
 
 // labelValue finds key in a compose labels node, a list of "k=v" or a map.
