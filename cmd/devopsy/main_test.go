@@ -347,3 +347,34 @@ func TestRemoteVars(t *testing.T) {
 		t.Fatalf("user-level .env %q", got)
 	}
 }
+
+func TestCompletion(t *testing.T) {
+	root := t.TempDir()
+	dot := filepath.Join(root, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
+	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
+	// docker's own completion, as cobra prints it: compose commands, one
+	// clashing with the project's deploy.
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "docker"), "#!/bin/sh\n[ \"$1\" = __complete ] || exit 1\nprintf 'deploy\\tcompose deploy\\nup\\tCreate and start containers\\n:4\\n'\n", 0o755)
+	env := []string{"PATH=" + bin + ":/usr/bin:/bin"}
+
+	out, code := runDevopsy(t, root, env, "--complete", "")
+	want := "@prod\t/srv/app-prod\ttarget\ndeploy\tRoll out\tproject\nup\tCreate and start containers\tcompose\n:4\n"
+	if code != 0 || out != want {
+		t.Fatalf("--complete (%d):\n%s", code, out)
+	}
+	out, _ = runDevopsy(t, root, env, "--complete", "deploy", "")
+	if out != ":0\n" {
+		t.Fatalf("a project command's arguments are files:\n%s", out)
+	}
+
+	out, code = runDevopsy(t, root, nil, "--completion", "fish")
+	if code != 0 || !strings.Contains(out, "devopsy --complete") {
+		t.Fatalf("--completion fish (%d):\n%s", code, out)
+	}
+	if _, code = runDevopsy(t, root, nil, "--completion", "tcsh"); code != 1 {
+		t.Fatalf("--completion tcsh: %d", code)
+	}
+}

@@ -40,6 +40,34 @@ ln -s "$PWD/scripts/devopsy" ~/.local/bin/devopsy
 devopsy --version   # like v0.5.0-2-g1a2b3c4-dirty
 ```
 
+### Shell completion
+
+`devopsy --completion <shell>` prints a completion script for bash, zsh or
+fish. Load it from your shell's startup file:
+
+```sh
+source <(devopsy --completion bash)   # ~/.bashrc (bash 4 or later)
+source <(devopsy --completion zsh)    # ~/.zshrc, after compinit
+devopsy --completion fish | source    # ~/.config/fish/config.fish
+```
+
+It completes targets (`@prod`, user-level ones included, with their host and
+path), the project's commands with their descriptions, devopsy's flags,
+the commands after `@<target>` (`release`, `--vars set` with the keys of
+the project's `.env`...) and, through docker compose's own completion,
+compose's commands, flags and the project's services. After a project
+command, it completes file names. On a target, services come from the local
+compose files: completion never connects to servers.
+
+Targets come first, then project commands, devopsy's own commands and docker
+compose's. zsh lists each in its own group (unless your `group-name` and
+`format` styles say otherwise), fish describes project commands as
+`project: ...` and compose's as `docker compose: ...`, and bash (4.4 or
+later) keeps the order but shows names only.
+
+The scripts are small and ask devopsy (`devopsy --complete <words>`) at every
+Tab, so upgrading devopsy upgrades completion, even in a saved script.
+
 ## Project layout
 
 ```
@@ -62,11 +90,12 @@ devopsy                # help: built-ins, the project's commands, and the rest
 devopsy --version      # devopsy's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
 devopsy --upgrade      # replace devopsy with the latest release
+devopsy --completion fish   # a shell completion script (bash, zsh, fish)
 devopsy -v deploy      # --verbose: also what devopsy found and runs
 ```
 
 devopsy's own features are flags (`--help`, `--version`, `--env`,
-`--upgrade`, `--verbose`) or start
+`--upgrade`, `--verbose`, `--completion`) or start
 with `@` (targets), so they never clash with words: a word is a project
 command if `.devopsy/commands/` has it, else a docker compose command.
 `devopsy version` is `docker compose version`.

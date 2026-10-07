@@ -124,19 +124,11 @@ func HostVar(name string) string {
 // DefaultHostVar sets the host of targets that define none.
 const DefaultHostVar = "DEVOPSY_TARGET_HOST"
 
-// LoadTarget reads one target from projectDir/targets.yaml.
-//
-// Hosts can come from variables, so a public repository need not name its
-// servers: HostVar(name) replaces the target's host, and DefaultHostVar sets
-// it when the target has none. They are read from the caller's environment,
-// then, for the project's own targets, from projectEnv (its .devopsy/.env;
-// nil for none). User-level targets ignore projectEnv: a project's settings
-// must not redirect them.
-func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool)) (*Target, error) {
-	// Lowest precedence first: the user-level file, then the project's
-	// targets.yaml, then its targets.local.yaml.
-	targets := map[string]*Target{}
-	var files []string
+// loadTargets reads every target, lowest precedence first: the user-level
+// file, then the project's targets.yaml, then its targets.local.yaml.
+// projectDir is "" outside a project. files are the files found.
+func loadTargets(projectDir string) (targets map[string]*Target, files []string, err error) {
+	targets = map[string]*Target{}
 	load := func(file string, user bool) error {
 		if file == "" {
 			return nil
@@ -159,15 +151,51 @@ func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool))
 		return nil
 	}
 	if err := load(UserTargetsFile(), true); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if projectDir != "" {
 		if err := load(filepath.Join(projectDir, TargetsFile), false); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := load(filepath.Join(projectDir, LocalTargetsFile), false); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+	}
+	return targets, files, nil
+}
+
+// Targets lists the targets available from projectDir ("" outside a
+// project), sorted by name, as defined: hosts from variables are not filled
+// in and nothing is validated. For shell completion.
+func Targets(projectDir string) []*Target {
+	targets, _, err := loadTargets(projectDir)
+	if err != nil {
+		return nil
+	}
+	var out []*Target
+	for n, t := range targets {
+		if t == nil || !targetName.MatchString(n) {
+			continue
+		}
+		t.Name = n
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// LoadTarget reads one target from projectDir/targets.yaml.
+//
+// Hosts can come from variables, so a public repository need not name its
+// servers: HostVar(name) replaces the target's host, and DefaultHostVar sets
+// it when the target has none. They are read from the caller's environment,
+// then, for the project's own targets, from projectEnv (its .devopsy/.env;
+// nil for none). User-level targets ignore projectEnv: a project's settings
+// must not redirect them.
+func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool)) (*Target, error) {
+	targets, files, err := loadTargets(projectDir)
+	if err != nil {
+		return nil, err
 	}
 	if len(targets) == 0 {
 		where := UserTargetsFile()
