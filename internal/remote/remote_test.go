@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -462,5 +463,66 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 	write(t, filepath.Join(root, "index.php"), "<?php echo 1;\n")
 	if !DirtyOutsideDevopsy(root) {
 		t.Error("a changed project file is not reported")
+	}
+}
+
+// A new release gets the server's public domain from its proxy, unless its
+// target sets one, even empty.
+func TestPublicDomainScript(t *testing.T) {
+	bin := t.TempDir()
+	// print-env prints $FAKE_ENV; the capability answers in a proxy that has
+	// a .devopsy-public file.
+	fake := `#!/bin/sh
+case "$1" in
+  print-env) printf '%s' "$FAKE_ENV" ;;
+  --capability) [ -f .devopsy-public ] && printf '{\n  "version": 1,\n  "public_domain": "%s"\n}\n' "$(cat .devopsy-public)" ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := t.TempDir()
+	proxy := filepath.Join(srv, "traefik")
+	other := filepath.Join(srv, "proxy")
+	for dir, domain := range map[string]string{proxy + "/current": "vm1.example.com", other: "vm2.example.com"} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".devopsy-public"), []byte(domain), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := strings.Replace(fmt.Sprintf(PublicDomainScript, "devopsy print-env"), DefaultProxyDir, proxy, 1)
+
+	for name, c := range map[string]struct{ env, want, says string }{
+		"from the proxy":   {"DEVOPSY_PROJECT_NAME='shop'\n", "DEVOPSY_PUBLIC_DOMAIN='vm1.example.com'\n", "public domain vm1.example.com"},
+		"target sets it":   {"DEVOPSY_PUBLIC_DOMAIN='mine.example.com'\n", "", ""},
+		"target opts out":  {"DEVOPSY_PUBLIC_DOMAIN=''\n", "", ""},
+		"another proxy":    {"DEVOPSY_PROXY_DIR='" + other + "'\n", "DEVOPSY_PUBLIC_DOMAIN='vm2.example.com'\n", "vm2.example.com"},
+		"no proxy there":   {"DEVOPSY_PROXY_DIR='/nowhere'\n", "", "no proxy at /nowhere"},
+		"the proxy itself": {"DEVOPSY_PROXY_DIR='@base'\n", "", ""},
+	} {
+		base := t.TempDir()
+		c.env = strings.ReplaceAll(c.env, "@base", base)
+		rel := filepath.Join(base, "releases", "1")
+		if err := os.MkdirAll(filepath.Join(rel, ".devopsy"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(rel, filepath.Join(base, "current")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nrel="+Quote(rel)+"\n"+script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ENV=" + c.env}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, out)
+		}
+		got, _ := os.ReadFile(filepath.Join(rel, ".devopsy", "target.env"))
+		if string(got) != c.want {
+			t.Errorf("%s: target.env %q, want %q", name, got, c.want)
+		}
+		if (c.says == "") != (len(out) == 0) || !strings.Contains(string(out), c.says) {
+			t.Errorf("%s: said %q, want %q", name, out, c.says)
+		}
 	}
 }

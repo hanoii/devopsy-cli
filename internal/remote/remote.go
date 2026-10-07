@@ -620,6 +620,9 @@ done
 make_current "releases/$id"
 echo "devopsy: current is now $id"
 `
+	if !rollback {
+		s += fmt.Sprintf(PublicDomainScript, devopsyCall(projectName, []string{"print-env"}, false))
+	}
 	if len(args) > 0 {
 		s += `status=0
 cd "$base/current"
@@ -655,6 +658,35 @@ fi
 `
 	return s
 }
+
+// PublicDomainScript gives a new release the server's public domain, from
+// the proxy's domains capability (public-domain), unless the target sets
+// DEVOPSY_PUBLIC_DOMAIN itself: in targets.yaml or shared/.env, even empty
+// for no automatic URL. The proxy is in DEVOPSY_PROXY_DIR, by default
+// DefaultProxyDir. It runs in ActivateScript before the release steps, with
+// $base and $rel set; %s is the call printing the release's environment.
+// The proxy's own release is skipped: it has no public URL.
+// Written into the release's target.env: rollbacks keep what each release
+// had, and a domain change reaches projects with their next release.
+const PublicDomainScript = `vars=$(cd "$base/current" && %s 2>/dev/null) || vars=
+proxy=
+if ! printf '%%s\n' "$vars" | grep -q '^DEVOPSY_PUBLIC_DOMAIN='; then
+  proxy=$(printf '%%s\n' "$vars" | sed -n "s/^DEVOPSY_PROXY_DIR='\(.*\)'$/\1/p")
+  proxy=${proxy:-` + DefaultProxyDir + `}
+fi
+# The proxy itself has no public URL.
+if [ -n "$proxy" ] && [ "$proxy" != "$base" ]; then
+  public=$(cd "$proxy" 2>/dev/null && { [ ! -d current ] || cd current; } \
+    && devopsy --capability domains public-domain 2>/dev/null \
+    | sed -n 's/.*"public_domain": *"\([a-z0-9.-]*\)".*/\1/p') || public=
+  if [ -n "$public" ]; then
+    printf "DEVOPSY_PUBLIC_DOMAIN='%%s'\n" "$public" >>"$rel/.devopsy/target.env"
+    echo "devopsy: public domain $public, from the proxy at $proxy"
+  else
+    echo "devopsy: no public domain: no proxy at $proxy reports one (DEVOPSY_PROXY_DIR)"
+  fi
+fi
+`
 
 // enter changes to where commands run: the current release, or the path
 // itself for a plain devopsy directory (like /srv/traefik, a git clone).
