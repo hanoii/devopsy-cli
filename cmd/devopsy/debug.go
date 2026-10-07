@@ -149,15 +149,21 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 	}
 
 	if asYAML {
-		out := map[string]*yamlTarget{}
+		// A mapping node, so the order is Targets' (a map would sort by name).
+		out := &yaml.Node{Kind: yaml.MappingNode}
 		for _, n := range names {
 			t, err := remote.LoadTarget(projectDir, n, projectEnv)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "# %s: %v\n", n, err)
 				continue
 			}
-			out[n] = &yamlTarget{Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
-				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Env: t.Env}
+			var value yaml.Node
+			if err := value.Encode(&yamlTarget{Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
+				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Env: t.Env}); err != nil {
+				cli.Fprint(os.Stderr, red, err.Error(), color)
+				return 1
+			}
+			out.Content = append(out.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: n}, &value)
 		}
 		enc := yaml.NewEncoder(os.Stdout)
 		enc.SetIndent(2)

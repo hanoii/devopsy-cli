@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -121,10 +120,8 @@ func Complete(cwd string, words []string, environ []string) Result {
 		// the delegate, compose's.
 		var r Result
 		if cur == "" || strings.HasPrefix(cur, "@") {
-			// The project's targets before user-level ones.
-			targets := remote.Targets(projectDir)
-			sort.SliceStable(targets, func(i, j int) bool { return !targets[i].User && targets[j].User })
-			for _, t := range targets {
+			// The project's targets before user-level ones (Targets' order).
+			for _, t := range remote.Targets(projectDir) {
 				group := GroupTarget
 				if t.User {
 					group = GroupUserTarget
