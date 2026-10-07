@@ -281,6 +281,7 @@ user-level ones in ~/.config/devopsy/targets.yaml):
                        or set and unset them; values never go in arguments
   <command> [args]     run 'devopsy <command>' in the current release: the
                        project's commands, then docker compose's
+  -- <args>            docker compose <args> there, past project commands
 
   devopsy @<target> <flag> --help   details of each
 `
@@ -405,6 +406,7 @@ Usage:
   devopsy <command> [args...]     a project command, else a docker compose command
   devopsy @<target> <command>     the same on a server
   devopsy [@<target>] --<flag>    devopsy's own (below)
+  devopsy [@<target>] -- <args>   docker compose <args>, past project commands
 
 Built-in:
   --help, -h     this help
@@ -593,6 +595,14 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		return capability(p, args[1:])
 	case "--shell":
 		return shell(p, args[1:])
+	case "--":
+		// The escape hatch: straight to docker compose, past project
+		// commands and the check for compose's commands.
+		plan := p.compose(args[1:])
+		secrets := NewSecrets(env, dotenvFile)
+		plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+		plan.Verbose = maskAll(secrets, verbose)
+		return plan, nil
 	}
 
 	// A custom command can call `devopsy <same name>` to reach the compose

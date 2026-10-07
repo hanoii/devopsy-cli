@@ -56,6 +56,13 @@ func TestUnknownWord(t *testing.T) {
 		t.Fatalf("a moved word: %v", err)
 	}
 
+	// --: straight to compose, even a word compose lacks or a project
+	// command's name.
+	plan, err := build(root, []string{"--", "deploy", "x"}, nil)
+	if err != nil || plan.Path != "docker" || !slices.Equal(plan.Args[len(plan.Args)-2:], []string{"deploy", "x"}) || slices.Contains(plan.Args, "--") {
+		t.Fatalf("--: %v %+v", err, plan)
+	}
+
 	// compose cannot be asked: pass the word on, as before.
 	saved := ComposeCommands
 	defer func() { ComposeCommands = saved }()
