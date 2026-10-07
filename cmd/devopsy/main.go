@@ -11,8 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/term"
-
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/complete"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -32,7 +30,7 @@ func main() {
 }
 
 func run() int {
-	color := term.IsTerminal(int(os.Stderr.Fd()))
+	color := styleFor(os.Stderr).on
 	args := os.Args[1:]
 
 	// --verbose (-v) goes before everything else, and is passed on through
@@ -54,7 +52,7 @@ func run() int {
 	// docker compose commands, which are words.
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		projectDir, _ := cli.FindProjectDir(cwd)
-		fmt.Print(cli.Usage(projectDir))
+		fmt.Print(styleFor(os.Stdout).help(cli.Usage(projectDir)))
 		return 0
 	}
 	if args[0] == "--version" {
@@ -111,7 +109,7 @@ func run() int {
 		fmt.Print(output.Text)
 		return 0
 	case errors.As(err, &help):
-		fmt.Fprint(os.Stderr, help.Text)
+		fmt.Fprint(os.Stderr, styleFor(os.Stderr).help(help.Text))
 		return help.Code
 	case errors.As(err, &exitErr):
 		cli.Fprint(os.Stderr, red, exitErr.Msg, color)

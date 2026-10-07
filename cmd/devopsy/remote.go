@@ -53,13 +53,13 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	}
 	args = args[1:]
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Print(cli.RemoteHelp)
+		fmt.Print(styleFor(os.Stdout).help(cli.RemoteHelp))
 		return 0
 	}
 
 	// `devopsy @t --release --help` explains instead of releasing.
 	if help, ok := cli.RemoteCommandHelp[args[0]]; ok && len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
-		fmt.Print(help)
+		fmt.Print(styleFor(os.Stdout).help(help))
 		return 0
 	}
 
