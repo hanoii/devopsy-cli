@@ -190,8 +190,22 @@ func TestUserTargets(t *testing.T) {
 			t.Errorf("%s (%d):\n%s", sub, code, out)
 		}
 	}
+	// With source, only from that directory ("~/" is the home directory),
+	// where the guard lets it through to the usual release checks.
+	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: nowhere.invalid\n  path: /srv/traefik\n  source: ~/app\n", 0o644)
+	write(t, filepath.Join(tmp, "other", ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	withHome := append([]string{"HOME=" + tmp, "DEVOPSY_SSH_COMMAND=false"}, env...)
+	out, code := runDevopsy(t, filepath.Join(tmp, "other"), withHome, "@vm1-traefik", "release")
+	if code == 0 || !strings.Contains(out, "releases only from its source, ~/app") || !strings.Contains(out, filepath.Join(tmp, "other")) {
+		t.Errorf("release from another project (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "@vm1-traefik", "release")
+	if strings.Contains(out, "source") || strings.Contains(out, "user-level") || !strings.Contains(out, "release") {
+		t.Errorf("release from its source (%d):\n%s", code, out)
+	}
+
 	// Outside a project the target resolves (help needs no SSH).
-	out, code := runDevopsy(t, t.TempDir(), env, "@vm1-traefik", "--help")
+	out, code = runDevopsy(t, t.TempDir(), env, "@vm1-traefik", "--help")
 	if code != 0 || !strings.Contains(out, "On a server") {
 		t.Errorf("outside a project (%d):\n%s", code, out)
 	}
