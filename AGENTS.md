@@ -68,7 +68,8 @@ user-facing behavior and keep it in sync with any change to it.
   group (target, user-target, project, devopsy, compose for the
   delegate's), which the zsh and fish scripts use to set them apart.
   Completion never connects to
-  servers: after `@target`, services come from the local compose files.
+  servers: after `@target`, services come from the local compose files (a
+  user-level target's `source:` checkout, from any directory).
   New built-ins and `@target` subcommands go in its lists too.
 - `--upgrade` (internal/update) reads the same release files as `install.sh`:
   keep archive names and `checksums.txt` as they are. The daily release

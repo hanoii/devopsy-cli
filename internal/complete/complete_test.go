@@ -152,3 +152,31 @@ func TestScripts(t *testing.T) {
 		t.Error("powershell has a script")
 	}
 }
+
+// A user-level target with source completes as its source's project, from
+// any directory: its commands and its services for --shell.
+func TestCompleteUserTargetSource(t *testing.T) {
+	root := setup(t)
+	home := os.Getenv("DEVOPSY_HOME")
+	write(t, filepath.Join(home, "targets.yaml"), "a-traefik:\n  host: devopsy@vm1\n  path: /srv/traefik\n  source: "+root+"\n", 0o644)
+	elsewhere := t.TempDir()
+	for _, c := range []struct {
+		words []string
+		want  []string
+	}{
+		{[]string{"@a-traefik", "--shell", ""}, []string{"web"}},
+		{[]string{"@a-traefik", "de"}, []string{"deploy"}},
+		// Its values never come from the source's .env.
+		{[]string{"@a-traefik", "--vars", "set", ""}, nil},
+	} {
+		r := Complete(elsewhere, c.words, os.Environ())
+		if got := values(r); !slices.Equal(got, c.want) {
+			t.Errorf("%q: candidates %q, want %q", c.words, got, c.want)
+		}
+	}
+	// Without source, nothing of the project's.
+	write(t, filepath.Join(home, "targets.yaml"), "a-traefik:\n  host: devopsy@vm1\n  path: /srv/traefik\n", 0o644)
+	if got := values(Complete(elsewhere, []string{"@a-traefik", "--shell", ""}, os.Environ())); len(got) != 0 {
+		t.Errorf("without source: %q", got)
+	}
+}

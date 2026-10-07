@@ -368,8 +368,9 @@ vm1-traefik:
   rollback: *steps
 ```
 
-Without `source:` they never release. A project's own targets win over
-user-level ones with the same name.
+Without `source:` they never release. With it, completion also knows the
+source's commands and services, from any directory. A project's own targets
+win over user-level ones with the same name.
 
 A target's path can also be a plain devopsy directory, without releases:
 anything maintained in place, like a git clone.
