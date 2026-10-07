@@ -86,6 +86,7 @@ var builtins = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
+	{"--debug", "what devopsy sees and computes", GroupDevopsy},
 	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
 	{"--completion", "a shell completion script", GroupDevopsy},
 }
@@ -149,6 +150,19 @@ func Complete(cwd string, words []string, environ []string) Result {
 			return shellServices(projectDir, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
+	case first == "--debug":
+		r := Result{Directive: DirectiveNoFileComp}
+		switch {
+		case len(words) == 2:
+			for _, t := range []string{"targets", "capabilities", "labels"} {
+				r.Candidates = append(r.Candidates, Candidate{Value: t})
+			}
+		case len(words) == 3 && words[1] == "targets":
+			for _, t := range remote.Targets(projectDir) {
+				r.Candidates = append(r.Candidates, Candidate{Value: t.Name})
+			}
+		}
+		return filter(r, cur)
 	case first == "--completion":
 		if len(words) == 2 {
 			var r Result

@@ -71,6 +71,11 @@ user-facing behavior and keep it in sync with any change to it.
   servers: after `@target`, services come from the local compose files (a
   user-level target's `source:` checkout, from any directory).
   New built-ins and `@target` subcommands go in its lists too.
+- `--debug [targets [name] | capabilities | labels]` explains what devopsy
+  sees and computes. Targets carry `From` (where each value came from) for
+  it. The capability catalog it prints (`cli.Capabilities`) lives with the
+  code that calls them: a new capability or action goes there and in
+  README's contract.
 - `--upgrade` (internal/update) reads the same release files as `install.sh`:
   keep archive names and `checksums.txt` as they are. The daily release
   check runs in a detached `devopsy --upgrade-check`, because devopsy

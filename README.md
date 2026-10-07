@@ -153,6 +153,7 @@ devopsy --version      # devopsy's, docker's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
 devopsy --shell [service]   # a shell in a container
 devopsy --context-hash [service]   # a hash of what the service's image is built from
+devopsy --debug        # what devopsy sees: versions, project, targets, capabilities, labels
 devopsy --upgrade      # replace devopsy with the latest release
 devopsy --completion fish   # a shell completion script (bash, zsh, fish)
 devopsy -v deploy      # --verbose: also what devopsy found and runs
@@ -170,6 +171,22 @@ a flag (`devopsy --profile tools up`) go to compose unchecked, and `--` is
 the escape hatch: `devopsy -- <args>` (or `devopsy @prod -- <args>`) is
 `docker compose <args>` with the project's files, even when a project
 command has that name or devopsy does not know the word.
+
+### Debugging
+
+`devopsy --debug` summarizes what devopsy sees: its version and path,
+docker's and compose's, the project and its files, commands, targets,
+implemented capabilities and `devopsy.*` labels. Topics go deeper:
+
+```sh
+devopsy --debug targets [name]   # each target as computed, and where each value comes from
+devopsy --debug capabilities     # what devopsy calls, each action's contract, what this project implements
+devopsy --debug labels           # the labels devopsy reads, and the project's
+devopsy @prod --debug            # the same, as the server sees it
+```
+
+`targets` shows every value with its origin: the targets file, `defaults
+in` a file, a variable like `DEVOPSY_TARGET_HOST`, or devopsy's default.
 
 ### Output and secrets
 

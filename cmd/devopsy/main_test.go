@@ -517,3 +517,29 @@ func TestNestedRemoteProjectName(t *testing.T) {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
+
+// --debug targets shows computed targets and where each value came from.
+func TestDebugTargets(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dot := filepath.Join(tmp, "app", ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels:\n      - devopsy.shell=true\n", 0o644)
+	write(t, filepath.Join(dot, "targets.yaml"), "defaults:\n  mode: image\n  env:\n    A: one\nprod:\n  host: h\n  path: /srv/app\n  env:\n    B: two\n", 0o644)
+	env := []string{"DEVOPSY_HOME=" + t.TempDir()}
+	out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "targets", "prod")
+	for _, want := range []string{"prod  (", "mode      image  (defaults in ", "env       A='one'  (defaults in ", "env       B='two'  (" + filepath.Join(dot, "targets.yaml")} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Errorf("missing %q (%d):\n%s", want, code, out)
+		}
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug")
+	if code != 0 || !strings.Contains(out, "targets: prod") || !strings.Contains(out, "web: devopsy.shell=true") {
+		t.Errorf("summary (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
+	if code != 0 || !strings.Contains(out, "wildcard-domain") || !strings.Contains(out, "does not implement it") {
+		t.Errorf("capabilities (%d):\n%s", code, out)
+	}
+}

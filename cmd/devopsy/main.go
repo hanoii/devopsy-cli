@@ -76,6 +76,9 @@ func run() int {
 	if args[0] == complete.Flag {
 		return runComplete(cwd, args[1:])
 	}
+	if args[0] == "--debug" {
+		return runDebug(cwd, args[1:], color)
+	}
 	if args[0] == "--completion" {
 		return runCompletion(args[1:], color)
 	}
