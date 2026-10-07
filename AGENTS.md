@@ -66,8 +66,14 @@ user-facing behavior and keep it in sync with any change to it.
   `X.Y.Z` versions) upgrade or check.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
-  layer: what describes a server (host, `DEVOPSY_PUBLIC_DOMAIN`) is the
-  target's. `/etc/devopsy/devopsy.env` existed until October 2026.
+  layer: `/etc/devopsy/devopsy.env` existed until October 2026.
+- `DEVOPSY_PUBLIC_DOMAIN` comes from the server's proxy: `release` asks its
+  `domains` capability (`public-domain`, `PublicDomainScript`) and writes
+  it into the release's `target.env`, unless the target's environment
+  already has the key (targets.yaml or `shared/.env`, even empty: no
+  automatic URL). Written per release, so rollbacks keep what each release
+  had. Asked at release, not on every command: devopsy would otherwise run
+  the proxy's capability (a container or two) on each `up`.
 - Public host: `<name>.<DEVOPSY_PUBLIC_DOMAIN>`; without a domain,
   `<name>.localhost` locally and none in a release (`target.env` exists),
   where the environment only answers on `DEVOPSY_DOMAINS`.

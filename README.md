@@ -18,8 +18,8 @@ from them:
   `devopsy --env`, so plain `docker compose` sees exactly what it sees.
   Configuration is environment variables, with a fixed precedence: caller,
   `.env` (on servers `shared/.env`), the target's `env`. Nothing
-  server-wide: what describes a server, its host and public domain, belongs
-  to each target.
+  server-wide: the server's public domain comes from its proxy at each
+  release, and each target can override it.
 - **An environment is a server path.** Each target is a directory on a
   server, so its own compose project, data and public URL. There is no
   branch concept: a branch is only what you release into a target. Hence
@@ -221,13 +221,18 @@ devopsy also sets, for compose files and custom commands:
 
 - `DEVOPSY_PROJECT_NAME`: the compose project name.
 - `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>`. The public
-  domain describes the server, like the target's host, so it is set per
-  target: in `targets.yaml`'s `env`, or, to keep it out of a public
-  repository, in the server's `shared/.env` (`devopsy @prod --vars set
-  --show DEVOPSY_PUBLIC_DOMAIN`, once per target; a local `.env` never
-  reaches the server). Without one, `<project>.localhost`
-  locally, and no public host in a release: the environment only answers on
-  its `DEVOPSY_DOMAINS`. Set it yourself to override.
+  domain is the server's base domain, like `vm1.example.com`, never a site
+  of its own: each environment gets an automatic subdomain of it, next to
+  its own `DEVOPSY_DOMAINS`. Each release asks the server's proxy for it
+  (the `domains` capability's `public-domain`, see Capabilities) and writes
+  it into the release's `target.env`, so nothing needs setting. A target
+  overrides it with its own value, or turns the automatic URL off with an
+  empty one: `devopsy @prod --vars set --show DEVOPSY_PUBLIC_DOMAIN` (empty:
+  just Enter), applied by the next `up` or `reload`; `--vars unset` goes
+  back to the proxy's. Without one, `<project>.localhost` locally, and no
+  public host in a release: the environment only answers on its
+  `DEVOPSY_DOMAINS`. Set `DEVOPSY_PUBLIC_HOST` yourself to override the
+  whole host.
 - `DEVOPSY_HOST_RULE`: a Traefik rule for the public host plus
   `DEVOPSY_DOMAINS`, a space or comma separated list you set per environment,
   usually in its `.env`. For example
@@ -304,7 +309,6 @@ prod:
   path: /srv/myapp              # absolute, writable by that user
   mode: image                   # image (default) or build
   env:                          # per-target settings, not secrets
-    DEVOPSY_PUBLIC_DOMAIN: vm1.example.com    # the server's: <project>.vm1.example.com
     DEVOPSY_DOMAINS: example.org www.example.org
   release:                      # what `release` runs (required for it)
     remote: deploy
@@ -578,6 +582,16 @@ one JSON document:
   `record`, once the proxy knows it) or `dns-api` (DNS-01 through the DNS
   provider's API: nothing to create).
 - `wildcard`: a wildcard certificate covering the host.
+
+`public-domain` prints the server's public domain, `""` for none:
+
+```json
+{"version": 1, "public_domain": "vm1.example.com"}
+```
+
+`release` asks it on the server, in `DEVOPSY_PROXY_DIR` (default
+`/srv/traefik`), for targets that do not set `DEVOPSY_PUBLIC_DOMAIN`
+themselves.
 
 `retry <name> <host>...` asks the proxy to request those certificates
 again, and `retry <name> --done` withdraws the request. `<name>` keeps
