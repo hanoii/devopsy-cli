@@ -94,6 +94,8 @@ type Target struct {
 	User bool `yaml:"-"`
 	// File is where the target was defined.
 	File string `yaml:"-"`
+	// nulls are its env keys set to null: they remove a default.
+	nulls map[string]bool
 }
 
 // Steps are what `release` or `rollback` runs, in three phases, so the
@@ -160,15 +162,113 @@ var (
 )
 
 func readTargets(file string) (map[string]*Target, error) {
+	f, err := readTargetsFile(file)
+	if err != nil {
+		return nil, err
+	}
+	return f.targets, nil
+}
+
+// DefaultsKey is the reserved entry of a targets file whose fields every
+// target of that file (and, for a project, of its targets.local.yaml) takes
+// unless it sets its own: mode, source, release, rollback, and env merged
+// key by key. host and path stay each target's.
+const DefaultsKey = "defaults"
+
+// targetsFile is one targets file: its targets, its defaults (nil without),
+// and per target (and for the defaults, under DefaultsKey) the env keys set
+// to null, which remove a default instead of setting "".
+type targetsFile struct {
+	targets  map[string]*Target
+	defaults *Target
+	nulls    map[string]map[string]bool
+}
+
+func readTargetsFile(file string) (*targetsFile, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	var targets map[string]*Target
-	if err := yaml.Unmarshal(data, &targets); err != nil {
+	var nodes map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &nodes); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
-	return targets, nil
+	f := &targetsFile{targets: map[string]*Target{}, nulls: map[string]map[string]bool{}}
+	for name, node := range nodes {
+		var t *Target
+		if err := node.Decode(&t); err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", file, name, err)
+		}
+		f.nulls[name] = nullEnv(&node)
+		for k := range f.nulls[name] {
+			delete(t.Env, k)
+		}
+		if name == DefaultsKey {
+			if t != nil && (t.Host != "" || t.Path != "") {
+				return nil, fmt.Errorf("%s: defaults: host and path belong to each target", file)
+			}
+			f.defaults = t
+			continue
+		}
+		f.targets[name] = t
+	}
+	return f, nil
+}
+
+// nullEnv lists the env keys a target node sets to null (KEY: ~).
+func nullEnv(n *yaml.Node) map[string]bool {
+	nulls := map[string]bool{}
+	if n.Kind != yaml.MappingNode {
+		return nulls
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value != "env" || n.Content[i+1].Kind != yaml.MappingNode {
+			continue
+		}
+		env := n.Content[i+1]
+		for j := 0; j+1 < len(env.Content); j += 2 {
+			if env.Content[j+1].Tag == "!!null" {
+				nulls[env.Content[j].Value] = true
+			}
+		}
+	}
+	return nulls
+}
+
+// mergeDefaults returns over's fields on top of base's: for two defaults,
+// or defaults under a target. env merges key by key; nulls are over's keys
+// that remove base's.
+func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
+	if base == nil {
+		return over
+	}
+	t := *over
+	if t.Mode == "" {
+		t.Mode = base.Mode
+	}
+	if t.Source == "" {
+		t.Source = base.Source
+	}
+	if t.Release == nil {
+		t.Release = base.Release
+	}
+	if t.Rollback == nil {
+		t.Rollback = base.Rollback
+	}
+	env := map[string]string{}
+	for k, v := range base.Env {
+		env[k] = v
+	}
+	for k := range nulls {
+		delete(env, k)
+	}
+	for k, v := range over.Env {
+		env[k] = v
+	}
+	if len(env) > 0 {
+		t.Env = env
+	}
+	return &t
 }
 
 // HostVar is the variable that replaces the host of the target name:
@@ -195,11 +295,15 @@ const DefaultHostVar = "DEVOPSY_TARGET_HOST"
 // projectDir is "" outside a project. files are the files found.
 func loadTargets(projectDir string) (targets map[string]*Target, files []string, err error) {
 	targets = map[string]*Target{}
+	// The user-level file's defaults apply to its targets only, and a
+	// project's (targets.local.yaml's over targets.yaml's) to the project's
+	// only: they never mix.
+	var defaults *Target
 	load := func(file string, user bool) error {
 		if file == "" {
 			return nil
 		}
-		found, err := readTargets(file)
+		f, err := readTargetsFile(file)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -207,18 +311,32 @@ func loadTargets(projectDir string) (targets map[string]*Target, files []string,
 			return err
 		}
 		files = append(files, file)
-		for n, t := range found {
+		if f.defaults != nil {
+			defaults = mergeDefaults(defaults, f.defaults, f.nulls[DefaultsKey])
+		}
+		for n, t := range f.targets {
 			if t != nil {
 				t.User = user
 				t.File = file
+				t.nulls = f.nulls[n]
 			}
 			targets[n] = t
 		}
 		return nil
 	}
+	apply := func(user bool) {
+		for n, t := range targets {
+			if t != nil && t.User == user && defaults != nil {
+				merged := mergeDefaults(defaults, t, t.nulls)
+				targets[n] = merged
+			}
+		}
+		defaults = nil
+	}
 	if err := load(UserTargetsFile(), true); err != nil {
 		return nil, nil, err
 	}
+	apply(true)
 	if projectDir != "" {
 		if err := load(filepath.Join(projectDir, TargetsFile), false); err != nil {
 			return nil, nil, err
@@ -226,6 +344,7 @@ func loadTargets(projectDir string) (targets map[string]*Target, files []string,
 		if err := load(filepath.Join(projectDir, LocalTargetsFile), false); err != nil {
 			return nil, nil, err
 		}
+		apply(false)
 	}
 	return targets, files, nil
 }
@@ -319,6 +438,9 @@ func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool))
 			where = filepath.Join(projectDir, TargetsFile) + " or " + where
 		}
 		return nil, fmt.Errorf("no targets defined: define %q in %s", name, where)
+	}
+	if name == DefaultsKey {
+		return nil, fmt.Errorf("%q is not a target: it holds what the targets of its file share", name)
 	}
 	t, ok := targets[name]
 	if !ok || t == nil {
