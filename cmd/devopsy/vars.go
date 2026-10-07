@@ -33,7 +33,7 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
-			fmt.Print(cli.RemoteCommandHelp["--vars"])
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--vars"]))
 			return 0
 		case "--show":
 			show = true

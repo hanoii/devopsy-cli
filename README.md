@@ -180,6 +180,7 @@ implemented capabilities and `devopsy.*` labels. Topics go deeper:
 
 ```sh
 devopsy --debug targets [name]   # each target as computed, and where each value comes from
+devopsy --debug targets --yaml   # the same as plain YAML: defaults merged, hosts resolved
 devopsy --debug capabilities     # what devopsy calls, each action's contract, what this project implements
 devopsy --debug labels           # the labels devopsy reads, and the project's
 devopsy @prod --debug            # the same, as the server sees it
@@ -187,6 +188,9 @@ devopsy @prod --debug            # the same, as the server sees it
 
 `targets` shows every value with its origin: the targets file, `defaults
 in` a file, a variable like `DEVOPSY_TARGET_HOST`, or devopsy's default.
+
+Help and `--debug` are in color on a terminal; `NO_COLOR=1` turns it off,
+as it does for devopsy's other messages.
 
 ### Output and secrets
 

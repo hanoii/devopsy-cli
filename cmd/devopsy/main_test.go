@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -535,8 +536,12 @@ func TestDebugTargets(t *testing.T) {
 		}
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug")
-	if code != 0 || !strings.Contains(out, "targets: prod") || !strings.Contains(out, "web: devopsy.shell=true") {
+	if code != 0 || !regexp.MustCompile(`(?m)^targets +prod$`).MatchString(out) || !strings.Contains(out, "web: devopsy.shell=true") {
 		t.Errorf("summary (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "targets", "--yaml")
+	if code != 0 || !strings.Contains(out, "prod:\n  host: h\n  path: /srv/app\n  mode: image\n") || !strings.Contains(out, "    A: one") {
+		t.Errorf("--yaml (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
 	if code != 0 || !strings.Contains(out, "wildcard-domain") || !strings.Contains(out, "does not implement it") {

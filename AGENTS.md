@@ -71,7 +71,10 @@ user-facing behavior and keep it in sync with any change to it.
   servers: after `@target`, services come from the local compose files (a
   user-level target's `source:` checkout, from any directory).
   New built-ins and `@target` subcommands go in its lists too.
-- `--debug [targets [name] | capabilities | labels]` explains what devopsy
+- Color only on a terminal and without `NO_COLOR` (`styleFor`); help is
+  colored by its layout (headings end with `:`, entries start with two
+  spaces), so keep that layout when editing help texts.
+- `--debug [targets [name] [--yaml] | capabilities | labels]` explains what devopsy
   sees and computes. Targets carry `From` (where each value came from) for
   it. The capability catalog it prints (`cli.Capabilities`) lives with the
   code that calls them: a new capability or action goes there and in
