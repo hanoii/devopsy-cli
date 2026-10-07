@@ -54,8 +54,9 @@ user-facing behavior and keep it in sync with any change to it.
   `:<directive>`). That lets docker compose's own completion (`docker
   __complete compose -f ...`, docker's CLI is cobra) pass through for
   compose's commands, flags and services. devopsy adds a third field, the
-  group (target, project, devopsy, compose for the delegate's), which the zsh
-  and fish scripts use to set them apart. Completion never connects to
+  group (target, user-target, project, devopsy, compose for the
+  delegate's), which the zsh and fish scripts use to set them apart.
+  Completion never connects to
   servers: after `@target`, services come from the local compose files.
   New built-ins and `@target` subcommands go in its lists too.
 - `--upgrade` (internal/update) reads the same release files as `install.sh`:

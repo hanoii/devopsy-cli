@@ -66,11 +66,11 @@ compose's commands, flags and the project's services. After a project
 command, it completes file names. On a target, services come from the local
 compose files: completion never connects to servers.
 
-Targets come first, then project commands, devopsy's own commands and docker
-compose's. zsh lists each in its own group (unless your `group-name` and
-`format` styles say otherwise), fish describes project commands as
-`project: ...` and compose's as `docker compose: ...`, and bash (4.4 or
-later) keeps the order but shows names only.
+Targets come first, the project's before user-level ones, then project
+commands, devopsy's own commands and docker compose's. zsh lists each in its
+own group (unless your `group-name` and `format` styles say otherwise), fish
+describes project commands as `project: ...` and compose's as `docker
+compose: ...`, and bash (4.4 or later) keeps the order but shows names only.
 
 The scripts are small and ask devopsy (`devopsy --complete <words>`) at every
 Tab, so candidates follow the installed devopsy right away, even in open
