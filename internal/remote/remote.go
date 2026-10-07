@@ -592,11 +592,9 @@ mv "$rel.tmp" "$rel"
 // ActivateScript links shared/ into a release, makes it current, runs args
 // there (if any) and goes back to the previous release when that fails.
 // Then it prunes old releases. rollback picks the release before current
-// instead of id.
-//
-// urlName, when known, is the compose project name: with the server's
-// DEVOPSY_PUBLIC_DOMAIN, the script ends with the release's public URL.
-func ActivateScript(t *Target, id string, rollback bool, projectName, urlName string, args []string) string {
+// instead of id. It ends with the release's public URL, or its first
+// domain, as devopsy on the server computes them.
+func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
 	s := fmt.Sprintf(prelude, Quote(t.Path)) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 `
@@ -643,11 +641,18 @@ fi
   [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
 done
 `, Keep+1)
-	if urlName != "" {
-		s += `domain=$(sed -n 's/^DEVOPSY_PUBLIC_DOMAIN=//p' /etc/devopsy/devopsy.env 2>/dev/null | tail -n 1)
-[ -z "$domain" ] || echo "devopsy: https://"` + Quote(urlName) + `".$domain"
+	s += `vars=$(cd "$base/current" && ` + devopsyCall(projectName, []string{"--env"}, false) + ` 2>/dev/null) || vars=
+host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_PUBLIC_HOST='\(.*\)'$/\1/p")
+domains=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_DOMAINS='\(.*\)'$/\1/p" | tr ',' ' ')
+set -- $domains
+if [ -n "$host" ]; then
+  echo "devopsy: https://$host"
+elif [ $# -gt 0 ]; then
+  echo "devopsy: https://$1"
+else
+  echo "devopsy: no public URL or domains (DEVOPSY_PUBLIC_DOMAIN, DEVOPSY_DOMAINS)"
+fi
 `
-	}
 	return s
 }
 

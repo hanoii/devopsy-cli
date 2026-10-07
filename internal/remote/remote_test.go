@@ -197,9 +197,9 @@ func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "/srv/it's app", Mode: ModeImage}
 	scripts := map[string]string{
 		"upload":       UploadScript(tg, "20261005120000"),
-		"activate":     ActivateScript(tg, "20261005120000", false, "", "", nil),
-		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", "app", []string{"deploy", "a b"}),
-		"rollback+cmd": ActivateScript(tg, "", true, "", "shop", []string{"up", "-d"}),
+		"activate":     ActivateScript(tg, "20261005120000", false, "", nil),
+		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", []string{"deploy", "a b"}),
+		"rollback+cmd": ActivateScript(tg, "", true, "", []string{"up", "-d"}),
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
 		"shell":        ShellScript(tg),
@@ -393,7 +393,7 @@ func TestPlainDirectories(t *testing.T) {
 	}
 	for name, script := range map[string]string{
 		"upload":   UploadScript(tg, "20261006000000"),
-		"rollback": ActivateScript(tg, "", true, "", "", nil),
+		"rollback": ActivateScript(tg, "", true, "", nil),
 		"releases": ReleasesScript(tg),
 	} {
 		out, err := run(script)

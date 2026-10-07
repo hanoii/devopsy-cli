@@ -226,11 +226,6 @@ func HasTopLevelName(composeFile string) (bool, error) {
 	return name != "", err
 }
 
-// ServerEnvFile holds server-wide settings, like DEVOPSY_PUBLIC_DOMAIN, that
-// devopsy-server writes. Lowest precedence: the caller's environment and the
-// project's .env win. DEVOPSY_SERVER_ENV points elsewhere.
-const ServerEnvFile = "/etc/devopsy/devopsy.env"
-
 // CustomCommands lists the executable files in commands/.
 func CustomCommands(projectDir string) []string {
 	entries, err := os.ReadDir(filepath.Join(projectDir, "commands"))
@@ -277,7 +272,7 @@ const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devops
                        target's rollback steps
   releases             list the releases on the server
   domains [--retry]    DNS, challenge and certificate per host, and what next;
-                       --retry asks Traefik for missing certificates
+                       --retry asks the proxy for missing certificates
   --shell              a shell on the server, in the current release (or the
                        plain directory)
   --vars [get|set|unset KEY...]
@@ -344,15 +339,14 @@ releases whose command failed. * marks the current one.
 	"--shell": `Usage: devopsy @<target> --shell
 
 Opens your login shell on the target's host, over SSH, in the current
-release, or in the target's path for a plain devopsy directory (like
-/srv/traefik). devopsy and docker compose work there as on any project. For
+release, or in the target's path for a plain devopsy directory. devopsy and docker compose work there as on any project. For
 a shell in a container, use compose: devopsy @<target> exec <service> bash.
 `,
 	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
 
 The target's variables on the server: shared/.env for an environment with
 releases (it can be set before the first release), or .devopsy/.env for a
-plain directory like /srv/traefik. These are its secrets and overrides,
+plain directory. These are its secrets and overrides,
 linked into every release; targets.yaml's env goes to target.env instead.
 
   --vars              the names, values hidden
@@ -378,16 +372,16 @@ Examples:
 `,
 	"domains": `Usage: devopsy @<target> domains [--retry]
 
-For the environment's public host and each of DEVOPSY_DOMAINS: the
-certificate resolver, DNS (through 1.1.1.1, Cloudflare's proxy recognized),
-the acme-dns challenge CNAME when it applies, and the certificate the server
-presents, verified like a browser would. Ends each host with what to do next.
-On the server's Traefik target (like @vm1-traefik), every host the server
-routes instead, and its public wildcard certificate.
+For the environment's public host and each of DEVOPSY_DOMAINS: what the
+server's proxy knows (routed, certificate resolver, through its domains
+capability in DEVOPSY_PROXY_DIR, default /srv/traefik), DNS (through
+1.1.1.1, Cloudflare's proxy recognized), the challenge CNAME when it
+applies, and the certificate the server presents, verified like a browser
+would. Ends each host with what to do next. On the proxy's own target (like
+@vm1-traefik), every host it routes instead, and its wildcards.
 
-  --retry   ask Traefik to request missing certificates again, without a
-            restart, then check again. The request is removed once every
-            certificate exists.
+  --retry   ask the proxy to request missing certificates again, then check
+            again. The request is withdrawn once every certificate exists.
 `,
 }
 
@@ -478,18 +472,12 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	// Per-target settings, written into each release by `devopsy @target
 	// release` from targets.yaml. Below .env, so a server can override them.
-	if err := load(filepath.Join(projectDir, "target.env")); err != nil {
+	targetEnv := filepath.Join(projectDir, "target.env")
+	if err := load(targetEnv); err != nil {
 		return nil, err
 	}
-	serverEnv := ServerEnvFile
-	if v, ok := env.Lookup("DEVOPSY_SERVER_ENV"); ok {
-		serverEnv = v
-	}
-	if serverEnv != "" {
-		if err := load(serverEnv); err != nil {
-			return nil, err
-		}
-	}
+	_, statErr := os.Stat(targetEnv)
+	released := statErr == nil
 
 	// Without a top-level name, compose would name every project after the
 	// .devopsy directory and they would all collide. Use the directory that
@@ -510,18 +498,23 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		}
 	}
 
-	// For compose files: the project name and its public hostname, <name>.<the
-	// server's DEVOPSY_PUBLIC_DOMAIN>, or <name>.localhost without one.
+	// For compose files: the project name and its public hostname,
+	// <name>.<DEVOPSY_PUBLIC_DOMAIN>, the target's like its host. Without
+	// one: <name>.localhost locally, none in a release (target.env), which
+	// then only answers on DEVOPSY_DOMAINS.
 	env.Set("DEVOPSY_PROJECT_NAME", name)
 	if _, ok := env.Lookup("DEVOPSY_PUBLIC_HOST"); !ok {
 		domain, _ := env.Lookup("DEVOPSY_PUBLIC_DOMAIN")
-		if domain == "" {
-			domain = "localhost"
+		switch {
+		case domain != "":
+			env.Set("DEVOPSY_PUBLIC_HOST", name+"."+domain)
+		case !released:
+			env.Set("DEVOPSY_PUBLIC_HOST", name+".localhost")
 		}
-		env.Set("DEVOPSY_PUBLIC_HOST", name+"."+domain)
 	}
 	// A Traefik rule for the public host and DEVOPSY_DOMAINS (space or comma
-	// separated), so labels need no per-environment hosts.
+	// separated), so labels need no per-environment hosts. Without any host
+	// it stays unset, so a label's own default applies.
 	if _, ok := env.Lookup("DEVOPSY_HOST_RULE"); !ok {
 		public, _ := env.Lookup("DEVOPSY_PUBLIC_HOST")
 		domains, _ := env.Lookup("DEVOPSY_DOMAINS")
@@ -532,7 +525,9 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		if err != nil {
 			return nil, &ExitError{Code: 1, Msg: "DEVOPSY_DOMAINS: " + err.Error()}
 		}
-		env.Set("DEVOPSY_HOST_RULE", rule)
+		if rule != "" {
+			env.Set("DEVOPSY_HOST_RULE", rule)
+		}
 	}
 	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_PUBLIC_HOST", "DEVOPSY_HOST_RULE"} {
 		env.Mark(k)
@@ -577,6 +572,8 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 			return nil, &ExitError{Code: 1, Msg: "--context-hash: " + err.Error()}
 		}
 		return nil, &Output{Text: hash + "\n"}
+	case "--capability":
+		return capability(p, args[1:])
 	}
 
 	// A custom command can call `devopsy <same name>` to reach the compose
@@ -599,6 +596,35 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
 	plan.Verbose = maskAll(secrets, verbose)
 	return plan, nil
+}
+
+// capabilityName is a capability's or action's name: a file name, never a
+// path.
+var capabilityName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// capability plans `devopsy --capability <name> <action> [args...]`: the
+// executable capabilities/<name>/<action>, with the project's environment.
+// devopsy calls it, people never do: hidden from help and completion.
+func capability(p *loadedProject, args []string) (*Plan, error) {
+	if len(args) < 2 {
+		return nil, &ExitError{Code: 1, Msg: "usage: devopsy --capability <name> <action> [args...]"}
+	}
+	name, action := args[0], args[1]
+	if !capabilityName.MatchString(name) || !capabilityName.MatchString(action) {
+		return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("--capability: not a capability and action: %q %q", name, action)}
+	}
+	file := filepath.Join(p.dir, "capabilities", name, action)
+	if !isExecutableFile(file) {
+		return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("%s does not provide the %s capability's %s action (no executable %s)", filepath.Dir(p.dir), name, action, file)}
+	}
+	cmdArgs := append([]string{file}, args[2:]...)
+	secrets := NewSecrets(p.env, p.dotenvFile)
+	return &Plan{
+		Path:    file,
+		Args:    cmdArgs,
+		Env:     p.env.Environ(),
+		Verbose: maskAll(secrets, append(p.verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
+	}, nil
 }
 
 // compose plans `docker compose` with the project's files and args.

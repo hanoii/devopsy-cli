@@ -2,66 +2,80 @@ package remote
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"go.yaml.in/yaml/v3"
 )
 
-func factLine(k, v string) string {
-	return k + "\t" + base64.StdEncoding.EncodeToString([]byte(v)) + "\n"
-}
-
-func sampleFacts(t *testing.T) *Facts {
+func parseFacts(t *testing.T, out string) *ProxyFacts {
 	t.Helper()
-	out := factLine("env", "DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_PUBLIC_DOMAIN='vm1.example.com'\nDEVOPSY_PROJECT_NAME='shop'\nDEVOPSY_DOMAINS='live.org ready.org nocname.org unregistered.org notpointing.org Live.org'\n") +
-		factLine("ip", "10.0.0.5\n") +
-		factLine("routers", `[
-  {"name":"shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`live.org`"+`) || Host(`+"`ready.org`"+`) || Host(`+"`notpointing.org`"+`)","tls":null},
-  {"name":"websecure-shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`live.org`"+`) || Host(`+"`ready.org`"+`) || Host(`+"`notpointing.org`"+`)","tls":{"certResolver":"letsencrypt1"}},
-  {"name":"dns@docker","rule":"Host(`+"`nocname.org`"+`) || Host(`+"`unregistered.org`"+`)","tls":{"certResolver":"acmedns"}}
-]`) +
-		factLine("accounts", `{"nocname.org":{"fulldomain":"abc.acme-vm1.example.com"},"*.vm1.example.com":{"fulldomain":"wild.acme-vm1.example.com"}}`) +
-		factLine("traefik", "/srv/traefik")
-	f, err := ParseFacts(out)
+	f, err := ParseProxyFacts([]byte(out))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
-func TestParseFacts(t *testing.T) {
-	f := sampleFacts(t)
-	if f.ServerIP != "10.0.0.5" || f.TraefikDir != "/srv/traefik" || len(f.Routers) != 3 {
+// What the domains capability reports for a project's hosts.
+const sampleFacts = `{
+  "version": 1,
+  "ip": "10.0.0.5",
+  "retries": ["shop"],
+  "hosts": [
+    {"host": "shop.vm1.example.com", "routed": true, "resolver": "letsencrypt1", "method": "http", "wildcard": "*.vm1.example.com"},
+    {"host": "live.org", "routed": true, "resolver": "letsencrypt1", "method": "http"},
+    {"host": "ready.org", "routed": true, "resolver": "letsencrypt1", "method": "http"},
+    {"host": "nocname.org", "routed": true, "resolver": "acmedns", "method": "dns-cname",
+     "record": {"name": "_acme-challenge.nocname.org", "target": "abc.acme-vm1.example.com"}},
+    {"host": "unregistered.org", "routed": true, "resolver": "acmedns", "method": "dns-cname"},
+    {"host": "notpointing.org", "routed": true, "resolver": "letsencrypt1", "method": "http"},
+    {"host": "api.org", "routed": true, "resolver": "cloudflare", "method": "dns-api"},
+    {"host": "odd.org", "routed": true, "resolver": "custom"},
+    {"host": "gone.org", "routed": false}
+  ],
+  "future": "ignored"
+}`
+
+func TestParseProxyFacts(t *testing.T) {
+	f := parseFacts(t, sampleFacts)
+	if f.IP != "10.0.0.5" || len(f.Hosts) != 9 || !f.HasRetry("shop") || f.HasRetry("other") {
 		t.Fatalf("%+v", f)
 	}
-	if f.Accounts["vm1.example.com"] != "wild.acme-vm1.example.com" {
-		t.Fatalf("wildcard account key not trimmed: %v", f.Accounts)
+	if h := f.Host("Live.org"); !h.Routed || h.Method != MethodHTTP {
+		t.Fatalf("live.org %+v", h)
 	}
-	hosts := f.Hosts()
-	want := []string{"shop.vm1.example.com", "live.org", "ready.org", "nocname.org", "unregistered.org", "notpointing.org"}
-	if strings.Join(hosts, " ") != strings.Join(want, " ") {
-		t.Fatalf("hosts %v", hosts)
+	if h := f.Host("other.org"); h.Routed || h.Host != "other.org" {
+		t.Fatalf("unknown host %+v", h)
 	}
-	if r, ok := f.Resolver("live.org"); r != "letsencrypt1" || !ok {
-		t.Fatalf("live.org resolver %q %v", r, ok)
+	for in, want := range map[string]string{
+		"garbage":                        "not JSON",
+		`{"hosts": []}`:                  "no version",
+		`{"version": 2, "hosts": []}`:    "upgrade devopsy",
+		`{"version": 99, "ip": "x.y.z"}`: "version 99",
+	} {
+		if _, err := ParseProxyFacts([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v, want it to contain %q", in, err, want)
+		}
 	}
-	if _, ok := f.Resolver("other.org"); ok {
-		t.Fatal("unrouted host reported routed")
+}
+
+func TestProjectHosts(t *testing.T) {
+	env, err := ParseEnv("DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='live.org, Live.org ready.org'\n")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := ParseFacts("garbage\n"); err == nil {
-		t.Fatal("garbage: want an error")
+	if got := strings.Join(ProjectHosts(env), " "); got != "shop.vm1.example.com live.org ready.org" {
+		t.Fatalf("hosts %s", got)
+	}
+	if got := ProjectHosts(map[string]string{}); len(got) != 0 {
+		t.Fatalf("no hosts: %v", got)
 	}
 }
 
 func TestCheckNextSteps(t *testing.T) {
-	f := sampleFacts(t)
+	f := parseFacts(t, sampleFacts)
 	server := "203.0.113.10"
 	dns := map[string][]string{
 		"shop.vm1.example.com": {server},
@@ -70,6 +84,8 @@ func TestCheckNextSteps(t *testing.T) {
 		"nocname.org":          {"198.51.100.1"},
 		"unregistered.org":     {"198.51.100.1"},
 		"notpointing.org":      {"198.51.100.1"},
+		"api.org":              {"198.51.100.1"},
+		"odd.org":              {server},
 	}
 	valid := map[string]bool{"shop.vm1.example.com": true, "live.org": true, "ready.org": true}
 	c := Checker{
@@ -92,7 +108,8 @@ func TestCheckNextSteps(t *testing.T) {
 			return CertInfo{Issuer: "TRAEFIK DEFAULT CERT"}, nil
 		},
 	}
-	reports := Check(context.Background(), f, c, []string{server, f.ServerIP}, f.Hosts())
+	hosts := []string{"shop.vm1.example.com", "live.org", "ready.org", "nocname.org", "unregistered.org", "notpointing.org", "api.org", "odd.org", "gone.org", "missing.org"}
+	reports := Check(context.Background(), f, c, []string{server, f.IP}, hosts)
 	got := map[string]DomainReport{}
 	for _, r := range reports {
 		got[r.Host] = r
@@ -102,8 +119,12 @@ func TestCheckNextSteps(t *testing.T) {
 		"live.org":             "live",
 		"ready.org":            "certificate ready: point its DNS at 203.0.113.10",
 		"nocname.org":          "_acme-challenge.nocname.org. CNAME abc.acme-vm1.example.com.",
-		"unregistered.org":     "not registered with acme-dns yet",
+		"unregistered.org":     "not known yet",
 		"notpointing.org":      "point its DNS at 203.0.113.10 (HTTP-01 needs it)",
+		"api.org":              "DNS API token",
+		"odd.org":              `resolver "custom"`,
+		"gone.org":             "does not route it",
+		"missing.org":          "does not route it",
 	} {
 		if !strings.Contains(got[host].Next, want) {
 			t.Errorf("%s: next %q, want it to contain %q", host, got[host].Next, want)
@@ -113,74 +134,13 @@ func TestCheckNextSteps(t *testing.T) {
 		t.Error("live flags wrong")
 	}
 	text := FormatReports(reports)
-	for _, want := range []string{"live.org  [live]", "(this server)", "challenge    missing", "expires 2027-01-03"} {
+	for _, want := range []string{"live.org  [live]", "(this server)", "challenge    missing", "expires 2027-01-03", "resolver     letsencrypt1"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("report missing %q:\n%s", want, text)
 		}
 	}
-}
 
-func TestDomainsAndRetryScripts(t *testing.T) {
-	tg := &Target{Name: "prod", Host: "h", Path: "/srv/shop", Mode: ModeImage}
-	traefik := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(traefik, ".devopsy", "mnt", "dynamic"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	retry := RetryScript(traefik, "shop", map[string][]string{
-		"acmedns":      {"nocname.org"},
-		"letsencrypt1": {"notpointing.org", "x.org"},
-	}, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
-	if out, err := exec.Command("sh", "-n", "-c", DomainsScript(tg, "shop")).CombinedOutput(); err != nil {
-		t.Fatalf("domains script: %v\n%s", err, out)
-	}
-	if out, err := exec.Command("sh", "-c", retry).CombinedOutput(); err != nil {
-		t.Fatalf("retry script: %v\n%s", err, out)
-	}
-	out, err := os.ReadFile(filepath.Join(traefik, ".devopsy", "mnt", "dynamic", "devopsy-retry-shop.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		HTTP struct {
-			Routers map[string]struct {
-				Rule string
-				TLS  struct {
-					CertResolver string `yaml:"certResolver"`
-					Domains      []struct{ Main string }
-				}
-			}
-		}
-	}
-	if err := yaml.Unmarshal(out, &doc); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	r := doc.HTTP.Routers["devopsy-retry-shop-letsencrypt1-20261005120000"]
-	if r.TLS.CertResolver != "letsencrypt1" || len(r.TLS.Domains) != 2 || r.TLS.Domains[1].Main != "x.org" {
-		t.Fatalf("%s", out)
-	}
-}
-
-func TestCleanupRetry(t *testing.T) {
-	traefik := t.TempDir()
-	dir := filepath.Join(traefik, ".devopsy", "mnt", "dynamic")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	file := RetryFile(traefik, "shop")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for i, want := range []string{"removed\n", ""} {
-		out, err := exec.Command("sh", "-c", CleanupRetryScript(traefik, "shop")).Output()
-		if err != nil || string(out) != want {
-			t.Fatalf("run %d: %q %v", i, out, err)
-		}
-	}
-	if _, err := os.Stat(file); !os.IsNotExist(err) {
-		t.Fatal("file still there")
-	}
-
-	reports := []DomainReport{{Routed: true, Cert: CertInfo{Valid: true}}, {Routed: false}}
+	reports = []DomainReport{{Routed: true, Cert: CertInfo{Valid: true}}, {Routed: false}}
 	if !AllCertified(reports) {
 		t.Fatal("all routed hosts are certified")
 	}
@@ -191,14 +151,12 @@ func TestCleanupRetry(t *testing.T) {
 }
 
 func TestCheckProxied(t *testing.T) {
-	out := factLine("env", "DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='cf-ok.org cf-526.org cf-down.org cf-pending.org'\n") +
-		factLine("ip", "203.0.113.10") +
-		factLine("routers", `[{"name":"websecure-shop@docker","rule":"Host(`+"`shop.vm1.example.com`"+`) || Host(`+"`cf-ok.org`"+`) || Host(`+"`cf-526.org`"+`) || Host(`+"`cf-down.org`"+`) || Host(`+"`cf-pending.org`"+`)","tls":{"certResolver":"acmedns"}}]`) +
-		factLine("accounts", `{}`) + factLine("traefik", "/srv/traefik")
-	f, err := ParseFacts(out)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := parseFacts(t, `{"version": 1, "ip": "203.0.113.10", "hosts": [
+	  {"host": "shop.vm1.example.com", "routed": true, "resolver": "acmedns", "method": "dns-cname"},
+	  {"host": "cf-ok.org", "routed": true, "resolver": "acmedns", "method": "dns-cname"},
+	  {"host": "cf-526.org", "routed": true, "resolver": "acmedns", "method": "dns-cname"},
+	  {"host": "cf-down.org", "routed": true, "resolver": "acmedns", "method": "dns-cname"},
+	  {"host": "cf-pending.org", "routed": true, "resolver": "acmedns", "method": "dns-cname"}]}`)
 	status := map[string]int{"cf-ok.org": 200, "cf-526.org": 526, "cf-down.org": 522, "cf-pending.org": 401}
 	c := Checker{
 		LookupIP: func(_ context.Context, h string) ([]string, error) {
@@ -220,7 +178,7 @@ func TestCheckProxied(t *testing.T) {
 		Get: func(_ context.Context, _, h string) (int, error) { return status[h], nil },
 	}
 	got := map[string]DomainReport{}
-	for _, r := range Check(context.Background(), f, c, []string{"203.0.113.10"}, f.Hosts()) {
+	for _, r := range Check(context.Background(), f, c, []string{"203.0.113.10"}, f.AllHosts()) {
 		got[r.Host] = r
 	}
 	if r := got["cf-ok.org"]; !r.Live || r.Proxy != "Cloudflare" {
@@ -245,26 +203,13 @@ func TestCheckProxied(t *testing.T) {
 	}
 }
 
-// On the server's own Traefik, domains covers every routed host and the
-// public wildcard, checked through its reserved name.
-func TestServerHosts(t *testing.T) {
-	routers := `[
-  {"name":"acme-http@internal","rule":"PathPrefix(` + "`/.well-known/acme-challenge/`" + `)","tls":null},
-  {"name":"web-to-websecure@internal","rule":"HostRegexp(` + "`^.+$`" + `)","tls":null},
-  {"name":"devopsy-public-wildcard@file","rule":"Host(` + "`devopsy-wildcard.vm1.example.com`" + `)","tls":{"certResolver":"acmedns","domains":[{"main":"*.vm1.example.com"}]}},
-  {"name":"devopsy-retry-shop-acmedns-1@file","rule":"Host(` + "`devopsy-retry-1.invalid`" + `)","tls":{"certResolver":"acmedns","domains":[{"main":"nocname.org"}]}},
-  {"name":"shop@docker","rule":"Host(` + "`shop.vm1.example.com`" + `) || Host(` + "`Live.org`" + `)","tls":{"certResolver":"letsencrypt1"}},
-  {"name":"websecure-shop@docker","rule":"Host(` + "`shop.vm1.example.com`" + `) || Host(` + "`live.org`" + `)","tls":{"certResolver":"letsencrypt1"}}
-]`
-	f, err := ParseFacts(factLine("env", "DEVOPSY_PROJECT_NAME='traefik-main'\n") + factLine("routers", routers) +
-		factLine("accounts", `{"*.vm1.example.com":{"fulldomain":"wild.acme-vm1.example.com"}}`) + factLine("traefik", "/srv/traefik"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	hosts := f.ServerHosts()
-	if got := strings.Join(hosts, " "); got != "*.vm1.example.com live.org shop.vm1.example.com" {
-		t.Fatalf("hosts: %s", got)
-	}
+// On the proxy's own target, a wildcard is checked through the name its
+// router matches, and its challenge is the domain's.
+func TestCheckWildcard(t *testing.T) {
+	f := parseFacts(t, `{"version": 1, "ip": "203.0.113.10", "hosts": [
+	  {"host": "*.vm1.example.com", "probe": "devopsy-wildcard.vm1.example.com", "routed": true, "resolver": "acmedns", "method": "dns-cname",
+	   "record": {"name": "_acme-challenge.vm1.example.com", "target": "wild.acme-vm1.example.com"}},
+	  {"host": "*.other.example.com", "routed": true, "resolver": "cloudflare", "method": "dns-api"}]}`)
 	server := "203.0.113.10"
 	var connected, challenged []string
 	c := Checker{
@@ -278,11 +223,31 @@ func TestServerHosts(t *testing.T) {
 			return CertInfo{Valid: true, Issuer: "Let's Encrypt R13"}, nil
 		},
 	}
-	reports := Check(context.Background(), f, c, []string{server}, hosts)
+	reports := Check(context.Background(), f, c, []string{server}, f.AllHosts())
 	if r := reports[0]; r.Host != "*.vm1.example.com" || r.Resolver != "acmedns" || !r.Live || r.ChallengeWant != "wild.acme-vm1.example.com" {
 		t.Errorf("wildcard: %+v", r)
 	}
-	if connected[0] != "devopsy-wildcard.vm1.example.com" || challenged[0] != "_acme-challenge.vm1.example.com" {
-		t.Errorf("wildcard checked through %v, challenge %v", connected, challenged)
+	if strings.Join(connected, " ") != "devopsy-wildcard.vm1.example.com devopsy-wildcard.other.example.com" || strings.Join(challenged, " ") != "_acme-challenge.vm1.example.com" {
+		t.Errorf("wildcards checked through %v, challenge %v", connected, challenged)
+	}
+	text := FormatReports(reports)
+	if !strings.Contains(text, "challenge    ok") {
+		t.Errorf("challenge not ok:\n%s", text)
+	}
+}
+
+func TestDomainsScripts(t *testing.T) {
+	tg := &Target{Name: "prod", Host: "h", Path: "/srv/shop", Mode: ModeImage}
+	for name, script := range map[string]string{
+		"env":        EnvScript(tg, "shop"),
+		"capability": CapabilityScript("/srv/traefik", "domains", "facts", []string{"a.org", "b c"}),
+	} {
+		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+			t.Fatalf("%s script: %v\n%s", name, err, out)
+		}
+	}
+	s := CapabilityScript("/srv/traefik", "domains", "retry", []string{"shop", "--done"})
+	if !strings.Contains(s, "devopsy '--capability' 'domains' 'retry' 'shop' '--done'") || strings.Contains(s, "COMPOSE_PROJECT_NAME") {
+		t.Fatalf("capability script:\n%s", s)
 	}
 }
