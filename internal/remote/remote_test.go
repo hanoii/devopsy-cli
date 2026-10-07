@@ -53,7 +53,7 @@ nohost:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tg.Mode != ModeImage || tg.Path != "/srv/app" || tg.Name != "prod" {
+	if tg.Mode != ModeBuild || tg.Path != "/srv/app" || tg.Name != "prod" {
 		t.Fatalf("prod: %+v", tg)
 	}
 	if tg, err := LoadTarget(dir, "build", nil); err != nil || tg.Mode != ModeBuild {

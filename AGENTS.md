@@ -140,6 +140,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   step calling `devopsy @target`) ignores the inherited
   `COMPOSE_PROJECT_NAME`: it was the local project's, and a release from
   catalyze's `ship` once came up as a second stack on the same data.
+- `mode:` defaults to `build` (before v0.15.0, `image`): build works for
+  every project, image only for those that never build, and a wrong build
+  costs a few uploaded files where a wrong image fails the release.
 - Releases are full tar streams over SSH (catalyze, the largest project,
   compresses to about 3 MB). No rsync: macOS ships openrsync without the
   needed features.

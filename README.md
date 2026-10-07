@@ -316,7 +316,7 @@ or from CI. Define targets in `.devopsy/targets.yaml`:
 prod:
   host: devopsy@203.0.113.10    # any SSH destination or ~/.ssh/config alias
   path: /srv/myapp              # absolute, writable by that user
-  mode: image                   # image (default) or build
+  mode: image                   # build (default) or image
   env:                          # per-target settings, not secrets
     DEVOPSY_DOMAINS: example.org www.example.org
   release:                      # what `--release` runs (required for it)
@@ -489,6 +489,10 @@ build mode. A project usually wraps that in its own `deploy` command.
 files into it, makes it current and runs the remote step there. It keeps the
 last 5 releases.
 
+- **build** mode, the default, uploads the whole project, as git sees it:
+  tracked and untracked files, minus gitignored ones, with uncommitted
+  changes. Compose then builds on the server. It works for every project:
+  one that only pulls images merely uploads a few more files.
 - **image** mode uploads `.devopsy/` only: images come from a registry.
   Tag them with the commit, so each release and each rollback runs its own
   image (a fixed `:latest` would make a rollback pull the newest image
@@ -499,14 +503,12 @@ last 5 releases.
   ```
 
   CI builds and pushes `ghcr.io/me/app:$GITHUB_SHA`, then runs `devopsy @prod
-  release` from the same checkout, whose remote step pulls and starts it; or
+  --release` from the same checkout, whose remote step pulls and starts it; or
   a `before` step builds and pushes it. The image is the commit's: uncommitted changes outside
   `.devopsy/` are not in it, and `--release` warns when there are some. Locally the variable is unset, so the tag is
   `local`. If the image was never pushed, the pull fails and the release goes
-  back to the previous one.
-- **build** mode uploads the whole project, as git sees it: tracked and
-  untracked files, minus gitignored ones, with uncommitted changes. Compose
-  then builds on the server.
+  back to the previous one. Projects that never build, like the server's
+  Traefik, use it too, to upload only `.devopsy/`.
 
 `--vars` manages the target's variables on the server: `shared/.env`, or
 `.devopsy/.env` for a plain directory. They are its secrets and overrides,

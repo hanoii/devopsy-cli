@@ -360,7 +360,9 @@ func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool))
 	t.Path = path.Clean(t.Path)
 	switch t.Mode {
 	case "":
-		t.Mode = ModeImage
+		// Build works for every project, image only for those that never
+		// build: a wrong build uploads extra files, a wrong image fails.
+		t.Mode = ModeBuild
 	case ModeImage, ModeBuild:
 	default:
 		return nil, fmt.Errorf("target %q: mode must be %q or %q", name, ModeImage, ModeBuild)
