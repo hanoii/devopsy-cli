@@ -240,8 +240,12 @@ usable with plain `docker compose`:
 ```yaml
 labels:
   - traefik.enable=true
-  - traefik.http.routers.${DEVOPSY_PROJECT_NAME:-app}.rule=${DEVOPSY_HOST_RULE:-Host(`app.localhost`)}
+  - traefik.http.routers.${DEVOPSY_PROJECT_NAME:-app}.rule=${DEVOPSY_HOST_RULE:-HostRegexp(`^app\.localhost$`)}
 ```
+
+The fallback is a `HostRegexp`: Traefik requests no certificate for it, so
+an environment without hosts (`DEVOPSY_HOST_RULE` unset) logs no ACME
+errors, while plain compose still answers on `app.localhost`.
 
 devopsy only adds environment variables; it never changes compose files.
 `devopsy --env` prints what it loads and computes, in `.env` format, to
