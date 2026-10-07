@@ -344,7 +344,8 @@ A shell in a container of the current release, as devopsy --shell runs it
 locally: the project's shell capability (capabilities/shell/open) if it has
 one; otherwise bash (or sh) in the service named, else the one labeled
 devopsy.shell=true in compose.yaml, else the only one running, as the
-service's user. Options go to docker compose exec, like --user root.
+service's user or its devopsy.shell.user label. Options go to docker
+compose exec, like --user root.
 `,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 
