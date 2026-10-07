@@ -243,6 +243,7 @@ devopsy @prod releases         # list releases, * marks the current one
 devopsy @prod rollback up -d   # back to the previous release, then `up -d`
 devopsy @prod domains          # per host: DNS, challenge, certificate, next step
 devopsy @prod --shell          # a shell on the server, in the current release
+devopsy @prod --vars set KEY   # set a secret in the server's shared/.env
 devopsy @prod release --help   # details of any of these
 ```
 
@@ -282,6 +283,28 @@ the command's exit code. It keeps the last 5 releases.
 - **build** mode uploads the whole project, as git sees it: tracked and
   untracked files, minus gitignored ones, with uncommitted changes. Compose
   then builds on the server.
+
+`--vars` manages the target's variables on the server: `shared/.env`, or
+`.devopsy/.env` for a plain directory. They are its secrets and overrides,
+linked into every release, as opposed to `targets.yaml`'s `env`, which is
+committed and written into each release as `target.env`.
+
+```sh
+devopsy @prod --vars                         # names, values hidden
+devopsy @prod --vars set DB_PASSWORD API_KEY # from your environment or .env, else a hidden prompt
+printf '%s' "$TOKEN" | devopsy @prod --vars set TOKEN   # or stdin, for one key
+devopsy @prod --vars get DB_PASSWORD
+devopsy @prod --vars unset API_KEY
+```
+
+Values never go in arguments: `set` sends them over SSH's stdin, so they
+stay out of `ps`, shell history and CI logs, and in CI it copies a CI
+variable to the server by name. Existing keys are replaced in place. It
+works before the first release, so secrets can be in place for the first
+deploy, and it waits for a running release. Running containers keep their
+values: apply with `devopsy @prod up -d` or the next release. User-level
+targets only take values from your environment, never from a project's
+`.env`.
 
 On the server, the target path holds `releases/`, a `current` symlink and
 `shared/`. Everything in `shared/` is linked into each release's `.devopsy/`.

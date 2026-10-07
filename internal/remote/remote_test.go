@@ -203,6 +203,9 @@ func TestScriptsParse(t *testing.T) {
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
 		"shell":        ShellScript(tg),
+		"vars":         VarsReadScript(tg),
+		"vars set":     VarsSetScript(tg),
+		"vars unset":   VarsUnsetScript(tg),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {

@@ -36,7 +36,8 @@ user-facing behavior and keep it in sync with any change to it.
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
   and the compose fallback. After `@target`, `release`, `rollback`,
-  `releases` and `domains` are words, kept as they are; new ones are flags: `--shell`
+  `releases` and `domains` are words, kept as they are; new ones are flags
+  (`--shell`, `--vars`): `--shell`
   is one so `devopsy @prod shell` stays a project's command (a shell in a
   container needs the project's service and user; devopsy cannot know them).
 - `devopsy @<target> <subcommand> --help` must only print help
@@ -96,6 +97,12 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   target's env sets it) for image tags: with a fixed tag, image-mode
   rollbacks would pull the newest image again.
 
+- `devopsy @target --vars`: secrets go into `shared/.env` (or a plain
+  directory's `.devopsy/.env`) over SSH's stdin, never as arguments. The
+  scripts only need `sh`, `awk` and `flock` on the server, so any server
+  version works; edits replace keys in place (appending reorders files) and
+  take the release lock, since `deploy` commands write their own secrets.
+  User-level targets never read values from a project's `.env`, as for hosts.
 - `devopsy @target domains`: the server only reports facts (`print-env`, the
   old name of `--env`, kept so any server version answers;
   Traefik's routers from its local API, acme-dns registrations, its IP); DNS
