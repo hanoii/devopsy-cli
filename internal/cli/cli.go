@@ -264,30 +264,31 @@ func CommandDescription(path string) string {
 }
 
 // RemoteHelp describes `devopsy @<target>` commands.
-const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devopsy/targets.yaml):
-  release              upload the project as a new release, make it current and
+const RemoteHelp = `On a server, devopsy @<target> ... (targets in .devopsy/targets.yaml, or
+user-level ones in ~/.config/devopsy/targets.yaml):
+  --release            upload the project as a new release, make it current and
                        run the target's release steps (targets.yaml), going
                        back to the previous release if the remote one fails
-  rollback             make the previous release current again and run the
+  --rollback           make the previous release current again and run the
                        target's rollback steps
-  releases             list the releases on the server
-  domains [--retry]    DNS, challenge and certificate per host, and what next;
+  --releases           list the releases on the server
+  --domains [--retry]  DNS, challenge and certificate per host, and what next;
                        --retry asks the proxy for missing certificates
-  --shell              a shell on the server, in the current release (or the
-                       plain directory)
+  --shell [service]    a shell in a container of the current release
+  --shell-host         a shell on the server itself, in the current release
   --vars [get|set|unset KEY...]
                        the server's variables (shared/.env): names, one value,
                        or set and unset them; values never go in arguments
-  <anything else>      run 'devopsy <anything else>' in the current release
+  <command> [args]     run 'devopsy <command>' in the current release: the
+                       project's commands, then docker compose's
 
-  devopsy @<target> <command> --help   details of release, rollback, releases,
-                                       domains, --shell, --vars
+  devopsy @<target> <flag> --help   details of each
 `
 
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"release": `Usage: devopsy @<target> release
+	"--release": `Usage: devopsy @<target> --release
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from targets.yaml (required):
@@ -315,7 +316,7 @@ The release links the server's shared/ (.env, mnt/...) and writes
 DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. The last 5
 releases are kept.
 `,
-	"rollback": `Usage: devopsy @<target> rollback
+	"--rollback": `Usage: devopsy @<target> --rollback
 
 Makes the release before the current one current again (skipping failed
 ones) and runs the target's rollback steps from targets.yaml (required), like
@@ -330,17 +331,27 @@ release, or a project command of its own:
 The remote command runs in the restored release, so it must exist there.
 Rolling back restores that release's files and target env, not data.
 `,
-	"releases": `Usage: devopsy @<target> releases
+	"--releases": `Usage: devopsy @<target> --releases
 
 Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases whose command failed. * marks the current one.
 `,
-	"--shell": `Usage: devopsy @<target> --shell
+	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...]
+
+A shell in a container of the current release, as devopsy --shell runs it
+locally: the project's shell capability (capabilities/shell/open) if it has
+one; otherwise bash (or sh) in the service named, else the one labeled
+devopsy.shell=true in compose.yaml, else the only one running, as the
+service's user. Options go to docker compose exec, like --user root.
+`,
+	"--shell-host": `Usage: devopsy @<target> --shell-host
 
 Opens your login shell on the target's host, over SSH, in the current
-release, or in the target's path for a plain devopsy directory. devopsy and docker compose work there as on any project. For
-a shell in a container, use compose: devopsy @<target> exec <service> bash.
+release, or in the target's path for a plain devopsy directory. devopsy and
+docker compose work there as on any project. It never depends on the
+project: the way in when something is broken. For a shell in a container:
+devopsy @<target> --shell.
 `,
 	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
 
@@ -370,7 +381,7 @@ Examples:
   devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
 `,
-	"domains": `Usage: devopsy @<target> domains [--retry]
+	"--domains": `Usage: devopsy @<target> --domains [--retry]
 
 For the environment's wildcard host and each of DEVOPSY_DOMAINS: what the
 server's proxy knows (routed, certificate resolver, through its domains
@@ -391,13 +402,18 @@ func Usage(projectDir string) string {
 	b.WriteString(`devopsy: docker compose for projects with a .devopsy/ directory.
 
 Usage:
-  devopsy <command> [args...]     a project command, else docker compose <command>
+  devopsy <command> [args...]     a project command, else a docker compose command
   devopsy @<target> <command>     the same on a server
+  devopsy [@<target>] --<flag>    devopsy's own (below)
 
 Built-in:
   --help, -h     this help
   --version      devopsy's, docker's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
+  --shell [service] [exec options...]
+                 a shell in a container: the project's shell capability, else
+                 bash (or sh) in the service named, labeled devopsy.shell=true,
+                 or the only one running
   --context-hash [service]
                  a hash of what the service's image is built from at HEAD
                  (build context minus dockerignore, Dockerfile, build:), to
@@ -429,8 +445,9 @@ Built-in:
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(`Anything else runs as docker compose, with the project's files:
+	b.WriteString(`Other words are docker compose's commands, with the project's files:
   devopsy up -d, devopsy ps, devopsy logs -f <service>, devopsy version...
+Anything else is an error.
 `)
 	return b.String()
 }
@@ -574,6 +591,8 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		return nil, &Output{Text: hash + "\n"}
 	case "--capability":
 		return capability(p, args[1:])
+	case "--shell":
+		return shell(p, args[1:])
 	}
 
 	// A custom command can call `devopsy <same name>` to reach the compose
@@ -590,6 +609,13 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 			Env:     env.Environ(),
 			Verbose: maskAll(secrets, append(verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
 		}, nil
+	}
+
+	// A word is a project command, else a docker compose command, else a
+	// mistake: say so, rather than compose's usage. Flags first (compose's
+	// global ones, like --profile) go to compose unchecked.
+	if !strings.HasPrefix(args[0], "-") && !isComposeCommand(args[0], env.Environ()) {
+		return nil, &ExitError{Code: 1, Msg: unknownWord(args[0], projectDir)}
 	}
 
 	plan := p.compose(args)

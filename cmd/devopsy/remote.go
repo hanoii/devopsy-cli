@@ -57,7 +57,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 0
 	}
 
-	// `devopsy @t release --help` explains instead of releasing.
+	// `devopsy @t --release --help` explains instead of releasing.
 	if help, ok := cli.RemoteCommandHelp[args[0]]; ok && len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
 		fmt.Print(help)
 		return 0
@@ -66,7 +66,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	// A user-level target belongs to no project, so nothing may be released
 	// to it from wherever devopsy happens to run: only from its source,
 	// where it then acts as the project's own target.
-	if args[0] == "release" || args[0] == "rollback" {
+	if args[0] == "--release" || args[0] == "--rollback" {
 		ok, why := t.ReleasesHere(projectDir)
 		if !ok {
 			return fail(why)
@@ -101,9 +101,9 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	}
 
 	switch args[0] {
-	case "--shell":
+	case "--shell-host":
 		if len(args) > 1 {
-			return fail("--shell takes no arguments: for one command, use 'devopsy @" + t.Name + " <command>'")
+			return fail("--shell-host takes no arguments: for one command, use 'devopsy @" + t.Name + " <command>'")
 		}
 		return ssh(remote.ShellScript(t), nil, tty)
 
@@ -116,7 +116,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		return runVars(t, args[1:], lookup, color)
 
-	case "releases":
+	case "--releases":
 		var out bytes.Buffer
 		code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)
 		if err != nil {
@@ -128,20 +128,20 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		fmt.Print(remote.FormatReleases(out.String()))
 		return 0
 
-	case "domains":
+	case "--domains":
 		retry := len(args) > 1 && args[1] == "--retry"
 		return runDomains(t, projectName, retry, color)
 
-	case "release", "rollback":
+	case "--release", "--rollback":
 		if len(args) > 1 {
-			return fail(fmt.Sprintf("%s takes no command: what it runs is the target's %s: steps in %s", args[0], args[0], t.File))
+			return fail(fmt.Sprintf("%s takes no command: what it runs is the target's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
 		}
 		steps := t.Release
-		if args[0] == "rollback" {
+		if args[0] == "--rollback" {
 			steps = t.Rollback
 		}
 		if steps == nil || len(remote.StepArgs(steps.Remote)) == 0 {
-			return fail(missingSteps(t, args[0]))
+			return fail(missingSteps(t, strings.TrimPrefix(args[0], "--")))
 		}
 		local := func(phase string, list remote.StepList, commit string) int {
 			for _, step := range list {
@@ -153,7 +153,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			return 0
 		}
 
-		if args[0] == "rollback" {
+		if args[0] == "--rollback" {
 			if code := local("before", steps.Before, ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
@@ -263,7 +263,7 @@ func missingSteps(t *remote.Target, which string) string {
       after: []           # local devopsy commands, once it is live
 
 remote is one devopsy command, run on the server after the switch; usually a
-project command (deploy) doing that and more. See 'devopsy @%s %s --help'.`,
+project command (deploy) doing that and more. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, t.Name, which, remoteCmd, t.Name, which)
 }
 
@@ -295,7 +295,7 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	return []byte(b.String())
 }
 
-// runDomains implements `devopsy @target domains [--retry]`. The server's
+// runDomains implements `devopsy @target --domains [--retry]`. The server's
 // proxy reports what it knows through its domains capability; the checks
 // run here, from outside, as visitors see the hosts.
 func runDomains(t *remote.Target, projectName string, retry bool, color bool) int {

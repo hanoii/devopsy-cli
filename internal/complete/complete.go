@@ -83,6 +83,7 @@ var builtins = []Candidate{
 	{"--help", "devopsy's help", GroupDevopsy},
 	{"--version", "devopsy's and docker compose's versions", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes", GroupDevopsy},
+	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
@@ -91,11 +92,12 @@ var builtins = []Candidate{
 
 // remoteCommands follow @<target>.
 var remoteCommands = []Candidate{
-	{"release", "upload a new release and run its steps", GroupDevopsy},
-	{"rollback", "back to the previous release, and run its steps", GroupDevopsy},
-	{"releases", "list the releases on the server", GroupDevopsy},
-	{"domains", "DNS and certificates per host", GroupDevopsy},
-	{"--shell", "a shell on the server", GroupDevopsy},
+	{"--release", "upload a new release and run its steps", GroupDevopsy},
+	{"--rollback", "back to the previous release, and run its steps", GroupDevopsy},
+	{"--releases", "list the releases on the server", GroupDevopsy},
+	{"--domains", "DNS and certificates per host", GroupDevopsy},
+	{"--shell", "a shell in a container", GroupDevopsy},
+	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }
@@ -142,6 +144,11 @@ func Complete(cwd string, words []string, environ []string) Result {
 	}
 
 	switch first := words[0]; {
+	case first == "--shell":
+		if len(words) == 2 && !strings.HasPrefix(cur, "-") {
+			return shellServices(projectDir, cur)
+		}
+		return Result{Directive: DirectiveNoFileComp}
 	case first == "--completion":
 		if len(words) == 2 {
 			var r Result
@@ -208,7 +215,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	}
 
 	switch words[0] {
-	case "release", "rollback":
+	case "--release", "--rollback":
 		// They take no command: their steps are in targets.yaml.
 		if len(words) == 2 {
 			r := filter(Result{Candidates: []Candidate{{"--help", "what it runs, and how", GroupDevopsy}}}, cur)
@@ -216,7 +223,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return r
 		}
 		return none
-	case "domains":
+	case "--domains":
 		if len(words) == 2 {
 			r := filter(Result{Candidates: []Candidate{{"--retry", "ask the proxy for missing certificates", GroupDevopsy}}}, cur)
 			r.Directive = DirectiveNoFileComp
@@ -237,10 +244,24 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			}
 		}
 		return filter(r, cur)
-	case "--shell", "releases", "--help", "-h":
+	case "--shell":
+		if len(words) == 2 && !strings.HasPrefix(cur, "-") {
+			return shellServices(projectDir, cur)
+		}
+		return none
+	case "--shell-host", "--releases", "--help", "-h":
 		return none
 	}
 	return completeCommand(cwd, projectDir, words, environ)
+}
+
+// shellServices completes --shell's service from the local compose files.
+func shellServices(projectDir, cur string) Result {
+	r := Result{Directive: DirectiveNoFileComp}
+	for _, s := range cli.Services(projectDir) {
+		r.Candidates = append(r.Candidates, Candidate{Value: s})
+	}
+	return filter(r, cur)
 }
 
 // composeDelegate asks docker compose to complete words, with the project's

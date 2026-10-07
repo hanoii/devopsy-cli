@@ -161,14 +161,14 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
 	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  host: nowhere.invalid\n  path: /srv/app\n", 0o644)
-	for _, sub := range []string{"release", "rollback", "releases", "domains", "--shell"} {
+	for _, sub := range []string{"--release", "--rollback", "--releases", "--domains", "--shell", "--shell-host"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
 			t.Errorf("%s --help (%d):\n%s", sub, code, out)
 		}
 	}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
-	if code != 0 || !strings.Contains(out, "<command> --help") {
+	if code != 0 || !strings.Contains(out, "<flag> --help") {
 		t.Errorf("@prod --help (%d):\n%s", code, out)
 	}
 }
@@ -184,7 +184,7 @@ func TestUserTargets(t *testing.T) {
 	}
 	write(t, filepath.Join(tmp, "app", ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
 	env := []string{"DEVOPSY_HOME=" + home}
-	for _, sub := range []string{"release", "rollback"} {
+	for _, sub := range []string{"--release", "--rollback"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "@vm1-traefik", sub)
 		if code == 0 || !strings.Contains(out, "is a user-level target") {
 			t.Errorf("%s (%d):\n%s", sub, code, out)
@@ -195,13 +195,19 @@ func TestUserTargets(t *testing.T) {
 	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: nowhere.invalid\n  path: /srv/traefik\n  source: ~/app\n", 0o644)
 	write(t, filepath.Join(tmp, "other", ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
 	withHome := append([]string{"HOME=" + tmp, "DEVOPSY_SSH_COMMAND=false"}, env...)
-	out, code := runDevopsy(t, filepath.Join(tmp, "other"), withHome, "@vm1-traefik", "release")
+	out, code := runDevopsy(t, filepath.Join(tmp, "other"), withHome, "@vm1-traefik", "--release")
 	if code == 0 || !strings.Contains(out, "releases only from its source, ~/app") || !strings.Contains(out, filepath.Join(tmp, "other")) {
 		t.Errorf("release from another project (%d):\n%s", code, out)
 	}
-	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "@vm1-traefik", "release")
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "@vm1-traefik", "--release")
 	if strings.Contains(out, "source") || strings.Contains(out, "user-level") || !strings.Contains(out, "release") {
 		t.Errorf("release from its source (%d):\n%s", code, out)
+	}
+
+	// devopsy's flags for servers, without a target, say so.
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--release")
+	if code == 0 || !strings.Contains(out, "--release needs a target: devopsy @<target> --release (targets: vm1-traefik)") {
+		t.Errorf("--release without a target (%d):\n%s", code, out)
 	}
 
 	// Outside a project the target resolves (help needs no SSH).
@@ -446,19 +452,19 @@ func TestReleaseSteps(t *testing.T) {
 		return l
 	}
 
-	if out, code := run(nil, "@prod", "release", "deploy"); code == 0 || !strings.Contains(out, "release takes no command") {
+	if out, code := run(nil, "@prod", "--release", "deploy"); code == 0 || !strings.Contains(out, "--release takes no command") {
 		t.Fatalf("release with a command (%d):\n%s", code, out)
 	}
 
 	// A failing before step stops before the server.
-	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "release"); code == 0 || !strings.Contains(out, "check target=prod site=one") || !strings.Contains(out, "nothing changed on prod") {
+	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "check target=prod site=one") || !strings.Contains(out, "nothing changed on prod") {
 		t.Fatalf("before failure (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(server); !os.IsNotExist(err) {
 		t.Fatalf("before failure touched the server: %v", err)
 	}
 
-	out, code := run(nil, "@prod", "release")
+	out, code := run(nil, "@prod", "--release")
 	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "after ran") {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
@@ -469,28 +475,28 @@ func TestReleaseSteps(t *testing.T) {
 
 	// A failing remote step goes back to the previous release, and skips after.
 	time.Sleep(1100 * time.Millisecond) // release ids are per second
-	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "release")
+	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "--release")
 	if code != 4 || strings.Contains(out, "after ran") || current() != first {
 		t.Fatalf("remote failure (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
 
 	// rollback needs its own steps.
-	if out, code := run(nil, "@prod", "rollback"); code == 0 || !strings.Contains(out, "@prod has no rollback steps") || !strings.Contains(out, "remote: up -d --wait") {
+	if out, code := run(nil, "@prod", "--rollback"); code == 0 || !strings.Contains(out, "@prod has no rollback steps") || !strings.Contains(out, "remote: up -d --wait") {
 		t.Fatalf("rollback without steps (%d):\n%s", code, out)
 	}
 	// With rollback steps: back to the first release, running its remote.
 	write(t, filepath.Join(dot, "targets.yaml"), targets+"  rollback:\n    remote: deploy --back\n", 0o644)
 	time.Sleep(1100 * time.Millisecond)
-	if out, code := run(nil, "@prod", "release"); code != 0 || current() == first {
+	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != first {
+	if out, code := run(nil, "@prod", "--rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != first {
 		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
 
 	// Unknown keys are refused, not ignored.
 	write(t, filepath.Join(dot, "targets.yaml"), strings.Replace(targets, "remote:", "remotes:", 1), 0o644)
-	if out, code := run(nil, "@prod", "release"); code == 0 || !strings.Contains(out, `unknown key "remotes"`) {
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, `unknown key "remotes"`) {
 		t.Fatalf("unknown key (%d):\n%s", code, out)
 	}
 }
