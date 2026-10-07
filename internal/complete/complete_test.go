@@ -20,12 +20,12 @@ func write(t *testing.T, path, content string, mode os.FileMode) {
 }
 
 // setup creates a project with a deploy command, a .env and targets, plus a
-// user-level target.
+// user-level target, named to sort first: the project's still come first.
 func setup(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: devopsy@vm1\n  path: /srv/traefik\n", 0o644)
+	write(t, filepath.Join(home, "targets.yaml"), "a-traefik:\n  host: devopsy@vm1\n  path: /srv/traefik\n", 0o644)
 	root := filepath.Join(t.TempDir(), "app")
 	dot := filepath.Join(root, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
@@ -68,8 +68,8 @@ func TestComplete(t *testing.T) {
 		delegate  []string
 		directive int
 	}{
-		{[]string{""}, []string{"@prod", "@staging", "@vm1-traefik", "deploy"}, []string{""}, DirectiveNoFileComp},
-		{[]string{"@"}, []string{"@prod", "@staging", "@vm1-traefik"}, nil, DirectiveNoFileComp},
+		{[]string{""}, []string{"@prod", "@staging", "@a-traefik", "deploy"}, []string{""}, DirectiveNoFileComp},
+		{[]string{"@"}, []string{"@prod", "@staging", "@a-traefik"}, nil, DirectiveNoFileComp},
 		{[]string{"--up"}, []string{"--upgrade"}, []string{"--up"}, DirectiveNoFileComp},
 		{[]string{"-v", "@st"}, []string{"@staging"}, nil, DirectiveNoFileComp},
 		{[]string{"de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
@@ -89,9 +89,9 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "logs", ""}, nil, []string{"logs", ""}, 0},
 		// A user-level target is another project: no local commands, .env
 		// or release.
-		{[]string{"@vm1-traefik", "dep"}, nil, []string{"dep"}, DirectiveNoFileComp},
-		{[]string{"@vm1-traefik", "--vars", "set", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@vm1-traefik", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@a-traefik", "dep"}, nil, []string{"dep"}, DirectiveNoFileComp},
+		{[]string{"@a-traefik", "--vars", "set", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@a-traefik", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
 	}
 	for _, c := range cases {
 		r := Complete(root, c.words, os.Environ())
@@ -117,7 +117,7 @@ func TestComplete(t *testing.T) {
 
 	// Outside a project: user-level targets, and compose without files.
 	r = Complete(t.TempDir(), []string{""}, os.Environ())
-	if got := values(r); !slices.Equal(got, []string{"@vm1-traefik"}) {
+	if got := values(r); !slices.Equal(got, []string{"@a-traefik"}) {
 		t.Errorf("outside a project: %q", got)
 	}
 	if got := r.Delegate.Args; !slices.Equal(got, []string{"docker", "__complete", "compose", ""}) {

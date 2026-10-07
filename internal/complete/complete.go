@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -35,16 +36,19 @@ const (
 type Candidate struct {
 	Value, Description string
 	// Group tells candidates apart, for shells that can show it:
-	// GroupTarget, GroupProject, GroupDevopsy, GroupCompose. Plain values,
+	// GroupTarget, GroupUserTarget, GroupProject, GroupDevopsy,
+	// GroupCompose. Plain values,
 	// like shell names, have none.
 	Group string
 }
 
 // Groups, printed as a third field after the description.
 const (
-	GroupTarget  = "target"
-	GroupProject = "project"
-	GroupDevopsy = "devopsy"
+	GroupTarget = "target"
+	// GroupUserTarget is a target from the user-level targets.yaml.
+	GroupUserTarget = "user-target"
+	GroupProject    = "project"
+	GroupDevopsy    = "devopsy"
 	// GroupCompose marks the delegate's candidates.
 	GroupCompose = "compose"
 )
@@ -114,8 +118,15 @@ func Complete(cwd string, words []string, environ []string) Result {
 		// the delegate, compose's.
 		var r Result
 		if cur == "" || strings.HasPrefix(cur, "@") {
-			for _, t := range remote.Targets(projectDir) {
-				r.Candidates = append(r.Candidates, Candidate{"@" + t.Name, targetDescription(t), GroupTarget})
+			// The project's targets before user-level ones.
+			targets := remote.Targets(projectDir)
+			sort.SliceStable(targets, func(i, j int) bool { return !targets[i].User && targets[j].User })
+			for _, t := range targets {
+				group := GroupTarget
+				if t.User {
+					group = GroupUserTarget
+				}
+				r.Candidates = append(r.Candidates, Candidate{"@" + t.Name, targetDescription(t), group})
 			}
 		}
 		r.Candidates = append(r.Candidates, projectCommands(projectDir)...)
