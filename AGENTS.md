@@ -99,7 +99,19 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 - Remote commands run through the `current` symlink, never a release path:
   compose stores bind-mount paths in containers, and pruned releases would
   break them (for example after a reboot). `release` switches `current`
-  first, runs the command, and switches back when it fails.
+  first, runs the remote step, and switches back when it fails.
+- `release` and `rollback` take no command: each target's `release:` and
+  `rollback:` (before, remote, after; `remote.Steps`) are required for them.
+  A bare upload left `current` ahead of the running containers, for the next
+  `up` or `reload` to half apply. Phases rather than a free list, so the
+  upload is never hidden in a step and the order cannot break the lock: the
+  lock is a `flock` inside the server script, one SSH session, so one remote
+  command; several remote steps belong in a project command. Local steps
+  get the target's env, never the server's `shared/.env`.
+- A nested devopsy (`DEVOPSY_PROJECT_DIR` set: a project command or release
+  step calling `devopsy @target`) ignores the inherited
+  `COMPOSE_PROJECT_NAME`: it was the local project's, and a release from
+  catalyze's `ship` once came up as a second stack on the same data.
 - Releases are full tar streams over SSH (catalyze, the largest project,
   compresses to about 3 MB). No rsync: macOS ships openrsync without the
   needed features.

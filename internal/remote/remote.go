@@ -82,10 +82,72 @@ type Target struct {
 	// Env is written into each release as .devopsy/target.env: per-target,
 	// committed, non-secret settings like DEVOPSY_DOMAINS.
 	Env map[string]string `yaml:"env"`
+	// Release and Rollback are what `release` and `rollback` run: required
+	// for them, see Steps.
+	Release  *Steps `yaml:"release"`
+	Rollback *Steps `yaml:"rollback"`
 	// User is set for targets from the user-level file.
 	User bool `yaml:"-"`
 	// File is where the target was defined.
 	File string `yaml:"-"`
+}
+
+// Steps are what `release` or `rollback` runs, in three phases, so the
+// upload and the switch of `current` always happen at the same point:
+//
+//   - Before: local devopsy commands, in order, before anything touches the
+//     server. A failure stops there.
+//   - then `release` uploads, and both switch `current`;
+//   - Remote: one devopsy command on the server, in the new current, under
+//     the release lock. A failure switches `current` back. Several remote
+//     steps belong in one project command.
+//   - After: local devopsy commands once the release is live. A failure is
+//     reported; nothing is undone.
+//
+// Each entry is a devopsy command line, split on spaces (no quoting).
+type Steps struct {
+	Before StepList `yaml:"before"`
+	Remote string   `yaml:"remote"`
+	After  StepList `yaml:"after"`
+}
+
+// UnmarshalYAML refuses unknown keys: a typo (remotes:) would otherwise
+// release without running anything.
+func (s *Steps) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: expected before, remote and after", n.Line)
+	}
+	for i := 0; i < len(n.Content); i += 2 {
+		switch k := n.Content[i].Value; k {
+		case "before", "remote", "after":
+		default:
+			return fmt.Errorf("line %d: unknown key %q (before, remote, after)", n.Content[i].Line, k)
+		}
+	}
+	type plain Steps
+	return n.Decode((*plain)(s))
+}
+
+// StepList is one command or a list of them.
+type StepList []string
+
+// UnmarshalYAML takes a single string as a list of one.
+func (l *StepList) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*l = StepList{n.Value}
+		return nil
+	}
+	var list []string
+	if err := n.Decode(&list); err != nil {
+		return err
+	}
+	*l = list
+	return nil
+}
+
+// StepArgs splits a step into devopsy's arguments.
+func StepArgs(step string) []string {
+	return strings.Fields(step)
 }
 
 var (

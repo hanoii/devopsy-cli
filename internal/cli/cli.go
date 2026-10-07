@@ -270,10 +270,11 @@ func CommandDescription(path string) string {
 
 // RemoteHelp describes `devopsy @<target>` commands.
 const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devopsy/targets.yaml):
-  release [cmd...]     upload the project as a new release and make it current;
-                       with cmd, run 'devopsy cmd' there, going back to the
-                       previous release if it fails
-  rollback [cmd...]    make the previous release current again, same cmd handling
+  release              upload the project as a new release, make it current and
+                       run the target's release steps (targets.yaml), going
+                       back to the previous release if the remote one fails
+  rollback             make the previous release current again and run the
+                       target's rollback steps
   releases             list the releases on the server
   domains [--retry]    DNS, challenge and certificate per host, and what next;
                        --retry asks Traefik for missing certificates
@@ -291,9 +292,24 @@ const RemoteHelp = `On a server, devopsy @<target> <command> (targets in .devops
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"release": `Usage: devopsy @<target> release [command [args...]]
+	"release": `Usage: devopsy @<target> release
 
-Uploads the project to the target as a new release and makes it current.
+Uploads the project to the target as a new release, makes it current and
+runs the target's release steps from targets.yaml (required):
+
+  prod:
+    release:
+      before: [image]     # local devopsy commands, in order, before anything
+                          # touches the server; a failure stops there
+      remote: deploy      # one devopsy command on the server, in the new
+                          # release, under the release lock; a failure makes
+                          # the previous release current again
+      after: [notify]     # local devopsy commands once it is live; a failure
+                          # is reported, nothing is undone
+
+Each step is a devopsy command line, split on spaces. Several remote steps
+belong in one project command. Local steps get the target's env,
+DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
 
   - image mode (default): uploads .devopsy/; images come from a registry.
   - build mode: uploads the project as git sees it (tracked and untracked
@@ -301,24 +317,23 @@ Uploads the project to the target as a new release and makes it current.
 
 The release links the server's shared/ (.env, mnt/...) and writes
 .devopsy/target.env from the target's env in targets.yaml, plus
-DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. With a command,
-it then runs 'devopsy <command> [args...]' in the new release; if that fails,
-the previous release becomes current again and devopsy exits with the
-command's code. The last 5 releases are kept.
-
-Examples:
-  devopsy @prod release deploy
-  devopsy @staging release up -d --wait
+DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. The last 5
+releases are kept.
 `,
-	"rollback": `Usage: devopsy @<target> rollback [command [args...]]
+	"rollback": `Usage: devopsy @<target> rollback
 
 Makes the release before the current one current again (skipping failed
-ones), then runs 'devopsy <command> [args...]' there if given, going back
-again if it fails. Rolling back restores that release's files and target env,
-not data.
+ones) and runs the target's rollback steps from targets.yaml (required), like
+release's: before (local), remote (on the server, after the switch; a
+failure goes back again), after (local). Usually the same remote command as
+release, or a project command of its own:
 
-Example:
-  devopsy @prod rollback deploy
+  prod:
+    rollback:
+      remote: deploy
+
+The remote command runs in the restored release, so it must exist there.
+Rolling back restores that release's files and target env, not data.
 `,
 	"releases": `Usage: devopsy @<target> releases
 

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -61,8 +63,11 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	// compose.yaml's name depends on the server's environment.
 	// A user-level target belongs to no local project: the server's own
 	// files name it (target.env in releases, the directory otherwise).
+	// A nested devopsy (DEVOPSY_PROJECT_DIR set: a project command, or a
+	// release step, calling devopsy @target) inherits the local project's
+	// COMPOSE_PROJECT_NAME, which says nothing about the target: ignore it.
 	projectName, urlName := "", ""
-	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" {
+	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
 	} else if t.User {
 	} else if raw, err := cli.TopLevelName(filepath.Join(projectDir, "compose.yaml")); err != nil {
@@ -129,17 +134,54 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		retry := len(args) > 1 && args[1] == "--retry"
 		return runDomains(t, projectName, retry, color)
 
-	case "rollback":
-		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
-		return ssh(remote.ActivateScript(t, "", true, projectName, urlName, args[1:]), nil, tty)
+	case "release", "rollback":
+		if len(args) > 1 {
+			return fail(fmt.Sprintf("%s takes no command: what it runs is the target's %s: steps in %s", args[0], args[0], t.File))
+		}
+		steps := t.Release
+		if args[0] == "rollback" {
+			steps = t.Rollback
+		}
+		if steps == nil || len(remote.StepArgs(steps.Remote)) == 0 {
+			return fail(missingSteps(t, args[0]))
+		}
+		local := func(phase string, list remote.StepList, commit string) int {
+			for _, step := range list {
+				cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase), color)
+				if code := runLocalStep(t, remote.StepArgs(step), commit); code != 0 {
+					return code
+				}
+			}
+			return 0
+		}
 
-	case "release":
+		if args[0] == "rollback" {
+			if code := local("before", steps.Before, ""); code != 0 {
+				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
+			}
+			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
+			if code := ssh(remote.ActivateScript(t, "", true, projectName, urlName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+				return code
+			}
+			if code := local("after", steps.After, ""); code != 0 {
+				return fail(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
+			}
+			return 0
+		}
+
 		projectRoot := filepath.Dir(projectDir)
 		files, err := remote.Files(projectRoot, t.Mode)
 		if err != nil {
 			return fail(err.Error())
 		}
 		record := remote.NewRecord(projectRoot, t.Mode, time.Now())
+		commit := record.Commit
+		if v := t.Env["DEVOPSY_RELEASE_COMMIT"]; v != "" {
+			commit = v
+		}
+		if code := local("before", steps.Before, commit); code != 0 {
+			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
+		}
 		src := record.Mode
 		if record.Commit != "" {
 			src += ", " + record.Branch + "@" + record.Commit[:min(10, len(record.Commit))]
@@ -164,11 +206,67 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
 			return code
 		}
-		return ssh(remote.ActivateScript(t, record.ID, false, projectName, urlName, args[1:]), nil, tty)
+		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, urlName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+			return code
+		}
+		if code := local("after", steps.After, commit); code != 0 {
+			return fail(fmt.Sprintf("an after step failed (%d): the release stays", code))
+		}
+		return 0
 
 	default:
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)
 	}
+}
+
+// runLocalStep runs `devopsy args...` here, in the local project, for a
+// release or rollback of t: with the target's env, DEVOPSY_TARGET and, for
+// a release, DEVOPSY_RELEASE_COMMIT, over the caller's environment. Never
+// the server's shared/.env: its secrets stay there.
+func runLocalStep(t *remote.Target, args []string, commit string) int {
+	self, err := os.Executable()
+	if err != nil {
+		self = "devopsy"
+	}
+	cmd := exec.Command(self, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = os.Environ()
+	for k, v := range t.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Env = append(cmd.Env, "DEVOPSY_TARGET="+t.Name)
+	if commit != "" {
+		cmd.Env = append(cmd.Env, "DEVOPSY_RELEASE_COMMIT="+commit)
+	}
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// missingSteps explains how to define a target's release or rollback steps,
+// with a starting point for its mode.
+func missingSteps(t *remote.Target, which string) string {
+	remoteCmd := "up -d --wait --remove-orphans --pull always"
+	if t.Mode == remote.ModeBuild {
+		remoteCmd = "up -d --wait --remove-orphans --build"
+	}
+	return fmt.Sprintf(`@%s has no %s steps: define them in %s, for example:
+
+  %s:
+    %s:
+      before: []          # local devopsy commands, before the upload
+      remote: %s
+      after: []           # local devopsy commands, once it is live
+
+remote is one devopsy command, run on the server after the switch; usually a
+project command (deploy) doing that and more. See 'devopsy @%s %s --help'.`,
+		t.Name, which, t.File, t.Name, which, remoteCmd, t.Name, which)
 }
 
 // targetEnv renders a target's env as the release's .devopsy/target.env.
