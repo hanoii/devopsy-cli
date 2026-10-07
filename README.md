@@ -222,8 +222,10 @@ devopsy also sets, for compose files and custom commands:
 - `DEVOPSY_PROJECT_NAME`: the compose project name.
 - `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>`. The public
   domain describes the server, like the target's host, so it is set per
-  target: in `targets.yaml`'s `env`, or for public repositories in `.env`
-  or CI, as `DEVOPSY_TARGET_HOST`. Without one, `<project>.localhost`
+  target: in `targets.yaml`'s `env`, or, to keep it out of a public
+  repository, in the server's `shared/.env` (`devopsy @prod --vars set
+  --show DEVOPSY_PUBLIC_DOMAIN`, once per target; a local `.env` never
+  reaches the server). Without one, `<project>.localhost`
   locally, and no public host in a release: the environment only answers on
   its `DEVOPSY_DOMAINS`. Set it yourself to override.
 - `DEVOPSY_HOST_RULE`: a Traefik rule for the public host plus
