@@ -67,14 +67,14 @@ user-facing behavior and keep it in sync with any change to it.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
   layer: `/etc/devopsy/devopsy.env` existed until October 2026.
-- `DEVOPSY_PUBLIC_DOMAIN` comes from the server's proxy: `release` asks its
-  `domains` capability (`public-domain`, `PublicDomainScript`) and writes
+- `DEVOPSY_WILDCARD_DOMAIN` comes from the server's proxy: `release` asks its
+  `domains` capability (`wildcard-domain`, `WildcardDomainScript`) and writes
   it into the release's `target.env`, unless the target's environment
   already has the key (targets.yaml or `shared/.env`, even empty: no
   automatic URL). Written per release, so rollbacks keep what each release
   had. Asked at release, not on every command: devopsy would otherwise run
   the proxy's capability (a container or two) on each `up`.
-- Public host: `<name>.<DEVOPSY_PUBLIC_DOMAIN>`; without a domain,
+- Wildcard host: `<name>.<DEVOPSY_WILDCARD_DOMAIN>`; without a domain,
   `<name>.localhost` locally and none in a release (`target.env` exists),
   where the environment only answers on `DEVOPSY_DOMAINS`.
   `DEVOPSY_HOST_RULE` stays unset without hosts, so labels' defaults apply.
@@ -110,7 +110,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   rewrites compose files: if a feature needs that, it is the wrong feature.
   Everything it computes is visible with `devopsy --env`.
 - An environment is a target: a server path, so its own compose project,
-  data and public URL (`<project>.<DEVOPSY_PUBLIC_DOMAIN>`). Branches are
+  data and wildcard URL (`<project>.<DEVOPSY_WILDCARD_DOMAIN>`). Branches are
   only what gets released into one; no branch concept in the core.
 - Remote commands run through the `current` symlink, never a release path:
   compose stores bind-mount paths in containers, and pruned releases would

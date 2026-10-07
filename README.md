@@ -18,10 +18,10 @@ from them:
   `devopsy --env`, so plain `docker compose` sees exactly what it sees.
   Configuration is environment variables, with a fixed precedence: caller,
   `.env` (on servers `shared/.env`), the target's `env`. Nothing
-  server-wide: the server's public domain comes from its proxy at each
+  server-wide: the server's wildcard domain comes from its proxy at each
   release, and each target can override it.
 - **An environment is a server path.** Each target is a directory on a
-  server, so its own compose project, data and public URL. There is no
+  server, so its own compose project, data and wildcard URL. There is no
   branch concept: a branch is only what you release into a target. Hence
   released projects' compose files have no `name:`; devopsy names the
   project after the path.
@@ -220,20 +220,21 @@ see the same values. Variables already set in your environment win over
 devopsy also sets, for compose files and custom commands:
 
 - `DEVOPSY_PROJECT_NAME`: the compose project name.
-- `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>`. The public
-  domain is the server's base domain, like `vm1.example.com`, never a site
-  of its own: each environment gets an automatic subdomain of it, next to
-  its own `DEVOPSY_DOMAINS`. Each release asks the server's proxy for it
-  (the `domains` capability's `public-domain`, see Capabilities) and writes
+- `DEVOPSY_WILDCARD_HOST`: `<project>.<DEVOPSY_WILDCARD_DOMAIN>`. The
+  wildcard domain is the server's, like `vm1.example.com`, with a wildcard
+  DNS record (and usually a wildcard certificate) pointing at it, never a
+  site of its own: when it is there, each environment gets an automatic
+  subdomain of it, next to its own `DEVOPSY_DOMAINS`. Each release asks the server's proxy for it
+  (the `domains` capability's `wildcard-domain`, see Capabilities) and writes
   it into the release's `target.env`, so nothing needs setting. A target
   overrides it with its own value, or turns the automatic URL off with an
-  empty one: `devopsy @prod --vars set --show DEVOPSY_PUBLIC_DOMAIN` (empty:
+  empty one: `devopsy @prod --vars set --show DEVOPSY_WILDCARD_DOMAIN` (empty:
   just Enter), applied by the next `up` or `reload`; `--vars unset` goes
   back to the proxy's. Without one, `<project>.localhost` locally, and no
-  public host in a release: the environment only answers on its
-  `DEVOPSY_DOMAINS`. Set `DEVOPSY_PUBLIC_HOST` yourself to override the
+  wildcard host in a release: the environment only answers on its
+  `DEVOPSY_DOMAINS`. Set `DEVOPSY_WILDCARD_HOST` yourself to override the
   whole host.
-- `DEVOPSY_HOST_RULE`: a Traefik rule for the public host plus
+- `DEVOPSY_HOST_RULE`: a Traefik rule for the wildcard host plus
   `DEVOPSY_DOMAINS`, a space or comma separated list you set per environment,
   usually in its `.env`. For example
   ``Host(`shop.vm1.example.com`) || Host(`example.org`)``. Unset when there
@@ -504,7 +505,7 @@ overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 
-`domains` checks the environment's public host and `DEVOPSY_DOMAINS`, as
+`domains` checks the environment's wildcard host and `DEVOPSY_DOMAINS`, as
 the server computes them, from where you run it: DNS through 1.1.1.1, the
 challenge CNAME when the certificate is issued through one, and the
 certificate the server actually presents for each name, verified like a
@@ -526,12 +527,12 @@ and renews the certificates without it.
 
 Run on the proxy's own target (its path is `DEVOPSY_PROXY_DIR`, like
 `devopsy @vm1-traefik domains`), it checks the whole server: every host the
-proxy routes, and wildcards (`*.<public domain>`) with their challenge
+proxy routes, and wildcards (`*.<wildcard domain>`) with their challenge
 CNAME, through a name each one covers. `--retry` there covers wildcards too.
 
 Several environments of one project live side by side as several targets,
 each with its own path: its own compose project, containers, data and public
-URL (`<target directory>.<server's public domain>`, printed after each
+URL (`<target directory>.<server's wildcard domain>`, printed after each
 release).
 
 Each release records its commit, branch, uncommitted changes and who made it,
@@ -599,14 +600,14 @@ one JSON document:
   provider's API: nothing to create).
 - `wildcard`: a wildcard certificate covering the host.
 
-`public-domain` prints the server's public domain, `""` for none:
+`wildcard-domain` prints the server's wildcard domain, `""` for none:
 
 ```json
-{"version": 1, "public_domain": "vm1.example.com"}
+{"version": 1, "wildcard_domain": "vm1.example.com"}
 ```
 
 `release` asks it on the server, in `DEVOPSY_PROXY_DIR` (default
-`/srv/traefik`), for targets that do not set `DEVOPSY_PUBLIC_DOMAIN`
+`/srv/traefik`), for targets that do not set `DEVOPSY_WILDCARD_DOMAIN`
 themselves.
 
 `retry <name> <host>...` asks the proxy to request those certificates
