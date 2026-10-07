@@ -274,7 +274,8 @@ user-level ones in ~/.config/devopsy/targets.yaml):
   --releases           list the releases on the server
   --domains [--retry]  DNS, challenge and certificate per host, and what next;
                        --retry asks the proxy for missing certificates
-  --shell [service]    a shell in a container of the current release
+  --shell [service] [-- command...]
+                       a shell (or the command) in a container
   --shell-host         a shell on the server itself, in the current release
   --vars [get|set|unset KEY...]
                        the server's variables (shared/.env): names, one value,
@@ -338,14 +339,16 @@ Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases whose command failed. * marks the current one.
 `,
-	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...]
+	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 
 A shell in a container of the current release, as devopsy --shell runs it
 locally: the project's shell capability (capabilities/shell/open) if it has
 one; otherwise bash (or sh) in the service named, else the one labeled
 devopsy.shell=true in compose.yaml, else the only one running, as the
 service's user or its devopsy.shell.user label. Options go to docker
-compose exec, like --user root.
+compose exec, like --user root. After --, a command runs instead of the
+shell, directly as docker compose exec runs it: devopsy @<target> --shell
+-- drush status.
 `,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 
@@ -413,10 +416,10 @@ Built-in:
   --help, -h     this help
   --version      devopsy's, docker's and docker compose's versions
   --env          the variables devopsy loads and computes, in .env format
-  --shell [service] [exec options...]
-                 a shell in a container: the project's shell capability, else
-                 bash (or sh) in the service named, labeled devopsy.shell=true,
-                 or the only one running
+  --shell [service] [exec options...] [-- command...]
+                 a shell in a container, or the command after --: the
+                 project's shell capability, else bash (or sh) in the service
+                 named, labeled devopsy.shell=true, or the only one running
   --context-hash [service]
                  a hash of what the service's image is built from at HEAD
                  (build context minus dockerignore, Dockerfile, build:), to

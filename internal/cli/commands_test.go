@@ -140,6 +140,22 @@ func TestShell(t *testing.T) {
 		}
 	}
 
+	// A command after --: run directly, in the same service and user.
+	for args, want := range map[string][]string{
+		"--shell -- drush status":        {"exec", "--user", "app", "app", "drush", "status"},
+		"--shell db --user root -- ls /": {"exec", "--user", "root", "db", "ls", "/"},
+		"--shell app -- sh -c a b":       {"exec", "--user", "app", "app", "sh", "-c", "a", "b"},
+		"--shell --":                     {"exec", "--user", "app", "app", "sh", "-c", shellCommand},
+	} {
+		plan, err := build(withUser, strings.Fields(args), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		if got := plan.Args[len(plan.Args)-len(want):]; !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", args, got, want)
+		}
+	}
+
 	// Map labels in the override, and two labeled services.
 	write := func(p, s string) {
 		if err := os.WriteFile(filepath.Join(root, ProjectDirName, p), []byte(s), 0o644); err != nil {
@@ -165,9 +181,9 @@ func TestShell(t *testing.T) {
 
 	// The project's shell capability replaces it, with the arguments.
 	own := project(t, "own", map[string]string{"compose.yaml": compose, "capabilities/shell/open*": "#!/bin/sh\n"})
-	plan, err = build(own, []string{"--shell", "db"}, nil)
+	plan, err = build(own, []string{"--shell", "db", "--", "ls"}, nil)
 	open := filepath.Join(own, ProjectDirName, "capabilities", "shell", "open")
-	if err != nil || plan.Path != open || !slices.Equal(plan.Args, []string{open, "db"}) {
+	if err != nil || plan.Path != open || !slices.Equal(plan.Args, []string{open, "db", "--", "ls"}) {
 		t.Fatalf("capability: %v %+v", err, plan)
 	}
 

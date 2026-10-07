@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -35,11 +36,12 @@ var RunningServices = func(p *loadedProject) ([]string, error) {
 	return strings.Fields(string(out)), nil
 }
 
-// shell plans `devopsy --shell [service] [exec options...]`: a shell in a
-// container, as its service's user. The project's shell capability
-// (capabilities/shell/open) replaces it, with the same arguments. Otherwise
-// the service is the one named, else the one labeled devopsy.shell=true,
-// else the only one running.
+// shell plans `devopsy --shell [service] [exec options...] [-- command...]`:
+// a shell in a container, as its service's user, or with a command after
+// `--`, that command, run directly like docker compose exec runs it. The
+// project's shell capability (capabilities/shell/open) replaces it, with the
+// same arguments. Otherwise the service is the one named, else the one
+// labeled devopsy.shell=true, else the only one running.
 func shell(p *loadedProject, args []string) (*Plan, error) {
 	secrets := NewSecrets(p.env, p.dotenvFile)
 	open := filepath.Join(p.dir, "capabilities", "shell", "open")
@@ -53,6 +55,10 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 		}, nil
 	}
 
+	var command []string
+	if i := slices.Index(args, "--"); i >= 0 {
+		args, command = args[:i], args[i+1:]
+	}
 	service := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		service, args = args[0], args[1:]
@@ -79,8 +85,13 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 	if user := users[service]; user != "" && !hasUserOption(args) {
 		args = append([]string{"--user", user}, args...)
 	}
-	plan := p.compose(append(append([]string{"exec"}, args...), service, "sh", "-c", shellCommand))
-	plan.Notice = secrets.Mask(fmt.Sprintf("Running 'docker compose exec %s' (a shell)...", strings.TrimSpace(strings.Join(args, " ")+" "+service)))
+	run := []string{"sh", "-c", shellCommand}
+	what := "a shell"
+	if len(command) > 0 {
+		run, what = command, strings.Join(command, " ")
+	}
+	plan := p.compose(append(append(append([]string{"exec"}, args...), service), run...))
+	plan.Notice = secrets.Mask(fmt.Sprintf("Running 'docker compose exec %s' (%s)...", strings.TrimSpace(strings.Join(args, " ")+" "+service), what))
 	plan.Verbose = maskAll(secrets, p.verbose)
 	return plan, nil
 }
