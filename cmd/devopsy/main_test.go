@@ -48,7 +48,7 @@ func runDevopsy(t *testing.T, dir string, env []string, args ...string) (string,
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...)
+	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_HOME=" + t.TempDir()}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -292,7 +292,7 @@ func TestRemoteVars(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(binary, args...)
 		cmd.Dir = project
-		cmd.Env = append([]string{"DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...)
+		cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir()}, env...)
 		cmd.Stdin = strings.NewReader(stdin)
 		out, err := cmd.CombinedOutput()
 		code := 0
@@ -423,7 +423,7 @@ func TestReleaseSteps(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(binary, args...)
 		cmd.Dir = project
-		cmd.Env = append(append([]string{"DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...), extra...)
+		cmd.Env = append(append([]string{"DEVOPSY_HOME=" + t.TempDir()}, env...), extra...)
 		out, _ := cmd.CombinedOutput()
 		return string(out), cmd.ProcessState.ExitCode()
 	}

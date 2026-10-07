@@ -59,14 +59,12 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 
 	// Without a top-level name, compose would name the project after the
 	// release directory, so fix it to the target directory's name.
-	// urlName is the name the public URL uses, when it is known here: not when
-	// compose.yaml's name depends on the server's environment.
 	// A user-level target belongs to no local project: the server's own
 	// files name it (target.env in releases, the directory otherwise).
 	// A nested devopsy (DEVOPSY_PROJECT_DIR set: a project command, or a
 	// release step, calling devopsy @target) inherits the local project's
 	// COMPOSE_PROJECT_NAME, which says nothing about the target: ignore it.
-	projectName, urlName := "", ""
+	projectName := ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
 	} else if t.User {
@@ -74,11 +72,6 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return fail(err.Error())
 	} else if raw == "" {
 		projectName = cli.NormalizeProjectName(filepath.Base(t.Path))
-	} else if !strings.Contains(raw, "$") {
-		urlName = raw
-	}
-	if urlName == "" {
-		urlName = projectName
 	}
 
 	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
@@ -160,7 +153,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
 			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
-			if code := ssh(remote.ActivateScript(t, "", true, projectName, urlName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+			if code := ssh(remote.ActivateScript(t, "", true, projectName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
 				return code
 			}
 			if code := local("after", steps.After, ""); code != 0 {
@@ -206,7 +199,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
 			return code
 		}
-		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, urlName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
 			return code
 		}
 		if code := local("after", steps.After, commit); code != 0 {
@@ -297,22 +290,53 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	return []byte(b.String())
 }
 
-// runDomains implements `devopsy @target domains [--retry]`.
+// runDomains implements `devopsy @target domains [--retry]`. The server's
+// proxy reports what it knows through its domains capability; the checks
+// run here, from outside, as visitors see the hosts.
 func runDomains(t *remote.Target, projectName string, retry bool, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	check := func() ([]remote.DomainReport, *remote.Facts, int) {
-		var out bytes.Buffer
-		code, err := remote.SSH(t, remote.DomainsScript(t, projectName), bytes.NewReader(nil), &out, false)
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.EnvScript(t, projectName), bytes.NewReader(nil), &out, false)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if code != 0 {
+		return code
+	}
+	env, err := remote.ParseEnv(out.String())
+	if err != nil {
+		return fail(err.Error())
+	}
+	proxyDir := env["DEVOPSY_PROXY_DIR"]
+	if proxyDir == "" {
+		proxyDir = remote.DefaultProxyDir
+	}
+	// On the proxy's own target, every host it routes; on a project, its own.
+	server := path.Clean(t.Path) == path.Clean(proxyDir)
+	hosts, name := remote.ProjectHosts(env), cli.NormalizeProjectName(env["DEVOPSY_PROJECT_NAME"])
+	factsArgs := hosts
+	if server {
+		factsArgs, name = []string{"--all"}, "server"
+	} else if len(hosts) == 0 {
+		return fail("no hosts: set DEVOPSY_PUBLIC_DOMAIN or DEVOPSY_DOMAINS for this target")
+	}
+	capability := func(action string, args []string, stdout io.Writer) int {
+		code, err := remote.SSH(t, remote.CapabilityScript(proxyDir, "domains", action, args), bytes.NewReader(nil), stdout, false)
 		if err != nil {
-			return nil, nil, fail(err.Error())
+			return fail(err.Error())
 		}
-		if code != 0 {
+		return code
+	}
+
+	check := func() ([]remote.DomainReport, *remote.ProxyFacts, int) {
+		var out bytes.Buffer
+		if code := capability("facts", factsArgs, &out); code != 0 {
 			return nil, nil, code
 		}
-		facts, err := remote.ParseFacts(out.String())
+		facts, err := remote.ParseProxyFacts(out.Bytes())
 		if err != nil {
 			return nil, nil, fail(err.Error())
 		}
@@ -320,71 +344,63 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		defer cancel()
 		checker := remote.PublicChecker(ctx)
 		// The server's addresses: as its public host resolves (right behind
-		// NAT too), then as it reports itself.
+		// NAT too), then as the proxy reports it.
 		var serverIPs []string
-		if facts.Env["DEVOPSY_PUBLIC_DOMAIN"] != "" {
-			if ips, err := checker.LookupIP(ctx, facts.Env["DEVOPSY_PUBLIC_HOST"]); err == nil {
+		if env["DEVOPSY_PUBLIC_DOMAIN"] != "" && env["DEVOPSY_PUBLIC_HOST"] != "" {
+			if ips, err := checker.LookupIP(ctx, env["DEVOPSY_PUBLIC_HOST"]); err == nil {
 				serverIPs = append(serverIPs, ips...)
 			}
 		}
-		if facts.ServerIP != "" {
-			serverIPs = append(serverIPs, facts.ServerIP)
+		if facts.IP != "" {
+			serverIPs = append(serverIPs, facts.IP)
 		}
-		// On the server's own Traefik, every domain on the server; on a
-		// project, its own.
-		hosts := facts.Hosts()
-		if path.Clean(t.Path) == path.Clean(facts.TraefikDir) {
-			hosts = facts.ServerHosts()
+		checked := hosts
+		if server {
+			checked = facts.AllHosts()
 		}
-		return remote.Check(ctx, facts, checker, serverIPs, hosts), facts, 0
+		return remote.Check(ctx, facts, checker, serverIPs, checked), facts, 0
 	}
-
-	var project string
 
 	reports, facts, code := check()
 	if code != 0 {
 		return code
 	}
 	fmt.Print(remote.FormatReports(reports))
-	project = cli.NormalizeProjectName(facts.Env["DEVOPSY_PROJECT_NAME"])
 
-	// A previous --retry's file is only clutter once every certificate exists.
-	cleanup := func(reports []remote.DomainReport) {
-		if !remote.AllCertified(reports) {
+	// A previous --retry is only clutter once every certificate exists.
+	cleanup := func(reports []remote.DomainReport, facts *remote.ProxyFacts) {
+		if !remote.AllCertified(reports) || !facts.HasRetry(name) {
 			return
 		}
-		var out bytes.Buffer
-		if _, err := remote.SSH(t, remote.CleanupRetryScript(facts.TraefikDir, project), bytes.NewReader(nil), &out, false); err == nil && strings.TrimSpace(out.String()) == "removed" {
-			cli.Fprint(os.Stderr, cyan, "All certificates exist: removed the retry file from Traefik's configuration.", color)
+		if capability("retry", []string{name, "--done"}, io.Discard) == 0 {
+			cli.Fprint(os.Stderr, cyan, "All certificates exist: removed the retry request from the proxy.", color)
 		}
 	}
 	if !retry {
-		cleanup(reports)
+		cleanup(reports, facts)
 		return 0
 	}
 
-	pending := map[string][]string{}
+	var pending []string
 	for _, r := range reports {
-		if r.Routed && !r.Cert.Valid && r.Resolver != "" {
-			pending[r.Resolver] = append(pending[r.Resolver], r.Host)
+		if r.Routed && !r.Cert.Valid {
+			pending = append(pending, r.Host)
 		}
 	}
 	if len(pending) == 0 {
 		cli.Fprint(os.Stderr, cyan, "Nothing to retry.", color)
 		return 0
 	}
-	if code, err := remote.SSH(t, remote.RetryScript(facts.TraefikDir, project, pending, time.Now()), bytes.NewReader(nil), nil, false); err != nil {
-		return fail(err.Error())
-	} else if code != 0 {
+	if code := capability("retry", append([]string{name}, pending...), io.Discard); code != 0 {
 		return code
 	}
-	cli.Fprint(os.Stderr, cyan, "Asked Traefik to request the missing certificates. Checking again in 45 seconds...", color)
+	cli.Fprint(os.Stderr, cyan, "Asked the proxy to request the missing certificates. Checking again in 45 seconds...", color)
 	time.Sleep(45 * time.Second)
-	reports, _, code = check()
+	reports, facts, code = check()
 	if code != 0 {
 		return code
 	}
 	fmt.Print(remote.FormatReports(reports))
-	cleanup(reports)
+	cleanup(reports, facts)
 	return 0
 }

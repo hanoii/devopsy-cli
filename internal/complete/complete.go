@@ -218,7 +218,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return none
 	case "domains":
 		if len(words) == 2 {
-			r := filter(Result{Candidates: []Candidate{{"--retry", "ask Traefik for missing certificates", GroupDevopsy}}}, cur)
+			r := filter(Result{Candidates: []Candidate{{"--retry", "ask the proxy for missing certificates", GroupDevopsy}}}, cur)
 			r.Directive = DirectiveNoFileComp
 			return r
 		}

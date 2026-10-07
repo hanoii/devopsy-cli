@@ -65,8 +65,13 @@ user-facing behavior and keep it in sync with any change to it.
   replaces itself with the command right away; only release builds (plain
   `X.Y.Z` versions) upgrade or check.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
-  `shared/.env`), `.devopsy/target.env` (from targets.yaml), then
-  `/etc/devopsy/devopsy.env`.
+  `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
+  layer: what describes a server (host, `DEVOPSY_PUBLIC_DOMAIN`) is the
+  target's. `/etc/devopsy/devopsy.env` existed until October 2026.
+- Public host: `<name>.<DEVOPSY_PUBLIC_DOMAIN>`; without a domain,
+  `<name>.localhost` locally and none in a release (`target.env` exists),
+  where the environment only answers on `DEVOPSY_DOMAINS`.
+  `DEVOPSY_HOST_RULE` stays unset without hosts, so labels' defaults apply.
 - Targets come from the project's `targets.local.yaml`, then `targets.yaml`,
   then the user-level `~/.config/devopsy/targets.yaml` (never `~/.devopsy`:
   project discovery would take the home directory for a project). User-level
@@ -136,18 +141,28 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   version works; edits replace keys in place (appending reorders files) and
   take the release lock, since `deploy` commands write their own secrets.
   User-level targets never read values from a project's `.env`, as for hosts.
-- `devopsy @target domains`: the server only reports facts (`print-env`, the
-  old name of `--env`, kept so any server version answers;
-  Traefik's routers from its local API, acme-dns registrations, its IP); DNS
-  (through 1.1.1.1), certificates (a real TLS connection to the server per
-  name, verified against system roots) and Cloudflare's proxy (its ranges,
-  then a request through it) are checked locally, so servers need nothing
-  extra. `--retry` writes a uniquely named router into Traefik's dynamic
-  directory (Traefik only retries on a configuration change) and the file is
-  removed once every routed host has a valid certificate. When the target's
-  path is the server's Traefik directory (`DEVOPSY_TRAEFIK_DIR`, reported by
-  the server), `domains` checks every routed host and the public wildcard
-  instead, through the reserved name its router matches.
+- Capabilities (`devopsy --capability <name> <action>`, hidden like
+  `--complete`): interfaces devopsy defines and projects implement in
+  `.devopsy/capabilities/<name>/<action>`, so devopsy asks a project without
+  knowing its internals. devopsy runs them over their own SSH session, in
+  the project's current release, so no other project's variables leak in
+  (a nested devopsy would inherit the caller's project env and its
+  recursion guard: rejected `-C <dir>` for that). Stderr shows only on
+  failure. Contracts are versioned JSON, documented in README; unknown
+  fields are ignored. Define a new one only when a second use needs it.
+- `devopsy @target domains`: the target's environment comes from the server
+  (`print-env`, the old name of `--env`); what the proxy knows comes from
+  its `domains` capability in `DEVOPSY_PROXY_DIR` (default `/srv/traefik`):
+  routes, the resolver (shown only) and the issuing method (`http`,
+  `dns-cname` with its record, `dns-api`), which next steps depend on.
+  devopsy-cli knows no proxy: Traefik's API, ACME files and resolver names
+  live in devopsy-traefik. DNS (through 1.1.1.1), certificates (a real TLS
+  connection to the server per name, verified against system roots) and
+  Cloudflare's proxy (its ranges, then a request through it) are checked
+  locally. `--retry` calls `retry <project> <hosts>` and `domains` calls
+  `retry <project> --done` once every routed host has a valid certificate.
+  When the target's path is `DEVOPSY_PROXY_DIR`, `domains` checks every
+  host the proxy reports (`facts --all`) as `server`.
 
 ## Gotchas
 

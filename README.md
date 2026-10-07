@@ -17,7 +17,9 @@ from them:
   rewrites compose files. It only adds variables, all visible with
   `devopsy --env`, so plain `docker compose` sees exactly what it sees.
   Configuration is environment variables, with a fixed precedence: caller,
-  `.env`, the target's `env`, the server's `/etc/devopsy/devopsy.env`.
+  `.env` (on servers `shared/.env`), the target's `env`. Nothing
+  server-wide: what describes a server, its host and public domain, belongs
+  to each target.
 - **An environment is a server path.** Each target is a directory on a
   server, so its own compose project, data and public URL. There is no
   branch concept: a branch is only what you release into a target. Hence
@@ -40,9 +42,13 @@ from them:
   push images either; it only helps decide when to (`--context-hash`).
 - **Traefik only where it helps.** Releases and commands do not depend on
   a proxy. `DEVOPSY_HOST_RULE` is a Traefik rule as a plain variable, which
-  projects are free to ignore, and `@target domains` is
-  [devopsy-traefik](https://github.com/hanoii/devopsy-traefik)'s companion:
-  it checks hosts from outside, where only the CLI is installed.
+  projects are free to ignore. `@target domains` checks hosts from outside,
+  where only the CLI is installed, and asks the server's proxy what it knows
+  through a capability: the proxy's internals stay in
+  [devopsy-traefik](https://github.com/hanoii/devopsy-traefik).
+- **Capabilities are interfaces.** devopsy defines a few, like `domains`;
+  a project implements one by shipping its scripts, and devopsy calls them.
+  People never do, so they are never words.
 - **Words are yours.** devopsy's own features are flags or `@target`, so a
   word is always a project command, then a compose command.
 - **Secrets stay out of sight.** Values from `.env` and secret-named
@@ -214,13 +220,17 @@ see the same values. Variables already set in your environment win over
 devopsy also sets, for compose files and custom commands:
 
 - `DEVOPSY_PROJECT_NAME`: the compose project name.
-- `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>` when the server
-  has a public domain, else `<project>.localhost`. Set it yourself to
-  override.
+- `DEVOPSY_PUBLIC_HOST`: `<project>.<DEVOPSY_PUBLIC_DOMAIN>`. The public
+  domain describes the server, like the target's host, so it is set per
+  target: in `targets.yaml`'s `env`, or for public repositories in `.env`
+  or CI, as `DEVOPSY_TARGET_HOST`. Without one, `<project>.localhost`
+  locally, and no public host in a release: the environment only answers on
+  its `DEVOPSY_DOMAINS`. Set it yourself to override.
 - `DEVOPSY_HOST_RULE`: a Traefik rule for the public host plus
   `DEVOPSY_DOMAINS`, a space or comma separated list you set per environment,
   usually in its `.env`. For example
-  ``Host(`shop.vm1.example.com`) || Host(`example.org`)``.
+  ``Host(`shop.vm1.example.com`) || Host(`example.org`)``. Unset when there
+  are no hosts at all, so a label's own default applies.
 
 A router label then needs no per-environment hosts. Defaults keep the file
 usable with plain `docker compose`:
@@ -270,10 +280,6 @@ tag=ctx-$(devopsy --context-hash app)
 docker buildx imagetools inspect "$image:$tag" >/dev/null 2>&1 || build_and_push
 ```
 
-On a server, `/etc/devopsy/devopsy.env` holds server-wide settings, like
-`DEVOPSY_PUBLIC_DOMAIN`, written by devopsy-server. The project's `.env` and
-your environment win over it. See devopsy-traefik for routing public URLs.
-
 ### Project name
 
 Set a top-level `name:` in `compose.yaml`. Without one, devopsy uses the name
@@ -292,6 +298,7 @@ prod:
   path: /srv/myapp              # absolute, writable by that user
   mode: image                   # image (default) or build
   env:                          # per-target settings, not secrets
+    DEVOPSY_PUBLIC_DOMAIN: vm1.example.com    # the server's: <project>.vm1.example.com
     DEVOPSY_DOMAINS: example.org www.example.org
   release:                      # what `release` runs (required for it)
     remote: deploy
@@ -329,8 +336,8 @@ targets you use from any directory, for running commands on servers. They
 never `release` or `rollback`: those need a target the project defines. A
 project's own targets win over user-level ones with the same name.
 
-A target's path can also be a plain devopsy directory, without releases: a
-git clone like each server's `/srv/traefik`, or anything maintained in place.
+A target's path can also be a plain devopsy directory, without releases:
+anything maintained in place, like a git clone.
 Commands then run in the path itself, and `release`, `rollback` and
 `releases` refuse. Together:
 
@@ -347,7 +354,7 @@ devopsy @vm1-traefik logs -f traefik
 ```
 
 A target's `env` is written into each release as `.devopsy/target.env`, which
-devopsy loads after `.env` and before the server-wide settings. So it applies
+devopsy loads after `.env`, so the server's `shared/.env` overrides it. So it applies
 however devopsy runs on the server, and a rollback brings back that release's
 values. Change it in `targets.yaml` and release again. When `compose.yaml` has
 no `name:`, `target.env` also fixes `COMPOSE_PROJECT_NAME` to the target
@@ -471,27 +478,30 @@ overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 
-`domains` checks the environment's public host and `DEVOPSY_DOMAINS` from
-where you run it: DNS through 1.1.1.1, the acme-dns challenge CNAME when the
-router uses `acmedns`, and the certificate the server actually presents for
-each name, verified like a browser would. A domain behind Cloudflare's proxy
+`domains` checks the environment's public host and `DEVOPSY_DOMAINS`, as
+the server computes them, from where you run it: DNS through 1.1.1.1, the
+challenge CNAME when the certificate is issued through one, and the
+certificate the server actually presents for each name, verified like a
+browser would. What the server's proxy knows (which hosts it routes, how it
+issues each certificate) comes from its `domains` capability (see
+Capabilities), in `DEVOPSY_PROXY_DIR` on the target's server, by default
+`/srv/traefik`. A domain behind Cloudflare's proxy
 resolves to Cloudflare, so `domains` recognizes its ranges and requests the
 site through the proxy instead, reporting Cloudflare's origin errors (521,
 522, 525, 526) with what they mean. Any other answer, even the site's own
 401, means the proxy reaches the server: without a valid certificate there,
 its SSL mode is not Full (strict) and the certificate is still pending, which
-Traefik requests when the router changes. It ends each host with what to do
-next, like the CNAME to create or "certificate ready: point its DNS at ...".
-`domains --retry` asks Traefik to request missing certificates again, through
-a small file in its dynamic configuration, without restarting it. Once every
-routed host has a valid certificate, `domains` removes that file again:
-Traefik keeps and renews the certificates without it.
+the proxy requests once the site is routed. It ends each host with what to
+do next, like the CNAME to create or "certificate ready: point its DNS at
+...". `domains --retry` asks the proxy to request missing certificates
+again (devopsy-traefik: a router file, no restart). Once every routed host
+has a valid certificate, `domains` withdraws that request: the proxy keeps
+and renews the certificates without it.
 
-Run on the server's Traefik target instead (a user-level target for
-`/srv/traefik`, like `devopsy @vm1-traefik domains`), it checks the whole
-server: every host Traefik routes, and the public wildcard
-(`*.<public domain>`) with its challenge CNAME, through the reserved name its
-router matches. `--retry` there covers the wildcard too.
+Run on the proxy's own target (its path is `DEVOPSY_PROXY_DIR`, like
+`devopsy @vm1-traefik domains`), it checks the whole server: every host the
+proxy routes, and wildcards (`*.<public domain>`) with their challenge
+CNAME, through a name each one covers. `--retry` there covers wildcards too.
 
 Several environments of one project live side by side as several targets,
 each with its own path: its own compose project, containers, data and public
@@ -510,6 +520,65 @@ set `DEVOPSY_SSH_COMMAND` to pass SSH options, like git's `GIT_SSH_COMMAND`:
 DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" \
   devopsy @prod release
 ```
+
+## Capabilities
+
+A capability is an interface devopsy defines and a project implements, so
+devopsy can ask a project for something without knowing how it works: the
+server's proxy for what it knows about hosts, for example. A project
+implements one with executables in `.devopsy/capabilities/<name>/<action>`
+(POSIX `sh` advised). They are not commands: never in help or completion,
+and only devopsy runs them, as `devopsy --capability <name> <action>
+[args...]` on the server, in the project's directory (its current release),
+with its environment loaded, over its own SSH session so no other project's
+variables apply. What they print on stderr shows only when they fail. A
+missing capability or action is an error naming where devopsy looked.
+
+### domains
+
+Implemented by the server's proxy (devopsy-traefik), used by `devopsy
+@target domains`.
+
+`facts <host>...` (or `facts --all`, every host the proxy routes) prints
+one JSON document:
+
+```json
+{
+  "version": 1,
+  "ip": "203.0.113.10",
+  "retries": ["shop"],
+  "hosts": [
+    {"host": "*.vm1.example.com", "probe": "devopsy-wildcard.vm1.example.com",
+     "routed": true, "resolver": "acmedns", "method": "dns-cname",
+     "record": {"name": "_acme-challenge.vm1.example.com", "target": "w.acme-vm1.example.com"}},
+    {"host": "shop.vm1.example.com", "routed": true, "resolver": "letsencrypt1",
+     "method": "http", "wildcard": "*.vm1.example.com"},
+    {"host": "api.example.org", "routed": true, "resolver": "cloudflare", "method": "dns-api"},
+    {"host": "old.example.org", "routed": false}
+  ]
+}
+```
+
+- `version`: 1. devopsy refuses a newer one, asking to upgrade devopsy.
+  Unknown fields are ignored.
+- `ip`: the server's public IPv4, for "point its DNS at ...".
+- `retries`: names with a pending retry request.
+- `routed`: the proxy has a route for the host. A host it does not list is
+  not routed.
+- `probe`: for a wildcard, a name it covers to look up and connect to.
+- `resolver`: shown in the report, never acted on.
+- `method`: how the certificate is issued. `http` (HTTP-01: the host's DNS
+  must reach the server), `dns-cname` (DNS-01 through a delegated record,
+  `record`, once the proxy knows it) or `dns-api` (DNS-01 through the DNS
+  provider's API: nothing to create).
+- `wildcard`: a wildcard certificate covering the host.
+
+`retry <name> <host>...` asks the proxy to request those certificates
+again, and `retry <name> --done` withdraws the request. `<name>` keeps
+callers apart: devopsy passes the compose project name, or `server` on the
+proxy's own target.
+
+Exit status 0 on success; anything else is an error, its message on stderr.
 
 ## License
 

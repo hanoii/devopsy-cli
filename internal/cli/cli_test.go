@@ -2,13 +2,13 @@ package cli
 
 import (
 	"errors"
-
-	"github.com/compose-spec/compose-go/v2/dotenv"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
 // project creates dir/<name>/.devopsy with the given files (path: content).
@@ -45,9 +45,9 @@ func envValue(t *testing.T, env []string, key string) (string, bool) {
 
 const minimalCompose = "services:\n  web:\n    image: busybox\n"
 
-// build is Build without the machine's real server settings file.
+// build is Build, as the tests call it.
 func build(cwd string, args []string, environ []string) (*Plan, error) {
-	return Build(cwd, args, append([]string{"DEVOPSY_SERVER_ENV="}, environ...))
+	return Build(cwd, args, environ)
 }
 
 func TestFindProjectDirFromSubdirectory(t *testing.T) {
@@ -253,28 +253,28 @@ func TestNormalizeProjectName(t *testing.T) {
 }
 
 func TestBuildPublicHost(t *testing.T) {
-	root := project(t, "My App", map[string]string{"compose.yaml": minimalCompose})
-	server := filepath.Join(t.TempDir(), "devopsy.env")
-	if err := os.WriteFile(server, []byte("DEVOPSY_PUBLIC_DOMAIN=vm1.example.com\nFOO=server\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	plan, err := Build(root, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server})
+	// DEVOPSY_PUBLIC_DOMAIN is the target's: target.env in a release.
+	root := project(t, "My App", map[string]string{
+		"compose.yaml": minimalCompose,
+		"target.env":   "DEVOPSY_PUBLIC_DOMAIN='vm1.example.com'\n",
+	})
+	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{
 		"DEVOPSY_PROJECT_NAME": "myapp",
 		"DEVOPSY_PUBLIC_HOST":  "myapp.vm1.example.com",
-		"FOO":                  "server",
+		"DEVOPSY_HOST_RULE":    "Host(`myapp.vm1.example.com`)",
 	} {
 		if got, _ := envValue(t, plan.Env, key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
 
-	// Without a server domain: <name>.localhost.
-	plan, err = build(root, []string{"ps"}, nil)
+	// Locally, without a domain: <name>.localhost.
+	local := project(t, "My App", map[string]string{"compose.yaml": minimalCompose})
+	plan, err = build(local, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,17 +282,43 @@ func TestBuildPublicHost(t *testing.T) {
 		t.Errorf("local host %q", got)
 	}
 
-	// The project's .env and the caller win over the server file.
-	root2 := project(t, "app", map[string]string{
+	// In a release without a domain: no public host, only DEVOPSY_DOMAINS.
+	released := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
-		".env":         "FOO=project\n",
+		"target.env":   "DEVOPSY_DOMAINS='example.org'\n",
 	})
-	plan, err = Build(root2, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server, "DEVOPSY_PUBLIC_HOST=custom.example.org"})
+	plan, err = build(released, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := envValue(t, plan.Env, "FOO"); got != "project" {
-		t.Errorf("FOO = %q, want project", got)
+	if _, ok := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); ok {
+		t.Error("public host without a domain in a release")
+	}
+	if got, _ := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); got != "Host(`example.org`)" {
+		t.Errorf("rule %q", got)
+	}
+
+	// No hosts at all: no rule, so a label's own default applies.
+	bare := project(t, "worker", map[string]string{
+		"compose.yaml": minimalCompose,
+		"target.env":   "X='1'\n",
+	})
+	plan, err = build(bare, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); ok {
+		t.Error("a rule without hosts")
+	}
+	out, err := build(bare, []string{"--env"}, nil)
+	if o, ok := err.(*Output); !ok || strings.Contains(o.Text, "DEVOPSY_HOST_RULE") || strings.Contains(o.Text, "DEVOPSY_PUBLIC_HOST") {
+		t.Errorf("--env: %v %v", out, err)
+	}
+
+	// The caller wins.
+	plan, err = build(root, []string{"ps"}, []string{"DEVOPSY_PUBLIC_HOST=custom.example.org"})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got, _ := envValue(t, plan.Env, "DEVOPSY_PUBLIC_HOST"); got != "custom.example.org" {
 		t.Errorf("caller's DEVOPSY_PUBLIC_HOST not kept: %q", got)
@@ -391,13 +417,9 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 	root := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
 		".env":         "OVERRIDE=from_env\n",
-		"target.env":   "DEVOPSY_DOMAINS='example.org'\nOVERRIDE='from_target'\nFROM_TARGET='yes'\n",
+		"target.env":   "DEVOPSY_DOMAINS='example.org'\nOVERRIDE='from_target'\nFROM_TARGET='yes'\nDEVOPSY_PUBLIC_DOMAIN='vm1.example.com'\n",
 	})
-	server := filepath.Join(t.TempDir(), "devopsy.env")
-	if err := os.WriteFile(server, []byte("FROM_TARGET=server\nDEVOPSY_PUBLIC_DOMAIN=vm1.example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	plan, err := Build(root, []string{"ps"}, []string{"DEVOPSY_SERVER_ENV=" + server})
+	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,6 +430,42 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 	} {
 		if got, _ := envValue(t, plan.Env, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestBuildCapability(t *testing.T) {
+	root := project(t, "traefik", map[string]string{
+		"compose.yaml":                 minimalCompose,
+		".env":                         "API_TOKEN=s3cr3t-value\n",
+		"capabilities/domains/facts":   "#!/bin/sh\n",
+		"capabilities/domains/notexec": "#!/bin/sh\n",
+	})
+	if err := os.Chmod(filepath.Join(root, ".devopsy", "capabilities", "domains", "facts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := build(root, []string{"--capability", "domains", "facts", "--all"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, ".devopsy", "capabilities", "domains", "facts")
+	if plan.Path != want || strings.Join(plan.Args, " ") != want+" --all" {
+		t.Fatalf("plan %s %v", plan.Path, plan.Args)
+	}
+	if got, _ := envValue(t, plan.Env, "API_TOKEN"); got != "s3cr3t-value" {
+		t.Errorf("project env not loaded: %q", got)
+	}
+	for args, wantErr := range map[string]string{
+		"--capability":                 "usage",
+		"--capability domains":         "usage",
+		"--capability domains retry":   "does not provide the domains capability's retry action",
+		"--capability domains notexec": "does not provide",
+		"--capability ../x facts":      "not a capability",
+		"--capability domains ../x":    "not a capability",
+	} {
+		_, err := build(root, strings.Fields(args), nil)
+		if e, ok := err.(*ExitError); !ok || !strings.Contains(e.Msg, wantErr) {
+			t.Errorf("%s: %v, want %q", args, err, wantErr)
 		}
 	}
 }

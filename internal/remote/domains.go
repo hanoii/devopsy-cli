@@ -4,118 +4,110 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
-// DomainsScript prints facts about a target's domains, as `key<TAB>base64`
-// lines: the effective environment (devopsy print-env), the server's IP,
-// Traefik's routers (its local API) and the acme-dns registrations. The
-// checks themselves run locally, so the server needs nothing extra.
-func DomainsScript(t *Target, projectName string) string {
-	return "set -eu\n" + enter(t) + fmt.Sprintf(`traefik=/srv/traefik
-v=$(sed -n 's/^DEVOPSY_TRAEFIK_DIR=//p' /etc/devopsy/devopsy.env 2>/dev/null | tail -n 1)
-[ -z "$v" ] || traefik=$v
-api=$(sed -n 's/^DEVOPSY_API_PORT=//p' "$traefik/.devopsy/.env" 2>/dev/null | tail -n 1)
-api=${api:-127.0.0.1:8080}
-case $api in *:*) ;; *) api=127.0.0.1:$api ;; esac
-fact() { printf '%%s\t' "$1"; base64 | tr -d '\n'; echo; }
-%s print-env | fact env
-ip -4 route get 1.1.1.1 | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }' | fact ip
-curl -fsS "http://$api/api/http/routers?per_page=1000" 2>/dev/null | fact routers || echo "routers	"
-cat "$traefik/.devopsy/mnt/letsencrypt/acme-dns-accounts.json" 2>/dev/null | fact accounts || echo "accounts	"
-printf '%%s' "$traefik" | fact traefik
-`, devopsyCall(projectName, nil, false))
+// ProxyFactsVersion is the newest version of the domains capability's facts
+// this devopsy reads.
+const ProxyFactsVersion = 1
+
+// ProxyFacts is what the proxy's domains capability reports (`facts`): see
+// README, "The domains capability".
+type ProxyFacts struct {
+	Version int    `json:"version"`
+	IP      string `json:"ip"`
+	// Retries are the names with a pending retry.
+	Retries []string    `json:"retries"`
+	Hosts   []HostFacts `json:"hosts"`
 }
 
-// Facts is what DomainsScript reports.
-type Facts struct {
-	Env      map[string]string
-	ServerIP string
-	Routers  []Router
-	// Accounts maps a domain to its acme-dns CNAME target.
-	Accounts   map[string]string
-	TraefikDir string
+// HostFacts is what the proxy knows about one host.
+type HostFacts struct {
+	Host string `json:"host"`
+	// Probe is the name to look up and connect to for a wildcard: one its
+	// router matches.
+	Probe  string `json:"probe"`
+	Routed bool   `json:"routed"`
+	// Resolver is informative only, shown in the report.
+	Resolver string `json:"resolver"`
+	// Method is how the certificate is issued: MethodHTTP, MethodDNSCNAME or
+	// MethodDNSAPI ("" when unknown).
+	Method   string     `json:"method"`
+	Record   *DNSRecord `json:"record"`
+	Wildcard string     `json:"wildcard"`
 }
 
-// Router is the part of Traefik's API router this needs.
-type Router struct {
-	Name string `json:"name"`
-	Rule string `json:"rule"`
-	TLS  *struct {
-		CertResolver string `json:"certResolver"`
-		// Domains are the certificates the router requests besides its
-		// rule's hosts, like the public wildcard's *.<domain>.
-		Domains []struct {
-			Main string `json:"main"`
-		} `json:"domains"`
-	} `json:"tls"`
+// DNSRecord is a record to create.
+type DNSRecord struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
 }
 
-// hostRule matches the hosts in a router rule: Host(`a`), not HostRegexp.
-var hostRule = regexp.MustCompile("Host\\(`([^`]+)`\\)")
+// Certificate issuing methods.
+const (
+	// MethodHTTP is HTTP-01: the host must reach the server.
+	MethodHTTP = "http"
+	// MethodDNSCNAME is DNS-01 through a delegated record, HostFacts.Record.
+	MethodDNSCNAME = "dns-cname"
+	// MethodDNSAPI is DNS-01 through the DNS provider's API.
+	MethodDNSAPI = "dns-api"
+)
 
-// ParseFacts reads DomainsScript output.
-func ParseFacts(out string) (*Facts, error) {
-	raw := map[string][]byte{}
-	for _, line := range strings.Split(out, "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		if !ok {
-			if k != "" {
-				raw[k] = nil
-			}
-			continue
-		}
-		b, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return nil, fmt.Errorf("server output for %s: %w", k, err)
-		}
-		raw[k] = b
+// ParseProxyFacts reads the facts capability's output.
+func ParseProxyFacts(out []byte) (*ProxyFacts, error) {
+	var f ProxyFacts
+	if err := json.Unmarshal(out, &f); err != nil {
+		return nil, fmt.Errorf("the proxy's domains facts are not JSON: %w\n%s", err, out)
 	}
-	if _, ok := raw["env"]; !ok {
-		return nil, fmt.Errorf("unexpected server output:\n%s", out)
+	switch {
+	case f.Version == 0:
+		return nil, fmt.Errorf("the proxy's domains facts have no version:\n%s", out)
+	case f.Version > ProxyFactsVersion:
+		return nil, fmt.Errorf("the proxy reports domains facts version %d, this devopsy reads up to %d: upgrade devopsy (devopsy --upgrade)", f.Version, ProxyFactsVersion)
 	}
-	f := &Facts{
-		ServerIP:   strings.TrimSpace(string(raw["ip"])),
-		TraefikDir: string(raw["traefik"]),
-		Accounts:   map[string]string{},
-	}
-	env, err := dotenv.UnmarshalWithLookup(string(raw["env"]), nil)
-	if err != nil {
-		return nil, fmt.Errorf("server environment: %w", err)
-	}
-	f.Env = env
-	if len(raw["routers"]) > 0 {
-		if err := json.Unmarshal(raw["routers"], &f.Routers); err != nil {
-			return nil, fmt.Errorf("Traefik routers: %w", err)
-		}
-	}
-	if len(raw["accounts"]) > 0 {
-		var accounts map[string]struct {
-			FullDomain string `json:"fulldomain"`
-		}
-		if err := json.Unmarshal(raw["accounts"], &accounts); err != nil {
-			return nil, fmt.Errorf("acme-dns registrations: %w", err)
-		}
-		for d, a := range accounts {
-			f.Accounts[strings.TrimPrefix(d, "*.")] = a.FullDomain
-		}
-	}
-	return f, nil
+	return &f, nil
 }
 
-// Hosts is the public host followed by DEVOPSY_DOMAINS, without duplicates.
-func (f *Facts) Hosts() []string {
+// Host returns the facts about host, or an unrouted host.
+func (f *ProxyFacts) Host(host string) HostFacts {
+	for _, h := range f.Hosts {
+		if strings.EqualFold(h.Host, host) {
+			return h
+		}
+	}
+	return HostFacts{Host: host}
+}
+
+// HasRetry reports whether name has a pending retry.
+func (f *ProxyFacts) HasRetry(name string) bool {
+	for _, r := range f.Retries {
+		if r == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AllHosts is every host the proxy reported, in its order.
+func (f *ProxyFacts) AllHosts() []string {
+	hosts := make([]string, len(f.Hosts))
+	for i, h := range f.Hosts {
+		hosts[i] = h.Host
+	}
+	return hosts
+}
+
+// ProjectHosts is a project's public host followed by its DEVOPSY_DOMAINS,
+// lowercase, without duplicates, from its environment.
+func ProjectHosts(env map[string]string) []string {
 	seen := map[string]bool{}
 	var hosts []string
 	add := func(h string) {
@@ -125,8 +117,8 @@ func (f *Facts) Hosts() []string {
 			hosts = append(hosts, h)
 		}
 	}
-	add(f.Env["DEVOPSY_PUBLIC_HOST"])
-	for _, h := range strings.FieldsFunc(f.Env["DEVOPSY_DOMAINS"], func(r rune) bool {
+	add(env["DEVOPSY_PUBLIC_HOST"])
+	for _, h := range strings.FieldsFunc(env["DEVOPSY_DOMAINS"], func(r rune) bool {
 		return r == ' ' || r == ',' || r == '\t' || r == '\n'
 	}) {
 		add(h)
@@ -134,100 +126,45 @@ func (f *Facts) Hosts() []string {
 	return hosts
 }
 
-// ServerHosts is every host Traefik routes, for `domains` on the server's
-// own Traefik: wildcard certificates ("*.<domain>") first, then hosts by
-// name. Routers that only exist to request a certificate (the wildcard's
-// reserved name, --retry's) are not hosts of their own.
-func (f *Facts) ServerHosts() []string {
-	seen := map[string]bool{}
-	var wildcards, hosts []string
-	for _, r := range f.Routers {
-		if strings.HasPrefix(r.Name, "devopsy-retry-") {
-			continue
-		}
-		if r.TLS != nil {
-			for _, d := range r.TLS.Domains {
-				if w := strings.ToLower(d.Main); strings.HasPrefix(w, "*.") && !seen[w] {
-					seen[w] = true
-					wildcards = append(wildcards, w)
-				}
-			}
-		}
+// ParseEnv reads EnvScript's output.
+func ParseEnv(out string) (map[string]string, error) {
+	env, err := dotenv.UnmarshalWithLookup(out, nil)
+	if err != nil {
+		return nil, fmt.Errorf("the target's environment: %w", err)
 	}
-	// Each wildcard's reserved name is checked as the wildcard.
-	for _, w := range wildcards {
-		seen[f.probe(w)] = true
-	}
-	for _, r := range f.Routers {
-		if strings.HasPrefix(r.Name, "devopsy-retry-") {
-			continue
-		}
-		for _, m := range hostRule.FindAllStringSubmatch(r.Rule, -1) {
-			h := strings.ToLower(m[1])
-			if !seen[h] {
-				seen[h] = true
-				hosts = append(hosts, h)
-			}
-		}
-	}
-	sort.Strings(wildcards)
-	sort.Strings(hosts)
-	return append(wildcards, hosts...)
+	return env, nil
 }
 
-// wildcardRouter returns the router requesting the wildcard certificate
-// host, like *.vm1.example.com.
-func (f *Facts) wildcardRouter(host string) *Router {
-	for i, r := range f.Routers {
-		if r.TLS == nil {
-			continue
-		}
-		for _, d := range r.TLS.Domains {
-			if strings.EqualFold(d.Main, host) {
-				return &f.Routers[i]
-			}
-		}
-	}
-	return nil
+// DefaultProxyDir is where the server's proxy lives unless a target's
+// DEVOPSY_PROXY_DIR says otherwise.
+const DefaultProxyDir = "/srv/traefik"
+
+// EnvScript prints the target's environment, as devopsy computes it there.
+// print-env: the old name of --env, which any server version answers.
+func EnvScript(t *Target, projectName string) string {
+	return "set -eu\n" + enter(t) + devopsyCall(projectName, []string{"print-env"}, true) + "\n"
 }
 
-// probe is the name checks look up and connect to for host: itself, or for a
-// wildcard a name it covers, the one its router matches.
-func (f *Facts) probe(host string) string {
-	if !strings.HasPrefix(host, "*.") {
-		return host
+// CapabilityScript runs a capability's action in the project at dir (its
+// current release, if any): devopsy --capability, in a fresh session, so no
+// other project's environment applies. Its messages on stderr only show when
+// it fails.
+func CapabilityScript(dir, name, action string, args []string) string {
+	call := devopsyCall("", append([]string{"--capability", name, action}, args...), false)
+	s := "set -eu\ndir=" + Quote(dir) + `
+cd "$dir" 2>/dev/null || { echo "devopsy: no project at $dir" >&2; exit 1; }
+[ ! -d current ] || cd current
+`
+	if Verbose {
+		return s + "exec " + call + "\n"
 	}
-	if r := f.wildcardRouter(host); r != nil {
-		for _, m := range hostRule.FindAllStringSubmatch(r.Rule, -1) {
-			if strings.HasSuffix(strings.ToLower(m[1]), host[1:]) {
-				return strings.ToLower(m[1])
-			}
-		}
-	}
-	return "devopsy-wildcard" + host[1:]
-}
-
-// Resolver returns the cert resolver of the router serving host, "" when no
-// router serves it. Routers with TLS win over their HTTP twins. A wildcard's
-// is the resolver of the router requesting it.
-func (f *Facts) Resolver(host string) (resolver string, routed bool) {
-	if strings.HasPrefix(host, "*.") {
-		if r := f.wildcardRouter(host); r != nil {
-			return r.TLS.CertResolver, true
-		}
-		return "", false
-	}
-	needle := "Host(`" + host + "`)"
-	for _, r := range f.Routers {
-		if !strings.Contains(strings.ToLower(r.Rule), strings.ToLower(needle)) {
-			continue
-		}
-		routed = true
-		if r.TLS != nil && r.TLS.CertResolver != "" {
-			return r.TLS.CertResolver, true
-		}
-	}
-	return "", routed
+	return s + `err=$(mktemp)
+status=0
+` + call + ` 2>"$err" || status=$?
+[ "$status" = 0 ] || cat "$err" >&2
+rm -f "$err"
+exit "$status"
+`
 }
 
 // CertInfo describes the certificate a server presents for a name.
@@ -382,6 +319,7 @@ func issuerName(c *x509.Certificate) string {
 type DomainReport struct {
 	Host     string
 	Resolver string
+	Method   string
 	Routed   bool
 	// IPs the host resolves to, and whether one is the server.
 	IPs      []string
@@ -392,7 +330,7 @@ type DomainReport struct {
 	Proxy       string
 	ProxyStatus int
 	ProxyError  string
-	// acme-dns: the CNAME the challenge needs, what it is now.
+	// dns-cname: the CNAME the challenge needs, what it is now.
 	ChallengeWant string
 	ChallengeHave string
 	Cert          CertInfo
@@ -401,10 +339,10 @@ type DomainReport struct {
 	Live          bool
 }
 
-// Check builds a report per host (f.Hosts() for a project, f.ServerHosts()
-// for the server's Traefik). serverIPs are the addresses that count as this
+// Check builds a report per host (ProjectHosts for a project, f.AllHosts()
+// for the server's proxy). serverIPs are the addresses that count as this
 // server.
-func Check(ctx context.Context, f *Facts, c Checker, serverIPs []string, hosts []string) []DomainReport {
+func Check(ctx context.Context, f *ProxyFacts, c Checker, serverIPs []string, hosts []string) []DomainReport {
 	var reports []DomainReport
 	connectIP := ""
 	if len(serverIPs) > 0 {
@@ -419,15 +357,20 @@ func Check(ctx context.Context, f *Facts, c Checker, serverIPs []string, hosts [
 
 // checkHost checks one host, with its own time limit so an unreachable one
 // cannot use up the others' time.
-func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, connectIP, host string) DomainReport {
+func checkHost(parent context.Context, f *ProxyFacts, c Checker, serverIPs []string, connectIP, host string) DomainReport {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	{
-		r := DomainReport{Host: host}
-		r.Resolver, r.Routed = f.Resolver(host)
+		hf := f.Host(host)
+		r := DomainReport{Host: host, Resolver: hf.Resolver, Method: hf.Method, Routed: hf.Routed}
 		// A wildcard is checked through a name it covers; its challenge is the
 		// domain's.
-		name, base := f.probe(host), strings.TrimPrefix(host, "*.")
+		name, base := host, strings.TrimPrefix(host, "*.")
+		if hf.Probe != "" {
+			name = hf.Probe
+		} else if name != base {
+			name = "devopsy-wildcard." + base
+		}
 
 		ips, err := c.LookupIP(ctx, name)
 		r.IPs = ips
@@ -458,10 +401,13 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 			}
 		}
 
-		if r.Resolver == "acmedns" {
-			r.ChallengeWant = f.Accounts[base]
-			if cname, err := c.LookupCNAME(ctx, "_acme-challenge."+base); err == nil && cname != "_acme-challenge."+base {
-				r.ChallengeHave = cname
+		if r.Method == MethodDNSCNAME {
+			record := "_acme-challenge." + base
+			if hf.Record != nil {
+				record, r.ChallengeWant = strings.TrimSuffix(hf.Record.Name, "."), strings.TrimSuffix(hf.Record.Target, ".")
+			}
+			if cname, err := c.LookupCNAME(ctx, record); err == nil && strings.TrimSuffix(cname, ".") != record {
+				r.ChallengeHave = strings.TrimSuffix(cname, ".")
 			}
 		}
 
@@ -481,7 +427,7 @@ func checkHost(parent context.Context, f *Facts, c Checker, serverIPs []string, 
 func nextStep(r DomainReport, ip string) (string, bool) {
 	switch {
 	case !r.Routed:
-		return "no Traefik router serves it: is the site running, with its rule from DEVOPSY_HOST_RULE?", false
+		return "the server's proxy does not route it: is the site running, with its rule from DEVOPSY_HOST_RULE?", false
 	case r.Cert.Valid && r.OnServer:
 		return "live", true
 	case r.Proxy != "":
@@ -489,23 +435,25 @@ func nextStep(r DomainReport, ip string) (string, bool) {
 	case r.Cert.Valid:
 		return fmt.Sprintf("certificate ready: point its DNS at %s (A record) to switch", ip), false
 	}
-	switch r.Resolver {
-	case "acmedns":
+	switch r.Method {
+	case MethodDNSCNAME:
 		switch {
 		case r.ChallengeWant == "":
-			return "not registered with acme-dns yet: run with --retry", false
+			return "its challenge record is not known yet (not registered): run with --retry", false
 		case !strings.EqualFold(r.ChallengeHave, r.ChallengeWant):
 			return fmt.Sprintf("create, where its DNS is hosted: _acme-challenge.%s. CNAME %s.", strings.TrimPrefix(r.Host, "*."), r.ChallengeWant), false
 		default:
 			return "challenge CNAME in place: run with --retry", false
 		}
-	case "cloudflare":
-		return "run with --retry; the Cloudflare token must cover this domain's zone", false
-	default:
+	case MethodDNSAPI:
+		return "run with --retry; the proxy's DNS API token must cover this domain's zone", false
+	case MethodHTTP:
 		if !r.OnServer {
 			return fmt.Sprintf("point its DNS at %s (HTTP-01 needs it), then run with --retry", ip), false
 		}
 		return "DNS points here: run with --retry", false
+	default:
+		return fmt.Sprintf("the proxy does not say how it issues this certificate (resolver %q): run with --retry", r.Resolver), false
 	}
 }
 
@@ -527,7 +475,7 @@ func proxyStep(r DomainReport, ip string) (string, bool) {
 	case !r.Cert.Valid:
 		// The proxy got an answer from the server despite its invalid
 		// certificate, so its SSL mode is not Full (strict).
-		return fmt.Sprintf("served through %s (its SSL mode is not Full (strict)), but the server has no certificate for it yet: Traefik requests one when its router changes, check again in a minute, else run with --retry; get one before switching to Full (strict)", r.Proxy), false
+		return fmt.Sprintf("served through %s (its SSL mode is not Full (strict)), but the server has no certificate for it yet: the proxy requests one once the site is routed, check again in a minute, else run with --retry; get one before switching to Full (strict)", r.Proxy), false
 	}
 	return "live", true
 }
@@ -560,7 +508,7 @@ func FormatReports(reports []DomainReport) string {
 		fmt.Fprintf(&b, "  dns          %s\n", dns)
 		// The challenge only matters while there is no valid certificate, or
 		// when the record exists (renewals use it).
-		if r.Resolver == "acmedns" && (!r.Cert.Valid || r.ChallengeHave != "") {
+		if r.Method == MethodDNSCNAME && (!r.Cert.Valid || r.ChallengeHave != "") {
 			have := r.ChallengeHave
 			if have == "" {
 				have = "missing"
@@ -585,46 +533,6 @@ func FormatReports(reports []DomainReport) string {
 		b.WriteString("\n")
 	}
 	return b.String()
-}
-
-// RetryScript writes a Traefik dynamic configuration file that requests the
-// certificates of hosts again, grouped by resolver. Every run uses new router
-// names, which Traefik sees as a configuration change: no restart, no
-// downtime. The file is replaced on the next retry.
-func RetryScript(traefikDir, project string, byResolver map[string][]string, now time.Time) string {
-	stamp := now.UTC().Format("20060102150405")
-	var y strings.Builder
-	y.WriteString("# Written by `devopsy @<target> domains --retry`: asks Traefik to request\n# these certificates again. Safe to delete.\nhttp:\n  routers:\n")
-	resolvers := make([]string, 0, len(byResolver))
-	for r := range byResolver {
-		resolvers = append(resolvers, r)
-	}
-	sort.Strings(resolvers)
-	for _, res := range resolvers {
-		fmt.Fprintf(&y, "    devopsy-retry-%s-%s-%s:\n", project, res, stamp)
-		fmt.Fprintf(&y, "      rule: 'Host(`devopsy-retry-%s.invalid`)'\n", stamp)
-		y.WriteString("      entryPoints: [websecure]\n      service: noop@internal\n      tls:\n")
-		fmt.Fprintf(&y, "        certResolver: %s\n        domains:\n", res)
-		for _, h := range byResolver[res] {
-			fmt.Fprintf(&y, "          - main: '%s'\n", h)
-		}
-	}
-	file := RetryFile(traefikDir, project)
-	return fmt.Sprintf("set -eu\nprintf '%%s' %s > %s.tmp\nmv %s.tmp %s\n",
-		Quote(y.String()), Quote(file), Quote(file), Quote(file))
-}
-
-// RetryFile is where RetryScript writes, for a project.
-func RetryFile(traefikDir, project string) string {
-	return traefikDir + "/.devopsy/mnt/dynamic/devopsy-retry-" + project + ".yaml"
-}
-
-// CleanupRetryScript removes a project's retry file, if any, and prints
-// "removed" when it did. Once the certificates exist the file is only
-// clutter: Traefik keeps and renews them without it.
-func CleanupRetryScript(traefikDir, project string) string {
-	f := Quote(RetryFile(traefikDir, project))
-	return "set -eu\nif [ -e " + f + " ]; then rm -f " + f + "; echo removed; fi\n"
 }
 
 // AllCertified reports whether every routed host has a valid certificate.
