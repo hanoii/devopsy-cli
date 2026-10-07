@@ -187,6 +187,10 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   install it before assuming a broken release.
 - Traefik picks up a new container a couple of seconds after `up` returns:
   wait before querying its API in tests.
+- GitHub's `releases/latest` redirect, which `--upgrade` follows, can lag
+  a new release by a few minutes depending on the edge: right after
+  v0.11.0, one server upgraded and another still saw v0.10.0 (October
+  2026). `devopsy --upgrade vX.Y.Z` installs a given release meanwhile.
 - Go's HTTPS connection to github.com took 1.5 s where curl took 0.5 s
   (October 2026): too slow for a check before every command, hence the
   detached `--upgrade-check`.
