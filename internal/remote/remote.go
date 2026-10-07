@@ -457,7 +457,13 @@ func Targets(projectDir string) []*Target {
 		t.Name = n
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	// The project's targets, then the user-level ones, each by name.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].User != out[j].User {
+			return !out[i].User
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
