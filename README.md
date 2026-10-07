@@ -428,7 +428,14 @@ services:
 `devopsy.shell.user` is for images that start as root and drop to another
 user in their entrypoint, which `docker compose exec` skips. Options go to
 `docker compose exec`, like `devopsy --shell app --user root`, which wins
-over the label. A project that needs more (a login script, another
+over the label. After `--`, a command runs instead of the shell, in the same
+service as the same user, directly as `docker compose exec` runs it, and
+without a terminal when there is none (pipes, CI):
+
+```sh
+devopsy --shell -- drush status             # the default service, its label user
+devopsy @prod --shell db --user root -- ls /
+``` A project that needs more (a login script, another
 program) implements the `shell` capability instead (see Capabilities).
 
 `--shell-host` opens your login shell on the server itself, where commands
@@ -649,8 +656,9 @@ Exit status 0 on success; anything else is an error, its message on stderr.
 ### shell
 
 Implemented by any project that wants its own `--shell`. `open [service]
-[exec options...]`, with the arguments `--shell` got, opens an interactive
-shell however the project needs: devopsy runs it in place of its own
+[exec options...] [-- command...]`, with the arguments `--shell` got, opens
+an interactive shell, or runs the command after `--`, however the project
+needs: devopsy runs it in place of its own
 (`exec`, the terminal attached), locally or on the server for
 `@<target> --shell`. Its exit status is the shell's.
 
