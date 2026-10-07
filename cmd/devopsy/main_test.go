@@ -432,7 +432,7 @@ func TestReleaseSteps(t *testing.T) {
 	project := filepath.Join(tmp, "app")
 	dot := filepath.Join(project, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	targets := "prod:\n  host: devopsy@server\n  path: " + server + "\n  env:\n    SITE: one\n" +
+	targets := "prod:\n  host: devopsy@server\n  path: " + server + "\n  mode: image\n  env:\n    SITE: one\n" +
 		"  release:\n    before: check\n    remote: deploy --fast\n    after: [done]\n"
 	write(t, filepath.Join(dot, "targets.yaml"), targets, 0o644)
 	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)

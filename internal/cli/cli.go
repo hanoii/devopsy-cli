@@ -309,9 +309,9 @@ Each step is a devopsy command line, split on spaces. Several remote steps
 belong in one project command. Local steps get the target's env,
 DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
 
-  - image mode (default): uploads .devopsy/; images come from a registry.
-  - build mode: uploads the project as git sees it (tracked and untracked
-    files, minus gitignored ones, uncommitted changes included).
+  - build mode (default): uploads the project as git sees it (tracked and
+    untracked files, minus gitignored ones, uncommitted changes included).
+  - image mode: uploads .devopsy/; images come from a registry.
 
 The release links the server's shared/ (.env, mnt/...) and writes
 .devopsy/target.env from the target's env in targets.yaml, plus
