@@ -639,8 +639,9 @@ mv "$rel.tmp" "$rel"
 // ActivateScript links shared/ into a release, makes it current, runs args
 // there (if any) and goes back to the previous release when that fails.
 // Then it prunes old releases. rollback picks the release before current
-// instead of id. It ends with the release's public URL, or its first
-// domain, as devopsy on the server computes them.
+// instead of id. It ends with the release's URL, its wildcard host or else
+// its first domain, as devopsy on the server computes them; nothing for the
+// server's proxy itself, which serves the others.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
 	s := fmt.Sprintf(prelude, Quote(t.Path)) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -668,7 +669,7 @@ make_current "releases/$id"
 echo "devopsy: current is now $id"
 `
 	if !rollback {
-		s += fmt.Sprintf(PublicDomainScript, devopsyCall(projectName, []string{"print-env"}, false))
+		s += fmt.Sprintf(WildcardDomainScript, devopsyCall(projectName, []string{"print-env"}, false))
 	}
 	if len(args) > 0 {
 		s += `status=0
@@ -692,45 +693,48 @@ fi
 done
 `, Keep+1)
 	s += `vars=$(cd "$base/current" && ` + devopsyCall(projectName, []string{"--env"}, false) + ` 2>/dev/null) || vars=
-host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_PUBLIC_HOST='\(.*\)'$/\1/p")
+host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_WILDCARD_HOST='\(.*\)'$/\1/p")
 domains=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_DOMAINS='\(.*\)'$/\1/p" | tr ',' ' ')
+proxy=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_PROXY_DIR='\(.*\)'$/\1/p")
 set -- $domains
-if [ -n "$host" ]; then
+if [ "${proxy:-` + DefaultProxyDir + `}" = "$base" ]; then
+  :
+elif [ -n "$host" ]; then
   echo "devopsy: https://$host"
 elif [ $# -gt 0 ]; then
   echo "devopsy: https://$1"
 else
-  echo "devopsy: no public URL or domains (DEVOPSY_PUBLIC_DOMAIN, DEVOPSY_DOMAINS)"
+  echo "devopsy: no URL: no wildcard domain or domains (DEVOPSY_WILDCARD_DOMAIN, DEVOPSY_DOMAINS)"
 fi
 `
 	return s
 }
 
-// PublicDomainScript gives a new release the server's public domain, from
-// the proxy's domains capability (public-domain), unless the target sets
-// DEVOPSY_PUBLIC_DOMAIN itself: in targets.yaml or shared/.env, even empty
+// WildcardDomainScript gives a new release the server's wildcard domain, from
+// the proxy's domains capability (wildcard-domain), unless the target sets
+// DEVOPSY_WILDCARD_DOMAIN itself: in targets.yaml or shared/.env, even empty
 // for no automatic URL. The proxy is in DEVOPSY_PROXY_DIR, by default
 // DefaultProxyDir. It runs in ActivateScript before the release steps, with
 // $base and $rel set; %s is the call printing the release's environment.
-// The proxy's own release is skipped: it has no public URL.
+// The proxy's own release is skipped: it has its own setting.
 // Written into the release's target.env: rollbacks keep what each release
 // had, and a domain change reaches projects with their next release.
-const PublicDomainScript = `vars=$(cd "$base/current" && %s 2>/dev/null) || vars=
+const WildcardDomainScript = `vars=$(cd "$base/current" && %s 2>/dev/null) || vars=
 proxy=
-if ! printf '%%s\n' "$vars" | grep -q '^DEVOPSY_PUBLIC_DOMAIN='; then
+if ! printf '%%s\n' "$vars" | grep -q '^DEVOPSY_WILDCARD_DOMAIN='; then
   proxy=$(printf '%%s\n' "$vars" | sed -n "s/^DEVOPSY_PROXY_DIR='\(.*\)'$/\1/p")
   proxy=${proxy:-` + DefaultProxyDir + `}
 fi
-# The proxy itself has no public URL.
+# The proxy itself has its own setting.
 if [ -n "$proxy" ] && [ "$proxy" != "$base" ]; then
-  public=$(cd "$proxy" 2>/dev/null && { [ ! -d current ] || cd current; } \
-    && devopsy --capability domains public-domain 2>/dev/null \
-    | sed -n 's/.*"public_domain": *"\([a-z0-9.-]*\)".*/\1/p') || public=
-  if [ -n "$public" ]; then
-    printf "DEVOPSY_PUBLIC_DOMAIN='%%s'\n" "$public" >>"$rel/.devopsy/target.env"
-    echo "devopsy: public domain $public, from the proxy at $proxy"
+  wildcard=$(cd "$proxy" 2>/dev/null && { [ ! -d current ] || cd current; } \
+    && devopsy --capability domains wildcard-domain 2>/dev/null \
+    | sed -n 's/.*"wildcard_domain": *"\([a-z0-9.-]*\)".*/\1/p') || wildcard=
+  if [ -n "$wildcard" ]; then
+    printf "DEVOPSY_WILDCARD_DOMAIN='%%s'\n" "$wildcard" >>"$rel/.devopsy/target.env"
+    echo "devopsy: wildcard domain $wildcard, from the proxy at $proxy"
   else
-    echo "devopsy: no public domain: no proxy at $proxy reports one (DEVOPSY_PROXY_DIR)"
+    echo "devopsy: no wildcard domain: no proxy at $proxy reports one (DEVOPSY_PROXY_DIR)"
   fi
 fi
 `

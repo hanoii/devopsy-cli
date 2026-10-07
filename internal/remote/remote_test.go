@@ -466,16 +466,16 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 	}
 }
 
-// A new release gets the server's public domain from its proxy, unless its
+// A new release gets the server's wildcard domain from its proxy, unless its
 // target sets one, even empty.
-func TestPublicDomainScript(t *testing.T) {
+func TestWildcardDomainScript(t *testing.T) {
 	bin := t.TempDir()
 	// print-env prints $FAKE_ENV; the capability answers in a proxy that has
-	// a .devopsy-public file.
+	// a .devopsy-wildcard file.
 	fake := `#!/bin/sh
 case "$1" in
   print-env) printf '%s' "$FAKE_ENV" ;;
-  --capability) [ -f .devopsy-public ] && printf '{\n  "version": 1,\n  "public_domain": "%s"\n}\n' "$(cat .devopsy-public)" ;;
+  --capability) [ -f .devopsy-wildcard ] && printf '{\n  "version": 1,\n  "wildcard_domain": "%s"\n}\n' "$(cat .devopsy-wildcard)" ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
@@ -488,17 +488,17 @@ esac
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ".devopsy-public"), []byte(domain), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, ".devopsy-wildcard"), []byte(domain), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	script := strings.Replace(fmt.Sprintf(PublicDomainScript, "devopsy print-env"), DefaultProxyDir, proxy, 1)
+	script := strings.Replace(fmt.Sprintf(WildcardDomainScript, "devopsy print-env"), DefaultProxyDir, proxy, 1)
 
 	for name, c := range map[string]struct{ env, want, says string }{
-		"from the proxy":   {"DEVOPSY_PROJECT_NAME='shop'\n", "DEVOPSY_PUBLIC_DOMAIN='vm1.example.com'\n", "public domain vm1.example.com"},
-		"target sets it":   {"DEVOPSY_PUBLIC_DOMAIN='mine.example.com'\n", "", ""},
-		"target opts out":  {"DEVOPSY_PUBLIC_DOMAIN=''\n", "", ""},
-		"another proxy":    {"DEVOPSY_PROXY_DIR='" + other + "'\n", "DEVOPSY_PUBLIC_DOMAIN='vm2.example.com'\n", "vm2.example.com"},
+		"from the proxy":   {"DEVOPSY_PROJECT_NAME='shop'\n", "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", "wildcard domain vm1.example.com"},
+		"target sets it":   {"DEVOPSY_WILDCARD_DOMAIN='mine.example.com'\n", "", ""},
+		"target opts out":  {"DEVOPSY_WILDCARD_DOMAIN=''\n", "", ""},
+		"another proxy":    {"DEVOPSY_PROXY_DIR='" + other + "'\n", "DEVOPSY_WILDCARD_DOMAIN='vm2.example.com'\n", "vm2.example.com"},
 		"no proxy there":   {"DEVOPSY_PROXY_DIR='/nowhere'\n", "", "no proxy at /nowhere"},
 		"the proxy itself": {"DEVOPSY_PROXY_DIR='@base'\n", "", ""},
 	} {

@@ -105,7 +105,7 @@ func (f *ProxyFacts) AllHosts() []string {
 	return hosts
 }
 
-// ProjectHosts is a project's public host followed by its DEVOPSY_DOMAINS,
+// ProjectHosts is a project's wildcard host followed by its DEVOPSY_DOMAINS,
 // lowercase, without duplicates, from its environment.
 func ProjectHosts(env map[string]string) []string {
 	seen := map[string]bool{}
@@ -117,7 +117,7 @@ func ProjectHosts(env map[string]string) []string {
 			hosts = append(hosts, h)
 		}
 	}
-	add(env["DEVOPSY_PUBLIC_HOST"])
+	add(env["DEVOPSY_WILDCARD_HOST"])
 	for _, h := range strings.FieldsFunc(env["DEVOPSY_DOMAINS"], func(r rune) bool {
 		return r == ' ' || r == ',' || r == '\t' || r == '\n'
 	}) {

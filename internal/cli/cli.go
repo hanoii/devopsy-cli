@@ -372,7 +372,7 @@ Examples:
 `,
 	"domains": `Usage: devopsy @<target> domains [--retry]
 
-For the environment's public host and each of DEVOPSY_DOMAINS: what the
+For the environment's wildcard host and each of DEVOPSY_DOMAINS: what the
 server's proxy knows (routed, certificate resolver, through its domains
 capability in DEVOPSY_PROXY_DIR, default /srv/traefik), DNS (through
 1.1.1.1, Cloudflare's proxy recognized), the challenge CNAME when it
@@ -498,27 +498,27 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		}
 	}
 
-	// For compose files: the project name and its public hostname,
-	// <name>.<DEVOPSY_PUBLIC_DOMAIN>, the target's like its host. Without
+	// For compose files: the project name and its automatic host under the
+	// server's wildcard domain, <name>.<DEVOPSY_WILDCARD_DOMAIN>. Without
 	// one: <name>.localhost locally, none in a release (target.env), which
 	// then only answers on DEVOPSY_DOMAINS.
 	env.Set("DEVOPSY_PROJECT_NAME", name)
-	if _, ok := env.Lookup("DEVOPSY_PUBLIC_HOST"); !ok {
-		domain, _ := env.Lookup("DEVOPSY_PUBLIC_DOMAIN")
+	if _, ok := env.Lookup("DEVOPSY_WILDCARD_HOST"); !ok {
+		domain, _ := env.Lookup("DEVOPSY_WILDCARD_DOMAIN")
 		switch {
 		case domain != "":
-			env.Set("DEVOPSY_PUBLIC_HOST", name+"."+domain)
+			env.Set("DEVOPSY_WILDCARD_HOST", name+"."+domain)
 		case !released:
-			env.Set("DEVOPSY_PUBLIC_HOST", name+".localhost")
+			env.Set("DEVOPSY_WILDCARD_HOST", name+".localhost")
 		}
 	}
-	// A Traefik rule for the public host and DEVOPSY_DOMAINS (space or comma
+	// A Traefik rule for the wildcard host and DEVOPSY_DOMAINS (space or comma
 	// separated), so labels need no per-environment hosts. Without any host
 	// it stays unset, so a label's own default applies.
 	if _, ok := env.Lookup("DEVOPSY_HOST_RULE"); !ok {
-		public, _ := env.Lookup("DEVOPSY_PUBLIC_HOST")
+		wildcard, _ := env.Lookup("DEVOPSY_WILDCARD_HOST")
 		domains, _ := env.Lookup("DEVOPSY_DOMAINS")
-		hosts := append([]string{public}, strings.FieldsFunc(domains, func(r rune) bool {
+		hosts := append([]string{wildcard}, strings.FieldsFunc(domains, func(r rune) bool {
 			return r == ' ' || r == ',' || r == '\t' || r == '\n'
 		})...)
 		rule, err := HostRule(hosts)
@@ -529,7 +529,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 			env.Set("DEVOPSY_HOST_RULE", rule)
 		}
 	}
-	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_PUBLIC_HOST", "DEVOPSY_HOST_RULE"} {
+	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_WILDCARD_HOST", "DEVOPSY_HOST_RULE"} {
 		env.Mark(k)
 	}
 	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose}, nil

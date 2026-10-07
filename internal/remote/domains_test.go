@@ -62,7 +62,7 @@ func TestParseProxyFacts(t *testing.T) {
 }
 
 func TestProjectHosts(t *testing.T) {
-	env, err := ParseEnv("DEVOPSY_PUBLIC_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='live.org, Live.org ready.org'\n")
+	env, err := ParseEnv("DEVOPSY_WILDCARD_HOST='shop.vm1.example.com'\nDEVOPSY_DOMAINS='live.org, Live.org ready.org'\n")
 	if err != nil {
 		t.Fatal(err)
 	}

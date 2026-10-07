@@ -326,7 +326,7 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 	if server {
 		factsArgs, name = []string{"--all"}, "server"
 	} else if len(hosts) == 0 {
-		return fail("no hosts: set DEVOPSY_PUBLIC_DOMAIN or DEVOPSY_DOMAINS for this target")
+		return fail("no hosts: set DEVOPSY_WILDCARD_DOMAIN or DEVOPSY_DOMAINS for this target")
 	}
 	capability := func(action string, args []string, stdout io.Writer) int {
 		code, err := remote.SSH(t, remote.CapabilityScript(proxyDir, "domains", action, args), bytes.NewReader(nil), stdout, false)
@@ -348,11 +348,11 @@ func runDomains(t *remote.Target, projectName string, retry bool, color bool) in
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		checker := remote.PublicChecker(ctx)
-		// The server's addresses: as its public host resolves (right behind
+		// The server's addresses: as its wildcard host resolves (right behind
 		// NAT too), then as the proxy reports it.
 		var serverIPs []string
-		if env["DEVOPSY_PUBLIC_DOMAIN"] != "" && env["DEVOPSY_PUBLIC_HOST"] != "" {
-			if ips, err := checker.LookupIP(ctx, env["DEVOPSY_PUBLIC_HOST"]); err == nil {
+		if env["DEVOPSY_WILDCARD_DOMAIN"] != "" && env["DEVOPSY_WILDCARD_HOST"] != "" {
+			if ips, err := checker.LookupIP(ctx, env["DEVOPSY_WILDCARD_HOST"]); err == nil {
 				serverIPs = append(serverIPs, ips...)
 			}
 		}
