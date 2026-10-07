@@ -105,6 +105,12 @@ user-facing behavior and keep it in sync with any change to it.
   A target path without `current` but with `.devopsy/` is a plain
   directory: commands run there, release scripts refuse before creating
   anything.
+- `defaults:` in a targets file (reserved, never a target) gives that
+  file's targets their `mode`, `source`, steps and `env` unless they set
+  their own; `env` merges key by key, `KEY: ~` removes a default and `""`
+  stays an empty value (hence parsing nodes: a string map would make both
+  ""). The project's defaults (targets.local.yaml's over targets.yaml's)
+  and the user-level file's never mix. host and path are never defaults.
 - Releases write `COMPOSE_PROJECT_NAME` into `target.env` when compose.yaml has
   no name: devopsy run by hand in `current` named the project "current".
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.

@@ -526,3 +526,97 @@ esac
 		}
 	}
 }
+
+// defaults: shared by a file's targets, env merged key by key, null removes
+// a default and "" keeps an empty value; a project's never reach user-level
+// targets.
+func TestTargetDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	write(t, filepath.Join(home, TargetsFile), `
+defaults:
+  mode: image
+  source: ~/src/traefik
+  release: {remote: deploy}
+vm1-traefik:
+  host: devopsy@vm1
+  path: /srv/traefik
+`)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, TargetsFile), `
+defaults:
+  mode: image
+  env:
+    CERTRESOLVER: acmedns
+    SITE: shared
+    DEVOPSY_WILDCARD_DOMAIN: vm1.example.com
+  release: {before: image, remote: deploy}
+  rollback: {remote: deploy}
+prod:
+  host: vm1
+  path: /srv/app-prod
+  env:
+    SITE: prod
+demo:
+  host: vm1
+  path: /srv/app-demo
+  release: {remote: deploy --fast}
+  env:
+    DEVOPSY_WILDCARD_DOMAIN: ""
+    CERTRESOLVER: ~
+`)
+	write(t, filepath.Join(dir, LocalTargetsFile), `
+defaults:
+  env:
+    SITE: local
+`)
+	prod, err := LoadTarget(dir, "prod", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prod.Mode != ModeImage || prod.Release.Remote != "deploy" || len(prod.Release.Before) != 1 || prod.Rollback == nil {
+		t.Errorf("prod: %+v", prod)
+	}
+	if prod.Env["SITE"] != "prod" || prod.Env["CERTRESOLVER"] != "acmedns" || prod.Env["DEVOPSY_WILDCARD_DOMAIN"] != "vm1.example.com" {
+		t.Errorf("prod env: %v", prod.Env)
+	}
+
+	demo, err := LoadTarget(dir, "demo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := demo.Env["DEVOPSY_WILDCARD_DOMAIN"]; !ok || v != "" {
+		t.Errorf("an empty value is kept: %v", demo.Env)
+	}
+	if _, ok := demo.Env["CERTRESOLVER"]; ok {
+		t.Errorf("null removes a default: %v", demo.Env)
+	}
+	if demo.Env["SITE"] != "local" {
+		t.Errorf("targets.local.yaml's defaults over targets.yaml's: %v", demo.Env)
+	}
+	if demo.Release.Remote != "deploy --fast" || len(demo.Release.Before) != 0 {
+		t.Errorf("steps replace whole: %+v", demo.Release)
+	}
+
+	// The user-level file's defaults, for its targets only.
+	traefik, err := LoadTarget(dir, "vm1-traefik", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traefik.Mode != ModeImage || traefik.Source != "~/src/traefik" || traefik.Release.Remote != "deploy" || traefik.Env["CERTRESOLVER"] != "" {
+		t.Errorf("user-level: %+v", traefik)
+	}
+
+	if _, err := LoadTarget(dir, DefaultsKey, nil); err == nil || !strings.Contains(err.Error(), "not a target") {
+		t.Errorf("@defaults: %v", err)
+	}
+	for _, tg := range Targets(dir) {
+		if tg.Name == DefaultsKey {
+			t.Error("defaults listed as a target")
+		}
+	}
+	write(t, filepath.Join(dir, LocalTargetsFile), "defaults:\n  path: /srv/x\n")
+	if _, err := LoadTarget(dir, "prod", nil); err == nil || !strings.Contains(err.Error(), "host and path belong to each target") {
+		t.Errorf("path in defaults: %v", err)
+	}
+}

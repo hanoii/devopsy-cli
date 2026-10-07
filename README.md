@@ -331,6 +331,33 @@ staging:
 ```
 
 Commit `targets.yaml`: CI deploys from it. It holds no secrets.
+
+`defaults:`, a reserved entry, holds what a file's targets share. Each
+target takes its `mode`, `source`, `release`, `rollback` and `env`, unless
+it sets its own: `env` merges key by key (the target's value wins), and the
+steps replace whole. In `env`, `""` sets an empty value and `~` (null)
+removes a default. `host` and `path` stay each target's.
+
+```yaml
+defaults:
+  mode: image
+  env:
+    CERTRESOLVER: acmedns
+  release: {before: image, remote: deploy}
+  rollback: {remote: deploy}
+
+prod:
+  path: /srv/shop-prod
+demo:
+  path: /srv/shop-demo
+  env:
+    DEVOPSY_WILDCARD_DOMAIN: ""   # set and empty: no wildcard URL
+    CERTRESOLVER: ~               # not set: the label's own default
+```
+
+A project's `targets.local.yaml` can have `defaults:` too, merged over
+`targets.yaml`'s, and the user-level file its own, for its targets only:
+a project's defaults never reach user-level targets.
 `.devopsy/targets.local.yaml` (gitignore it) adds or replaces whole targets
 for one machine, like a personal test server, and is never uploaded.
 
@@ -477,8 +504,8 @@ Local steps run in the local project with the target's `env`,
 server's `shared/.env`. They can still pass something to the remote step
 with `devopsy @$DEVOPSY_TARGET --vars set`. A rollback's remote command runs
 in the restored release, so it must exist there. Unknown keys are refused.
-YAML anchors share steps between targets (`release: &steps ...`, then
-`release: *steps`).
+`defaults:` shares steps and the rest between targets (see Remote
+targets).
 
 Without steps, `--release` and `--rollback` refuse and print a starting point:
 `up -d --wait --remove-orphans --pull always` in image mode (`up` alone
