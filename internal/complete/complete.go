@@ -87,8 +87,8 @@ var builtins = []Candidate{
 
 // remoteCommands follow @<target>.
 var remoteCommands = []Candidate{
-	{"release", "upload a new release and make it current", GroupDevopsy},
-	{"rollback", "make the previous release current again", GroupDevopsy},
+	{"release", "upload a new release and run its steps", GroupDevopsy},
+	{"rollback", "back to the previous release, and run its steps", GroupDevopsy},
 	{"releases", "list the releases on the server", GroupDevopsy},
 	{"domains", "DNS and certificates per host", GroupDevopsy},
 	{"--shell", "a shell on the server", GroupDevopsy},
@@ -198,10 +198,13 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 
 	switch words[0] {
 	case "release", "rollback":
-		if target != nil && target.User {
-			return none
+		// They take no command: their steps are in targets.yaml.
+		if len(words) == 2 {
+			r := filter(Result{Candidates: []Candidate{{"--help", "what it runs, and how", GroupDevopsy}}}, cur)
+			r.Directive = DirectiveNoFileComp
+			return r
 		}
-		return completeCommand(cwd, projectDir, words[1:], environ)
+		return none
 	case "domains":
 		if len(words) == 2 {
 			r := filter(Result{Candidates: []Candidate{{"--retry", "ask Traefik for missing certificates", GroupDevopsy}}}, cur)

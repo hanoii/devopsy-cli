@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -391,5 +392,108 @@ func TestCompletion(t *testing.T) {
 	}
 	if _, code = runDevopsy(t, root, nil, "--completion", "tcsh"); code != 1 {
 		t.Fatalf("--completion tcsh: %d", code)
+	}
+}
+
+// release and rollback run the target's steps: before (local), the upload and
+// switch, remote (on the server), after (local). With an ssh that runs the
+// scripts here.
+func TestReleaseSteps(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	// GNU mv -T, which macOS lacks: replace the symlink, never move into it.
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
+	server := filepath.Join(tmp, "srv", "app-prod")
+	project := filepath.Join(tmp, "app")
+	dot := filepath.Join(project, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
+	targets := "prod:\n  host: devopsy@server\n  path: " + server + "\n  env:\n    SITE: one\n" +
+		"  release:\n    before: check\n    remote: deploy --fast\n    after: [done]\n"
+	write(t, filepath.Join(dot, "targets.yaml"), targets, 0o644)
+	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\nexit ${FAIL_REMOTE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}
+	run := func(extra []string, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = append(append([]string{"DEVOPSY_SERVER_ENV=", "DEVOPSY_HOME=" + t.TempDir()}, env...), extra...)
+		out, _ := cmd.CombinedOutput()
+		return string(out), cmd.ProcessState.ExitCode()
+	}
+	current := func() string {
+		l, _ := os.Readlink(filepath.Join(server, "current"))
+		return l
+	}
+
+	if out, code := run(nil, "@prod", "release", "deploy"); code == 0 || !strings.Contains(out, "release takes no command") {
+		t.Fatalf("release with a command (%d):\n%s", code, out)
+	}
+
+	// A failing before step stops before the server.
+	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "release"); code == 0 || !strings.Contains(out, "check target=prod site=one") || !strings.Contains(out, "nothing changed on prod") {
+		t.Fatalf("before failure (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(server); !os.IsNotExist(err) {
+		t.Fatalf("before failure touched the server: %v", err)
+	}
+
+	out, code := run(nil, "@prod", "release")
+	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "after ran") {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	first := current()
+	if first == "" {
+		t.Fatal("no current release")
+	}
+
+	// A failing remote step goes back to the previous release, and skips after.
+	time.Sleep(1100 * time.Millisecond) // release ids are per second
+	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "release")
+	if code != 4 || strings.Contains(out, "after ran") || current() != first {
+		t.Fatalf("remote failure (%d), current %s, want %s:\n%s", code, current(), first, out)
+	}
+
+	// rollback needs its own steps.
+	if out, code := run(nil, "@prod", "rollback"); code == 0 || !strings.Contains(out, "@prod has no rollback steps") || !strings.Contains(out, "remote: up -d --wait") {
+		t.Fatalf("rollback without steps (%d):\n%s", code, out)
+	}
+	// With rollback steps: back to the first release, running its remote.
+	write(t, filepath.Join(dot, "targets.yaml"), targets+"  rollback:\n    remote: deploy --back\n", 0o644)
+	time.Sleep(1100 * time.Millisecond)
+	if out, code := run(nil, "@prod", "release"); code != 0 || current() == first {
+		t.Fatalf("second release (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != first {
+		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), first, out)
+	}
+
+	// Unknown keys are refused, not ignored.
+	write(t, filepath.Join(dot, "targets.yaml"), strings.Replace(targets, "remote:", "remotes:", 1), 0o644)
+	if out, code := run(nil, "@prod", "release"); code == 0 || !strings.Contains(out, `unknown key "remotes"`) {
+		t.Fatalf("unknown key (%d):\n%s", code, out)
+	}
+}
+
+// A project command calling devopsy @target inherits the local project's
+// COMPOSE_PROJECT_NAME; the target's own name must win.
+func TestNestedRemoteProjectName(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(tmp, "app")
+	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  host: devopsy@server\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "commands", "nested"), "#!/bin/sh\nexec devopsy @prod ps\n", 0o755)
+	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "nested")
+	if code != 0 || !strings.Contains(out, `COMPOSE_PROJECT_NAME='\''app-prod'\'' exec devopsy`) {
+		t.Errorf("(%d):\n%s", code, out)
 	}
 }

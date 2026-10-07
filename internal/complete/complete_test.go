@@ -79,9 +79,9 @@ func TestComplete(t *testing.T) {
 		{[]string{"--env", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "rel"}, []string{"release", "releases"}, []string{"rel"}, DirectiveNoFileComp},
 		{[]string{"@prod", "--"}, []string{"--shell", "--vars", "--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "release", ""}, []string{"deploy"}, []string{""}, DirectiveNoFileComp},
-		{[]string{"@prod", "release", "deploy", ""}, nil, nil, 0},
-		{[]string{"@prod", "rollback", "up", "-"}, nil, []string{"up", "-"}, 0},
+		{[]string{"@prod", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "domains", ""}, []string{"--retry"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", ""}, []string{"get", "set", "unset"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", "set", "TOKEN", ""}, []string{"USER_NAME"}, nil, DirectiveNoFileComp},
@@ -91,7 +91,7 @@ func TestComplete(t *testing.T) {
 		// or release.
 		{[]string{"@vm1-traefik", "dep"}, nil, []string{"dep"}, DirectiveNoFileComp},
 		{[]string{"@vm1-traefik", "--vars", "set", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@vm1-traefik", "release", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@vm1-traefik", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
 	}
 	for _, c := range cases {
 		r := Complete(root, c.words, os.Environ())

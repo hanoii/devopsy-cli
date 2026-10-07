@@ -237,9 +237,15 @@ prod:
   mode: image                   # image (default) or build
   env:                          # per-target settings, not secrets
     DEVOPSY_DOMAINS: example.org www.example.org
+  release:                      # what `release` runs (required for it)
+    remote: deploy
+  rollback:                     # what `rollback` runs (required for it)
+    remote: deploy
 staging:
   host: devopsy@203.0.113.10
   path: /srv/myapp-staging
+  release:
+    remote: deploy
 ```
 
 Commit `targets.yaml`: CI deploys from it. It holds no secrets.
@@ -294,10 +300,10 @@ finds the project. From a git checkout, it also sets `DEVOPSY_RELEASE_COMMIT`
 to the commit released (see image tags below).
 
 ```sh
-devopsy @prod release deploy   # upload a new release, run `devopsy deploy` there
+devopsy @prod release          # upload a new release and run its steps
 devopsy @prod logs -f web      # any command runs in the current release
 devopsy @prod releases         # list releases, * marks the current one
-devopsy @prod rollback up -d   # back to the previous release, then `up -d`
+devopsy @prod rollback         # back to the previous release and run its steps
 devopsy @prod domains          # per host: DNS, challenge, certificate, next step
 devopsy @prod --shell          # a shell on the server, in the current release
 devopsy @prod --vars set KEY   # set a secret in the server's shared/.env
@@ -313,14 +319,49 @@ server version.
 
 On a server, project commands come from the current release
 (`current/.devopsy/commands/`), so a new or changed command arrives with the
-next release. `devopsy @prod release` alone uploads and switches without
-running anything; running containers keep going, so use `release deploy`
-when anything else changed.
+next release.
+
+### Release and rollback steps
+
+`release` and `rollback` take no command: what they run belongs to the
+project, in each target's `release:` and `rollback:`, and both are required
+for their command. An upload that started nothing would leave `current`
+ahead of the running containers, for the next command on that target to
+half apply. Three phases, so the upload always happens at the same point:
+
+```yaml
+prod:
+  release:
+    before: [image]    # local devopsy commands, in order, before anything
+                       # touches the server; a failure stops there
+    remote: deploy     # one devopsy command on the server, in the new
+                       # release, under the release lock; a failure makes
+                       # the previous release current again
+    after: [notify]    # local devopsy commands once it is live; a failure
+                       # is reported, nothing is undone
+  rollback:
+    remote: deploy     # the same phases, after switching back
+```
+
+Each step is a devopsy command line, split on spaces (no quoting); `before`
+and `after` take one or a list. There is one remote command: several remote
+steps belong in a project command, which can also handle a partial failure.
+Local steps run in the local project with the target's `env`,
+`DEVOPSY_TARGET` and, for `release`, `DEVOPSY_RELEASE_COMMIT`, never the
+server's `shared/.env`. They can still pass something to the remote step
+with `devopsy @$DEVOPSY_TARGET --vars set`. A rollback's remote command runs
+in the restored release, so it must exist there. Unknown keys are refused.
+YAML anchors share steps between targets (`release: &steps ...`, then
+`release: *steps`).
+
+Without steps, `release` and `rollback` refuse and print a starting point:
+`up -d --wait --remove-orphans --pull always` in image mode (`up` alone
+would not pull a tag that moved), `--build` instead of `--pull always` in
+build mode. A project usually wraps that in its own `deploy` command.
 
 `release` uploads the project as a new release, links the server's shared
-files into it and makes it current. With a command, it runs `devopsy
-<command>` there, and goes back to the previous release when that fails, with
-the command's exit code. It keeps the last 5 releases.
+files into it, makes it current and runs the remote step there. It keeps the
+last 5 releases.
 
 - **image** mode uploads `.devopsy/` only: images come from a registry.
   Tag them with the commit, so each release and each rollback runs its own
@@ -332,8 +373,8 @@ the command's exit code. It keeps the last 5 releases.
   ```
 
   CI builds and pushes `ghcr.io/me/app:$GITHUB_SHA`, then runs `devopsy @prod
-  release deploy` from the same checkout; the project's `deploy` pulls and
-  starts it. The image is the commit's: uncommitted changes outside
+  release` from the same checkout, whose remote step pulls and starts it; or
+  a `before` step builds and pushes it. The image is the commit's: uncommitted changes outside
   `.devopsy/` are not in it, and `release` warns when there are some. Locally the variable is unset, so the tag is
   `local`. If the image was never pushed, the pull fails and the release goes
   back to the previous one.
@@ -408,7 +449,7 @@ set `DEVOPSY_SSH_COMMAND` to pass SSH options, like git's `GIT_SSH_COMMAND`:
 
 ```sh
 DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" \
-  devopsy @prod release deploy
+  devopsy @prod release
 ```
 
 ## License
