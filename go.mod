@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/compose-spec/compose-go/v2 v2.16.1
+	github.com/moby/patternmatcher v0.6.1
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/term v0.46.0
 )
