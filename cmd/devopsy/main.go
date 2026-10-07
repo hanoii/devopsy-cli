@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/complete"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // Set at build time by GoReleaser.
@@ -80,6 +82,21 @@ func run() int {
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
 		return runRemote(cwd, args, color, verbose)
+	}
+
+	// devopsy's flags for servers, used without a target.
+	if slices.Contains(cli.RemoteOnly, args[0]) {
+		var names []string
+		projectDir, _ := cli.FindProjectDir(cwd)
+		for _, t := range remote.Targets(projectDir) {
+			names = append(names, t.Name)
+		}
+		msg := fmt.Sprintf("%s needs a target: devopsy @<target> %s", args[0], args[0])
+		if len(names) > 0 {
+			msg += " (targets: " + strings.Join(names, ", ") + ")"
+		}
+		cli.Fprint(os.Stderr, red, msg, color)
+		return 1
 	}
 
 	plan, err := cli.Build(cwd, args, os.Environ())

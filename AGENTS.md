@@ -38,13 +38,20 @@ user-facing behavior and keep it in sync with any change to it.
   clashes (`devopsy version` once printed devopsy's version and then ran
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
-  and the compose fallback. After `@target`, `release`, `rollback`,
-  `releases` and `domains` are words, kept as they are; new ones are flags
-  (`--shell`, `--vars`): `--shell`
-  is one so `devopsy @prod shell` stays a project's command (a shell in a
-  container needs the project's service and user; devopsy cannot know them).
+  and the compose fallback. After `@target` too: `--release`, `--rollback`,
+  `--releases`, `--domains`, `--shell`, `--shell-host`, `--vars` (the first
+  four were words until v0.12.0). A word is a project command, else a docker
+  compose command (`ComposeCommands`: compose's own completion, cached and
+  refreshed when a word is missing, since compose's commands only change with
+  its version), else an error, never compose's usage dump. Arguments starting
+  with a flag go to compose unchecked: compose's global flags take values
+  devopsy would have to know. Flags that need a target say so without one.
+- `--shell` opens a container shell: the project's `shell` capability, else
+  bash or sh in the named service, the one labeled `devopsy.shell=true`, or
+  the only running one. `--shell-host` (the server's own shell) is never
+  overridable: it is the way in when the project is broken.
 - `devopsy @<target> <subcommand> --help` must only print help
-  (`cli.RemoteCommandHelp`): before it existed, `release --help` made a
+  (`cli.RemoteCommandHelp`): before it existed, `--release --help` made a
   release and ran `devopsy --help` on the server. Keep a help entry for every
   server subcommand.
 - Few dependencies; prefer the standard library. Linux and macOS only.
@@ -67,7 +74,7 @@ user-facing behavior and keep it in sync with any change to it.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
   layer: `/etc/devopsy/devopsy.env` existed until October 2026.
-- `DEVOPSY_WILDCARD_DOMAIN` comes from the server's proxy: `release` asks its
+- `DEVOPSY_WILDCARD_DOMAIN` comes from the server's proxy: `--release` asks its
   `domains` capability (`wildcard-domain`, `WildcardDomainScript`) and writes
   it into the release's `target.env`, unless the target's environment
   already has the key (targets.yaml or `shared/.env`, even empty: no
@@ -114,9 +121,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   only what gets released into one; no branch concept in the core.
 - Remote commands run through the `current` symlink, never a release path:
   compose stores bind-mount paths in containers, and pruned releases would
-  break them (for example after a reboot). `release` switches `current`
+  break them (for example after a reboot). `--release` switches `current`
   first, runs the remote step, and switches back when it fails.
-- `release` and `rollback` take no command: each target's `release:` and
+- `--release` and `--rollback` take no command: each target's `release:` and
   `rollback:` (before, remote, after; `remote.Steps`) are required for them.
   A bare upload left `current` ahead of the running containers, for the next
   `up` or `reload` to half apply. Phases rather than a free list, so the
@@ -160,7 +167,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   recursion guard: rejected `-C <dir>` for that). Stderr shows only on
   failure. Contracts are versioned JSON, documented in README; unknown
   fields are ignored. Define a new one only when a second use needs it.
-- `devopsy @target domains`: the target's environment comes from the server
+- `devopsy @target --domains`: the target's environment comes from the server
   (`print-env`, the old name of `--env`); what the proxy knows comes from
   its `domains` capability in `DEVOPSY_PROXY_DIR` (default `/srv/traefik`):
   routes, the resolver (shown only) and the issuing method (`http`,
@@ -169,9 +176,9 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   live in devopsy-traefik. DNS (through 1.1.1.1), certificates (a real TLS
   connection to the server per name, verified against system roots) and
   Cloudflare's proxy (its ranges, then a request through it) are checked
-  locally. `--retry` calls `retry <project> <hosts>` and `domains` calls
+  locally. `--retry` calls `retry <project> <hosts>` and `--domains` calls
   `retry <project> --done` once every routed host has a valid certificate.
-  When the target's path is `DEVOPSY_PROXY_DIR`, `domains` checks every
+  When the target's path is `DEVOPSY_PROXY_DIR`, `--domains` checks every
   host the proxy reports (`facts --all`) as `server`.
 
 ## Gotchas

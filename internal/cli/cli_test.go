@@ -157,13 +157,9 @@ func TestBuildCustomCommand(t *testing.T) {
 		t.Fatalf("DEVOPSY_CLI_COMMAND %q", v)
 	}
 
-	// Not executable: compose.
-	plan, err = build(root, []string{"notexec"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Path != "docker" {
-		t.Fatalf("non-executable file ran as a command: %+v", plan)
+	// Not executable: not a command, and not compose's either.
+	if _, err = build(root, []string{"notexec"}, nil); err == nil || !strings.Contains(err.Error(), "notexec: not a project command (deploy)") {
+		t.Fatalf("non-executable file: %v", err)
 	}
 }
 
@@ -198,7 +194,7 @@ func TestUsage(t *testing.T) {
 		"commands/plain*":  "#!/bin/sh\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Built-in:", "--version", "--env", "On a server", "Project commands (", "deploy  Pull and roll out", "  plain", "Anything else runs as docker compose"} {
+	for _, want := range []string{"Built-in:", "--version", "--env", "On a server", "Project commands (", "deploy  Pull and roll out", "  plain", "Anything else is an error", "--shell [service]", "--shell-host", "--release"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

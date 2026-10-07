@@ -77,21 +77,25 @@ func TestComplete(t *testing.T) {
 		{[]string{"logs", ""}, nil, []string{"logs", ""}, 0},
 		{[]string{"--completion", "z"}, []string{"zsh"}, nil, DirectiveNoFileComp},
 		{[]string{"--env", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "rel"}, []string{"release", "releases"}, []string{"rel"}, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--shell", "--vars", "--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "domains", ""}, []string{"--retry"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
+		{[]string{"@prod", "--rel"}, []string{"--release", "--releases"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--domains", "--shell", "--shell-host", "--vars", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--domains", ""}, []string{"--retry"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", ""}, []string{"get", "set", "unset"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", "set", "TOKEN", ""}, []string{"USER_NAME"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--shell", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--shell", ""}, []string{"web"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--shell-host", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"--shell", "w"}, []string{"web"}, nil, DirectiveNoFileComp},
+		{[]string{"--sh"}, []string{"--shell"}, []string{"--sh"}, DirectiveNoFileComp},
 		{[]string{"@prod", "logs", ""}, nil, []string{"logs", ""}, 0},
 		// A user-level target is another project: no local commands, .env
 		// or release.
 		{[]string{"@a-traefik", "dep"}, nil, []string{"dep"}, DirectiveNoFileComp},
 		{[]string{"@a-traefik", "--vars", "set", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@a-traefik", "release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@a-traefik", "--release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
 	}
 	for _, c := range cases {
 		r := Complete(root, c.words, os.Environ())

@@ -3,7 +3,7 @@
 A small wrapper around `docker compose` for projects that keep their
 deployment in a `.devopsy/` directory. Run `devopsy` from anywhere inside the
 project and it finds `.devopsy/`, loads its `.env` and runs compose with the
-right files. Anything it doesn't know becomes a `docker compose` command.
+right files. Other words are `docker compose` commands.
 
 It is a single static binary for Linux and macOS (amd64 and arm64), with no
 dependencies besides Docker and the Compose plugin.
@@ -33,7 +33,7 @@ from them:
   `current` switches to it at the end, then back if the release steps fail.
   Secrets and data live in `shared/`, outside releases, so rollbacks keep
   them. Remote commands run through `current`.
-- **Steps are explicit.** `release` and `rollback` run the steps each target
+- **Steps are explicit.** `--release` and `--rollback` run the steps each target
   names in `targets.yaml`; without them they refuse, rather than upload a
   release nothing applies.
 - **Project behavior lives in the project.** Anything that depends on a
@@ -42,11 +42,11 @@ from them:
   push images either; it only helps decide when to (`--context-hash`).
 - **Traefik only where it helps.** Releases and commands do not depend on
   a proxy. `DEVOPSY_HOST_RULE` is a Traefik rule as a plain variable, which
-  projects are free to ignore. `@target domains` checks hosts from outside,
+  projects are free to ignore. `@target --domains` checks hosts from outside,
   where only the CLI is installed, and asks the server's proxy what it knows
   through a capability: the proxy's internals stay in
   [devopsy-traefik](https://github.com/hanoii/devopsy-traefik).
-- **Capabilities are interfaces.** devopsy defines a few, like `domains`;
+- **Capabilities are interfaces.** devopsy defines a few, like `domains` and `shell`;
   a project implements one by shipping its scripts, and devopsy calls them.
   People never do, so they are never words.
 - **Words are yours.** devopsy's own features are flags or `@target`, so a
@@ -111,7 +111,7 @@ echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fi
 
 It completes targets (`@prod`, user-level ones included, with their host and
 path), the project's commands with their descriptions, devopsy's flags,
-the commands after `@<target>` (`release`, `--vars set` with the keys of
+the commands after `@<target>` (`--release`, `--vars set` with the keys of
 the project's `.env`...) and, through docker compose's own completion,
 compose's commands, flags and the project's services. After a project
 command, it completes file names. On a target, services come from the local
@@ -151,6 +151,7 @@ devopsy deploy         # runs .devopsy/commands/deploy if it exists
 devopsy                # help: built-ins, the project's commands, and the rest
 devopsy --version      # devopsy's, docker's and docker compose's versions
 devopsy --env          # the variables devopsy loads and computes
+devopsy --shell [service]   # a shell in a container
 devopsy --context-hash [service]   # a hash of what the service's image is built from
 devopsy --upgrade      # replace devopsy with the latest release
 devopsy --completion fish   # a shell completion script (bash, zsh, fish)
@@ -158,10 +159,14 @@ devopsy -v deploy      # --verbose: also what devopsy found and runs
 ```
 
 devopsy's own features are flags (`--help`, `--version`, `--env`,
-`--context-hash`, `--upgrade`, `--verbose`, `--completion`) or start
-with `@` (targets), so they never clash with words: a word is a project
-command if `.devopsy/commands/` has it, else a docker compose command.
-`devopsy version` is `docker compose version`.
+`--shell`, `--context-hash`, `--upgrade`, `--verbose`, `--completion`, and
+after a target `--release` and the rest) or start with `@` (targets), so
+they never clash with words: a word is a project command if
+`.devopsy/commands/` has it, else a docker compose command, else an error
+naming the project's commands. `devopsy version` is `docker compose
+version`. devopsy learns compose's commands from compose itself and caches
+them, so a new compose's new commands just work. Arguments that start with
+a flag (`devopsy --profile tools up`) go to compose unchecked.
 
 ### Output and secrets
 
@@ -311,9 +316,9 @@ prod:
   mode: image                   # image (default) or build
   env:                          # per-target settings, not secrets
     DEVOPSY_DOMAINS: example.org www.example.org
-  release:                      # what `release` runs (required for it)
+  release:                      # what `--release` runs (required for it)
     remote: deploy
-  rollback:                     # what `rollback` runs (required for it)
+  rollback:                     # what `--rollback` runs (required for it)
     remote: deploy
 staging:
   host: devopsy@203.0.113.10
@@ -344,7 +349,7 @@ only fills in a missing one. `~/.ssh/config` aliases work as hosts too.
 
 `~/.config/devopsy/targets.yaml` (or `$DEVOPSY_HOME/targets.yaml`) holds
 targets you use from any directory, for running commands on servers. They
-belong to no project, so they only `release` or `rollback` with
+belong to no project, so they only `--release` or `--rollback` with
 `source:`, the local directory of the project they release, and only
 from there; anywhere else, a release would upload whatever project you
 stand in. `~/` is your home directory:
@@ -365,8 +370,8 @@ user-level ones with the same name.
 
 A target's path can also be a plain devopsy directory, without releases:
 anything maintained in place, like a git clone.
-Commands then run in the path itself, and `release`, `rollback` and
-`releases` refuse. Together:
+Commands then run in the path itself, and `--release`, `--rollback` and
+`--releases` refuse. Together:
 
 ```yaml
 # ~/.config/devopsy/targets.yaml
@@ -390,22 +395,39 @@ finds the project. From a git checkout, it also sets `DEVOPSY_RELEASE_COMMIT`
 to the commit released (see image tags below).
 
 ```sh
-devopsy @prod release          # upload a new release and run its steps
+devopsy @prod --release          # upload a new release and run its steps
 devopsy @prod logs -f web      # any command runs in the current release
-devopsy @prod releases         # list releases, * marks the current one
-devopsy @prod rollback         # back to the previous release and run its steps
-devopsy @prod domains          # per host: DNS, challenge, certificate, next step
-devopsy @prod --shell          # a shell on the server, in the current release
-devopsy @prod --vars set KEY   # set a secret in the server's shared/.env
-devopsy @prod release --help   # details of any of these
+devopsy @prod --releases         # list releases, * marks the current one
+devopsy @prod --rollback         # back to the previous release and run its steps
+devopsy @prod --domains          # per host: DNS, challenge, certificate, next step
+devopsy @prod --shell            # a shell in a container, like devopsy --shell
+devopsy @prod --shell-host       # a shell on the server itself
+devopsy @prod --vars set KEY     # set a secret in the server's shared/.env
+devopsy @prod --release --help   # details of any of these
+devopsy --release                # without a target: says it needs one
 ```
 
-`--shell` opens your login shell on the server where commands run: the
-current release, or the path itself for a plain directory. For a shell in a
-container, use compose, `devopsy @prod exec <service> bash`, or a project
-command that knows the service and user. `--shell` is built into the local
-devopsy and only needs `sh` on the server, so it works with any target and
-server version.
+`--shell [service] [exec options]` opens a shell in a container, locally or
+(`@prod --shell`) in the current release: bash, or sh where the image has no
+bash, as the service's user (`user:` in compose). The service is the one
+you name, else the one labeled `devopsy.shell=true` in `compose.yaml`, else
+the only one running:
+
+```yaml
+services:
+  app:
+    labels:
+      - devopsy.shell=true
+```
+
+Options go to `docker compose exec`, like `devopsy --shell app --user
+root`. A project that needs more (another user, a login script) implements
+the `shell` capability instead (see Capabilities).
+
+`--shell-host` opens your login shell on the server itself, where commands
+run: the current release, or the path itself for a plain directory. It never
+depends on the project, so it is the way in when something is broken: it is
+built into the local devopsy and only needs `sh` on the server.
 
 On a server, project commands come from the current release
 (`current/.devopsy/commands/`), so a new or changed command arrives with the
@@ -413,7 +435,7 @@ next release.
 
 ### Release and rollback steps
 
-`release` and `rollback` take no command: what they run belongs to the
+`--release` and `--rollback` take no command: what they run belongs to the
 project, in each target's `release:` and `rollback:`, and both are required
 for their command. An upload that started nothing would leave `current`
 ahead of the running containers, for the next command on that target to
@@ -437,19 +459,19 @@ Each step is a devopsy command line, split on spaces (no quoting); `before`
 and `after` take one or a list. There is one remote command: several remote
 steps belong in a project command, which can also handle a partial failure.
 Local steps run in the local project with the target's `env`,
-`DEVOPSY_TARGET` and, for `release`, `DEVOPSY_RELEASE_COMMIT`, never the
+`DEVOPSY_TARGET` and, for `--release`, `DEVOPSY_RELEASE_COMMIT`, never the
 server's `shared/.env`. They can still pass something to the remote step
 with `devopsy @$DEVOPSY_TARGET --vars set`. A rollback's remote command runs
 in the restored release, so it must exist there. Unknown keys are refused.
 YAML anchors share steps between targets (`release: &steps ...`, then
 `release: *steps`).
 
-Without steps, `release` and `rollback` refuse and print a starting point:
+Without steps, `--release` and `--rollback` refuse and print a starting point:
 `up -d --wait --remove-orphans --pull always` in image mode (`up` alone
 would not pull a tag that moved), `--build` instead of `--pull always` in
 build mode. A project usually wraps that in its own `deploy` command.
 
-`release` uploads the project as a new release, links the server's shared
+`--release` uploads the project as a new release, links the server's shared
 files into it, makes it current and runs the remote step there. It keeps the
 last 5 releases.
 
@@ -465,7 +487,7 @@ last 5 releases.
   CI builds and pushes `ghcr.io/me/app:$GITHUB_SHA`, then runs `devopsy @prod
   release` from the same checkout, whose remote step pulls and starts it; or
   a `before` step builds and pushes it. The image is the commit's: uncommitted changes outside
-  `.devopsy/` are not in it, and `release` warns when there are some. Locally the variable is unset, so the tag is
+  `.devopsy/` are not in it, and `--release` warns when there are some. Locally the variable is unset, so the tag is
   `local`. If the image was never pushed, the pull fails and the release goes
   back to the previous one.
 - **build** mode uploads the whole project, as git sees it: tracked and
@@ -505,7 +527,7 @@ overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
 `compose.override.yaml` are never uploaded. Commands run through `current`, so
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 
-`domains` checks the environment's wildcard host and `DEVOPSY_DOMAINS`, as
+`--domains` checks the environment's wildcard host and `DEVOPSY_DOMAINS`, as
 the server computes them, from where you run it: DNS through 1.1.1.1, the
 challenge CNAME when the certificate is issued through one, and the
 certificate the server actually presents for each name, verified like a
@@ -513,20 +535,20 @@ browser would. What the server's proxy knows (which hosts it routes, how it
 issues each certificate) comes from its `domains` capability (see
 Capabilities), in `DEVOPSY_PROXY_DIR` on the target's server, by default
 `/srv/traefik`. A domain behind Cloudflare's proxy
-resolves to Cloudflare, so `domains` recognizes its ranges and requests the
+resolves to Cloudflare, so `--domains` recognizes its ranges and requests the
 site through the proxy instead, reporting Cloudflare's origin errors (521,
 522, 525, 526) with what they mean. Any other answer, even the site's own
 401, means the proxy reaches the server: without a valid certificate there,
 its SSL mode is not Full (strict) and the certificate is still pending, which
 the proxy requests once the site is routed. It ends each host with what to
 do next, like the CNAME to create or "certificate ready: point its DNS at
-...". `domains --retry` asks the proxy to request missing certificates
+...". `--domains --retry` asks the proxy to request missing certificates
 again (devopsy-traefik: a router file, no restart). Once every routed host
-has a valid certificate, `domains` withdraws that request: the proxy keeps
+has a valid certificate, `--domains` withdraws that request: the proxy keeps
 and renews the certificates without it.
 
 Run on the proxy's own target (its path is `DEVOPSY_PROXY_DIR`, like
-`devopsy @vm1-traefik domains`), it checks the whole server: every host the
+`devopsy @vm1-traefik --domains`), it checks the whole server: every host the
 proxy routes, and wildcards (`*.<wildcard domain>`) with their challenge
 CNAME, through a name each one covers. `--retry` there covers wildcards too.
 
@@ -536,7 +558,7 @@ URL (`<target directory>.<server's wildcard domain>`, printed after each
 release).
 
 Each release records its commit, branch, uncommitted changes and who made it,
-shown by `releases`. When `compose.yaml` has no top-level `name:`, the project
+shown by `--releases`. When `compose.yaml` has no top-level `name:`, the project
 is named after the target directory, here `myapp`.
 
 The server needs `devopsy`, Docker, `tar` and `flock`;
@@ -545,7 +567,7 @@ set `DEVOPSY_SSH_COMMAND` to pass SSH options, like git's `GIT_SSH_COMMAND`:
 
 ```sh
 DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_KNOWN_HOSTS" \
-  devopsy @prod release
+  devopsy @prod --release
 ```
 
 ## Capabilities
@@ -606,7 +628,7 @@ one JSON document:
 {"version": 1, "wildcard_domain": "vm1.example.com"}
 ```
 
-`release` asks it on the server, in `DEVOPSY_PROXY_DIR` (default
+`--release` asks it on the server, in `DEVOPSY_PROXY_DIR` (default
 `/srv/traefik`), for targets that do not set `DEVOPSY_WILDCARD_DOMAIN`
 themselves.
 
@@ -616,6 +638,14 @@ callers apart: devopsy passes the compose project name, or `server` on the
 proxy's own target.
 
 Exit status 0 on success; anything else is an error, its message on stderr.
+
+### shell
+
+Implemented by any project that wants its own `--shell`. `open [service]
+[exec options...]`, with the arguments `--shell` got, opens an interactive
+shell however the project needs: devopsy runs it in place of its own
+(`exec`, the terminal attached), locally or on the server for
+`@<target> --shell`. Its exit status is the shell's.
 
 ## License
 
