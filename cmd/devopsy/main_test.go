@@ -326,6 +326,21 @@ func TestRemoteVars(t *testing.T) {
 		t.Fatalf("get unset (%d):\n%s", code, out)
 	}
 
+	// --help anywhere after --vars only explains; --show is for set only.
+	if out, code := run("", "@prod", "--vars", "set", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --vars") {
+		t.Fatalf("set --help (%d):\n%s", code, out)
+	}
+	if out, code := run("", "@prod", "--vars", "get", "--show", "TOKEN"); code == 0 || !strings.Contains(out, "--show only applies to set") {
+		t.Fatalf("get --show (%d):\n%s", code, out)
+	}
+	// Without a terminal, --show still reads stdin.
+	if out, code := run("shown\n", "@prod", "--vars", "set", "--show", "SHOWN"); code != 0 {
+		t.Fatalf("set --show (%d):\n%s", code, out)
+	}
+	if out, _ := run("", "@prod", "--vars", "get", "SHOWN"); out != "shown\n" {
+		t.Fatalf("get SHOWN: %q", out)
+	}
+
 	// Values never go in arguments.
 	if out, code := run("", "@prod", "--vars", "set", "A=b"); code == 0 || !strings.Contains(out, "not a variable name") {
 		t.Fatalf("value in argument (%d):\n%s", code, out)

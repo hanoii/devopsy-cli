@@ -214,6 +214,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		switch {
 		case len(words) == 2:
 			r.Candidates = []Candidate{{"get", "one value", GroupDevopsy}, {"set", "set variables", GroupDevopsy}, {"unset", "remove variables", GroupDevopsy}}
+		case words[1] == "set" && strings.HasPrefix(cur, "-"):
+			r.Candidates = []Candidate{{"--show", "echo what you type at the prompt", GroupDevopsy}}
 		case words[1] == "set" && projectDir != "":
 			// The keys of the project's .env: what set copies from.
 			for _, k := range dotenvKeys(filepath.Join(projectDir, ".env"), words[2:len(words)-1]) {

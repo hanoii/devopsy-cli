@@ -333,7 +333,7 @@ release, or in the target's path for a plain devopsy directory (like
 /srv/traefik). devopsy and docker compose work there as on any project. For
 a shell in a container, use compose: devopsy @<target> exec <service> bash.
 `,
-	"--vars": `Usage: devopsy @<target> --vars [get KEY | set KEY... | unset KEY...]
+	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
 
 The target's variables on the server: shared/.env for an environment with
 releases (it can be set before the first release), or .devopsy/.env for a
@@ -346,15 +346,19 @@ linked into every release; targets.yaml's env goes to target.env instead.
                       .env (not for user-level targets), else a hidden
                       prompt, else stdin (one key only). Existing keys are
                       replaced in place, new ones appended.
+    --show            echo what you type at the prompt, for values that are
+                      not secrets
   --vars unset KEY... remove them
 
 Values never go in arguments: they travel on SSH's stdin, so they stay out
-of ps, shell history and CI logs. Running containers keep their values:
-apply with 'devopsy @<target> up -d' or the next release.
+of ps, shell history and CI logs. Running containers keep their old values
+until they are recreated, as by the next release; how to recreate them
+without one depends on the project.
 
 Examples:
   devopsy @prod --vars set REGISTRY_USER REGISTRY_PASSWORD   # copy from local .env
   printf '%s' "$TOKEN" | devopsy @prod --vars set CF_DNS_API_TOKEN
+  devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
 `,
 	"domains": `Usage: devopsy @<target> domains [--retry]

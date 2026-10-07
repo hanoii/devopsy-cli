@@ -350,6 +350,7 @@ committed and written into each release as `target.env`.
 devopsy @prod --vars                         # names, values hidden
 devopsy @prod --vars set DB_PASSWORD API_KEY # from your environment or .env, else a hidden prompt
 printf '%s' "$TOKEN" | devopsy @prod --vars set TOKEN   # or stdin, for one key
+devopsy @prod --vars set --show LOG_LEVEL    # a visible prompt, for values that are not secrets
 devopsy @prod --vars get DB_PASSWORD
 devopsy @prod --vars unset API_KEY
 ```
@@ -359,7 +360,9 @@ stay out of `ps`, shell history and CI logs, and in CI it copies a CI
 variable to the server by name. Existing keys are replaced in place. It
 works before the first release, so secrets can be in place for the first
 deploy, and it waits for a running release. Running containers keep their
-values: apply with `devopsy @prod up -d` or the next release. User-level
+old values until they are recreated, as by the next release; without one,
+the project's own way (a `reload` command, `up -d`...). `--show` echoes the
+prompt, for values that are not secrets; `--vars set --help` explains. User-level
 targets only take values from your environment, never from a project's
 `.env`.
 
