@@ -86,6 +86,10 @@ type Target struct {
 	// for them, see Steps.
 	Release  *Steps `yaml:"release"`
 	Rollback *Steps `yaml:"rollback"`
+	// Source, on a user-level target, is the local project directory it
+	// releases from: release and rollback run only there. Without it a
+	// user-level target never releases. "~/" means the home directory.
+	Source string `yaml:"source"`
 	// User is set for targets from the user-level file.
 	User bool `yaml:"-"`
 	// File is where the target was defined.
@@ -224,6 +228,49 @@ func loadTargets(projectDir string) (targets map[string]*Target, files []string,
 		}
 	}
 	return targets, files, nil
+}
+
+// ReleasesHere reports whether release and rollback may run for t from the
+// project whose .devopsy/ is projectDir ("" outside a project). A project's
+// own targets always may. A user-level target belongs to no project, so
+// only from its source: anywhere else, release would upload whatever
+// project devopsy runs in to it.
+func (t *Target) ReleasesHere(projectDir string) (bool, string) {
+	if !t.User {
+		return true, ""
+	}
+	if t.Source == "" {
+		return false, fmt.Sprintf("@%s is a user-level target (%s) without source: release and rollback need a target defined by the project, in .devopsy/targets.yaml, or source: <the project's directory> on it", t.Name, t.File)
+	}
+	want := t.Source
+	if home, err := os.UserHomeDir(); err == nil && (want == "~" || strings.HasPrefix(want, "~/")) {
+		want = filepath.Join(home, strings.TrimPrefix(want, "~"))
+	}
+	here := ""
+	if projectDir != "" {
+		here = filepath.Dir(projectDir)
+	}
+	if here != "" && samePath(here, want) {
+		return true, ""
+	}
+	if here == "" {
+		here = "outside a project"
+	}
+	return false, fmt.Sprintf("@%s releases only from its source, %s (%s); here: %s", t.Name, t.Source, t.File, here)
+}
+
+// samePath compares two directories after resolving symbolic links.
+func samePath(a, b string) bool {
+	resolve := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return filepath.Clean(p)
+	}
+	return resolve(a) == resolve(b)
 }
 
 // Targets lists the targets available from projectDir ("" outside a

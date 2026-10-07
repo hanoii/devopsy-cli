@@ -343,8 +343,24 @@ only fills in a missing one. `~/.ssh/config` aliases work as hosts too.
 
 `~/.config/devopsy/targets.yaml` (or `$DEVOPSY_HOME/targets.yaml`) holds
 targets you use from any directory, for running commands on servers. They
-never `release` or `rollback`: those need a target the project defines. A
-project's own targets win over user-level ones with the same name.
+belong to no project, so they only `release` or `rollback` with
+`source:`, the local directory of the project they release, and only
+from there; anywhere else, a release would upload whatever project you
+stand in. `~/` is your home directory:
+
+```yaml
+# ~/.config/devopsy/targets.yaml
+vm1-traefik:
+  host: devopsy@203.0.113.10
+  path: /srv/traefik
+  source: ~/src/devopsy-traefik     # release and rollback only from here
+  release: &steps
+    remote: deploy
+  rollback: *steps
+```
+
+Without `source:` they never release. A project's own targets win over
+user-level ones with the same name.
 
 A target's path can also be a plain devopsy directory, without releases:
 anything maintained in place, like a git clone.

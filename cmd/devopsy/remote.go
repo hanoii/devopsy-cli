@@ -57,6 +57,23 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 0
 	}
 
+	// `devopsy @t release --help` explains instead of releasing.
+	if help, ok := cli.RemoteCommandHelp[args[0]]; ok && len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
+		fmt.Print(help)
+		return 0
+	}
+
+	// A user-level target belongs to no project, so nothing may be released
+	// to it from wherever devopsy happens to run: only from its source,
+	// where it then acts as the project's own target.
+	if args[0] == "release" || args[0] == "rollback" {
+		ok, why := t.ReleasesHere(projectDir)
+		if !ok {
+			return fail(why)
+		}
+		t.User = false
+	}
+
 	// Without a top-level name, compose would name the project after the
 	// release directory, so fix it to the target directory's name.
 	// A user-level target belongs to no local project: the server's own
@@ -81,18 +98,6 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			return fail(err.Error())
 		}
 		return code
-	}
-
-	// `devopsy @t release --help` explains instead of releasing.
-	if help, ok := cli.RemoteCommandHelp[args[0]]; ok && len(args) > 1 && (args[1] == "--help" || args[1] == "-h") {
-		fmt.Print(help)
-		return 0
-	}
-
-	// A user-level target belongs to no project, so nothing may be released
-	// to it from wherever devopsy happens to run.
-	if t.User && (args[0] == "release" || args[0] == "rollback") {
-		return fail(fmt.Sprintf("@%s is a user-level target (%s): %s needs a target defined by the project, in .devopsy/targets.yaml", t.Name, t.File, args[0]))
 	}
 
 	switch args[0] {
