@@ -264,9 +264,9 @@ func CommandDescription(path string) string {
 }
 
 // RemoteHelp describes `devopsy @<target>` commands.
-const RemoteHelp = `On a server, devopsy @<target> ... or @<instance>:<target> (targets in
-.devopsy/config.yaml, or user-level ones in ~/.config/devopsy/config.yaml;
-the instance also from DEVOPSY_INSTANCE):
+const RemoteHelp = `On a server, devopsy @[<server>:][<instance>/]<environment> ..., a target
+(environments in .devopsy/config.yaml; the server also from DEVOPSY_SERVER,
+the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml):
   --release            upload the project as a new release, make it current and
                        run the target's release steps (config.yaml), going
                        back to the previous release if the remote one fails
@@ -292,12 +292,12 @@ the instance also from DEVOPSY_INSTANCE):
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"--release": `Usage: devopsy @<target> --release
+	"--release": `Usage: devopsy @<target> --release [--yes]
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from .devopsy/config.yaml (required):
 
-  targets:
+  environments:
     prod:
       release:
         before: [image]   # local devopsy commands, in order, before anything
@@ -319,10 +319,14 @@ DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
 The release links the server's shared/ (.env, mnt/...) and writes
 .devopsy/target.env from the target's env in config.yaml, plus
 DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. It lands in
-<project>[/<instance>]/<target> under the server's release root (its
+<project>[/<instance>]/<environment> under the server's release root (its
 user-level config's releases: root, else the deploy user's home), unless
 the target sets a path. It keeps the target's or project's releases: keep,
 else the server's, at most the server's max_keep (all default 5).
+
+The first release of an instance the server does not have yet asks before
+creating it (a typo would otherwise make a new site); --yes skips that, for
+CI.
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 
@@ -332,7 +336,7 @@ release's: before (local), remote (on the server, after the switch; a
 failure goes back again), after (local). Usually the same remote command as
 release, or a project command of its own:
 
-  targets:
+  environments:
     prod:
       rollback:
         remote: deploy
@@ -367,8 +371,8 @@ instance's .env stay.
 `,
 	"--instances": `Usage: devopsy @<target> --instances
 
-Lists the project's instances on the target's server, with the targets each
-one has: devopsy @<instance>:<target> runs on one of them.
+Lists the project's instances on the target's server, with the environments
+each one has: devopsy @<server>:<instance>/<environment> runs on one of them.
 `,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 
@@ -388,7 +392,7 @@ release; config.yaml's env goes to target.env instead.
   --project           the project's .env on that server instead, shared by
                       all its environments there (<root>/<project>/.env)
   --instance          the instance's, shared by its environments
-                      (<root>/<project>/<instance>/.env; @<instance>:<target>)
+                      (<root>/<project>/<instance>/.env; @<server>:<instance>/<env>)
 
 Nearest wins: the caller, the environment's, the instance's, the project's,
 then target.env.
@@ -396,7 +400,7 @@ then target.env.
   --vars              the names, values hidden
   --vars get KEY      one value, on stdout
   --vars set KEY...   each value from your environment, else the project's
-                      .env (not for user-level targets), else a hidden
+                      .env (not for aliases), else a hidden
                       prompt, else stdin (one key only). Existing keys are
                       replaced in place, new ones appended.
     --show            echo what you type at the prompt, for values that are
@@ -442,9 +446,10 @@ Built-in:
   --probe [--ip <server ip>] <host>...
                  DNS, certificate and HTTPS of each host, from here, as
                  visitors reach them; exits 1 on a problem
-  --debug [targets [name] [--yaml] | capabilities | labels | imports]
+  --debug [environments [name] [--yaml] | capabilities | labels | imports]
                  what devopsy sees and computes: versions, the project,
-                 targets with where each value comes from, the capabilities
+                 environments and aliases with where each value comes from
+                 (any address resolved), the capabilities
                  it calls and their contracts, the labels it reads, and
                  the imports of every project running on this host
   --upgrade [v]  replace devopsy with the latest release, or release v

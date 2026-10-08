@@ -589,3 +589,11 @@ for d in "$dir"/*/; do
 done
 `
 }
+
+// InstanceExistsScript exits 0 when the target's instance has a directory on
+// the server: --release asks before creating a new one.
+func InstanceExistsScript(t *Target) string {
+	dir := t.Project.Name + "/" + t.Instance
+	return "set -eu\n" + basePrelude(t) + `[ -d "$root"/` + Quote(dir) + ` ]
+`
+}

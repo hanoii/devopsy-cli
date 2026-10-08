@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"os"
@@ -17,9 +18,9 @@ import (
 )
 
 // debugTopics are what `devopsy --debug <topic>` explains.
-var debugTopics = []string{"targets", "capabilities", "labels", "imports"}
+var debugTopics = []string{"environments", "capabilities", "labels", "imports"}
 
-// runDebug implements `devopsy --debug [targets [name] [--yaml] |
+// runDebug implements `devopsy --debug [environments [name] [--yaml] |
 // capabilities | labels | imports]`: what devopsy sees and computes, to explain its
 // behavior. On a server (`devopsy @<target> --debug`), the server's view.
 func runDebug(cwd string, args []string, color bool) int {
@@ -32,7 +33,7 @@ func runDebug(cwd string, args []string, color bool) int {
 	switch topic {
 	case "":
 		debugSummary(st, projectDir)
-	case "targets":
+	case "environments":
 		asYAML := slices.Contains(args[1:], "--yaml")
 		name := ""
 		for _, a := range args[1:] {
@@ -88,8 +89,11 @@ func debugSummary(st style, projectDir string) {
 			field("name on servers", st.warn("none: set project: in "+remote.ConfigFile))
 		default:
 			v := p.Name
-			if p.Instances != "" {
-				v += " (instances required: @<instance>:<target>)"
+			switch p.Instances {
+			case remote.InstancesRequired:
+				v += " (instances required: @[<server>:]<instance>/<environment>)"
+			case remote.InstancesNone:
+				v += " (no instances)"
 			}
 			field("name on servers", v)
 		}
@@ -102,11 +106,16 @@ func debugSummary(st style, projectDir string) {
 			project = append(project, t.Name)
 		}
 	}
-	field("targets", orNone(project))
+	field("environments", orNone(project))
 	if pats := remote.Patterns(projectDir); len(pats) > 0 {
-		field("target patterns", strings.Join(pats, ", "))
+		field("env patterns", strings.Join(pats, ", "))
 	}
-	field("user-level targets", orNone(user))
+	for _, k := range []string{remote.ServerVar, remote.InstanceVar} {
+		if v := os.Getenv(k); v != "" {
+			field(k, v)
+		}
+	}
+	field("aliases", orNone(user))
 	var caps []string
 	for _, c := range cli.Capabilities {
 		if have := cli.ImplementedActions(projectDir, c); len(have) > 0 {
@@ -119,12 +128,13 @@ func debugSummary(st style, projectDir string) {
 			field("devopsy labels", orNone(labelList(labels)))
 		}
 	}
-	fmt.Printf("\n%s devopsy --debug targets [name] [--yaml] | capabilities | labels | imports\n", st.dim("More:"))
+	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | capabilities | labels | imports\n", st.dim("More:"))
 }
 
-// yamlTarget is a target as devopsy uses it, for --debug targets --yaml.
+// yamlTarget is an environment as devopsy uses it, for --debug environments --yaml.
 type yamlTarget struct {
-	Host     string            `yaml:"host"`
+	Address  string            `yaml:"target,omitempty"`
+	Host     string            `yaml:"server,omitempty"`
 	Path     string            `yaml:"path"`
 	Mode     string            `yaml:"mode"`
 	Source   string            `yaml:"source,omitempty"`
@@ -157,18 +167,18 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			projectEnv = env.Lookup
 		}
 	}
+	// Every environment and alias, or one: a name, or any address.
 	var names []string
+	if name != "" {
+		names = []string{strings.TrimPrefix(name, "@")}
+	}
 	for _, t := range remote.Targets(projectDir) {
-		if name == "" || t.Name == name {
+		if name == "" {
 			names = append(names, t.Name)
 		}
 	}
 	if len(names) == 0 {
-		msg := "no targets"
-		if name != "" {
-			msg = "no target " + name
-		}
-		cli.Fprint(os.Stderr, red, msg, color)
+		cli.Fprint(os.Stderr, red, "no environments or aliases", color)
 		return 1
 	}
 
@@ -182,7 +192,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 				continue
 			}
 			var value yaml.Node
-			if err := value.Encode(&yamlTarget{Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
+			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
 				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Keep: t.Keep, Env: t.Env}); err != nil {
 				cli.Fprint(os.Stderr, red, err.Error(), color)
 				return 1
@@ -209,9 +219,9 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		}
 		kind := ""
 		if t.User {
-			kind = ", user-level"
+			kind = ", alias " + t.Alias
 		}
-		fmt.Printf("%s  %s\n", st.name(st.head(t.Name)), st.dim("("+tilde(t.File)+kind+")"))
+		fmt.Printf("%s  %s\n", st.name(st.head(n)), st.dim("("+tilde(t.File)+kind+")"))
 		row := func(field, value, from string) {
 			if value == "" {
 				return
@@ -221,14 +231,18 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			}
 			fmt.Printf("  %s %s%s\n", st.head(fmt.Sprintf("%-9s", field)), value, from)
 		}
-		row("host", t.Host, t.From["host"])
+		if t.Host != "" {
+			row("target", t.Address, "")
+		}
+		row("server", cmp.Or(t.Host, st.warn("none yet: @<server>:"+t.Name+", or "+remote.ServerVar)), t.From["server"])
+		row("instance", t.Instance, t.From["instance"])
 		if t.Project != nil {
 			row("project", t.Project.Name, filepath.Join(t.Project.Dir, remote.ConfigFile))
 		}
 		row("compose", t.ComposeName(), "")
 		row("path", t.Path, t.From["path"])
 		row("mode", t.Mode, t.From["mode"])
-		row("source", t.Source, t.From["source"])
+		row("source", t.Source, "")
 		row("release", steps(t.Release), t.From["release"])
 		row("rollback", steps(t.Rollback), t.From["rollback"])
 		if t.Keep > 0 {

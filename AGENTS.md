@@ -69,12 +69,12 @@ user-facing behavior and keep it in sync with any change to it.
   delegate's), which the zsh and fish scripts use to set them apart.
   Completion never connects to
   servers: after `@target`, services come from the local compose files (a
-  user-level target's `source:` checkout, from any directory).
+  an alias's `source:` checkout, from any directory).
   New built-ins and `@target` subcommands go in its lists too.
 - Color only on a terminal and without `NO_COLOR` (`styleFor`); help is
   colored by its layout (headings end with `:`, entries start with two
   spaces), so keep that layout when editing help texts.
-- `--debug [targets [name] [--yaml] | capabilities | labels]` explains what devopsy
+- `--debug [environments [name or address] [--yaml] | capabilities | labels | imports]` explains what devopsy
   sees and computes. Targets carry `From` (where each value came from) for
   it. The capability catalog it prints (`cli.Capabilities`) lives with the
   code that calls them: a new capability or action goes there and in
@@ -114,27 +114,40 @@ user-facing behavior and keep it in sync with any change to it.
   where the environment only answers on `DEVOPSY_DOMAINS`.
   `DEVOPSY_HOST_RULE` stays unset without hosts, so labels' defaults apply.
 - Config (`internal/remote/config.go`): the project's `.devopsy/config.yaml`
-  (`project:`, `instances:`, `releases: {keep}`, `defaults:`, `targets:`),
-  its `config.local.yaml` over it, and the user-level
-  `~/.config/devopsy/config.yaml` (`defaults:`, `targets:`, `releases:`;
+  (`project:`, `instances:`, `releases: {keep}`, `defaults:`,
+  `environments:`), its `config.local.yaml` over it, and the user-level
+  `~/.config/devopsy/config.yaml` (`aliases:`; on servers `releases:`;
   never `~/.devopsy`: project discovery would take the home directory for a
-  project). Unknown keys are errors. Nothing else is read: older files
-  (targets.yaml) do nothing, and there is no migration code; the project
-  moves forward and moves its own servers by hand.
-- A project's name on servers is `project:`, required for anything remote,
-  never the checkout's folder (copies of templates would install under the
-  template's name). A target lives in `<project>[/<instance>]/<target>`
-  under the server's release root unless it sets `path:` (relative to the
-  root, or absolute; then no instance and no shared levels). Its compose
-  name is `<project>[-<instance>]-<target>` (`Target.ComposeName`); with its
-  own path, the path's parts joined with "-" (`traefik/main`:
-  `traefik-main`), or an absolute path's last part.
-- Instances: `@<instance>:<target>` or `DEVOPSY_INSTANCE` (both and
-  different: error); `instances: required` makes every remote command name
-  one, so a multi-site project never releases as itself by accident.
-- Patterns: target keys with `*` (one or more name characters); exact names
-  win, then the most literal characters; equal: error. `Targets()` lists
-  names only, `Patterns()` the patterns.
+  project). Unknown keys are errors, environments' too. Nothing else is
+  read and there is no migration code: older files and syntax do nothing,
+  and servers are moved by hand.
+- A target is an address, `@[<server>:][<instance>/]<environment>`
+  (`parseAddress`): the server ends at the first `:` (any SSH destination or
+  ssh alias, no `:` inside), the instance before the last `/`, an empty one
+  meaning none. What it leaves out comes from `DEVOPSY_SERVER_<ENVIRONMENT>`,
+  `DEVOPSY_SERVER`, the environment's `server:` (server) and
+  `DEVOPSY_INSTANCE`, from the caller's environment then the project's
+  `.env` (never for aliases). Missing server: error; instance per
+  `instances:` (`required`, `none`, or optional). The project's config
+  never lists instances or, usually, servers: those are deployment facts.
+- Names come only from project, instance and environment: compose name and
+  wildcard host `<project>[-<instance>]-<environment>`
+  (`Target.ComposeName`), directory `<project>/[<instance>/]<environment>`
+  under the server's release root. `path:` moves the directory only (then
+  no instance and no shared `.env` levels). `project:` is required for
+  anything remote, never the checkout's folder (template copies would
+  install under the template's name).
+- A first release of an instance the server lacks asks first
+  (`InstanceExistsScript`); `--release --yes` skips it. Releases print the
+  resolved target (`Target.Address`), which is also `DEVOPSY_TARGET` in
+  `target.env` and local steps.
+- Patterns: environment keys with `*` (one or more name characters); exact
+  names win, then the most literal characters; equal: error. `Targets()`
+  lists environments then aliases, `Patterns()` the patterns.
+- Aliases (user config): `{to: <address>, source: <checkout>}`, or
+  `project:` instead of source for commands only. Only a bare `@name` is an
+  alias; an environment of that exact name wins. The source's config gives
+  the project, environments and steps.
 - Release settings are the machine's, never a project's or a laptop's: the
   deploy user's `releases:` (`root`, default home; `keep` and `max_keep`,
   default 5), read on the server by the hidden `--release-settings`, which
@@ -146,25 +159,17 @@ user-facing behavior and keep it in sync with any change to it.
   removed from a container (its files can belong to container users), then
   the directory; asks for the target's name unless `--yes`, refuses a plain
   directory and the root.
-- User-level targets refuse release and rollback unless their `source:` is
-  the local project's directory (`ReleasesHere`, symlinks resolved): a
-  user-level target belongs to no project, and a release from anywhere else
-  would replace, say, a server's Traefik with whatever project it ran in.
-  Their project (name, instances, keep) comes from the source's config.yaml;
-  without source they need `path:`. Hosts can come from variables, so
-  public repositories need not name servers: `DEVOPSY_TARGET_HOST_<NAME>`
-  replaces a target's host, `DEVOPSY_TARGET_HOST` fills in a missing one,
-  from the caller's environment, then the project's `.env` (read for this
-  only; user-level targets ignore it, so a project cannot redirect them).
-  A target path without `current` but with `.devopsy/` is a plain
-  directory: commands run there, release scripts refuse before creating
-  anything.
-- `defaults:` in a config file gives that file's targets their `mode`,
-  `source`, steps, `releases` and `env` unless they set their own; `env`
-  merges key by key, `KEY: ~` removes a default and `""` stays an empty
-  value (hence parsing nodes: a string map would make both ""). The
-  project's defaults (config.local.yaml's over config.yaml's) and the
-  user-level file's never mix. host and path are never defaults.
+- Aliases refuse release and rollback unless their `source:` is the local
+  project's directory (`ReleasesHere`, symlinks resolved): a release from
+  anywhere else would replace, say, a server's Traefik with whatever project
+  it ran in. A target path without `current` but with `.devopsy/` is a
+  plain directory: commands run there, release scripts refuse before
+  creating anything.
+- `defaults:` in a project's config gives its environments their `mode`,
+  steps, `releases` and `env` unless they set their own; `env` merges key
+  by key, `KEY: ~` removes a default and `""` stays an empty value (hence
+  parsing nodes: a string map would make both ""). config.local.yaml's
+  defaults go over config.yaml's. server and path are never defaults.
 - Releases write `COMPOSE_PROJECT_NAME` into `target.env` when compose.yaml has
   no name: devopsy run by hand in `current` named the project "current".
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
@@ -225,7 +230,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   scripts only need `sh`, `awk` and `flock` on the server, so any server
   version works; edits replace keys in place (appending reorders files) and
   take the release lock, since `deploy` commands write their own secrets.
-  User-level targets never read values from a project's `.env`, as for hosts.
+  Aliases never read values from a project's `.env`, as for servers.
 - Capabilities (`devopsy --capability <name> <action>`, hidden like
   `--complete`): interfaces devopsy defines and projects implement in
   `.devopsy/capabilities/<name>/<action>`, so devopsy asks a project without
@@ -279,7 +284,7 @@ a test project whose `.devopsy/config.local.yaml` points at
 
 Roles and imports, end to end on that machine: release devopsy-template-traefik
 (its `config.local.yaml` pointing there too), then a template importing from
-it (whoami, with `DEVOPSY_TARGET_HOST`), and check its `target.env`,
+it (whoami, with `DEVOPSY_SERVER`), and check its `target.env`,
 `devopsy @<target> --debug imports`, `devopsy @<traefik target> domains
 <project>`, a target that sets the variable empty, a rollback, and a
 release with Traefik stopped (fails after 30 s, `current` unchanged).

@@ -13,95 +13,160 @@ func TestLoadTarget(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, ConfigFile), `
 project: app
-targets:
-  prod:
-    host: deploy@203.0.113.10
+environments:
+  prod: {}
+  staging:
+    server: devopsy@staging
   custom:
-    host: vm1
     path: /srv/app-custom/
   relative:
-    host: vm1
     path: elsewhere/x
   bad-mode:
-    host: vm1
     mode: rsync
   root:
-    host: vm1
     path: /
   up:
-    host: vm1
     path: ../x
-  nohost: {}
 `)
-	tg, err := LoadTarget(dir, "prod", "", nil)
+	tg, err := LoadTarget(dir, "vm1:prod", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tg.Mode != ModeBuild || tg.Path != "app/prod" || tg.Name != "prod" || tg.ComposeName() != "app-prod" {
+	if tg.Mode != ModeBuild || tg.Path != "app/prod" || tg.Name != "prod" || tg.Host != "vm1" || tg.Address != "vm1:prod" || tg.ComposeName() != "app-prod" {
 		t.Fatalf("prod: %+v", tg)
 	}
 	if len(tg.Levels) != 1 || tg.Levels[0].Dir != "app" || tg.Levels[0].Link != "project.env" {
 		t.Fatalf("levels: %+v", tg.Levels)
 	}
-	if tg, err := LoadTarget(dir, "custom", "", nil); err != nil || tg.Path != "/srv/app-custom" || len(tg.Levels) != 0 || tg.ComposeName() != "app-custom" {
+	if tg, err := LoadTarget(dir, "staging", nil); err != nil || tg.Host != "devopsy@staging" {
+		t.Fatalf("server from config: %+v %v", tg, err)
+	}
+	// A path moves the directory, never the name.
+	if tg, err := LoadTarget(dir, "vm1:custom", nil); err != nil || tg.Path != "/srv/app-custom" || len(tg.Levels) != 0 || tg.ComposeName() != "app-custom" {
 		t.Fatalf("absolute path: %+v %v", tg, err)
 	}
-	if tg, err := LoadTarget(dir, "relative", "", nil); err != nil || tg.Path != "elsewhere/x" || tg.ComposeName() != "elsewhere-x" {
+	if tg, err := LoadTarget(dir, "vm1:relative", nil); err != nil || tg.Path != "elsewhere/x" || tg.ComposeName() != "app-relative" {
 		t.Fatalf("relative path: %+v %v", tg, err)
 	}
-	for _, name := range []string{"bad-mode", "root", "up", "nohost", "missing", "bad name"} {
-		if _, err := LoadTarget(dir, name, "", nil); err == nil {
-			t.Errorf("%s: want an error", name)
+	for _, addr := range []string{"vm1:bad-mode", "vm1:root", "vm1:up", "vm1:missing", "prod", ":prod", "vm1:a:b/prod", "vm1:Bad/prod", "vm1:"} {
+		if _, err := LoadTarget(dir, addr, nil); err == nil {
+			t.Errorf("%s: want an error", addr)
 		}
 	}
-	if _, err := LoadTarget(t.TempDir(), "prod", "", nil); err == nil || !strings.Contains(err.Error(), "no targets defined") {
-		t.Errorf("no config: %v", err)
+	if _, err := LoadTarget(dir, "prod", nil); err == nil || !strings.Contains(err.Error(), "no server for @prod") {
+		t.Errorf("no server: %v", err)
 	}
-
+	if _, err := LoadTarget(t.TempDir(), "vm1:prod", nil); err == nil {
+		t.Errorf("no config: want an error")
+	}
 	// A leftover targets.yaml does nothing.
 	old := t.TempDir()
 	write(t, filepath.Join(old, "targets.yaml"), "prod:\n  host: h\n  path: /srv/x\n")
-	if _, err := LoadTarget(old, "prod", "", nil); err == nil {
+	if _, err := LoadTarget(old, "h:prod", nil); err == nil {
 		t.Error("targets.yaml was read")
+	}
+}
+
+func TestServerAndInstanceVariables(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), "project: shop\nenvironments:\n  prod: {}\n  staging-eu: {}\n")
+	env := map[string]string{}
+	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	load := func(addr string) *Target {
+		t.Helper()
+		tg, err := LoadTarget(dir, addr, projectEnv)
+		if err != nil {
+			t.Fatalf("%s: %v", addr, err)
+		}
+		return tg
+	}
+	if got := EnvironmentVar("staging-eu"); got != "DEVOPSY_SERVER_STAGING_EU" {
+		t.Errorf("EnvironmentVar: %s", got)
+	}
+	env["DEVOPSY_SERVER"] = "vm1"
+	env["DEVOPSY_INSTANCE"] = "a"
+	if tg := load("prod"); tg.Host != "vm1" || tg.Instance != "a" || tg.Address != "vm1:a/prod" || tg.Path != "shop/a/prod" {
+		t.Errorf("from .env: %+v", tg)
+	}
+	env["DEVOPSY_SERVER_STAGING_EU"] = "eu"
+	if tg := load("staging-eu"); tg.Host != "eu" {
+		t.Errorf("per environment: %s", tg.Host)
+	}
+	if tg := load("vm2:prod"); tg.Host != "vm2" || tg.Instance != "a" {
+		t.Errorf("address server, variable instance: %+v", tg)
+	}
+	if tg := load("vm2:/prod"); tg.Instance != "" || tg.Address != "vm2:prod" {
+		t.Errorf("explicitly none: %+v", tg)
+	}
+	if tg := load("b/prod"); tg.Instance != "b" || tg.Host != "vm1" {
+		t.Errorf("address instance: %+v", tg)
+	}
+	t.Setenv("DEVOPSY_SERVER", "caller")
+	if tg := load("prod"); tg.Host != "caller" {
+		t.Errorf("caller over .env: %s", tg.Host)
+	}
+}
+
+func TestInstancesSetting(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	t.Setenv("DEVOPSY_INSTANCE", "")
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), "project: shop\ninstances: required\nenvironments:\n  prod: {}\n  fixed: {path: /srv/fixed}\n")
+	if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), "shop needs an instance") {
+		t.Fatalf("required: %v", err)
+	}
+	if _, err := LoadTarget(dir, "vm1:/prod", nil); err == nil {
+		t.Fatal("required, explicitly none")
+	}
+	if tg, err := LoadTarget(dir, "vm1:site1/prod", nil); err != nil || tg.Path != "shop/site1/prod" || tg.ComposeName() != "shop-site1-prod" || len(tg.Levels) != 2 {
+		t.Fatalf("required, given: %+v %v", tg, err)
+	}
+	if _, err := LoadTarget(dir, "vm1:fixed", nil); err != nil {
+		t.Fatalf("an own path needs no instance: %v", err)
+	}
+	if tg, err := DescribeTarget(dir, "prod", nil); err != nil || tg.Path != "shop/<instance>/prod" {
+		t.Fatalf("describe: %+v %v", tg, err)
+	}
+	write(t, filepath.Join(dir, LocalConfigFile), "instances: none\n")
+	if _, err := LoadTarget(dir, "vm1:a/prod", nil); err == nil || !strings.Contains(err.Error(), "instances: none") {
+		t.Fatalf("none: %v", err)
+	}
+	t.Setenv("DEVOPSY_INSTANCE", "a")
+	if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil {
+		t.Fatal("none, from the variable")
+	}
+	if tg, err := LoadTarget(dir, "vm1:/prod", nil); err != nil || tg.Instance != "" {
+		t.Fatalf("none, explicitly: %+v %v", tg, err)
 	}
 }
 
 func TestConfigErrors(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	for name, config := range map[string]string{
-		"no project":         "targets:\n  prod: {host: h}\n",
-		"bad project":        "project: My App\ntargets:\n  prod: {host: h}\n",
-		"unknown key":        "project: app\nprod: {host: h}\n",
-		"root in a project":  "project: app\nreleases: {root: /srv}\ntargets:\n  prod: {host: h}\n",
-		"max_keep":           "project: app\nreleases: {max_keep: 9}\ntargets:\n  prod: {host: h}\n",
-		"instances":          "project: app\ninstances: maybe\ntargets:\n  prod: {host: h}\n",
-		"path in defaults":   "project: app\ndefaults: {path: /srv/x}\ntargets:\n  prod: {host: h}\n",
-		"unknown step":       "project: app\ntargets:\n  prod: {host: h, release: {remotes: deploy}}\n",
-		"bad target pattern": "project: app\ntargets:\n  \"pr/*\": {host: h}\n",
+		"no project":        "environments:\n  prod: {}\n",
+		"bad project":       "project: My App\nenvironments:\n  prod: {}\n",
+		"unknown key":       "project: app\nprod: {}\n",
+		"targets":           "project: app\ntargets:\n  prod: {}\n",
+		"host":              "project: app\nenvironments:\n  prod: {host: h}\n",
+		"root in a project": "project: app\nreleases: {root: /srv}\nenvironments:\n  prod: {}\n",
+		"max_keep":          "project: app\nreleases: {max_keep: 9}\nenvironments:\n  prod: {}\n",
+		"instances":         "project: app\ninstances: maybe\nenvironments:\n  prod: {}\n",
+		"server in defaults": "project: app\ndefaults: {server: vm1}\nenvironments:\n  prod: {}\n",
+		"unknown step":      "project: app\nenvironments:\n  prod: {release: {remotes: deploy}}\n",
+		"bad pattern":       "project: app\nenvironments:\n  \"pr/*\": {}\n",
+		"aliases":           "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
-		if _, err := LoadTarget(dir, "prod", "", nil); err == nil {
+		if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
 }
 
-func TestLoadTargetLocalAndDefaults(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DEVOPSY_HOME", home)
-	t.Setenv("HOME", home)
-	write(t, filepath.Join(home, "src", "traefik", ".devopsy", ConfigFile), "project: traefik\n")
-	write(t, filepath.Join(home, ConfigFile), `
-defaults:
-  mode: image
-  source: ~/src/traefik
-  release: {remote: deploy}
-targets:
-  vm1-traefik:
-    host: devopsy@vm1
-    path: /srv/traefik
-`)
+func TestDefaultsAndLocal(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, ConfigFile), `
 project: app
@@ -114,32 +179,29 @@ defaults:
     DEVOPSY_WILDCARD_DOMAIN: vm1.example.com
   release: {before: image, remote: deploy}
   rollback: {remote: deploy}
-targets:
+environments:
   prod:
-    host: vm1
     env:
       SITE: prod
   demo:
-    host: vm1
     releases: {keep: 1}
     release: {remote: deploy --fast}
     env:
       DEVOPSY_WILDCARD_DOMAIN: ""
       CERTRESOLVER: ~
   staging:
-    host: vm1
+    server: vm1
 `)
 	write(t, filepath.Join(dir, LocalConfigFile), `
 defaults:
   env:
     SITE: local
-targets:
+environments:
   staging:
-    host: my-test-vm
-  mine:
-    host: laptop-vm
+    server: my-test-vm
+  mine: {}
 `)
-	prod, err := LoadTarget(dir, "prod", "", nil)
+	prod, err := LoadTarget(dir, "vm1:prod", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +211,7 @@ targets:
 	if prod.Env["SITE"] != "prod" || prod.Env["CERTRESOLVER"] != "acmedns" || prod.Env["DEVOPSY_WILDCARD_DOMAIN"] != "vm1.example.com" {
 		t.Errorf("prod env: %v", prod.Env)
 	}
-	demo, err := LoadTarget(dir, "demo", "", nil)
+	demo, err := LoadTarget(dir, "vm1:demo", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,170 +224,90 @@ targets:
 	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Remote != "deploy --fast" || len(demo.Release.Before) != 0 {
 		t.Errorf("demo: %+v", demo)
 	}
-	if staging, err := LoadTarget(dir, "staging", "", nil); err != nil || staging.Host != "my-test-vm" {
-		t.Errorf("local replaces a target: %+v %v", staging, err)
+	if staging, err := LoadTarget(dir, "staging", nil); err != nil || staging.Host != "my-test-vm" {
+		t.Errorf("local replaces an environment: %+v %v", staging, err)
 	}
-	if _, err := LoadTarget(dir, "mine", "", nil); err != nil {
-		t.Errorf("local-only target: %v", err)
-	}
-
-	// The user-level file's defaults, for its targets only.
-	traefik, err := LoadTarget(dir, "vm1-traefik", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !traefik.User || traefik.Mode != ModeImage || traefik.Source != "~/src/traefik" || traefik.Env["CERTRESOLVER"] != "" {
-		t.Errorf("user-level: %+v", traefik)
+	if _, err := LoadTarget(dir, "vm1:mine", nil); err != nil {
+		t.Errorf("local-only environment: %v", err)
 	}
 }
 
-func TestUserTargets(t *testing.T) {
+func TestAliases(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
 	src := t.TempDir()
-	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ndefaults:\n  mode: image\n  release: {remote: deploy}\ntargets: {}\n")
+	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ndefaults:\n  mode: image\n  release: {remote: deploy}\nenvironments:\n  main: {}\n")
 	write(t, filepath.Join(home, ConfigFile), `
-targets:
-  vm1-traefik:
-    host: devopsy@vm1
-    source: `+src+`
-  old:
-    host: devopsy@vm1
-    path: /srv/traefik
-  nowhere:
-    host: devopsy@vm1
-  prod:
-    host: user-level
-    path: /srv/user-prod
+aliases:
+  vm1-traefik: {source: `+src+`, to: "vm1:main"}
+  bare: {project: thing, to: "vm2:x/live"}
+  prod: {project: thing, to: "vm3:live"}
+  nothing: {to: "vm1:main"}
 `)
+	tr, err := LoadTarget("", "vm1-traefik", nil)
+	if err != nil || !tr.User || tr.Alias != "vm1-traefik" || tr.Address != "vm1:main" || tr.Path != "traefik/main" || tr.ComposeName() != "traefik-main" || tr.Mode != ModeImage || tr.Release == nil {
+		t.Fatalf("alias with source: %+v %v", tr, err)
+	}
+	if ok, _ := tr.ReleasesHere(""); ok {
+		t.Error("an alias releases only from its source")
+	}
+	if ok, why := tr.ReleasesHere(filepath.Join(src, ".devopsy")); !ok {
+		t.Errorf("from its source: %s", why)
+	}
+	if b, err := LoadTarget("", "bare", nil); err != nil || b.Path != "thing/x/live" || b.Host != "vm2" {
+		t.Fatalf("alias with project: %+v %v", b, err)
+	}
+	if _, err := LoadTarget("", "nothing", nil); err == nil {
+		t.Fatal("alias without source or project")
+	}
+	if _, err := LoadTarget("", "missing", nil); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
+		t.Fatalf("missing alias should list the others: %v", err)
+	}
+	// Inside a project, its environment of the same name wins.
 	project := t.TempDir()
-	write(t, filepath.Join(project, ConfigFile), "project: app\ntargets:\n  prod: {host: vm1}\n")
-
-	if prod, err := LoadTarget(project, "prod", "", nil); err != nil || prod.User || prod.Host != "vm1" {
-		t.Fatalf("project target must win: %+v %v", prod, err)
+	write(t, filepath.Join(project, ConfigFile), "project: app\nenvironments:\n  prod: {server: vm1}\n")
+	if p, err := LoadTarget(project, "prod", nil); err != nil || p.User || p.Host != "vm1" {
+		t.Fatalf("project environment wins: %+v %v", p, err)
 	}
-	tr, err := LoadTarget("", "vm1-traefik", "", nil)
-	if err != nil || !tr.User || tr.Path != "traefik/vm1-traefik" || tr.ComposeName() != "traefik-vm1-traefik" || tr.Mode != ModeImage || tr.Release == nil || tr.Release.Remote != "deploy" {
-		t.Fatalf("from its source's project: %+v %v", tr, err)
+	if v, err := LoadTarget(project, "vm1-traefik", nil); err != nil || !v.User {
+		t.Fatalf("alias from a project: %+v %v", v, err)
 	}
-	if old, err := LoadTarget("", "old", "", nil); err != nil || old.Path != "/srv/traefik" || old.ComposeName() != "" {
-		t.Fatalf("with a path: %+v %v", old, err)
+	names := []string{}
+	for _, tg := range Targets(project) {
+		names = append(names, tg.Name)
 	}
-	if _, err := LoadTarget("", "nowhere", "", nil); err == nil || !strings.Contains(err.Error(), "path: or source:") {
-		t.Fatalf("neither: %v", err)
-	}
-	if _, err := LoadTarget("", "missing", "", nil); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
-		t.Fatalf("missing target should list the others: %v", err)
+	if strings.Join(names, " ") != "prod bare nothing prod vm1-traefik" {
+		t.Errorf("Targets: %q", names)
 	}
 }
 
-func TestLoadTargetHostVars(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, ConfigFile), "targets:\n  vm1-traefik:\n    path: /srv/traefik\n")
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, ConfigFile), `
-project: app
-targets:
-  prod: {}
-  staging-eu:
-    host: devopsy@staging
-`)
-	env := map[string]string{}
-	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
-	host := func(name string) string {
-		t.Helper()
-		tg, err := LoadTarget(dir, name, "", projectEnv)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return tg.Host
-	}
-	if got := HostVar("staging-eu"); got != "DEVOPSY_TARGET_HOST_STAGING_EU" {
-		t.Errorf("HostVar: %s", got)
-	}
-	if got := host("prod"); !strings.Contains(got, "DEVOPSY_TARGET_HOST_PROD or DEVOPSY_TARGET_HOST") {
-		t.Errorf("no host should name the variables: %s", got)
-	}
-	env["DEVOPSY_TARGET_HOST"] = "devopsy@default"
-	if got := host("prod"); got != "devopsy@default" {
-		t.Errorf("default: %s", got)
-	}
-	if got := host("staging-eu"); got != "devopsy@staging" {
-		t.Errorf("default must not replace a host: %s", got)
-	}
-	env["DEVOPSY_TARGET_HOST_STAGING_EU"] = "devopsy@eu"
-	if got := host("staging-eu"); got != "devopsy@eu" {
-		t.Errorf("target variable: %s", got)
-	}
-	t.Setenv("DEVOPSY_TARGET_HOST_STAGING_EU", "devopsy@caller")
-	if got := host("staging-eu"); got != "devopsy@caller" {
-		t.Errorf("caller: %s", got)
-	}
-	if got := host("vm1-traefik"); !strings.HasPrefix(got, "error: ") {
-		t.Errorf("user target used the project's .env: %s", got)
-	}
-}
-
-func TestPatternsAndInstances(t *testing.T) {
+func TestPatterns(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, ConfigFile), `
 project: shop
-targets:
-  prod: {host: h}
-  "pr-*": {host: h, releases: {keep: 1}}
-  "pr-big-*": {host: big}
-  "*-a": {host: x}
-  "x-*": {host: y}
+environments:
+  prod: {}
+  "pr-*": {releases: {keep: 1}}
+  "pr-big-*": {server: big}
+  "*-a": {}
+  "x-*": {}
 `)
-	pr, err := LoadTarget(dir, "pr-123", "", nil)
+	pr, err := LoadTarget(dir, "vm1:pr-123", nil)
 	if err != nil || pr.Name != "pr-123" || pr.Pattern != "pr-*" || pr.Path != "shop/pr-123" || pr.Keep != 1 || pr.ComposeName() != "shop-pr-123" {
 		t.Fatalf("pattern: %+v %v", pr, err)
 	}
-	if big, err := LoadTarget(dir, "pr-big-1", "", nil); err != nil || big.Host != "big" {
+	if big, err := LoadTarget(dir, "pr-big-1", nil); err != nil || big.Host != "big" {
 		t.Fatalf("most specific: %+v %v", big, err)
 	}
-	if _, err := LoadTarget(dir, "x-a", "", nil); err == nil || !strings.Contains(err.Error(), "several patterns") {
+	if _, err := LoadTarget(dir, "vm1:x-a", nil); err == nil || !strings.Contains(err.Error(), "several patterns") {
 		t.Fatalf("tie: %v", err)
 	}
-	if _, err := LoadTarget(dir, "pr-", "", nil); err == nil {
+	if _, err := LoadTarget(dir, "vm1:pr-", nil); err == nil {
 		t.Fatal("* matches one or more")
-	}
-
-	// An instance: its own directory level and name.
-	b, err := LoadTarget(dir, "prod", "b", nil)
-	if err != nil || b.Path != "shop/b/prod" || b.ComposeName() != "shop-b-prod" || len(b.Levels) != 2 || b.Levels[1].Dir != "shop/b" {
-		t.Fatalf("instance: %+v %v", b, err)
-	}
-	if _, err := LoadTarget(dir, "prod", "Bad_Name", nil); err == nil {
-		t.Fatal("bad instance name")
-	}
-
-	// instances: required.
-	write(t, filepath.Join(dir, LocalConfigFile), "instances: required\ntargets:\n  fixed: {host: h, path: /srv/fixed}\n")
-	if _, err := LoadTarget(dir, "prod", "", nil); err == nil || !strings.Contains(err.Error(), "devopsy @<instance>:prod") {
-		t.Fatalf("required: %v", err)
-	}
-	if tg, err := LoadTarget(dir, "prod", "site1", nil); err != nil || tg.Path != "shop/site1/prod" {
-		t.Fatalf("required, given: %+v %v", tg, err)
-	}
-	if _, err := LoadTarget(dir, "fixed", "", nil); err != nil {
-		t.Fatalf("an explicit path needs no instance: %v", err)
-	}
-	if _, err := LoadTarget(dir, "fixed", "a", nil); err == nil {
-		t.Fatal("an explicit path takes no instance")
-	}
-	if tg, err := DescribeTarget(dir, "prod", nil); err != nil || tg.Path != "shop/<instance>/prod" {
-		t.Fatalf("describe: %+v %v", tg, err)
 	}
 	if pats := Patterns(dir); len(pats) != 4 {
 		t.Errorf("patterns: %v", pats)
-	}
-	for _, tg := range Targets(dir) {
-		if strings.Contains(tg.Name, "*") {
-			t.Errorf("pattern listed as a target: %s", tg.Name)
-		}
 	}
 }
 
