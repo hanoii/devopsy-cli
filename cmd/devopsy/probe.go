@@ -73,6 +73,7 @@ line to run, like devopsy-traefik's domains.
 // runPrepareRelease implements the hidden --prepare-release, run by the
 // release script on the server (cli.PrepareRelease).
 func runPrepareRelease(cwd string, color bool) int {
+	cli.Progress = func(s string) { fmt.Fprintln(os.Stderr, s) }
 	said, err := cli.PrepareRelease(cwd, os.Environ())
 	for _, s := range said {
 		fmt.Fprintln(os.Stderr, s)

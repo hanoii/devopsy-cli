@@ -176,8 +176,11 @@ func TestPrepareRelease(t *testing.T) {
 	}
 	WaitForExporters = 10 * time.Second
 	root = release(map[string]string{"compose.yaml": compose})
-	if said, err := PrepareRelease(root, nil); err != nil || !strings.Contains(strings.Join(said, "\n"), "waiting up to") {
-		t.Fatalf("waited: %v %q", err, said)
+	var progress []string
+	Progress = func(s string) { progress = append(progress, s) }
+	defer func() { Progress = func(string) {} }()
+	if _, err := PrepareRelease(root, nil); err != nil || !strings.Contains(strings.Join(progress, "\n"), "waiting up to") {
+		t.Fatalf("waited: %v %q", err, progress)
 	}
 
 	// Only in a release.
