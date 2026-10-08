@@ -476,7 +476,8 @@ its own `defaults:` for them. They belong to no project, so they only
 `--release` or `--rollback` with `source:`, the local directory of the
 project they release, and only from there; anywhere else, a release would
 upload whatever project you stand in. `~/` is your home directory. The
-project's name and settings come from that source's `config.yaml`:
+project's name and settings come from that source's `config.yaml`, and its
+`defaults:` (mode, release steps...) apply under the target's own:
 
 ```yaml
 # ~/.config/devopsy/config.yaml
