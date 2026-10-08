@@ -93,7 +93,7 @@ user-facing behavior and keep it in sync with any change to it.
   compose project per host holds, `devopsy.export.<KEY>` a fact on running
   containers, `devopsy.import.<VAR>=<role or project>/<KEY>[?]` copies one
   into a release's `target.env`. devopsy knows no role or key names:
-  `proxy` and `WILDCARD_DOMAIN` are devopsy-traefik's convention. The
+  `proxy` and `WILDCARD_DOMAIN` are devopsy-template-traefik's convention. The
   hidden `--prepare-release` checks the role and resolves imports on the
   server, in the new release before it becomes current (`PrepareScript`,
   only when the compose files mention the labels, so older servers release
@@ -213,7 +213,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   request, from where it runs. A tool with plain arguments, not a contract:
   it knows no proxy. It replaced `devopsy @target --domains` (until
   v0.17.0), whose proxy-specific half (routes, resolvers, CNAMEs, retries)
-  is now devopsy-traefik's own `domains` command, which prints the
+  is now devopsy-template-traefik's own `domains` command, which prints the
   `--probe` line to run. A server never drives local devopsy: devopsy execs
   ssh, so it cannot watch output, and a server must not make a laptop act.
 
@@ -250,8 +250,8 @@ devopsy-server (see its AGENTS.md), a linux/arm64 build installed in it, and
 a test project whose `.devopsy/targets.local.yaml` points at
 `devopsy@devopsy-test@orb`. OrbStack's SSH needs no keys.
 
-Roles and imports, end to end on that machine: release devopsy-traefik
-(its `targets.local.yaml` pointing there too), then a recipe importing from
+Roles and imports, end to end on that machine: release devopsy-template-traefik
+(its `targets.local.yaml` pointing there too), then a template importing from
 it (whoami, with `DEVOPSY_TARGET_HOST`), and check its `target.env`,
 `devopsy @<target> --debug imports`, `devopsy @<traefik target> domains
 <project>`, a target that sets the variable empty, a rollback, and a
