@@ -5,7 +5,7 @@
 #
 # or save it as _devopsy in a directory of $fpath. It asks devopsy itself
 # (devopsy --complete <words>) for targets, commands, flags and, through
-# docker compose, services. The project's targets, user-level targets,
+# docker compose, services. Environments, aliases,
 # project commands, devopsy's own commands and docker compose's are listed
 # in their own groups, in that order.
 
@@ -39,7 +39,7 @@ _devopsy() {
     zstyle -m ":completion:${curcontext}:descriptions" format '*' ||
         zstyle ":completion:*:*:devopsy:*:descriptions" format '%B%d%b'
     (( ${#targets} )) && _describe -t devopsy-targets target targets $opts && ret=0
-    (( ${#usertargets} )) && _describe -t devopsy-user-targets 'user-level target' usertargets $opts && ret=0
+    (( ${#usertargets} )) && _describe -t devopsy-user-targets alias usertargets $opts && ret=0
     (( ${#project} )) && _describe -t project-commands 'project command' project $opts && ret=0
     (( ${#builtin} )) && _describe -t devopsy-commands devopsy builtin $opts && ret=0
     (( ${#compose} )) && _describe -t compose 'docker compose' compose $opts && ret=0

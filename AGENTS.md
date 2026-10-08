@@ -70,7 +70,12 @@ user-facing behavior and keep it in sync with any change to it.
   Completion never connects to
   servers: after `@target`, services come from the local compose files (a
   an alias's `source:` checkout, from any directory).
-  New built-ins and `@target` subcommands go in its lists too.
+  New built-ins and `@target` subcommands go in its lists too. The scripts run
+  in real shells in `TestCompletionShells` (each one installed: bash,
+  macOS's /bin/bash 3.2, zsh with `_describe` stubbed, since compsys needs
+  a terminal, and fish's `complete -C`); CI installs zsh and fish. bash
+  splits words at ":" (targets use it), so its script rebuilds them from
+  `COMP_LINE`.
 - Color only on a terminal and without `NO_COLOR` (`styleFor`); help is
   colored by its layout (headings end with `:`, entries start with two
   spaces), so keep that layout when editing help texts.

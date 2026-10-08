@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # The completion scripts are tested in each shell found (bash is there).
+      - run: sudo apt-get update -q && sudo apt-get install -yq zsh fish
       - run: go vet ./...
       - run: go test -count=1 ./...
       - run: shellcheck -s sh install.sh

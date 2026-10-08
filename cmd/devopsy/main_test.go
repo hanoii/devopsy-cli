@@ -705,3 +705,84 @@ func TestInitAndSchema(t *testing.T) {
 		t.Fatalf("user schema (%d):\n%s", code, out)
 	}
 }
+
+// The completion scripts in real shells, each one found on this machine:
+// what a Tab offers for targets with servers and instances (bash splits
+// words at ":"), and after one.
+func TestCompletionShells(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dot := filepath.Join(tmp, "app", ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod: {}\n  staging: {}\n", 0o644)
+	bin := t.TempDir()
+	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
+		t.Fatal(err)
+	}
+	// docker's own completion, as cobra ends it: no candidates.
+	write(t, filepath.Join(bin, "docker"), "#!/bin/sh\necho :4\n", 0o755)
+	path := bin + ":/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"
+	cases := []struct{ line, want string }{
+		{"devopsy @vm1:", "@vm1:prod @vm1:staging"},
+		{"devopsy @vm1:b/st", "@vm1:b/staging"},
+		{"devopsy -v @st", "@staging"},
+		{"devopsy @vm1:prod --shell-h", "--shell-host"},
+	}
+	run := func(t *testing.T, shell string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(shell, args...)
+		cmd.Dir = filepath.Join(tmp, "app")
+		cmd.Env = []string{"PATH=" + path, "HOME=" + tmp, "DEVOPSY_HOME=" + t.TempDir()}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", shell, err, out)
+		}
+		return string(out)
+	}
+	scripts := map[string]string{}
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		out, _ := runDevopsy(t, tmp, nil, "--completion", shell)
+		file := filepath.Join(tmp, "devopsy."+shell)
+		write(t, file, out, 0o644)
+		scripts[shell] = file
+	}
+
+	for _, shell := range []string{"/bin/bash", "bash", "zsh", "fish"} {
+		found, err := exec.LookPath(shell)
+		if err != nil {
+			t.Logf("%s: not installed, skipped", shell)
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			for _, c := range cases {
+				var out string
+				switch filepath.Base(shell) {
+				case "bash":
+					// bash's own word breaks, ":" included.
+					out = run(t, found, "-c", `source "$1"; COMP_WORDBREAKS=$' \t\n"'"'"'@><=;|&(:'; COMP_LINE="$2"; COMP_POINT=${#2}; _devopsy; echo "${COMPREPLY[*]}"`, "sh", scripts["bash"], c.line)
+					// bash completes what follows the last ":" in the word.
+					if i := strings.LastIndex(c.line, ":"); i > strings.LastIndex(c.line, " ") {
+						prefix := c.line[strings.LastIndex(c.line, " ")+1 : i+1]
+						var words []string
+						for _, w := range strings.Fields(out) {
+							words = append(words, prefix+w)
+						}
+						out = strings.Join(words, " ")
+					}
+				case "zsh":
+					// compsys needs a terminal: _describe prints what it gets.
+					out = run(t, found, "-c", `_describe() { local a=$4 i; for i in "${(@P)a}"; do [[ $i =~ '^(([\\].|[^:\\])*)' ]] && i=$match[1]; print -r -- "${i//\\:/:}"; done; }
+zstyle() { return 0 }; _files() { return 1 }; compdef() { : }
+source "$1"; words=(${(z)2}); [[ $2 == *' ' ]] && words+=(''); CURRENT=${#words}; _devopsy`, "zsh", scripts["zsh"], c.line)
+				case "fish":
+					out = run(t, found, "-c", `source $argv[1]; complete -C $argv[2] | string replace -r '\t.*' ''`, scripts["fish"], c.line)
+				}
+				if got := strings.Join(strings.Fields(out), " "); got != c.want {
+					t.Errorf("%q: %q, want %q", c.line, got, c.want)
+				}
+			}
+		})
+	}
+}
