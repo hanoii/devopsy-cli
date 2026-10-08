@@ -75,9 +75,9 @@ type Target struct {
 	// Name is the environment's name (an alias's own name in Targets()).
 	Name string `yaml:"-"`
 	// Host is the server: an SSH destination or ~/.ssh/config alias, from
-	// the address, DEVOPSY_SERVER_<ENVIRONMENT>, DEVOPSY_SERVER, or the
-	// environment's server:.
-	Host string `yaml:"server"`
+	// the address, DEVOPSY_SERVER_<ENVIRONMENT> or DEVOPSY_SERVER. Never in
+	// a project's config: where it runs is a deployment fact.
+	Host string `yaml:"-"`
 	// Path is the directory on the server: relative to its release root,
 	// or absolute. Without one, <project>[/<instance>]/<environment>.
 	Path string `yaml:"path"`
@@ -282,8 +282,8 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			if err != nil {
 				return nil, err
 			}
-			if t != nil && (t.Host != "" || t.Path != "") {
-				return nil, fmt.Errorf("%s: defaults: server and path belong to each environment", file)
+			if t != nil && t.Path != "" {
+				return nil, fmt.Errorf("%s: defaults: path belongs to each environment", file)
 			}
 			if t != nil {
 				t.From = origins(t, "defaults in "+file)
@@ -341,9 +341,11 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
-			case "server", "path", "mode", "env", "release", "rollback", "releases":
+			case "path", "mode", "env", "release", "rollback", "releases":
+			case "server":
+				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (server, path, mode, env, release, rollback, releases)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, releases)", file, name, k)
 			}
 		}
 	}
@@ -371,7 +373,6 @@ func origins(t *Target, from string) map[string]string {
 			o[field] = from
 		}
 	}
-	set("server", t.Host != "")
 	set("path", t.Path != "")
 	set("mode", t.Mode != "")
 	set("release", t.Release != nil)
@@ -597,6 +598,17 @@ func match(envs map[string]*Target, name string) (*Target, string, error) {
 	return best, bestKey, nil
 }
 
+// PatternVar is the server variable of an environment pattern: its literal
+// part, * and the separators next to it left out (pr-*: DEVOPSY_SERVER_PR,
+// pr-big-*: DEVOPSY_SERVER_PR_BIG); "" for "*" alone.
+func PatternVar(pattern string) string {
+	name := strings.Trim(strings.ReplaceAll(pattern, "*", ""), "-_.")
+	if name == "" || pattern == "" {
+		return ""
+	}
+	return EnvironmentVar(name)
+}
+
 // ServerVar is the default server; ServerVar_<ENVIRONMENT> one
 // environment's (EnvironmentVar).
 const ServerVar = "DEVOPSY_SERVER"
@@ -763,8 +775,8 @@ func parseAddress(s string) (address, error) {
 // LoadTarget resolves an address (what follows @) for a command.
 //
 // What the address leaves out comes from variables: the server from
-// EnvironmentVar(environment), then ServerVar, then the environment's
-// server:; the instance from InstanceVar. They are read from the caller's
+// EnvironmentVar(environment), then ServerVar; the instance from
+// InstanceVar. They are read from the caller's
 // environment, then from projectEnv (the project's .devopsy/.env; nil for
 // none), never for an alias.
 func LoadTarget(projectDir, addr string, projectEnv func(string) (string, bool)) (*Target, error) {
@@ -900,15 +912,20 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		t.From["instance"] = from
 	}
 
-	// The server.
-	switch v, k := lookup(EnvironmentVar(a.env)); {
-	case a.server != "":
+	// The server: the address, else the environment's variable, its
+	// pattern's (pr-*: DEVOPSY_SERVER_PR), then DEVOPSY_SERVER.
+	if a.server != "" {
 		t.Host, t.From["server"] = a.server, "the address"
-	case v != "":
-		t.Host, t.From["server"] = v, k
-	default:
-		if v, k := lookup(ServerVar); v != "" {
-			t.Host, t.From["server"] = v, k
+	} else {
+		vars := []string{EnvironmentVar(a.env)}
+		if pv := PatternVar(t.Pattern); pv != "" {
+			vars = append(vars, pv)
+		}
+		for _, name := range append(vars, ServerVar) {
+			if v, k := lookup(name); v != "" {
+				t.Host, t.From["server"] = v, k
+				break
+			}
 		}
 	}
 	if strings.Contains(t.Host, ":") {

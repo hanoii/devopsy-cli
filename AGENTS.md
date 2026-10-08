@@ -125,11 +125,13 @@ user-facing behavior and keep it in sync with any change to it.
   (`parseAddress`): the server ends at the first `:` (any SSH destination or
   ssh alias, no `:` inside), the instance before the last `/`, an empty one
   meaning none. What it leaves out comes from `DEVOPSY_SERVER_<ENVIRONMENT>`,
-  `DEVOPSY_SERVER`, the environment's `server:` (server) and
-  `DEVOPSY_INSTANCE`, from the caller's environment then the project's
-  `.env` (never for aliases). Missing server: error; instance per
-  `instances:` (`required`, `none`, or optional). The project's config
-  never lists instances or, usually, servers: those are deployment facts.
+  the pattern's `DEVOPSY_SERVER_<PATTERN>` (`pr-*`: `DEVOPSY_SERVER_PR`,
+  `PatternVar`), `DEVOPSY_SERVER` (server) and `DEVOPSY_INSTANCE`, from the
+  caller's environment then the project's `.env` (never for aliases).
+  Missing server: error; instance per `instances:` (`required`, `none`, or
+  optional). The project's config never lists instances or servers
+  (`server:` is an error): those are deployment facts, made in addresses,
+  variables or aliases.
 - Names come only from project, instance and environment: compose name and
   wildcard host `<project>[-<instance>]-<environment>`
   (`Target.ComposeName`), directory `<project>/[<instance>/]<environment>`
