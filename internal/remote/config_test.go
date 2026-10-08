@@ -15,8 +15,6 @@ func TestLoadTarget(t *testing.T) {
 project: app
 environments:
   prod: {}
-  staging:
-    server: devopsy@staging
   custom:
     path: /srv/app-custom/
   relative:
@@ -37,9 +35,6 @@ environments:
 	}
 	if len(tg.Levels) != 1 || tg.Levels[0].Dir != "app" || tg.Levels[0].Link != "project.env" {
 		t.Fatalf("levels: %+v", tg.Levels)
-	}
-	if tg, err := LoadTarget(dir, "staging", nil); err != nil || tg.Host != "devopsy@staging" {
-		t.Fatalf("server from config: %+v %v", tg, err)
 	}
 	// A path moves the directory, never the name.
 	if tg, err := LoadTarget(dir, "vm1:custom", nil); err != nil || tg.Path != "/srv/app-custom" || len(tg.Levels) != 0 || tg.ComposeName() != "app-custom" {
@@ -189,8 +184,7 @@ environments:
     env:
       DEVOPSY_WILDCARD_DOMAIN: ""
       CERTRESOLVER: ~
-  staging:
-    server: vm1
+  staging: {}
 `)
 	write(t, filepath.Join(dir, LocalConfigFile), `
 defaults:
@@ -198,7 +192,7 @@ defaults:
     SITE: local
 environments:
   staging:
-    server: my-test-vm
+    mode: build
   mine: {}
 `)
 	prod, err := LoadTarget(dir, "vm1:prod", nil)
@@ -224,7 +218,7 @@ environments:
 	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Remote != "deploy --fast" || len(demo.Release.Before) != 0 {
 		t.Errorf("demo: %+v", demo)
 	}
-	if staging, err := LoadTarget(dir, "staging", nil); err != nil || staging.Host != "my-test-vm" {
+	if staging, err := LoadTarget(dir, "vm1:staging", nil); err != nil || staging.Mode != ModeBuild {
 		t.Errorf("local replaces an environment: %+v %v", staging, err)
 	}
 	if _, err := LoadTarget(dir, "vm1:mine", nil); err != nil {
@@ -265,8 +259,8 @@ aliases:
 	}
 	// Inside a project, its environment of the same name wins.
 	project := t.TempDir()
-	write(t, filepath.Join(project, ConfigFile), "project: app\nenvironments:\n  prod: {server: vm1}\n")
-	if p, err := LoadTarget(project, "prod", nil); err != nil || p.User || p.Host != "vm1" {
+	write(t, filepath.Join(project, ConfigFile), "project: app\nenvironments:\n  prod: {}\n")
+	if p, err := LoadTarget(project, "vm1:prod", nil); err != nil || p.User || p.Host != "vm1" {
 		t.Fatalf("project environment wins: %+v %v", p, err)
 	}
 	if v, err := LoadTarget(project, "vm1-traefik", nil); err != nil || !v.User {
@@ -289,7 +283,7 @@ project: shop
 environments:
   prod: {}
   "pr-*": {releases: {keep: 1}}
-  "pr-big-*": {server: big}
+  "pr-big-*": {mode: image}
   "*-a": {}
   "x-*": {}
 `)
@@ -297,7 +291,7 @@ environments:
 	if err != nil || pr.Name != "pr-123" || pr.Pattern != "pr-*" || pr.Path != "shop/pr-123" || pr.Keep != 1 || pr.ComposeName() != "shop-pr-123" {
 		t.Fatalf("pattern: %+v %v", pr, err)
 	}
-	if big, err := LoadTarget(dir, "pr-big-1", nil); err != nil || big.Host != "big" {
+	if big, err := LoadTarget(dir, "vm1:pr-big-1", nil); err != nil || big.Pattern != "pr-big-*" {
 		t.Fatalf("most specific: %+v %v", big, err)
 	}
 	if _, err := LoadTarget(dir, "vm1:x-a", nil); err == nil || !strings.Contains(err.Error(), "several patterns") {
@@ -305,6 +299,17 @@ environments:
 	}
 	if _, err := LoadTarget(dir, "vm1:pr-", nil); err == nil {
 		t.Fatal("* matches one or more")
+	}
+	if got := PatternVar("pr-big-*"); got != "DEVOPSY_SERVER_PR_BIG" || PatternVar("*") != "" {
+		t.Errorf("PatternVar: %s", got)
+	}
+	t.Setenv("DEVOPSY_SERVER_PR", "pr-box")
+	if pr, err := LoadTarget(dir, "pr-9", nil); err != nil || pr.Host != "pr-box" || pr.From["server"] != "DEVOPSY_SERVER_PR" {
+		t.Fatalf("pattern's server: %+v %v", pr, err)
+	}
+	t.Setenv("DEVOPSY_SERVER_PR_9", "nine")
+	if pr, err := LoadTarget(dir, "pr-9", nil); err != nil || pr.Host != "nine" {
+		t.Fatalf("the environment's own wins: %+v %v", pr, err)
 	}
 	if pats := Patterns(dir); len(pats) != 4 {
 		t.Errorf("patterns: %v", pats)

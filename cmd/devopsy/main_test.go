@@ -161,7 +161,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod:\n    server: nowhere.invalid\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
 	for _, sub := range []string{"--release", "--rollback", "--releases", "--shell", "--shell-host"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
@@ -279,16 +279,17 @@ func TestRemoteVerbose(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod:\n    server: devopsy@server\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DB_PASSWORD=dotenv-secret-value\n", 0o644)
-	// true stands in for ssh: only devopsy's own output remains.
-	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true"}, "-v", "@prod", "exec", "db", "dotenv-secret-value")
+	// true stands in for ssh: only devopsy's own output remains. Values from
+	// .env are masked, so the server comes from the environment here.
+	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}, "-v", "@prod", "exec", "db", "dotenv-secret-value")
 	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server, running:") ||
 		!strings.Contains(out, "DEVOPSY_VERBOSE=1 COMPOSE_PROJECT_NAME=") ||
 		!strings.Contains(out, "'exec' 'db' '***'") || strings.Contains(out, "dotenv-secret-value") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
-	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true"}, "@prod", "ps")
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}, "@prod", "ps")
 	if code != 0 || out != "" {
 		t.Errorf("not verbose by default (%d):\n%s", code, out)
 	}
@@ -307,8 +308,8 @@ func TestRemoteVars(t *testing.T) {
 	server := filepath.Join(tmp, "srv", "app-prod")
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod:\n    server: devopsy@server\n    path: "+server+"\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", ".env"), "REG_USER=deploy\nREG_PASSWORD='p@ss word'\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod:\n    path: "+server+"\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@server\nREG_USER=deploy\nREG_PASSWORD='p@ss word'\n", 0o644)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(stdin string, args ...string) (string, int) {
 		t.Helper()
@@ -434,9 +435,10 @@ func TestReleaseSteps(t *testing.T) {
 	project := filepath.Join(tmp, "app")
 	dot := filepath.Join(project, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	targets := "project: app\nenvironments:\n prod:\n  server: devopsy@server\n  path: " + server + "\n  mode: image\n  env:\n    SITE: one\n" +
+	targets := "project: app\nenvironments:\n prod:\n  path: " + server + "\n  mode: image\n  env:\n    SITE: one\n" +
 		"  release:\n    before: check\n    remote: deploy --fast\n    after: [done]\n"
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
+	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\nexit ${FAIL_REMOTE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
@@ -512,7 +514,8 @@ func TestNestedRemoteProjectName(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod:\n    server: devopsy@server\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", "commands", "nested"), "#!/bin/sh\nexec devopsy @prod ps\n", 0o755)
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "nested")
 	if code != 0 || !strings.Contains(out, `COMPOSE_PROJECT_NAME='\''app-prod'\'' exec devopsy`) {
@@ -528,8 +531,8 @@ func TestDebugTargets(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels:\n      - devopsy.shell=true\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  env:\n    A: one\nenvironments:\n  prod:\n    server: h\n    path: /srv/app\n    env:\n      B: two\n", 0o644)
-	env := []string{"DEVOPSY_HOME=" + t.TempDir()}
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  env:\n    A: one\nenvironments:\n  prod:\n    path: /srv/app\n    env:\n      B: two\n", 0o644)
+	env := []string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_SERVER=h"}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "environments", "prod")
 	for _, want := range []string{"prod  (", "mode      image  (defaults in ", "env       A='one'  (defaults in ", "env       B='two'  (" + filepath.Join(dot, "config.yaml")} {
 		if code != 0 || !strings.Contains(out, want) {
@@ -612,7 +615,8 @@ func TestInstancesEndToEnd(t *testing.T) {
 	project := filepath.Join(tmp, "app")
 	dot := filepath.Join(project, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: required\ndefaults:\n  mode: image\n  release: {remote: deploy}\nenvironments:\n  prod: {server: devopsy@server}\n  \"pr-*\": {server: devopsy@server}\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: required\ndefaults:\n  mode: image\n  release: {remote: deploy}\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n", 0o644)
+	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy shared=$SHARED project=$DEVOPSY_PROJECT instance=$DEVOPSY_INSTANCE env=$DEVOPSY_ENVIRONMENT\"\n", 0o755)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home}
 	run := func(extra []string, args ...string) (string, int) {

@@ -405,8 +405,8 @@ environments:
     releases: {keep: 1}
 ```
 
-Commit `config.yaml`: CI deploys from it. It holds no secrets and, usually,
-no servers. `.devopsy/config.local.yaml` (gitignore it) is read over it for
+Commit `config.yaml`: CI deploys from it. It holds no secrets and no
+servers. `.devopsy/config.local.yaml` (gitignore it) is read over it for
 one machine: top-level keys replace, `defaults` merge, an environment
 replaces the same-named one; it is never uploaded.
 
@@ -416,12 +416,15 @@ project's `.devopsy/.env` (CI sets them in its environment):
 ```sh
 DEVOPSY_SERVER=vm1                       # the server
 DEVOPSY_SERVER_STAGING=devopsy@203.0.113.20   # one environment's (upper case, other characters as _)
+DEVOPSY_SERVER_PR=pr-box                 # a pattern's: pr-* without the *
 DEVOPSY_INSTANCE=confcatsdemo            # the instance
 ```
 
-An environment can also name its `server:` in config, for private
-repositories; the address, then the variables, win over it. No server
-anywhere is an error naming both ways to give one.
+The most specific wins: the environment's (`DEVOPSY_SERVER_PR_12`), its
+pattern's, then `DEVOPSY_SERVER`. A project's config never names servers
+(nor instances): where things run is a deployment decision, made in the
+address, these variables, or an alias. No server anywhere is an error
+naming the ways to give one.
 
 On the server, each environment lives in `<project>/[<instance>/]<environment>`
 under the server's release root (below): `shop/prod`, `shop/pr-123`. Its
