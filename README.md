@@ -149,7 +149,8 @@ echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fi
 ```
 
 It completes targets (`@prod`, the project's environments, and aliases
-with what they stand for), the project's commands with their descriptions, devopsy's flags,
+with what they stand for; past a server or instance, `@vm1:` or
+`@vm1:b/`, the environments), the project's commands with their descriptions, devopsy's flags,
 the commands after `@<target>` (`--release`, `--vars set` with the keys of
 the project's `.env`...) and, through docker compose's own completion,
 compose's commands, flags and the project's services. After a project
