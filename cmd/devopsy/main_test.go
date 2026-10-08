@@ -671,3 +671,37 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("destroy touched another environment: %v", err)
 	}
 }
+
+// --init writes a config once; --debug schema documents every key.
+func TestInitAndSchema(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "My_Shop")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runDevopsy(t, dir, nil, "--init"); code == 0 || !strings.Contains(out, "(my-shop?)") {
+		t.Fatalf("no terminal, no name (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, dir, nil, "--init", "Bad Name"); code == 0 {
+		t.Fatalf("bad name (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, dir, nil, "--init", "shop"); code != 0 {
+		t.Fatalf("--init (%d):\n%s", code, out)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".devopsy", "config.yaml"))
+	if !strings.Contains(string(data), "project: shop\n") {
+		t.Fatalf("config:\n%s", data)
+	}
+	write(t, filepath.Join(dir, ".devopsy", "config.yaml"), "project: mine\n", 0o644)
+	if out, code := runDevopsy(t, dir, nil, "--init", "other"); code != 0 || !strings.Contains(out, "nothing to do") {
+		t.Fatalf("existing (%d):\n%s", code, out)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, ".devopsy", "config.yaml")); string(data) != "project: mine\n" {
+		t.Fatalf("existing config changed:\n%s", data)
+	}
+	if out, code := runDevopsy(t, dir, nil, "--debug", "schema"); code != 0 || !strings.Contains(out, "environments:") {
+		t.Fatalf("schema (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, dir, nil, "--debug", "schema", "--user"); code != 0 || !strings.Contains(out, "aliases:") {
+		t.Fatalf("user schema (%d):\n%s", code, out)
+	}
+}

@@ -224,6 +224,7 @@ devopsy --debug environments --yaml   # the same as plain YAML: defaults merged,
 devopsy --debug capabilities     # what devopsy calls, each action's contract, what this project implements
 devopsy --debug labels           # the labels devopsy reads, the project's, roles on this host
 devopsy --debug imports          # every running project's imports against its release (STALE ones)
+devopsy --debug schema           # every key of .devopsy/config.yaml, commented (--user: the user config)
 devopsy @prod --debug            # the same, as the server sees it
 ```
 
@@ -405,7 +406,9 @@ environments:
     releases: {keep: 1}
 ```
 
-Commit `config.yaml`: CI deploys from it. It holds no secrets and no
+`devopsy --init` writes a starting `config.yaml` (it asks for the project's
+name; it never touches an existing one), and `devopsy --debug schema` prints
+every key, commented. Commit `config.yaml`: CI deploys from it. It holds no secrets and no
 servers. `.devopsy/config.local.yaml` (gitignore it) is read over it for
 one machine: top-level keys replace, `defaults` merge, an environment
 replaces the same-named one; it is never uploaded.

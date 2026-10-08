@@ -146,6 +146,10 @@ user-facing behavior and keep it in sync with any change to it.
 - Patterns: environment keys with `*` (one or more name characters); exact
   names win, then the most literal characters; equal: error. `Targets()`
   lists environments then aliases, `Patterns()` the patterns.
+- `--init` writes a new `.devopsy/config.yaml` and never touches an
+  existing one. `--debug schema [--user]` prints `remote.ProjectSchema` /
+  `UserSchema`: documentation as a config that parses (`TestSchemas`), so a
+  new key goes there too or the test fails to show it.
 - Aliases (user config): `{to: <address>, source: <checkout>}`, or
   `project:` instead of source for commands only. Only a bare `@name` is an
   alias; an environment of that exact name wins. The source's config gives

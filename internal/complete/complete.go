@@ -85,6 +85,7 @@ var builtins = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--probe", "DNS, certificate and HTTPS of hosts, from here", GroupDevopsy},
+	{"--init", "a new .devopsy/config.yaml", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--debug", "what devopsy sees and computes", GroupDevopsy},
 	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
@@ -153,7 +154,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2:
-			for _, t := range []string{"environments", "capabilities", "labels", "imports"} {
+			for _, t := range []string{"environments", "capabilities", "labels", "imports", "schema"} {
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
 		case len(words) == 3 && words[1] == "environments":
