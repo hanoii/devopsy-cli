@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -291,17 +292,105 @@ func debugLabels(st style, projectDir string, color bool) int {
 		return 1
 	}
 	fmt.Println(st.head("Labels devopsy reads, on compose services:"))
-	fmt.Printf("  %s  %s\n", st.name(fmt.Sprintf("%-25s", cli.ShellLabel+"=true")), "the service --shell opens by default")
-	fmt.Printf("  %s  %s\n\n", st.name(fmt.Sprintf("%-25s", cli.ShellUserLabel+"=<user>")), "the user of its shell and --shell commands, unless --user")
+	for _, l := range [][2]string{
+		{cli.ShellLabel + "=true", "the service --shell opens by default"},
+		{cli.ShellUserLabel + "=<user>", "the user of its shell and --shell commands, unless --user"},
+		{cli.RoleLabel + "=<name>", "a role only one compose project per host holds, checked at --release"},
+		{cli.ExportPrefix + "<KEY>=<value>", "a fact for other projects, read from running containers"},
+		{cli.ImportPrefix + "<VAR>=<role or project>/<KEY>[?]", "at --release, into target.env unless the target sets VAR; ? if optional"},
+	} {
+		fmt.Printf("  %s\n      %s\n", st.name(l[0]), l[1])
+	}
+	fmt.Println()
 	if len(labels) == 0 {
 		fmt.Println("This project sets none.")
-		return 0
+	} else {
+		fmt.Println(st.head("This project's:"))
+		for _, l := range labelList(labels) {
+			fmt.Println("  " + l)
+		}
 	}
-	fmt.Println(st.head("This project's:"))
-	for _, l := range labelList(labels) {
-		fmt.Println("  " + l)
-	}
+	debugHost(st, projectDir)
 	return 0
+}
+
+// debugHost shows the roles held on this host, through the local docker, and
+// what this project's imports resolve to now.
+func debugHost(st style, projectDir string) {
+	fmt.Println()
+	fmt.Println(st.head("On this host (running containers):"))
+	holders, err := cli.Containers(cli.RoleLabel)
+	if err != nil {
+		fmt.Println("  " + st.warn(err.Error()))
+		return
+	}
+	roles := map[string][]string{}
+	for _, c := range holders {
+		r := c.Labels[cli.RoleLabel]
+		if !slices.Contains(roles[r], c.Project) {
+			roles[r] = append(roles[r], c.Project)
+		}
+	}
+	if len(roles) == 0 {
+		fmt.Println("  no roles")
+	}
+	names := make([]string, 0, len(roles))
+	for r := range roles {
+		names = append(names, r)
+	}
+	sort.Strings(names)
+	for _, r := range names {
+		fmt.Printf("  %s  held by %s\n", st.name("role "+r), strings.Join(roles[r], ", "))
+		for _, project := range roles[r] {
+			list, _ := cli.Containers("com.docker.compose.project=" + project)
+			exports := map[string]bool{}
+			for _, c := range list {
+				for k, v := range c.Labels {
+					if strings.HasPrefix(k, cli.ExportPrefix) {
+						exports[strings.TrimPrefix(k, cli.ExportPrefix)+"="+v] = true
+					}
+				}
+			}
+			for _, e := range slices.Sorted(maps.Keys(exports)) {
+				fmt.Printf("    %s %s\n", st.dim("exports"), e)
+			}
+		}
+	}
+	_, imports, err := cli.ProjectRoles(projectDir)
+	if err != nil {
+		fmt.Println("  " + st.warn(err.Error()))
+		return
+	}
+	if len(imports) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(st.head("This project's imports:"))
+	current := map[string]string{}
+	if data, err := os.ReadFile(filepath.Join(projectDir, "target.env")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(k, "#") {
+				current[k] = strings.Trim(v, `'"`)
+			}
+		}
+	}
+	for _, imp := range imports {
+		now := ""
+		switch e, err := cli.Resolve(imp); {
+		case err != nil:
+			now = st.warn(err.Error())
+		case !e.Found && e.Project == "":
+			now = st.warn("nothing running is " + imp.Source)
+		case !e.Found:
+			now = st.warn(e.Project + " does not export " + imp.Key)
+		default:
+			now = fmt.Sprintf("%q from %s", e.Value, e.Project)
+		}
+		fmt.Printf("  %s\n      now: %s\n", st.name(imp.String()), now)
+		if v, ok := current[imp.Var]; ok {
+			fmt.Printf("      this release's target.env: %q\n", v)
+		}
+	}
 }
 
 func labelList(labels map[string]map[string]string) []string {

@@ -272,8 +272,6 @@ user-level ones in ~/.config/devopsy/targets.yaml):
   --rollback           make the previous release current again and run the
                        target's rollback steps
   --releases           list the releases on the server
-  --domains [--retry]  DNS, challenge and certificate per host, and what next;
-                       --retry asks the proxy for missing certificates
   --shell [service] [-- command...]
                        a shell (or the command) in a container
   --shell-host         a shell on the server itself, in the current release
@@ -386,20 +384,11 @@ Examples:
   devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
 `,
-	"--domains": `Usage: devopsy @<target> --domains [--retry]
-
-For the environment's wildcard host and each of DEVOPSY_DOMAINS: what the
-server's proxy knows (routed, certificate resolver, through its domains
-capability in DEVOPSY_PROXY_DIR, default /srv/traefik), DNS (through
-1.1.1.1, Cloudflare's proxy recognized), the challenge CNAME when it
-applies, and the certificate the server presents, verified like a browser
-would. Ends each host with what to do next. On the proxy's own target (like
-@vm1-traefik), every host it routes instead, and its wildcards.
-
-  --retry   ask the proxy to request missing certificates again, then check
-            again. The request is withdrawn once every certificate exists.
-`,
 }
+
+// DomainsMoved answers --domains, which became the proxy's own command in
+// v0.17.0, with devopsy --probe for the view from outside.
+const DomainsMoved = "--domains moved to the server's proxy: devopsy @<proxy target> domains [<compose project>] (devopsy-traefik), which also prints the devopsy --probe line to check from here"
 
 // Usage is devopsy's help. projectDir is "" outside a project.
 func Usage(projectDir string) string {
@@ -424,6 +413,9 @@ Built-in:
                  a hash of what the service's image is built from at HEAD
                  (build context minus dockerignore, Dockerfile, build:), to
                  reuse an image across commits; see README
+  --probe [--ip <server ip>] <host>...
+                 DNS, certificate and HTTPS of each host, from here, as
+                 visitors reach them; exits 1 on a problem
   --debug [targets [name] [--yaml] | capabilities | labels]
                  what devopsy sees and computes: versions, the project,
                  targets with where each value comes from, the capabilities

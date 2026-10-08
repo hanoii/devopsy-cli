@@ -39,8 +39,9 @@ user-facing behavior and keep it in sync with any change to it.
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
   and the compose fallback. After `@target` too: `--release`, `--rollback`,
-  `--releases`, `--domains`, `--shell`, `--shell-host`, `--vars` (the first
-  four were words until v0.12.0). A word is a project command, else a docker
+  `--releases`, `--shell`, `--shell-host`, `--vars` (the first three were
+  words until v0.12.0; `--domains` existed until v0.17.0 and now says
+  where it went). A word is a project command, else a docker
   compose command (`ComposeCommands`: compose's own completion, cached and
   refreshed when a word is missing, since compose's commands only change with
   its version), else an error, never compose's usage dump. Arguments starting
@@ -87,13 +88,21 @@ user-facing behavior and keep it in sync with any change to it.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
   `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
   layer: `/etc/devopsy/devopsy.env` existed until October 2026.
-- `DEVOPSY_WILDCARD_DOMAIN` comes from the server's proxy: `--release` asks its
-  `domains` capability (`wildcard-domain`, `WildcardDomainScript`) and writes
-  it into the release's `target.env`, unless the target's environment
-  already has the key (targets.yaml or `shared/.env`, even empty: no
-  automatic URL). Written per release, so rollbacks keep what each release
-  had. Asked at release, not on every command: devopsy would otherwise run
-  the proxy's capability (a container or two) on each `up`.
+- Roles, exports and imports (`internal/cli/roles.go`): compose labels
+  for facts shared between projects on a host. `devopsy.role` is a slot one
+  compose project per host holds, `devopsy.export.<KEY>` a fact on running
+  containers, `devopsy.import.<VAR>=<role or project>/<KEY>[?]` copies one
+  into a release's `target.env`. devopsy knows no role or key names:
+  `proxy` and `WILDCARD_DOMAIN` are devopsy-traefik's convention. The
+  hidden `--prepare-release` checks the role and resolves imports on the
+  server, in the new release before it becomes current (`PrepareScript`,
+  only when the compose files mention the labels, so older servers release
+  other projects); an import never overrides what the release's
+  environment sets, even empty; an empty export is a value; rollbacks never
+  check. Read from running containers, not files: the exporter must run.
+  Replaced, in v0.17.0, the `domains` capability's `wildcard-domain` and
+  `DEVOPSY_PROXY_DIR` (October 2026), which made devopsy's core define a
+  proxy contract.
 - Wildcard host: `<name>.<DEVOPSY_WILDCARD_DOMAIN>`; without a domain,
   `<name>.localhost` locally and none in a release (`target.env` exists),
   where the environment only answers on `DEVOPSY_DOMAINS`.
@@ -189,19 +198,14 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
   recursion guard: rejected `-C <dir>` for that). Stderr shows only on
   failure. Contracts are versioned JSON, documented in README; unknown
   fields are ignored. Define a new one only when a second use needs it.
-- `devopsy @target --domains`: the target's environment comes from the server
-  (`print-env`, the old name of `--env`); what the proxy knows comes from
-  its `domains` capability in `DEVOPSY_PROXY_DIR` (default `/srv/traefik`):
-  routes, the resolver (shown only) and the issuing method (`http`,
-  `dns-cname` with its record, `dns-api`), which next steps depend on.
-  devopsy-cli knows no proxy: Traefik's API, ACME files and resolver names
-  live in devopsy-traefik. DNS (through 1.1.1.1), certificates (a real TLS
-  connection to the server per name, verified against system roots) and
-  Cloudflare's proxy (its ranges, then a request through it) are checked
-  locally. `--retry` calls `retry <project> <hosts>` and `--domains` calls
-  `retry <project> --done` once every routed host has a valid certificate.
-  When the target's path is `DEVOPSY_PROXY_DIR`, `--domains` checks every
-  host the proxy reports (`facts --all`) as `server`.
+- `devopsy --probe [--ip <ip>] <host>...` (`internal/probe`): DNS through
+  1.1.1.1, the certificate (a real handshake, system roots) and an HTTPS
+  request, from where it runs. A tool with plain arguments, not a contract:
+  it knows no proxy. It replaced `devopsy @target --domains` (until
+  v0.17.0), whose proxy-specific half (routes, resolvers, CNAMEs, retries)
+  is now devopsy-traefik's own `domains` command, which prints the
+  `--probe` line to run. A server never drives local devopsy: devopsy execs
+  ssh, so it cannot watch output, and a server must not make a laptop act.
 
 ## Gotchas
 

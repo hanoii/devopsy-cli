@@ -162,7 +162,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
 	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  host: nowhere.invalid\n  path: /srv/app\n", 0o644)
-	for _, sub := range []string{"--release", "--rollback", "--releases", "--domains", "--shell", "--shell-host"} {
+	for _, sub := range []string{"--release", "--rollback", "--releases", "--shell", "--shell-host"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
 			t.Errorf("%s --help (%d):\n%s", sub, code, out)
@@ -544,7 +544,7 @@ func TestDebugTargets(t *testing.T) {
 		t.Errorf("--yaml (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
-	if code != 0 || !strings.Contains(out, "wildcard-domain") || !strings.Contains(out, "does not implement it") {
+	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") {
 		t.Errorf("capabilities (%d):\n%s", code, out)
 	}
 }

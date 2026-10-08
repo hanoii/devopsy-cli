@@ -84,6 +84,7 @@ var builtins = []Candidate{
 	{"--env", "the variables devopsy loads and computes", GroupDevopsy},
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
+	{"--probe", "DNS, certificate and HTTPS of hosts, from here", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--debug", "what devopsy sees and computes", GroupDevopsy},
 	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
@@ -95,7 +96,6 @@ var remoteCommands = []Candidate{
 	{"--release", "upload a new release and run its steps", GroupDevopsy},
 	{"--rollback", "back to the previous release, and run its steps", GroupDevopsy},
 	{"--releases", "list the releases on the server", GroupDevopsy},
-	{"--domains", "DNS and certificates per host", GroupDevopsy},
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
@@ -239,13 +239,6 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		// They take no command: their steps are in targets.yaml.
 		if len(words) == 2 {
 			r := filter(Result{Candidates: []Candidate{{"--help", "what it runs, and how", GroupDevopsy}}}, cur)
-			r.Directive = DirectiveNoFileComp
-			return r
-		}
-		return none
-	case "--domains":
-		if len(words) == 2 {
-			r := filter(Result{Candidates: []Candidate{{"--retry", "ask the proxy for missing certificates", GroupDevopsy}}}, cur)
 			r.Directive = DirectiveNoFileComp
 			return r
 		}

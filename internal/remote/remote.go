@@ -825,8 +825,7 @@ mv "$rel.tmp" "$rel"
 // there (if any) and goes back to the previous release when that fails.
 // Then it prunes old releases. rollback picks the release before current
 // instead of id. It ends with the release's URL, its wildcard host or else
-// its first domain, as devopsy on the server computes them; nothing for the
-// server's proxy itself, which serves the others.
+// its first domain, as devopsy on the server computes them.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
 	s := fmt.Sprintf(prelude, Quote(t.Path)) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -850,12 +849,13 @@ for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   rm -rf "$rel/.devopsy/${f##*/}"
   ln -s "$f" "$rel/.devopsy/${f##*/}"
 done
-make_current "releases/$id"
-echo "devopsy: current is now $id"
 `
 	if !rollback {
-		s += fmt.Sprintf(WildcardDomainScript, devopsyCall(projectName, []string{"print-env"}, false))
+		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 	}
+	s += `make_current "releases/$id"
+echo "devopsy: current is now $id"
+`
 	if len(args) > 0 {
 		s += `status=0
 cd "$base/current"
@@ -880,11 +880,8 @@ done
 	s += `vars=$(cd "$base/current" && ` + devopsyCall(projectName, []string{"--env"}, false) + ` 2>/dev/null) || vars=
 host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_WILDCARD_HOST='\(.*\)'$/\1/p")
 domains=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_DOMAINS='\(.*\)'$/\1/p" | tr ',' ' ')
-proxy=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_PROXY_DIR='\(.*\)'$/\1/p")
 set -- $domains
-if [ "${proxy:-` + DefaultProxyDir + `}" = "$base" ]; then
-  :
-elif [ -n "$host" ]; then
+if [ -n "$host" ]; then
   echo "devopsy: https://$host"
 elif [ $# -gt 0 ]; then
   echo "devopsy: https://$1"
@@ -895,31 +892,18 @@ fi
 	return s
 }
 
-// WildcardDomainScript gives a new release the server's wildcard domain, from
-// the proxy's domains capability (wildcard-domain), unless the target sets
-// DEVOPSY_WILDCARD_DOMAIN itself: in targets.yaml or shared/.env, even empty
-// for no automatic URL. The proxy is in DEVOPSY_PROXY_DIR, by default
-// DefaultProxyDir. It runs in ActivateScript before the release steps, with
-// $base and $rel set; %s is the call printing the release's environment.
-// The proxy's own release is skipped: it has its own setting.
-// Written into the release's target.env: rollbacks keep what each release
-// had, and a domain change reaches projects with their next release.
-const WildcardDomainScript = `vars=$(cd "$base/current" && %s 2>/dev/null) || vars=
-proxy=
-if ! printf '%%s\n' "$vars" | grep -q '^DEVOPSY_WILDCARD_DOMAIN='; then
-  proxy=$(printf '%%s\n' "$vars" | sed -n "s/^DEVOPSY_PROXY_DIR='\(.*\)'$/\1/p")
-  proxy=${proxy:-` + DefaultProxyDir + `}
-fi
-# The proxy itself has its own setting.
-if [ -n "$proxy" ] && [ "$proxy" != "$base" ]; then
-  wildcard=$(cd "$proxy" 2>/dev/null && { [ ! -d current ] || cd current; } \
-    && devopsy --capability domains wildcard-domain 2>/dev/null \
-    | sed -n 's/.*"wildcard_domain": *"\([a-z0-9.-]*\)".*/\1/p') || wildcard=
-  if [ -n "$wildcard" ]; then
-    printf "DEVOPSY_WILDCARD_DOMAIN='%%s'\n" "$wildcard" >>"$rel/.devopsy/target.env"
-    echo "devopsy: wildcard domain $wildcard, from the proxy at $proxy"
-  else
-    echo "devopsy: no wildcard domain: no proxy at $proxy reports one (DEVOPSY_PROXY_DIR)"
+// PrepareScript runs devopsy --prepare-release (cli.PrepareRelease) in a
+// new release before it becomes current, with $base, $rel and $id set; %s is
+// the call. It checks the project's devopsy.role is free on the host and
+// writes its devopsy.import labels into the release's target.env, so
+// rollbacks keep what each release had. Only for projects with those labels,
+// so servers with an older devopsy release the others. A failure leaves
+// current alone.
+const PrepareScript = `if grep -qsE 'devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
+  if ! (cd "$rel" && %s); then
+    touch "$rel/.devopsy-failed"
+    echo "devopsy: release $id not made current" >&2
+    exit 1
   fi
 fi
 `
