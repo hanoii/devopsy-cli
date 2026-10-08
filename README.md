@@ -364,7 +364,8 @@ On the server, each target lives in `<project>/<target>` under the server's
 release root (below): `shop/prod`, `shop/pr-123`. Its compose project, and
 so its containers, volumes and wildcard URL, is `<project>-<target>`
 (`shop-prod`). A target's `path:` replaces the directory: relative to the
-root, or absolute.
+root, or absolute; its compose name then follows the path (`traefik/main`:
+`traefik-main`; an absolute path's last part).
 
 `defaults:` gives each target its `mode`, `source`, `release`, `rollback`,
 `releases` and `env`, unless it sets its own: `env` merges key by key (the

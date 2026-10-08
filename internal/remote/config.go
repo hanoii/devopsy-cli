@@ -104,6 +104,8 @@ type Target struct {
 	// .env files, relative to the release root: the project's and the
 	// instance's. None for an explicit path.
 	Levels []Level `yaml:"-"`
+	// OwnPath is set when the target sets its path.
+	OwnPath bool `yaml:"-"`
 	// Keep is how many releases to keep: the target's releases.keep, else
 	// the project's, else 0 (the server's default).
 	Keep int `yaml:"-"`
@@ -644,10 +646,18 @@ func samePath(a, b string) bool {
 }
 
 // ComposeName is the compose project name of t's environment:
-// <project>[-<instance>]-<target>, "" when t has no project.
+// <project>[-<instance>]-<target>, "" when t has no project. A target with
+// its own path is named after it: a relative one's parts joined with "-"
+// (traefik/main: traefik-main), an absolute one's last part.
 func (t *Target) ComposeName() string {
 	if t.Project == nil || t.Project.Name == "" {
 		return ""
+	}
+	if t.OwnPath {
+		if path.IsAbs(t.Path) {
+			return path.Base(t.Path)
+		}
+		return strings.ReplaceAll(t.Path, "/", "-")
 	}
 	parts := []string{t.Project.Name}
 	if t.Instance != "" {
@@ -785,6 +795,7 @@ func loadTarget(projectDir, name, instance string, projectEnv func(string) (stri
 	}
 	t.Instance = instance
 
+	t.OwnPath = t.Path != ""
 	if t.Path == "" {
 		if t.Project == nil {
 			return nil, fmt.Errorf("@%s: a user-level target needs path: or source:", name)
