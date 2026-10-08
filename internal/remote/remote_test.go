@@ -466,63 +466,45 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 	}
 }
 
-// A new release gets the server's wildcard domain from its proxy, unless its
-// target sets one, even empty.
-func TestWildcardDomainScript(t *testing.T) {
+// A new release runs devopsy --prepare-release before it becomes current,
+// only with role or import labels, and stops there when it fails.
+func TestPrepareScript(t *testing.T) {
 	bin := t.TempDir()
-	// print-env prints $FAKE_ENV; the capability answers in a proxy that has
-	// a .devopsy-wildcard file.
-	fake := `#!/bin/sh
-case "$1" in
-  print-env) printf '%s' "$FAKE_ENV" ;;
-  --capability) [ -f .devopsy-wildcard ] && printf '{\n  "version": 1,\n  "wildcard_domain": "%s"\n}\n' "$(cat .devopsy-wildcard)" ;;
-esac
-`
+	// The fake devopsy records where it ran, and fails in a FAIL directory.
+	fake := "#!/bin/sh\npwd > ran\n[ ! -f .devopsy/FAIL ]\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := t.TempDir()
-	proxy := filepath.Join(srv, "traefik")
-	other := filepath.Join(srv, "proxy")
-	for dir, domain := range map[string]string{proxy + "/current": "vm1.example.com", other: "vm2.example.com"} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, ".devopsy-wildcard"), []byte(domain), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	script := strings.Replace(fmt.Sprintf(WildcardDomainScript, "devopsy print-env"), DefaultProxyDir, proxy, 1)
-
-	for name, c := range map[string]struct{ env, want, says string }{
-		"from the proxy":   {"DEVOPSY_PROJECT_NAME='shop'\n", "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", "wildcard domain vm1.example.com"},
-		"target sets it":   {"DEVOPSY_WILDCARD_DOMAIN='mine.example.com'\n", "", ""},
-		"target opts out":  {"DEVOPSY_WILDCARD_DOMAIN=''\n", "", ""},
-		"another proxy":    {"DEVOPSY_PROXY_DIR='" + other + "'\n", "DEVOPSY_WILDCARD_DOMAIN='vm2.example.com'\n", "vm2.example.com"},
-		"no proxy there":   {"DEVOPSY_PROXY_DIR='/nowhere'\n", "", "no proxy at /nowhere"},
-		"the proxy itself": {"DEVOPSY_PROXY_DIR='@base'\n", "", ""},
+	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
+	for name, c := range map[string]struct {
+		compose, override string
+		fail, runs        bool
+	}{
+		"no labels":       {compose: "services: {}\n"},
+		"import":          {compose: "services:\n  a:\n    labels: [devopsy.import.X=proxy/X]\n", runs: true},
+		"role":            {compose: "services:\n  a:\n    labels: {devopsy.role: proxy}\n", runs: true},
+		"in the override": {compose: "services: {}\n", override: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true},
+		"fails":           {compose: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true, fail: true},
 	} {
 		base := t.TempDir()
-		c.env = strings.ReplaceAll(c.env, "@base", base)
 		rel := filepath.Join(base, "releases", "1")
-		if err := os.MkdirAll(filepath.Join(rel, ".devopsy"), 0o755); err != nil {
-			t.Fatal(err)
+		write(t, filepath.Join(rel, ".devopsy", "compose.yaml"), c.compose)
+		if c.override != "" {
+			write(t, filepath.Join(rel, ".devopsy", "compose.override.yaml"), c.override)
 		}
-		if err := os.Symlink(rel, filepath.Join(base, "current")); err != nil {
-			t.Fatal(err)
+		if c.fail {
+			write(t, filepath.Join(rel, ".devopsy", "FAIL"), "")
 		}
-		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nrel="+Quote(rel)+"\n"+script)
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ENV=" + c.env}
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nrel="+Quote(rel)+"\n"+script+"echo after\n")
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s: %v\n%s", name, err, out)
+		_, ranErr := os.Stat(filepath.Join(rel, "ran"))
+		if (ranErr == nil) != c.runs {
+			t.Errorf("%s: ran %v, want %v", name, ranErr == nil, c.runs)
 		}
-		got, _ := os.ReadFile(filepath.Join(rel, ".devopsy", "target.env"))
-		if string(got) != c.want {
-			t.Errorf("%s: target.env %q, want %q", name, got, c.want)
-		}
-		if (c.says == "") != (len(out) == 0) || !strings.Contains(string(out), c.says) {
-			t.Errorf("%s: said %q, want %q", name, out, c.says)
+		_, failedErr := os.Stat(filepath.Join(rel, ".devopsy-failed"))
+		if c.fail != (err != nil) || c.fail != (failedErr == nil) || c.fail == strings.Contains(string(out), "after") {
+			t.Errorf("%s: err %v, marked failed %v:\n%s", name, err, failedErr == nil, out)
 		}
 	}
 }

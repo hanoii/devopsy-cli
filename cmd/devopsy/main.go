@@ -80,6 +80,16 @@ func run() int {
 	if args[0] == "--completion" {
 		return runCompletion(args[1:], color)
 	}
+	if args[0] == "--probe" {
+		return runProbe(args[1:], color)
+	}
+	if args[0] == cli.PrepareReleaseFlag {
+		return runPrepareRelease(cwd, color)
+	}
+	if args[0] == "--domains" {
+		cli.Fprint(os.Stderr, red, cli.DomainsMoved, color)
+		return 1
+	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
 		return runRemote(cwd, args, color, verbose)

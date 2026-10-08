@@ -2,13 +2,11 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -129,8 +127,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 0
 
 	case "--domains":
-		retry := len(args) > 1 && args[1] == "--retry"
-		return runDomains(t, projectName, retry, color)
+		return fail(cli.DomainsMoved)
 
 	case "--release", "--rollback":
 		if len(args) > 1 {
@@ -293,119 +290,4 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 		b.WriteString(cli.DotenvLine(k, t.Env[k]) + "\n")
 	}
 	return []byte(b.String())
-}
-
-// runDomains implements `devopsy @target --domains [--retry]`. The server's
-// proxy reports what it knows through its domains capability; the checks
-// run here, from outside, as visitors see the hosts.
-func runDomains(t *remote.Target, projectName string, retry bool, color bool) int {
-	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
-		return 1
-	}
-	var out bytes.Buffer
-	code, err := remote.SSH(t, remote.EnvScript(t, projectName), bytes.NewReader(nil), &out, false)
-	if err != nil {
-		return fail(err.Error())
-	}
-	if code != 0 {
-		return code
-	}
-	env, err := remote.ParseEnv(out.String())
-	if err != nil {
-		return fail(err.Error())
-	}
-	proxyDir := env["DEVOPSY_PROXY_DIR"]
-	if proxyDir == "" {
-		proxyDir = remote.DefaultProxyDir
-	}
-	// On the proxy's own target, every host it routes; on a project, its own.
-	server := path.Clean(t.Path) == path.Clean(proxyDir)
-	hosts, name := remote.ProjectHosts(env), cli.NormalizeProjectName(env["DEVOPSY_PROJECT_NAME"])
-	factsArgs := hosts
-	if server {
-		factsArgs, name = []string{"--all"}, "server"
-	} else if len(hosts) == 0 {
-		return fail("no hosts: set DEVOPSY_WILDCARD_DOMAIN or DEVOPSY_DOMAINS for this target")
-	}
-	capability := func(action string, args []string, stdout io.Writer) int {
-		code, err := remote.SSH(t, remote.CapabilityScript(proxyDir, "domains", action, args), bytes.NewReader(nil), stdout, false)
-		if err != nil {
-			return fail(err.Error())
-		}
-		return code
-	}
-
-	check := func() ([]remote.DomainReport, *remote.ProxyFacts, int) {
-		var out bytes.Buffer
-		if code := capability("facts", factsArgs, &out); code != 0 {
-			return nil, nil, code
-		}
-		facts, err := remote.ParseProxyFacts(out.Bytes())
-		if err != nil {
-			return nil, nil, fail(err.Error())
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		checker := remote.PublicChecker(ctx)
-		// The server's addresses: as its wildcard host resolves (right behind
-		// NAT too), then as the proxy reports it.
-		var serverIPs []string
-		if env["DEVOPSY_WILDCARD_DOMAIN"] != "" && env["DEVOPSY_WILDCARD_HOST"] != "" {
-			if ips, err := checker.LookupIP(ctx, env["DEVOPSY_WILDCARD_HOST"]); err == nil {
-				serverIPs = append(serverIPs, ips...)
-			}
-		}
-		if facts.IP != "" {
-			serverIPs = append(serverIPs, facts.IP)
-		}
-		checked := hosts
-		if server {
-			checked = facts.AllHosts()
-		}
-		return remote.Check(ctx, facts, checker, serverIPs, checked), facts, 0
-	}
-
-	reports, facts, code := check()
-	if code != 0 {
-		return code
-	}
-	fmt.Print(remote.FormatReports(reports))
-
-	// A previous --retry is only clutter once every certificate exists.
-	cleanup := func(reports []remote.DomainReport, facts *remote.ProxyFacts) {
-		if !remote.AllCertified(reports) || !facts.HasRetry(name) {
-			return
-		}
-		if capability("retry", []string{name, "--done"}, io.Discard) == 0 {
-			cli.Fprint(os.Stderr, cyan, "All certificates exist: removed the retry request from the proxy.", color)
-		}
-	}
-	if !retry {
-		cleanup(reports, facts)
-		return 0
-	}
-
-	var pending []string
-	for _, r := range reports {
-		if r.Routed && !r.Cert.Valid {
-			pending = append(pending, r.Host)
-		}
-	}
-	if len(pending) == 0 {
-		cli.Fprint(os.Stderr, cyan, "Nothing to retry.", color)
-		return 0
-	}
-	if code := capability("retry", append([]string{name}, pending...), io.Discard); code != 0 {
-		return code
-	}
-	cli.Fprint(os.Stderr, cyan, "Asked the proxy to request the missing certificates. Checking again in 45 seconds...", color)
-	time.Sleep(45 * time.Second)
-	reports, facts, code = check()
-	if code != 0 {
-		return code
-	}
-	fmt.Print(remote.FormatReports(reports))
-	cleanup(reports, facts)
-	return 0
 }
