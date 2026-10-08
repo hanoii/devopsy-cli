@@ -6,14 +6,27 @@
 # flags and, through docker compose, services.
 
 _devopsy() {
-    local IFS=$'\n' out directive line
+    local IFS=$' \t\n' out directive line words args cur colon
     COMPREPLY=()
-    out=$(devopsy --complete "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null) || return
+    # Words from the line itself: bash splits COMP_WORDS at ":", which
+    # targets use (@vm1:prod).
+    line=${COMP_LINE:0:COMP_POINT}
+    read -r -a words <<< "$line"
+    [[ $line == *[[:space:]] || ${#words[@]} -eq 1 ]] && words+=("")
+    cur=${words[${#words[@]}-1]}
+    # bash replaces only what follows the last ":" in the word.
+    colon=
+    [[ $cur == *:* && $COMP_WORDBREAKS == *:* ]] && colon=${cur%"${cur##*:}"}
+    # Sliced before IFS changes: bash 3.2 (macOS) joins a quoted slice with
+    # IFS.
+    args=("${words[@]:1}")
+    IFS=$'\n'
+    out=$(devopsy --complete "${args[@]}" 2>/dev/null) || return
     directive=${out##*:}
     out=${out%:*}
     for line in $out; do
         line=${line%%$'\t'*}
-        [[ -n $line && $line == "${COMP_WORDS[COMP_CWORD]}"* ]] && COMPREPLY+=("$line")
+        [[ -n $line && $line == "$cur"* ]] && COMPREPLY+=("${line#"$colon"}")
     done
     # devopsy's order: targets, then project commands first (bash 4.4 or
     # later).

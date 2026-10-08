@@ -122,8 +122,15 @@ func Complete(cwd string, words []string, environ []string) Result {
 		// Targets first, then project commands, devopsy's flags and, from
 		// the delegate, compose's.
 		var r Result
-		if cur == "" || strings.HasPrefix(cur, "@") {
-			// The project's targets before user-level ones (Targets' order).
+		if i := strings.LastIndexAny(cur, ":/"); strings.HasPrefix(cur, "@") && i >= 0 {
+			// Past a server or instance: the environments, after them.
+			for _, t := range remote.Targets(projectDir) {
+				if !t.User {
+					r.Candidates = append(r.Candidates, Candidate{cur[:i+1] + t.Name, targetDescription(t), GroupTarget})
+				}
+			}
+		} else if cur == "" || strings.HasPrefix(cur, "@") {
+			// Environments before aliases (Targets' order).
 			for _, t := range remote.Targets(projectDir) {
 				group := GroupTarget
 				if t.User {
