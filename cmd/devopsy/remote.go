@@ -202,6 +202,25 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			return 0
 		}
 
+		// A role taken by another compose project on the server fails before
+		// anything is uploaded (--prepare-release checks it again, under the
+		// release lock).
+		if role, _, err := cli.ProjectRoles(projectDir); err != nil {
+			return fail(err.Error())
+		} else if role != "" {
+			var out bytes.Buffer
+			if code, err := remote.SSH(t, remote.RoleHoldersScript(t, role), bytes.NewReader(nil), &out, false); err != nil {
+				return fail(err.Error())
+			} else if code != 0 {
+				return code
+			}
+			for _, holder := range strings.Fields(out.String()) {
+				if holder != projectName {
+					return fail(fmt.Sprintf("role %s is held by %s on %s: one compose project per role (%s=%s). Nothing changed.", role, holder, t.Host, cli.RoleLabel, role))
+				}
+			}
+		}
+
 		// A new instance is a new site: confirm it, unless --yes.
 		if t.Instance != "" && !yes {
 			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), io.Discard, false)
