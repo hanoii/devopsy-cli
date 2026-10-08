@@ -276,6 +276,9 @@ func checkValue(v string) error {
 	return nil
 }
 
+// Progress shows what PrepareRelease is waiting for, as it happens.
+var Progress = func(string) {}
+
 // WaitForExporters is how long a release waits for an import's source to
 // run, as while the proxy restarts.
 var WaitForExporters = 30 * time.Second
@@ -340,7 +343,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 			break
 		}
 		if !waited {
-			said = append(said, fmt.Sprintf("devopsy: waiting up to %s for %s to run...", WaitForExporters, missing))
+			Progress(fmt.Sprintf("devopsy: waiting up to %s for %s to run...", WaitForExporters, missing))
 			waited = true
 		}
 		time.Sleep(2 * time.Second)
