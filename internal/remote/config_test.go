@@ -183,7 +183,7 @@ func TestUserTargets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
 	src := t.TempDir()
-	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ntargets: {}\n")
+	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ndefaults:\n  mode: image\n  release: {remote: deploy}\ntargets: {}\n")
 	write(t, filepath.Join(home, ConfigFile), `
 targets:
   vm1-traefik:
@@ -205,7 +205,7 @@ targets:
 		t.Fatalf("project target must win: %+v %v", prod, err)
 	}
 	tr, err := LoadTarget("", "vm1-traefik", "", nil)
-	if err != nil || !tr.User || tr.Path != "traefik/vm1-traefik" || tr.ComposeName() != "traefik-vm1-traefik" {
+	if err != nil || !tr.User || tr.Path != "traefik/vm1-traefik" || tr.ComposeName() != "traefik-vm1-traefik" || tr.Mode != ModeImage || tr.Release == nil || tr.Release.Remote != "deploy" {
 		t.Fatalf("from its source's project: %+v %v", tr, err)
 	}
 	if old, err := LoadTarget("", "old", "", nil); err != nil || old.Path != "/srv/traefik" || old.ComposeName() != "" {

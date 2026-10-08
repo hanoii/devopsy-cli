@@ -419,6 +419,9 @@ type Config struct {
 	Targets map[string]*Target
 	// Files are the files read.
 	Files []string
+	// Defaults are the project's defaults (config.local.yaml's over
+	// config.yaml's), for user-level targets whose source is this project.
+	Defaults *Target
 }
 
 // LoadConfig reads the user-level config, then the project's config.yaml
@@ -457,6 +460,9 @@ func LoadConfig(projectDir string) (*Config, error) {
 			if t != nil && t.User == user && defaults != nil {
 				c.Targets[n] = mergeDefaults(defaults, t, t.nulls)
 			}
+		}
+		if !user {
+			c.Defaults = defaults
 		}
 		defaults, defaultsNulls = nil, nil
 	}
@@ -772,14 +778,20 @@ func loadTarget(projectDir, name, instance string, projectEnv func(string) (stri
 			return nil, fmt.Errorf("set project: (its name on servers) in %s", filepath.Join(projectDir, ConfigFile))
 		}
 	} else if t.Source != "" {
-		p, err := LoadProject(filepath.Join(t.SourceDir(), ".devopsy"))
+		// The source's project, and its defaults under the target's own
+		// (and its file's): mode and release steps live with the project.
+		src, err := LoadConfig(filepath.Join(t.SourceDir(), ".devopsy"))
 		if err != nil {
 			return nil, err
 		}
-		if p == nil || p.Name == "" {
+		if src.Project == nil || src.Project.Name == "" {
 			return nil, fmt.Errorf("@%s: its source, %s, has no project: in .devopsy/config.yaml", name, t.Source)
 		}
-		t.Project = p
+		t.Project = src.Project
+		if src.Defaults != nil {
+			merged := mergeDefaults(src.Defaults, &t, t.nulls)
+			t = *merged
+		}
 	}
 
 	if instance != "" && !nameRe.MatchString(instance) {
