@@ -144,18 +144,18 @@ func TestInstancesSetting(t *testing.T) {
 func TestConfigErrors(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	for name, config := range map[string]string{
-		"no project":        "environments:\n  prod: {}\n",
-		"bad project":       "project: My App\nenvironments:\n  prod: {}\n",
-		"unknown key":       "project: app\nprod: {}\n",
-		"targets":           "project: app\ntargets:\n  prod: {}\n",
-		"host":              "project: app\nenvironments:\n  prod: {host: h}\n",
-		"root in a project": "project: app\nreleases: {root: /srv}\nenvironments:\n  prod: {}\n",
-		"max_keep":          "project: app\nreleases: {max_keep: 9}\nenvironments:\n  prod: {}\n",
-		"instances":         "project: app\ninstances: maybe\nenvironments:\n  prod: {}\n",
+		"no project":         "environments:\n  prod: {}\n",
+		"bad project":        "project: My App\nenvironments:\n  prod: {}\n",
+		"unknown key":        "project: app\nprod: {}\n",
+		"targets":            "project: app\ntargets:\n  prod: {}\n",
+		"host":               "project: app\nenvironments:\n  prod: {host: h}\n",
+		"root in a project":  "project: app\nreleases: {root: /srv}\nenvironments:\n  prod: {}\n",
+		"max_keep":           "project: app\nreleases: {max_keep: 9}\nenvironments:\n  prod: {}\n",
+		"instances":          "project: app\ninstances: maybe\nenvironments:\n  prod: {}\n",
 		"server in defaults": "project: app\ndefaults: {server: vm1}\nenvironments:\n  prod: {}\n",
-		"unknown step":      "project: app\nenvironments:\n  prod: {release: {remotes: deploy}}\n",
-		"bad pattern":       "project: app\nenvironments:\n  \"pr/*\": {}\n",
-		"aliases":           "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
+		"unknown step":       "project: app\nenvironments:\n  prod: {release: {remotes: deploy}}\n",
+		"bad pattern":        "project: app\nenvironments:\n  \"pr/*\": {}\n",
+		"aliases":            "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
