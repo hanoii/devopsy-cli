@@ -51,10 +51,6 @@ func TestUnknownWord(t *testing.T) {
 	if !errors.As(err, &e) || e.Msg != "relase: not a project command (deploy) or a docker compose command" {
 		t.Fatalf("typo: %v", err)
 	}
-	_, err = build(root, []string{"release"}, nil)
-	if !errors.As(err, &e) || !strings.Contains(e.Msg, "devopsy @<target> --release") {
-		t.Fatalf("a moved word: %v", err)
-	}
 
 	// --: straight to compose, even a word compose lacks or a project
 	// command's name.

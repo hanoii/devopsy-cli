@@ -34,7 +34,7 @@ from them:
   Secrets and data live in `shared/`, outside releases, so rollbacks keep
   them. Remote commands run through `current`.
 - **Steps are explicit.** `--release` and `--rollback` run the steps each target
-  names in `targets.yaml`; without them they refuse, rather than upload a
+  names in `config.yaml`; without them they refuse, rather than upload a
   release nothing applies.
 - **Project behavior lives in the project.** Anything that depends on a
   project's services, users or data is a command in its
@@ -334,56 +334,61 @@ of the directory containing `.devopsy/`, normalized as compose does
 ## Remote targets
 
 `devopsy @<target> ...` runs devopsy on a server over SSH, from your machine
-or from CI. Define targets in `.devopsy/targets.yaml`:
+or from CI. A project's devopsy config, `.devopsy/config.yaml`, names the
+project and its targets, its environments:
 
 ```yaml
-prod:
-  host: devopsy@203.0.113.10    # any SSH destination or ~/.ssh/config alias
-  path: /srv/myapp              # absolute, writable by that user
+project: shop                   # its name on servers: required for @target
+defaults:                       # what every target takes unless it sets its own
   mode: image                   # build (default) or image
-  env:                          # per-target settings, not secrets
-    DEVOPSY_DOMAINS: example.org www.example.org
-  release:                      # what `--release` runs (required for it)
-    remote: deploy
-  rollback:                     # what `--rollback` runs (required for it)
-    remote: deploy
-staging:
-  host: devopsy@203.0.113.10
-  path: /srv/myapp-staging
-  release:
-    remote: deploy
+  release: {remote: deploy}     # what --release runs (required for it)
+  rollback: {remote: deploy}    # what --rollback runs (required for it)
+targets:
+  prod:
+    host: devopsy@203.0.113.10  # any SSH destination or ~/.ssh/config alias
+    env:                        # per-target settings, not secrets
+      DEVOPSY_DOMAINS: example.org www.example.org
+  staging:
+    host: devopsy@203.0.113.10
+  "pr-*":                       # any matching name: @pr-123, @pr-feature
+    host: devopsy@203.0.113.10
+    releases: {keep: 1}
 ```
 
-Commit `targets.yaml`: CI deploys from it. It holds no secrets.
+Commit `config.yaml`: CI deploys from it. It holds no secrets.
+`.devopsy/config.local.yaml` (gitignore it) is read over it for one machine:
+top-level keys replace, `defaults` merge, a target replaces the same-named
+one; it is never uploaded.
 
-`defaults:`, a reserved entry, holds what a file's targets share. Each
-target takes its `mode`, `source`, `release`, `rollback` and `env`, unless
-it sets its own: `env` merges key by key (the target's value wins), and the
-steps replace whole. In `env`, `""` sets an empty value and `~` (null)
-removes a default. `host` and `path` stay each target's.
+On the server, each target lives in `<project>/<target>` under the server's
+release root (below): `shop/prod`, `shop/pr-123`. Its compose project, and
+so its containers, volumes and wildcard URL, is `<project>-<target>`
+(`shop-prod`). A target's `path:` replaces the directory: relative to the
+root, or absolute.
+
+`defaults:` gives each target its `mode`, `source`, `release`, `rollback`,
+`releases` and `env`, unless it sets its own: `env` merges key by key (the
+target's value wins), the rest replaces whole. In `env`, `""` sets an empty
+value and `~` (null) removes a default. `host` and `path` stay each
+target's.
 
 ```yaml
 defaults:
-  mode: image
   env:
     CERTRESOLVER: acmedns
-  release: {before: image, remote: deploy}
-  rollback: {remote: deploy}
-
-prod:
-  path: /srv/shop-prod
-demo:
-  path: /srv/shop-demo
-  env:
-    DEVOPSY_WILDCARD_DOMAIN: ""   # set and empty: no wildcard URL
-    CERTRESOLVER: ~               # not set: the label's own default
+targets:
+  demo:
+    env:
+      DEVOPSY_WILDCARD_DOMAIN: ""   # set and empty: no wildcard URL
+      CERTRESOLVER: ~               # not set: the label's own default
 ```
 
-A project's `targets.local.yaml` can have `defaults:` too, merged over
-`targets.yaml`'s, and the user-level file its own, for its targets only:
-a project's defaults never reach user-level targets.
-`.devopsy/targets.local.yaml` (gitignore it) adds or replaces whole targets
-for one machine, like a personal test server, and is never uploaded.
+Target names with `*` are patterns, one or more name characters: `@pr-123`
+uses a target named `pr-123`, else the matching pattern with the most
+literal characters (two equally specific ones are an error). The name is
+the concrete one everywhere: path, compose name, `DEVOPSY_TARGET`. Pull
+request environments are then a CI job: `devopsy @pr-$PR --release` when one
+opens or changes, `devopsy @pr-$PR --destroy --yes` when it closes.
 
 To keep server addresses out of the repository, leave `host` out and set it
 with variables, in your environment or `.devopsy/.env` (CI sets them in its
@@ -399,59 +404,105 @@ upper case, with anything but letters and digits as `_` (`staging-eu`:
 `DEVOPSY_TARGET_HOST_STAGING_EU`). It replaces any host; `DEVOPSY_TARGET_HOST`
 only fills in a missing one. `~/.ssh/config` aliases work as hosts too.
 
+### Instances
+
+One project can be installed several times on a server, each install an
+instance with its own environments: a second copy of a site, or one
+codebase serving several sites. Name the instance before the target, or
+with `DEVOPSY_INSTANCE` (both, and different: an error):
+
+```sh
+devopsy @b:prod --release                         # shop/b/prod, compose name shop-b-prod
+DEVOPSY_INSTANCE=b devopsy @prod --release        # the same
+devopsy @prod --instances                         # the instances on prod's server
+```
+
+`instances: required` in `config.yaml` makes every remote command name one,
+so a multi-site project is never released as itself by accident. Without
+it, `@prod` is the project's own `shop/prod`, and instances are still
+allowed. A target with its own `path:` takes none.
+
+### Variables on servers
+
+A target's `env` is written into each release as `.devopsy/target.env`. The
+server adds, nearest first:
+
+- the environment's `shared/.env`, linked into every release (secrets,
+  overrides): `devopsy @prod --vars set KEY`;
+- the instance's `.env`, `<project>/<instance>/.env`, shared by its
+  environments: `--vars --instance`;
+- the project's `.env`, `<project>/.env`, shared by all its environments on
+  that server: `--vars --project`.
+
+Then `target.env`. So a release applies however devopsy runs on the server,
+a rollback brings back that release's `target.env`, and edits to a `.env`
+apply without a release (to running containers when recreated). Each
+release's `target.env` also has `COMPOSE_PROJECT_NAME` (unless
+`compose.yaml` has a `name:`), `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
+`DEVOPSY_ENVIRONMENT` (the target) and, from a git checkout,
+`DEVOPSY_RELEASE_COMMIT` (see image tags below).
+
+### Release settings of a server
+
+Where releases live and how many stay is the server's decision, in the
+deploy user's own `~/.config/devopsy/config.yaml` there, read by devopsy on
+the server, so your laptop and CI always agree:
+
+```yaml
+# on the server: ~/.config/devopsy/config.yaml
+releases:
+  root: /srv          # default: the deploy user's home
+  keep: 2             # default for its projects; default 5
+  max_keep: 5         # no project keeps more; default 5
+```
+
+A project sets its own `keep` (`releases: {keep: 3}` in `config.yaml`, or
+per target), at most the server's `max_keep`. A project's config cannot set
+`root` or `max_keep`: a repository never decides a server's layout. The
+same file on your laptop only matters for releases landing on it, none
+today. `devopsy --debug` shows this machine's settings; `devopsy @prod
+--debug` the server's.
+
+`devopsy @pr-123 --destroy` removes an environment: compose down with its
+volumes, then its directory, data and `shared/.env` included. It asks for
+the target's name, unless `--yes`.
+
 ### User-level targets and plain directories
 
-`~/.config/devopsy/targets.yaml` (or `$DEVOPSY_HOME/targets.yaml`) holds
-targets you use from any directory, for running commands on servers. They
-belong to no project, so they only `--release` or `--rollback` with
-`source:`, the local directory of the project they release, and only
-from there; anywhere else, a release would upload whatever project you
-stand in. `~/` is your home directory:
+`~/.config/devopsy/config.yaml` (or `$DEVOPSY_HOME/config.yaml`) holds
+targets you use from any directory, for running commands on servers, with
+its own `defaults:` for them. They belong to no project, so they only
+`--release` or `--rollback` with `source:`, the local directory of the
+project they release, and only from there; anywhere else, a release would
+upload whatever project you stand in. `~/` is your home directory. The
+project's name and settings come from that source's `config.yaml`:
 
 ```yaml
-# ~/.config/devopsy/targets.yaml
-vm1-traefik:
-  host: devopsy@203.0.113.10
-  path: /srv/traefik
-  source: ~/src/devopsy-template-traefik     # release and rollback only from here
-  release: &steps
-    remote: deploy
-  rollback: *steps
+# ~/.config/devopsy/config.yaml
+defaults:
+  mode: image
+  source: ~/src/devopsy-template-traefik   # release and rollback only from here
+  release: {remote: deploy}
+  rollback: {remote: deploy}
+targets:
+  vm1-traefik:
+    host: devopsy@203.0.113.10
+    path: traefik/main            # its target in the source's project
 ```
 
-Without `source:` they never release. With it, completion also knows the
-source's commands and services, from any directory. A project's own targets
-win over user-level ones with the same name.
+Without `source:`, a user-level target needs a `path:`, and never releases.
+With it, completion also knows the source's commands and services, from
+any directory. A project's own targets win over user-level ones with the
+same name.
 
 A target's path can also be a plain devopsy directory, without releases:
-anything maintained in place, like a git clone.
-Commands then run in the path itself, and `--release`, `--rollback` and
-`--releases` refuse. Together:
-
-```yaml
-# ~/.config/devopsy/targets.yaml
-vm1-traefik:
-  host: devopsy@203.0.113.10
-  path: /srv/traefik
-```
+anything maintained in place, like a git clone. Commands then run in the
+path itself, and `--release`, `--rollback` and `--releases` refuse.
 
 ```sh
 devopsy @vm1-traefik proxies add cloudflare   # from anywhere
-devopsy @vm1-traefik logs -f traefik
-```
-
-A target's `env` is written into each release as `.devopsy/target.env`, which
-devopsy loads after `.env`, so the server's `shared/.env` overrides it. So it applies
-however devopsy runs on the server, and a rollback brings back that release's
-values. Change it in `targets.yaml` and release again. When `compose.yaml` has
-no `name:`, `target.env` also fixes `COMPOSE_PROJECT_NAME` to the target
-directory's name, so devopsy run by hand on the server, in `current`, still
-finds the project. From a git checkout, it also sets `DEVOPSY_RELEASE_COMMIT`
-to the commit released (see image tags below).
-
-```sh
 devopsy @prod --release          # upload a new release and run its steps
-devopsy @prod logs -f web      # any command runs in the current release
+devopsy @prod logs -f web        # any command runs in the current release
 devopsy @prod --releases         # list releases, * marks the current one
 devopsy @prod --rollback         # back to the previous release and run its steps
 devopsy @prod --shell            # a shell in a container, like devopsy --shell
@@ -562,8 +613,10 @@ last 5 releases.
 
 `--vars` manages the target's variables on the server: `shared/.env`, or
 `.devopsy/.env` for a plain directory. They are its secrets and overrides,
-linked into every release, as opposed to `targets.yaml`'s `env`, which is
-committed and written into each release as `target.env`.
+linked into every release, as opposed to `config.yaml`'s `env`, which is
+committed and written into each release as `target.env`. `--vars --project`
+and `--vars --instance` manage the `.env` shared by the project's, or the
+instance's, environments on that server.
 
 ```sh
 devopsy @prod --vars                         # names, values hidden
@@ -594,13 +647,12 @@ overrides) and run `devopsy @prod up -d` to apply it. Other files, like a
 bind mounts like `./mnt/data` keep pointing at `shared/mnt`.
 
 Several environments of one project live side by side as several targets,
-each with its own path: its own compose project, containers, data and public
-URL (`<target directory>.<server's wildcard domain>`, printed after each
-release).
+each with its own directory: its own compose project, containers, data and
+public URL (`<project>[-<instance>]-<target>.<server's wildcard domain>`,
+printed after each release).
 
 Each release records its commit, branch, uncommitted changes and who made it,
-shown by `--releases`. When `compose.yaml` has no top-level `name:`, the project
-is named after the target directory, here `myapp`.
+shown by `--releases`.
 
 The server needs `devopsy`, Docker, `tar` and `flock`;
 [devopsy-server](https://github.com/hanoii/devopsy-server) sets that up. In CI,
@@ -641,7 +693,7 @@ labels:
 At `--release`, before the new release becomes current, devopsy on the
 server checks the project's role is not held by another compose project
 there, and resolves each import: unless the release's environment already
-has `<VAR>` (targets.yaml or `shared/.env`, even empty), it finds the
+has `<VAR>` (config.yaml or a `.env` on the server, even empty), it finds the
 running compose project holding that role (else of that name), reads its
 export and writes `<VAR>` into `target.env`. An export that is there but
 empty is a value (`''`); one with newlines or control characters is
@@ -653,7 +705,7 @@ release had, and a later `devopsy up` on the server sees them.
 
 So a project that expects a proxy imports from it, one that does not
 imports nothing, and a target opts out of a value it would import by
-setting it, for example `DEVOPSY_WILDCARD_DOMAIN: ""` in `targets.yaml` or
+setting it, for example `DEVOPSY_WILDCARD_DOMAIN: ""` in `config.yaml` or
 `devopsy @prod --vars set --show DEVOPSY_WILDCARD_DOMAIN` (empty).
 
 `devopsy --debug labels` (locally, or `devopsy @prod --debug labels` on a

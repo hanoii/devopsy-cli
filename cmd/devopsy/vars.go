@@ -27,8 +27,9 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + t.Name + " --vars [get KEY | set [--show] KEY... | unset KEY...]"
+	usage := "usage: devopsy @" + t.Name + " --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
+	var level *remote.Level
 	var words []string
 	for _, a := range args {
 		switch a {
@@ -37,6 +38,16 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 			return 0
 		case "--show":
 			show = true
+		case "--project", "--instance":
+			name := strings.TrimPrefix(a, "--")
+			for i := range t.Levels {
+				if t.Levels[i].Name == name {
+					level = &t.Levels[i]
+				}
+			}
+			if level == nil {
+				return fail(fmt.Sprintf("%s: @%s has no %s level (an instance, or the default path, <project>[/<instance>]/<target>)", a, t.Name, name))
+			}
 		default:
 			words = append(words, a)
 		}
@@ -64,7 +75,7 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 			return fail(usage)
 		}
 		var out bytes.Buffer
-		code, err := remote.SSH(t, remote.VarsReadScript(t), bytes.NewReader(nil), &out, false)
+		code, err := remote.SSH(t, remote.VarsReadScript(t, level), bytes.NewReader(nil), &out, false)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -107,13 +118,13 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 			}
 			lines.WriteString(cli.DotenvLine(k, v) + "\n")
 		}
-		return editVars(t, remote.VarsSetScript(t), lines.String(), "set", args, color)
+		return editVars(t, remote.VarsSetScript(t, level), lines.String(), "set", args, color)
 
 	case "unset":
 		if len(args) == 0 {
 			return fail(usage)
 		}
-		return editVars(t, remote.VarsUnsetScript(t), strings.Join(args, "\n")+"\n", "unset", args, color)
+		return editVars(t, remote.VarsUnsetScript(t, level), strings.Join(args, "\n")+"\n", "unset", args, color)
 	}
 	return fail(usage)
 }

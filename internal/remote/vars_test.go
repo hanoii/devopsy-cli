@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+// varsRoot is the release root the fake server devopsy reports.
+var varsRoot = os.TempDir()
+
 // runVarsScript runs a --vars script locally, as sh on a server would, with
 // a no-op flock (macOS has none).
 func runVarsScript(t *testing.T, script, stdin string) string {
@@ -16,8 +19,12 @@ func runVarsScript(t *testing.T, script, stdin string) string {
 	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	settings := "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("sh", "-c", script)
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + varsRoot}
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -31,7 +38,7 @@ func TestVarsScripts(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "app's prod")
 	tg := &Target{Name: "prod", Host: "h", Path: base}
 	file := filepath.Join(base, "shared", ".env")
-	if out := runVarsScript(t, VarsSetScript(tg), "A='1'\n"); strings.TrimSpace(out) != file {
+	if out := runVarsScript(t, VarsSetScript(tg, nil), "A='1'\n"); strings.TrimSpace(out) != file {
 		t.Fatalf("set printed %q", out)
 	}
 	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
@@ -41,20 +48,20 @@ func TestVarsScripts(t *testing.T) {
 	// Existing keys are replaced in place, duplicates dropped, comments and
 	// other lines kept, new keys appended in order.
 	write(t, file, "# secrets\nexport A=old\nB=keep\nA=dup\nC = spaced\n\n")
-	runVarsScript(t, VarsSetScript(tg), "C='new c'\nA='new a'\nD='d'\n")
+	runVarsScript(t, VarsSetScript(tg, nil), "C='new c'\nA='new a'\nD='d'\n")
 	got, _ := os.ReadFile(file)
 	want := "# secrets\nA='new a'\nB=keep\nC='new c'\n\nD='d'\n"
 	if string(got) != want {
 		t.Fatalf("set\n got %q\nwant %q", got, want)
 	}
 
-	runVarsScript(t, VarsUnsetScript(tg), "A\nD\nMISSING\n")
+	runVarsScript(t, VarsUnsetScript(tg, nil), "A\nD\nMISSING\n")
 	got, _ = os.ReadFile(file)
 	if want := "# secrets\nB=keep\nC='new c'\n\n"; string(got) != want {
 		t.Fatalf("unset\n got %q\nwant %q", got, want)
 	}
 
-	out := runVarsScript(t, VarsReadScript(tg), "")
+	out := runVarsScript(t, VarsReadScript(tg, nil), "")
 	if out != file+"\n"+string(got) {
 		t.Fatalf("read %q", out)
 	}
@@ -68,7 +75,7 @@ func TestVarsScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	tp := &Target{Name: "vm1-traefik", Host: "h", Path: plain}
-	runVarsScript(t, VarsSetScript(tp), "TOKEN='x'\n")
+	runVarsScript(t, VarsSetScript(tp, nil), "TOKEN='x'\n")
 	if got, _ := os.ReadFile(filepath.Join(plain, ".devopsy", ".env")); string(got) != "TOKEN='x'\n" {
 		t.Fatalf("plain .env %q", got)
 	}
@@ -78,10 +85,27 @@ func TestVarsScripts(t *testing.T) {
 
 	// Reading a target with nothing yet creates nothing.
 	empty := filepath.Join(t.TempDir(), "new")
-	if out := runVarsScript(t, VarsReadScript(&Target{Path: empty}), ""); out != empty+"/shared/.env\n" {
+	if out := runVarsScript(t, VarsReadScript(&Target{Path: empty}, nil), ""); out != empty+"/shared/.env\n" {
 		t.Fatalf("read empty %q", out)
 	}
 	if _, err := os.Stat(empty); err == nil {
 		t.Fatal("read created the target directory")
+	}
+
+	// A level: the project's .env under the release root, shared.
+	root := t.TempDir()
+	varsRoot = root
+	defer func() { varsRoot = os.TempDir() }()
+	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
+	tl := &Target{Name: "prod", Path: "app/prod"}
+	if out := runVarsScript(t, VarsSetScript(tl, level), "SHARED='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", ".env") {
+		t.Fatalf("level set printed %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "app", ".env")); string(got) != "SHARED='1'\n" {
+		t.Fatalf("level .env %q", got)
+	}
+	// And a relative path resolves under the root.
+	if out := runVarsScript(t, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
+		t.Fatalf("relative path printed %q", out)
 	}
 }

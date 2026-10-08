@@ -10,7 +10,7 @@ user-facing behavior and keep it in sync with any change to it.
   end-to-end tests that run the built binary against a fake `docker`.
 - `internal/cli/`: finds the project, loads `.env` and decides what to run
   (`Build` returns a `Plan`; it never executes). Unit-tested.
-- `internal/remote/`: `@target` support: targets.yaml, packing a release, and
+- `internal/remote/`: `@target` support: config.yaml (`config.go`), packing a release, and
   the POSIX `sh` scripts run on the server over SSH. Scripts are checked with
   `sh -n` in tests; keep them POSIX and GNU coreutils based (`mv -T`).
 - `internal/complete/`: shell completion: the candidates for the words
@@ -39,9 +39,8 @@ user-facing behavior and keep it in sync with any change to it.
   compose's). Never add a word built-in. Help (bare `devopsy`) lists
   built-ins, remote commands, project commands with their `## Description:`
   and the compose fallback. After `@target` too: `--release`, `--rollback`,
-  `--releases`, `--shell`, `--shell-host`, `--vars` (the first three were
-  words until v0.12.0; `--domains` existed until v0.17.0 and now says
-  where it went). A word is a project command, else a docker
+  `--releases`, `--shell`, `--shell-host`, `--vars`, `--instances`,
+  `--destroy`. A word is a project command, else a docker
   compose command (`ComposeCommands`: compose's own completion, cached and
   refreshed when a word is missing, since compose's commands only change with
   its version), else an error, never compose's usage dump. Arguments starting
@@ -86,8 +85,9 @@ user-facing behavior and keep it in sync with any change to it.
   replaces itself with the command right away; only release builds (plain
   `X.Y.Z` versions) upgrade or check.
 - Variable precedence: caller's environment, `.devopsy/.env` (on servers
-  `shared/.env`), `.devopsy/target.env` (from targets.yaml). No server-wide
-  layer: `/etc/devopsy/devopsy.env` existed until October 2026.
+  `shared/.env`), then on servers `instance.env` and `project.env` (links
+  to `<root>/<project>[/<instance>]/.env`, made by every release, even when
+  the file does not exist yet), `.devopsy/target.env` (from config.yaml).
 - Roles, exports and imports (`internal/cli/roles.go`): compose labels
   for facts shared between projects on a host. `devopsy.role` is a slot one
   compose project per host holds, `devopsy.export.<KEY>` a fact on running
@@ -96,35 +96,61 @@ user-facing behavior and keep it in sync with any change to it.
   `proxy` and `WILDCARD_DOMAIN` are devopsy-template-traefik's convention. The
   hidden `--prepare-release` checks the role and resolves imports on the
   server, in the new release before it becomes current (`PrepareScript`,
-  only when the compose files mention the labels, so older servers release
-  other projects); an import never overrides what the release's
+  only when the compose files mention the labels); an import never overrides what the release's
   environment sets, even empty; an empty export is a value; rollbacks never
   check. Read from running containers, not files: the exporter must run,
   and required sources are waited for (`WaitForExporters`, 30 s). Each
   lookup reads one snapshot of the host (`Running`: `docker ps` then
   `docker inspect`), so a restart in between cannot mix states.
-  `PrepareScript` refuses servers older than v0.17.0 with an upgrade hint
-  instead of compose's "unknown flag". `--debug imports` compares every
+  `--debug imports` compares every
   running project's imports (from its containers' labels) with its
   release's `target.env` (found through compose's working_dir label;
   imported lines follow `cli.ImportedMarker`). Roles are advisory: checked
   only at devopsy releases, never a security boundary (docker group is
-  root-equivalent); pinning roles on the host is in ROADMAP.
-  Replaced, in v0.17.0, the `domains` capability's `wildcard-domain` and
-  `DEVOPSY_PROXY_DIR` (October 2026), which made devopsy's core define a
-  proxy contract.
+  root-equivalent); pinning roles on the host is in ROADMAP. devopsy's
+  core defines no proxy contract.
 - Wildcard host: `<name>.<DEVOPSY_WILDCARD_DOMAIN>`; without a domain,
   `<name>.localhost` locally and none in a release (`target.env` exists),
   where the environment only answers on `DEVOPSY_DOMAINS`.
   `DEVOPSY_HOST_RULE` stays unset without hosts, so labels' defaults apply.
-- Targets come from the project's `targets.local.yaml`, then `targets.yaml`,
-  then the user-level `~/.config/devopsy/targets.yaml` (never `~/.devopsy`:
-  project discovery would take the home directory for a project). User-level
-  targets refuse release and rollback unless their `source:` is the local
-  project's directory (`ReleasesHere`, symlinks resolved): a user-level
-  target belongs to no project, and a release from anywhere else would
-  replace, say, a server's Traefik with whatever project it ran in.
-  Hosts can come from variables, so
+- Config (`internal/remote/config.go`): the project's `.devopsy/config.yaml`
+  (`project:`, `instances:`, `releases: {keep}`, `defaults:`, `targets:`),
+  its `config.local.yaml` over it, and the user-level
+  `~/.config/devopsy/config.yaml` (`defaults:`, `targets:`, `releases:`;
+  never `~/.devopsy`: project discovery would take the home directory for a
+  project). Unknown keys are errors. Nothing else is read: older files
+  (targets.yaml) do nothing, and there is no migration code; the project
+  moves forward and moves its own servers by hand.
+- A project's name on servers is `project:`, required for anything remote,
+  never the checkout's folder (copies of templates would install under the
+  template's name). A target lives in `<project>[/<instance>]/<target>`
+  under the server's release root unless it sets `path:` (relative to the
+  root, or absolute; then no instance and no shared levels). Its compose
+  name is `<project>[-<instance>]-<target>` (`Target.ComposeName`), also for
+  a target with its own path.
+- Instances: `@<instance>:<target>` or `DEVOPSY_INSTANCE` (both and
+  different: error); `instances: required` makes every remote command name
+  one, so a multi-site project never releases as itself by accident.
+- Patterns: target keys with `*` (one or more name characters); exact names
+  win, then the most literal characters; equal: error. `Targets()` lists
+  names only, `Patterns()` the patterns.
+- Release settings are the machine's, never a project's or a laptop's: the
+  deploy user's `releases:` (`root`, default home; `keep` and `max_keep`,
+  default 5), read on the server by the hidden `--release-settings`, which
+  every script asks first (`basePrelude`), so laptop and CI resolve the
+  same paths. A project's `keep` (project or target) is capped at the
+  server's `max_keep`; `root` and `max_keep` in a project's config are
+  errors. On a laptop they only matter once `host: local` exists.
+- `--destroy`: down with volumes in the current release, `shared/mnt`
+  removed from a container (its files can belong to container users), then
+  the directory; asks for the target's name unless `--yes`, refuses a plain
+  directory and the root.
+- User-level targets refuse release and rollback unless their `source:` is
+  the local project's directory (`ReleasesHere`, symlinks resolved): a
+  user-level target belongs to no project, and a release from anywhere else
+  would replace, say, a server's Traefik with whatever project it ran in.
+  Their project (name, instances, keep) comes from the source's config.yaml;
+  without source they need `path:`. Hosts can come from variables, so
   public repositories need not name servers: `DEVOPSY_TARGET_HOST_<NAME>`
   replaces a target's host, `DEVOPSY_TARGET_HOST` fills in a missing one,
   from the caller's environment, then the project's `.env` (read for this
@@ -132,12 +158,12 @@ user-facing behavior and keep it in sync with any change to it.
   A target path without `current` but with `.devopsy/` is a plain
   directory: commands run there, release scripts refuse before creating
   anything.
-- `defaults:` in a targets file (reserved, never a target) gives that
-  file's targets their `mode`, `source`, steps and `env` unless they set
-  their own; `env` merges key by key, `KEY: ~` removes a default and `""`
-  stays an empty value (hence parsing nodes: a string map would make both
-  ""). The project's defaults (targets.local.yaml's over targets.yaml's)
-  and the user-level file's never mix. host and path are never defaults.
+- `defaults:` in a config file gives that file's targets their `mode`,
+  `source`, steps, `releases` and `env` unless they set their own; `env`
+  merges key by key, `KEY: ~` removes a default and `""` stays an empty
+  value (hence parsing nodes: a string map would make both ""). The
+  project's defaults (config.local.yaml's over config.yaml's) and the
+  user-level file's never mix. host and path are never defaults.
 - Releases write `COMPOSE_PROJECT_NAME` into `target.env` when compose.yaml has
   no name: devopsy run by hand in `current` named the project "current".
 - Remote: only `ssh` locally, and `devopsy`, `tar` and `flock` on the server.
@@ -179,7 +205,7 @@ fit together, and `../devopsy/ROADMAP.md` the open ideas.
 - Releases are full tar streams over SSH (catalyze, the largest project,
   compresses to about 3 MB). No rsync: macOS ships openrsync without the
   needed features.
-- `.devopsy/target.env` is written into each release from targets.yaml, so
+- `.devopsy/target.env` is written into each release from config.yaml, so
   per-target values apply however devopsy runs on the server, and rollbacks
   restore them. `shared/.env` is always linked so server edits apply without
   a release. It also carries `DEVOPSY_RELEASE_COMMIT` (from git, unless the
@@ -247,11 +273,11 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.
 
 End to end, against a real server: an OrbStack Debian 13 machine set up with
 devopsy-server (see its AGENTS.md), a linux/arm64 build installed in it, and
-a test project whose `.devopsy/targets.local.yaml` points at
+a test project whose `.devopsy/config.local.yaml` points at
 `devopsy@devopsy-test@orb`. OrbStack's SSH needs no keys.
 
 Roles and imports, end to end on that machine: release devopsy-template-traefik
-(its `targets.local.yaml` pointing there too), then a template importing from
+(its `config.local.yaml` pointing there too), then a template importing from
 it (whoami, with `DEVOPSY_TARGET_HOST`), and check its `target.env`,
 `devopsy @<target> --debug imports`, `devopsy @<traefik target> domains
 <project>`, a target that sets the variable empty, a rollback, and a

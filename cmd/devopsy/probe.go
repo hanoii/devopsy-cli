@@ -10,6 +10,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/probe"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 const probeUsage = "usage: devopsy --probe [--ip <server ip>] <host>..."
@@ -82,5 +83,18 @@ func runPrepareRelease(cwd string, color bool) int {
 		cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
 		return 1
 	}
+	return 0
+}
+
+// runReleaseSettings implements the hidden --release-settings, run by the
+// release scripts on a server: the machine's releases: settings, as
+// key=value lines.
+func runReleaseSettings(color bool) int {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
+		return 1
+	}
+	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\n", r.Root, r.Keep, r.MaxKeep)
 	return 0
 }

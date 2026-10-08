@@ -1,7 +1,7 @@
 // Package remote runs devopsy on a server over SSH: `devopsy @<target> ...`.
 //
-// A target, in .devopsy/targets.yaml, names an SSH destination and a path.
-// On the server the path holds:
+// A target, in .devopsy/config.yaml, names an SSH destination and an
+// environment of the project; its path on the server holds:
 //
 //	releases/<id>/   one copy of the project per release
 //	current          symlink to the live release
@@ -21,535 +21,14 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
-
-	"go.yaml.in/yaml/v3"
 )
-
-// TargetsFile is the targets definition, inside .devopsy/. Committed.
-const TargetsFile = "targets.yaml"
-
-// LocalTargetsFile adds or replaces whole targets, for one machine. Not
-// committed, never released.
-const LocalTargetsFile = "targets.local.yaml"
 
 // TargetEnvFile is written into each release from the target's env.
 const TargetEnvFile = "target.env"
-
-// UserTargetsFile is the user-level targets file:
-// $XDG_CONFIG_HOME/devopsy/targets.yaml (~/.config/devopsy/targets.yaml), or
-// $DEVOPSY_HOME/targets.yaml. Its targets work from any directory, for running
-// commands on servers, never for release or rollback. Not ~/.devopsy: devopsy
-// would take the home directory for a project.
-func UserTargetsFile() string {
-	if h := os.Getenv("DEVOPSY_HOME"); h != "" {
-		return filepath.Join(h, TargetsFile)
-	}
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "devopsy", TargetsFile)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "devopsy", TargetsFile)
-}
-
-// Keep is how many releases stay on the server.
-const Keep = 5
-
-// Modes of a target.
-const (
-	ModeImage = "image" // only .devopsy/ is released; images come from a registry
-	ModeBuild = "build" // the whole project is released and built on the server
-)
-
-// Target is one entry of targets.yaml.
-type Target struct {
-	Name string `yaml:"-"`
-	// Host is the SSH destination, like deploy@203.0.113.10 or an alias from
-	// ~/.ssh/config. DEVOPSY_TARGET_HOST_<NAME> replaces it, and
-	// DEVOPSY_TARGET_HOST sets it when targets.yaml has none (see LoadTarget).
-	Host string `yaml:"host"`
-	// Path is the absolute directory on the server.
-	Path string `yaml:"path"`
-	Mode string `yaml:"mode"`
-	// Env is written into each release as .devopsy/target.env: per-target,
-	// committed, non-secret settings like DEVOPSY_DOMAINS.
-	Env map[string]string `yaml:"env"`
-	// Release and Rollback are what `release` and `rollback` run: required
-	// for them, see Steps.
-	Release  *Steps `yaml:"release"`
-	Rollback *Steps `yaml:"rollback"`
-	// Source, on a user-level target, is the local project directory it
-	// releases from: release and rollback run only there. Without it a
-	// user-level target never releases. "~/" means the home directory.
-	Source string `yaml:"source"`
-	// User is set for targets from the user-level file.
-	User bool `yaml:"-"`
-	// File is where the target was defined.
-	File string `yaml:"-"`
-	// nulls are its env keys set to null: they remove a default.
-	nulls map[string]bool
-	// From says where each value came from, for --debug: "host", "path",
-	// "mode", "source", "release", "rollback", "env.KEY". A file, "defaults
-	// in" a file, or a variable.
-	From map[string]string `yaml:"-"`
-}
-
-// Steps are what `release` or `rollback` runs, in three phases, so the
-// upload and the switch of `current` always happen at the same point:
-//
-//   - Before: local devopsy commands, in order, before anything touches the
-//     server. A failure stops there.
-//   - then `release` uploads, and both switch `current`;
-//   - Remote: one devopsy command on the server, in the new current, under
-//     the release lock. A failure switches `current` back. Several remote
-//     steps belong in one project command.
-//   - After: local devopsy commands once the release is live. A failure is
-//     reported; nothing is undone.
-//
-// Each entry is a devopsy command line, split on spaces (no quoting).
-type Steps struct {
-	Before StepList `yaml:"before"`
-	Remote string   `yaml:"remote"`
-	After  StepList `yaml:"after"`
-}
-
-// UnmarshalYAML refuses unknown keys: a typo (remotes:) would otherwise
-// release without running anything.
-func (s *Steps) UnmarshalYAML(n *yaml.Node) error {
-	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: expected before, remote and after", n.Line)
-	}
-	for i := 0; i < len(n.Content); i += 2 {
-		switch k := n.Content[i].Value; k {
-		case "before", "remote", "after":
-		default:
-			return fmt.Errorf("line %d: unknown key %q (before, remote, after)", n.Content[i].Line, k)
-		}
-	}
-	type plain Steps
-	return n.Decode((*plain)(s))
-}
-
-// StepList is one command or a list of them.
-type StepList []string
-
-// UnmarshalYAML takes a single string as a list of one.
-func (l *StepList) UnmarshalYAML(n *yaml.Node) error {
-	if n.Kind == yaml.ScalarNode {
-		*l = StepList{n.Value}
-		return nil
-	}
-	var list []string
-	if err := n.Decode(&list); err != nil {
-		return err
-	}
-	*l = list
-	return nil
-}
-
-// StepArgs splits a step into devopsy's arguments.
-func StepArgs(step string) []string {
-	return strings.Fields(step)
-}
-
-var (
-	targetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-	envName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-)
-
-func readTargets(file string) (map[string]*Target, error) {
-	f, err := readTargetsFile(file)
-	if err != nil {
-		return nil, err
-	}
-	return f.targets, nil
-}
-
-// DefaultsKey is the reserved entry of a targets file whose fields every
-// target of that file (and, for a project, of its targets.local.yaml) takes
-// unless it sets its own: mode, source, release, rollback, and env merged
-// key by key. host and path stay each target's.
-const DefaultsKey = "defaults"
-
-// targetsFile is one targets file: its targets, its defaults (nil without),
-// and per target (and for the defaults, under DefaultsKey) the env keys set
-// to null, which remove a default instead of setting "".
-type targetsFile struct {
-	targets  map[string]*Target
-	defaults *Target
-	nulls    map[string]map[string]bool
-}
-
-func readTargetsFile(file string) (*targetsFile, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	var nodes map[string]yaml.Node
-	if err := yaml.Unmarshal(data, &nodes); err != nil {
-		return nil, fmt.Errorf("%s: %w", file, err)
-	}
-	f := &targetsFile{targets: map[string]*Target{}, nulls: map[string]map[string]bool{}}
-	for name, node := range nodes {
-		var t *Target
-		if err := node.Decode(&t); err != nil {
-			return nil, fmt.Errorf("%s: %s: %w", file, name, err)
-		}
-		f.nulls[name] = nullEnv(&node)
-		for k := range f.nulls[name] {
-			delete(t.Env, k)
-		}
-		if t != nil {
-			from := file
-			if name == DefaultsKey {
-				from = "defaults in " + file
-			}
-			t.From = origins(t, from)
-		}
-		if name == DefaultsKey {
-			if t != nil && (t.Host != "" || t.Path != "") {
-				return nil, fmt.Errorf("%s: defaults: host and path belong to each target", file)
-			}
-			f.defaults = t
-			continue
-		}
-		f.targets[name] = t
-	}
-	return f, nil
-}
-
-// origins marks every value t sets as coming from from.
-func origins(t *Target, from string) map[string]string {
-	o := map[string]string{}
-	set := func(field string, ok bool) {
-		if ok {
-			o[field] = from
-		}
-	}
-	set("host", t.Host != "")
-	set("path", t.Path != "")
-	set("mode", t.Mode != "")
-	set("source", t.Source != "")
-	set("release", t.Release != nil)
-	set("rollback", t.Rollback != nil)
-	for k := range t.Env {
-		o["env."+k] = from
-	}
-	return o
-}
-
-// nullEnv lists the env keys a target node sets to null (KEY: ~).
-func nullEnv(n *yaml.Node) map[string]bool {
-	nulls := map[string]bool{}
-	if n.Kind != yaml.MappingNode {
-		return nulls
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value != "env" || n.Content[i+1].Kind != yaml.MappingNode {
-			continue
-		}
-		env := n.Content[i+1]
-		for j := 0; j+1 < len(env.Content); j += 2 {
-			if env.Content[j+1].Tag == "!!null" {
-				nulls[env.Content[j].Value] = true
-			}
-		}
-	}
-	return nulls
-}
-
-// mergeDefaults returns over's fields on top of base's: for two defaults,
-// or defaults under a target. env merges key by key; nulls are over's keys
-// that remove base's.
-func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
-	if base == nil {
-		return over
-	}
-	t := *over
-	from := map[string]string{}
-	for k, v := range base.From {
-		from[k] = v
-	}
-	for k := range nulls {
-		delete(from, "env."+k)
-	}
-	for k, v := range over.From {
-		from[k] = v
-	}
-	t.From = from
-	if t.Mode == "" {
-		t.Mode = base.Mode
-	}
-	if t.Source == "" {
-		t.Source = base.Source
-	}
-	if t.Release == nil {
-		t.Release = base.Release
-	}
-	if t.Rollback == nil {
-		t.Rollback = base.Rollback
-	}
-	env := map[string]string{}
-	for k, v := range base.Env {
-		env[k] = v
-	}
-	for k := range nulls {
-		delete(env, k)
-	}
-	for k, v := range over.Env {
-		env[k] = v
-	}
-	if len(env) > 0 {
-		t.Env = env
-	}
-	return &t
-}
-
-// HostVar is the variable that replaces the host of the target name:
-// DEVOPSY_TARGET_HOST_ and the name in upper case, anything but letters and
-// digits as "_" (vm1-traefik: DEVOPSY_TARGET_HOST_VM1_TRAEFIK).
-func HostVar(name string) string {
-	suffix := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z':
-			return r - 'a' + 'A'
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			return r
-		}
-		return '_'
-	}, name)
-	return DefaultHostVar + "_" + suffix
-}
-
-// DefaultHostVar sets the host of targets that define none.
-const DefaultHostVar = "DEVOPSY_TARGET_HOST"
-
-// loadTargets reads every target, lowest precedence first: the user-level
-// file, then the project's targets.yaml, then its targets.local.yaml.
-// projectDir is "" outside a project. files are the files found.
-func loadTargets(projectDir string) (targets map[string]*Target, files []string, err error) {
-	targets = map[string]*Target{}
-	// The user-level file's defaults apply to its targets only, and a
-	// project's (targets.local.yaml's over targets.yaml's) to the project's
-	// only: they never mix.
-	var defaults *Target
-	load := func(file string, user bool) error {
-		if file == "" {
-			return nil
-		}
-		f, err := readTargetsFile(file)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		files = append(files, file)
-		if f.defaults != nil {
-			defaults = mergeDefaults(defaults, f.defaults, f.nulls[DefaultsKey])
-		}
-		for n, t := range f.targets {
-			if t != nil {
-				t.User = user
-				t.File = file
-				t.nulls = f.nulls[n]
-			}
-			targets[n] = t
-		}
-		return nil
-	}
-	apply := func(user bool) {
-		for n, t := range targets {
-			if t != nil && t.User == user && defaults != nil {
-				merged := mergeDefaults(defaults, t, t.nulls)
-				targets[n] = merged
-			}
-		}
-		defaults = nil
-	}
-	if err := load(UserTargetsFile(), true); err != nil {
-		return nil, nil, err
-	}
-	apply(true)
-	if projectDir != "" {
-		if err := load(filepath.Join(projectDir, TargetsFile), false); err != nil {
-			return nil, nil, err
-		}
-		if err := load(filepath.Join(projectDir, LocalTargetsFile), false); err != nil {
-			return nil, nil, err
-		}
-		apply(false)
-	}
-	return targets, files, nil
-}
-
-// ReleasesHere reports whether release and rollback may run for t from the
-// project whose .devopsy/ is projectDir ("" outside a project). A project's
-// own targets always may. A user-level target belongs to no project, so
-// only from its source: anywhere else, release would upload whatever
-// project devopsy runs in to it.
-func (t *Target) ReleasesHere(projectDir string) (bool, string) {
-	if !t.User {
-		return true, ""
-	}
-	if t.Source == "" {
-		return false, fmt.Sprintf("@%s is a user-level target (%s) without source: release and rollback need a target defined by the project, in .devopsy/targets.yaml, or source: <the project's directory> on it", t.Name, t.File)
-	}
-	want := t.SourceDir()
-	here := ""
-	if projectDir != "" {
-		here = filepath.Dir(projectDir)
-	}
-	if here != "" && samePath(here, want) {
-		return true, ""
-	}
-	if here == "" {
-		here = "outside a project"
-	}
-	return false, fmt.Sprintf("@%s releases only from its source, %s (%s); here: %s", t.Name, t.Source, t.File, here)
-}
-
-// SourceDir is a user-level target's source, with "~/" expanded; "" when it
-// has none.
-func (t *Target) SourceDir() string {
-	dir := t.Source
-	if home, err := os.UserHomeDir(); err == nil && (dir == "~" || strings.HasPrefix(dir, "~/")) {
-		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
-	}
-	return dir
-}
-
-// samePath compares two directories after resolving symbolic links.
-func samePath(a, b string) bool {
-	resolve := func(p string) string {
-		if abs, err := filepath.Abs(p); err == nil {
-			p = abs
-		}
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			p = r
-		}
-		return filepath.Clean(p)
-	}
-	return resolve(a) == resolve(b)
-}
-
-// Targets lists the targets available from projectDir ("" outside a
-// project), sorted by name, as defined: hosts from variables are not filled
-// in and nothing is validated. For shell completion.
-func Targets(projectDir string) []*Target {
-	targets, _, err := loadTargets(projectDir)
-	if err != nil {
-		return nil
-	}
-	var out []*Target
-	for n, t := range targets {
-		if t == nil || !targetName.MatchString(n) {
-			continue
-		}
-		t.Name = n
-		out = append(out, t)
-	}
-	// The project's targets, then the user-level ones, each by name.
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].User != out[j].User {
-			return !out[i].User
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
-}
-
-// LoadTarget reads one target from projectDir/targets.yaml.
-//
-// Hosts can come from variables, so a public repository need not name its
-// servers: HostVar(name) replaces the target's host, and DefaultHostVar sets
-// it when the target has none. They are read from the caller's environment,
-// then, for the project's own targets, from projectEnv (its .devopsy/.env;
-// nil for none). User-level targets ignore projectEnv: a project's settings
-// must not redirect them.
-func LoadTarget(projectDir, name string, projectEnv func(string) (string, bool)) (*Target, error) {
-	targets, files, err := loadTargets(projectDir)
-	if err != nil {
-		return nil, err
-	}
-	if len(targets) == 0 {
-		where := UserTargetsFile()
-		if projectDir != "" {
-			where = filepath.Join(projectDir, TargetsFile) + " or " + where
-		}
-		return nil, fmt.Errorf("no targets defined: define %q in %s", name, where)
-	}
-	if name == DefaultsKey {
-		return nil, fmt.Errorf("%q is not a target: it holds what the targets of its file share", name)
-	}
-	t, ok := targets[name]
-	if !ok || t == nil {
-		names := make([]string, 0, len(targets))
-		for n := range targets {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		return nil, fmt.Errorf("no target %q in %s (targets: %s)", name, strings.Join(files, ", "), strings.Join(names, ", "))
-	}
-	t.Name = name
-	if !targetName.MatchString(name) {
-		return nil, fmt.Errorf("target name %q: use letters, digits, '.', '_' and '-'", name)
-	}
-	lookup := func(k string) string {
-		if v, ok := os.LookupEnv(k); ok {
-			return v
-		}
-		if projectEnv != nil && !t.User {
-			v, _ := projectEnv(k)
-			return v
-		}
-		return ""
-	}
-	if t.From == nil {
-		t.From = map[string]string{}
-	}
-	if v := lookup(HostVar(name)); v != "" {
-		t.Host = v
-		t.From["host"] = HostVar(name)
-	} else if t.Host == "" {
-		t.Host = lookup(DefaultHostVar)
-		t.From["host"] = DefaultHostVar
-	}
-	if t.Host == "" {
-		return nil, fmt.Errorf("target %q: no host: set host in %s, or %s or %s in the environment or .devopsy/.env", name, t.File, HostVar(name), DefaultHostVar)
-	}
-	if t.Path == "" {
-		return nil, fmt.Errorf("target %q: path is required", name)
-	}
-	if !path.IsAbs(t.Path) || path.Clean(t.Path) == "/" {
-		return nil, fmt.Errorf("target %q: path must be an absolute directory, not /", name)
-	}
-	t.Path = path.Clean(t.Path)
-	switch t.Mode {
-	case "":
-		// Build works for every project, image only for those that never
-		// build: a wrong build uploads extra files, a wrong image fails.
-		t.Mode = ModeBuild
-		t.From["mode"] = "devopsy's default"
-	case ModeImage, ModeBuild:
-	default:
-		return nil, fmt.Errorf("target %q: mode must be %q or %q", name, ModeImage, ModeBuild)
-	}
-	for k := range t.Env {
-		if !envName.MatchString(k) {
-			return nil, fmt.Errorf("target %q: env: %q is not a variable name", name, k)
-		}
-	}
-	return t, nil
-}
 
 // excluded reports whether a path, relative to the project root, stays out of
 // a release: server-side state that lives in shared/ instead.
@@ -559,7 +38,8 @@ func excluded(rel string) bool {
 	case rel == ".git" || strings.HasPrefix(rel, ".git/"):
 		return true
 	case rel == ".devopsy/.env",
-		rel == ".devopsy/"+LocalTargetsFile,
+		rel == ".devopsy/"+LocalConfigFile,
+		rel == ".devopsy/project.env", rel == ".devopsy/instance.env",
 		rel == ".devopsy/"+TargetEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",
@@ -794,10 +274,23 @@ func devopsyCall(projectName string, args []string, exec bool) string {
 	return env + "devopsy " + quoteAll(args)
 }
 
-// Shell helpers shared by the scripts. $base is the target path.
-const prelude = `set -eu
-base=%s
-if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+// basePrelude sets $root, $keep and $max_keep from the server's devopsy
+// (--release-settings: its user-level config's releases:) and $base to the
+// target's directory: its path, relative to $root unless absolute. The
+// server decides where releases live, so a laptop and CI always agree.
+func basePrelude(t *Target) string {
+	return `settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
+root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
+keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
+max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
+path=` + Quote(t.Path) + `
+case $path in /*) base=$path ;; *) base=$root/$path ;; esac
+`
+}
+
+// prelude adds, for release scripts, the checks and helpers they share.
+func prelude(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
   exit 1
 fi
@@ -808,10 +301,11 @@ lock() {
   flock -w 600 9 || { echo "devopsy: another release is running on $base" >&2; exit 75; }
 }
 `
+}
 
 // UploadScript extracts a release from stdin.
 func UploadScript(t *Target, id string) string {
-	return fmt.Sprintf(prelude, Quote(t.Path)) + fmt.Sprintf(`rel="$base/releases/"%s
+	return prelude(t) + fmt.Sprintf(`rel="$base/releases/"%s
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
@@ -827,7 +321,7 @@ mv "$rel.tmp" "$rel"
 // instead of id. It ends with the release's URL, its wildcard host or else
 // its first domain, as devopsy on the server computes them.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
-	s := fmt.Sprintf(prelude, Quote(t.Path)) + "lock\n"
+	s := prelude(t) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 `
 	if rollback {
@@ -850,6 +344,11 @@ for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   ln -s "$f" "$rel/.devopsy/${f##*/}"
 done
 `
+	// The project's and the instance's .env, shared by their environments:
+	// linked even when missing, so one created later applies too.
+	for _, l := range t.Levels {
+		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$rel/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
+	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 	}
@@ -873,10 +372,18 @@ if [ "$status" != 0 ]; then
 fi
 `
 	}
-	s += fmt.Sprintf(`ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +%d | while read -r r; do
+	// keep: the target's or project's, else the server's, at most its
+	// max_keep.
+	s += fmt.Sprintf(`k=%d
+[ "$k" -gt 0 ] || k=$keep
+if [ "$k" -gt "$max_keep" ]; then
+  echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k"
+  k=$max_keep
+fi
+ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | while read -r r; do
   [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
 done
-`, Keep+1)
+`, t.Keep)
 	s += `vars=$(cd "$base/current" && ` + devopsyCall(projectName, []string{"--env"}, false) + ` 2>/dev/null) || vars=
 host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_WILDCARD_HOST='\(.*\)'$/\1/p")
 domains=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_DOMAINS='\(.*\)'$/\1/p" | tr ',' ' ')
@@ -897,19 +404,9 @@ fi
 // the call. It checks the project's devopsy.role is free on the host and
 // writes its devopsy.import labels into the release's target.env, so
 // rollbacks keep what each release had. Only for projects with those labels
-// (outside comments), so servers with an older devopsy release the others,
-// and those with labels say which devopsy they need. A failure leaves
-// current alone.
+// (outside comments). A failure leaves current alone.
 const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
-  v=$(devopsy --version 2>/dev/null | sed -n '1s/^devopsy v\{0,1\}//p')
-  case $v in
-    0.[0-9].* | 0.1[0-6].*)
-      echo "devopsy: this project's devopsy.role or devopsy.import labels need devopsy v0.17.0 or newer on the server, which has $v: devopsy --upgrade" >&2
-      prepared=1
-      ;;
-    *) prepared=0; (cd "$rel" && %s) || prepared=1 ;;
-  esac
-  if [ "$prepared" != 0 ]; then
+  if ! (cd "$rel" && %s); then
     touch "$rel/.devopsy-failed"
     echo "devopsy: release $id not made current" >&2
     exit 1
@@ -918,18 +415,17 @@ fi
 `
 
 // enter changes to where commands run: the current release, or the path
-// itself for a plain devopsy directory (like /srv/traefik, a git clone).
+// itself for a plain devopsy directory (a project maintained in place).
 func enter(t *Target) string {
-	return fmt.Sprintf(`base=%s
-if [ -d "$base/current" ]; then
+	return basePrelude(t) + fmt.Sprintf(`if [ -d "$base/current" ]; then
   cd "$base/current"
 elif [ -d "$base/.devopsy" ]; then
   cd "$base"
 else
-  echo "devopsy: %s has no release and no .devopsy/ project: run 'devopsy @%s release' first" >&2
+  echo "devopsy: $base has no release and no .devopsy/ project: run 'devopsy @%s --release' first" >&2
   exit 1
 fi
-`, Quote(t.Path), t.Path, t.Name)
+`, t.Name)
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -946,9 +442,7 @@ func ShellScript(t *Target) string {
 // ReleasesScript prints one line per release: id, current flag, failed flag
 // and the record JSON, tab separated.
 func ReleasesScript(t *Target) string {
-	return fmt.Sprintf(`set -eu
-base=%s
-if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, without releases" >&2
   exit 1
 fi
@@ -961,7 +455,7 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   tr -d '\n' < "$base/releases/$r/%s" 2>/dev/null || true
   echo
 done
-`, Quote(t.Path), RecordFile)
+`, RecordFile)
 }
 
 // FormatReleases turns ReleasesScript output into a table.
@@ -1042,4 +536,56 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 		return 1, err
 	}
 	return 0, nil
+}
+
+// DestroyScript removes the target's environment: down, with its volumes,
+// in the current release, then its directory, under the release lock.
+// Data bind-mounted from shared/mnt can belong to container users, so it is
+// removed from a container.
+func DestroyScript(t *Target, projectName string) string {
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ ! -d "$base" ]; then
+  echo "devopsy: nothing at $base"
+  exit 0
+fi
+if [ "$base" = "$root" ] || [ "$base" = / ]; then
+  echo "devopsy: refusing to remove $base" >&2
+  exit 1
+fi
+if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  echo "devopsy: $base is a plain devopsy directory, not an environment with releases: remove it by hand" >&2
+  exit 1
+fi
+exec 9>"$base/.lock"
+flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+if [ -d "$base/current" ]; then
+  (cd "$base/current" && %s)
+fi
+if [ -d "$base/shared/mnt" ]; then
+  docker run --rm --network none -v "$base/shared:/shared" %s rm -rf /shared/mnt
+fi
+cd /
+rm -rf "$base"
+echo "devopsy: removed $base"
+`, devopsyCall(projectName, []string{"down", "--volumes", "--remove-orphans"}, false), CleanupImage)
+}
+
+// CleanupImage removes files container users own, for DestroyScript.
+const CleanupImage = "busybox:1.37.0"
+
+// InstancesScript prints the project's instances on the server, one per
+// line: the name, a tab, its targets (directories with releases).
+func InstancesScript(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `dir="$root"/` + Quote(t.Project.Name) + `
+[ -d "$dir" ] || exit 0
+for d in "$dir"/*/; do
+  d=${d%/}
+  [ -d "$d" ] && [ ! -d "$d/releases" ] || continue
+  targets=
+  for e in "$d"/*/; do
+    e=${e%/}
+    [ -d "$e/releases" ] && targets="$targets ${e##*/}"
+  done
+  [ -z "$targets" ] || printf '%s\t%s\n' "${d##*/}" "${targets# }"
+done
+`
 }

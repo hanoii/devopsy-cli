@@ -86,9 +86,8 @@ func run() int {
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
 	}
-	if args[0] == "--domains" {
-		cli.Fprint(os.Stderr, red, cli.DomainsMoved, color)
-		return 1
+	if args[0] == "--release-settings" {
+		return runReleaseSettings(color)
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {

@@ -219,7 +219,7 @@ func TestBuildWordsAreNotBuiltins(t *testing.T) {
 			t.Errorf("%s: %v", flag, err)
 		}
 	}
-	for _, env := range []string{"--env", "print-env"} {
+	for _, env := range []string{"--env"} {
 		var out *Output
 		if _, err := build(root, []string{env}, nil); !errors.As(err, &out) || !strings.Contains(out.Text, "COMPOSE_PROJECT_NAME='app'") {
 			t.Errorf("%s: %v", env, err)

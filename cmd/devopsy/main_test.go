@@ -49,7 +49,7 @@ func runDevopsy(t *testing.T, dir string, env []string, args ...string) (string,
 	t.Helper()
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_HOME=" + t.TempDir()}, env...)
+	cmd.Env = append([]string{"PATH=" + fakeBin(t) + ":/usr/bin:/bin", "DEVOPSY_HOME=" + t.TempDir(), "HOME=" + t.TempDir()}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -161,7 +161,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  host: nowhere.invalid\n  path: /srv/app\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ntargets:\n  prod:\n    host: nowhere.invalid\n", 0o644)
 	for _, sub := range []string{"--release", "--rollback", "--releases", "--shell", "--shell-host"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
@@ -178,7 +178,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 // work outside a project.
 func TestUserTargets(t *testing.T) {
 	home := t.TempDir()
-	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: nowhere.invalid\n  path: /srv/traefik\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "targets:\n  vm1-traefik:\n    host: nowhere.invalid\n    path: /srv/traefik\n", 0o644)
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +193,8 @@ func TestUserTargets(t *testing.T) {
 	}
 	// With source, only from that directory ("~/" is the home directory),
 	// where the guard lets it through to the usual release checks.
-	write(t, filepath.Join(home, "targets.yaml"), "vm1-traefik:\n  host: nowhere.invalid\n  path: /srv/traefik\n  source: ~/app\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "targets:\n  vm1-traefik:\n    host: nowhere.invalid\n    source: ~/app\n", 0o644)
+	write(t, filepath.Join(tmp, "app", ".devopsy", "config.yaml"), "project: traefik\n", 0o644)
 	write(t, filepath.Join(tmp, "other", ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
 	withHome := append([]string{"HOME=" + tmp, "DEVOPSY_SSH_COMMAND=false"}, env...)
 	out, code := runDevopsy(t, filepath.Join(tmp, "other"), withHome, "@vm1-traefik", "--release")
@@ -212,7 +213,7 @@ func TestUserTargets(t *testing.T) {
 	}
 
 	// Outside a project the target resolves (help needs no SSH).
-	out, code = runDevopsy(t, t.TempDir(), env, "@vm1-traefik", "--help")
+	out, code = runDevopsy(t, t.TempDir(), withHome, "@vm1-traefik", "--help")
 	if code != 0 || !strings.Contains(out, "On a server") {
 		t.Errorf("outside a project (%d):\n%s", code, out)
 	}
@@ -230,7 +231,7 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\ntargets:\n  prod: {}\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_TARGET_HOST=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
@@ -278,7 +279,7 @@ func TestRemoteVerbose(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  host: devopsy@server\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\ntargets:\n  prod:\n    host: devopsy@server\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DB_PASSWORD=dotenv-secret-value\n", 0o644)
 	// true stands in for ssh: only devopsy's own output remains.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true"}, "-v", "@prod", "exec", "db", "dotenv-secret-value")
@@ -306,9 +307,9 @@ func TestRemoteVars(t *testing.T) {
 	server := filepath.Join(tmp, "srv", "app-prod")
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  host: devopsy@server\n  path: "+server+"\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\ntargets:\n  prod:\n    host: devopsy@server\n    path: "+server+"\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "REG_USER=deploy\nREG_PASSWORD='p@ss word'\n", 0o644)
-	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(stdin string, args ...string) (string, int) {
 		t.Helper()
 		cmd := exec.Command(binary, args...)
@@ -375,7 +376,7 @@ func TestRemoteVars(t *testing.T) {
 	// A user-level target never takes values from the project's .env.
 	home := t.TempDir()
 	box := filepath.Join(tmp, "srv", "box")
-	write(t, filepath.Join(home, "targets.yaml"), "box:\n  host: devopsy@server\n  path: "+box+"\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "targets:\n  box:\n    host: devopsy@server\n    path: "+box+"\n", 0o644)
 	env = append(env, "DEVOPSY_HOME="+home)
 	if out, code := run("other\n", "@box", "--vars", "set", "REG_USER"); code != 0 {
 		t.Fatalf("user-level set (%d):\n%s", code, out)
@@ -389,7 +390,7 @@ func TestCompletion(t *testing.T) {
 	root := t.TempDir()
 	dot := filepath.Join(root, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
-	write(t, filepath.Join(dot, "targets.yaml"), "prod:\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ntargets:\n  prod:\n    path: /srv/app-prod\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
 	// docker's own completion, as cobra prints it: compose commands, one
 	// clashing with the project's deploy.
@@ -433,13 +434,13 @@ func TestReleaseSteps(t *testing.T) {
 	project := filepath.Join(tmp, "app")
 	dot := filepath.Join(project, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
-	targets := "prod:\n  host: devopsy@server\n  path: " + server + "\n  mode: image\n  env:\n    SITE: one\n" +
+	targets := "project: app\ntargets:\n prod:\n  host: devopsy@server\n  path: " + server + "\n  mode: image\n  env:\n    SITE: one\n" +
 		"  release:\n    before: check\n    remote: deploy --fast\n    after: [done]\n"
-	write(t, filepath.Join(dot, "targets.yaml"), targets, 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\nexit ${FAIL_REMOTE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
-	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin"}
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(extra []string, args ...string) (string, int) {
 		t.Helper()
 		cmd := exec.Command(binary, args...)
@@ -486,7 +487,7 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("rollback without steps (%d):\n%s", code, out)
 	}
 	// With rollback steps: back to the first release, running its remote.
-	write(t, filepath.Join(dot, "targets.yaml"), targets+"  rollback:\n    remote: deploy --back\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback:\n    remote: deploy --back\n", 0o644)
 	time.Sleep(1100 * time.Millisecond)
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
 		t.Fatalf("second release (%d):\n%s", code, out)
@@ -496,7 +497,7 @@ func TestReleaseSteps(t *testing.T) {
 	}
 
 	// Unknown keys are refused, not ignored.
-	write(t, filepath.Join(dot, "targets.yaml"), strings.Replace(targets, "remote:", "remotes:", 1), 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), strings.Replace(targets, "remote:", "remotes:", 1), 0o644)
 	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, `unknown key "remotes"`) {
 		t.Fatalf("unknown key (%d):\n%s", code, out)
 	}
@@ -511,7 +512,7 @@ func TestNestedRemoteProjectName(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "targets.yaml"), "prod:\n  host: devopsy@server\n  path: /srv/app-prod\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\ntargets:\n  prod:\n    host: devopsy@server\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", "commands", "nested"), "#!/bin/sh\nexec devopsy @prod ps\n", 0o755)
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "nested")
 	if code != 0 || !strings.Contains(out, `COMPOSE_PROJECT_NAME='\''app-prod'\'' exec devopsy`) {
@@ -527,10 +528,10 @@ func TestDebugTargets(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels:\n      - devopsy.shell=true\n", 0o644)
-	write(t, filepath.Join(dot, "targets.yaml"), "defaults:\n  mode: image\n  env:\n    A: one\nprod:\n  host: h\n  path: /srv/app\n  env:\n    B: two\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  env:\n    A: one\ntargets:\n  prod:\n    host: h\n    path: /srv/app\n    env:\n      B: two\n", 0o644)
 	env := []string{"DEVOPSY_HOME=" + t.TempDir()}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "targets", "prod")
-	for _, want := range []string{"prod  (", "mode      image  (defaults in ", "env       A='one'  (defaults in ", "env       B='two'  (" + filepath.Join(dot, "targets.yaml")} {
+	for _, want := range []string{"prod  (", "mode      image  (defaults in ", "env       A='one'  (defaults in ", "env       B='two'  (" + filepath.Join(dot, "config.yaml")} {
 		if code != 0 || !strings.Contains(out, want) {
 			t.Errorf("missing %q (%d):\n%s", want, code, out)
 		}
@@ -591,5 +592,73 @@ esac
 	out, _ = runDevopsy(t, rel, env, "--debug", "imports")
 	if !strings.Contains(out, "STALE: release shop again") {
 		t.Errorf("stale:\n%s", out)
+	}
+}
+
+// Instances, the server's release root, the project's .env, --instances and
+// --destroy, with an ssh that runs the scripts here.
+func TestInstancesEndToEnd(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
+	root := filepath.Join(tmp, "srv")
+	home := filepath.Join(tmp, "home")
+	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+root+"\n", 0o644)
+	project := filepath.Join(tmp, "app")
+	dot := filepath.Join(project, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: required\ndefaults:\n  mode: image\n  release: {remote: deploy}\ntargets:\n  prod: {host: devopsy@server}\n  \"pr-*\": {host: devopsy@server}\n", 0o644)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy shared=$SHARED project=$DEVOPSY_PROJECT instance=$DEVOPSY_INSTANCE env=$DEVOPSY_ENVIRONMENT\"\n", 0o755)
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home}
+	run := func(extra []string, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = append(append([]string{}, env...), extra...)
+		cmd.Stdin = strings.NewReader("")
+		out, _ := cmd.CombinedOutput()
+		return string(out), cmd.ProcessState.ExitCode()
+	}
+
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "shop needs an instance: devopsy @<instance>:prod") {
+		t.Fatalf("instance required (%d):\n%s", code, out)
+	}
+	if out, code := run([]string{"DEVOPSY_INSTANCE=a"}, "@b:prod", "--release"); code == 0 || !strings.Contains(out, "name different instances") {
+		t.Fatalf("two instances (%d):\n%s", code, out)
+	}
+	// A shared value for the whole project on that server, before any release.
+	if out, code := run([]string{"SHARED=yes"}, "@b:prod", "--vars", "--project", "set", "SHARED"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
+		t.Fatalf("--vars --project (%d):\n%s", code, out)
+	}
+	out, code := run(nil, "@b:prod", "--release")
+	if code != 0 || !strings.Contains(out, "deploy shared=yes project=shop instance=b env=prod") {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "shop", "b", "prod", "current", ".devopsy", "target.env"))
+	if !strings.Contains(string(data), "COMPOSE_PROJECT_NAME='shop-b-prod'") {
+		t.Errorf("target.env:\n%s", data)
+	}
+	if out, code := run([]string{"DEVOPSY_INSTANCE=c"}, "@pr-12", "--release"); code != 0 || !strings.Contains(out, "instance=c env=pr-12") {
+		t.Fatalf("pattern target (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@b:prod", "--instances"); code != 0 || !strings.Contains(out, "b") || !strings.Contains(out, "prod") || !strings.Contains(out, "c") || !strings.Contains(out, "pr-12") {
+		t.Fatalf("--instances (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@c:pr-12", "--destroy"); code == 0 || !strings.Contains(out, "add --yes") {
+		t.Fatalf("--destroy without a terminal (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@c:pr-12", "--destroy", "--yes"); code != 0 || !strings.Contains(out, "removed") {
+		t.Fatalf("--destroy (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12")); !os.IsNotExist(err) {
+		t.Fatalf("still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", "b", "prod", "current")); err != nil {
+		t.Fatalf("destroy touched another environment: %v", err)
 	}
 }
