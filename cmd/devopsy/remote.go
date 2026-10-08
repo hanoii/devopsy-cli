@@ -209,11 +209,12 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 				return fail(err.Error())
 			}
 			if code != 0 {
-				q := fmt.Sprintf("%s has no instance %s of %s yet: create it", t.Host, t.Instance, t.Project.Name)
+				q := fmt.Sprintf("New instance: %s has no %q instance of %s yet.\nThis release creates it: %s, compose project %s, its own data and URL.",
+					t.Host, t.Instance, t.Project.Name, t.Path, t.ComposeName())
 				if !term.IsTerminal(int(os.Stdin.Fd())) {
-					return fail(q + "? Add --yes when not at a terminal: devopsy @" + t.Address + " --release --yes")
+					return fail(q + "\nAdd --yes when not at a terminal: devopsy @" + t.Address + " --release --yes")
 				}
-				fmt.Fprintf(os.Stderr, "%s? [y/N] ", q)
+				fmt.Fprintf(os.Stderr, "%s\nCreate it? [y/N] ", q)
 				line, _ := stdinReader.ReadString('\n')
 				if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
 					return fail("Nothing released.")

@@ -637,7 +637,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("--vars --project (%d):\n%s", code, out)
 	}
 	// A new instance asks first; without a terminal, --yes.
-	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "has no instance b of shop yet") || !strings.Contains(out, "--release --yes") {
+	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `New instance: devopsy@server has no "b" instance of shop yet.`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)
 	}
 	out, code := run(nil, "@b/prod", "--release", "--yes")
