@@ -45,7 +45,7 @@ from them:
   projects are free to ignore. devopsy knows no proxy: projects that deliver
   to one speak its language (labels, its network), the proxy owns routing
   and certificates, with its own commands
-  ([devopsy-traefik](https://github.com/hanoii/devopsy-traefik)), and the
+  ([devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik)), and the
   facts it shares reach projects through generic labels (roles, exports,
   imports).
 - **Capabilities are interfaces.** devopsy defines few (`shell`); a project
@@ -59,7 +59,7 @@ from them:
 
 Other practices, like container UIDs, certificate resolvers or where data
 lives, are recommendations: see the
-[devopsy workspace](https://github.com/hanoii/devopsy) and its recipes.
+[devopsy workspace](https://github.com/hanoii/devopsy) and its templates.
 
 ## Install
 
@@ -413,7 +413,7 @@ stand in. `~/` is your home directory:
 vm1-traefik:
   host: devopsy@203.0.113.10
   path: /srv/traefik
-  source: ~/src/devopsy-traefik     # release and rollback only from here
+  source: ~/src/devopsy-template-traefik     # release and rollback only from here
   release: &steps
     remote: deploy
   rollback: *steps
@@ -615,11 +615,11 @@ DEVOPSY_SSH_COMMAND="ssh -i $DEVOPSY_SSH_KEY -o UserKnownHostsFile=$DEVOPSY_SSH_
 
 Projects on one host share facts through compose labels, which devopsy
 reads like `devopsy.shell`. devopsy knows none of the names: they are a
-convention between the projects, like devopsy-traefik's `proxy` role and
+convention between the projects, like devopsy-template-traefik's `proxy` role and
 its `WILDCARD_DOMAIN` export.
 
 ```yaml
-# the server's proxy (devopsy-traefik), on its traefik service
+# the server's proxy (devopsy-template-traefik), on its traefik service
 labels:
   - devopsy.role=proxy
   - devopsy.export.WILDCARD_DOMAIN=${DEVOPSY_PROXY_WILDCARD_DOMAIN:-}
@@ -668,7 +668,7 @@ STALE, to release again.
 Rollbacks and plain `up` never check anything. The server's devopsy must be
 v0.17.0 or newer for projects with these labels (a release says so);
 projects without them release with any. Order when moving a server to them:
-upgrade its devopsy, release the exporter (devopsy-traefik), then the
+upgrade its devopsy, release the exporter (devopsy-template-traefik), then the
 projects importing from it.
 
 Roles are advisory, not a security boundary: they are only checked when
@@ -693,7 +693,7 @@ works as a smoke test after a release. A wildcard cannot be probed: name a
 host it covers.
 
 It knows no proxy, and takes plain arguments: a proxy's commands print the
-line to run, like devopsy-traefik's `domains`, which reports what the proxy
+line to run, like devopsy-template-traefik's `domains`, which reports what the proxy
 knows (routes, resolvers, the CNAME to create) from the server.
 
 ## Capabilities

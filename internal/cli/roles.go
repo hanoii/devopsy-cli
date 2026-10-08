@@ -18,7 +18,7 @@ import (
 
 // Labels for sharing facts between projects on a host, read like
 // devopsy.shell: a role is a slot only one compose project per host holds
-// (devopsy-traefik's is proxy); exports are facts on a project's running
+// (devopsy-template-traefik's is proxy); exports are facts on a project's running
 // containers; imports copy one into a release's target.env.
 const (
 	RoleLabel    = "devopsy.role"

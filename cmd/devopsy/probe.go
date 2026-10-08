@@ -31,7 +31,7 @@ Cloudflare: IPv4 ranges only), the certificate the
 server presents (at --ip, else where the host resolves; verified against
 the system's roots) and an HTTPS request as visitors make it. Exits 1 when
 a host has a problem. It knows no proxy: proxies' own commands print the
-line to run, like devopsy-traefik's domains.
+line to run, like devopsy-template-traefik's domains.
 `)
 			return 0
 		case a == "--ip" && i+1 < len(args):

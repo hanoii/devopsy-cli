@@ -388,7 +388,7 @@ Examples:
 
 // DomainsMoved answers --domains, which became the proxy's own command in
 // v0.17.0, with devopsy --probe for the view from outside.
-const DomainsMoved = "--domains moved to the server's proxy: devopsy @<proxy target> domains [<compose project>] (devopsy-traefik), which also prints the devopsy --probe line to check from here"
+const DomainsMoved = "--domains moved to the server's proxy: devopsy @<proxy target> domains [<compose project>] (devopsy-template-traefik), which also prints the devopsy --probe line to check from here"
 
 // Usage is devopsy's help. projectDir is "" outside a project.
 func Usage(projectDir string) string {
