@@ -165,6 +165,7 @@ func TestScriptsParse(t *testing.T) {
 		"vars unset":   VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
 		"destroy":      DestroyScript(tg, "app"),
 		"instances":    InstancesScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+		"role holders": RoleHoldersScript(tg, "proxy"),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -319,7 +320,7 @@ func TestPrepareScript(t *testing.T) {
 		if c.fail {
 			write(t, filepath.Join(rel, ".devopsy", "FAIL"), "")
 		}
-		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nrel="+Quote(rel)+"\n"+script+"echo after\n")
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=releases/0\nrel="+Quote(rel)+"\n"+script+"echo after\n")
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
 		_, ranErr := os.Stat(filepath.Join(rel, "ran"))
@@ -329,6 +330,41 @@ func TestPrepareScript(t *testing.T) {
 		_, failedErr := os.Stat(filepath.Join(rel, ".devopsy-failed"))
 		if c.fail != (err != nil) || c.fail != (failedErr == nil) || c.fail == strings.Contains(string(out), "after") {
 			t.Errorf("%s: err %v, marked failed %v:\n%s", name, err, failedErr == nil, out)
+		}
+	}
+}
+
+// A first release that fails before going live, with nothing in shared/,
+// leaves no directory; with secrets already set, it stays.
+func TestPrepareScriptFirstRelease(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
+	for _, secrets := range []bool{false, true} {
+		root := t.TempDir()
+		base := filepath.Join(root, "shop", "b", "prod")
+		rel := filepath.Join(base, "releases", "1")
+		write(t, filepath.Join(rel, ".devopsy", "compose.yaml"), "services:\n  a:\n    labels: [devopsy.role=proxy]\n")
+		write(t, filepath.Join(base, "shared", ".env"), "")
+		if secrets {
+			write(t, filepath.Join(base, "shared", ".env"), "TOKEN=x\n")
+		}
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=\nrel="+Quote(rel)+"\n"+script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("want a failure:\n%s", out)
+		}
+		_, baseErr := os.Stat(base)
+		_, instanceErr := os.Stat(filepath.Dir(base))
+		if secrets && baseErr != nil {
+			t.Errorf("removed despite shared/.env:\n%s", out)
+		}
+		if !secrets && (baseErr == nil || instanceErr == nil || !strings.Contains(string(out), "did not go live")) {
+			t.Errorf("left behind: base %v, instance %v:\n%s", baseErr, instanceErr, out)
 		}
 	}
 }

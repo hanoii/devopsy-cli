@@ -404,11 +404,20 @@ fi
 // the call. It checks the project's devopsy.role is free on the host and
 // writes its devopsy.import labels into the release's target.env, so
 // rollbacks keep what each release had. Only for projects with those labels
-// (outside comments). A failure leaves current alone.
+// (outside comments). A failure leaves current alone; a first release with
+// nothing in shared/ yet leaves no directory at all.
 const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
   if ! (cd "$rel" && %s); then
-    touch "$rel/.devopsy-failed"
-    echo "devopsy: release $id not made current" >&2
+    if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
+      # A first release that never went live, with nothing set yet: leave
+      # no directory behind (an instance's, when it is empty, neither).
+      rm -rf "$base"
+      rmdir "$(dirname "$base")" 2>/dev/null || true
+      echo "devopsy: removed $base: its first release did not go live" >&2
+    else
+      touch "$rel/.devopsy-failed"
+      echo "devopsy: release $id not made current" >&2
+    fi
     exit 1
   fi
 fi
@@ -595,5 +604,12 @@ done
 func InstanceExistsScript(t *Target) string {
 	dir := t.Project.Name + "/" + t.Instance
 	return "set -eu\n" + basePrelude(t) + `[ -d "$root"/` + Quote(dir) + ` ]
+`
+}
+
+// RoleHoldersScript prints the compose projects running a container with
+// the role, one per line: --release checks it before uploading anything.
+func RoleHoldersScript(t *Target, role string) string {
+	return "set -eu\ndocker ps --filter " + Quote("label=devopsy.role="+role) + ` --format '{{.Label "com.docker.compose.project"}}' | sort -u
 `
 }
