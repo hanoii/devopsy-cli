@@ -18,7 +18,7 @@ import (
 )
 
 // debugTopics are what `devopsy --debug <topic>` explains.
-var debugTopics = []string{"environments", "capabilities", "labels", "imports"}
+var debugTopics = []string{"environments", "capabilities", "labels", "imports", "schema"}
 
 // runDebug implements `devopsy --debug [environments [name] [--yaml] |
 // capabilities | labels | imports]`: what devopsy sees and computes, to explain its
@@ -48,6 +48,12 @@ func runDebug(cwd string, args []string, color bool) int {
 		return debugLabels(st, projectDir, color)
 	case "imports":
 		return debugImports(st, color)
+	case "schema":
+		if slices.Contains(args[1:], "--user") {
+			fmt.Print(remote.UserSchema)
+		} else {
+			fmt.Print(remote.ProjectSchema)
+		}
 	default:
 		cli.Fprint(os.Stderr, red, fmt.Sprintf("--debug: no topic %q: %s", topic, strings.Join(debugTopics, ", ")), color)
 		return 1
@@ -128,7 +134,7 @@ func debugSummary(st style, projectDir string) {
 			field("devopsy labels", orNone(labelList(labels)))
 		}
 	}
-	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | capabilities | labels | imports\n", st.dim("More:"))
+	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | capabilities | labels | imports | schema [--user]\n", st.dim("More:"))
 }
 
 // yamlTarget is an environment as devopsy uses it, for --debug environments --yaml.

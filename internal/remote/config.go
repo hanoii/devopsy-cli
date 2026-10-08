@@ -519,6 +519,9 @@ func LoadConfig(projectDir string) (*Config, error) {
 	return c, nil
 }
 
+// ValidName reports whether s can be a project's or an instance's name.
+func ValidName(s string) bool { return nameRe.MatchString(s) }
+
 // LoadProject reads only what a project's config says about the project.
 func LoadProject(projectDir string) (*Project, error) {
 	c, err := LoadConfig(projectDir)

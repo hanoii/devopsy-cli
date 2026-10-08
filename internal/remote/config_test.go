@@ -384,3 +384,16 @@ func TestActivateKeepAndLevels(t *testing.T) {
 		t.Errorf("capped: %d releases\n%s", n, out)
 	}
 }
+
+// The schemas --debug schema prints are configs devopsy accepts.
+func TestSchemas(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "project.yaml"), ProjectSchema)
+	if _, err := readConfigFile(filepath.Join(dir, "project.yaml"), false); err != nil {
+		t.Errorf("project schema: %v", err)
+	}
+	write(t, filepath.Join(dir, "user.yaml"), UserSchema)
+	if _, err := readConfigFile(filepath.Join(dir, "user.yaml"), true); err != nil {
+		t.Errorf("user schema: %v", err)
+	}
+}

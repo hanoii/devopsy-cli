@@ -446,12 +446,16 @@ Built-in:
   --probe [--ip <server ip>] <host>...
                  DNS, certificate and HTTPS of each host, from here, as
                  visitors reach them; exits 1 on a problem
-  --debug [environments [name] [--yaml] | capabilities | labels | imports]
+  --init [project]
+                 a new .devopsy/config.yaml (asks for the project's name);
+                 does nothing if there is one
+  --debug [environments [name] [--yaml] | capabilities | labels | imports | schema [--user]]
                  what devopsy sees and computes: versions, the project,
                  environments and aliases with where each value comes from
                  (any address resolved), the capabilities
-                 it calls and their contracts, the labels it reads, and
-                 the imports of every project running on this host
+                 it calls and their contracts, the labels it reads, the
+                 imports of every project running on this host, and every
+                 config key (schema: the project's; --user: this machine's)
   --upgrade [v]  replace devopsy with the latest release, or release v
   --completion <shell>
                  shell completion for bash, zsh or fish; see README
