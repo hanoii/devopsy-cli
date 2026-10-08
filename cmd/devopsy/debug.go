@@ -17,10 +17,10 @@ import (
 )
 
 // debugTopics are what `devopsy --debug <topic>` explains.
-var debugTopics = []string{"targets", "capabilities", "labels"}
+var debugTopics = []string{"targets", "capabilities", "labels", "imports"}
 
 // runDebug implements `devopsy --debug [targets [name] [--yaml] |
-// capabilities | labels]`: what devopsy sees and computes, to explain its
+// capabilities | labels | imports]`: what devopsy sees and computes, to explain its
 // behavior. On a server (`devopsy @<target> --debug`), the server's view.
 func runDebug(cwd string, args []string, color bool) int {
 	projectDir, _ := cli.FindProjectDir(cwd)
@@ -45,6 +45,8 @@ func runDebug(cwd string, args []string, color bool) int {
 		debugCapabilities(st, projectDir)
 	case "labels":
 		return debugLabels(st, projectDir, color)
+	case "imports":
+		return debugImports(st, color)
 	default:
 		cli.Fprint(os.Stderr, red, fmt.Sprintf("--debug: no topic %q: %s", topic, strings.Join(debugTopics, ", ")), color)
 		return 1
@@ -97,7 +99,7 @@ func debugSummary(st style, projectDir string) {
 			field("devopsy labels", orNone(labelList(labels)))
 		}
 	}
-	fmt.Printf("\n%s devopsy --debug targets [name] [--yaml] | capabilities | labels\n", st.dim("More:"))
+	fmt.Printf("\n%s devopsy --debug targets [name] [--yaml] | capabilities | labels | imports\n", st.dim("More:"))
 }
 
 // yamlTarget is a target as devopsy uses it, for --debug targets --yaml.
@@ -319,41 +321,36 @@ func debugLabels(st style, projectDir string, color bool) int {
 func debugHost(st style, projectDir string) {
 	fmt.Println()
 	fmt.Println(st.head("On this host (running containers):"))
-	holders, err := cli.Containers(cli.RoleLabel)
+	host, err := cli.Running()
 	if err != nil {
 		fmt.Println("  " + st.warn(err.Error()))
 		return
 	}
 	roles := map[string][]string{}
-	for _, c := range holders {
-		r := c.Labels[cli.RoleLabel]
-		if !slices.Contains(roles[r], c.Project) {
-			roles[r] = append(roles[r], c.Project)
+	for _, c := range host {
+		r, ok := c.Labels[cli.RoleLabel]
+		if ok && !slices.Contains(roles[r], c.Name()) {
+			roles[r] = append(roles[r], c.Name())
 		}
 	}
 	if len(roles) == 0 {
 		fmt.Println("  no roles")
 	}
-	names := make([]string, 0, len(roles))
-	for r := range roles {
-		names = append(names, r)
-	}
-	sort.Strings(names)
-	for _, r := range names {
+	for _, r := range slices.Sorted(maps.Keys(roles)) {
 		fmt.Printf("  %s  held by %s\n", st.name("role "+r), strings.Join(roles[r], ", "))
-		for _, project := range roles[r] {
-			list, _ := cli.Containers("com.docker.compose.project=" + project)
-			exports := map[string]bool{}
-			for _, c := range list {
-				for k, v := range c.Labels {
-					if strings.HasPrefix(k, cli.ExportPrefix) {
-						exports[strings.TrimPrefix(k, cli.ExportPrefix)+"="+v] = true
-					}
+		exports := map[string]bool{}
+		for _, c := range host {
+			if !slices.Contains(roles[r], c.Name()) {
+				continue
+			}
+			for k, v := range c.Labels {
+				if strings.HasPrefix(k, cli.ExportPrefix) {
+					exports[strings.TrimPrefix(k, cli.ExportPrefix)+"="+v] = true
 				}
 			}
-			for _, e := range slices.Sorted(maps.Keys(exports)) {
-				fmt.Printf("    %s %s\n", st.dim("exports"), e)
-			}
+		}
+		for _, e := range slices.Sorted(maps.Keys(exports)) {
+			fmt.Printf("    %s %s\n", st.dim("exports"), e)
 		}
 	}
 	_, imports, err := cli.ProjectRoles(projectDir)
@@ -366,31 +363,76 @@ func debugHost(st style, projectDir string) {
 	}
 	fmt.Println()
 	fmt.Println(st.head("This project's imports:"))
-	current := map[string]string{}
-	if data, err := os.ReadFile(filepath.Join(projectDir, "target.env")); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(k, "#") {
-				current[k] = strings.Trim(v, `'"`)
-			}
-		}
-	}
+	_, imported, released := cli.ReleaseEnv(projectDir)
 	for _, imp := range imports {
 		now := ""
-		switch e, err := cli.Resolve(imp); {
+		switch e, err := host.Resolve(imp); {
 		case err != nil:
 			now = st.warn(err.Error())
-		case !e.Found && e.Project == "":
-			now = st.warn("nothing running is " + imp.Source)
 		case !e.Found:
-			now = st.warn(e.Project + " does not export " + imp.Key)
+			now = st.warn(e.Why(imp))
 		default:
 			now = fmt.Sprintf("%q from %s", e.Value, e.Project)
 		}
 		fmt.Printf("  %s\n      now: %s\n", st.name(imp.String()), now)
-		if v, ok := current[imp.Var]; ok {
-			fmt.Printf("      this release's target.env: %q\n", v)
+		if v, ok := imported[imp.Var]; ok {
+			fmt.Printf("      this release imported: %q\n", v)
+		} else if released {
+			fmt.Printf("      this release did not import it (set by the target, or released before the label)\n")
 		}
 	}
+}
+
+// debugImports shows every import of the compose projects running on this
+// host against what their current release has: a release keeps what it
+// imported, so a changed export needs the importing projects released again.
+func debugImports(st style, color bool) int {
+	host, err := cli.Running()
+	if err != nil {
+		cli.Fprint(os.Stderr, red, err.Error(), color)
+		return 1
+	}
+	states := host.ImportStates()
+	fmt.Println(st.head("Imports of the compose projects running on this host:"))
+	if len(states) == 0 {
+		fmt.Println("  none")
+		return 0
+	}
+	stale := 0
+	for _, s := range states {
+		now := ""
+		switch {
+		case s.Err != nil:
+			now = st.warn(s.Err.Error())
+		case !s.Now.Found:
+			now = st.warn(s.Now.Why(s.Import))
+		default:
+			now = fmt.Sprintf("%q from %s", s.Now.Value, s.Now.Project)
+		}
+		state := ""
+		switch {
+		case s.Stale():
+			state = st.warn("STALE: release " + s.Project + " again")
+			stale++
+		case s.Set:
+			state = fmt.Sprintf("set by the target: %q", s.Release)
+		case s.Imported:
+			state = st.ok("current")
+		case !s.Released:
+			state = st.dim("not a release")
+		default:
+			state = st.warn("not imported by its current release: release it again")
+		}
+		fmt.Printf("  %s  %s\n", st.name(s.Project), s.Import.String())
+		if s.Imported {
+			fmt.Printf("      release: %q\n", s.Release)
+		}
+		fmt.Printf("      now:     %s\n      %s\n", now, state)
+	}
+	if stale > 0 {
+		fmt.Printf("\n%d stale: each release keeps what it imported, so release those projects again.\n", stale)
+	}
+	return 0
 }
 
 func labelList(labels map[string]map[string]string) []string {

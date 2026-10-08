@@ -5,28 +5,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-// fakeHost replaces docker with running containers, filtered by label as
-// docker ps --filter label=... does.
+// fakeHost replaces docker with running containers.
 func fakeHost(t *testing.T, running ...Container) {
 	t.Helper()
-	saved := Containers
-	t.Cleanup(func() { Containers = saved })
-	Containers = func(label string) ([]Container, error) {
-		k, v, hasValue := strings.Cut(label, "=")
-		var out []Container
-		for _, c := range running {
-			if got, ok := c.Labels[k]; ok && (!hasValue || got == v) {
-				out = append(out, c)
-			}
-		}
-		return out, nil
-	}
+	savedRunning, savedWait := Running, WaitForExporters
+	t.Cleanup(func() { Running, WaitForExporters = savedRunning, savedWait })
+	WaitForExporters = 0
+	Running = func() (Host, error) { return running, nil }
 }
 
 func container(project string, labels ...string) Container {
-	c := Container{Project: project, Labels: map[string]string{"com.docker.compose.project": project}}
+	c := Container{ID: "0123456789abcdef", Project: project, Labels: map[string]string{}}
+	if project != "" {
+		c.Labels["com.docker.compose.project"] = project
+	}
 	for _, l := range labels {
 		k, v, _ := strings.Cut(l, "=")
 		c.Labels[k] = v
@@ -100,7 +95,7 @@ func TestPrepareRelease(t *testing.T) {
 	if got := targetEnv(root); !strings.HasSuffix(got, "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n") || strings.Contains(got, "MAIL") {
 		t.Fatalf("target.env:\n%s", got)
 	}
-	if s := strings.Join(said, "\n"); !strings.Contains(s, "DEVOPSY_WILDCARD_DOMAIN=vm1.example.com, from proxy (traefik)") || !strings.Contains(s, "MAIL: nothing running is mail, not imported (optional)") {
+	if s := strings.Join(said, "\n"); !strings.Contains(s, "DEVOPSY_WILDCARD_DOMAIN=vm1.example.com, from proxy (traefik)") || !strings.Contains(s, "MAIL: no running container has devopsy.role=mail, and no compose project mail is running, not imported (optional)") {
 		t.Fatalf("said %q", said)
 	}
 
@@ -156,6 +151,35 @@ func TestPrepareRelease(t *testing.T) {
 		t.Fatalf("taken role: %v", err)
 	}
 
+	// Not compose's: named as such.
+	fakeHost(t, container("", "devopsy.role=proxy"))
+	root = project(t, "1", map[string]string{"compose.yaml": proxyCompose, "target.env": "COMPOSE_PROJECT_NAME='traefik'\n"})
+	if _, err := PrepareRelease(root, nil); err == nil || !strings.Contains(err.Error(), "held by a container not started by compose (0123456789ab)") {
+		t.Fatalf("unmanaged holder: %v", err)
+	}
+
+	// A value that cannot be one line.
+	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=a\nb"))
+	root = release(map[string]string{"compose.yaml": compose})
+	if _, err := PrepareRelease(root, nil); err == nil || !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("control characters: %v", err)
+	}
+
+	// A source that starts while waiting.
+	calls := 0
+	Running = func() (Host, error) {
+		calls++
+		if calls < 2 {
+			return nil, nil
+		}
+		return Host{proxy}, nil
+	}
+	WaitForExporters = 10 * time.Second
+	root = release(map[string]string{"compose.yaml": compose})
+	if said, err := PrepareRelease(root, nil); err != nil || !strings.Contains(strings.Join(said, "\n"), "waiting up to") {
+		t.Fatalf("waited: %v %q", err, said)
+	}
+
 	// Only in a release.
 	if _, err := PrepareRelease(project(t, "local", map[string]string{"compose.yaml": compose}), nil); err == nil {
 		t.Fatal("outside a release: want an error")
@@ -166,5 +190,43 @@ func TestPrepareRelease(t *testing.T) {
 	root = release(map[string]string{"compose.yaml": "services:\n  app:\n    labels: [devopsy.import.MAIL=mailer/HOST]\n"})
 	if _, err := PrepareRelease(root, nil); err != nil || !strings.Contains(targetEnv(root), "MAIL='smtp.internal'") {
 		t.Fatalf("project source: %v\n%s", err, targetEnv(root))
+	}
+}
+
+func TestParseInspect(t *testing.T) {
+	host, err := parseInspect([]byte("abc {\"com.docker.compose.project\":\"shop\",\"devopsy.role\":\"proxy\"}\ndef null\n"))
+	if err != nil || len(host) != 2 || host[0].Project != "shop" || host[0].Labels[RoleLabel] != "proxy" || host[1].ID != "def" || host[1].Labels == nil {
+		t.Fatalf("%v %+v", err, host)
+	}
+	if _, err := parseInspect([]byte("abc {broken")); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+// --debug imports: each running project's imports against its release.
+func TestImportStates(t *testing.T) {
+	dir := filepath.Join(project(t, "shop", map[string]string{
+		"target.env": "COMPOSE_PROJECT_NAME='shop'\nOWN='x'\n" + ImportedMarker + "\nDEVOPSY_WILDCARD_DOMAIN='old.example.com'\n",
+		".env":       "MAIL=\n",
+	}), ProjectDirName)
+	fakeHost(t,
+		container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=new.example.com", "devopsy.export.HOST=smtp"),
+		container("shop", "com.docker.compose.project.working_dir="+dir,
+			"devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN", "devopsy.import.MAIL=proxy/HOST"),
+		container("local", "devopsy.import.X=proxy/HOST"),
+	)
+	host, _ := Running()
+	states := host.ImportStates()
+	if len(states) != 3 {
+		t.Fatalf("%+v", states)
+	}
+	if s := states[1]; s.Project != "shop" || s.Import.Var != "DEVOPSY_WILDCARD_DOMAIN" || !s.Imported || s.Release != "old.example.com" || !s.Stale() {
+		t.Errorf("stale: %+v", s)
+	}
+	if s := states[2]; s.Import.Var != "MAIL" || !s.Set || s.Stale() {
+		t.Errorf("set by the target: %+v", s)
+	}
+	if s := states[0]; s.Project != "local" || s.Released || s.Stale() {
+		t.Errorf("not a release: %+v", s)
 	}
 }

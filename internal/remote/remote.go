@@ -896,11 +896,20 @@ fi
 // new release before it becomes current, with $base, $rel and $id set; %s is
 // the call. It checks the project's devopsy.role is free on the host and
 // writes its devopsy.import labels into the release's target.env, so
-// rollbacks keep what each release had. Only for projects with those labels,
-// so servers with an older devopsy release the others. A failure leaves
+// rollbacks keep what each release had. Only for projects with those labels
+// (outside comments), so servers with an older devopsy release the others,
+// and those with labels say which devopsy they need. A failure leaves
 // current alone.
-const PrepareScript = `if grep -qsE 'devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
-  if ! (cd "$rel" && %s); then
+const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
+  v=$(devopsy --version 2>/dev/null | sed -n '1s/^devopsy v\{0,1\}//p')
+  case $v in
+    0.[0-9].* | 0.1[0-6].*)
+      echo "devopsy: this project's devopsy.role or devopsy.import labels need devopsy v0.17.0 or newer on the server, which has $v: devopsy --upgrade" >&2
+      prepared=1
+      ;;
+    *) prepared=0; (cd "$rel" && %s) || prepared=1 ;;
+  esac
+  if [ "$prepared" != 0 ]; then
     touch "$rel/.devopsy-failed"
     echo "devopsy: release $id not made current" >&2
     exit 1

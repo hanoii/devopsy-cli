@@ -3,12 +3,17 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
 // Labels for sharing facts between projects on a host, read like
@@ -33,14 +38,31 @@ var (
 
 // Container is a running container: its compose project and labels.
 type Container struct {
+	ID      string
 	Project string
 	Labels  map[string]string
 }
 
-// Containers lists the running containers with a label ("key" or
-// "key=value"), through the local docker; replaceable in tests.
-var Containers = func(label string) ([]Container, error) {
-	out, err := exec.Command("docker", "ps", "-q", "--filter", "label="+label).Output()
+// Name is the container's compose project, or says it has none.
+func (c Container) Name() string {
+	if c.Project != "" {
+		return c.Project
+	}
+	id := c.ID
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	return "a container not started by compose (" + id + ")"
+}
+
+// Host is a snapshot of the running containers, so one lookup sees one
+// state of the host.
+type Host []Container
+
+// Running lists the host's running containers, through the local docker;
+// replaceable in tests.
+var Running = func() (Host, error) {
+	out, err := exec.Command("docker", "ps", "-q", "--no-trunc").Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %w", err)
 	}
@@ -48,19 +70,64 @@ var Containers = func(label string) ([]Container, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	out, err = exec.Command("docker", append([]string{"inspect", "--format", "{{json .Config.Labels}}"}, ids...)...).Output()
+	out, err = exec.Command("docker", append([]string{"inspect", "--format", "{{.Id}} {{json .Config.Labels}}"}, ids...)...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker inspect: %w", err)
 	}
-	var list []Container
+	return parseInspect(out)
+}
+
+// parseInspect reads lines of "<id> <labels as JSON>" (null without labels).
+func parseInspect(out []byte) (Host, error) {
+	var host Host
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		id, data, _ := strings.Cut(line, " ")
 		var labels map[string]string
-		if err := json.Unmarshal([]byte(line), &labels); err != nil {
+		if err := json.Unmarshal([]byte(data), &labels); err != nil {
 			return nil, fmt.Errorf("docker inspect: %w", err)
 		}
-		list = append(list, Container{Project: labels["com.docker.compose.project"], Labels: labels})
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		host = append(host, Container{ID: id, Project: labels["com.docker.compose.project"], Labels: labels})
 	}
-	return list, nil
+	return host, nil
+}
+
+// Holders are the containers holding role.
+func (h Host) Holders(role string) Host {
+	var out Host
+	for _, c := range h {
+		if c.Labels[RoleLabel] == role {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Project are the containers of a compose project.
+func (h Host) Project(name string) Host {
+	var out Host
+	for _, c := range h {
+		if c.Project == name && name != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Projects are the compose projects running, sorted.
+func (h Host) Projects() []string {
+	seen := map[string]bool{}
+	for _, c := range h {
+		if c.Project != "" {
+			seen[c.Project] = true
+		}
+	}
+	return sortedKeys(seen)
 }
 
 // Import is a devopsy.import.<Var>=<Source>/<Key>[?] label.
@@ -150,36 +217,34 @@ type Exporter struct {
 	Found bool
 }
 
-// Resolve finds what imp reads: the compose project holding the role named
-// by its source, else the compose project of that name; then the export on
-// its running containers. Containers of one project exporting different
-// values are an error.
-func Resolve(imp Import) (Exporter, error) {
+// Resolve finds what imp reads on host: the compose project holding the
+// role named by its source, else the compose project of that name; then
+// the export on its running containers. Containers of one project exporting
+// different values are an error.
+func (h Host) Resolve(imp Import) (Exporter, error) {
 	var e Exporter
-	holders, err := Containers(RoleLabel + "=" + imp.Source)
-	if err != nil {
-		return e, err
-	}
+	holders := h.Holders(imp.Source)
 	projects := map[string]bool{}
 	for _, c := range holders {
-		projects[c.Project] = true
+		projects[c.Name()] = true
 	}
+	var list Host
 	switch len(projects) {
 	case 0:
-		e.Project = imp.Source
+		list = h.Project(imp.Source)
 	case 1:
-		e.Project = holders[0].Project
+		if holders[0].Project == "" {
+			list = holders
+		} else {
+			list = h.Project(holders[0].Project)
+		}
 	default:
-		return e, fmt.Errorf("role %s is held by several compose projects: %s", imp.Source, strings.Join(sortedKeys(projects), ", "))
-	}
-	list, err := Containers("com.docker.compose.project=" + e.Project)
-	if err != nil {
-		return e, err
+		return e, fmt.Errorf("role %s is held by several: %s", imp.Source, strings.Join(sortedKeys(projects), ", "))
 	}
 	if len(list) == 0 {
-		e.Project = ""
 		return e, nil
 	}
+	e.Project = list[0].Name()
 	for _, c := range list {
 		v, ok := c.Labels[ExportPrefix+imp.Key]
 		if !ok {
@@ -192,6 +257,28 @@ func Resolve(imp Import) (Exporter, error) {
 	}
 	return e, nil
 }
+
+// Why says why e has no value for imp.
+func (e Exporter) Why(imp Import) string {
+	if e.Project == "" {
+		return fmt.Sprintf("no running container has %s=%s, and no compose project %s is running", RoleLabel, imp.Source, imp.Source)
+	}
+	return e.Project + " does not export " + imp.Key
+}
+
+// checkValue refuses what cannot be a variable's value on one line.
+func checkValue(v string) error {
+	for _, r := range v {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("the exported value has control characters or newlines: %q", v)
+		}
+	}
+	return nil
+}
+
+// WaitForExporters is how long a release waits for an import's source to
+// run, as while the proxy restarts.
+var WaitForExporters = 30 * time.Second
 
 func sortedKeys(m map[string]bool) []string {
 	keys := make([]string, 0, len(m))
@@ -223,16 +310,42 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 	}
 	self, _ := p.env.Lookup("DEVOPSY_PROJECT_NAME")
 	var said []string
+	host, err := Running()
+	if err != nil {
+		return nil, err
+	}
 
 	if role != "" {
-		holders, err := Containers(RoleLabel + "=" + role)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range holders {
+		for _, c := range host.Holders(role) {
 			if c.Project != self {
-				return nil, fmt.Errorf("role %s is held by %s on this host: one compose project per role (%s=%s)", role, c.Project, RoleLabel, role)
+				return nil, fmt.Errorf("role %s is held by %s on this host: one compose project per role (%s=%s)", role, c.Name(), RoleLabel, role)
 			}
+		}
+	}
+
+	// Required sources not running yet are waited for a while: a proxy
+	// restarting should not fail a release.
+	deadline := time.Now().Add(WaitForExporters)
+	for waited := false; ; {
+		missing := ""
+		for _, imp := range imports {
+			if _, ok := p.env.Lookup(imp.Var); ok || imp.Optional {
+				continue
+			}
+			if e, err := host.Resolve(imp); err == nil && e.Project == "" {
+				missing = imp.Source
+			}
+		}
+		if missing == "" || !time.Now().Before(deadline) {
+			break
+		}
+		if !waited {
+			said = append(said, fmt.Sprintf("devopsy: waiting up to %s for %s to run...", WaitForExporters, missing))
+			waited = true
+		}
+		time.Sleep(2 * time.Second)
+		if host, err = Running(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -242,20 +355,19 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 			said = append(said, fmt.Sprintf("devopsy: %s: set by the target, not imported from %s", imp.Var, imp.Source))
 			continue
 		}
-		e, err := Resolve(imp)
+		e, err := host.Resolve(imp)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", imp, err)
+			return said, fmt.Errorf("%s: %w", imp, err)
 		}
 		if !e.Found {
-			why := "nothing running is " + imp.Source
-			if e.Project != "" {
-				why = e.Project + " does not export " + imp.Key
-			}
 			if !imp.Optional {
-				return nil, fmt.Errorf("%s: %s. Start it, or set %s for this target (empty for none)", imp, why, imp.Var)
+				return said, fmt.Errorf("%s: %s. Start it, or set %s for this target (empty for none)", imp, e.Why(imp), imp.Var)
 			}
-			said = append(said, fmt.Sprintf("devopsy: %s: %s, not imported (optional)", imp.Var, why))
+			said = append(said, fmt.Sprintf("devopsy: %s: %s, not imported (optional)", imp.Var, e.Why(imp)))
 			continue
+		}
+		if err := checkValue(e.Value); err != nil {
+			return said, fmt.Errorf("%s: %w", imp, err)
 		}
 		lines = append(lines, DotenvLine(imp.Var, e.Value))
 		from := imp.Source
@@ -269,7 +381,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = f.WriteString("# Imported at release (devopsy.import labels).\n" + strings.Join(lines, "\n") + "\n")
+		_, err = f.WriteString(ImportedMarker + "\n" + strings.Join(lines, "\n") + "\n")
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
@@ -278,4 +390,96 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		}
 	}
 	return said, nil
+}
+
+// ImportedMarker starts the imported lines in a release's target.env.
+const ImportedMarker = "# Imported at release (devopsy.import labels)."
+
+// ImportState is one import of a running compose project and what its
+// current release has, for `devopsy --debug imports`.
+type ImportState struct {
+	Project string
+	Import  Import
+	// Release is the value in the project's release: imported (Imported),
+	// or set by the target itself (Set). Neither: not in a release, or not
+	// imported.
+	Release       string
+	Imported, Set bool
+	Released      bool
+	Now           Exporter
+	Err           error
+}
+
+// Stale reports whether the release imported a value its source no longer
+// exports.
+func (s ImportState) Stale() bool {
+	return s.Imported && s.Err == nil && s.Now.Found && s.Now.Value != s.Release
+}
+
+// ImportStates lists the imports of every compose project running on the
+// host, from its containers' labels, and the values in its current release
+// (the target.env and .env next to its compose file).
+func (h Host) ImportStates() []ImportState {
+	var states []ImportState
+	for _, project := range h.Projects() {
+		imports := map[string]Import{}
+		dir := ""
+		for _, c := range h.Project(project) {
+			if d := c.Labels["com.docker.compose.project.working_dir"]; d != "" {
+				dir = d
+			}
+			for k, v := range c.Labels {
+				if !strings.HasPrefix(k, ImportPrefix) {
+					continue
+				}
+				if imp, err := parseImport(strings.TrimPrefix(k, ImportPrefix), v); err == nil {
+					imports[imp.Var] = imp
+				}
+			}
+		}
+		if len(imports) == 0 {
+			continue
+		}
+		set, imported, released := ReleaseEnv(dir)
+		vars := make([]string, 0, len(imports))
+		for v := range imports {
+			vars = append(vars, v)
+		}
+		sort.Strings(vars)
+		for _, v := range vars {
+			s := ImportState{Project: project, Import: imports[v], Released: released}
+			if val, ok := imported[v]; ok {
+				s.Release, s.Imported = val, true
+			} else if val, ok := set[v]; ok {
+				s.Release, s.Set = val, true
+			}
+			s.Now, s.Err = h.Resolve(imports[v])
+			states = append(states, s)
+		}
+	}
+	return states
+}
+
+// ReleaseEnv reads a release's .devopsy/ (dir): what its target sets
+// (target.env above the imported lines, and .env), what it imported, and
+// whether it is a release at all.
+func ReleaseEnv(dir string) (set, imported map[string]string, released bool) {
+	set, imported = map[string]string{}, map[string]string{}
+	data, err := os.ReadFile(filepath.Join(dir, "target.env"))
+	if dir == "" || err != nil {
+		return set, imported, false
+	}
+	own, after, _ := strings.Cut(string(data), ImportedMarker)
+	if m, err := dotenv.UnmarshalWithLookup(own, nil); err == nil {
+		maps.Copy(set, m)
+	}
+	if m, err := dotenv.UnmarshalWithLookup(after, nil); err == nil {
+		maps.Copy(imported, m)
+	}
+	if env, err := os.ReadFile(filepath.Join(dir, ".env")); err == nil {
+		if m, err := dotenv.UnmarshalWithLookup(string(env), nil); err == nil {
+			maps.Copy(set, m)
+		}
+	}
+	return set, imported, true
 }

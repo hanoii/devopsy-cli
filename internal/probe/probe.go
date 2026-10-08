@@ -66,7 +66,8 @@ func cloudflareNets(ctx context.Context) []*net.IPNet {
 	return nets
 }
 
-// Public resolves through 1.1.1.1, as the rest of the Internet sees DNS, and
+// Public resolves through 1.1.1.1 (A and AAAA), as the rest of the Internet
+// sees DNS, and
 // verifies certificates against the system's trusted roots.
 func Public(ctx context.Context) Checker {
 	cf := cloudflareNets(ctx)
@@ -79,12 +80,18 @@ func Public(ctx context.Context) Checker {
 	}
 	return Checker{
 		LookupIP: func(ctx context.Context, host string) ([]string, error) {
-			ips, err := r.LookupIP(ctx, "ip4", host)
-			out := make([]string, len(ips))
-			for i, ip := range ips {
-				out[i] = ip.String()
+			// IPv4 first: requests go to the first address, and not every
+			// network has IPv6.
+			ips, err := r.LookupIP(ctx, "ip", host)
+			var v4, v6 []string
+			for _, ip := range ips {
+				if ip.To4() != nil {
+					v4 = append(v4, ip.String())
+				} else {
+					v6 = append(v6, ip.String())
+				}
 			}
-			return out, err
+			return append(v4, v6...), err
 		},
 		CDN: func(ip string) string {
 			parsed := net.ParseIP(ip)

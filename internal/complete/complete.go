@@ -151,7 +151,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2:
-			for _, t := range []string{"targets", "capabilities", "labels"} {
+			for _, t := range []string{"targets", "capabilities", "labels", "imports"} {
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
 		case len(words) == 3 && words[1] == "targets":

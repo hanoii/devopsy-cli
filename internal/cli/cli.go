@@ -416,10 +416,11 @@ Built-in:
   --probe [--ip <server ip>] <host>...
                  DNS, certificate and HTTPS of each host, from here, as
                  visitors reach them; exits 1 on a problem
-  --debug [targets [name] [--yaml] | capabilities | labels]
+  --debug [targets [name] [--yaml] | capabilities | labels | imports]
                  what devopsy sees and computes: versions, the project,
                  targets with where each value comes from, the capabilities
-                 it calls and their contracts, the labels it reads
+                 it calls and their contracts, the labels it reads, and
+                 the imports of every project running on this host
   --upgrade [v]  replace devopsy with the latest release, or release v
   --completion <shell>
                  shell completion for bash, zsh or fish; see README
