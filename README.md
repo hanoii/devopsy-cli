@@ -148,15 +148,15 @@ installed devopsy's script:
 echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fish/completions/devopsy.fish
 ```
 
-It completes targets (`@prod`, user-level ones included, with their host and
-path), the project's commands with their descriptions, devopsy's flags,
+It completes targets (`@prod`, the project's environments, and aliases
+with what they stand for), the project's commands with their descriptions, devopsy's flags,
 the commands after `@<target>` (`--release`, `--vars set` with the keys of
 the project's `.env`...) and, through docker compose's own completion,
 compose's commands, flags and the project's services. After a project
 command, it completes file names. On a target, services come from the local
 compose files: completion never connects to servers.
 
-Targets come first, the project's before user-level ones, then project
+Targets come first, environments before aliases, then project
 commands, devopsy's own commands and docker compose's. zsh lists each in its
 own group (unless your `group-name` and `format` styles say otherwise), fish
 describes project commands as `project: ...` and compose's as `docker
@@ -214,20 +214,23 @@ command has that name or devopsy does not know the word.
 ### Debugging
 
 `devopsy --debug` summarizes what devopsy sees: its version and path,
-docker's and compose's, the project and its files, commands, targets,
-implemented capabilities and `devopsy.*` labels. Topics go deeper:
+docker's and compose's, the project and its files, commands,
+environments, aliases, implemented capabilities and `devopsy.*` labels.
+Topics go deeper:
 
 ```sh
-devopsy --debug targets [name]   # each target as computed, and where each value comes from
-devopsy --debug targets --yaml   # the same as plain YAML: defaults merged, hosts resolved
+devopsy --debug environments [name or address]   # each as computed, where each value comes from
+devopsy --debug environments --yaml   # the same as plain YAML: defaults merged, servers resolved
 devopsy --debug capabilities     # what devopsy calls, each action's contract, what this project implements
 devopsy --debug labels           # the labels devopsy reads, the project's, roles on this host
 devopsy --debug imports          # every running project's imports against its release (STALE ones)
 devopsy @prod --debug            # the same, as the server sees it
 ```
 
-`targets` shows every value with its origin: the targets file, `defaults
-in` a file, a variable like `DEVOPSY_TARGET_HOST`, or devopsy's default.
+`environments` shows every value with its origin: the config file,
+`defaults in` a file, the address, a variable like `DEVOPSY_SERVER`, or
+devopsy's default; any address resolves (`devopsy --debug environments
+vm1:b/prod`).
 
 Help and `--debug` are in color on a terminal; `NO_COLOR=1` turns it off,
 as it does for devopsy's other messages.
@@ -371,94 +374,108 @@ of the directory containing `.devopsy/`, normalized as compose does
 ## Remote targets
 
 `devopsy @<target> ...` runs devopsy on a server over SSH, from your machine
-or from CI. A project's devopsy config, `.devopsy/config.yaml`, names the
-project and its targets, its environments:
+or from CI. A target is an address: which server, which instance of the
+project, which environment.
+
+```
+@[<server>:][<instance>/]<environment>
+
+@prod                         environment; server (and instance) from variables or config
+@vm1:prod                     on vm1: any SSH destination or ~/.ssh/config alias, no ":"
+@vm1:confcatsdemo/prod        an instance of the project, on vm1
+@vm1:/prod                    explicitly no instance, whatever DEVOPSY_INSTANCE says
+@devopsy@203.0.113.10:prod    a raw SSH destination: the server ends at the first ":"
+```
+
+The project's devopsy config, `.devopsy/config.yaml`, names the project and
+defines its environments:
 
 ```yaml
 project: shop                   # its name on servers: required for @target
-defaults:                       # what every target takes unless it sets its own
+defaults:                       # what every environment takes unless it sets its own
   mode: image                   # build (default) or image
   release: {remote: deploy}     # what --release runs (required for it)
   rollback: {remote: deploy}    # what --rollback runs (required for it)
-targets:
+environments:
   prod:
-    host: devopsy@203.0.113.10  # any SSH destination or ~/.ssh/config alias
-    env:                        # per-target settings, not secrets
+    env:                        # per-environment settings, not secrets
       DEVOPSY_DOMAINS: example.org www.example.org
-  staging:
-    host: devopsy@203.0.113.10
+  staging: {}
   "pr-*":                       # any matching name: @pr-123, @pr-feature
-    host: devopsy@203.0.113.10
     releases: {keep: 1}
 ```
 
-Commit `config.yaml`: CI deploys from it. It holds no secrets.
-`.devopsy/config.local.yaml` (gitignore it) is read over it for one machine:
-top-level keys replace, `defaults` merge, a target replaces the same-named
-one; it is never uploaded.
+Commit `config.yaml`: CI deploys from it. It holds no secrets and, usually,
+no servers. `.devopsy/config.local.yaml` (gitignore it) is read over it for
+one machine: top-level keys replace, `defaults` merge, an environment
+replaces the same-named one; it is never uploaded.
 
-On the server, each target lives in `<project>/<target>` under the server's
-release root (below): `shop/prod`, `shop/pr-123`. Its compose project, and
-so its containers, volumes and wildcard URL, is `<project>-<target>`
-(`shop-prod`). A target's `path:` replaces the directory: relative to the
-root, or absolute; its compose name then follows the path (`traefik/main`:
-`traefik-main`; an absolute path's last part).
+What the address leaves out comes from variables, in your environment or the
+project's `.devopsy/.env` (CI sets them in its environment):
 
-`defaults:` gives each target its `mode`, `source`, `release`, `rollback`,
+```sh
+DEVOPSY_SERVER=vm1                       # the server
+DEVOPSY_SERVER_STAGING=devopsy@203.0.113.20   # one environment's (upper case, other characters as _)
+DEVOPSY_INSTANCE=confcatsdemo            # the instance
+```
+
+An environment can also name its `server:` in config, for private
+repositories; the address, then the variables, win over it. No server
+anywhere is an error naming both ways to give one.
+
+On the server, each environment lives in `<project>/[<instance>/]<environment>`
+under the server's release root (below): `shop/prod`, `shop/pr-123`. Its
+compose project, and so its containers, volumes and wildcard URL, is
+`<project>[-<instance>]-<environment>` (`shop-prod`): from project, instance
+and environment only, never the server. An environment's `path:` moves its
+directory (relative to the root, or absolute), never its name.
+
+`defaults:` gives each environment its `mode`, `release`, `rollback`,
 `releases` and `env`, unless it sets its own: `env` merges key by key (the
-target's value wins), the rest replaces whole. In `env`, `""` sets an empty
-value and `~` (null) removes a default. `host` and `path` stay each
-target's.
+environment's value wins), the rest replaces whole. In `env`, `""` sets an
+empty value and `~` (null) removes a default. `server` and `path` stay each
+environment's.
 
 ```yaml
 defaults:
   env:
     CERTRESOLVER: acmedns
-targets:
+environments:
   demo:
     env:
       DEVOPSY_WILDCARD_DOMAIN: ""   # set and empty: no wildcard URL
       CERTRESOLVER: ~               # not set: the label's own default
 ```
 
-Target names with `*` are patterns, one or more name characters: `@pr-123`
-uses a target named `pr-123`, else the matching pattern with the most
-literal characters (two equally specific ones are an error). The name is
-the concrete one everywhere: path, compose name, `DEVOPSY_TARGET`. Pull
-request environments are then a CI job: `devopsy @pr-$PR --release` when one
-opens or changes, `devopsy @pr-$PR --destroy --yes` when it closes.
-
-To keep server addresses out of the repository, leave `host` out and set it
-with variables, in your environment or `.devopsy/.env` (CI sets them in its
-environment):
-
-```sh
-DEVOPSY_TARGET_HOST=devopsy@203.0.113.10        # targets without a host
-DEVOPSY_TARGET_HOST_STAGING=devopsy@203.0.113.20  # replaces staging's host
-```
-
-The per-target variable is `DEVOPSY_TARGET_HOST_` and the target's name in
-upper case, with anything but letters and digits as `_` (`staging-eu`:
-`DEVOPSY_TARGET_HOST_STAGING_EU`). It replaces any host; `DEVOPSY_TARGET_HOST`
-only fills in a missing one. `~/.ssh/config` aliases work as hosts too.
+Environment names with `*` are patterns, one or more name characters:
+`@pr-123` uses an environment named `pr-123`, else the matching pattern
+with the most literal characters (two equally specific ones are an error);
+`"*"` allows any name. The name is the concrete one everywhere: path,
+compose name, `DEVOPSY_ENVIRONMENT`. Pull request environments are then a
+CI job: `devopsy @pr-$PR --release` when one opens or changes, `devopsy
+@pr-$PR --destroy --yes` when it closes.
 
 ### Instances
 
 One project can be installed several times on a server, each install an
 instance with its own environments: a second copy of a site, or one
-codebase serving several sites. Name the instance before the target, or
-with `DEVOPSY_INSTANCE` (both, and different: an error):
+codebase serving several sites, each maybe on another server. Instances
+are never listed in the project: any name (lowercase letters, digits, `-`)
+works, from the address or `DEVOPSY_INSTANCE`.
 
 ```sh
-devopsy @b:prod --release                         # shop/b/prod, compose name shop-b-prod
-DEVOPSY_INSTANCE=b devopsy @prod --release        # the same
-devopsy @prod --instances                         # the instances on prod's server
+devopsy @vm1:b/prod --release                     # shop/b/prod, compose name shop-b-prod
+DEVOPSY_INSTANCE=b devopsy @vm1:prod --release    # the same
+devopsy @vm1:prod --instances                     # the instances on vm1
 ```
 
-`instances: required` in `config.yaml` makes every remote command name one,
-so a multi-site project is never released as itself by accident. Without
-it, `@prod` is the project's own `shop/prod`, and instances are still
-allowed. A target with its own `path:` takes none.
+The first release of an instance the server does not have yet asks before
+creating it, as a typo would otherwise create a new site; `--release
+--yes` skips the question (CI). `instances: required` in `config.yaml`
+makes every remote command name one, so a multi-site project never
+releases as itself by accident; `instances: none` refuses them. Without
+either, instances are optional. An environment with its own `path:` takes
+none.
 
 ### Variables on servers
 
@@ -505,34 +522,28 @@ today. `devopsy --debug` shows this machine's settings; `devopsy @prod
 volumes, then its directory, data and `shared/.env` included. It asks for
 the target's name, unless `--yes`.
 
-### User-level targets and plain directories
+### Aliases and plain directories
 
 `~/.config/devopsy/config.yaml` (or `$DEVOPSY_HOME/config.yaml`) holds
-targets you use from any directory, for running commands on servers, with
-its own `defaults:` for them. They belong to no project, so they only
-`--release` or `--rollback` with `source:`, the local directory of the
-project they release, and only from there; anywhere else, a release would
-upload whatever project you stand in. `~/` is your home directory. The
-project's name and settings come from that source's `config.yaml`, and its
-`defaults:` (mode, release steps...) apply under the target's own:
+aliases: shortcuts for targets you use from any directory. `to:` is an
+address; `source:` is the local checkout of its project, which gives the
+project's name, environments and release steps, and the only directory it
+releases from (anywhere else, a release would upload whatever project you
+stand in). `~/` is your home directory. Without `source:`, `project:` names
+the project, for running commands only.
 
 ```yaml
 # ~/.config/devopsy/config.yaml
-defaults:
-  mode: image
-  source: ~/src/devopsy-template-traefik   # release and rollback only from here
-  release: {remote: deploy}
-  rollback: {remote: deploy}
-targets:
-  vm1-traefik:
-    host: devopsy@203.0.113.10
-    path: traefik/main            # its target in the source's project
+aliases:
+  vm1-traefik:  {source: ~/src/devopsy-template-traefik, to: "vm1:main"}
+  confcatsdemo: {source: ~/src/catalyze, to: "vm1:confcatsdemo/prod"}
 ```
 
-Without `source:`, a user-level target needs a `path:`, and never releases.
-With it, completion also knows the source's commands and services, from
-any directory. A project's own targets win over user-level ones with the
-same name.
+Only a bare name can be an alias: inside a project, its environment of that
+exact name wins, then an alias, then the project's patterns. Parts `to:`
+leaves out come from your environment's variables, never a project's
+`.env`. With `source:`, completion also knows the source's commands and
+services, from any directory.
 
 A target's path can also be a plain devopsy directory, without releases:
 anything maintained in place, like a git clone. Commands then run in the
@@ -673,8 +684,8 @@ works before the first release, so secrets can be in place for the first
 deploy, and it waits for a running release. Running containers keep their
 old values until they are recreated, as by the next release; without one,
 the project's own way (a `reload` command, `up -d`...). `--show` echoes the
-prompt, for values that are not secrets; `--vars set --help` explains. User-level
-targets only take values from your environment, never from a project's
+prompt, for values that are not secrets; `--vars set --help` explains.
+Aliases only take values from your environment, never from a project's
 `.env`.
 
 On the server, the target path holds `releases/`, a `current` symlink and

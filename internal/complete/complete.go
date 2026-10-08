@@ -153,10 +153,10 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2:
-			for _, t := range []string{"targets", "capabilities", "labels", "imports"} {
+			for _, t := range []string{"environments", "capabilities", "labels", "imports"} {
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
-		case len(words) == 3 && words[1] == "targets":
+		case len(words) == 3 && words[1] == "environments":
 			for _, t := range remote.Targets(projectDir) {
 				r.Candidates = append(r.Candidates, Candidate{Value: t.Name})
 			}
@@ -199,16 +199,18 @@ func completeCommand(cwd, projectDir string, words []string, environ []string) R
 	return Result{Delegate: composeDelegate(cwd, projectDir, words, environ)}
 }
 
-// completeRemote completes the words after `@<name>`.
+// completeRemote completes the words after `@<address>`.
 func completeRemote(cwd, projectDir, name string, words []string, environ []string) Result {
 	var target *remote.Target
+	// An address's environment is its last part; a bare name can be an alias.
+	env := name[strings.LastIndexAny(name, ":/")+1:]
 	for _, t := range remote.Targets(projectDir) {
-		if t.Name == name {
+		if t.Name == name || (!t.User && t.Name == env) {
 			target = t
 		}
 	}
-	// A user-level target is not this project: its commands and services
-	// are its source's, when it names one, else unknown.
+	// An alias is not this project: its commands and services are its
+	// source's, when it names one, else unknown.
 	user := target != nil && target.User
 	if user {
 		projectDir = ""
@@ -295,14 +297,13 @@ func composeDelegate(cwd, projectDir string, words []string, environ []string) *
 }
 
 func targetDescription(t *remote.Target) string {
-	d := t.Path
-	if t.Host != "" {
-		d = t.Host + ":" + t.Path
-	}
 	if t.User {
-		d += " (user-level)"
+		return t.Address + " (alias)"
 	}
-	return d
+	if t.Host != "" {
+		return "environment, on " + t.Host
+	}
+	return "environment"
 }
 
 func projectCommands(projectDir string) []Candidate {

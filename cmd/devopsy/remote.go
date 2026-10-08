@@ -26,9 +26,10 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 1
 	}
 
-	// Outside a project only user-level targets exist.
+	// Outside a project only aliases exist.
 	projectDir, _ := cli.FindProjectDir(cwd)
-	// The project's .env can set target hosts (DEVOPSY_TARGET_HOST...).
+	// The project's .env can name the server and instance (DEVOPSY_SERVER,
+	// DEVOPSY_INSTANCE).
 	var projectEnv func(string) (string, bool)
 	env := cli.NewEnv(os.Environ())
 	dotenvFile := ""
@@ -46,22 +47,14 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		remote.Verbose = true
 		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
 	}
-	// @<instance>:<target>, or DEVOPSY_INSTANCE: one install of the project
-	// among several on a server.
-	name, instance := strings.TrimPrefix(args[0], "@"), ""
-	if i, n, ok := strings.Cut(name, ":"); ok {
-		instance, name = i, n
-		if instance == "" {
-			return fail("@:" + name + ": name the instance, or leave out the colon")
-		}
+	// @[<server>:][<instance>/]<environment>, or an alias. Help needs no
+	// server: it only explains.
+	addr := strings.TrimPrefix(args[0], "@")
+	load := remote.LoadTarget
+	if len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h")) {
+		load = remote.DescribeTarget
 	}
-	if v := os.Getenv(remote.InstanceVar); v != "" {
-		if instance != "" && instance != v {
-			return fail(fmt.Sprintf("@%s:%s and %s=%s name different instances", instance, name, remote.InstanceVar, v))
-		}
-		instance = v
-	}
-	t, err := remote.LoadTarget(projectDir, name, instance, projectEnv)
+	t, err := load(projectDir, addr, projectEnv)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -99,6 +92,8 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	projectName := ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
+	} else if t.Project != nil && t.Project.Dir == "" {
+		projectName = t.ComposeName()
 	} else if t.Project != nil {
 		raw, err := cli.TopLevelName(filepath.Join(t.Project.Dir, "compose.yaml"))
 		if err != nil {
@@ -172,8 +167,9 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 0
 
 	case "--release", "--rollback":
-		if len(args) > 1 {
-			return fail(fmt.Sprintf("%s takes no command: what it runs is the target's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
+		yes := len(args) == 2 && (args[1] == "--yes" || args[1] == "-y") && args[0] == "--release"
+		if len(args) > 1 && !yes {
+			return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
 		}
 		steps := t.Release
 		if args[0] == "--rollback" {
@@ -196,7 +192,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			if code := local("before", steps.Before, ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
-			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Name, t.Host, t.Path), color)
+			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path), color)
 			if code := ssh(remote.ActivateScript(t, "", true, projectName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
 				return code
 			}
@@ -204,6 +200,25 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 				return fail(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
 			}
 			return 0
+		}
+
+		// A new instance is a new site: confirm it, unless --yes.
+		if t.Instance != "" && !yes {
+			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), io.Discard, false)
+			if err != nil {
+				return fail(err.Error())
+			}
+			if code != 0 {
+				q := fmt.Sprintf("%s has no instance %s of %s yet: create it", t.Host, t.Instance, t.Project.Name)
+				if !term.IsTerminal(int(os.Stdin.Fd())) {
+					return fail(q + "? Add --yes when not at a terminal: devopsy @" + t.Address + " --release --yes")
+				}
+				fmt.Fprintf(os.Stderr, "%s? [y/N] ", q)
+				line, _ := stdinReader.ReadString('\n')
+				if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+					return fail("Nothing released.")
+				}
+			}
 		}
 
 		projectRoot := filepath.Dir(projectDir)
@@ -217,7 +232,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			commit = v
 		}
 		if code := local("before", steps.Before, commit); code != 0 {
-			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
+			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
 		src := record.Mode
 		if record.Commit != "" {
@@ -227,7 +242,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			}
 		}
 		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s...",
-			record.ID, t.Name, t.Host, t.Path, len(files), src), color)
+			record.ID, t.Address, t.Host, t.Path, len(files), src), color)
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
 			cli.Fprint(os.Stderr, yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
 				record.Commit[:min(10, len(record.Commit))]), color)
@@ -271,7 +286,7 @@ func runLocalStep(t *remote.Target, args []string, commit string) int {
 	for k, v := range t.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.Env = append(cmd.Env, "DEVOPSY_TARGET="+t.Name)
+	cmd.Env = append(cmd.Env, "DEVOPSY_TARGET="+t.Address, "DEVOPSY_ENVIRONMENT="+t.Name, "DEVOPSY_INSTANCE="+t.Instance)
 	if commit != "" {
 		cmd.Env = append(cmd.Env, "DEVOPSY_RELEASE_COMMIT="+commit)
 	}
@@ -286,16 +301,16 @@ func runLocalStep(t *remote.Target, args []string, commit string) int {
 	return 0
 }
 
-// missingSteps explains how to define a target's release or rollback steps,
+// missingSteps explains how to define an environment's release or rollback steps,
 // with a starting point for its mode.
 func missingSteps(t *remote.Target, which string) string {
 	remoteCmd := "up -d --wait --remove-orphans --pull always"
 	if t.Mode == remote.ModeBuild {
 		remoteCmd = "up -d --wait --remove-orphans --build"
 	}
-	return fmt.Sprintf(`@%s has no %s steps: define them in %s, for example:
+	return fmt.Sprintf(`environment %s has no %s steps: define them in %s, for example:
 
-  targets:
+  environments:
     %s:
       %s:
         before: []        # local devopsy commands, before the upload
@@ -311,7 +326,7 @@ project command (deploy) doing that and more. See 'devopsy @%s --%s --help'.`,
 // commit is the release's git commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Written by devopsy from the %q target in config.yaml. Do not edit:\n", t.Name)
+	fmt.Fprintf(&b, "# Written by devopsy from the %q environment in config.yaml. Do not edit:\n", t.Name)
 	fmt.Fprintf(&b, "# change config.yaml and release again, or override in .env.\n")
 	// The project's name, when devopsy derives it: so it is the same however
 	// devopsy runs on the server, not "current".
@@ -320,7 +335,7 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	}
 	// Where the environment sits: project, instance and target.
 	if t.Project != nil {
-		for _, kv := range [][2]string{{"DEVOPSY_PROJECT", t.Project.Name}, {"DEVOPSY_INSTANCE", t.Instance}, {"DEVOPSY_ENVIRONMENT", t.Name}} {
+		for _, kv := range [][2]string{{"DEVOPSY_PROJECT", t.Project.Name}, {"DEVOPSY_INSTANCE", t.Instance}, {"DEVOPSY_ENVIRONMENT", t.Name}, {"DEVOPSY_TARGET", t.Address}} {
 			if _, ok := t.Env[kv[0]]; !ok {
 				b.WriteString(cli.DotenvLine(kv[0], kv[1]) + "\n")
 			}

@@ -25,12 +25,12 @@ func setup(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, "config.yaml"), "targets:\n  a-traefik:\n    host: devopsy@vm1\n    path: /srv/traefik\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "aliases:\n  a-traefik: {project: traefik, to: \"vm1:main\"}\n", 0o644)
 	root := filepath.Join(t.TempDir(), "app")
 	dot := filepath.Join(root, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
 	write(t, filepath.Join(dot, ".env"), "# comment\nTOKEN=x\nexport USER_NAME='y'\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: app\ntargets:\n  prod:\n    path: /srv/app-prod\n  staging:\n    path: /srv/app-staging\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod:\n    path: /srv/app-prod\n  staging:\n    path: /srv/app-staging\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
 	return root
 }
@@ -157,7 +157,7 @@ func TestScripts(t *testing.T) {
 func TestCompleteUserTargetSource(t *testing.T) {
 	root := setup(t)
 	home := os.Getenv("DEVOPSY_HOME")
-	write(t, filepath.Join(home, "config.yaml"), "targets:\n  a-traefik:\n    host: devopsy@vm1\n    path: /srv/traefik\n    source: "+root+"\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "aliases:\n  a-traefik: {source: "+root+", to: \"vm1:prod\"}\n", 0o644)
 	elsewhere := t.TempDir()
 	for _, c := range []struct {
 		words []string
@@ -174,7 +174,7 @@ func TestCompleteUserTargetSource(t *testing.T) {
 		}
 	}
 	// Without source, nothing of the project's.
-	write(t, filepath.Join(home, "config.yaml"), "targets:\n  a-traefik:\n    host: devopsy@vm1\n    path: /srv/traefik\n", 0o644)
+	write(t, filepath.Join(home, "config.yaml"), "aliases:\n  a-traefik: {project: traefik, to: \"vm1:main\"}\n", 0o644)
 	if got := values(Complete(elsewhere, []string{"@a-traefik", "--shell", ""}, os.Environ())); len(got) != 0 {
 		t.Errorf("without source: %q", got)
 	}
