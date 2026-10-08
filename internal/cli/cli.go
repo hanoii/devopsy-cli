@@ -264,10 +264,11 @@ func CommandDescription(path string) string {
 }
 
 // RemoteHelp describes `devopsy @<target>` commands.
-const RemoteHelp = `On a server, devopsy @<target> ... (targets in .devopsy/targets.yaml, or
-user-level ones in ~/.config/devopsy/targets.yaml):
+const RemoteHelp = `On a server, devopsy @<target> ... or @<instance>:<target> (targets in
+.devopsy/config.yaml, or user-level ones in ~/.config/devopsy/config.yaml;
+the instance also from DEVOPSY_INSTANCE):
   --release            upload the project as a new release, make it current and
-                       run the target's release steps (targets.yaml), going
+                       run the target's release steps (config.yaml), going
                        back to the previous release if the remote one fails
   --rollback           make the previous release current again and run the
                        target's rollback steps
@@ -275,9 +276,12 @@ user-level ones in ~/.config/devopsy/targets.yaml):
   --shell [service] [-- command...]
                        a shell (or the command) in a container
   --shell-host         a shell on the server itself, in the current release
-  --vars [get|set|unset KEY...]
-                       the server's variables (shared/.env): names, one value,
-                       or set and unset them; values never go in arguments
+  --vars [--project | --instance] [get|set|unset KEY...]
+                       the server's variables (shared/.env, or the project's
+                       or instance's .env): names, one value, or set and
+                       unset them; values never go in arguments
+  --instances          the project's instances on the server
+  --destroy [--yes]    remove the environment: containers, volumes, directory
   <command> [args]     run 'devopsy <command>' in the current release: the
                        project's commands, then docker compose's
   -- <args>            docker compose <args> there, past project commands
@@ -291,16 +295,17 @@ var RemoteCommandHelp = map[string]string{
 	"--release": `Usage: devopsy @<target> --release
 
 Uploads the project to the target as a new release, makes it current and
-runs the target's release steps from targets.yaml (required):
+runs the target's release steps from .devopsy/config.yaml (required):
 
-  prod:
-    release:
-      before: [image]     # local devopsy commands, in order, before anything
+  targets:
+    prod:
+      release:
+        before: [image]   # local devopsy commands, in order, before anything
                           # touches the server; a failure stops there
-      remote: deploy      # one devopsy command on the server, in the new
+        remote: deploy    # one devopsy command on the server, in the new
                           # release, under the release lock; a failure makes
                           # the previous release current again
-      after: [notify]     # local devopsy commands once it is live; a failure
+        after: [notify]   # local devopsy commands once it is live; a failure
                           # is reported, nothing is undone
 
 Each step is a devopsy command line, split on spaces. Several remote steps
@@ -312,21 +317,25 @@ DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
   - image mode: uploads .devopsy/; images come from a registry.
 
 The release links the server's shared/ (.env, mnt/...) and writes
-.devopsy/target.env from the target's env in targets.yaml, plus
-DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. The last 5
-releases are kept.
+.devopsy/target.env from the target's env in config.yaml, plus
+DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. It lands in
+<project>[/<instance>]/<target> under the server's release root (its
+user-level config's releases: root, else the deploy user's home), unless
+the target sets a path. It keeps the target's or project's releases: keep,
+else the server's, at most the server's max_keep (all default 5).
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 
 Makes the release before the current one current again (skipping failed
-ones) and runs the target's rollback steps from targets.yaml (required), like
+ones) and runs the target's rollback steps from config.yaml (required), like
 release's: before (local), remote (on the server, after the switch; a
 failure goes back again), after (local). Usually the same remote command as
 release, or a project command of its own:
 
-  prod:
-    rollback:
-      remote: deploy
+  targets:
+    prod:
+      rollback:
+        remote: deploy
 
 The remote command runs in the restored release, so it must exist there.
 Rolling back restores that release's files and target env, not data.
@@ -348,6 +357,19 @@ compose exec, like --user root. After --, a command runs instead of the
 shell, directly as docker compose exec runs it: devopsy @<target> --shell
 -- drush status.
 `,
+	"--destroy": `Usage: devopsy @<target> --destroy [--yes]
+
+Removes the environment from the server: docker compose down --volumes in
+its current release, then its directory (releases, shared/ with its data
+and .env). Asks for the target's name, unless --yes (CI, like when a pull
+request closes: devopsy @pr-123 --destroy --yes). The project's and the
+instance's .env stay.
+`,
+	"--instances": `Usage: devopsy @<target> --instances
+
+Lists the project's instances on the target's server, with the targets each
+one has: devopsy @<instance>:<target> runs on one of them.
+`,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 
 Opens your login shell on the target's host, over SSH, in the current
@@ -356,12 +378,20 @@ docker compose work there as on any project. It never depends on the
 project: the way in when something is broken. For a shell in a container:
 devopsy @<target> --shell.
 `,
-	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
+	"--vars": `Usage: devopsy @<target> --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]
 
 The target's variables on the server: shared/.env for an environment with
 releases (it can be set before the first release), or .devopsy/.env for a
-plain directory. These are its secrets and overrides,
-linked into every release; targets.yaml's env goes to target.env instead.
+plain directory. These are its secrets and overrides, linked into every
+release; config.yaml's env goes to target.env instead.
+
+  --project           the project's .env on that server instead, shared by
+                      all its environments there (<root>/<project>/.env)
+  --instance          the instance's, shared by its environments
+                      (<root>/<project>/<instance>/.env; @<instance>:<target>)
+
+Nearest wins: the caller, the environment's, the instance's, the project's,
+then target.env.
 
   --vars              the names, values hidden
   --vars get KEY      one value, on stdout
@@ -385,10 +415,6 @@ Examples:
   devopsy @vm1-traefik --vars
 `,
 }
-
-// DomainsMoved answers --domains, which became the proxy's own command in
-// v0.17.0, with devopsy --probe for the view from outside.
-const DomainsMoved = "--domains moved to the server's proxy: devopsy @<proxy target> domains [<compose project>] (devopsy-template-traefik), which also prints the devopsy --probe line to check from here"
 
 // Usage is devopsy's help. projectDir is "" outside a project.
 func Usage(projectDir string) string {
@@ -490,8 +516,15 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	if err := load(dotenvFile); err != nil {
 		return nil, err
 	}
+	// On servers, the instance's and the project's .env, shared by their
+	// environments: links releases get, nearest first.
+	for _, shared := range []string{"instance.env", "project.env"} {
+		if err := load(filepath.Join(projectDir, shared)); err != nil {
+			return nil, err
+		}
+	}
 	// Per-target settings, written into each release by `devopsy @target
-	// release` from targets.yaml. Below .env, so a server can override them.
+	// --release` from config.yaml. Below .env, so a server can override them.
 	targetEnv := filepath.Join(projectDir, "target.env")
 	if err := load(targetEnv); err != nil {
 		return nil, err
@@ -570,9 +603,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	switch args[0] {
 	case "-h", "--help":
 		return nil, &Help{Text: Usage(projectDir), Code: 0}
-	// print-env: the name before --env, still used by older devopsy calling
-	// newer servers.
-	case "--env", "print-env":
+	case "--env":
 		var b strings.Builder
 		for _, k := range env.Marked() {
 			v, _ := env.Lookup(k)

@@ -44,7 +44,7 @@ type Candidate struct {
 // Groups, printed as a third field after the description.
 const (
 	GroupTarget = "target"
-	// GroupUserTarget is a target from the user-level targets.yaml.
+	// GroupUserTarget is a target from the user-level config.yaml.
 	GroupUserTarget = "user-target"
 	GroupProject    = "project"
 	GroupDevopsy    = "devopsy"
@@ -99,6 +99,8 @@ var remoteCommands = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
+	{"--instances", "the project's instances on the server", GroupDevopsy},
+	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }
 
@@ -236,7 +238,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 
 	switch words[0] {
 	case "--release", "--rollback":
-		// They take no command: their steps are in targets.yaml.
+		// They take no command: their steps are in config.yaml.
 		if len(words) == 2 {
 			r := filter(Result{Candidates: []Candidate{{"--help", "what it runs, and how", GroupDevopsy}}}, cur)
 			r.Directive = DirectiveNoFileComp

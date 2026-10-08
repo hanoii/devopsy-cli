@@ -25,50 +25,6 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
-func TestLoadTarget(t *testing.T) {
-	t.Setenv("DEVOPSY_HOME", t.TempDir())
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, TargetsFile), `
-prod:
-  host: deploy@203.0.113.10
-  path: /srv/app/
-build:
-  host: vm1
-  path: /srv/app-build
-  mode: build
-bad-mode:
-  host: vm1
-  path: /srv/x
-  mode: rsync
-relative:
-  host: vm1
-  path: srv/x
-root:
-  host: vm1
-  path: /
-nohost:
-  path: /srv/x
-`)
-	tg, err := LoadTarget(dir, "prod", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tg.Mode != ModeBuild || tg.Path != "/srv/app" || tg.Name != "prod" {
-		t.Fatalf("prod: %+v", tg)
-	}
-	if tg, err := LoadTarget(dir, "build", nil); err != nil || tg.Mode != ModeBuild {
-		t.Fatalf("build: %+v %v", tg, err)
-	}
-	for _, name := range []string{"bad-mode", "relative", "root", "nohost", "missing"} {
-		if _, err := LoadTarget(dir, name, nil); err == nil {
-			t.Errorf("%s: want an error", name)
-		}
-	}
-	if _, err := LoadTarget(t.TempDir(), "prod", nil); err == nil || !strings.Contains(err.Error(), "no targets defined") {
-		t.Errorf("no targets file: %v", err)
-	}
-}
-
 // gitProject makes a git repository with a .devopsy/ project and some state
 // that must never be released.
 func gitProject(t *testing.T) string {
@@ -84,7 +40,7 @@ func gitProject(t *testing.T) string {
 	write(t, filepath.Join(root, ".devopsy", ".env"), "SECRET=1\n")
 	write(t, filepath.Join(root, ".devopsy", "compose.override.yaml"), "services: {}\n")
 	write(t, filepath.Join(root, ".devopsy", "mnt", "data", "db"), "data\n")
-	write(t, filepath.Join(root, ".devopsy", LocalTargetsFile), "mine: {}\n")
+	write(t, filepath.Join(root, ".devopsy", LocalConfigFile), "targets: {mine: {}}\n")
 	write(t, filepath.Join(root, ".devopsy", TargetEnvFile), "STRAY=1\n")
 	if err := os.Symlink("app.php", filepath.Join(root, "link.php")); err != nil {
 		t.Fatal(err)
@@ -204,9 +160,11 @@ func TestScriptsParse(t *testing.T) {
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
 		"shell":        ShellScript(tg),
-		"vars":         VarsReadScript(tg),
-		"vars set":     VarsSetScript(tg),
-		"vars unset":   VarsUnsetScript(tg),
+		"vars":         VarsReadScript(tg, nil),
+		"vars set":     VarsSetScript(tg, nil),
+		"vars unset":   VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
+		"destroy":      DestroyScript(tg, "app"),
+		"instances":    InstancesScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -229,147 +187,12 @@ func TestFormatReleases(t *testing.T) {
 	}
 }
 
-func TestLoadTargetEnvAndLocal(t *testing.T) {
-	t.Setenv("DEVOPSY_HOME", t.TempDir())
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, TargetsFile), `
-prod:
-  host: vm1
-  path: /srv/app
-  env:
-    DEVOPSY_DOMAINS: example.org
-staging:
-  host: vm1
-  path: /srv/app-staging
-badenv:
-  host: vm1
-  path: /srv/x
-  env:
-    "NOT VALID": x
-`)
-	write(t, filepath.Join(dir, LocalTargetsFile), `
-staging:
-  host: my-test-vm
-  path: /srv/mine
-mine:
-  host: laptop-vm
-  path: /srv/mine
-`)
-	prod, err := LoadTarget(dir, "prod", nil)
-	if err != nil || prod.Env["DEVOPSY_DOMAINS"] != "example.org" {
-		t.Fatalf("prod: %+v %v", prod, err)
-	}
-	staging, err := LoadTarget(dir, "staging", nil)
-	if err != nil || staging.Host != "my-test-vm" || staging.Path != "/srv/mine" {
-		t.Fatalf("local override: %+v %v", staging, err)
-	}
-	if _, err := LoadTarget(dir, "mine", nil); err != nil {
-		t.Fatalf("local-only target: %v", err)
-	}
-	if _, err := LoadTarget(dir, "badenv", nil); err == nil {
-		t.Fatal("invalid env name: want an error")
-	}
-
-	// Only a local file is enough.
-	only := t.TempDir()
-	write(t, filepath.Join(only, LocalTargetsFile), "x:\n  host: h\n  path: /srv/x\n")
-	if _, err := LoadTarget(only, "x", nil); err != nil {
-		t.Fatalf("local file only: %v", err)
-	}
-}
-
-func TestLoadTargetUserFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, TargetsFile), `
-vm1-traefik:
-  host: devopsy@vm1
-  path: /srv/traefik
-prod:
-  host: user-level
-  path: /srv/user-prod
-`)
-	project := t.TempDir()
-	write(t, filepath.Join(project, TargetsFile), "prod:\n  host: vm1\n  path: /srv/app\n")
-
-	prod, err := LoadTarget(project, "prod", nil)
-	if err != nil || prod.User || prod.Host != "vm1" {
-		t.Fatalf("project target must win: %+v %v", prod, err)
-	}
-	tr, err := LoadTarget(project, "vm1-traefik", nil)
-	if err != nil || !tr.User || tr.File != filepath.Join(home, TargetsFile) {
-		t.Fatalf("user target from a project: %+v %v", tr, err)
-	}
-	if tr, err := LoadTarget("", "vm1-traefik", nil); err != nil || !tr.User {
-		t.Fatalf("user target outside a project: %+v %v", tr, err)
-	}
-	if _, err := LoadTarget("", "missing", nil); err == nil || !strings.Contains(err.Error(), "vm1-traefik") {
-		t.Fatalf("missing target should list the others: %v", err)
-	}
-}
-
-func TestLoadTargetHostVars(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, TargetsFile), "vm1-traefik:\n  path: /srv/traefik\n")
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, TargetsFile), `
-prod:
-  path: /srv/app-prod
-staging-eu:
-  host: devopsy@staging
-  path: /srv/app-staging
-`)
-	env := map[string]string{}
-	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
-	host := func(name string) string {
-		t.Helper()
-		tg, err := LoadTarget(dir, name, projectEnv)
-		if err != nil {
-			return "error: " + err.Error()
-		}
-		return tg.Host
-	}
-
-	if got := HostVar("staging-eu"); got != "DEVOPSY_TARGET_HOST_STAGING_EU" {
-		t.Errorf("HostVar: %s", got)
-	}
-	if got := host("prod"); !strings.Contains(got, "DEVOPSY_TARGET_HOST_PROD or DEVOPSY_TARGET_HOST") {
-		t.Errorf("no host should name the variables: %s", got)
-	}
-	// The default only fills in missing hosts; a target's own variable
-	// replaces any.
-	env["DEVOPSY_TARGET_HOST"] = "devopsy@default"
-	if got := host("prod"); got != "devopsy@default" {
-		t.Errorf("default: %s", got)
-	}
-	if got := host("staging-eu"); got != "devopsy@staging" {
-		t.Errorf("default must not replace a host: %s", got)
-	}
-	env["DEVOPSY_TARGET_HOST_STAGING_EU"] = "devopsy@eu"
-	if got := host("staging-eu"); got != "devopsy@eu" {
-		t.Errorf("target variable: %s", got)
-	}
-	// The caller's environment wins over the project's .env.
-	t.Setenv("DEVOPSY_TARGET_HOST_STAGING_EU", "devopsy@caller")
-	if got := host("staging-eu"); got != "devopsy@caller" {
-		t.Errorf("caller: %s", got)
-	}
-	// User-level targets ignore the project's .env.
-	if got := host("vm1-traefik"); !strings.HasPrefix(got, "error: ") {
-		t.Errorf("user target used the project's .env: %s", got)
-	}
-	t.Setenv("DEVOPSY_TARGET_HOST_VM1_TRAEFIK", "devopsy@vm1")
-	if got := host("vm1-traefik"); got != "devopsy@vm1" {
-		t.Errorf("user target from the caller: %s", got)
-	}
-}
-
 // fakeDevopsy puts a devopsy on PATH that prints where it runs.
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte("#!/bin/sh\necho \"ran in $PWD: $*\"\n"), 0o755); err != nil {
+	fake := "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return "PATH=" + bin + ":/usr/bin:/bin"
@@ -471,14 +294,14 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 func TestPrepareScript(t *testing.T) {
 	bin := t.TempDir()
 	// The fake devopsy records where it ran, and fails in a FAIL directory.
-	fake := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"devopsy ${FAKE_VERSION:-0.17.0}\"; exit; fi\npwd > ran\n[ ! -f .devopsy/FAIL ]\n"
+	fake := "#!/bin/sh\npwd > ran\n[ ! -f .devopsy/FAIL ]\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
 	for name, c := range map[string]struct {
-		compose, override, version string
-		fail, runs                 bool
+		compose, override string
+		fail, runs        bool
 	}{
 		"no labels":       {compose: "services: {}\n"},
 		"import":          {compose: "services:\n  a:\n    labels: [devopsy.import.X=proxy/X]\n", runs: true},
@@ -486,7 +309,6 @@ func TestPrepareScript(t *testing.T) {
 		"in the override": {compose: "services: {}\n", override: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true},
 		"fails":           {compose: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true, fail: true},
 		"in a comment":    {compose: "# devopsy.role=proxy\nservices: {}\n"},
-		"older devopsy":   {compose: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", version: "0.16.0", fail: true},
 	} {
 		base := t.TempDir()
 		rel := filepath.Join(base, "releases", "1")
@@ -498,11 +320,8 @@ func TestPrepareScript(t *testing.T) {
 			write(t, filepath.Join(rel, ".devopsy", "FAIL"), "")
 		}
 		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nrel="+Quote(rel)+"\n"+script+"echo after\n")
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_VERSION=" + c.version}
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
-		if c.version != "" && !strings.Contains(string(out), "need devopsy v0.17.0 or newer on the server, which has "+c.version) {
-			t.Errorf("%s: no upgrade hint:\n%s", name, out)
-		}
 		_, ranErr := os.Stat(filepath.Join(rel, "ran"))
 		if (ranErr == nil) != c.runs {
 			t.Errorf("%s: ran %v, want %v", name, ranErr == nil, c.runs)
@@ -511,99 +330,5 @@ func TestPrepareScript(t *testing.T) {
 		if c.fail != (err != nil) || c.fail != (failedErr == nil) || c.fail == strings.Contains(string(out), "after") {
 			t.Errorf("%s: err %v, marked failed %v:\n%s", name, err, failedErr == nil, out)
 		}
-	}
-}
-
-// defaults: shared by a file's targets, env merged key by key, null removes
-// a default and "" keeps an empty value; a project's never reach user-level
-// targets.
-func TestTargetDefaults(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("DEVOPSY_HOME", home)
-	write(t, filepath.Join(home, TargetsFile), `
-defaults:
-  mode: image
-  source: ~/src/traefik
-  release: {remote: deploy}
-vm1-traefik:
-  host: devopsy@vm1
-  path: /srv/traefik
-`)
-	dir := t.TempDir()
-	write(t, filepath.Join(dir, TargetsFile), `
-defaults:
-  mode: image
-  env:
-    CERTRESOLVER: acmedns
-    SITE: shared
-    DEVOPSY_WILDCARD_DOMAIN: vm1.example.com
-  release: {before: image, remote: deploy}
-  rollback: {remote: deploy}
-prod:
-  host: vm1
-  path: /srv/app-prod
-  env:
-    SITE: prod
-demo:
-  host: vm1
-  path: /srv/app-demo
-  release: {remote: deploy --fast}
-  env:
-    DEVOPSY_WILDCARD_DOMAIN: ""
-    CERTRESOLVER: ~
-`)
-	write(t, filepath.Join(dir, LocalTargetsFile), `
-defaults:
-  env:
-    SITE: local
-`)
-	prod, err := LoadTarget(dir, "prod", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if prod.Mode != ModeImage || prod.Release.Remote != "deploy" || len(prod.Release.Before) != 1 || prod.Rollback == nil {
-		t.Errorf("prod: %+v", prod)
-	}
-	if prod.Env["SITE"] != "prod" || prod.Env["CERTRESOLVER"] != "acmedns" || prod.Env["DEVOPSY_WILDCARD_DOMAIN"] != "vm1.example.com" {
-		t.Errorf("prod env: %v", prod.Env)
-	}
-
-	demo, err := LoadTarget(dir, "demo", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v, ok := demo.Env["DEVOPSY_WILDCARD_DOMAIN"]; !ok || v != "" {
-		t.Errorf("an empty value is kept: %v", demo.Env)
-	}
-	if _, ok := demo.Env["CERTRESOLVER"]; ok {
-		t.Errorf("null removes a default: %v", demo.Env)
-	}
-	if demo.Env["SITE"] != "local" {
-		t.Errorf("targets.local.yaml's defaults over targets.yaml's: %v", demo.Env)
-	}
-	if demo.Release.Remote != "deploy --fast" || len(demo.Release.Before) != 0 {
-		t.Errorf("steps replace whole: %+v", demo.Release)
-	}
-
-	// The user-level file's defaults, for its targets only.
-	traefik, err := LoadTarget(dir, "vm1-traefik", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if traefik.Mode != ModeImage || traefik.Source != "~/src/traefik" || traefik.Release.Remote != "deploy" || traefik.Env["CERTRESOLVER"] != "" {
-		t.Errorf("user-level: %+v", traefik)
-	}
-
-	if _, err := LoadTarget(dir, DefaultsKey, nil); err == nil || !strings.Contains(err.Error(), "not a target") {
-		t.Errorf("@defaults: %v", err)
-	}
-	for _, tg := range Targets(dir) {
-		if tg.Name == DefaultsKey {
-			t.Error("defaults listed as a target")
-		}
-	}
-	write(t, filepath.Join(dir, LocalTargetsFile), "defaults:\n  path: /srv/x\n")
-	if _, err := LoadTarget(dir, "prod", nil); err == nil || !strings.Contains(err.Error(), "host and path belong to each target") {
-		t.Errorf("path in defaults: %v", err)
 	}
 }

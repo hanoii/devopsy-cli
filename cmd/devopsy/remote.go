@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -45,7 +46,22 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		remote.Verbose = true
 		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
 	}
-	t, err := remote.LoadTarget(projectDir, strings.TrimPrefix(args[0], "@"), projectEnv)
+	// @<instance>:<target>, or DEVOPSY_INSTANCE: one install of the project
+	// among several on a server.
+	name, instance := strings.TrimPrefix(args[0], "@"), ""
+	if i, n, ok := strings.Cut(name, ":"); ok {
+		instance, name = i, n
+		if instance == "" {
+			return fail("@:" + name + ": name the instance, or leave out the colon")
+		}
+	}
+	if v := os.Getenv(remote.InstanceVar); v != "" {
+		if instance != "" && instance != v {
+			return fail(fmt.Sprintf("@%s:%s and %s=%s name different instances", instance, name, remote.InstanceVar, v))
+		}
+		instance = v
+	}
+	t, err := remote.LoadTarget(projectDir, name, instance, projectEnv)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -73,20 +89,24 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	}
 
 	// Without a top-level name, compose would name the project after the
-	// release directory, so fix it to the target directory's name.
-	// A user-level target belongs to no local project: the server's own
-	// files name it (target.env in releases, the directory otherwise).
-	// A nested devopsy (DEVOPSY_PROJECT_DIR set: a project command, or a
-	// release step, calling devopsy @target) inherits the local project's
-	// COMPOSE_PROJECT_NAME, which says nothing about the target: ignore it.
+	// release directory, so it is <project>[-<instance>]-<target>. A
+	// user-level target without source belongs to no local project: the
+	// server's own files name it (target.env in releases, the directory
+	// otherwise). A nested devopsy (DEVOPSY_PROJECT_DIR set: a project
+	// command, or a release step, calling devopsy @target) inherits the local
+	// project's COMPOSE_PROJECT_NAME, which says nothing about the target:
+	// ignore it.
 	projectName := ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
-	} else if t.User {
-	} else if raw, err := cli.TopLevelName(filepath.Join(projectDir, "compose.yaml")); err != nil {
-		return fail(err.Error())
-	} else if raw == "" {
-		projectName = cli.NormalizeProjectName(filepath.Base(t.Path))
+	} else if t.Project != nil {
+		raw, err := cli.TopLevelName(filepath.Join(t.Project.Dir, "compose.yaml"))
+		if err != nil {
+			return fail(err.Error())
+		}
+		if raw == "" {
+			projectName = cli.NormalizeProjectName(t.ComposeName())
+		}
 	}
 
 	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
@@ -126,8 +146,30 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		fmt.Print(remote.FormatReleases(out.String()))
 		return 0
 
-	case "--domains":
-		return fail(cli.DomainsMoved)
+	case "--destroy":
+		return runDestroy(t, projectName, args[1:], color)
+
+	case "--instances":
+		if t.Project == nil {
+			return fail("--instances: @" + t.Name + " has no project (a user-level target without source)")
+		}
+		var out bytes.Buffer
+		code, err := remote.SSH(t, remote.InstancesScript(t), bytes.NewReader(nil), &out, false)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if code != 0 {
+			return code
+		}
+		if out.Len() == 0 {
+			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("No instances of %s on %s.", t.Project.Name, t.Host), color)
+			return 0
+		}
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			inst, targets, _ := strings.Cut(line, "\t")
+			fmt.Printf("%-24s %s\n", inst, targets)
+		}
+		return 0
 
 	case "--release", "--rollback":
 		if len(args) > 1 {
@@ -253,27 +295,36 @@ func missingSteps(t *remote.Target, which string) string {
 	}
 	return fmt.Sprintf(`@%s has no %s steps: define them in %s, for example:
 
-  %s:
+  targets:
     %s:
-      before: []          # local devopsy commands, before the upload
-      remote: %s
-      after: []           # local devopsy commands, once it is live
+      %s:
+        before: []        # local devopsy commands, before the upload
+        remote: %s
+        after: []         # local devopsy commands, once it is live
 
 remote is one devopsy command, run on the server after the switch; usually a
 project command (deploy) doing that and more. See 'devopsy @%s --%s --help'.`,
-		t.Name, which, t.File, t.Name, which, remoteCmd, t.Name, which)
+		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 
 // targetEnv renders a target's env as the release's .devopsy/target.env.
 // commit is the release's git commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Written by devopsy from the %q target in targets.yaml. Do not edit:\n", t.Name)
-	fmt.Fprintf(&b, "# change targets.yaml and release again, or override in .env.\n")
-	// The project's name, when devopsy derives it from the target path: so it is
-	// the same however devopsy runs on the server, not "current".
+	fmt.Fprintf(&b, "# Written by devopsy from the %q target in config.yaml. Do not edit:\n", t.Name)
+	fmt.Fprintf(&b, "# change config.yaml and release again, or override in .env.\n")
+	// The project's name, when devopsy derives it: so it is the same however
+	// devopsy runs on the server, not "current".
 	if projectName != "" && t.Env["COMPOSE_PROJECT_NAME"] == "" {
 		b.WriteString(cli.DotenvLine("COMPOSE_PROJECT_NAME", projectName) + "\n")
+	}
+	// Where the environment sits: project, instance and target.
+	if t.Project != nil {
+		for _, kv := range [][2]string{{"DEVOPSY_PROJECT", t.Project.Name}, {"DEVOPSY_INSTANCE", t.Instance}, {"DEVOPSY_ENVIRONMENT", t.Name}} {
+			if _, ok := t.Env[kv[0]]; !ok {
+				b.WriteString(cli.DotenvLine(kv[0], kv[1]) + "\n")
+			}
+		}
 	}
 	// The commit released, for image tags: in image mode, compose.yaml can
 	// use the image CI built from that commit, so each release, and each
@@ -290,4 +341,39 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 		b.WriteString(cli.DotenvLine(k, t.Env[k]) + "\n")
 	}
 	return []byte(b.String())
+}
+
+// runDestroy implements `devopsy @target --destroy [--yes]`: the
+// environment's containers, volumes and directory on the server. It asks
+// for the target's name unless --yes.
+func runDestroy(t *remote.Target, projectName string, args []string, color bool) int {
+	yes := false
+	for _, a := range args {
+		switch a {
+		case "--yes", "-y":
+			yes = true
+		default:
+			cli.Fprint(os.Stderr, red, "usage: devopsy @"+t.Name+" --destroy [--yes]", color)
+			return 1
+		}
+	}
+	where := t.Host + ":" + t.Path
+	if !yes {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "This removes %s: its containers, volumes, releases and shared/ (data, .env). Type %s to go on: ", where, t.Name)
+		line, _ := stdinReader.ReadString('\n')
+		if strings.TrimSpace(line) != t.Name {
+			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
+			return 1
+		}
+	}
+	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
+	if err != nil {
+		cli.Fprint(os.Stderr, red, err.Error(), color)
+		return 1
+	}
+	return code
 }

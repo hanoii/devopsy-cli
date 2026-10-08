@@ -12,10 +12,7 @@ import (
 )
 
 // RemoteOnly are devopsy's flags that need a target: devopsy @<target> <flag>.
-var RemoteOnly = []string{"--release", "--rollback", "--releases", "--shell-host", "--vars"}
-
-// movedWords were devopsy's words after @<target> before they became flags.
-var movedWords = map[string]string{"release": "--release", "rollback": "--rollback", "releases": "--releases"}
+var RemoteOnly = []string{"--release", "--rollback", "--releases", "--shell-host", "--vars", "--destroy", "--instances"}
 
 // ComposeCommands lists docker compose's commands, from its own completion
 // (cobra's protocol: "name<TAB>description" lines, then ":<directive>").
@@ -97,9 +94,6 @@ func unknownWord(word, projectDir string) string {
 	msg := fmt.Sprintf("%s: not a project command or a docker compose command", word)
 	if cmds := CustomCommands(projectDir); len(cmds) > 0 {
 		msg = fmt.Sprintf("%s: not a project command (%s) or a docker compose command", word, strings.Join(cmds, ", "))
-	}
-	if flag, ok := movedWords[word]; ok {
-		msg += fmt.Sprintf(". devopsy's own is a flag now: devopsy @<target> %s", flag)
 	}
 	return msg
 }

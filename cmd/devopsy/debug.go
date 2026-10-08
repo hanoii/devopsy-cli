@@ -64,18 +64,35 @@ func debugSummary(st style, projectDir string) {
 	}
 	field("docker", strings.TrimPrefix(dockerVersion(), "docker "))
 	field("docker compose", compose)
-	field("user targets file", tilde(remote.UserTargetsFile()))
+	field("user config", tilde(remote.UserConfigFile()))
+	if r, err := remote.ReleaseSettings(); err == nil {
+		field("releases here", fmt.Sprintf("root %s, keep %d, max_keep %d %s", tilde(r.Root), r.Keep, r.MaxKeep, st.dim("(for releases landing on this machine)")))
+	} else {
+		field("releases here", st.warn(err.Error()))
+	}
 	if projectDir == "" {
 		field("project", st.warn("none (no .devopsy/ here or above)"))
 	} else {
 		files := []string{"compose.yaml"}
-		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "target.env", remote.TargetsFile, remote.LocalTargetsFile} {
+		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "instance.env", "project.env", "target.env", remote.ConfigFile, remote.LocalConfigFile} {
 			if _, err := os.Stat(filepath.Join(projectDir, f)); err == nil {
 				files = append(files, f)
 			}
 		}
 		field("project", tilde(projectDir)+" "+st.dim("("+strings.Join(files, ", ")+")"))
 		field("commands", orNone(cli.CustomCommands(projectDir)))
+		switch p, err := remote.LoadProject(projectDir); {
+		case err != nil:
+			field("name on servers", st.warn(err.Error()))
+		case p == nil || p.Name == "":
+			field("name on servers", st.warn("none: set project: in "+remote.ConfigFile))
+		default:
+			v := p.Name
+			if p.Instances != "" {
+				v += " (instances required: @<instance>:<target>)"
+			}
+			field("name on servers", v)
+		}
 	}
 	var project, user []string
 	for _, t := range remote.Targets(projectDir) {
@@ -86,6 +103,9 @@ func debugSummary(st style, projectDir string) {
 		}
 	}
 	field("targets", orNone(project))
+	if pats := remote.Patterns(projectDir); len(pats) > 0 {
+		field("target patterns", strings.Join(pats, ", "))
+	}
 	field("user-level targets", orNone(user))
 	var caps []string
 	for _, c := range cli.Capabilities {
@@ -110,6 +130,7 @@ type yamlTarget struct {
 	Source   string            `yaml:"source,omitempty"`
 	Release  *yamlSteps        `yaml:"release,omitempty"`
 	Rollback *yamlSteps        `yaml:"rollback,omitempty"`
+	Keep     int               `yaml:"keep,omitempty"`
 	Env      map[string]string `yaml:"env,omitempty"`
 }
 
@@ -155,14 +176,14 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		// A mapping node, so the order is Targets' (a map would sort by name).
 		out := &yaml.Node{Kind: yaml.MappingNode}
 		for _, n := range names {
-			t, err := remote.LoadTarget(projectDir, n, projectEnv)
+			t, err := remote.DescribeTarget(projectDir, n, projectEnv)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "# %s: %v\n", n, err)
 				continue
 			}
 			var value yaml.Node
 			if err := value.Encode(&yamlTarget{Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
-				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Env: t.Env}); err != nil {
+				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Keep: t.Keep, Env: t.Env}); err != nil {
 				cli.Fprint(os.Stderr, red, err.Error(), color)
 				return 1
 			}
@@ -181,7 +202,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		if i > 0 {
 			fmt.Println()
 		}
-		t, err := remote.LoadTarget(projectDir, n, projectEnv)
+		t, err := remote.DescribeTarget(projectDir, n, projectEnv)
 		if err != nil {
 			fmt.Printf("%s\n  %s %v\n", st.name(n), st.warn("error:"), err)
 			continue
@@ -201,11 +222,18 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			fmt.Printf("  %s %s%s\n", st.head(fmt.Sprintf("%-9s", field)), value, from)
 		}
 		row("host", t.Host, t.From["host"])
+		if t.Project != nil {
+			row("project", t.Project.Name, filepath.Join(t.Project.Dir, remote.ConfigFile))
+		}
+		row("compose", t.ComposeName(), "")
 		row("path", t.Path, t.From["path"])
 		row("mode", t.Mode, t.From["mode"])
 		row("source", t.Source, t.From["source"])
 		row("release", steps(t.Release), t.From["release"])
 		row("rollback", steps(t.Rollback), t.From["rollback"])
+		if t.Keep > 0 {
+			row("keep", fmt.Sprint(t.Keep), t.From["keep"])
+		}
 		keys := make([]string, 0, len(t.Env))
 		for k := range t.Env {
 			keys = append(keys, k)
