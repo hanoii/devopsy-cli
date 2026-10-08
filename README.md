@@ -8,6 +8,43 @@ right files. Other words are `docker compose` commands.
 It is a single static binary for Linux and macOS (amd64 and arm64), with no
 dependencies besides Docker and the Compose plugin.
 
+## What this is not
+
+- **Not a platform.** No control plane, dashboard, agent or daemon on
+  servers; nothing listens for webhooks. A server is Docker, SSH and this
+  binary.
+- **Not an orchestrator.** No Kubernetes, no Swarm, no scheduling across
+  hosts: an environment is one compose project on one server.
+- **Not a replacement for compose.** It never generates or rewrites compose
+  files; plain `docker compose` sees exactly what devopsy runs.
+- **Not a local development tool like DDEV.** No per-framework setup, no
+  router or database snapshots of its own: it runs the compose project you
+  write, the same way locally and on servers.
+- **Not a build system, and not tied to a proxy.** Images are built however
+  you like; Traefik is one template, not part of devopsy.
+
+## What this is for
+
+Hosting compose projects on plain servers you own, from your machine or CI:
+
+- **Releases over SSH:** each one a complete directory, switched in at the
+  end and switched back when its steps fail; `--rollback` to the previous
+  one. Data and secrets live outside releases.
+- **Several environments per server:** `prod`, `staging`, `pr-123`, each its
+  own compose project, data and URL; one codebase installed several times
+  (instances) for multi-site setups.
+- **The same commands locally and remotely:** `devopsy up`, `devopsy @prod
+  logs`, project commands in `.devopsy/commands/`, a shell in any container.
+- **Small teams and agencies** running many sites on a few cheap servers,
+  with nothing to operate besides the servers themselves.
+
+To start: install it (below), then take a template, like
+[devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami)
+for the smallest project and
+[devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik)
+for the server's proxy, or add `.devopsy/compose.yaml` and
+`.devopsy/config.yaml` to your own project (Remote targets, below).
+
 ## Opinions
 
 devopsy decides a few things for you, and the rest of this README follows
