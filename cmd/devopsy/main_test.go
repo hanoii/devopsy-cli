@@ -548,3 +548,48 @@ func TestDebugTargets(t *testing.T) {
 		t.Errorf("capabilities (%d):\n%s", code, out)
 	}
 }
+
+// --prepare-release, --debug labels and --debug imports against a docker
+// that answers ps and inspect like a host running a proxy.
+func TestRolesEndToEnd(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(tmp, "releases", "1")
+	dot := filepath.Join(rel, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels: [devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN]\n", 0o644)
+	write(t, filepath.Join(dot, "target.env"), "COMPOSE_PROJECT_NAME='shop'\n", 0o644)
+	bin := t.TempDir()
+	docker := `#!/bin/sh
+case "$1" in
+  ps) echo aaa; echo bbb ;;
+  inspect)
+    echo 'aaa {"com.docker.compose.project":"traefik-main","devopsy.role":"proxy","devopsy.export.WILDCARD_DOMAIN":"vm1.example.com"}'
+    echo 'bbb {"com.docker.compose.project":"shop","com.docker.compose.project.working_dir":"` + dot + `","devopsy.import.DEVOPSY_WILDCARD_DOMAIN":"proxy/WILDCARD_DOMAIN"}'
+    ;;
+esac
+`
+	write(t, filepath.Join(bin, "docker"), docker, 0o755)
+	env := []string{"PATH=" + bin + ":/usr/bin:/bin"}
+
+	out, code := runDevopsy(t, rel, env, "--prepare-release")
+	data, _ := os.ReadFile(filepath.Join(dot, "target.env"))
+	if code != 0 || !strings.Contains(out, "DEVOPSY_WILDCARD_DOMAIN=vm1.example.com, from proxy (traefik-main)") || !strings.HasSuffix(string(data), "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n") {
+		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
+	}
+	out, code = runDevopsy(t, rel, env, "--debug", "labels")
+	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) {
+		t.Errorf("--debug labels (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, rel, env, "--debug", "imports")
+	if code != 0 || !strings.Contains(out, "shop  devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN") || !strings.Contains(out, "current") {
+		t.Errorf("--debug imports (%d):\n%s", code, out)
+	}
+	// The proxy now exports another domain: the release is stale.
+	write(t, filepath.Join(bin, "docker"), strings.Replace(docker, `"devopsy.export.WILDCARD_DOMAIN":"vm1.example.com"`, `"devopsy.export.WILDCARD_DOMAIN":"vm2.example.com"`, 1), 0o755)
+	out, _ = runDevopsy(t, rel, env, "--debug", "imports")
+	if !strings.Contains(out, "STALE: release shop again") {
+		t.Errorf("stale:\n%s", out)
+	}
+}

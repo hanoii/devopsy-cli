@@ -185,6 +185,7 @@ devopsy --debug targets [name]   # each target as computed, and where each value
 devopsy --debug targets --yaml   # the same as plain YAML: defaults merged, hosts resolved
 devopsy --debug capabilities     # what devopsy calls, each action's contract, what this project implements
 devopsy --debug labels           # the labels devopsy reads, the project's, roles on this host
+devopsy --debug imports          # every running project's imports against its release (STALE ones)
 devopsy @prod --debug            # the same, as the server sees it
 ```
 
@@ -643,9 +644,11 @@ there, and resolves each import: unless the release's environment already
 has `<VAR>` (targets.yaml or `shared/.env`, even empty), it finds the
 running compose project holding that role (else of that name), reads its
 export and writes `<VAR>` into `target.env`. An export that is there but
-empty is a value (`''`). Nothing running, or no such export, fails the
-release, unless the import ends in `?`. A failed check leaves `current`
-alone. The values stay with each release: a rollback restores what its
+empty is a value (`''`); one with newlines or control characters is
+refused. A required source that is not running is waited for up to 30
+seconds, as while the proxy restarts; then nothing running, or no such
+export, fails the release, unless the import ends in `?`. A failed check
+leaves `current` alone. The values stay with each release: a rollback restores what its
 release had, and a later `devopsy up` on the server sees them.
 
 So a project that expects a proxy imports from it, one that does not
@@ -656,9 +659,23 @@ setting it, for example `DEVOPSY_WILDCARD_DOMAIN: ""` in `targets.yaml` or
 `devopsy --debug labels` (locally, or `devopsy @prod --debug labels` on a
 server) shows the roles held on the host with their exports, and what each
 of the project's imports resolves to now and in the current release.
+Because each release keeps what it imported, a changed export (a new
+wildcard domain, say) only reaches a project with its next release:
+`devopsy @prod --debug imports` lists every project running on that host
+with its imports, and marks those whose release has an outdated value as
+STALE, to release again.
+
 Rollbacks and plain `up` never check anything. The server's devopsy must be
-v0.17.0 or newer for projects with these labels; projects without them
-release with any.
+v0.17.0 or newer for projects with these labels (a release says so);
+projects without them release with any. Order when moving a server to them:
+upgrade its devopsy, release the exporter (devopsy-traefik), then the
+projects importing from it.
+
+Roles are advisory, not a security boundary: they are only checked when
+devopsy releases a project, against running containers, so a role is free
+while its holder is stopped, and anyone in the docker group (root-equivalent)
+can run a container claiming any role or exporting any value. They prevent
+mistakes, like two proxies on one host. Separate servers separate clients.
 
 ## Probe
 
@@ -667,8 +684,8 @@ devopsy --probe [--ip <server ip>] <host>...
 ```
 
 Checks hosts from where you run it, as visitors reach them: DNS through
-1.1.1.1 (and whether it points at `--ip`, or at a CDN proxy: Cloudflare's
-ranges are recognized), the certificate the server presents (at `--ip`,
+1.1.1.1, IPv4 and IPv6 (and whether it points at `--ip`, either kind, or at
+a CDN proxy: Cloudflare's IPv4 ranges are recognized), the certificate the server presents (at `--ip`,
 else where the host resolves), verified like a browser would, and an HTTPS
 request through what DNS returns, with Cloudflare's origin errors (521,
 522, 525, 526) explained. Exits 1 when a host has a problem, so it also

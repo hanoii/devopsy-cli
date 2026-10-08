@@ -25,8 +25,9 @@ func runProbe(args []string, color bool) int {
 		case a == "--help" || a == "-h":
 			fmt.Println(probeUsage)
 			fmt.Print(`
-For each host, from where devopsy runs: DNS through 1.1.1.1 (and whether it
-points at --ip, or at a CDN proxy like Cloudflare), the certificate the
+For each host, from where devopsy runs: DNS through 1.1.1.1, IPv4 and IPv6
+(and whether it points at --ip, either kind, or at a CDN proxy like
+Cloudflare: IPv4 ranges only), the certificate the
 server presents (at --ip, else where the host resolves; verified against
 the system's roots) and an HTTPS request as visitors make it. Exits 1 when
 a host has a problem. It knows no proxy: proxies' own commands print the
@@ -48,6 +49,9 @@ line to run, like devopsy-traefik's domains.
 	if len(hosts) == 0 || (ip != "" && net.ParseIP(ip) == nil) {
 		cli.Fprint(os.Stderr, red, probeUsage, color)
 		return 1
+	}
+	if ip != "" {
+		ip = net.ParseIP(ip).String()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

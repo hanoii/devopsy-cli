@@ -99,7 +99,17 @@ user-facing behavior and keep it in sync with any change to it.
   only when the compose files mention the labels, so older servers release
   other projects); an import never overrides what the release's
   environment sets, even empty; an empty export is a value; rollbacks never
-  check. Read from running containers, not files: the exporter must run.
+  check. Read from running containers, not files: the exporter must run,
+  and required sources are waited for (`WaitForExporters`, 30 s). Each
+  lookup reads one snapshot of the host (`Running`: `docker ps` then
+  `docker inspect`), so a restart in between cannot mix states.
+  `PrepareScript` refuses servers older than v0.17.0 with an upgrade hint
+  instead of compose's "unknown flag". `--debug imports` compares every
+  running project's imports (from its containers' labels) with its
+  release's `target.env` (found through compose's working_dir label;
+  imported lines follow `cli.ImportedMarker`). Roles are advisory: checked
+  only at devopsy releases, never a security boundary (docker group is
+  root-equivalent); pinning roles on the host is in ROADMAP.
   Replaced, in v0.17.0, the `domains` capability's `wildcard-domain` and
   `DEVOPSY_PROXY_DIR` (October 2026), which made devopsy's core define a
   proxy contract.
@@ -239,6 +249,14 @@ End to end, against a real server: an OrbStack Debian 13 machine set up with
 devopsy-server (see its AGENTS.md), a linux/arm64 build installed in it, and
 a test project whose `.devopsy/targets.local.yaml` points at
 `devopsy@devopsy-test@orb`. OrbStack's SSH needs no keys.
+
+Roles and imports, end to end on that machine: release devopsy-traefik
+(its `targets.local.yaml` pointing there too), then a recipe importing from
+it (whoami, with `DEVOPSY_TARGET_HOST`), and check its `target.env`,
+`devopsy @<target> --debug imports`, `devopsy @<traefik target> domains
+<project>`, a target that sets the variable empty, a rollback, and a
+release with Traefik stopped (fails after 30 s, `current` unchanged).
+Delete the machine afterwards.
 
 `--upgrade` and the release notice only work in release builds: test them
 with a build that pretends to be older, against the real releases:

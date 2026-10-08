@@ -471,20 +471,22 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 func TestPrepareScript(t *testing.T) {
 	bin := t.TempDir()
 	// The fake devopsy records where it ran, and fails in a FAIL directory.
-	fake := "#!/bin/sh\npwd > ran\n[ ! -f .devopsy/FAIL ]\n"
+	fake := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"devopsy ${FAKE_VERSION:-0.17.0}\"; exit; fi\npwd > ran\n[ ! -f .devopsy/FAIL ]\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
 	for name, c := range map[string]struct {
-		compose, override string
-		fail, runs        bool
+		compose, override, version string
+		fail, runs                 bool
 	}{
 		"no labels":       {compose: "services: {}\n"},
 		"import":          {compose: "services:\n  a:\n    labels: [devopsy.import.X=proxy/X]\n", runs: true},
 		"role":            {compose: "services:\n  a:\n    labels: {devopsy.role: proxy}\n", runs: true},
 		"in the override": {compose: "services: {}\n", override: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true},
 		"fails":           {compose: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", runs: true, fail: true},
+		"in a comment":    {compose: "# devopsy.role=proxy\nservices: {}\n"},
+		"older devopsy":   {compose: "services:\n  a:\n    labels: [devopsy.role=proxy]\n", version: "0.16.0", fail: true},
 	} {
 		base := t.TempDir()
 		rel := filepath.Join(base, "releases", "1")
@@ -496,8 +498,11 @@ func TestPrepareScript(t *testing.T) {
 			write(t, filepath.Join(rel, ".devopsy", "FAIL"), "")
 		}
 		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nrel="+Quote(rel)+"\n"+script+"echo after\n")
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_VERSION=" + c.version}
 		out, err := cmd.CombinedOutput()
+		if c.version != "" && !strings.Contains(string(out), "need devopsy v0.17.0 or newer on the server, which has "+c.version) {
+			t.Errorf("%s: no upgrade hint:\n%s", name, out)
+		}
 		_, ranErr := os.Stat(filepath.Join(rel, "ran"))
 		if (ranErr == nil) != c.runs {
 			t.Errorf("%s: ran %v, want %v", name, ranErr == nil, c.runs)
