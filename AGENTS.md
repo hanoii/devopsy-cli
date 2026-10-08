@@ -126,8 +126,9 @@ user-facing behavior and keep it in sync with any change to it.
   template's name). A target lives in `<project>[/<instance>]/<target>`
   under the server's release root unless it sets `path:` (relative to the
   root, or absolute; then no instance and no shared levels). Its compose
-  name is `<project>[-<instance>]-<target>` (`Target.ComposeName`), also for
-  a target with its own path.
+  name is `<project>[-<instance>]-<target>` (`Target.ComposeName`); with its
+  own path, the path's parts joined with "-" (`traefik/main`:
+  `traefik-main`), or an absolute path's last part.
 - Instances: `@<instance>:<target>` or `DEVOPSY_INSTANCE` (both and
   different: error); `instances: required` makes every remote command name
   one, so a multi-site project never releases as itself by accident.

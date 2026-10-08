@@ -46,7 +46,7 @@ targets:
 	if tg, err := LoadTarget(dir, "custom", "", nil); err != nil || tg.Path != "/srv/app-custom" || len(tg.Levels) != 0 || tg.ComposeName() != "app-custom" {
 		t.Fatalf("absolute path: %+v %v", tg, err)
 	}
-	if tg, err := LoadTarget(dir, "relative", "", nil); err != nil || tg.Path != "elsewhere/x" {
+	if tg, err := LoadTarget(dir, "relative", "", nil); err != nil || tg.Path != "elsewhere/x" || tg.ComposeName() != "elsewhere-x" {
 		t.Fatalf("relative path: %+v %v", tg, err)
 	}
 	for _, name := range []string{"bad-mode", "root", "up", "nohost", "missing", "bad name"} {
