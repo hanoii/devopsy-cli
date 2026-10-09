@@ -347,6 +347,8 @@ the server's devopsy and docker versions and the project; capabilities, the
 release's capabilities and their contracts; labels, the devopsy labels in
 its compose files; imports, the imports of every project running on that
 host, marking those whose release holds an outdated value as STALE.
+environments and schema are about this machine's config: run them without a
+target.
 `,
 	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 
