@@ -141,6 +141,20 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
+	case "--log":
+		list, prefix := false, ""
+		for _, a := range args[1:] {
+			switch {
+			case a == "--list":
+				list = true
+			case prefix == "" && !strings.HasPrefix(a, "-"):
+				prefix = a
+			default:
+				return fail("usage: devopsy @" + t.Name + " --log [<release id> | --list]")
+			}
+		}
+		return ssh(remote.LogReadScript(t, prefix, list), bytes.NewReader(nil), false)
+
 	case "--instances":
 		if t.Project == nil {
 			return fail("--instances: @" + t.Name + " has no project (a user-level target without source)")
@@ -183,10 +197,39 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			restart = t.Release
 		}
 		phases := remote.RemotePhases(steps, restart)
+
+		// The whole run is recorded and saved on the server once it has
+		// been touched: devopsy @<target> --log.
+		what := strings.TrimPrefix(args[0], "--")
+		rlog := newReleaseLog(what, t)
+		say := func(c, msg string) {
+			cli.Fprint(os.Stderr, c, msg, color)
+			rlog.Line(msg)
+		}
+		stop := func(msg string) int {
+			rlog.Line(msg)
+			return fail(msg)
+		}
+		session := func(script string) int {
+			code, err := remote.SSHLog(t, script, nil, nil, tty, rlog)
+			if err != nil {
+				return stop(err.Error())
+			}
+			return code
+		}
+		// save ends the log with code and saves it as name on the server.
+		save := func(name string, code int) int {
+			rlog.Line(fmt.Sprintf("devopsy: %s exited %d", what, code))
+			if c, err := remote.SSH(t, remote.LogSaveScript(t, name+"-"+what+".log"), bytes.NewReader(rlog.Text()), io.Discard, false); err != nil || c != 0 {
+				cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the %s log on the server (%v, %d)", what, err, c), color)
+			}
+			return code
+		}
 		local := func(phase string, list []string, commit string) int {
 			for _, step := range list {
-				cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase), color)
+				say(cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase))
 				if code := runLocalStep(t, remote.StepArgs(step), commit); code != 0 {
+					rlog.Line(fmt.Sprintf("devopsy: 'devopsy %s' exited %d", step, code))
 					return code
 				}
 			}
@@ -197,14 +240,15 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
-			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path), color)
-			if code := ssh(remote.ActivateScript(t, "", true, projectName, phases), nil, tty); code != 0 {
-				return code
+			name := time.Now().UTC().Format("20060102150405")
+			say(cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path))
+			if code := session(remote.ActivateScript(t, "", true, projectName, phases)); code != 0 {
+				return save(name, code)
 			}
 			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
-				return fail(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
+				return save(name, stop(fmt.Sprintf("an after step failed (%d): the rollback stays", code)))
 			}
-			return 0
+			return save(name, 0)
 		}
 
 		// A role taken by another compose project on the server fails before
@@ -266,11 +310,11 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 				src += " with uncommitted changes"
 			}
 		}
-		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s...",
-			record.ID, t.Address, t.Host, t.Path, len(files), src), color)
+		say(cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s...",
+			record.ID, t.Address, t.Host, t.Path, len(files), src))
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
-			cli.Fprint(os.Stderr, yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
-				record.Commit[:min(10, len(record.Commit))]), color)
+			say(yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
+				record.Commit[:min(10, len(record.Commit))]))
 		}
 
 		pr, pw := io.Pipe()
@@ -280,16 +324,19 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
 			}))
 		}()
-		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
+		if code, err := remote.SSHLog(t, remote.UploadScript(t, record.ID), pr, nil, false, rlog); err != nil || code != 0 {
+			if err != nil {
+				return stop(err.Error())
+			}
 			return code
 		}
-		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, phases), nil, tty); code != 0 {
-			return code
+		if code := session(remote.ActivateScript(t, record.ID, false, projectName, phases)); code != 0 {
+			return save(record.ID, code)
 		}
 		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
-			return fail(fmt.Sprintf("an after step failed (%d): the release stays", code))
+			return save(record.ID, stop(fmt.Sprintf("an after step failed (%d): the release stays", code)))
 		}
-		return 0
+		return save(record.ID, 0)
 
 	default:
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)

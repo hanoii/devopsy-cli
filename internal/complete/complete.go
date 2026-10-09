@@ -97,6 +97,7 @@ var remoteCommands = []Candidate{
 	{"--release", "upload a new release and run its steps", GroupDevopsy},
 	{"--rollback", "back to the previous release, and run its steps", GroupDevopsy},
 	{"--releases", "list the releases on the server", GroupDevopsy},
+	{"--log", "the log of the last release or rollback, or of one", GroupDevopsy},
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
@@ -286,6 +287,11 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
 			return filter(r, cur)
+		}
+		return none
+	case "--log":
+		if len(words) == 2 && strings.HasPrefix(cur, "-") {
+			return filter(Result{Candidates: []Candidate{{"--list", "the logs on the server", GroupDevopsy}}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return none
 	case "--shell-host", "--releases", "--env", "--help", "-h":
