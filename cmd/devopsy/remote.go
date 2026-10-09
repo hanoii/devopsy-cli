@@ -20,7 +20,7 @@ import (
 )
 
 // runRemote handles `devopsy @target ...`.
-func runRemote(cwd string, args []string, color, verbose bool) int {
+func runRemote(cwd string, args []string, color bool, verbose int) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
@@ -40,12 +40,13 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		projectEnv = env.Lookup
 	}
-	if verbose {
-		// What runs over SSH, with the project's secrets masked. devopsy on
-		// the server is verbose too.
+	if verbose > 0 {
+		// Each SSH session (-vv: and its script), with the project's secrets
+		// masked. devopsy on the server is verbose too.
 		secrets := cli.NewSecrets(env, dotenvFile)
 		remote.Verbose = true
 		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
+		remote.TraceScripts = verbose > 1
 	}
 	// @[<server>:][<instance>/]<environment>, or an alias. Help needs no
 	// server: it only explains.

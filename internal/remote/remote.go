@@ -255,8 +255,12 @@ func quoteAll(args []string) string {
 // older versions ignore).
 var Verbose bool
 
-// Trace, when set, receives each SSH command and the script it runs.
-var Trace func(string)
+// Trace, when set, receives each SSH command, and with TraceScripts the
+// script it runs.
+var (
+	Trace        func(string)
+	TraceScripts bool
+)
 
 // devopsyCall is the remote devopsy invocation, with the project name fixed
 // when compose.yaml has none (the release directory would name it). With
@@ -593,7 +597,11 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	// they are in use while another session (or the user's own) holds them.
 	args := append(append([]string{}, SSHOptions...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
-		Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", ttyFlag, t.Host, strings.TrimRight(script, "\n")))
+		if TraceScripts {
+			Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", ttyFlag, t.Host, strings.TrimRight(script, "\n")))
+		} else {
+			Trace(fmt.Sprintf("devopsy: ssh %s %s", ttyFlag, t.Host))
+		}
 	}
 
 	var cmd *exec.Cmd

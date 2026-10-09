@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -33,14 +34,15 @@ func run() int {
 	color := styleFor(os.Stderr).on
 	args := os.Args[1:]
 
-	// --verbose (-v) goes before everything else, and is passed on through
+	// -v or -vv goes before everything else, and is passed on through
 	// DEVOPSY_VERBOSE to nested devopsy calls: project commands calling
 	// devopsy, and devopsy on servers.
-	for len(args) > 0 && (args[0] == "--verbose" || args[0] == "-v") {
-		os.Setenv(cli.VerboseEnv, "1")
+	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv") {
+		os.Setenv(cli.VerboseEnv, strconv.Itoa(len(args[0])-1))
 		args = args[1:]
 	}
-	verbose := cli.IsVerbose(os.Getenv(cli.VerboseEnv))
+	verboseLevel := cli.VerboseLevel(os.Getenv(cli.VerboseEnv))
+	verbose := verboseLevel > 0
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -97,7 +99,7 @@ func run() int {
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
-		return runRemote(cwd, args, color, verbose)
+		return runRemote(cwd, args, color, verboseLevel)
 	}
 
 	// devopsy's flags for servers, used without a target.

@@ -206,7 +206,7 @@ devopsy                # help: devopsy's own, the project's commands, the rest
 devopsy --env          # the variables devopsy loads and computes
 devopsy --shell [service] [-- command]   # a shell, or a command, in a container
 devopsy -- <args>      # docker compose <args>, even if a project command has that name
-devopsy -v deploy      # --verbose: what devopsy found and runs
+devopsy -v deploy      # what devopsy found and runs (-vv: more)
 ```
 
 A word is a project command if `.devopsy/commands/` has it, else a compose
@@ -260,9 +260,9 @@ or longer. Only the message is masked. Masking is a safety net: pass secrets
 through the environment, not arguments (`devopsy exec -T db sh -c
 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb'`).
 
-`--verbose` (`-v`, or `DEVOPSY_VERBOSE=1`) also prints the files loaded and,
-for targets, each SSH command and its script; it carries over to nested and
-server-side devopsy.
+`-v` (or `DEVOPSY_VERBOSE=1`) also prints the files loaded and, for
+targets, each SSH session; `-vv` (`DEVOPSY_VERBOSE=2`) also the script each
+session runs. It carries over to nested and server-side devopsy.
 
 ```sh
 devopsy --debug                       # versions, the project, environments, aliases, labels

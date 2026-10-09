@@ -123,9 +123,9 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("version word (%d):\n%s", code, out)
 	}
 
-	// --verbose: what devopsy decided, before the notice; nested devopsy calls
+	// -v: what devopsy decided, before the notice; nested devopsy calls
 	// (the show command calls devopsy show) are verbose too.
-	for _, flag := range []string{"--verbose", "-v"} {
+	for _, flag := range []string{"-v", "-vv"} {
 		out, code = runDevopsy(t, sub, nil, flag, "show")
 		if code != 0 || strings.Count(out, "devopsy: project "+dot) != 2 ||
 			!strings.Contains(out, "devopsy: running '"+dot+"/commands/show'") {
@@ -222,7 +222,7 @@ func TestUserTargets(t *testing.T) {
 
 	// Outside a project the target resolves (help needs no SSH).
 	out, code = runDevopsy(t, t.TempDir(), withHome, "@vm1-traefik", "--help")
-	if code != 0 || !strings.Contains(out, "On a server") {
+	if code != 0 || !strings.Contains(out, "Targets (") {
 		t.Errorf("outside a project (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, t.TempDir(), env, "@missing", "ps")
@@ -278,8 +278,8 @@ func TestTargetEnv(t *testing.T) {
 	}
 }
 
-// With --verbose, the SSH command and its script are printed, secrets from
-// the project's .env masked, and devopsy on the server is verbose too.
+// With -v, each SSH session is printed; with -vv, also its script, secrets
+// from the project's .env masked. devopsy on the server is verbose too.
 func TestRemoteVerbose(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -291,11 +291,16 @@ func TestRemoteVerbose(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DB_PASSWORD=dotenv-secret-value\n", 0o644)
 	// true stands in for ssh: only devopsy's own output remains. Values from
 	// .env are masked, so the server comes from the environment here.
-	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}, "-v", "@prod", "exec", "db", "dotenv-secret-value")
+	env := []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}
+	out, code := runDevopsy(t, project, env, "-vv", "@prod", "exec", "db", "dotenv-secret-value")
 	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server, running:") ||
 		!strings.Contains(out, "DEVOPSY_VERBOSE=1 COMPOSE_PROJECT_NAME=") ||
 		!strings.Contains(out, "'exec' 'db' '***'") || strings.Contains(out, "dotenv-secret-value") {
-		t.Errorf("(%d):\n%s", code, out)
+		t.Errorf("-vv (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, project, env, "-v", "@prod", "exec", "db", "dotenv-secret-value")
+	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server\n") || strings.Contains(out, "running:") {
+		t.Errorf("-v (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}, "@prod", "ps")
 	if code != 0 || out != "" {

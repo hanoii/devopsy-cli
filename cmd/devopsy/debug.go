@@ -31,6 +31,8 @@ func runDebug(cwd string, args []string, color bool) int {
 		topic = args[0]
 	}
 	switch topic {
+	case "--help", "-h":
+		fmt.Print(st.help(cli.DebugHelp))
 	case "":
 		debugSummary(st, projectDir)
 	case "environments":
