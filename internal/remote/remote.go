@@ -369,6 +369,7 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
   [ "releases/$r" = "$prev" ] && found=1
 done)
 [ -n "$id" ] || { echo "devopsy: no release before the current one" >&2; exit 1; }
+echo "devopsy: rolling back to $id" >&2
 ` + RollbackNotLive
 	} else {
 		s += "id=" + Quote(id) + "\n" + NotLive
@@ -619,39 +620,43 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	return 0, nil
 }
 
-// LogsKept is how many release logs an environment keeps.
-const LogsKept = 20
+// LogFile is a release's log, in its directory: what its release printed,
+// then what each rollback to it printed.
+const LogFile = ".devopsy-log"
 
-// LogSaveScript saves stdin as the environment's release log name, in
-// logs/ next to releases/, keeping the newest LogsKept. Nothing when the
-// environment is gone (a first release that did not go live).
-func LogSaveScript(t *Target, name string) string {
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/releases" ] || { cat > /dev/null; exit 0; }
-mkdir -p "$base/logs"
+// LogSaveScript saves stdin as release id's log, or appends it (a
+// rollback's). Nothing when the release is gone (a first release that did
+// not go live).
+func LogSaveScript(t *Target, id string, appendTo bool) string {
+	redirect := ">"
+	if appendTo {
+		redirect = ">>"
+	}
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`d="$base/releases/"%s
+[ -d "$d" ] || { cat > /dev/null; exit 0; }
 umask 077
-f="$base/logs/"%s
-cat > "$f.tmp"
-mv "$f.tmp" "$f"
-ls -1 "$base/logs" | grep '\.log$' | sort -r | tail -n +%d | while read -r old; do
-  rm -f "$base/logs/$old"
-done
-`, Quote(name), LogsKept+1)
+cat %s "$d/%s"
+`, Quote(id), redirect, LogFile)
 }
 
-// LogReadScript prints the newest release log whose name starts with
-// prefix (any, when empty), or with list, the logs' names, newest first.
-func LogReadScript(t *Target, prefix string, list bool) string {
-	s := "set -eu\n" + basePrelude(t) + `logs=$(ls -1 "$base/logs" 2>/dev/null | grep '\.log$' | sort -r) || true
-[ -n "$logs" ] || { echo "devopsy: no release logs in $base yet" >&2; exit 1; }
+// LogReadScript prints the log of the release whose id starts with prefix
+// (the newest such), or, without one, the most recently written log.
+func LogReadScript(t *Target, prefix string) string {
+	s := "set -eu\n" + basePrelude(t)
+	if prefix == "" {
+		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` 2>/dev/null | head -n 1) || true
+[ -n "$f" ] || { echo "devopsy: no release logs in $base/releases yet" >&2; exit 1; }
 `
-	if list {
-		return s + `printf '%s\n' "$logs" | sed 's/\.log$//'` + "\n"
+	} else {
+		s += fmt.Sprintf(`r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | grep -- "^"%s | sort -r | head -n 1) || true
+[ -n "$r" ] || { echo "devopsy: no release starting with "%s" in $base/releases" >&2; exit 1; }
+f="$base/releases/$r/%s"
+[ -f "$f" ] || { echo "devopsy: release $r has no log" >&2; exit 1; }
+`, Quote(prefix), Quote(prefix), LogFile)
 	}
-	return s + fmt.Sprintf(`f=$(printf '%%s\n' "$logs" | grep -F -- %s | grep -- "^"%s | head -n 1) || true
-[ -n "$f" ] || { echo "devopsy: no release log starting with "%s" in $base/logs" >&2; exit 1; }
-echo "devopsy: $base/logs/$f" >&2
-cat "$base/logs/$f"
-`, Quote(prefix), Quote(prefix), Quote(prefix))
+	return s + `echo "devopsy: $f" >&2
+cat "$f"
+`
 }
 
 // DestroyScript removes the target's environment: down, with its volumes,

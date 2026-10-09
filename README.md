@@ -284,7 +284,7 @@ volumes are named `<project>[-<instance>]-<environment>`
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps
 devopsy @vm1:prod --releases     # list them, * marks the current one
-devopsy @vm1:prod --log          # what the last release or rollback printed (--list, or an id)
+devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # down with volumes, then remove the environment
 devopsy @vm1:prod --instances    # the project's instances on vm1
 devopsy @vm1:prod --env          # its variables there, env capability included
@@ -321,10 +321,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Hence local before steps first and local after steps last. Remote before
   steps run in the current release, with its commands, and none run on a
   first release.
-- **Logs:** each release and rollback is recorded and saved on the server
-  (`logs/`, the newest 20), failed ones included once the server was
-  reached: devopsy's messages, the local steps run, and all the server
-  printed. `--log` shows the last, `--log <id>` one release's. Local steps'
+- **Logs:** each release and rollback is recorded and saved on the server,
+  in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
+  appended to the restored release's), failed ones included once the server
+  was reached: devopsy's messages, the local steps run, and all the server
+  printed. `--log` shows the most recent, `--log <id>` one release's. Local steps'
   own output stays on your screen only, keeping their terminal.
 - **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
   resolved target) and `DEVOPSY_RELEASE_COMMIT`, never the server's `.env`.

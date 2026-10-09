@@ -142,18 +142,14 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return runDestroy(t, projectName, args[1:], color)
 
 	case "--log":
-		list, prefix := false, ""
-		for _, a := range args[1:] {
-			switch {
-			case a == "--list":
-				list = true
-			case prefix == "" && !strings.HasPrefix(a, "-"):
-				prefix = a
-			default:
-				return fail("usage: devopsy @" + t.Name + " --log [<release id> | --list]")
-			}
+		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
+			return fail("usage: devopsy @" + t.Name + " --log [<release id>]")
 		}
-		return ssh(remote.LogReadScript(t, prefix, list), bytes.NewReader(nil), false)
+		prefix := ""
+		if len(args) == 2 {
+			prefix = args[1]
+		}
+		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
 	case "--instances":
 		if t.Project == nil {
@@ -217,10 +213,22 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			}
 			return code
 		}
-		// save ends the log with code and saves it as name on the server.
-		save := func(name string, code int) int {
+		// save ends the log with code and saves it in release id's
+		// directory on the server: a rollback's is appended to the log of
+		// the release it restores, which its script names.
+		save := func(id string, code int) int {
 			rlog.Line(fmt.Sprintf("devopsy: %s exited %d", what, code))
-			if c, err := remote.SSH(t, remote.LogSaveScript(t, name+"-"+what+".log"), bytes.NewReader(rlog.Text()), io.Discard, false); err != nil || c != 0 {
+			text := rlog.Text()
+			rollback := id == ""
+			if rollback {
+				m := rollingBackTo.FindSubmatch(text)
+				if m == nil {
+					return code
+				}
+				id = string(m[1])
+				text = append([]byte("\n"), text...)
+			}
+			if c, err := remote.SSH(t, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false); err != nil || c != 0 {
 				cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the %s log on the server (%v, %d)", what, err, c), color)
 			}
 			return code
@@ -240,15 +248,14 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
-			name := time.Now().UTC().Format("20060102150405")
 			say(cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path))
 			if code := session(remote.ActivateScript(t, "", true, projectName, phases)); code != 0 {
-				return save(name, code)
+				return save("", code)
 			}
 			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
-				return save(name, stop(fmt.Sprintf("an after step failed (%d): the rollback stays", code)))
+				return save("", stop(fmt.Sprintf("an after step failed (%d): the rollback stays", code)))
 			}
-			return save(name, 0)
+			return save("", 0)
 		}
 
 		// A role taken by another compose project on the server fails before

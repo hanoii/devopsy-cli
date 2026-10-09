@@ -503,16 +503,17 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatal("no current release")
 	}
 
-	// Both runs are logged on the server, the failed one too.
+	// Both runs are logged on the server, in their releases, the failed one
+	// too.
 	out, code = run(nil, "@prod", "--log")
 	if code != 0 || !strings.Contains(out, "devopsy dev: release of devopsy@server:prod") || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "release exited 0") {
 		t.Fatalf("--log (%d):\n%s", code, out)
 	}
-	out, code = run(nil, "@prod", "--log", "--list")
-	if logs := strings.Fields(out); code != 0 || len(logs) != 2 || !strings.HasSuffix(logs[1], "-release") {
-		t.Fatalf("--log --list (%d):\n%s", code, out)
+	entries, _ := os.ReadDir(filepath.Join(server, "releases"))
+	if len(entries) != 2 {
+		t.Fatalf("releases: %v", entries)
 	}
-	if out, code := run(nil, "@prod", "--log", strings.Fields(out)[1][:14]); code != 0 || !strings.Contains(out, "NEEDED  set it per environment") || !strings.Contains(out, "release exited 1") {
+	if out, code := run(nil, "@prod", "--log", entries[0].Name()); code != 0 || !strings.Contains(out, "NEEDED  set it per environment") || !strings.Contains(out, "release exited 1") {
 		t.Fatalf("--log <id> (%d):\n%s", code, out)
 	}
 
@@ -532,6 +533,10 @@ func TestReleaseSteps(t *testing.T) {
 	}
 	if out, code := run(nil, "@prod", "--rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != first {
 		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), first, out)
+	}
+	// The rollback's log is appended to the restored release's.
+	if data, err := os.ReadFile(filepath.Join(server, first, ".devopsy-log")); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {
+		t.Fatalf("rollback log: %v\n%s", err, data)
 	}
 
 	// rollback needs its own steps.
