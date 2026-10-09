@@ -278,22 +278,36 @@ var RemoteCommandHelp = map[string]string{
 	"--release": `Usage: devopsy @<target> --release [--yes]
 
 Uploads the project to the target as a new release, makes it current and
-runs the target's release steps from .devopsy/config.yaml (required):
+runs the target's release steps from .devopsy/config.yaml (required), in
+phases:
 
   environments:
     prod:
       release:
-        before: [image]   # local devopsy commands, in order, before anything
-                          # touches the server; a failure stops there
-        remote: deploy    # one devopsy command on the server, in the new
-                          # release, under the release lock; a failure makes
-                          # the previous release current again
-        after: [notify]   # local devopsy commands once it is live; a failure
-                          # is reported, nothing is undone
+        before:                # before anything changes; a failure stops
+          - local: image       #   here, on this machine, first
+          - remote: maint on   #   on the server, in the current release
+        prepare: [secrets]     # on the server, in the new release before it
+                               # goes live (then: the variables check)
+        run: deploy            # once it is current: the release itself
+        after:                 # once live; a failure is only reported
+          - remote: maint off  #   on the server first
+          - local: notify      #   then here
+      # or only the run step:
+      # release: deploy
 
-Each step is a devopsy command line, split on spaces. Several remote steps
-belong in one project command. Local steps get the target's env,
+After prepare, devopsy checks that every variable compose requires
+(${VAR:?message}) is set, with the env capability included; a missing one
+fails the release before it goes live, listing what to set (--vars set).
+When run fails, current goes back to the previous release, which is then
+restarted with its own run step (the rollback's, else the release's).
+
+Each step is a devopsy command line, split on spaces. The remote steps
+share one SSH session, under the release lock: hence local before steps
+first and local after steps last. Local steps get the target's env,
 DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
+Remote before steps run in the current release, so they use its commands;
+none run on a first release.
 
   - build mode (default): uploads the project as git sees it (tracked and
     untracked files, minus gitignored ones, uncommitted changes included).
@@ -314,17 +328,17 @@ CI.
 	"--rollback": `Usage: devopsy @<target> --rollback
 
 Makes the release before the current one current again (skipping failed
-ones) and runs the target's rollback steps from config.yaml (required), like
-release's: before (local), remote (on the server, after the switch; a
-failure goes back again), after (local). Usually the same remote command as
-release, or a project command of its own:
+ones) and runs the target's rollback steps from config.yaml (required), in
+release's phases: before, prepare and the variables check in the restored
+release (a failure changes nothing), run once it is current (a failure goes
+back again), after. No upload, and no new imports: the restored release
+keeps what it had. Usually the same run step as release:
 
   environments:
     prod:
-      rollback:
-        remote: deploy
+      rollback: deploy
 
-The remote command runs in the restored release, so it must exist there.
+The run step runs in the restored release, so it must exist there.
 Rolling back restores that release's files and target env, not data.
 `,
 	"--releases": `Usage: devopsy @<target> --releases
@@ -607,6 +621,8 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		return nil, &Output{Text: hash + "\n"}
 	case "--capability":
 		return capability(p, args[1:])
+	case "--missing-vars":
+		return nil, missingVars(p)
 	case "--shell":
 		return shell(p, args[1:])
 	case "--":

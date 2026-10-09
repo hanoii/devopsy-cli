@@ -146,40 +146,116 @@ type TargetReleases struct {
 	Keep int `yaml:"keep"`
 }
 
-// Steps are what --release or --rollback runs, in three phases, so the
-// upload and the switch of `current` always happen at the same point:
+// Steps are what --release or --rollback runs, in phases, so the upload,
+// the switch of `current` and the release lock are always where devopsy
+// puts them:
 //
-//   - Before: local devopsy commands, in order, before anything touches the
-//     server. A failure stops there.
-//   - then --release uploads, and both switch `current`;
-//   - Remote: one devopsy command on the server, in the new current, under
-//     the release lock. A failure switches `current` back. Several remote
-//     steps belong in one project command.
-//   - After: local devopsy commands once the release is live. A failure is
+//   - Before: steps before anything changes, local (on this machine) then
+//     remote (on the server, in the current release, under the lock). A
+//     failure stops there.
+//   - then --release uploads (complete, not live);
+//   - Prepare: remote steps in the new release (for a rollback, the one
+//     restored), before it goes live: generating secrets, say. Then
+//     devopsy checks that every variable compose requires is set. A failure
+//     leaves `current` alone.
+//   - Run: one remote step, once the release is current: the release
+//     itself. A failure switches `current` back and runs the previous
+//     release's rollback run step (else its release run), so its
+//     containers are the previous release's again.
+//   - After: steps once it is live, remote then local. A failure is
 //     reported; nothing is undone.
 //
-// Each entry is a devopsy command line, split on spaces (no quoting).
+// The remote phases share one SSH session, which holds the lock: hence local
+// before steps first and local after steps last. Each step is a devopsy
+// command line, split on spaces (no quoting). A plain string is Run alone.
 type Steps struct {
-	Before StepList `yaml:"before"`
-	Remote string   `yaml:"remote"`
-	After  StepList `yaml:"after"`
+	Before  []Step
+	Prepare StepList
+	Run     string
+	After   []Step
 }
 
-// UnmarshalYAML refuses unknown keys: a typo (remotes:) would otherwise
+// Step is one devopsy command line, run locally or on the server.
+type Step struct {
+	Remote bool
+	Cmd    string
+}
+
+func (s Step) String() string {
+	if s.Remote {
+		return "remote: " + s.Cmd
+	}
+	return "local: " + s.Cmd
+}
+
+// UnmarshalYAML refuses unknown keys: a typo (prepares:) would otherwise
 // release without running anything.
 func (s *Steps) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		s.Run = n.Value
+		return nil
+	}
 	if n.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: expected before, remote and after", n.Line)
+		return fmt.Errorf("line %d: expected a command, or before, prepare, run and after", n.Line)
 	}
 	for i := 0; i < len(n.Content); i += 2 {
-		switch k := n.Content[i].Value; k {
-		case "before", "remote", "after":
+		k, v := n.Content[i], n.Content[i+1]
+		var err error
+		switch k.Value {
+		case "before":
+			s.Before, err = decodePhase(v, "before")
+		case "after":
+			s.After, err = decodePhase(v, "after")
+		case "prepare":
+			err = v.Decode(&s.Prepare)
+		case "run":
+			err = v.Decode(&s.Run)
 		default:
-			return fmt.Errorf("line %d: unknown key %q (before, remote, after)", n.Content[i].Line, k)
+			return fmt.Errorf("line %d: unknown key %q (before, prepare, run, after)", k.Line, k.Value)
+		}
+		if err != nil {
+			return err
 		}
 	}
-	type plain Steps
-	return n.Decode((*plain)(s))
+	return nil
+}
+
+// decodePhase reads before's or after's list of {local: cmd} and {remote:
+// cmd}, in the order the one SSH session allows.
+func decodePhase(n *yaml.Node, phase string) ([]Step, error) {
+	if n.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("line %d: %s is a list of {local: <command>} and {remote: <command>}", n.Line, phase)
+	}
+	var steps []Step
+	for _, item := range n.Content {
+		if item.Kind != yaml.MappingNode || len(item.Content) != 2 || (item.Content[0].Value != "local" && item.Content[0].Value != "remote") || item.Content[1].Kind != yaml.ScalarNode {
+			return nil, fmt.Errorf("line %d: a %s step is {local: <command>} or {remote: <command>}", item.Line, phase)
+		}
+		step := Step{Remote: item.Content[0].Value == "remote", Cmd: item.Content[1].Value}
+		if len(steps) > 0 {
+			last := steps[len(steps)-1]
+			if phase == "before" && last.Remote && !step.Remote {
+				return nil, fmt.Errorf("line %d: local before steps go first: remote ones run in the release's SSH session, under its lock", item.Line)
+			}
+			if phase == "after" && !last.Remote && step.Remote {
+				return nil, fmt.Errorf("line %d: remote after steps go first: they run in the release's SSH session, under its lock", item.Line)
+			}
+		}
+		steps = append(steps, step)
+	}
+	return steps, nil
+}
+
+// Commands lists the command lines of steps run on the server (remote) or
+// here.
+func Commands(steps []Step, remote bool) []string {
+	var out []string
+	for _, s := range steps {
+		if s.Remote == remote {
+			out = append(out, s.Cmd)
+		}
+	}
+	return out
 }
 
 // StepList is one command or a list of them.
