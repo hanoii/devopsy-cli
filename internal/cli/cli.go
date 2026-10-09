@@ -265,7 +265,6 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
   --debug [capabilities | labels | imports]
                        what devopsy sees there: versions, the release's
                        capabilities and labels, every project's imports
-  --environments       the project's environments on the server
   --destroy [--yes]    remove the environment: its destroy step, then its
                        directory
   <command> [args]     run 'devopsy <command>' in the current release: the
@@ -407,13 +406,6 @@ Asks for the target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
 .env stay.
 `,
-	"--environments": `Usage: devopsy @<target> --environments
-
-Lists the project's environments on the target's server, one per line, as
-addresses: <environment>, or <instance>/<environment> for an instance's
-(devopsy @<server>:<line> targets it). Environments with an explicit path:
-live elsewhere and are not listed.
-`,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 
 Opens your login shell on the target's host, over SSH, in the current
@@ -486,6 +478,10 @@ Built-in:
   --probe [--ip <server ip>] <host>...
                  DNS, certificate and HTTPS of each host, from here, as
                  visitors reach them; exits 1 on a problem
+  --environments [server]
+                 the project's environments on the server, as addresses
+                 (server:prod, server:b/prod); without one, on every
+                 server DEVOPSY_SERVER and DEVOPSY_SERVER_<ENVIRONMENT> name
   --init [project]
                  a new .devopsy/config.yaml (asks for the project's name);
                  does nothing if there is one

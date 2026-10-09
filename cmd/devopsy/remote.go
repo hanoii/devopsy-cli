@@ -151,25 +151,6 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
-	case "--environments":
-		if t.Project == nil {
-			return fail("--environments: @" + t.Name + " has no project (a user-level target without source)")
-		}
-		var out bytes.Buffer
-		code, err := remote.SSH(t, remote.EnvironmentsScript(t), bytes.NewReader(nil), &out, false)
-		if err != nil {
-			return fail(err.Error())
-		}
-		if code != 0 {
-			return code
-		}
-		if out.Len() == 0 {
-			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("No environments of %s on %s.", t.Project.Name, t.Host), color)
-			return 0
-		}
-		fmt.Print(out.String())
-		return 0
-
 	case "--release", "--rollback":
 		yes := len(args) == 2 && (args[1] == "--yes" || args[1] == "-y") && args[0] == "--release"
 		if len(args) > 1 && !yes {

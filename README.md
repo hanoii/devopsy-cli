@@ -346,11 +346,17 @@ devopsy @vm1:prod --rollback     # back to the previous release, run the rollbac
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
-devopsy @vm1:prod --environments # the project's environments on vm1 (prod, b/prod...)
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
+devopsy --environments           # the project's environments on its servers: vm1:prod, vm1:b/prod...
+devopsy --environments vm2       # on one server
 ```
+
+`--environments` takes no target: without a server it asks each server
+`DEVOPSY_SERVER` and the environments' `DEVOPSY_SERVER_<ENVIRONMENT>` name
+(the caller's environment, then `.devopsy/.env`). Environments with an
+explicit `path:` live elsewhere and are not listed.
 
 Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
 command line:

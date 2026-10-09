@@ -85,6 +85,7 @@ var builtins = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--probe", "DNS, certificate and HTTPS of hosts, from here", GroupDevopsy},
+	{"--environments", "the project's environments on its servers", GroupDevopsy},
 	{"--init", "a new .devopsy/config.yaml", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--debug", "what devopsy sees and computes", GroupDevopsy},
@@ -103,7 +104,6 @@ var remoteCommands = []Candidate{
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
-	{"--environments", "the project's environments on the server", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }

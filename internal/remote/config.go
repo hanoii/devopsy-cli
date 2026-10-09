@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -713,6 +714,39 @@ func PatternVar(pattern string) string {
 		return ""
 	}
 	return EnvironmentVar(name)
+}
+
+// Servers lists the servers a project's environments name, without an
+// address: DEVOPSY_SERVER, then each environment's variable (a pattern's,
+// DEVOPSY_SERVER_PR for pr-*), looked up in lookup. Each once, in that
+// order.
+func Servers(projectDir string, lookup func(string) (string, bool)) ([]string, error) {
+	c, err := LoadConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	vars := []string{ServerVar}
+	keys := make([]string, 0, len(c.Environments))
+	for k := range c.Environments {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if strings.Contains(k, "*") {
+			if v := PatternVar(k); v != "" {
+				vars = append(vars, v)
+			}
+		} else {
+			vars = append(vars, EnvironmentVar(k))
+		}
+	}
+	var servers []string
+	for _, name := range vars {
+		if v, _ := lookup(name); v != "" && !slices.Contains(servers, v) {
+			servers = append(servers, v)
+		}
+	}
+	return servers, nil
 }
 
 // ServerVar is the default server; ServerVar_<ENVIRONMENT> one
