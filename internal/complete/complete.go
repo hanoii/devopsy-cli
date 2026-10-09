@@ -100,6 +100,7 @@ var remoteCommands = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
+	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--instances", "the project's instances on the server", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
@@ -275,7 +276,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return shellServices(projectDir, cur)
 		}
 		return none
-	case "--shell-host", "--releases", "--help", "-h":
+	case "--shell-host", "--releases", "--env", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}

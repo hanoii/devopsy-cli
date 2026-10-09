@@ -286,6 +286,7 @@ devopsy @vm1:prod --rollback     # back to the previous release, run the rollbac
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:pr-12 --destroy     # down with volumes, then remove the environment
 devopsy @vm1:prod --instances    # the project's instances on vm1
+devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod logs -f web    # any command, in the current release
 ```
 
