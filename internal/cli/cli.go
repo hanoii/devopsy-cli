@@ -260,6 +260,9 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
                        or instance's .env): names, one value, or set and
                        unset them; values never go in arguments
   --env                the variables devopsy loads and computes there
+  --debug [capabilities | labels | imports]
+                       what devopsy sees there: versions, the release's
+                       capabilities and labels, every project's imports
   --instances          the project's instances on the server
   --destroy [--yes]    remove the environment: containers, volumes, directory
   <command> [args]     run 'devopsy <command>' in the current release: the
@@ -336,6 +339,14 @@ The variables devopsy loads and computes in the current release, as
 devopsy --env prints them there: shared/.env, the instance's and project's
 .env, target.env and the project's env capability (capabilities/env/compute,
 from the release on the server, not your checkout). Secrets included.
+`,
+	"--debug": `Usage: devopsy @<target> --debug [capabilities | labels | imports]
+
+devopsy --debug, run in the current release on the server: without a topic,
+the server's devopsy and docker versions and the project; capabilities, the
+release's capabilities and their contracts; labels, the devopsy labels in
+its compose files; imports, the imports of every project running on that
+host, marking those whose release holds an outdated value as STALE.
 `,
 	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 
