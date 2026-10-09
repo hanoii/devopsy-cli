@@ -418,6 +418,28 @@ anything else (a `compose.override.yaml`). Local `.env`, `mnt/` and override
 files are never uploaded. Each release records its commit, branch and who
 made it. A first release that fails before going live leaves nothing behind.
 
+**Data and mounts.** `.devopsy/mnt/` is devopsy's one data directory:
+releases never upload it, and on servers it is a link to `shared/mnt`, one
+per environment, so data outlives releases, rollbacks and pruning. Bind
+mount from it (`./mnt/<name>:/path`). A bind mount from anywhere else in
+`.devopsy/` lives in the release: the next release replaces it, and your
+local copy is uploaded with each release. The alternatives:
+
+- **Named volumes** survive releases too (the compose project name stays
+  the same) and take the ownership of the image's directory; `down
+  --volumes` removes them. Harder to inspect and back up from the host.
+- **Absolute paths** work, but devopsy knows nothing of them: keeping,
+  backing up and removing them is the project's.
+
+`shared/mnt` starts empty and belongs to the deploy user, and Docker
+creates a missing bind-mount directory as root. A container running as
+non-root from the start cannot write there, and the deploy user cannot give
+it away: start as root and fix ownership in the entrypoint, or give the
+directory away in a one-shot `init` service running as root. For the same
+reason the environment's `destroy` step, not devopsy, removes what
+containers own there. Back up `shared/.env` and `shared/mnt` (databases as
+dumps).
+
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 the instance's `.env` (`<project>/<instance>/.env`), the project's
 (`<project>/.env`), then the release's `target.env`, written from the
