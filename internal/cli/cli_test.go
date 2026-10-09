@@ -183,7 +183,7 @@ func TestUsage(t *testing.T) {
 		"commands/plain*":  "#!/bin/sh\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Built-in:", "--version", "--env", "On a server", "Project commands (", "deploy  Pull and roll out", "  plain", "Anything else is an error", "--shell [service]", "--shell-host", "--release"} {
+	for _, want := range []string{"Project:", "--version", "--env", "Targets (", "Project commands (", "deploy  Pull and roll out", "  plain", "anything else is an error", "--shell [service]", "--shell-host", "--release", "Tools:", "devopsy:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -462,10 +462,10 @@ func TestBuildVerbose(t *testing.T) {
 	}
 }
 
-func TestIsVerbose(t *testing.T) {
-	for v, want := range map[string]bool{"1": true, "true": true, "TRUE": true, "yes": true, "on": true, "": false, "0": false, "false": false, "no": false} {
-		if got := IsVerbose(v); got != want {
-			t.Errorf("IsVerbose(%q) = %v", v, got)
+func TestVerboseLevel(t *testing.T) {
+	for v, want := range map[string]int{"1": 1, "true": 1, "TRUE": 1, "yes": 1, "on": 1, "2": 2, "3": 2, "": 0, "0": 0, "false": 0, "no": 0, "-1": 0} {
+		if got := VerboseLevel(v); got != want {
+			t.Errorf("VerboseLevel(%q) = %d", v, got)
 		}
 	}
 }

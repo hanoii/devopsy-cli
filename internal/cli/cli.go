@@ -40,7 +40,7 @@ type Plan struct {
 	// Notice is printed to stderr before executing, if not empty. Secrets
 	// are masked.
 	Notice string
-	// Verbose lines are printed to stderr before Notice with --verbose.
+	// Verbose lines are printed to stderr before Notice with -v.
 	// Secrets are masked.
 	Verbose []string
 }
@@ -243,36 +243,23 @@ func CommandDescription(path string) string {
 }
 
 // RemoteHelp describes `devopsy @<target>` commands.
-const RemoteHelp = `On a server, devopsy @[<server>:][<instance>/]<environment> ..., a target
-(environments in .devopsy/config.yaml; the server also from DEVOPSY_SERVER,
-the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml):
-  --release            upload the project as a new release, make it current and
-                       run the target's release steps (config.yaml), going
-                       back to the previous release if the remote one fails
-  --rollback           make the previous release current again and run the
-                       target's rollback steps
-  --releases           list the releases on the server
-  --log [<id>]         what the last release or rollback printed, saved on
-                       the server; or one release's, by id (--releases)
+const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ..., or @<alias>):
+  --release [--yes]      upload a new release, make it current, run its steps
+  --rollback             back to the previous release, and run its steps
+  --releases             the releases on the server
+  --log [<id>]           what a release or rollback printed: the last, or one
   --shell [service] [-- command...]
-                       a shell (or the command) in a container
-  --shell-host         a shell on the server itself, in the current release
-  --ssh-config         a ~/.ssh/config block for the target's host, with
-                       suggestions for faster sessions; never connects
-  --vars [--project | --instance] [get|set|unset KEY...]
-                       the server's variables (shared/.env, or the project's
-                       or instance's .env): names, one value, or set and
-                       unset them; values never go in arguments
-  --env                the variables devopsy loads and computes there
+                         a shell, or the command, in a container
+  --shell-host           a shell on the server itself
+  --vars [--project | --instance] [get | set | unset KEY...]
+                         the server's variables (shared/.env)
+  --env                  the variables devopsy loads and computes there
   --debug [capabilities | labels | imports]
-                       what devopsy sees there: versions, the release's
-                       capabilities and labels, every project's imports
-  --destroy [--yes]    remove the environment: its destroy step, then its
-                       directory
-  <command> [args]     run 'devopsy <command>' in the current release: the
-                       project's commands, then docker compose's
-  -- <args>            docker compose <args> there, past project commands
-
+                         what devopsy sees there
+  --ssh-config           a ~/.ssh/config block for the target's host
+  --destroy [--yes]      remove the environment, data included
+  <command> [args]       a project or compose command, in the current release
+  -- <args>              docker compose <args> there
   devopsy @<target> <flag> --help   details of each
 `
 
@@ -461,55 +448,64 @@ Examples:
 `,
 }
 
+// DebugHelp is `devopsy --debug --help`.
+const DebugHelp = `Usage: devopsy --debug [topic]
+
+What devopsy sees and computes. Without a topic: versions, the project,
+environments and aliases. Topics:
+
+  environments [name] [--yaml]
+                 environments and aliases with where each value comes from
+                 (any address resolved)
+  capabilities   the capabilities devopsy calls and their contracts
+  labels         the devopsy labels in the compose files
+  imports        the imports of every project running on this host
+  schema [--user]
+                 every config key, commented: the project's, or with --user
+                 this machine's
+`
+
 // Usage is devopsy's help. projectDir is "" outside a project.
 func Usage(projectDir string) string {
 	var b strings.Builder
 	b.WriteString(`devopsy: docker compose for projects with a .devopsy/ directory.
 
 Usage:
-  devopsy <command> [args...]     a project command, else a docker compose command
+  devopsy <command> [args...]     a project command, else docker compose's
   devopsy @<target> <command>     the same on a server
   devopsy [@<target>] --<flag>    devopsy's own (below)
   devopsy [@<target>] -- <args>   docker compose <args>, past project commands
+  devopsy -v|-vv ...              any of these, verbose (below)
 
-Built-in:
-  --help, -h     this help
-  --version      devopsy's, docker's and docker compose's versions
-  --env          the variables devopsy loads and computes, in .env format
+devopsy:
+  -v, -vv                before anything else: also what devopsy found and
+                         runs, and SSH sessions; -vv also their scripts
+                         (DEVOPSY_VERBOSE=1 or 2 does the same)
+  --version              devopsy's, docker's and docker compose's versions
+  --upgrade [v]          replace devopsy with the latest release, or v
+  --completion <shell>   shell completion for bash, zsh or fish
+  --help, -h             this help
+
+Project:
+  --env                  the variables devopsy loads and computes (.env format)
   --shell [service] [exec options...] [-- command...]
-                 a shell in a container, or the command after --: the
-                 project's shell capability, else bash (or sh) in the service
-                 named, labeled devopsy.shell=true, or the only one running
-  --context-hash [service]
-                 a hash of what the service's image is built from at HEAD
-                 (build context minus dockerignore, Dockerfile, build:), to
-                 reuse an image across commits; see README
-  --probe [--ip <server ip>] <host>...
-                 DNS, certificate and HTTPS of each host, from here, as
-                 visitors reach them; exits 1 on a problem
+                         a shell, or the command, in a container
   --environments [server]
-                 the project's environments on the server, as addresses
-                 (server:prod, server:b/prod); without one, on every
-                 server DEVOPSY_SERVER and DEVOPSY_SERVER_<ENVIRONMENT> name
-  --init [project]
-                 a new .devopsy/config.yaml (asks for the project's name);
-                 does nothing if there is one
-  --debug [environments [name] [--yaml] | capabilities | labels | imports | schema [--user]]
-                 what devopsy sees and computes: versions, the project,
-                 environments and aliases with where each value comes from
-                 (any address resolved), the capabilities
-                 it calls and their contracts, the labels it reads, the
-                 imports of every project running on this host, and every
-                 config key (schema: the project's; --user: this machine's)
-  --upgrade [v]  replace devopsy with the latest release, or release v
-  --completion <shell>
-                 shell completion for bash, zsh or fish; see README
-  --verbose, -v  before anything else: also print what devopsy found and runs
-                 (DEVOPSY_VERBOSE=1 does the same)
+                         the project's environments on its servers
+  --init [project]       a new .devopsy/config.yaml
+  --context-hash [service]
+                         a hash of what the service's image is built from
+  --debug [topic]        what devopsy sees and computes (--debug --help)
 
 `)
 	b.WriteString(RemoteHelp)
-	b.WriteString("\n")
+	b.WriteString(`
+Tools:
+  --probe [--ip <ip>] <host>...
+                         DNS, certificate and HTTPS of hosts, from here
+                         (--probe --help)
+
+`)
 	if projectDir == "" {
 		b.WriteString("Not in a devopsy project: no .devopsy/ in this directory or above.\n\n")
 	} else {
@@ -526,12 +522,13 @@ Built-in:
 			desc := CommandDescription(filepath.Join(projectDir, "commands", c))
 			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
 		}
-		b.WriteString("\n")
-	}
-	b.WriteString(`Other words are docker compose's commands, with the project's files:
-  devopsy up -d, devopsy ps, devopsy logs -f <service>, devopsy version...
-Anything else is an error.
+		b.WriteString(`
+Other words are docker compose's commands, with the project's files
+(devopsy up -d, devopsy logs -f <service>...); anything else is an error.
+
 `)
+	}
+	b.WriteString("More in the README: https://github.com/hanoii/devopsy-cli\n")
 	return b.String()
 }
 

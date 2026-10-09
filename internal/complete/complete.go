@@ -89,7 +89,7 @@ var builtins = []Candidate{
 	{"--init", "a new .devopsy/config.yaml", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
 	{"--debug", "what devopsy sees and computes", GroupDevopsy},
-	{"--verbose", "also print what devopsy found and runs", GroupDevopsy},
+	{"-v", "also print what devopsy found and runs; -vv: also the scripts run over SSH", GroupDevopsy},
 	{"--completion", "a shell completion script", GroupDevopsy},
 }
 
@@ -115,8 +115,8 @@ func Complete(cwd string, words []string, environ []string) Result {
 	if len(words) == 0 {
 		words = []string{""}
 	}
-	// --verbose goes before everything else.
-	for len(words) > 1 && (words[0] == "--verbose" || words[0] == "-v") {
+	// -v or -vv goes before everything else.
+	for len(words) > 1 && (words[0] == "-v" || words[0] == "-vv") {
 		words = words[1:]
 	}
 	projectDir, _ := cli.FindProjectDir(cwd)

@@ -3,6 +3,7 @@ package cli
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -58,17 +59,22 @@ func (s *Secrets) Mask(msg string) string {
 	return msg
 }
 
-// VerboseEnv is the variable that turns on verbose output, like --verbose.
-// devopsy sets it when given the flag, so nested devopsy calls (project
-// commands calling devopsy, devopsy on a server) are verbose too.
+// VerboseEnv is the variable that turns on verbose output, like -v (1) and
+// -vv (2). devopsy sets it when given the flag, so nested devopsy calls
+// (project commands calling devopsy, devopsy on a server) are verbose too.
 const VerboseEnv = "DEVOPSY_VERBOSE"
 
-// IsVerbose reports whether a DEVOPSY_VERBOSE value turns verbose output on:
-// 1, true, yes or on.
-func IsVerbose(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
+// VerboseLevel is a DEVOPSY_VERBOSE value's level: 0 (off), 1 (1, true, yes
+// or on) or 2 (2 or more).
+func VerboseLevel(v string) int {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "true", "yes", "on":
+		return 1
 	}
-	return false
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0
+	}
+	return min(n, 2)
 }
