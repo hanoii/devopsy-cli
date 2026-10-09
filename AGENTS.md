@@ -11,7 +11,8 @@ repositories fit together and the open ideas.
 - `cmd/devopsy/`: `main`, which executes what `internal/cli` plans, and
   end-to-end tests that run the built binary against a fake `docker`.
 - `internal/cli/`: finds the project, loads `.env` and decides what to run
-  (`Build` returns a `Plan`; it never executes); roles, exports and imports
+  (`Build` returns a `Plan`; it only runs helpers, like the `env`
+  capability, never the command); roles, exports and imports
   (`roles.go`); capabilities.
 - `internal/remote/`: config and targets (`config.go`), the documented
   schemas (`schema.go`), packing a release, and the POSIX `sh` scripts run on
@@ -75,7 +76,7 @@ repositories fit together and the open ideas.
   caller's environment, then the project's `.env`, never for aliases. No
   server: error. `instances:` is `required`, `none` or unset (optional).
 - **Names come only from project, instance and environment:** compose name
-  and wildcard host `<project>[-<instance>]-<environment>`
+  `<project>[-<instance>]-<environment>`
   (`Target.ComposeName`), directory `<project>/[<instance>/]<environment>`
   under the server's release root. `path:` moves the directory only (and
   then takes no instance and no shared `.env` levels). `project:` is
@@ -118,7 +119,7 @@ repositories fit together and the open ideas.
   `--yes`). A first release that fails before going live, with nothing in
   `shared/` yet, removes its directory.
 - `target.env` is written into each release (environment `env`,
-  `COMPOSE_PROJECT_NAME` unless compose has `name:`, `DEVOPSY_PROJECT`,
+  `COMPOSE_PROJECT_NAME`, overriding compose's `name:`, `DEVOPSY_PROJECT`,
   `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`,
   `DEVOPSY_RELEASE_COMMIT`), so it applies however devopsy runs on the
   server and rollbacks restore it. Precedence there: caller, `shared/.env`,
@@ -171,6 +172,12 @@ repositories fit together and the open ideas.
   `.devopsy/capabilities/`, run in the project's own environment and SSH
   session, so no other project's variables leak in. Define one only when a
   second use needs it.
+- **devopsy knows no URL.** It always sets `COMPOSE_PROJECT_NAME` (locally
+  the config's `project:`, else compose's `name:`, else the folder) and
+  runs the `env` capability (`computeEnv`) before every command but help
+  and completion: projects derive hosts, rules and URLs themselves, from
+  the name and imported facts. Its output only fills unset variables;
+  `DEVOPSY_ENV_COMPUTE` keeps a devopsy it calls from running it again.
 - **`--probe`** is a tool with plain arguments, not a contract: it knows no
   proxy. A server never drives local devopsy (devopsy execs ssh and cannot
   watch its output, and a server must not make a laptop act): proxies print

@@ -15,6 +15,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/template"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -161,28 +162,6 @@ func LoadDotenv(env *Env, file string) error {
 		}
 	}
 	return nil
-}
-
-// hostnameRe accepts what a Traefik Host() takes, wildcards included.
-var hostnameRe = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$`)
-
-// HostRule builds a Traefik rule matching hosts, in order, without
-// duplicates.
-func HostRule(hosts []string) (string, error) {
-	seen := map[string]bool{}
-	var parts []string
-	for _, h := range hosts {
-		h = strings.ToLower(strings.TrimSpace(h))
-		if h == "" || seen[h] {
-			continue
-		}
-		if !hostnameRe.MatchString(h) {
-			return "", fmt.Errorf("%q is not a hostname", h)
-		}
-		seen[h] = true
-		parts = append(parts, "Host(`"+h+"`)")
-	}
-	return strings.Join(parts, " || "), nil
 }
 
 // DotenvLine formats KEY=value so compose's .env parser reads value back
@@ -538,62 +517,33 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	if err := load(targetEnv); err != nil {
 		return nil, err
 	}
-	_, statErr := os.Stat(targetEnv)
-	released := statErr == nil
-
-	// Without a top-level name, compose would name every project after the
-	// .devopsy directory and they would all collide. Use the directory that
-	// contains it, as compose does for a compose.yaml at a project's root.
-	name, _ := env.Lookup("COMPOSE_PROJECT_NAME")
-	if name == "" {
-		raw, err := TopLevelName(composeFile)
+	// COMPOSE_PROJECT_NAME is always set, so commands and compose agree on
+	// it: releases write it into target.env (<project>[-<instance>]-<environment>);
+	// locally it is the config's project, else compose's name:, else the
+	// directory containing .devopsy (compose would take .devopsy itself).
+	if name, _ := env.Lookup("COMPOSE_PROJECT_NAME"); name == "" {
+		project, err := remote.LoadProject(projectDir)
 		if err != nil {
-			return nil, err
+			return nil, &ExitError{Code: 1, Msg: err.Error()}
 		}
-		if raw != "" {
+		if project != nil && project.Name != "" {
+			name = project.Name
+		} else {
+			raw, err := TopLevelName(composeFile)
+			if err != nil {
+				return nil, err
+			}
 			if name, err = template.Substitute(raw, env.Lookup); err != nil {
 				return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("%s: name: %v", composeFile, err)}
 			}
-		} else {
-			name = NormalizeProjectName(filepath.Base(filepath.Dir(projectDir)))
-			env.Set("COMPOSE_PROJECT_NAME", name)
+			if name == "" {
+				name = filepath.Base(filepath.Dir(projectDir))
+			}
 		}
+		env.Set("COMPOSE_PROJECT_NAME", NormalizeProjectName(name))
 	}
-
-	// For compose files: the project name and its automatic host under the
-	// server's wildcard domain, <name>.<DEVOPSY_WILDCARD_DOMAIN>. Without
-	// one: <name>.localhost locally, none in a release (target.env), which
-	// then only answers on DEVOPSY_DOMAINS.
-	env.Set("DEVOPSY_PROJECT_NAME", name)
-	if _, ok := env.Lookup("DEVOPSY_WILDCARD_HOST"); !ok {
-		domain, _ := env.Lookup("DEVOPSY_WILDCARD_DOMAIN")
-		switch {
-		case domain != "":
-			env.Set("DEVOPSY_WILDCARD_HOST", name+"."+domain)
-		case !released:
-			env.Set("DEVOPSY_WILDCARD_HOST", name+".localhost")
-		}
-	}
-	// A Traefik rule for the wildcard host and DEVOPSY_DOMAINS (space or comma
-	// separated), so labels need no per-environment hosts. Without any host
-	// it stays unset, so a label's own default applies.
-	if _, ok := env.Lookup("DEVOPSY_HOST_RULE"); !ok {
-		wildcard, _ := env.Lookup("DEVOPSY_WILDCARD_HOST")
-		domains, _ := env.Lookup("DEVOPSY_DOMAINS")
-		hosts := append([]string{wildcard}, strings.FieldsFunc(domains, func(r rune) bool {
-			return r == ' ' || r == ',' || r == '\t' || r == '\n'
-		})...)
-		rule, err := HostRule(hosts)
-		if err != nil {
-			return nil, &ExitError{Code: 1, Msg: "DEVOPSY_DOMAINS: " + err.Error()}
-		}
-		if rule != "" {
-			env.Set("DEVOPSY_HOST_RULE", rule)
-		}
-	}
-	for _, k := range []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT_DIR", "DEVOPSY_PROJECT_NAME", "DEVOPSY_WILDCARD_HOST", "DEVOPSY_HOST_RULE"} {
-		env.Mark(k)
-	}
+	env.Mark("COMPOSE_PROJECT_NAME")
+	env.Mark("DEVOPSY_PROJECT_DIR")
 	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose}, nil
 }
 
@@ -606,12 +556,14 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 	projectDir, env, verbose, dotenvFile := p.dir, p.env, p.verbose, p.dotenvFile
 
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		return nil, &Help{Text: Usage(projectDir), Code: 0}
 	}
+	if err := p.computeEnv(); err != nil {
+		return nil, err
+	}
+	verbose = p.verbose
 	switch args[0] {
-	case "-h", "--help":
-		return nil, &Help{Text: Usage(projectDir), Code: 0}
 	case "--env":
 		var b strings.Builder
 		for _, k := range env.Marked() {

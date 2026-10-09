@@ -107,17 +107,6 @@ func TestBuildOverrideFile(t *testing.T) {
 	}
 }
 
-func TestBuildKeepsTopLevelName(t *testing.T) {
-	root := project(t, "app", map[string]string{"compose.yaml": "name: fixed\n" + minimalCompose})
-	plan, err := build(root, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := envValue(t, plan.Env, "COMPOSE_PROJECT_NAME"); ok {
-		t.Fatal("COMPOSE_PROJECT_NAME set although compose.yaml has a name")
-	}
-}
-
 func TestBuildDotenvCallerWins(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml": minimalCompose,
@@ -248,133 +237,91 @@ func TestNormalizeProjectName(t *testing.T) {
 	}
 }
 
-func TestBuildPublicHost(t *testing.T) {
-	// DEVOPSY_WILDCARD_DOMAIN is the target's: target.env in a release.
-	root := project(t, "My App", map[string]string{
-		"compose.yaml": minimalCompose,
-		"target.env":   "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n",
-	})
-	plan, err := build(root, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestBuildProjectName(t *testing.T) {
+	cases := []struct {
+		files   map[string]string
+		environ []string
+		want    string
+	}{
+		// The directory containing .devopsy, as compose would for a
+		// compose.yaml at the root.
+		{map[string]string{"compose.yaml": minimalCompose}, nil, "myapp"},
+		// compose's name:, interpolated.
+		{map[string]string{"compose.yaml": "name: shop-${STAGE:-dev}\n" + minimalCompose, ".env": "STAGE=prod\n"}, nil, "shop-prod"},
+		// The config's project, over compose's name:.
+		{map[string]string{"compose.yaml": "name: other\n" + minimalCompose, "config.yaml": "project: shop\n"}, nil, "shop"},
+		// A release's target.env, over the config's project.
+		{map[string]string{"compose.yaml": minimalCompose, "config.yaml": "project: shop\n", "target.env": "COMPOSE_PROJECT_NAME='shop-prod'\n"}, nil, "shop-prod"},
+		// The caller wins.
+		{map[string]string{"compose.yaml": minimalCompose, "config.yaml": "project: shop\n"}, []string{"COMPOSE_PROJECT_NAME=mine"}, "mine"},
 	}
-	for key, want := range map[string]string{
-		"DEVOPSY_PROJECT_NAME":  "myapp",
-		"DEVOPSY_WILDCARD_HOST": "myapp.vm1.example.com",
-		"DEVOPSY_HOST_RULE":     "Host(`myapp.vm1.example.com`)",
-	} {
-		if got, _ := envValue(t, plan.Env, key); got != want {
-			t.Errorf("%s = %q, want %q", key, got, want)
+	for i, c := range cases {
+		root := project(t, "My App", c.files)
+		plan, err := build(root, []string{"ps"}, c.environ)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	// Locally, without a domain: <name>.localhost.
-	local := project(t, "My App", map[string]string{"compose.yaml": minimalCompose})
-	plan, err = build(local, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_WILDCARD_HOST"); got != "myapp.localhost" {
-		t.Errorf("local host %q", got)
-	}
-
-	// In a release without a domain: no wildcard host, only DEVOPSY_DOMAINS.
-	released := project(t, "shop", map[string]string{
-		"compose.yaml": minimalCompose,
-		"target.env":   "DEVOPSY_DOMAINS='example.org'\n",
-	})
-	plan, err = build(released, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := envValue(t, plan.Env, "DEVOPSY_WILDCARD_HOST"); ok {
-		t.Error("wildcard host without a domain in a release")
-	}
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); got != "Host(`example.org`)" {
-		t.Errorf("rule %q", got)
-	}
-
-	// No hosts at all: no rule, so a label's own default applies.
-	bare := project(t, "worker", map[string]string{
-		"compose.yaml": minimalCompose,
-		"target.env":   "X='1'\n",
-	})
-	plan, err = build(bare, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); ok {
-		t.Error("a rule without hosts")
-	}
-	out, err := build(bare, []string{"--env"}, nil)
-	if o, ok := err.(*Output); !ok || strings.Contains(o.Text, "DEVOPSY_HOST_RULE") || strings.Contains(o.Text, "DEVOPSY_WILDCARD_HOST") {
-		t.Errorf("--env: %v %v", out, err)
-	}
-
-	// The caller wins.
-	plan, err = build(root, []string{"ps"}, []string{"DEVOPSY_WILDCARD_HOST=custom.example.org"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_WILDCARD_HOST"); got != "custom.example.org" {
-		t.Errorf("caller's DEVOPSY_WILDCARD_HOST not kept: %q", got)
-	}
-}
-
-func TestBuildProjectNameFromCompose(t *testing.T) {
-	root := project(t, "app", map[string]string{
-		"compose.yaml": "name: shop-${STAGE:-dev}\n" + minimalCompose,
-		".env":         "STAGE=prod\n",
-	})
-	plan, err := build(root, []string{"ps"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_PROJECT_NAME"); got != "shop-prod" {
-		t.Errorf("DEVOPSY_PROJECT_NAME = %q, want shop-prod", got)
-	}
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_WILDCARD_HOST"); got != "shop-prod.localhost" {
-		t.Errorf("DEVOPSY_WILDCARD_HOST = %q", got)
-	}
-}
-
-func TestHostRule(t *testing.T) {
-	got, err := HostRule([]string{"shop.vm1.example.com", "Example.org", "", "example.org", "*.shop.example.org"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "Host(`shop.vm1.example.com`) || Host(`example.org`) || Host(`*.shop.example.org`)"
-	if got != want {
-		t.Fatalf("got %s\nwant %s", got, want)
-	}
-	for _, bad := range []string{"a`b.com", "with space.com", "-bad.com", "a..b"} {
-		if _, err := HostRule([]string{bad}); err == nil {
-			t.Errorf("%q: want an error", bad)
+		if got, _ := envValue(t, plan.Env, "COMPOSE_PROJECT_NAME"); got != c.want {
+			t.Errorf("%d: COMPOSE_PROJECT_NAME = %q, want %q", i, got, c.want)
 		}
 	}
 }
 
-func TestBuildHostRule(t *testing.T) {
+func TestEnvCapability(t *testing.T) {
 	root := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
-		".env":         "DEVOPSY_DOMAINS=\"example.org, www.example.org\"\n",
+		".env":         "SITE_URL=https://override.example.org\n",
 	})
+	compute := filepath.Join(root, ".devopsy", "capabilities", "env", "compute")
+	if err := os.MkdirAll(filepath.Dir(compute), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"[ -z \"$DEVOPSY_ENV_COMPUTE\" ] && exit 9\n" +
+		"echo \"SITE_HOST='$COMPOSE_PROJECT_NAME.localhost'\"\n" +
+		"echo \"SITE_URL='https://$COMPOSE_PROJECT_NAME.localhost'\"\n"
+	if err := os.WriteFile(compute, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "Host(`shop.localhost`) || Host(`example.org`) || Host(`www.example.org`)"
-	if got, _ := envValue(t, plan.Env, "DEVOPSY_HOST_RULE"); got != want {
-		t.Fatalf("got %s", got)
+	if got, _ := envValue(t, plan.Env, "SITE_HOST"); got != "shop.localhost" {
+		t.Errorf("SITE_HOST = %q", got)
 	}
-
-	root = project(t, "shop", map[string]string{
-		"compose.yaml": minimalCompose,
-		".env":         "DEVOPSY_DOMAINS=bad`host\n",
-	})
+	// What is set already wins.
+	if got, _ := envValue(t, plan.Env, "SITE_URL"); got != "https://override.example.org" {
+		t.Errorf("SITE_URL = %q", got)
+	}
+	if _, ok := envValue(t, plan.Env, "DEVOPSY_ENV_COMPUTE"); ok {
+		t.Error("the guard leaked into the command's environment")
+	}
+	_, err = build(root, []string{"--env"}, nil)
+	if o, ok := err.(*Output); !ok || !strings.Contains(o.Text, "SITE_HOST='shop.localhost'") {
+		t.Errorf("--env: %v", err)
+	}
+	// Inside the capability, devopsy does not run it again.
+	plan, err = build(root, []string{"ps"}, []string{"DEVOPSY_ENV_COMPUTE=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := envValue(t, plan.Env, "SITE_HOST"); ok {
+		t.Error("ran inside itself")
+	}
+	// A failure names the script and says what it printed.
+	if err := os.WriteFile(compute, []byte("#!/bin/sh\necho broken >&2\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var e *ExitError
-	if _, err := build(root, []string{"ps"}, nil); !errors.As(err, &e) {
-		t.Fatalf("invalid domain: %v", err)
+	if _, err := build(root, []string{"ps"}, nil); !errors.As(err, &e) || !strings.Contains(e.Msg, compute) || !strings.Contains(e.Msg, "broken") {
+		t.Errorf("failure: %v", err)
+	}
+	// Help needs no environment.
+	if _, err := build(root, nil, nil); err == nil {
+		t.Error("no help")
+	} else if _, ok := err.(*Help); !ok {
+		t.Errorf("help: %v", err)
 	}
 }
 
@@ -397,11 +344,10 @@ func TestPrintEnvRoundTrip(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.Text)
 	}
 	for k, want := range map[string]string{
-		"PLAIN":                 "caller",
-		"TRICKY":                `it's "x" $HOME \ end`,
-		"COMPOSE_PROJECT_NAME":  "shop",
-		"DEVOPSY_WILDCARD_HOST": "shop.localhost",
-		"DEVOPSY_HOST_RULE":     "Host(`shop.localhost`) || Host(`example.org`)",
+		"PLAIN":                "caller",
+		"TRICKY":               `it's "x" $HOME \ end`,
+		"COMPOSE_PROJECT_NAME": "shop",
+		"DEVOPSY_DOMAINS":      "example.org",
 	} {
 		if parsed[k] != want {
 			t.Errorf("%s = %q, want %q\n%s", k, parsed[k], want, out.Text)
@@ -420,9 +366,8 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	for k, want := range map[string]string{
-		"OVERRIDE":          "from_env",
-		"FROM_TARGET":       "yes",
-		"DEVOPSY_HOST_RULE": "Host(`shop.vm1.example.com`) || Host(`example.org`)",
+		"OVERRIDE":    "from_env",
+		"FROM_TARGET": "yes",
 	} {
 		if got, _ := envValue(t, plan.Env, k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)

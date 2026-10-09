@@ -524,11 +524,29 @@ func ValidName(s string) bool { return nameRe.MatchString(s) }
 
 // LoadProject reads only what a project's config says about the project.
 func LoadProject(projectDir string) (*Project, error) {
-	c, err := LoadConfig(projectDir)
-	if err != nil {
-		return nil, err
+	var p *Project
+	for _, name := range []string{ConfigFile, LocalConfigFile} {
+		f, err := readConfigFile(filepath.Join(projectDir, name), false)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			p = &Project{Dir: projectDir}
+		}
+		if f.project != "" {
+			p.Name = f.project
+		}
+		if f.instances != "" {
+			p.Instances = f.instances
+		}
+		if f.keep > 0 {
+			p.Keep = f.keep
+		}
 	}
-	return c.Project, nil
+	return p, nil
 }
 
 // ReleaseSettings are the user-level config's releases: with defaults: the

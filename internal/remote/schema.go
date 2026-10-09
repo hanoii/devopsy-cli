@@ -59,7 +59,7 @@ environments:
       keep: 1
   legacy:
     # Moves the directory on the server (relative to its release root, or
-    # absolute); never the compose name or URL. Takes no instance.
+    # absolute); never the compose name. Takes no instance.
     path: /srv/legacy-shop
 
 # Targets: devopsy @[<server>:][<instance>/]<environment> ...
