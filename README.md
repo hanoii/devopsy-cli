@@ -6,25 +6,56 @@ finds it from anywhere inside the project, loads its `.env` and runs compose
 with the right files. One static binary for Linux and macOS (amd64, arm64);
 it needs Docker with the Compose plugin, and `ssh` for servers.
 
-## What it helps with
+## What devopsy does
 
-- **Releasing** a compose project to a server, from your machine or CI:
+devopsy itself is generic: it knows compose, SSH and directories, and no
+proxy, framework or registry (its one nod to Traefik is `DEVOPSY_HOST_RULE`,
+a rule written as a plain variable that projects are free to ignore).
+
+- **Releases a compose project to a server,** from your machine or CI:
   `devopsy @vm1:prod --release`. Each release is a complete directory,
   switched in at the end and back when its steps fail; `--rollback` returns
   to the previous one. Data and secrets live outside releases.
-- **Many environments per server:** `prod`, `staging`, `pr-123`, each its own
-  compose project, data and URL; one codebase installed several times
-  (instances) for multi-site setups; pull request environments created and
-  destroyed from CI.
-- **The same commands everywhere:** `devopsy up`, `devopsy @vm1:prod logs -f`,
-  the project's own commands (`.devopsy/commands/`), a shell in a container.
-- **Server variables and secrets** set from your machine without them ever
-  being command arguments (`--vars`).
-- **Wildcard URLs and certificates,** through a proxy the projects share
-  (devopsy-template-traefik), and checks of DNS and certificates
-  (`--probe`).
-- **Seeing what it does:** `--debug` explains every value and where it came
-  from; secrets are masked in everything it prints.
+- **Keeps environments apart:** `prod`, `staging`, `pr-123`, each its own
+  compose project, data and name on the server; one codebase installed
+  several times (instances); environments created and destroyed from CI.
+- **Runs the same commands everywhere:** compose's, the project's own
+  (`.devopsy/commands/`), a shell in a container, locally or `@target`.
+- **Sets server variables and secrets** without them ever being arguments
+  (`--vars`), and masks secrets in everything it prints.
+- **Lets projects on a server share facts** through compose labels (roles,
+  exports, imports), without knowing what the facts are.
+- **Explains itself:** `--debug` shows every value and where it came from;
+  `--probe` checks a host's DNS, certificate and HTTPS from where you are.
+
+## What the templates add
+
+Everything about how sites are served is a template's, copied into your
+projects and owned there (see the
+[devopsy workspace](https://github.com/hanoii/devopsy)):
+
+- **[devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik):**
+  one Traefik per server: HTTPS certificates (HTTP-01, acme-dns,
+  Cloudflare), a wildcard domain it exports to projects for automatic URLs,
+  real client IPs behind CDNs, and its `domains` report.
+- **Site templates** ([whoami](https://github.com/hanoii/devopsy-template-whoami),
+  [drupal11](https://github.com/hanoii/devopsy-template-drupal11),
+  [registry](https://github.com/hanoii/devopsy-template-registry)): compose
+  files that route through that Traefik, `deploy` commands, non-root
+  containers, data ownership, generated secrets.
+
+Where they meet:
+
+| | devopsy | the templates |
+| --- | --- | --- |
+| HTTPS | nothing | Traefik and its resolvers; sites' router labels |
+| Automatic URL | imports the server's wildcard domain, computes `DEVOPSY_WILDCARD_HOST` and `DEVOPSY_HOST_RULE` | Traefik exports the domain; sites use the rule in their labels |
+| Starting a release | runs the environment's `remote:` step | `deploy`: pull or build, migrate, start |
+| Data | keeps `shared/mnt` across releases and rollbacks | bind mounts into it, file ownership (init services, entrypoints) |
+| Domains | `--probe`, from outside | Traefik's `domains`: routes, CNAMEs, retries |
+
+Swap a template and devopsy does not notice: another proxy, another way to
+deploy, no proxy at all.
 
 ## What it is not
 
@@ -39,7 +70,7 @@ it needs Docker with the Compose plugin, and `ssh` for servers.
 - **Not a build system, and not tied to a proxy.** Images are built however
   you like; Traefik is one template, not part of devopsy.
 
-To start: install it, then take a template
+To start: install devopsy, then take a template
 ([devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami)
 for the smallest project,
 [devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik)
