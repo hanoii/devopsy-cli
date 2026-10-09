@@ -128,6 +128,12 @@ repositories fit together and the open ideas.
   switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.
+- Release logs (`releaseLog`): devopsy's messages, local steps' command
+  lines and exit codes, and the upload and activation sessions' output
+  (`SSHLog`, both streams), without terminal codes, saved by
+  `LogSaveScript` in `logs/<id>-release.log` or `<time>-rollback.log` once
+  the server was reached; `--log` reads them (`LogReadScript`). Local
+  steps' output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
   `--yes`). A first release that fails before going live, with nothing in

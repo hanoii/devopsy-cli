@@ -189,7 +189,7 @@ func NewRecord(projectRoot, mode string, now time.Time) Record {
 		ID:   now.UTC().Format("20060102150405"),
 		Mode: mode,
 		Time: now.UTC().Format(time.RFC3339),
-		By:   whoami(),
+		By:   Whoami(),
 	}
 	git := func(args ...string) string {
 		cmd := exec.Command("git", args...)
@@ -217,7 +217,8 @@ func DirtyOutsideDevopsy(projectRoot string) bool {
 	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
-func whoami() string {
+// Whoami is who releases: user@host, or the CI user.
+func Whoami() string {
 	user := os.Getenv("USER")
 	if user == "" {
 		user = os.Getenv("LOGNAME")
@@ -573,6 +574,11 @@ func FormatReleases(out string) string {
 // "ssh -i key -o UserKnownHostsFile=known_hosts" in CI). It returns the
 // remote exit code.
 func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) (int, error) {
+	return SSHLog(t, script, stdin, stdout, tty, nil)
+}
+
+// SSHLog is SSH, also copying the session's output, both streams, to log.
+func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	args := []string{}
 	if tty {
 		args = append(args, "-t")
@@ -599,6 +605,10 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 		cmd.Stdout = os.Stdout
 	}
 	cmd.Stderr = os.Stderr
+	if log != nil {
+		cmd.Stdout = io.MultiWriter(cmd.Stdout, log)
+		cmd.Stderr = io.MultiWriter(cmd.Stderr, log)
+	}
 	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		return ee.ExitCode(), nil
@@ -607,6 +617,41 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 		return 1, err
 	}
 	return 0, nil
+}
+
+// LogsKept is how many release logs an environment keeps.
+const LogsKept = 20
+
+// LogSaveScript saves stdin as the environment's release log name, in
+// logs/ next to releases/, keeping the newest LogsKept. Nothing when the
+// environment is gone (a first release that did not go live).
+func LogSaveScript(t *Target, name string) string {
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/releases" ] || { cat > /dev/null; exit 0; }
+mkdir -p "$base/logs"
+umask 077
+f="$base/logs/"%s
+cat > "$f.tmp"
+mv "$f.tmp" "$f"
+ls -1 "$base/logs" | grep '\.log$' | sort -r | tail -n +%d | while read -r old; do
+  rm -f "$base/logs/$old"
+done
+`, Quote(name), LogsKept+1)
+}
+
+// LogReadScript prints the newest release log whose name starts with
+// prefix (any, when empty), or with list, the logs' names, newest first.
+func LogReadScript(t *Target, prefix string, list bool) string {
+	s := "set -eu\n" + basePrelude(t) + `logs=$(ls -1 "$base/logs" 2>/dev/null | grep '\.log$' | sort -r) || true
+[ -n "$logs" ] || { echo "devopsy: no release logs in $base yet" >&2; exit 1; }
+`
+	if list {
+		return s + `printf '%s\n' "$logs" | sed 's/\.log$//'` + "\n"
+	}
+	return s + fmt.Sprintf(`f=$(printf '%%s\n' "$logs" | grep -F -- %s | grep -- "^"%s | head -n 1) || true
+[ -n "$f" ] || { echo "devopsy: no release log starting with "%s" in $base/logs" >&2; exit 1; }
+echo "devopsy: $base/logs/$f" >&2
+cat "$base/logs/$f"
+`, Quote(prefix), Quote(prefix), Quote(prefix))
 }
 
 // DestroyScript removes the target's environment: down, with its volumes,

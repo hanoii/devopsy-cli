@@ -252,6 +252,9 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
   --rollback           make the previous release current again and run the
                        target's rollback steps
   --releases           list the releases on the server
+  --log [<id> | --list]
+                       what the last release or rollback printed, saved on
+                       the server; or one release's, by id; or the list
   --shell [service] [-- command...]
                        a shell (or the command) in a container
   --shell-host         a shell on the server itself, in the current release
@@ -363,6 +366,21 @@ its compose files; imports, the imports of every project running on that
 host, marking those whose release holds an outdated value as STALE.
 environments and schema are about this machine's config: run them without a
 target.
+`,
+	"--log": `Usage: devopsy @<target> --log [<release id> | --list]
+
+Every release and rollback is recorded as it runs and saved on the server,
+in logs/ next to releases/ (the newest 20): devopsy's messages, the local
+steps run and how they ended, and everything the server printed (steps,
+compose, the variables check). Saved even when it fails, once the server
+was reached; terminal colors and progress redraws are dropped.
+
+  devopsy @prod --log                   the last release's or rollback's
+  devopsy @prod --log 20261009113901    that release's (an id, or its start)
+  devopsy @prod --log --list            the logs, newest first
+
+Local steps' own output is not in it: it stays on your screen, which
+keeps their terminal (docker's progress, colors).
 `,
 	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 

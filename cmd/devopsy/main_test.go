@@ -503,6 +503,19 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatal("no current release")
 	}
 
+	// Both runs are logged on the server, the failed one too.
+	out, code = run(nil, "@prod", "--log")
+	if code != 0 || !strings.Contains(out, "devopsy dev: release of devopsy@server:prod") || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "release exited 0") {
+		t.Fatalf("--log (%d):\n%s", code, out)
+	}
+	out, code = run(nil, "@prod", "--log", "--list")
+	if logs := strings.Fields(out); code != 0 || len(logs) != 2 || !strings.HasSuffix(logs[1], "-release") {
+		t.Fatalf("--log --list (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--log", strings.Fields(out)[1][:14]); code != 0 || !strings.Contains(out, "NEEDED  set it per environment") || !strings.Contains(out, "release exited 1") {
+		t.Fatalf("--log <id> (%d):\n%s", code, out)
+	}
+
 	// A failing run goes back to the previous release, restarts it with its
 	// rollback's run step, and skips after. Remote before steps ran in it.
 	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
