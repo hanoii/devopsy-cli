@@ -101,6 +101,7 @@ var remoteCommands = []Candidate{
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
+	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--instances", "the project's instances on the server", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
@@ -274,6 +275,17 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--shell":
 		if len(words) == 2 && !strings.HasPrefix(cur, "-") {
 			return shellServices(projectDir, cur)
+		}
+		return none
+	case "--debug":
+		// The topics about the release and the host; environments and
+		// schema are about local config.
+		if len(words) == 2 {
+			r := Result{Directive: DirectiveNoFileComp}
+			for _, t := range []string{"capabilities", "labels", "imports"} {
+				r.Candidates = append(r.Candidates, Candidate{Value: t})
+			}
+			return filter(r, cur)
 		}
 		return none
 	case "--shell-host", "--releases", "--env", "--help", "-h":
