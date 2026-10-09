@@ -160,6 +160,11 @@ repositories fit together and the open ideas.
   asks for the target's name unless `--yes`. devopsy knows nothing of
   containers, volumes or `shared/mnt`: taking them down, and removing files
   container users own, is the project's step. A failed step removes nothing.
+- `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
+  mounts"): never uploaded, `shared/mnt` created by the upload and linked
+  like every `shared/` entry. Its contents and their ownership are the
+  project's; devopsy only checks whether it is empty (`NotLive`), never
+  removes anything in it.
 - A target path with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 
