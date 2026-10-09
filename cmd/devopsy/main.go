@@ -80,6 +80,9 @@ func run() int {
 	if args[0] == "--completion" {
 		return runCompletion(args[1:], color)
 	}
+	if args[0] == "--environments" {
+		return runEnvironments(cwd, args[1:], color)
+	}
 	if args[0] == "--init" {
 		return runInit(cwd, args[1:], color)
 	}

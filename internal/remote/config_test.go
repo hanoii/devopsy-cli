@@ -401,3 +401,18 @@ func TestSchemas(t *testing.T) {
 		t.Errorf("user schema: %v", err)
 	}
 }
+
+func TestServers(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("project: app\nenvironments:\n  prod: {}\n  staging-eu: {}\n  \"pr-*\": {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{"DEVOPSY_SERVER": "vm1", "DEVOPSY_SERVER_STAGING_EU": "vm2", "DEVOPSY_SERVER_PR": "vm1", "DEVOPSY_SERVER_OTHER": "vm3"}
+	got, err := Servers(dir, func(k string) (string, bool) { v, ok := vars[k]; return v, ok })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "vm1 vm2" {
+		t.Errorf("servers: %v", got)
+	}
+}

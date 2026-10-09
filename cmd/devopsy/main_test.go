@@ -707,8 +707,12 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "shop", "staging", "releases"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := run(nil, "@b/prod", "--environments"); code != 0 || !strings.Contains(out, "b/prod\nc/pr-12\nstaging\n") {
+	// On the server .env names, as addresses; or on the one given.
+	if out, code := run(nil, "--environments"); code != 0 || !strings.Contains(out, "devopsy@server:b/prod\ndevopsy@server:c/pr-12\ndevopsy@server:staging\n") {
 		t.Fatalf("--environments (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "--environments", "other"); code != 0 || !strings.Contains(out, "other:b/prod\n") {
+		t.Fatalf("--environments other (%d):\n%s", code, out)
 	}
 	if out, code := run(nil, "@c/pr-12", "--destroy", "--yes"); code == 0 || !strings.Contains(out, "has no destroy step") || !strings.Contains(out, "pr-*:") {
 		t.Fatalf("--destroy without a destroy step (%d):\n%s", code, out)
