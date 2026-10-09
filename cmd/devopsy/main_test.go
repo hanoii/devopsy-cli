@@ -162,7 +162,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services: {}\n", 0o644)
 	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
-	for _, sub := range []string{"--release", "--rollback", "--releases", "--shell", "--shell-host"} {
+	for _, sub := range []string{"--release", "--rollback", "--releases", "--shell", "--shell-host", "--env", "--debug"} {
 		out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", sub, "--help")
 		if code != 0 || !strings.Contains(out, "Usage: devopsy @<target> "+sub) {
 			t.Errorf("%s --help (%d):\n%s", sub, code, out)
@@ -171,6 +171,14 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
 	if code != 0 || !strings.Contains(out, "<flag> --help") {
 		t.Errorf("@prod --help (%d):\n%s", code, out)
+	}
+	// --debug's local topics are refused before SSH.
+	env := []string{"DEVOPSY_SERVER=nowhere.invalid", "DEVOPSY_SSH_COMMAND=false"}
+	for _, topic := range []string{"environments", "schema"} {
+		out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "@prod", "--debug", topic)
+		if code == 0 || !strings.Contains(out, "without a target") {
+			t.Errorf("--debug %s (%d):\n%s", topic, code, out)
+		}
 	}
 }
 

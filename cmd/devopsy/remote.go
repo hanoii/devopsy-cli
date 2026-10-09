@@ -70,6 +70,12 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		return 0
 	}
 
+	// environments and schema explain local config: on a server they would
+	// describe the release's copy and the server's own user config.
+	if args[0] == "--debug" && len(args) > 1 && (args[1] == "environments" || args[1] == "schema") {
+		return fail(fmt.Sprintf("--debug %s is about this machine's config: run devopsy --debug %s, without a target", args[1], strings.Join(args[1:], " ")))
+	}
+
 	// A user-level target belongs to no project, so nothing may be released
 	// to it from wherever devopsy happens to run: only from its source,
 	// where it then acts as the project's own target.
