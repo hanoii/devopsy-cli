@@ -25,7 +25,7 @@ releases:
   keep: 5
 
 # What every environment takes unless it sets its own: mode, release,
-# rollback, releases and env (env merges key by key). Not path.
+# rollback, destroy, releases and env (env merges key by key). Not path.
 defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
@@ -53,6 +53,11 @@ defaults:
   # What --rollback runs (required for it): the same phases, in the release
   # before current (no upload, imports kept). A plain command is run alone.
   rollback: deploy
+  # What --destroy runs (required for it): one devopsy command in the
+  # current release, under the lock. It takes the project's containers,
+  # volumes and data down (shared/mnt holds files containers own); devopsy
+  # then removes the directory. A failure removes nothing.
+  destroy: destroy
   # Per-environment settings, written into each release's .devopsy/target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:

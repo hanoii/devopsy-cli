@@ -103,7 +103,7 @@ var remoteCommands = []Candidate{
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
-	{"--instances", "the project's instances on the server", GroupDevopsy},
+	{"--environments", "the project's environments on the server", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }

@@ -265,8 +265,9 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
   --debug [capabilities | labels | imports]
                        what devopsy sees there: versions, the release's
                        capabilities and labels, every project's imports
-  --instances          the project's instances on the server
-  --destroy [--yes]    remove the environment: containers, volumes, directory
+  --environments       the project's environments on the server
+  --destroy [--yes]    remove the environment: its destroy step, then its
+                       directory
   <command> [args]     run 'devopsy <command>' in the current release: the
                        project's commands, then docker compose's
   -- <args>            docker compose <args> there, past project commands
@@ -396,16 +397,22 @@ shell, directly as docker compose exec runs it: devopsy @<target> --shell
 `,
 	"--destroy": `Usage: devopsy @<target> --destroy [--yes]
 
-Removes the environment from the server: docker compose down --volumes in
-its current release, then its directory (releases, shared/ with its data
-and .env). Asks for the target's name, unless --yes (CI, like when a pull
-request closes: devopsy @pr-123 --destroy --yes). The project's and the
-instance's .env stay.
+Removes the environment from the server, under the release lock: runs the
+environment's destroy step (destroy: in config.yaml, required) in its
+current release, then removes its directory (releases, shared/ with its
+data and .env). The step is the project's: usually a command that runs
+docker compose down --volumes and removes what its containers own in
+shared/mnt, which the deploy user cannot. A failed step removes nothing.
+Asks for the target's name, unless --yes (CI, like when a pull request
+closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
+.env stay.
 `,
-	"--instances": `Usage: devopsy @<target> --instances
+	"--environments": `Usage: devopsy @<target> --environments
 
-Lists the project's instances on the target's server, with the environments
-each one has: devopsy @<server>:<instance>/<environment> runs on one of them.
+Lists the project's environments on the target's server, one per line, as
+addresses: <environment>, or <instance>/<environment> for an instance's
+(devopsy @<server>:<line> targets it). Environments with an explicit path:
+live elsewhere and are not listed.
 `,
 	"--shell-host": `Usage: devopsy @<target> --shell-host
 

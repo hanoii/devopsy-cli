@@ -154,9 +154,11 @@ repositories fit together and the open ideas.
   needs: `devopsy`, `tar`, `flock`; locally only `ssh`.
 - `--vars` sends values over SSH's stdin, never as arguments; edits replace
   keys in place, under the release lock (deploy commands write secrets too).
-- `--destroy`: down with volumes in the current release, `shared/mnt`
-  removed from a container (its files can belong to container users), then
-  the directory; asks for the target's name unless `--yes`.
+- `--destroy`: the environment's `destroy:` step (one command, required)
+  in the current release under the lock, then `rm -rf` of the directory;
+  asks for the target's name unless `--yes`. devopsy knows nothing of
+  containers, volumes or `shared/mnt`: taking them down, and removing files
+  container users own, is the project's step. A failed step removes nothing.
 - A target path with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 

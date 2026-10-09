@@ -89,6 +89,11 @@ type Target struct {
 	// for them, see Steps.
 	Release  *Steps `yaml:"release"`
 	Rollback *Steps `yaml:"rollback"`
+	// Destroy is what --destroy runs in the current release before devopsy
+	// removes the directory: a devopsy command line, required for it. The
+	// project takes its containers, volumes and data down; devopsy knows
+	// none of them.
+	Destroy string `yaml:"destroy"`
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
 
@@ -119,8 +124,8 @@ type Target struct {
 	// nulls are its env keys set to null: they remove a default.
 	nulls map[string]bool
 	// From says where each value came from, for --debug: "server", "path",
-	// "mode", "release", "rollback", "keep", "env.KEY". A file, "defaults
-	// in" a file, a variable or the address.
+	// "mode", "release", "rollback", "destroy", "keep", "env.KEY". A file,
+	// "defaults in" a file, a variable or the address.
 	From map[string]string `yaml:"-"`
 }
 
@@ -417,11 +422,11 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
-			case "path", "mode", "env", "release", "rollback", "releases":
+			case "path", "mode", "env", "release", "rollback", "destroy", "releases":
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, releases)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases)", file, name, k)
 			}
 		}
 	}
@@ -453,6 +458,7 @@ func origins(t *Target, from string) map[string]string {
 	set("mode", t.Mode != "")
 	set("release", t.Release != nil)
 	set("rollback", t.Rollback != nil)
+	set("destroy", t.Destroy != "")
 	set("keep", t.Releases != nil && t.Releases.Keep > 0)
 	for k := range t.Env {
 		o["env."+k] = from
@@ -507,6 +513,9 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	}
 	if t.Rollback == nil {
 		t.Rollback = base.Rollback
+	}
+	if t.Destroy == "" {
+		t.Destroy = base.Destroy
 	}
 	if t.Releases == nil {
 		t.Releases = base.Releases

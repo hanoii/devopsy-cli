@@ -645,7 +645,7 @@ esac
 	}
 }
 
-// Instances, the server's release root, the project's .env, --instances and
+// Instances, the server's release root, the project's .env, --environments and
 // --destroy, with an ssh that runs the scripts here.
 func TestInstancesEndToEnd(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -702,13 +702,31 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_INSTANCE=c"}, "@pr-12", "--release", "--yes"); code != 0 || !strings.Contains(out, "instance=c env=pr-12") {
 		t.Fatalf("pattern environment (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@b/prod", "--instances"); code != 0 || !strings.Contains(out, "b") || !strings.Contains(out, "prod") || !strings.Contains(out, "c") || !strings.Contains(out, "pr-12") {
-		t.Fatalf("--instances (%d):\n%s", code, out)
+	// An environment without an instance is listed too (made by hand: the
+	// project requires instances).
+	if err := os.MkdirAll(filepath.Join(root, "shop", "staging", "releases"), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	if out, code := run(nil, "@b/prod", "--environments"); code != 0 || !strings.Contains(out, "b/prod\nc/pr-12\nstaging\n") {
+		t.Fatalf("--environments (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@c/pr-12", "--destroy", "--yes"); code == 0 || !strings.Contains(out, "has no destroy step") || !strings.Contains(out, "pr-*:") {
+		t.Fatalf("--destroy without a destroy step (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12", "current")); err != nil {
+		t.Fatalf("removed without a destroy step: %v", err)
+	}
+	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: required\ndefaults:\n  mode: image\n  release: deploy\n  destroy: destroy\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n", 0o644)
 	if out, code := run(nil, "@c/pr-12", "--destroy"); code == 0 || !strings.Contains(out, "add --yes") {
 		t.Fatalf("--destroy without a terminal (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes"); code != 0 || !strings.Contains(out, "removed") {
+	// The step comes from the current release: a failing one removes nothing.
+	write(t, filepath.Join(root, "shop", "c", "pr-12", "current", ".devopsy", "commands", "destroy"), "#!/bin/sh\necho \"destroy env=$DEVOPSY_ENVIRONMENT\"\nexit 3\n", 0o755)
+	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes"); code != 3 || !strings.Contains(out, "nothing removed") {
+		t.Fatalf("--destroy with a failing step (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(root, "shop", "c", "pr-12", "current", ".devopsy", "commands", "destroy"), "#!/bin/sh\necho \"destroy env=$DEVOPSY_ENVIRONMENT\"\n", 0o755)
+	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes"); code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "removed") {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12")); !os.IsNotExist(err) {

@@ -83,7 +83,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--vars", "--env", "--debug", "--instances", "--destroy", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--vars", "--env", "--debug", "--environments", "--destroy", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
