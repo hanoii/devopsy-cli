@@ -259,6 +259,7 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
                        the server's variables (shared/.env, or the project's
                        or instance's .env): names, one value, or set and
                        unset them; values never go in arguments
+  --env                the variables devopsy loads and computes there
   --instances          the project's instances on the server
   --destroy [--yes]    remove the environment: containers, volumes, directory
   <command> [args]     run 'devopsy <command>' in the current release: the
@@ -328,6 +329,13 @@ Rolling back restores that release's files and target env, not data.
 Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases whose command failed. * marks the current one.
+`,
+	"--env": `Usage: devopsy @<target> --env
+
+The variables devopsy loads and computes in the current release, as
+devopsy --env prints them there: shared/.env, the instance's and project's
+.env, target.env and the project's env capability (capabilities/env/compute,
+from the release on the server, not your checkout). Secrets included.
 `,
 	"--shell": `Usage: devopsy @<target> --shell [service] [exec options...] [-- command...]
 
