@@ -148,7 +148,11 @@ func TestConfigErrors(t *testing.T) {
 		"max_keep":           "project: app\nreleases: {max_keep: 9}\nenvironments:\n  prod: {}\n",
 		"instances":          "project: app\ninstances: maybe\nenvironments:\n  prod: {}\n",
 		"server in defaults": "project: app\ndefaults: {server: vm1}\nenvironments:\n  prod: {}\n",
-		"unknown step":       "project: app\nenvironments:\n  prod: {release: {remotes: deploy}}\n",
+		"unknown step":       "project: app\nenvironments:\n  prod: {release: {remote: deploy}}\n",
+		"bare before step":   "project: app\nenvironments:\n  prod: {release: {before: [image], run: deploy}}\n",
+		"local after remote": "project: app\nenvironments:\n  prod: {release: {before: [remote: a, local: b], run: deploy}}\n",
+		"remote after local": "project: app\nenvironments:\n  prod: {release: {after: [local: a, remote: b], run: deploy}}\n",
+		"step with two keys": "project: app\nenvironments:\n  prod: {release: {after: [{local: a, remote: b}], run: deploy}}\n",
 		"bad pattern":        "project: app\nenvironments:\n  \"pr/*\": {}\n",
 		"aliases":            "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
 	} {
@@ -172,15 +176,15 @@ defaults:
     CERTRESOLVER: acmedns
     SITE: shared
     DEVOPSY_WILDCARD_DOMAIN: vm1.example.com
-  release: {before: image, remote: deploy}
-  rollback: {remote: deploy}
+  release: {before: [local: image], prepare: secrets, run: deploy}
+  rollback: deploy
 environments:
   prod:
     env:
       SITE: prod
   demo:
     releases: {keep: 1}
-    release: {remote: deploy --fast}
+    release: deploy --fast
     env:
       DEVOPSY_WILDCARD_DOMAIN: ""
       CERTRESOLVER: ~
@@ -199,7 +203,7 @@ environments:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prod.Mode != ModeImage || prod.Release.Remote != "deploy" || len(prod.Release.Before) != 1 || prod.Rollback == nil || prod.Keep != 3 {
+	if prod.Mode != ModeImage || prod.Release.Run != "deploy" || len(prod.Release.Before) != 1 || prod.Release.Before[0].Remote || len(prod.Release.Prepare) != 1 || prod.Rollback == nil || prod.Rollback.Run != "deploy" || prod.Keep != 3 {
 		t.Errorf("prod: %+v", prod)
 	}
 	if prod.Env["SITE"] != "prod" || prod.Env["CERTRESOLVER"] != "acmedns" || prod.Env["DEVOPSY_WILDCARD_DOMAIN"] != "vm1.example.com" {
@@ -215,7 +219,7 @@ environments:
 	if _, ok := demo.Env["CERTRESOLVER"]; ok {
 		t.Errorf("null removes a default: %v", demo.Env)
 	}
-	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Remote != "deploy --fast" || len(demo.Release.Before) != 0 {
+	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Run != "deploy --fast" || len(demo.Release.Before) != 0 {
 		t.Errorf("demo: %+v", demo)
 	}
 	if staging, err := LoadTarget(dir, "vm1:staging", nil); err != nil || staging.Mode != ModeBuild {
@@ -230,7 +234,7 @@ func TestAliases(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
 	src := t.TempDir()
-	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ndefaults:\n  mode: image\n  release: {remote: deploy}\nenvironments:\n  main: {}\n")
+	write(t, filepath.Join(src, ".devopsy", ConfigFile), "project: traefik\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  main: {}\n")
 	write(t, filepath.Join(home, ConfigFile), `
 aliases:
   vm1-traefik: {source: `+src+`, to: "vm1:main"}
@@ -351,7 +355,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	run := func(tg *Target, id string) string {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
-		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", nil))
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{}))
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root}
 		out, err := cmd.CombinedOutput()
 		if err != nil {

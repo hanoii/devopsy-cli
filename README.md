@@ -49,7 +49,7 @@ Where they meet:
 | --- | --- | --- |
 | HTTPS | nothing | Traefik and its resolvers; sites' router labels |
 | Automatic URL | names the compose project, imports what the label asks for, runs the `env` capability | Traefik exports its wildcard domain; sites import it, compute their hosts and rule (`env` capability) and use them in their labels |
-| Starting a release | runs the environment's `remote:` step | `deploy`: pull or build, migrate, start |
+| Starting a release | runs the environment's steps (before, prepare, run, after) and checks compose's required variables before going live | `secrets` generates them; `deploy`: pull or build, migrate, start |
 | Data | keeps `shared/mnt` across releases and rollbacks | bind mounts into it, file ownership (init services, entrypoints) |
 | Domains | `--probe`, from outside | Traefik's `domains`: routes, CNAMEs, retries |
 
@@ -228,8 +228,8 @@ instances: required             # optional: required, or none; unset: optional
 releases: {keep: 5}             # optional: releases kept per environment
 defaults:                       # what every environment takes unless it sets its own
   mode: image                   # build (default) or image
-  release: {remote: deploy}     # what --release runs: required for it
-  rollback: {remote: deploy}    # what --rollback runs: required for it
+  release: deploy               # what --release runs: required for it
+  rollback: deploy              # what --rollback runs: required for it
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
 environments:
   prod:
@@ -291,19 +291,38 @@ devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labe
 devopsy @vm1:prod logs -f web    # any command, in the current release
 ```
 
-Steps, in `release:` and `rollback:`, run in three phases:
+Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
+command line:
 
 ```yaml
 release:
-  before: [image]   # local devopsy commands; a failure stops before the server
-  remote: deploy    # one devopsy command on the server, in the new release, under
-                    # the release lock; a failure switches back to the previous release
-  after: [notify]   # local commands once live; a failure is only reported
+  before:                # before anything changes; a failure stops here
+    - local: image       #   on this machine, first
+    - remote: maint on   #   on the server, in the current release
+  prepare: [secrets]     # on the server, in the new release, before it goes live
+  run: deploy            # once it is current: the release itself
+  after:                 # once live; a failure is only reported
+    - remote: maint off  #   on the server, first
+    - local: notify      #   then here
+rollback: deploy         # only a run step: the same phases, in the restored release
 ```
 
-Local steps get the environment's `env`, `DEVOPSY_TARGET` (the resolved
-target) and `DEVOPSY_RELEASE_COMMIT`, never the server's `.env`. Without
-steps, devopsy prints a starting point.
+- **The variables check:** after `prepare`, devopsy checks that every
+  variable compose requires (`${VAR:?message}`) is set there, env capability
+  included. A missing one fails the release before it goes live, listing the
+  variables and the `--vars set` line. Generate secrets in `prepare` so the
+  check finds them.
+- **When `run` fails,** `current` goes back to the previous release, which is
+  restarted with its own run step (the rollback's, else the release's), so
+  its containers are the previous release's again. Data changes, like
+  database updates, are the project's to undo.
+- **One SSH session:** the remote steps share it, under the release lock.
+  Hence local before steps first and local after steps last. Remote before
+  steps run in the current release, with its commands, and none run on a
+  first release.
+- **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
+  resolved target) and `DEVOPSY_RELEASE_COMMIT`, never the server's `.env`.
+  Without steps, devopsy prints a starting point.
 
 - **build** mode (default) uploads the project as git sees it, uncommitted
   changes included, and builds on the server.

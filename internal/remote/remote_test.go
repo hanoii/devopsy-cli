@@ -154,9 +154,9 @@ func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "/srv/it's app", Mode: ModeImage}
 	scripts := map[string]string{
 		"upload":       UploadScript(tg, "20261005120000"),
-		"activate":     ActivateScript(tg, "20261005120000", false, "", nil),
-		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", []string{"deploy", "a b"}),
-		"rollback+cmd": ActivateScript(tg, "", true, "", []string{"up", "-d"}),
+		"activate":     ActivateScript(tg, "20261005120000", false, "", Phases{}),
+		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, Restart: []string{"deploy"}, After: [][]string{{"warm"}}}),
+		"rollback+cmd": ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}),
 		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":     ReleasesScript(tg),
 		"shell":        ShellScript(tg),
@@ -218,7 +218,7 @@ func TestPlainDirectories(t *testing.T) {
 	}
 	for name, script := range map[string]string{
 		"upload":   UploadScript(tg, "20261006000000"),
-		"rollback": ActivateScript(tg, "", true, "", nil),
+		"rollback": ActivateScript(tg, "", true, "", Phases{}),
 		"releases": ReleasesScript(tg),
 	} {
 		out, err := run(script)
@@ -299,7 +299,7 @@ func TestPrepareScript(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
+	script := NotLive + fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
 	for name, c := range map[string]struct {
 		compose, override string
 		fail, runs        bool
@@ -342,7 +342,7 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
+	script := NotLive + fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
 	for _, secrets := range []bool{false, true} {
 		root := t.TempDir()
 		base := filepath.Join(root, "shop", "b", "prod")

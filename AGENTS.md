@@ -102,18 +102,29 @@ repositories fit together and the open ideas.
 
 - Remote commands run through the `current` symlink, never a release path:
   compose stores bind-mount paths in containers, and pruned releases would
-  break them.
+  break them. The exception is `prepare`, in the new release before it is
+  current: it must not start services.
 - `--release` and `--rollback` take no command: the environment's
-  `release:`/`rollback:` (before, remote, after: `remote.Steps`) are
-  required. Phases, not a free list, so the upload is never hidden in a
-  step and the lock (a `flock` in the one SSH session) covers the one
-  remote command. Local steps get the target's env, `DEVOPSY_TARGET` (the
+  `release:`/`rollback:` (`remote.Steps`: before, prepare, run, after; a
+  plain string is run alone) are required. Phases, not a free list, so the
+  upload and the switch are never hidden in a step. The remote steps share
+  one SSH session, which holds the lock (a `flock`): so before is local
+  steps then remote ones, after is remote then local, checked when the
+  config is read. Local steps get the target's env, `DEVOPSY_TARGET` (the
   resolved address) and the commit, never the server's `.env`.
-- Order on the server (`ActivateScript`): lock, link `shared/*` and the
+- Order on the server (`ActivateScript`, one session): lock; remote before
+  steps in `current` (skipped on a first release); link `shared/*` and the
   project's and instance's `.env` (`project.env`, `instance.env`, linked
-  even when missing) into the release, `--prepare-release` when the compose
-  files use role or import labels (`PrepareScript`), switch `current`, run
-  the remote step, switch back on failure, prune to `keep`.
+  even when missing) into the release; `--prepare-release` when the compose
+  files use role or import labels (`PrepareScript`, releases only);
+  `prepare` steps in the release; `--missing-vars` (`cli.MissingVars`:
+  compose's `${VAR:?}`/`${VAR?}` left unset, env capability included); switch
+  `current`; `run`; on failure switch back and restart the previous release
+  with its own run step (`Phases.Restart`: the rollback's, else the
+  release's); prune to `keep`; remote after steps. A failure before the
+  switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
+  changes. No prompts: what is missing is listed with its `--vars set`
+  line.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
   `--yes`). A first release that fails before going live, with nothing in

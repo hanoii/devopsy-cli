@@ -151,16 +151,28 @@ type yamlTarget struct {
 }
 
 type yamlSteps struct {
-	Before []string `yaml:"before,omitempty"`
-	Remote string   `yaml:"remote"`
-	After  []string `yaml:"after,omitempty"`
+	Before  []map[string]string `yaml:"before,omitempty"`
+	Prepare []string            `yaml:"prepare,omitempty"`
+	Run     string              `yaml:"run"`
+	After   []map[string]string `yaml:"after,omitempty"`
 }
 
 func toYAMLSteps(s *remote.Steps) *yamlSteps {
 	if s == nil {
 		return nil
 	}
-	return &yamlSteps{Before: s.Before, Remote: s.Remote, After: s.After}
+	phase := func(steps []remote.Step) []map[string]string {
+		var out []map[string]string
+		for _, st := range steps {
+			where := "local"
+			if st.Remote {
+				where = "remote"
+			}
+			out = append(out, map[string]string{where: st.Cmd})
+		}
+		return out
+	}
+	return &yamlSteps{Before: phase(s.Before), Prepare: s.Prepare, Run: s.Run, After: phase(s.After)}
 }
 
 // debugTargets shows targets as devopsy computes them: with where each value
@@ -270,13 +282,23 @@ func steps(s *remote.Steps) string {
 	if s == nil {
 		return ""
 	}
+	phase := func(steps []remote.Step) string {
+		var out []string
+		for _, st := range steps {
+			out = append(out, st.String())
+		}
+		return strings.Join(out, ", ")
+	}
 	parts := []string{}
 	if len(s.Before) > 0 {
-		parts = append(parts, "before: "+strings.Join(s.Before, ", "))
+		parts = append(parts, "before: "+phase(s.Before))
 	}
-	parts = append(parts, "remote: "+s.Remote)
+	if len(s.Prepare) > 0 {
+		parts = append(parts, "prepare: "+strings.Join(s.Prepare, ", "))
+	}
+	parts = append(parts, "run: "+s.Run)
 	if len(s.After) > 0 {
-		parts = append(parts, "after: "+strings.Join(s.After, ", "))
+		parts = append(parts, "after: "+phase(s.After))
 	}
 	return strings.Join(parts, "; ")
 }

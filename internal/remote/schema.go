@@ -30,17 +30,29 @@ defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
   mode: build
-  # What --release runs (required for it): before, local devopsy commands;
-  # remote, one devopsy command on the server, in the new release, under
-  # the release lock (a failure goes back to the previous release); after,
-  # local commands once it is live. Each a devopsy command line.
+  # What --release runs (required for it), in phases. Each step is a
+  # devopsy command line. The remote ones share one SSH session, under the
+  # release lock.
   release:
-    before: [image]
-    remote: deploy
-    after: []
-  # What --rollback runs (required for it), in the restored release.
-  rollback:
-    remote: deploy
+    # Before anything changes: local steps (here), then remote ones (on the
+    # server, in the current release). A failure stops there.
+    before:
+      - local: image
+      - remote: maintenance on
+    # Then the upload. prepare: remote steps in the new release, before it
+    # goes live (generate secrets...); then devopsy checks every variable
+    # compose requires (${VAR:?}) is set. A failure leaves current alone.
+    prepare: [secrets]
+    # Once current: the release itself. A failure switches back and runs
+    # the previous release's own run step (the rollback's, else this).
+    run: deploy
+    # Once live: remote steps, then local ones. A failure is reported.
+    after:
+      - remote: maintenance off
+      - local: notify
+  # What --rollback runs (required for it): the same phases, in the release
+  # before current (no upload, imports kept). A plain command is run alone.
+  rollback: deploy
   # Per-environment settings, written into each release's .devopsy/target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:

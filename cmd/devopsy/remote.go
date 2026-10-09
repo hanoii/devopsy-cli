@@ -172,10 +172,18 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		if args[0] == "--rollback" {
 			steps = t.Rollback
 		}
-		if steps == nil || len(remote.StepArgs(steps.Remote)) == 0 {
+		if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 			return fail(missingSteps(t, strings.TrimPrefix(args[0], "--")))
 		}
-		local := func(phase string, list remote.StepList, commit string) int {
+		// When run fails, current goes back to the previous release, and its
+		// own run step brings its containers back: the rollback's, else the
+		// release's.
+		restart := t.Rollback
+		if restart == nil || len(remote.StepArgs(restart.Run)) == 0 {
+			restart = t.Release
+		}
+		phases := remote.RemotePhases(steps, restart)
+		local := func(phase string, list []string, commit string) int {
 			for _, step := range list {
 				cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase), color)
 				if code := runLocalStep(t, remote.StepArgs(step), commit); code != 0 {
@@ -186,14 +194,14 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 
 		if args[0] == "--rollback" {
-			if code := local("before", steps.Before, ""); code != 0 {
+			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
 			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path), color)
-			if code := ssh(remote.ActivateScript(t, "", true, projectName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+			if code := ssh(remote.ActivateScript(t, "", true, projectName, phases), nil, tty); code != 0 {
 				return code
 			}
-			if code := local("after", steps.After, ""); code != 0 {
+			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
 				return fail(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
 			}
 			return 0
@@ -248,7 +256,7 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		if v := t.Env["DEVOPSY_RELEASE_COMMIT"]; v != "" {
 			commit = v
 		}
-		if code := local("before", steps.Before, commit); code != 0 {
+		if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
 		src := record.Mode
@@ -275,10 +283,10 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		if code := ssh(remote.UploadScript(t, record.ID), pr, false); code != 0 {
 			return code
 		}
-		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, remote.StepArgs(steps.Remote)), nil, tty); code != 0 {
+		if code := ssh(remote.ActivateScript(t, record.ID, false, projectName, phases), nil, tty); code != 0 {
 			return code
 		}
-		if code := local("after", steps.After, commit); code != 0 {
+		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
 			return fail(fmt.Sprintf("an after step failed (%d): the release stays", code))
 		}
 		return 0
@@ -329,13 +337,11 @@ func missingSteps(t *remote.Target, which string) string {
 
   environments:
     %s:
-      %s:
-        before: []        # local devopsy commands, before the upload
-        remote: %s
-        after: []         # local devopsy commands, once it is live
+      %s: %s
 
-remote is one devopsy command, run on the server after the switch; usually a
-project command (deploy) doing that and more. See 'devopsy @%s --%s --help'.`,
+That is the run step alone: one devopsy command on the server, once the
+release is current; usually a project command (deploy). before, prepare
+and after steps can go around it. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 

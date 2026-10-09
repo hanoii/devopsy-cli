@@ -315,12 +315,49 @@ mv "$rel.tmp" "$rel"
 `, Quote(id))
 }
 
-// ActivateScript links shared/ into a release, makes it current, runs args
-// there (if any) and goes back to the previous release when that fails.
-// Then it prunes old releases. rollback picks the release before current
-// instead of id. It ends with the release's URL, its wildcard host or else
-// its first domain, as devopsy on the server computes them.
-func ActivateScript(t *Target, id string, rollback bool, projectName string, args []string) string {
+// Phases are the remote parts of a release's or rollback's steps, as
+// devopsy arguments.
+type Phases struct {
+	// Before runs in the current release, before anything changes.
+	Before [][]string
+	// Prepare runs in the new (or restored) release before it goes live.
+	Prepare [][]string
+	// Run runs once it is current. Restart runs in the previous release
+	// when Run fails and current goes back to it.
+	Run, Restart []string
+	// After runs in the current release once it is live.
+	After [][]string
+}
+
+// RemotePhases are the remote phases of steps. restart is the previous
+// release's own run step, for when Run fails: the rollback's, else the
+// release's.
+func RemotePhases(steps *Steps, restart *Steps) Phases {
+	p := Phases{Run: StepArgs(steps.Run)}
+	for _, c := range Commands(steps.Before, true) {
+		p.Before = append(p.Before, StepArgs(c))
+	}
+	for _, c := range steps.Prepare {
+		p.Prepare = append(p.Prepare, StepArgs(c))
+	}
+	for _, c := range Commands(steps.After, true) {
+		p.After = append(p.After, StepArgs(c))
+	}
+	if restart != nil {
+		p.Restart = StepArgs(restart.Run)
+	}
+	return p
+}
+
+// ActivateScript makes a release current, in one SSH session under the
+// release lock: remote before steps in the current release; shared/ and
+// the .env levels linked into the new one (for a rollback, the release
+// before current); its role and imports (releases only); prepare steps;
+// devopsy --missing-vars, so a variable compose requires is never found
+// missing once live; the switch; the run step, going back to the previous
+// release when it fails and restarting that one; pruning; remote after
+// steps. Nothing before the switch changes what is live.
+func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases) string {
 	s := prelude(t) + "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 `
@@ -331,12 +368,24 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, arg
   [ "releases/$r" = "$prev" ] && found=1
 done)
 [ -n "$id" ] || { echo "devopsy: no release before the current one" >&2; exit 1; }
-`
+` + RollbackNotLive
 	} else {
-		s += "id=" + Quote(id) + "\n"
+		s += "id=" + Quote(id) + "\n" + NotLive
+	}
+	step := func(phase, dir string, args []string, onFail string) string {
+		return fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (%s)\"\n(cd %s && %s) || %s\n",
+			strings.Join(args, " "), phase, dir, devopsyCall(projectName, args, false), onFail)
 	}
 	s += `rel="$base/releases/$id"
-# Always linked, so editing the server's .env applies without a new release.
+`
+	if len(p.Before) > 0 {
+		s += "if [ -n \"$prev\" ]; then\n"
+		for _, args := range p.Before {
+			s += step("before", `"$base/current"`, args, "not_live $?")
+		}
+		s += "else\n  echo \"devopsy: no current release: remote before steps skipped\"\nfi\n"
+	}
+	s += `# Always linked, so editing the server's .env applies without a new release.
 touch "$base/shared/.env"
 for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
@@ -352,21 +401,30 @@ done
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 	}
+	for _, args := range p.Prepare {
+		s += step("prepare", `"$rel"`, args, "not_live $?")
+	}
+	s += fmt.Sprintf("(cd \"$rel\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id"
 `
-	if len(args) > 0 {
+	if len(p.Run) > 0 {
+		restart := ""
+		if len(p.Restart) > 0 {
+			restart = fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
+    (cd "$base/current" && %s) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
+`, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
+		}
 		s += `status=0
-cd "$base/current"
-` + devopsyCall(projectName, args, false) + ` || status=$?
+` + fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\"\n", strings.Join(p.Run, " ")) + `(cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
 if [ "$status" != 0 ]; then
   touch "$rel/.devopsy-failed"
   if [ -n "$prev" ]; then
     make_current "$prev"
-    echo "devopsy: command failed ($status), current is back to ${prev#releases/}" >&2
-  else
+    echo "devopsy: run failed ($status), current is back to ${prev#releases/}" >&2
+` + restart + `  else
     rm -f "$base/current"
-    echo "devopsy: command failed ($status), no previous release to go back to" >&2
+    echo "devopsy: run failed ($status), no previous release to go back to" >&2
   fi
   exit "$status"
 fi
@@ -384,30 +442,46 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | whil
   [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
 done
 `, t.Keep)
+	for _, args := range p.After {
+		s += step("after", `"$base/current"`, args, `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`)
+	}
 	return s
 }
 
-// PrepareScript runs devopsy --prepare-release (cli.PrepareRelease) in a
-// new release before it becomes current, with $base, $rel and $id set; %s is
-// the call. It checks the project's devopsy.role is free on the host and
-// writes its devopsy.import labels into the release's target.env, so
-// rollbacks keep what each release had. Only for projects with those labels
-// (outside comments). A failure leaves current alone; a first release with
-// nothing in shared/ yet leaves no directory at all.
-const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
-  if ! (cd "$rel" && %s); then
-    if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
-      # A first release that never went live, with nothing set yet: leave
-      # no directory behind (an instance's, when it is empty, neither).
-      rm -rf "$base"
-      rmdir "$(dirname "$base")" 2>/dev/null || true
-      echo "devopsy: removed $base: its first release did not go live" >&2
-    else
-      touch "$rel/.devopsy-failed"
-      echo "devopsy: release $id not made current" >&2
-    fi
-    exit 1
+// NotLive is not_live, for a new release that does not go live: marked
+// failed, so rollbacks skip it, or, for a first release with nothing in
+// shared/ yet, no directory left at all. $base, $prev, $rel and $id are set.
+const NotLive = `not_live() {
+  if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
+    # A first release that never went live, with nothing set yet: leave
+    # no directory behind (an instance's, when it is empty, neither).
+    rm -rf "$base"
+    rmdir "$(dirname "$base")" 2>/dev/null || true
+    echo "devopsy: removed $base: its first release did not go live" >&2
+  else
+    touch "$rel/.devopsy-failed"
+    echo "devopsy: release $id not made current" >&2
   fi
+  exit "$1"
+}
+`
+
+// RollbackNotLive is not_live for a rollback: the release it would restore
+// stays as it was.
+const RollbackNotLive = `not_live() {
+  echo "devopsy: nothing changed: current is still ${prev#releases/}" >&2
+  exit "$1"
+}
+`
+
+// PrepareScript runs devopsy --prepare-release (cli.PrepareRelease) in a
+// new release before it becomes current, with not_live defined; %s is the
+// call. It checks the project's devopsy.role is free on the host and writes
+// its devopsy.import labels into the release's target.env, so rollbacks
+// keep what each release had. Only for projects with those labels (outside
+// comments).
+const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
+  (cd "$rel" && %s) || not_live 1
 fi
 `
 
