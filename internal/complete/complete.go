@@ -101,6 +101,7 @@ var remoteCommands = []Candidate{
 	{"--log", "what the last release or rollback printed, or one release's", GroupDevopsy},
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
+	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
@@ -289,7 +290,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(r, cur)
 		}
 		return none
-	case "--shell-host", "--log", "--releases", "--env", "--help", "-h":
+	case "--shell-host", "--ssh-config", "--log", "--releases", "--env", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}
