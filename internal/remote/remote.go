@@ -373,7 +373,7 @@ done)
 		s += "id=" + Quote(id) + "\n" + NotLive
 	}
 	step := func(phase, dir string, args []string, onFail string) string {
-		return fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (%s)\"\n(cd %s && %s) || %s\n",
+		return fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (%s)\" >&2\n(cd %s && %s) || %s\n",
 			strings.Join(args, " "), phase, dir, devopsyCall(projectName, args, false), onFail)
 	}
 	s += `rel="$base/releases/$id"
@@ -383,7 +383,7 @@ done)
 		for _, args := range p.Before {
 			s += step("before", `"$base/current"`, args, "not_live $?")
 		}
-		s += "else\n  echo \"devopsy: no current release: remote before steps skipped\"\nfi\n"
+		s += "else\n  echo \"devopsy: no current release: remote before steps skipped\" >&2\nfi\n"
 	}
 	s += `# Always linked, so editing the server's .env applies without a new release.
 touch "$base/shared/.env"
@@ -406,7 +406,7 @@ done
 	}
 	s += fmt.Sprintf("(cd \"$rel\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
 	s += `make_current "releases/$id"
-echo "devopsy: current is now $id"
+echo "devopsy: current is now $id" >&2
 `
 	if len(p.Run) > 0 {
 		restart := ""
@@ -416,7 +416,7 @@ echo "devopsy: current is now $id"
 `, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
 		}
 		s += `status=0
-` + fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\"\n", strings.Join(p.Run, " ")) + `(cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
+` + fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `(cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
 if [ "$status" != 0 ]; then
   touch "$rel/.devopsy-failed"
   if [ -n "$prev" ]; then
@@ -435,7 +435,7 @@ fi
 	s += fmt.Sprintf(`k=%d
 [ "$k" -gt 0 ] || k=$keep
 if [ "$k" -gt "$max_keep" ]; then
-  echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k"
+  echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k" >&2
   k=$max_keep
 fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | while read -r r; do
@@ -615,7 +615,7 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 // removed from a container.
 func DestroyScript(t *Target, projectName string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ ! -d "$base" ]; then
-  echo "devopsy: nothing at $base"
+  echo "devopsy: nothing at $base" >&2
   exit 0
 fi
 if [ "$base" = "$root" ] || [ "$base" = / ]; then
@@ -636,7 +636,7 @@ if [ -d "$base/shared/mnt" ]; then
 fi
 cd /
 rm -rf "$base"
-echo "devopsy: removed $base"
+echo "devopsy: removed $base" >&2
 `, devopsyCall(projectName, []string{"down", "--volumes", "--remove-orphans"}, false), CleanupImage)
 }
 

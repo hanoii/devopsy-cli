@@ -35,7 +35,10 @@ repositories fit together and the open ideas.
   anything else: older files and syntax just stop working.
 - devopsy replaces itself with what it runs (`syscall.Exec`): signals, the
   terminal and exit codes belong to that command.
-- **Output:** messages on stderr, compose's output on stdout. Anything that
+- **Output:** stdout is the result (compose's output, `--env`, `--vars
+  get`, `--context-hash`...), stderr is everything devopsy says: progress,
+  notices and errors, the server scripts' `echo` lines included (`>&2`), so
+  pipes stay clean and the two never interleave out of order. Anything that
   can contain arguments or scripts goes through `cli.Secrets` (values from
   `.env`, secret-named variables).
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
