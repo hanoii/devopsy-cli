@@ -243,7 +243,7 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
-	if code != 0 || !strings.Contains(out, "-T devopsy@from-dotenv sh -c") {
+	if code != 0 || !strings.Contains(out, "-o ClearAllForwardings=yes -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -310,8 +310,8 @@ func TestRemoteVars(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	// ssh -T <host> 'sh -c <script>': run the last argument here.
-	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	// ssh [options] -T <host> 'sh -c <script>': run the last argument here.
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
 	server := filepath.Join(tmp, "srv", "app-prod")
 	project := filepath.Join(tmp, "app")
@@ -436,7 +436,7 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
 	// GNU mv -T, which macOS lacks: replace the symlink, never move into it.
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
@@ -653,7 +653,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nshift 2\nexec sh -c \"$1\"\n", 0o755)
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
 	root := filepath.Join(tmp, "srv")

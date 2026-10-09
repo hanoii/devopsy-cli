@@ -257,6 +257,8 @@ the instance from DEVOPSY_INSTANCE), or @<alias> (~/.config/devopsy/config.yaml)
   --shell [service] [-- command...]
                        a shell (or the command) in a container
   --shell-host         a shell on the server itself, in the current release
+  --ssh-config         a ~/.ssh/config block for the target's host, with
+                       suggestions for faster sessions; never connects
   --vars [--project | --instance] [get|set|unset KEY...]
                        the server's variables (shared/.env, or the project's
                        or instance's .env): names, one value, or set and
@@ -413,6 +415,13 @@ release, or in the target's path for a plain devopsy directory. devopsy and
 docker compose work there as on any project. It never depends on the
 project: the way in when something is broken. For a shell in a container:
 devopsy @<target> --shell.
+`,
+	"--ssh-config": `Usage: devopsy @<target> --ssh-config
+
+Prints a Host block for the target's host, for ~/.ssh/config: Hostname,
+User and Port as the target and ssh -G resolve them, then suggestions,
+commented out: connection sharing (one connection for all of a release's
+sessions instead of a handshake each) and keepalives. It never connects.
 `,
 	"--vars": `Usage: devopsy @<target> --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]
 

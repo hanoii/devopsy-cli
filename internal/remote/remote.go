@@ -578,17 +578,22 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 	return SSHLog(t, script, stdin, stdout, tty, nil)
 }
 
+// SSHOptions go before every session's own arguments, also after
+// DEVOPSY_SSH_COMMAND, whose options win: ssh keeps the first value of each.
+var SSHOptions = []string{"-o", "ClearAllForwardings=yes"}
+
 // SSHLog is SSH, also copying the session's output, both streams, to log.
 func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
-	args := []string{}
+	ttyFlag := "-T"
 	if tty {
-		args = append(args, "-t")
-	} else {
-		args = append(args, "-T")
+		ttyFlag = "-t"
 	}
-	args = append(args, t.Host, "sh -c "+Quote(script))
+	// devopsy's sessions never need the host's port forwardings from
+	// ~/.ssh/config: each one would try to bind them again, and warn that
+	// they are in use while another session (or the user's own) holds them.
+	args := append(append([]string{}, SSHOptions...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
-		Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", args[0], t.Host, strings.TrimRight(script, "\n")))
+		Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", ttyFlag, t.Host, strings.TrimRight(script, "\n")))
 	}
 
 	var cmd *exec.Cmd

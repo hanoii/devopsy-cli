@@ -482,6 +482,18 @@ place and refuses releases. Project commands come from the current release.
 DEVOPSY_SSH_COMMAND="ssh -i $KEY -o UserKnownHostsFile=$KNOWN_HOSTS" devopsy @vm1:prod --release
 ```
 
+Its options come first, so they win over devopsy's own: ssh keeps the first
+value of each. devopsy adds `-o ClearAllForwardings=yes` to every session:
+it never needs the host's `LocalForward` lines, and each session would try
+to bind them again while another holds them.
+
+**SSH settings:** a release opens several SSH sessions (checks, upload,
+activation, its log), each a new connection and handshake: noticeable
+through a jump host or VPN. `devopsy @<target> --ssh-config` prints a
+`Host` block for `~/.ssh/config`: where it connects (`Hostname`, `User`,
+`Port`), then connection sharing (`ControlMaster`, `ControlPersist`) and
+keepalives, commented out. It never connects.
+
 ### Aliases
 
 Your `~/.config/devopsy/config.yaml` (or `$DEVOPSY_HOME/config.yaml`) can

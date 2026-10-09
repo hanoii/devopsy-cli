@@ -212,6 +212,12 @@ repositories fit together and the open ideas.
   proxy. A server never drives local devopsy (devopsy execs ssh and cannot
   watch its output, and a server must not make a laptop act): proxies print
   the `--probe` line to run.
+- **SSH:** every session is `ssh [DEVOPSY_SSH_COMMAND's options]
+  [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`):
+  `ClearAllForwardings=yes`, since the user's `LocalForward` lines clash
+  between sessions. Anything faster (connection sharing) is the user's SSH
+  config, which `--ssh-config` suggests and never writes; built-in sharing
+  is in ROADMAP.md. Test fakes of ssh run their last argument.
 - **`--context-hash`** is a pure helper; devopsy builds nothing. Errors only
   ever go towards a new hash (a kept file costs a rebuild, a dropped one
   would reuse a stale image), hence Docker's own matcher and refusing what

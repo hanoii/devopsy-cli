@@ -117,6 +117,15 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		return ssh(remote.ShellScript(t), nil, tty)
 
+	case "--ssh-config":
+		if len(args) > 1 {
+			return fail("--ssh-config takes no arguments")
+		}
+		// ssh -G only reads config; without it the block has no "Now" lines.
+		effective, _ := remote.SSHEffective(t.Host)
+		fmt.Print(remote.SSHConfig(t, effective))
+		return 0
+
 	case "--vars":
 		// A user-level target belongs to no project: its values never come
 		// from the .env of whatever project devopsy runs in.
