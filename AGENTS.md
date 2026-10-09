@@ -130,7 +130,8 @@ repositories fit together and the open ideas.
   line.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
-  (`SSHLog`, both streams), without terminal codes, saved by
+  (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
+  15:04:05`), without terminal codes, progress frames or empty lines, saved by
   `LogSaveScript` in `releases/<id>/.devopsy-log` once the server was
   reached; a rollback's is appended to the restored release's, found from
   its script's "rolling back to <id>" line. Pruned with their releases.

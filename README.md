@@ -391,7 +391,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
   was reached: devopsy's messages, the local steps run, and all the server
-  printed. `--log` shows the most recent, `--log <id>` one release's. Local steps'
+  printed, each line after its time in UTC (`2026-10-09 15:24:32`),
+  progress displays reduced to their final state. `--log` shows the most recent, `--log <id>` one release's. Local steps'
   own output stays on your screen only, keeping their terminal.
 - **Destroying:** `--destroy` runs the environment's `destroy:` step, one
   devopsy command, in the current release under the lock, then removes the
