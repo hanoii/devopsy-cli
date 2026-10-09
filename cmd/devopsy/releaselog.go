@@ -51,6 +51,10 @@ func (l *releaseLog) Line(s string) {
 	_, _ = l.Write([]byte(s + "\n"))
 }
 
+// rollingBackTo is the line a rollback's script prints once it has picked
+// the release to restore.
+var rollingBackTo = regexp.MustCompile(`devopsy: rolling back to ([0-9]{14})`)
+
 // terminalCodes are colors and cursor movements, which make no sense in a
 // file.
 var terminalCodes = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]`)

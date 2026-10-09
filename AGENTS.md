@@ -131,8 +131,10 @@ repositories fit together and the open ideas.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
   (`SSHLog`, both streams), without terminal codes, saved by
-  `LogSaveScript` in `logs/<id>-release.log` or `<time>-rollback.log` once
-  the server was reached; `--log` reads them (`LogReadScript`). Local
+  `LogSaveScript` in `releases/<id>/.devopsy-log` once the server was
+  reached; a rollback's is appended to the restored release's, found from
+  its script's "rolling back to <id>" line. Pruned with their releases.
+  `--log` reads them (`LogReadScript`). Local
   steps' output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
