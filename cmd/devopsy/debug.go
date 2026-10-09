@@ -146,6 +146,7 @@ type yamlTarget struct {
 	Source   string            `yaml:"source,omitempty"`
 	Release  *yamlSteps        `yaml:"release,omitempty"`
 	Rollback *yamlSteps        `yaml:"rollback,omitempty"`
+	Destroy  string            `yaml:"destroy,omitempty"`
 	Keep     int               `yaml:"keep,omitempty"`
 	Env      map[string]string `yaml:"env,omitempty"`
 }
@@ -211,7 +212,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			}
 			var value yaml.Node
 			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
-				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Keep: t.Keep, Env: t.Env}); err != nil {
+				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Keep: t.Keep, Env: t.Env}); err != nil {
 				cli.Fprint(os.Stderr, red, err.Error(), color)
 				return 1
 			}
@@ -263,6 +264,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		row("source", t.Source, "")
 		row("release", steps(t.Release), t.From["release"])
 		row("rollback", steps(t.Rollback), t.From["rollback"])
+		row("destroy", t.Destroy, t.From["destroy"])
 		if t.Keep > 0 {
 			row("keep", fmt.Sprint(t.Keep), t.From["keep"])
 		}

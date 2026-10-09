@@ -163,8 +163,8 @@ func TestScriptsParse(t *testing.T) {
 		"vars":         VarsReadScript(tg, nil),
 		"vars set":     VarsSetScript(tg, nil),
 		"vars unset":   VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
-		"destroy":      DestroyScript(tg, "app"),
-		"instances":    InstancesScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+		"destroy":      DestroyScript(tg, "app", []string{"destroy"}),
+		"environments": EnvironmentsScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
 		"role holders": RoleHoldersScript(tg, "proxy"),
 	}
 	for name, s := range scripts {

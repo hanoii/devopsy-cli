@@ -289,6 +289,7 @@ defaults:                       # what every environment takes unless it sets it
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs: required for it
+  destroy: destroy              # what --destroy runs: required for it
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
 environments:
   prod:
@@ -344,8 +345,8 @@ devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
-devopsy @vm1:pr-12 --destroy     # down with volumes, then remove the environment
-devopsy @vm1:prod --instances    # the project's instances on vm1
+devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
+devopsy @vm1:prod --environments # the project's environments on vm1 (prod, b/prod...)
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -386,6 +387,13 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   was reached: devopsy's messages, the local steps run, and all the server
   printed. `--log` shows the most recent, `--log <id>` one release's. Local steps'
   own output stays on your screen only, keeping their terminal.
+- **Destroying:** `--destroy` runs the environment's `destroy:` step, one
+  devopsy command, in the current release under the lock, then removes the
+  directory (releases, `shared/` with its data and `.env`). The step is the
+  project's: devopsy knows nothing of what it runs. Usually a command that
+  runs `docker compose down --volumes` and removes what its containers own
+  in `shared/mnt`, which the deploy user cannot. A failed step removes
+  nothing; files left that the deploy user cannot remove fail the removal.
 - **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
   resolved target) and `DEVOPSY_RELEASE_COMMIT`, never the server's `.env`.
   Without steps, devopsy prints a starting point.

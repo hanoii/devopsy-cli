@@ -659,11 +659,12 @@ cat "$f"
 `
 }
 
-// DestroyScript removes the target's environment: down, with its volumes,
-// in the current release, then its directory, under the release lock.
-// Data bind-mounted from shared/mnt can belong to container users, so it is
-// removed from a container.
-func DestroyScript(t *Target, projectName string) string {
+// DestroyScript removes the target's environment under the release lock:
+// the destroy command (args) in the current release, which takes the
+// project's containers, volumes and data down, then the directory. devopsy
+// knows nothing of what the project runs or owns: whatever the command
+// leaves that the deploy user cannot remove fails the removal.
+func DestroyScript(t *Target, projectName string, args []string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ ! -d "$base" ]; then
   echo "devopsy: nothing at $base" >&2
   exit 0
@@ -679,34 +680,38 @@ fi
 exec 9>"$base/.lock"
 flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
 if [ -d "$base/current" ]; then
-  (cd "$base/current" && %s)
-fi
-if [ -d "$base/shared/mnt" ]; then
-  docker run --rm --network none -v "$base/shared:/shared" %s rm -rf /shared/mnt
+  echo "devopsy: running 'devopsy %s' (destroy)" >&2
+  (cd "$base/current" && %s) || { s=$?; echo "devopsy: the destroy step failed ($s): nothing removed" >&2; exit "$s"; }
+else
+  echo "devopsy: no current release: destroy step skipped" >&2
 fi
 cd /
-rm -rf "$base"
+rm -rf "$base" || {
+  echo "devopsy: could not remove everything in $base: the destroy step must remove what containers own (shared/mnt...)" >&2
+  exit 1
+}
 echo "devopsy: removed $base" >&2
-`, devopsyCall(projectName, []string{"down", "--volumes", "--remove-orphans"}, false), CleanupImage)
+`, strings.Join(args, " "), devopsyCall(projectName, args, false))
 }
 
-// CleanupImage removes files container users own, for DestroyScript.
-const CleanupImage = "busybox:1.37.0"
-
-// InstancesScript prints the project's instances on the server, one per
-// line: the name, a tab, its targets (directories with releases).
-func InstancesScript(t *Target) string {
+// EnvironmentsScript prints the project's environments on the server, one
+// per line, as addresses: <environment> or <instance>/<environment>
+// (directories with releases). Environments with an explicit path live
+// elsewhere and are not listed.
+func EnvironmentsScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + `dir="$root"/` + Quote(t.Project.Name) + `
 [ -d "$dir" ] || exit 0
 for d in "$dir"/*/; do
   d=${d%/}
-  [ -d "$d" ] && [ ! -d "$d/releases" ] || continue
-  targets=
+  [ -d "$d" ] || continue
+  if [ -d "$d/releases" ]; then
+    printf '%s\n' "${d##*/}"
+    continue
+  fi
   for e in "$d"/*/; do
     e=${e%/}
-    [ -d "$e/releases" ] && targets="$targets ${e##*/}"
+    if [ -d "$e/releases" ]; then printf '%s/%s\n' "${d##*/}" "${e##*/}"; fi
   done
-  [ -z "$targets" ] || printf '%s\t%s\n' "${d##*/}" "${targets# }"
 done
 `
 }

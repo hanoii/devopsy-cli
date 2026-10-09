@@ -151,12 +151,12 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		}
 		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
-	case "--instances":
+	case "--environments":
 		if t.Project == nil {
-			return fail("--instances: @" + t.Name + " has no project (a user-level target without source)")
+			return fail("--environments: @" + t.Name + " has no project (a user-level target without source)")
 		}
 		var out bytes.Buffer
-		code, err := remote.SSH(t, remote.InstancesScript(t), bytes.NewReader(nil), &out, false)
+		code, err := remote.SSH(t, remote.EnvironmentsScript(t), bytes.NewReader(nil), &out, false)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -164,13 +164,10 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 			return code
 		}
 		if out.Len() == 0 {
-			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("No instances of %s on %s.", t.Project.Name, t.Host), color)
+			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("No environments of %s on %s.", t.Project.Name, t.Host), color)
 			return 0
 		}
-		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-			inst, targets, _ := strings.Cut(line, "\t")
-			fmt.Printf("%-24s %s\n", inst, targets)
-		}
+		fmt.Print(out.String())
 		return 0
 
 	case "--release", "--rollback":
@@ -399,6 +396,19 @@ and after steps can go around it. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 
+func missingDestroy(t *remote.Target) string {
+	return fmt.Sprintf(`environment %s has no destroy step: define it in %s, for example:
+
+  environments:
+    %s:
+      destroy: destroy
+
+One devopsy command on the server, in the current release, before devopsy
+removes the directory: usually a project command that runs down --volumes
+and removes what its containers own in shared/mnt. See 'devopsy @%s
+--destroy --help'.`, t.Name, cmp.Or(t.File, "the project's config"), cmp.Or(t.Pattern, t.Name), t.Name)
+}
+
 // targetEnv renders a target's env as the release's .devopsy/target.env.
 // commit is the release's git commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
@@ -436,8 +446,8 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 }
 
 // runDestroy implements `devopsy @target --destroy [--yes]`: the
-// environment's containers, volumes and directory on the server. It asks
-// for the target's name unless --yes.
+// environment's destroy step, then its directory on the server. It asks for
+// the target's name unless --yes.
 func runDestroy(t *remote.Target, projectName string, args []string, color bool) int {
 	yes := false
 	for _, a := range args {
@@ -449,20 +459,25 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 			return 1
 		}
 	}
+	steps := remote.StepArgs(t.Destroy)
+	if len(steps) == 0 {
+		cli.Fprint(os.Stderr, red, missingDestroy(t), color)
+		return 1
+	}
 	where := t.Host + ":" + t.Path
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "This removes %s: its containers, volumes, releases and shared/ (data, .env). Type %s to go on: ", where, t.Name)
+		fmt.Fprintf(os.Stderr, "This runs 'devopsy %s' in %s, then removes it: its releases and shared/ (data, .env). Type %s to go on: ", strings.Join(steps, " "), where, t.Name)
 		line, _ := stdinReader.ReadString('\n')
 		if strings.TrimSpace(line) != t.Name {
 			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
 			return 1
 		}
 	}
-	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
+	code, err := remote.SSH(t, remote.DestroyScript(t, projectName, steps), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1
