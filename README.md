@@ -1,93 +1,96 @@
 # devopsy-cli
 
-`devopsy` runs Docker Compose projects locally and on plain servers you own,
-over SSH. A project keeps its deployment in a `.devopsy/` directory; devopsy
-finds it from anywhere inside the project, loads its `.env` and runs compose
-with the right files. One static binary for Linux and macOS (amd64, arm64);
-it needs Docker with the Compose plugin, and `ssh` for servers.
+`devopsy` is a small command-line tool for running Docker Compose projects,
+both on your machine and on servers you own.
 
-## What devopsy does
+Compose is great for describing a project, but leaves you on your own once
+it has to live on a server. devopsy tries to help with a few things there:
 
-devopsy itself is generic: it knows compose, SSH and directories, and no
-proxy, framework, registry or URL.
+- **Releases:** ship a new version with one command, from your machine or
+  CI, and roll back just as easily.
+- **Environments:** production, staging or one per pull request, side by
+  side on the same server without stepping on each other.
+- **Variables per deployment:** set a value once for a project on a
+  server, or only for one install or one environment; the most specific
+  wins. Secrets never touch git or your shell history, and a release that
+  is missing a required value stops before going live and tells you what
+  to set.
 
-- **Releases a compose project to a server,** from your machine or CI:
-  `devopsy @vm1:prod --release`. Each release is a complete directory,
-  switched in at the end and back when its steps fail; `--rollback` returns
-  to the previous one. Data and secrets live outside releases.
-- **Keeps environments apart:** `prod`, `staging`, `pr-123`, each its own
-  compose project, data and name on the server; one codebase installed
-  several times (instances); environments created and destroyed from CI.
-- **Runs the same commands everywhere:** compose's, the project's own
-  (`.devopsy/commands/`), a shell in a container, locally or `@target`.
-- **Sets server variables and secrets** without them ever being arguments
-  (`--vars`), and masks secrets in everything it prints.
-- **Lets projects on a server share facts** through compose labels (roles,
-  exports, imports), without knowing what the facts are.
-- **Explains itself:** `--debug` shows every value and where it came from;
-  `--probe` checks a host's DNS, certificate and HTTPS from where you are.
-
-## What the templates add
-
-Everything about how sites are served is a template's, copied into your
-projects and owned there (see the
-[devopsy workspace](https://github.com/hanoii/devopsy)):
-
-- **[devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik):**
-  one Traefik per server: HTTPS certificates (HTTP-01, acme-dns,
-  Cloudflare), a wildcard domain it exports to projects for automatic URLs,
-  real client IPs behind CDNs, and its `domains` report.
-- **Site templates** ([whoami](https://github.com/hanoii/devopsy-template-whoami),
-  [drupal11](https://github.com/hanoii/devopsy-template-drupal11),
-  [registry](https://github.com/hanoii/devopsy-template-registry)): compose
-  files that route through that Traefik, `deploy` commands, non-root
-  containers, data ownership, generated secrets.
-
-Where they meet:
-
-| | devopsy | the templates |
-| --- | --- | --- |
-| HTTPS | nothing | Traefik and its resolvers; sites' router labels |
-| Automatic URL | names the compose project, imports what the label asks for, runs the `env` capability | Traefik exports its wildcard domain; sites import it, compute their hosts and rule (`env` capability) and use them in their labels |
-| Starting a release | runs the environment's steps (before, prepare, run, after) and checks compose's required variables before going live | `secrets` generates them; `deploy`: pull or build, migrate, start |
-| Data | keeps `shared/mnt` across releases and rollbacks | bind mounts into it, file ownership (init services, entrypoints) |
-| Domains | `--probe`, from outside | Traefik's `domains`: routes, CNAMEs, retries |
-
-Swap a template and devopsy does not notice: another proxy, another way to
-deploy, no proxy at all.
+Everything a project needs lives in a `.devopsy/` directory next to your
+code, so every project works the same way.
 
 ## What it is not
 
 - **Not a platform.** No control plane, dashboard, agent or daemon; nothing
   listens for webhooks. A server is Docker, SSH and this binary.
-- **Not an orchestrator.** No Kubernetes, no Swarm: an environment is one
-  compose project on one server.
+- **Not an orchestrator.** No Kubernetes, no Swarm, no failover: an
+  environment is one compose project on one server.
 - **Not a compose replacement.** It never generates or rewrites compose
   files; plain `docker compose` sees exactly what devopsy runs.
 - **Not a local development tool like DDEV.** No per-framework setup, router
   or snapshots: it runs the compose project you write.
-- **Not a build system, and not tied to a proxy.** Images are built however
-  you like; Traefik is one template, not part of devopsy.
+- **Not a build system.** Images are built however you like: on the server
+  by compose, or in CI and pushed to a registry.
 
-To start: install devopsy, then take a template
-([devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami)
-for the smallest project,
-[devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik)
-for a server's proxy), or run `devopsy --init` in your project.
+> [!NOTE]
+> devopsy is none of these, but it should be possible to build any of them
+> on top of it: its commands, `--debug` output and plain files are meant to
+> be scripted, by you or with an AI agent.
 
-## Opinions
+## Who it is for
+
+People and small teams who deploy different web applications, sometimes
+with complex stacks and their own deploy strategies, to a few servers they
+own, and want what a hosting platform gives (an environment per branch, releases and rollbacks, secrets
+out of git, URLs and certificates) without running or paying for one.
+
+It assumes some technical knowledge: a terminal, SSH, and the basics of
+Docker. It is also a good way to learn how Docker and Docker Compose
+deployments work: devopsy hides nothing, and every step it takes is plain
+compose you can read and run yourself.
+
+It grew out of hosting websites for clients: many projects, some installed
+several times from one codebase, spread over a handful of servers, each
+deployed by a different person or CI job. It fits when:
+
+- you already describe your stack in compose, or are happy to;
+- a project fits on one server per environment;
+- a release that recreates its containers, for a few seconds, is fine;
+- the people deploying have SSH access to the servers.
+
+## Opinionated (as little as possible)
+
+devopsy is small, but not neutral. Its goal is that every project is worked
+on, released and operated the same way, so that moving between projects,
+handing one over, or letting CI or an agent deploy it needs nothing to be
+relearned:
+
+- the same commands in every project: `devopsy up`, `devopsy @prod
+  --release`, `--rollback`, `--log`, `--vars`, `--shell`;
+- the same layout on every server: `<project>/<environment>/` with
+  `releases/`, `current` and `shared/`, so data, secrets and release logs
+  are always in the same place;
+- the same names: compose project, containers and volumes are
+  `<project>[-<instance>]-<environment>`.
+
+To get there it makes choices for you:
 
 - **Compose plus environment variables.** devopsy only adds variables, all
-  visible with `devopsy --env`.
+  visible with `devopsy --env`. Anything else is compose's.
 - **Push over SSH, never pull.** The server needs no access to the
-  repository. Locally devopsy needs `ssh`; on the server `devopsy`, `tar`
-  and `flock`.
+  repository: no deploy keys, tokens or webhooks. Locally devopsy needs
+  `ssh`; on the server `devopsy`, `tar` and `flock`.
 - **Releases are complete directories,** run through a `current` symlink;
-  `shared/` keeps data and secrets across them.
+  `shared/` keeps data and secrets across them. A release never changes a
+  live tree in place.
 - **Steps are explicit.** `--release` and `--rollback` refuse without the
   steps the environment names.
 - **Project behavior lives in the project,** as commands in
   `.devopsy/commands/`, not as devopsy features.
+- **Capabilities for common needs.** Some conveniences are useful to most
+  projects but depend on each one to get right. devopsy defines them as
+  small contracts, and a project that wants one implements it in
+  `.devopsy/capabilities/`.
 - **Deployment facts stay out of the project:** which servers and instances
   exist is decided by the command, variables or aliases, never the
   project's config.
@@ -95,11 +98,67 @@ for a server's proxy), or run `devopsy --init` in your project.
   is always a project command, then a compose command.
 - **Secrets stay out of sight:** masked in output, never in arguments.
 
-Practices like container UIDs, certificate resolvers or where data lives are
-recommendations: see the [devopsy workspace](https://github.com/hanoii/devopsy)
-and the templates.
+Everything else is yours to make (an AI skill to help is coming soon).
+
+## Templates
+
+I created these templates as starting points, and as examples of how to work
+with devopsy. Together they set up a stack for deploying complex web
+applications, with an environment per branch or pull request, from your own
+repository and in relatively little time.
+
+They are GitHub template repositories: start a project from one ("Use this
+template"), or clone it and keep it as a remote to pull its changes when you
+choose, then adapt it to your needs. They define one particular way of
+doing things; devopsy enforces none of it, beyond the labels they use for
+its features.
+
+- [devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik):
+  the reverse proxy the others route through, one per server.
+  - Automatic HTTPS certificates, including before DNS points to the server.
+  - A wildcard domain, so every environment gets its own URL.
+  - Real visitor IPs behind CDNs and other proxies.
+  - A `domains` report: DNS, certificates and what to do next.
+  - Cloudflare aware: its IP ranges, automatic DNS challenges with an API
+    token, and proxied domains.
+- [devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami):
+  the smallest project.
+  - Try releases, rollbacks and per pull request environments.
+  - Try domains and certificates end to end.
+- [devopsy-template-drupal11](https://github.com/hanoii/devopsy-template-drupal11):
+  a Drupal 11 site with MariaDB 11.
+  - Built on the server: no registry needed.
+  - Read-only code at runtime, and non-root containers.
+  - Secrets generated on the first release.
+  - Drush and a shell in the app container, as the app user.
+- [devopsy-template-registry](https://github.com/hanoii/devopsy-template-registry):
+  a private Docker registry with a user and password.
+  - For projects that build images in CI and pull them on release.
+  - A `credentials` command for `docker login`.
+
+---
+
+> [!WARNING]
+> Work in progress. What follows is the longer explanation, from getting
+> started to every feature in detail, and is still being rewritten.
+
+## Getting started
+
+1. Install devopsy on your machine (below).
+2. Prepare a server: Docker, a `devopsy` deploy user in the docker group,
+   and devopsy ([devopsy-server](https://github.com/hanoii/devopsy-server)
+   does all three on Debian 13).
+3. Release [devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik)
+   to it, if your projects serve websites.
+4. Start a project from a template
+   ([devopsy-template-whoami](https://github.com/hanoii/devopsy-template-whoami)
+   is the smallest), or run `devopsy --init` in an existing compose project.
+5. `devopsy up -d` locally, then `devopsy @<server>:prod --release`.
 
 ## Install
+
+One static binary for Linux and macOS (amd64, arm64). It needs Docker
+with the Compose plugin, and `ssh` for servers.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
