@@ -43,7 +43,7 @@ var Capabilities = []Capability{
 				Name:   "compute",
 				Usage:  "compute",
 				Does:   "gets the project's environment and prints .env lines; devopsy sets those not set yet (the lowest precedence) and devopsy --env shows them. Runs before every command, so keep it fast; devopsy run inside it skips it",
-				Output: "SITE_HOSTS='shop-prod.vm1.example.com example.org'",
+				Output: "SITE_URL='https://shop-prod.vm1.example.com'",
 			},
 		},
 	},
