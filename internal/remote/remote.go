@@ -384,18 +384,6 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | whil
   [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
 done
 `, t.Keep)
-	s += `vars=$(cd "$base/current" && ` + devopsyCall(projectName, []string{"--env"}, false) + ` 2>/dev/null) || vars=
-host=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_WILDCARD_HOST='\(.*\)'$/\1/p")
-domains=$(printf '%s\n' "$vars" | sed -n "s/^DEVOPSY_DOMAINS='\(.*\)'$/\1/p" | tr ',' ' ')
-set -- $domains
-if [ -n "$host" ]; then
-  echo "devopsy: https://$host"
-elif [ $# -gt 0 ]; then
-  echo "devopsy: https://$1"
-else
-  echo "devopsy: no URL: no wildcard domain or domains (DEVOPSY_WILDCARD_DOMAIN, DEVOPSY_DOMAINS)"
-fi
-`
 	return s
 }
 

@@ -9,8 +9,7 @@ it needs Docker with the Compose plugin, and `ssh` for servers.
 ## What devopsy does
 
 devopsy itself is generic: it knows compose, SSH and directories, and no
-proxy, framework or registry (its one nod to Traefik is `DEVOPSY_HOST_RULE`,
-a rule written as a plain variable that projects are free to ignore).
+proxy, framework, registry or URL.
 
 - **Releases a compose project to a server,** from your machine or CI:
   `devopsy @vm1:prod --release`. Each release is a complete directory,
@@ -49,7 +48,7 @@ Where they meet:
 | | devopsy | the templates |
 | --- | --- | --- |
 | HTTPS | nothing | Traefik and its resolvers; sites' router labels |
-| Automatic URL | imports the server's wildcard domain, computes `DEVOPSY_WILDCARD_HOST` and `DEVOPSY_HOST_RULE` | Traefik exports the domain; sites use the rule in their labels |
+| Automatic URL | names the compose project, imports what the label asks for, runs the `env` capability | Traefik exports its wildcard domain; sites import it, compute their hosts and rule (`env` capability) and use them in their labels |
 | Starting a release | runs the environment's `remote:` step | `deploy`: pull or build, migrate, start |
 | Data | keeps `shared/mnt` across releases and rollbacks | bind mounts into it, file ownership (init services, entrypoints) |
 | Domains | `--probe`, from outside | Traefik's `domains`: routes, CNAMEs, retries |
@@ -165,29 +164,19 @@ A command can wrap a compose command of the same name: `commands/up` calling
 as in compose.
 
 **Variables devopsy adds**, for compose files and commands:
-
-- `DEVOPSY_PROJECT_NAME`: the compose project name.
-- `DEVOPSY_WILDCARD_HOST`: `<project name>.<DEVOPSY_WILDCARD_DOMAIN>`, the
-  automatic URL when the server has a wildcard domain (see Roles, exports
-  and imports); `<name>.localhost` locally; none in a release without one.
-- `DEVOPSY_HOST_RULE`: a Traefik rule for that host plus `DEVOPSY_DOMAINS`
-  (space or comma separated), unset without hosts, so a label's default
-  applies:
-
-  ```yaml
-  - traefik.http.routers.${DEVOPSY_PROJECT_NAME:-app}.rule=${DEVOPSY_HOST_RULE:-HostRegexp(`^app\.localhost$`)}
-  ```
-
-  A `HostRegexp` fallback asks Traefik for no certificate.
+`COMPOSE_PROJECT_NAME` (always set, see below), `DEVOPSY_PROJECT_DIR`, and
+whatever the project's `env` capability computes (see Capabilities), which
+is how projects derive values like their hosts.
 
 To run plain compose with the same values: `devopsy --env > /tmp/env &&
 docker compose -f .devopsy/compose.yaml --env-file /tmp/env config` (a file:
 compose reads `--env-file` more than once).
 
-**Project name:** compose's top-level `name:` if set, else the directory
-containing `.devopsy/`, normalized; `COMPOSE_PROJECT_NAME` overrides both.
-On servers it is `<project>[-<instance>]-<environment>` instead (below), so
-released projects leave `name:` out.
+**Project name:** devopsy always sets `COMPOSE_PROJECT_NAME`: the config's
+`project:`, else compose's top-level `name:`, else the directory containing
+`.devopsy/`, normalized. On servers it is
+`<project>[-<instance>]-<environment>` (below), whatever `name:` says. Your
+own `COMPOSE_PROJECT_NAME` wins.
 
 **`--shell`** opens bash (or sh) in the service named, else the one labeled
 `devopsy.shell=true`, else the only one running, as `devopsy.shell.user`
@@ -286,7 +275,8 @@ one the server lacks asks before creating it (`--release --yes` in CI).
 
 On the server, an environment lives in `<project>/[<instance>/]<environment>`
 under the server's release root, and its compose project, containers,
-volumes and wildcard URL are named `<project>[-<instance>]-<environment>`.
+volumes are named `<project>[-<instance>]-<environment>`
+(`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
 ### Releases
 
@@ -430,8 +420,17 @@ the line to run, like the Traefik template's `domains`.
 
 Interfaces devopsy defines and a project implements, as executables in
 `.devopsy/capabilities/<name>/<action>`, run only by devopsy, in the
-project's directory with its environment. One today:
+project's directory with its environment (`devopsy --debug capabilities`
+lists them with their contracts):
 
+- **env:** `compute` runs before every devopsy command in the project
+  (not help or completion), locally and on servers, and prints `.env`
+  lines; devopsy sets those not set yet, at the lowest precedence, and
+  `--env` shows them. For values a project derives from others, like the
+  site templates' hosts and Traefik rule from `COMPOSE_PROJECT_NAME`, the
+  imported `DEVOPSY_WILDCARD_DOMAIN` and their own `DEVOPSY_DOMAINS`. It
+  runs every time, so keep it fast; a devopsy it calls skips it
+  (`DEVOPSY_ENV_COMPUTE` is set). A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
 

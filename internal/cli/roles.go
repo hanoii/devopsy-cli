@@ -311,7 +311,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	self, _ := p.env.Lookup("DEVOPSY_PROJECT_NAME")
+	self, _ := p.env.Lookup("COMPOSE_PROJECT_NAME")
 	var said []string
 	host, err := Running()
 	if err != nil {

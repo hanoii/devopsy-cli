@@ -81,27 +81,18 @@ func runRemote(cwd string, args []string, color, verbose bool) int {
 		t.User = false
 	}
 
-	// Without a top-level name, compose would name the project after the
-	// release directory, so it is <project>[-<instance>]-<target>. A
-	// user-level target without source belongs to no local project: the
-	// server's own files name it (target.env in releases, the directory
-	// otherwise). A nested devopsy (DEVOPSY_PROJECT_DIR set: a project
+	// The compose project: <project>[-<instance>]-<environment>, whatever
+	// compose.yaml's name: says. A user-level target without source belongs
+	// to no local project: the server's own files name it (target.env in
+	// releases). A nested devopsy (DEVOPSY_PROJECT_DIR set: a project
 	// command, or a release step, calling devopsy @target) inherits the local
 	// project's COMPOSE_PROJECT_NAME, which says nothing about the target:
 	// ignore it.
 	projectName := ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
-	} else if t.Project != nil && t.Project.Dir == "" {
-		projectName = t.ComposeName()
 	} else if t.Project != nil {
-		raw, err := cli.TopLevelName(filepath.Join(t.Project.Dir, "compose.yaml"))
-		if err != nil {
-			return fail(err.Error())
-		}
-		if raw == "" {
-			projectName = cli.NormalizeProjectName(t.ComposeName())
-		}
+		projectName = t.ComposeName()
 	}
 
 	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
