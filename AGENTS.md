@@ -40,7 +40,9 @@ repositories fit together and the open ideas.
   notices and errors, the server scripts' `echo` lines included (`>&2`), so
   pipes stay clean and the two never interleave out of order. Anything that
   can contain arguments or scripts goes through `cli.Secrets` (values from
-  `.env`, secret-named variables).
+  `.env`, secret-named variables). Scripts are for `-vv`: an SSH session's,
+  and an argument of several lines in the "Running" notice (`Plan.running`),
+  which otherwise only counts its lines.
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
   a word is a project command, else a compose command (`ComposeCommands`:
   compose's own completion, cached, refreshed when a word is missing), else

@@ -40,6 +40,8 @@ type Plan struct {
 	// Notice is printed to stderr before executing, if not empty. Secrets
 	// are masked.
 	Notice string
+	// NoticeFull replaces Notice with -vv, when Notice leaves a script out.
+	NoticeFull string
 	// Verbose lines are printed to stderr before Notice with -v.
 	// Secrets are masked.
 	Verbose []string
@@ -543,7 +545,8 @@ Usage:
 
 devopsy:
   -v, -vv                before anything else: also what devopsy found and
-                         runs, and SSH sessions; -vv also their scripts
+                         runs, and SSH sessions; -vv also scripts, theirs
+                         and the ones in a command's arguments
                          (DEVOPSY_VERBOSE=1 or 2 does the same)
   --version              devopsy's, docker's and docker compose's versions
   --upgrade [v]          replace devopsy with the latest release, or v
@@ -757,7 +760,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		// commands and the check for compose's commands.
 		plan := p.compose(args[1:])
 		secrets := NewSecrets(env, dotenvFile)
-		plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+		plan.running(secrets)
 		plan.Verbose = maskAll(secrets, verbose)
 		return plan, nil
 	}
@@ -786,9 +789,28 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 
 	plan := p.compose(args)
-	plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+	plan.running(secrets)
 	plan.Verbose = maskAll(secrets, verbose)
 	return plan, nil
+}
+
+// running sets the plan's notice: the command line, with an argument of
+// several lines (a script, as in `run ... sh -c '<script>'`) only counted;
+// -vv shows it whole, as it does the scripts of SSH sessions.
+func (plan *Plan) running(secrets *Secrets) {
+	short := make([]string, len(plan.Args))
+	script := false
+	for i, a := range plan.Args {
+		short[i] = a
+		if n := strings.Count(strings.TrimSpace(a), "\n"); n > 0 {
+			short[i] = fmt.Sprintf("<script: %d lines>", n+1)
+			script = true
+		}
+	}
+	plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(short, " ")))
+	if script {
+		plan.NoticeFull = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+	}
 }
 
 // capabilityName is a capability's or action's name: a file name, never a

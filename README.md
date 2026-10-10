@@ -262,7 +262,10 @@ through the environment, not arguments (`devopsy exec -T db sh -c
 
 `-v` (or `DEVOPSY_VERBOSE=1`) also prints the files loaded and, for
 targets, each SSH session; `-vv` (`DEVOPSY_VERBOSE=2`) also the script each
-session runs. It carries over to nested and server-side devopsy.
+session runs. It carries over to nested and server-side devopsy. A script
+in a command's arguments (`devopsy run --rm tool sh -c '<several lines>'`)
+shows as `<script: 12 lines>` in what devopsy says it runs, whole with
+`-vv`.
 
 ```sh
 devopsy --debug                       # versions, the project, environments, aliases, labels
