@@ -268,9 +268,20 @@ session runs. It carries over to nested and server-side devopsy.
 devopsy --debug                       # versions, the project, environments, aliases, labels
 devopsy --debug environments [name or target] [--yaml]   # computed, with each value's origin
 devopsy --debug schema [--user]       # every config key, commented
+devopsy --debug env [--show] [VAR...]  # each variable: what sets it, what that overrides
 devopsy --debug labels | imports | capabilities
 devopsy @vm1:prod --debug             # the same, as the server sees it
+devopsy @vm1:prod --debug env         # the release's variables, traced there
 ```
+
+`--debug env` traces the variables of `--env`, or the ones named: the
+definition in use first, then every overridden one with its value, by
+precedence. It tells the caller's environment, each `.env` file (on servers
+with what it links to, like `shared/.env`), `target.env` and what the
+release imported into it, what devopsy sets itself and what the `env`
+capability computed. Secrets are masked as above, unless `--show`. For a
+target, the caller's environment is the server's SSH session plus the
+`COMPOSE_PROJECT_NAME` your devopsy sends.
 
 Help and `--debug` are in color on a terminal, unless `NO_COLOR=1`.
 

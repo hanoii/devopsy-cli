@@ -196,8 +196,11 @@ repositories fit together and the open ideas.
   with `_describe` stubbed, fish); CI installs zsh and fish. bash splits
   words at `:`, so its script rebuilds them from `COMP_LINE`.
 - **`--debug`** explains what devopsy sees; targets carry `From` (each
-  value's origin). The capability catalog (`cli.Capabilities`) lives with
-  the code that calls it.
+  value's origin), and `Env` records every definition of a variable as it
+  loads (`EnvDef`, `TraceEnv`: `--debug env`), so the trace is the loading
+  itself, not a second implementation of its precedence. A new source of
+  variables records its definitions too. The capability catalog
+  (`cli.Capabilities`) lives with the code that calls it.
 - **Capabilities** (`--capability <name> <action>`, hidden): executables in
   `.devopsy/capabilities/`, run in the project's own environment and SSH
   session, so no other project's variables leak in. Define one only when a
