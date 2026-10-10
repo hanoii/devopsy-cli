@@ -125,11 +125,24 @@ func updateNotice(color bool) {
 	if !update.Newer(latest, version) {
 		return
 	}
-	// Root owns the binary on servers: say so before anyone tries.
-	const writable = 2 // W_OK
 	cmd := "devopsy --upgrade"
-	if exe, err := os.Executable(); err == nil && syscall.Access(filepath.Dir(exe), writable) != nil {
-		cmd = "sudo " + cmd
+	if exe, err := os.Executable(); err == nil {
+		cmd = upgradeCommand(exe)
 	}
 	cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy %s is available (this is %s): %s", strings.TrimPrefix(latest, "v"), version, cmd), color)
+}
+
+// upgradeCommand is what upgrades the binary at exe: with sudo when its
+// directory is someone else's, said before anyone tries. Links are followed,
+// as --upgrade does: on servers /usr/local/bin/devopsy links to the deploy
+// user's own copy.
+func upgradeCommand(exe string) string {
+	const writable = 2 // W_OK
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	if syscall.Access(filepath.Dir(exe), writable) != nil {
+		return "sudo devopsy --upgrade"
+	}
+	return "devopsy --upgrade"
 }

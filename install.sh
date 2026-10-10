@@ -74,7 +74,7 @@ mkdir -p "$dir"
 cp "$tmp/devopsy" "$dir/.devopsy.new"
 chmod 755 "$dir/.devopsy.new"
 mv "$dir/.devopsy.new" "$dir/devopsy"
-echo "Installed $("$dir/devopsy" version | head -n 1) to $dir/devopsy"
+echo "Installed $("$dir/devopsy" --version | head -n 1) to $dir/devopsy"
 
 case ":$PATH:" in
   *":$dir:"*) ;;
