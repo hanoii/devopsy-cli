@@ -167,7 +167,8 @@ curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh 
 It installs the latest release, checksum verified, to `/usr/local/bin` when
 it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
-binary (with `sudo` when root owns it, as on servers). At a terminal it
+binary (with `sudo` when its directory is not yours; on servers set up
+with devopsy-server it is the deploy user's). At a terminal it
 checks for a new release once a day in the background and says so; never in
 CI, and `DEVOPSY_NO_UPDATE_CHECK=1` turns it off.
 
