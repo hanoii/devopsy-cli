@@ -92,6 +92,29 @@ func TestBuildComposePassthrough(t *testing.T) {
 	}
 }
 
+// A script in the arguments is only counted in the notice; -vv has it whole.
+func TestBuildNoticeScript(t *testing.T) {
+	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
+	script := "\n  echo one\n  SECRETVALUE123 two\n"
+	plan, err := build(root, []string{"run", "--rm", "web", "sh", "-c", script, "sh", "x"}, []string{"API_TOKEN=SECRETVALUE123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Args[len(plan.Args)-3] != script {
+		t.Fatalf("args changed: %q", plan.Args)
+	}
+	if !strings.HasSuffix(plan.Notice, "run --rm web sh -c <script: 2 lines> sh x'...") {
+		t.Fatalf("notice %s", plan.Notice)
+	}
+	if !strings.Contains(plan.NoticeFull, "echo one\n  *** two") {
+		t.Fatalf("full notice %q", plan.NoticeFull)
+	}
+	plan, err = build(root, []string{"ps"}, nil)
+	if err != nil || plan.NoticeFull != "" || !strings.HasSuffix(plan.Notice, " ps'...") {
+		t.Fatalf("plain notice %q, full %q (%v)", plan.Notice, plan.NoticeFull, err)
+	}
+}
+
 func TestBuildOverrideFile(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":         minimalCompose,

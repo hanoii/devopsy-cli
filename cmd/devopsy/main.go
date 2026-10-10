@@ -141,8 +141,11 @@ func run() int {
 			cli.Fprint(os.Stderr, "", line, color)
 		}
 	}
-	if plan.Notice != "" {
-		cli.Fprint(os.Stderr, cyan, plan.Notice, color)
+	if notice := plan.Notice; notice != "" {
+		if verboseLevel > 1 && plan.NoticeFull != "" {
+			notice = plan.NoticeFull
+		}
+		cli.Fprint(os.Stderr, cyan, notice, color)
 	}
 	path := plan.Path
 	if path == "docker" {
