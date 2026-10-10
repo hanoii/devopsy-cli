@@ -83,17 +83,59 @@ type Env struct {
 	// origin is the first dotenv file that defines a key, even when the
 	// caller's environment set it first.
 	origin map[string]string
+	// caller is the environment devopsy was called with; first and defs are
+	// every definition devopsy saw of a key, for TraceEnv: first the ones
+	// that win over the caller's, defs the others, by precedence.
+	caller map[string]string
+	first  map[string][]EnvDef
+	defs   map[string][]EnvDef
+}
+
+// The kinds of EnvDef.
+const (
+	EnvCaller   = "caller"
+	EnvFile     = "file"
+	EnvImported = "imported"
+	EnvDevopsy  = "devopsy"
+	EnvComputed = "computed"
+)
+
+// EnvDef is one place a variable is defined.
+type EnvDef struct {
+	Kind string
+	// Source is the file (EnvFile, EnvImported, EnvComputed), or what
+	// devopsy took the value from (EnvDevopsy).
+	Source string
+	Value  string
+}
+
+// EnvVar is a variable and its definitions by precedence: the first one is
+// its value, the others are overridden. None: not set.
+type EnvVar struct {
+	Name string
+	Defs []EnvDef
+}
+
+// trace returns k's definitions by precedence.
+func (e *Env) trace(k string) []EnvDef {
+	out := append([]EnvDef{}, e.first[k]...)
+	if v, ok := e.caller[k]; ok {
+		out = append(out, EnvDef{Kind: EnvCaller, Value: v})
+	}
+	return append(out, e.defs[k]...)
 }
 
 // NewEnv builds an Env from os.Environ-style entries.
 func NewEnv(environ []string) *Env {
-	e := &Env{values: map[string]string{}, marked: map[string]bool{}, origin: map[string]string{}}
+	e := &Env{values: map[string]string{}, marked: map[string]bool{}, origin: map[string]string{},
+		caller: map[string]string{}, first: map[string][]EnvDef{}, defs: map[string][]EnvDef{}}
 	for _, kv := range environ {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
 			continue
 		}
 		e.Set(k, v)
+		e.caller[k] = v
 	}
 	return e
 }
@@ -147,6 +189,15 @@ func LoadDotenv(env *Env, file string) error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", file, err)}
 	}
+	// A release's target.env ends with what it imported.
+	imported := map[string]string{}
+	if filepath.Base(file) == remote.TargetEnvFile {
+		if data, err := os.ReadFile(file); err == nil {
+			if _, after, ok := strings.Cut(string(data), ImportedMarker); ok {
+				imported, _ = dotenv.UnmarshalWithLookup(after, nil)
+			}
+		}
+	}
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
@@ -157,6 +208,11 @@ func LoadDotenv(env *Env, file string) error {
 			env.Set(k, vars[k])
 		}
 		env.Mark(k)
+		kind := EnvFile
+		if _, ok := imported[k]; ok {
+			kind = EnvImported
+		}
+		env.defs[k] = append(env.defs[k], EnvDef{Kind: kind, Source: file, Value: vars[k]})
 		if _, ok := env.origin[k]; !ok {
 			env.origin[k] = file
 		}
@@ -254,7 +310,7 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
   --vars [--project | --instance] [get | set | unset KEY...]
                          the server's variables (shared/.env)
   --env                  the variables devopsy loads and computes there
-  --debug [capabilities | labels | imports]
+  --debug [env | capabilities | labels | imports]
                          what devopsy sees there
   --ssh-config           a ~/.ssh/config block for the target's host
   --destroy [--yes]      remove the environment, data included
@@ -345,10 +401,13 @@ devopsy --env prints them there: shared/.env, the instance's and project's
 .env, target.env and the project's env capability (capabilities/env/compute,
 from the release on the server, not your checkout). Secrets included.
 `,
-	"--debug": `Usage: devopsy @<target> --debug [capabilities | labels | imports]
+	"--debug": `Usage: devopsy @<target> --debug [env [--show] [VAR...] | capabilities | labels | imports]
 
 devopsy --debug, run in the current release on the server: without a topic,
-the server's devopsy and docker versions and the project; capabilities, the
+the server's devopsy and docker versions and the project; env, where each
+variable of --env comes from there (shared/.env, the instance's and
+project's .env, target.env and what it imported, the env capability) and
+what each of those overrides, secrets masked unless --show; capabilities, the
 release's capabilities and their contracts; labels, the devopsy labels in
 its compose files; imports, the imports of every project running on that
 host, marking those whose release holds an outdated value as STALE.
@@ -457,6 +516,11 @@ environments and aliases. Topics:
   environments [name] [--yaml]
                  environments and aliases with where each value comes from
                  (any address resolved)
+  env [--show] [VAR...]
+                 the variables devopsy loads and computes (or the ones
+                 named), with every place that defines each: the one in
+                 use first, then the overridden ones. Secrets masked
+                 unless --show
   capabilities   the capabilities devopsy calls and their contracts
   labels         the devopsy labels in the compose files
   imports        the imports of every project running on this host
@@ -553,6 +617,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 
 	env := NewEnv(environ)
 	env.Set("DEVOPSY_PROJECT_DIR", projectDir)
+	env.first["DEVOPSY_PROJECT_DIR"] = []EnvDef{{Kind: EnvDevopsy, Source: "where it found " + ProjectDirName + "/", Value: projectDir}}
 	verbose := []string{"devopsy: project " + projectDir}
 	load := func(file string) error {
 		if err := LoadDotenv(env, file); err != nil {
@@ -589,9 +654,11 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		if err != nil {
 			return nil, &ExitError{Code: 1, Msg: err.Error()}
 		}
+		from := "project: in " + filepath.Join(projectDir, remote.ConfigFile)
 		if project != nil && project.Name != "" {
 			name = project.Name
 		} else {
+			from = "name: in " + composeFile
 			raw, err := TopLevelName(composeFile)
 			if err != nil {
 				return nil, err
@@ -601,13 +668,45 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 			}
 			if name == "" {
 				name = filepath.Base(filepath.Dir(projectDir))
+				from = "the name of the directory with " + ProjectDirName + "/"
 			}
 		}
 		env.Set("COMPOSE_PROJECT_NAME", NormalizeProjectName(name))
+		env.first["COMPOSE_PROJECT_NAME"] = []EnvDef{{Kind: EnvDevopsy, Source: from, Value: NormalizeProjectName(name)}}
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
 	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose}, nil
+}
+
+// TraceEnv explains the project's environment as every devopsy command
+// gets it, for `devopsy --debug env`: the variables devopsy loads and
+// computes (what --env prints), or the ones named, each with every place
+// that defines it. The Secrets mask what devopsy never prints.
+func TraceEnv(cwd string, environ, names []string) (string, []EnvVar, *Secrets, error) {
+	p, err := loadProject(cwd, environ)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if err := p.computeEnv(); err != nil {
+		return "", nil, nil, err
+	}
+	if len(names) == 0 {
+		names = p.env.Marked()
+	}
+	secrets := NewSecrets(p.env, p.dotenvFile)
+	var vars []EnvVar
+	for _, k := range names {
+		defs := p.env.trace(k)
+		// Overridden values are secrets like the ones in use.
+		for _, d := range defs {
+			if d.Source == p.dotenvFile || secretName.MatchString(k) {
+				secrets.Add(d.Value)
+			}
+		}
+		vars = append(vars, EnvVar{Name: k, Defs: defs})
+	}
+	return p.dir, vars, secrets, nil
 }
 
 // Build decides what to run for args (without argv[0]), from cwd and the

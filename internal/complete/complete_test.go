@@ -91,7 +91,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "--vars", "set", "TOKEN", ""}, []string{"USER_NAME"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--shell", ""}, []string{"web"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--shell-host", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--debug", ""}, []string{"capabilities", "labels", "imports"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--debug", ""}, []string{"env", "capabilities", "labels", "imports"}, nil, DirectiveNoFileComp},
 		{[]string{"--shell", "w"}, []string{"web"}, nil, DirectiveNoFileComp},
 		{[]string{"--sh"}, []string{"--shell"}, []string{"--sh"}, DirectiveNoFileComp},
 		{[]string{"@prod", "logs", ""}, nil, []string{"logs", ""}, 0},

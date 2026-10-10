@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -602,6 +603,50 @@ func TestDebugTargets(t *testing.T) {
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
 	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") {
 		t.Errorf("capabilities (%d):\n%s", code, out)
+	}
+}
+
+// --debug env traces each variable: what sets it and what that overrides.
+func TestDebugEnv(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dot := filepath.Join(tmp, "current", ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
+	write(t, filepath.Join(tmp, "shared", ".env"), "LEVEL=shared\nDB_PASSWORD=hunter2hunter2\nCALLED=file\n", 0o644)
+	if err := os.Symlink(filepath.Join(tmp, "shared", ".env"), filepath.Join(dot, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dot, "project.env"), "LEVEL=project\nDB_PASSWORD=oldoldoldold\n", 0o644)
+	write(t, filepath.Join(dot, "target.env"), "COMPOSE_PROJECT_NAME='shop-prod'\nLEVEL=target\n"+cli.ImportedMarker+"\nDEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", 0o644)
+	write(t, filepath.Join(dot, "capabilities", "env", "compute"), "#!/bin/sh\necho \"SITE_URL='https://$COMPOSE_PROJECT_NAME.$DEVOPSY_WILDCARD_DOMAIN'\"\necho LEVEL=computed\n", 0o755)
+	dir := filepath.Join(tmp, "current")
+	out, code := runDevopsy(t, dir, []string{"CALLED=caller"}, "--debug", "env")
+	for _, want := range []string{
+		"COMPOSE_PROJECT_NAME='shop-prod'\n  set by      target.env\n",
+		"DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n  set by      target.env, imported at release\n",
+		"SITE_URL='https://shop-prod.vm1.example.com'\n  set by      capabilities/env/compute, computed\n",
+		"LEVEL='shared'\n  set by      .env (-> " + filepath.Join(tmp, "shared", ".env") + ")\n  overridden  project.env: 'project'\n  overridden  target.env: 'target'\n  overridden  capabilities/env/compute, computed: 'computed'\n",
+		"CALLED='caller'\n  set by      the caller's environment\n  overridden  .env (",
+		"DB_PASSWORD='***'\n",
+		"overridden  project.env: '***'\n",
+		"DEVOPSY_PROJECT_DIR='" + dot + "'\n  set by      devopsy, from where it found .devopsy/\n",
+	} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Errorf("missing %q (%d):\n%s", want, code, out)
+		}
+	}
+	out, code = runDevopsy(t, dir, nil, "--debug", "env", "--show", "DB_PASSWORD", "NOPE", "PATH")
+	if code != 0 || !strings.Contains(out, "DB_PASSWORD='hunter2hunter2'\n") || !strings.Contains(out, "project.env: 'oldoldoldold'") ||
+		!strings.Contains(out, "NOPE not set\n") || !strings.Contains(out, "\n  set by      the caller's environment\n") || strings.Contains(out, "LEVEL") {
+		t.Errorf("--show (%d):\n%s", code, out)
+	}
+	// Without release files, devopsy names the compose project itself.
+	write(t, filepath.Join(tmp, "app", ".devopsy", "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), nil, "--debug", "env")
+	if code != 0 || !strings.Contains(out, "COMPOSE_PROJECT_NAME='app'\n  set by      devopsy, from the name of the directory with .devopsy/\n") {
+		t.Errorf("local (%d):\n%s", code, out)
 	}
 }
 

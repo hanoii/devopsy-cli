@@ -165,7 +165,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2:
-			for _, t := range []string{"environments", "capabilities", "labels", "imports", "schema"} {
+			for _, t := range []string{"environments", "env", "capabilities", "labels", "imports", "schema"} {
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
 		case len(words) == 3 && words[1] == "environments":
@@ -284,7 +284,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		// schema are about local config.
 		if len(words) == 2 {
 			r := Result{Directive: DirectiveNoFileComp}
-			for _, t := range []string{"capabilities", "labels", "imports"} {
+			for _, t := range []string{"env", "capabilities", "labels", "imports"} {
 				r.Candidates = append(r.Candidates, Candidate{Value: t})
 			}
 			return filter(r, cur)

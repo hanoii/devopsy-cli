@@ -18,10 +18,10 @@ import (
 )
 
 // debugTopics are what `devopsy --debug <topic>` explains.
-var debugTopics = []string{"environments", "capabilities", "labels", "imports", "schema"}
+var debugTopics = []string{"environments", "env", "capabilities", "labels", "imports", "schema"}
 
 // runDebug implements `devopsy --debug [environments [name] [--yaml] |
-// capabilities | labels | imports]`: what devopsy sees and computes, to explain its
+// env [--show] [VAR...] | capabilities | labels | imports]`: what devopsy sees and computes, to explain its
 // behavior. On a server (`devopsy @<target> --debug`), the server's view.
 func runDebug(cwd string, args []string, color bool) int {
 	projectDir, _ := cli.FindProjectDir(cwd)
@@ -44,6 +44,8 @@ func runDebug(cwd string, args []string, color bool) int {
 			}
 		}
 		return debugTargets(st, projectDir, name, asYAML, color)
+	case "env":
+		return debugEnv(st, cwd, args[1:], color)
 	case "capabilities":
 		debugCapabilities(st, projectDir)
 	case "labels":
@@ -136,7 +138,7 @@ func debugSummary(st style, projectDir string) {
 			field("devopsy labels", orNone(labelList(labels)))
 		}
 	}
-	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | capabilities | labels | imports | schema [--user]\n", st.dim("More:"))
+	fmt.Printf("\n%s devopsy --debug environments [name or address] [--yaml] | env [--show] [VAR...] | capabilities | labels | imports | schema [--user]\n", st.dim("More:"))
 }
 
 // yamlTarget is an environment as devopsy uses it, for --debug environments --yaml.
@@ -305,6 +307,76 @@ func steps(s *remote.Steps) string {
 		parts = append(parts, "after: "+phase(s.After))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// debugEnv traces the project's variables: each with the place that sets it
+// and the ones it overrides, by precedence.
+func debugEnv(st style, cwd string, args []string, color bool) int {
+	show := false
+	var names []string
+	for _, a := range args {
+		switch {
+		case a == "--show":
+			show = true
+		case strings.HasPrefix(a, "-"):
+			cli.Fprint(os.Stderr, red, "usage: devopsy --debug env [--show] [VAR...]", color)
+			return 1
+		default:
+			names = append(names, a)
+		}
+	}
+	projectDir, vars, secrets, err := cli.TraceEnv(cwd, os.Environ(), names)
+	if err != nil {
+		cli.Fprint(os.Stderr, red, err.Error(), color)
+		return 1
+	}
+	if show {
+		secrets = nil
+	}
+	// Files as the project names them; on servers most are links.
+	file := func(path string) string {
+		name := path
+		if rel, err := filepath.Rel(projectDir, path); err == nil && !strings.HasPrefix(rel, "..") {
+			name = rel
+		}
+		if real, err := filepath.EvalSymlinks(path); err == nil && real != path {
+			name += " " + st.dim("(-> "+tilde(real)+")")
+		}
+		return name
+	}
+	source := func(d cli.EnvDef) string {
+		switch d.Kind {
+		case cli.EnvCaller:
+			return "the caller's environment"
+		case cli.EnvImported:
+			return file(d.Source) + ", imported at release"
+		case cli.EnvDevopsy:
+			return "devopsy, from " + tilde(d.Source)
+		case cli.EnvComputed:
+			return file(d.Source) + ", computed"
+		}
+		return file(d.Source)
+	}
+	fmt.Println(st.dim("First wins: the caller's environment, .env, instance.env, project.env, target.env, the env capability."))
+	for _, v := range vars {
+		if len(v.Defs) == 0 {
+			fmt.Printf("%s %s\n", st.name(v.Name), st.warn("not set"))
+			continue
+		}
+		// Masked before quoting: quoting can escape a secret out of sight.
+		quoted := func(value string) string {
+			return strings.TrimPrefix(cli.DotenvLine("", secrets.Mask(value)), "=")
+		}
+		fmt.Printf("%s=%s\n", st.name(v.Name), quoted(v.Defs[0].Value))
+		for i, d := range v.Defs {
+			if i == 0 {
+				fmt.Printf("  %s  %s\n", st.ok("set by    "), source(d))
+				continue
+			}
+			fmt.Printf("  %s  %s: %s\n", st.warn("overridden"), source(d), quoted(d.Value))
+		}
+	}
+	return 0
 }
 
 func debugCapabilities(st style, projectDir string) {
