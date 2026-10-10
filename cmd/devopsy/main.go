@@ -44,6 +44,33 @@ func run() int {
 	verboseLevel := cli.VerboseLevel(os.Getenv(cli.VerboseEnv))
 	verbose := verboseLevel > 0
 
+	// These need no directory: they work anywhere, even where the working
+	// directory cannot be read (another user's, as root's is for a deploy
+	// user).
+	if len(args) > 0 {
+		switch args[0] {
+		case "--version":
+			fmt.Printf("devopsy %s\n", version)
+			fmt.Println(dockerVersion())
+			if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
+				fmt.Printf("docker compose %s\n", strings.TrimSpace(string(out)))
+			} else {
+				fmt.Println("docker compose: not available")
+			}
+			return 0
+		case "--upgrade":
+			return runUpgrade(args[1:], color)
+		case upgradeCheck:
+			return runUpgradeCheck()
+		case "--completion":
+			return runCompletion(args[1:], color)
+		case "--probe":
+			return runProbe(args[1:], color)
+		case "--release-settings":
+			return runReleaseSettings(color)
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
@@ -57,30 +84,11 @@ func run() int {
 		fmt.Print(styleFor(os.Stdout).help(cli.Usage(projectDir)))
 		return 0
 	}
-	if args[0] == "--version" {
-		fmt.Printf("devopsy %s\n", version)
-		fmt.Println(dockerVersion())
-		if out, err := exec.Command("docker", "compose", "version", "--short").Output(); err == nil {
-			fmt.Printf("docker compose %s\n", strings.TrimSpace(string(out)))
-		} else {
-			fmt.Println("docker compose: not available")
-		}
-		return 0
-	}
-	if args[0] == "--upgrade" {
-		return runUpgrade(args[1:], color)
-	}
-	if args[0] == upgradeCheck {
-		return runUpgradeCheck()
-	}
 	if args[0] == complete.Flag {
 		return runComplete(cwd, args[1:])
 	}
 	if args[0] == "--debug" {
 		return runDebug(cwd, args[1:], color)
-	}
-	if args[0] == "--completion" {
-		return runCompletion(args[1:], color)
 	}
 	if args[0] == "--environments" {
 		return runEnvironments(cwd, args[1:], color)
@@ -88,14 +96,8 @@ func run() int {
 	if args[0] == "--init" {
 		return runInit(cwd, args[1:], color)
 	}
-	if args[0] == "--probe" {
-		return runProbe(args[1:], color)
-	}
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
-	}
-	if args[0] == "--release-settings" {
-		return runReleaseSettings(color)
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
