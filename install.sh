@@ -4,8 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/hanoii/devopsy-cli/main/install.sh | sh
 #
 # Variables:
-#   DEVOPSY_VERSION      Release tag, like v0.2.0. Default: latest ("main" also
-#                        means latest, for older setups).
+#   DEVOPSY_VERSION      Release tag, like v0.2.0. Default: latest.
 #   DEVOPSY_INSTALL_DIR  Where to put the binary. Default: /usr/local/bin when
 #                        writable or when running as root, else ~/.local/bin.
 set -eu
@@ -19,7 +18,7 @@ die() {
 
 version=${DEVOPSY_VERSION:-latest}
 case $version in
-  latest | main) base=$repo/releases/latest/download ;;
+  latest) base=$repo/releases/latest/download ;;
   *) base=$repo/releases/download/$version ;;
 esac
 
