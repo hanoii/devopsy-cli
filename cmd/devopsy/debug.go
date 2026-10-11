@@ -476,7 +476,7 @@ func debugLabels(st style, projectDir string, color bool) int {
 		{cli.RoleLabel + "=<name>", "a role only one compose project per host holds, checked at --release"},
 		{cli.ExportPrefix + "<KEY>=<value>", "a fact for other projects, read from running containers"},
 		{cli.ImportPrefix + "<VAR>=<role or project>/<KEY>[?]", "at --release, into target.env unless the target sets VAR; ? if optional"},
-		{cli.CloneLabel + "=live|skip|stop|pause", "in a clone: copy its mounts under mnt (live, default) or not (skip); stop it, or pause it (never a database), for the copy"},
+		{cli.CloneLabel + "=skip|live|pause|stop|custom", "in a clone: neither copied nor touched (skip, default); its mounts under mnt copied (live), with it paused (pause, never a database) or stopped (stop); left to the clone capability's push (custom)"},
 	} {
 		fmt.Printf("  %s\n      %s\n", st.name(l[0]), l[1])
 	}

@@ -626,46 +626,68 @@ func runClonePush(cwd string, color bool) int {
 	ctx, stop := interruptible()
 	defer stop()
 
-	if push := filepath.Join(projectDir, "capabilities", "clone", "push"); isExecutable(push) {
-		sayErr("devopsy: running 'devopsy --capability clone push'")
-		self, err := os.Executable()
-		if err != nil {
-			self = "devopsy"
-		}
-		cmd := exec.Command(self, "--capability", "clone", "push")
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, errOut, errOut
-		return exitCode(cmd.Run())
-	}
-
 	_, services, err := cli.CloneServices(cwd, os.Environ())
 	if err != nil {
 		return fail(err.Error())
 	}
-	dirs := cli.CloneDirs(services)
-	if len(dirs) == 0 {
-		sayErr("devopsy: nothing to clone: no bind mounts under .devopsy/mnt")
+	labeled := slices.ContainsFunc(services, func(s cli.CloneService) bool { return s.Labeled })
+	custom := cli.ClonePolicy(services, cli.CloneCustom)
+	push := filepath.Join(projectDir, "capabilities", "clone", "push")
+	hasPush := isExecutable(push)
+	switch {
+	case len(custom) > 0 && !hasPush:
+		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/clone/push to copy it", strings.Join(custom, ", "), cli.CloneLabel, cli.CloneCustom))
+	case len(custom) == 0 && hasPush:
+		sayErr("devopsy: capabilities/clone/push present but no service labeled " + cli.CloneLabel + "=" + cli.CloneCustom + ": not run")
+	}
+	if !labeled {
+		sayErr("devopsy: nothing to clone: no service labeled " + cli.CloneLabel)
 		return 0
 	}
-	if err := ensureRsyncImage(ctx); err != nil {
-		return fail(err.Error())
-	}
-	if err := prepareServices(cwd, services); err != nil {
-		// What it paused or stopped before failing comes back: finish
-		// reads the containers' state, not what prepare did.
-		code := fail(err.Error())
-		if err := finishServices(cwd, services); err != nil {
-			fail(err.Error())
+
+	// The generic path first: flush, pause and stop, rsync, start and
+	// unpause the services labeled live, pause and stop.
+	if dirs := cli.CloneDirs(services); len(dirs) > 0 {
+		if err := ensureRsyncImage(ctx); err != nil {
+			return fail(err.Error())
 		}
-		return code
+		if err := prepareServices(cwd, projectDir, services); err != nil {
+			// What it paused or stopped before failing comes back: finish
+			// reads the containers' state, not what prepare did.
+			code := fail(err.Error())
+			if err := finishServices(cwd, services); err != nil {
+				fail(err.Error())
+			}
+			return code
+		}
+		code := 0
+		if err := cloneRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.CloneArgsEnv))); err != nil {
+			code = fail(err.Error())
+		}
+		if err := finishServices(cwd, services); err != nil {
+			code = fail(err.Error())
+		}
+		if code != 0 {
+			return code
+		}
+	} else if len(custom) == 0 {
+		sayErr("devopsy: nothing to clone: no bind mounts under .devopsy/mnt for the services labeled " + cli.CloneLabel)
+		return 0
 	}
-	code := 0
-	if err := cloneRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.CloneArgsEnv))); err != nil {
-		code = fail(err.Error())
+
+	// Then the custom services, the capability's.
+	if len(custom) == 0 {
+		return 0
 	}
-	if err := finishServices(cwd, services); err != nil {
-		code = fail(err.Error())
+	sayErr("devopsy: running 'devopsy --capability clone push' (" + strings.Join(custom, " ") + ")")
+	self, err := os.Executable()
+	if err != nil {
+		self = "devopsy"
 	}
-	return code
+	cmd := exec.Command(self, "--capability", "clone", "push")
+	cmd.Env = append(os.Environ(), remote.CloneCustomEnv+"="+strings.Join(custom, " "))
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, errOut, errOut
+	return exitCode(cmd.Run())
 }
 
 func isExecutable(p string) bool {
@@ -910,7 +932,7 @@ func runCloneServices(cwd string, args []string, color bool) int {
 	if len(args) != 1 || !slices.Contains([]string{"prepare", "finish", "list"}, args[0]) {
 		return fail("usage: devopsy " + cli.CloneServicesFlag + " prepare|finish|list")
 	}
-	_, services, err := cli.CloneServices(cwd, os.Environ())
+	projectDir, services, err := cli.CloneServices(cwd, os.Environ())
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -924,7 +946,7 @@ func runCloneServices(cwd string, args []string, color bool) int {
 		// A session gone is no reason to die halfway: the holder
 		// restores what this paused or stopped.
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
-		err = prepareServices(cwd, services)
+		err = prepareServices(cwd, projectDir, services)
 	default:
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 		err = finishServices(cwd, services)
@@ -968,16 +990,42 @@ func intersect(a, b []string) []string {
 	return out
 }
 
-// prepareServices pauses the running services labeled pause, then stops
-// those labeled stop. When stopping fails, it unpauses what it paused.
-func prepareServices(cwd string, services []cli.CloneService) error {
+// prepareServices runs the clone capability's flush, when the project has
+// one, for each running service labeled live or pause, then pauses the
+// running services labeled pause, then stops those labeled stop. When
+// stopping fails, it unpauses what it paused; a failing flush changes
+// nothing after it.
+func prepareServices(cwd, projectDir string, services []cli.CloneService) error {
 	pause, stop := cli.ClonePolicy(services, cli.ClonePause), cli.ClonePolicy(services, cli.CloneStop)
-	if len(pause)+len(stop) == 0 {
+	var flush []string
+	if isExecutable(filepath.Join(projectDir, "capabilities", "clone", "flush")) {
+		for _, s := range services {
+			if s.Policy == cli.CloneLive || s.Policy == cli.ClonePause {
+				flush = append(flush, s.Name)
+			}
+		}
+	}
+	if len(flush)+len(pause)+len(stop) == 0 {
 		return nil
 	}
 	running, err := composeList(cwd, "--status", "running")
 	if err != nil {
 		return fmt.Errorf("docker compose ps: %w", err)
+	}
+	if len(flush) > 0 {
+		self, err := os.Executable()
+		if err != nil {
+			self = "devopsy"
+		}
+		for _, name := range intersect(flush, running) {
+			sayErr("devopsy: running 'devopsy --capability clone flush " + name + "'")
+			cmd := exec.Command(self, "--capability", "clone", "flush", name)
+			cmd.Dir = cwd
+			cmd.Stdout, cmd.Stderr = errOut, errOut
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("the clone capability's flush %s: %w", name, err)
+			}
+		}
 	}
 	pause, stop = intersect(pause, running), intersect(stop, running)
 	if len(pause) > 0 {

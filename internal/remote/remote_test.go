@@ -472,7 +472,7 @@ exit 0
 		t.Errorf("failing prepare calls:\n%s", got)
 	}
 
-	// The capability replaces the generic services handling.
+	// The clone capability's prepare and finish hooks.
 	root = t.TempDir()
 	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "prepare"), "")
 	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "finish"), "")
@@ -484,7 +484,9 @@ exit 0
 	if _, errOut, err := run(root, "1", "go\n"); err != nil {
 		t.Fatalf("capability (%v):\n%s", err, errOut)
 	}
-	if got := calls(root); !strings.Contains(got, "--capability clone prepare from") || !strings.Contains(got, "--capability clone finish go from") || strings.Contains(got, "--clone-services") {
+	// The hooks run besides the generic handling: prepare before it,
+	// finish after it.
+	if got := calls(root); !strings.Contains(got, "--capability clone prepare from=vm1:prod args=-v\n--clone-services prepare from=vm1:prod args=-v\n--clone-services finish from=vm1:prod args=-v\n--capability clone finish go from") {
 		t.Errorf("capability calls:\n%s", got)
 	}
 

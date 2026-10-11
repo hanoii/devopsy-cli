@@ -481,26 +481,41 @@ dumps).
 **Parent environments and clones.** A child (`develop: {parent: prod}`)
 is a copy of its parent: its first release clones the parent's data, and
 `devopsy @<child> --clone` does it again later, then reruns the child's
-`run` step. devopsy knows nothing of what the data is: it copies the
-entries of `.devopsy/mnt` the project's services bind-mount (`./mnt/files`
-gives `files`; `./mnt` itself, all of it), from the parent's `shared/mnt`
-into the child's, with `rsync -a --delete --numeric-ids`: the child's
-copy equals the parent's, owners and modes included. `shared/.env` is
-never copied: the child keeps its own secrets.
+`run` step. devopsy knows nothing of what the data is: services opt in
+with a label, `devopsy.clone`, and devopsy copies the entries of
+`.devopsy/mnt` those services bind-mount (`./mnt/files` gives `files`;
+`./mnt` itself, all of it), from the parent's `shared/mnt` into the
+child's, with `rsync -a --delete --numeric-ids`: the child's copy equals
+the parent's, owners and modes included. `shared/.env` is never copied:
+the child keeps its own secrets.
 
-A label per service, `devopsy.clone`, tunes it, on both sides:
+The label's values, on both sides:
 
-- `live` (the default): nothing happens to the service; its mounts are
-  copied.
-- `skip`: its mounts are not copied (a database the project dumps).
-- `stop`: stopped for the copy, a clean shutdown (a database's raw files);
-  started again and waited for until healthy.
+| `devopsy.clone` | flush hook | rsync of its mounts | push capability |
+| --------------- | ---------- | ------------------- | --------------- |
+| `skip` (no label) | no | no | no |
+| `live` | yes | yes | no |
+| `pause` | yes | yes | no |
+| `stop` | no | yes | no |
+| `custom` | no | no | yes |
+
+- `skip`, the default: the service is neither copied nor touched.
+- `live`: nothing happens to the service; its mounts are copied.
 - `pause`: frozen for the copy (the routed app): its router stays and
   requests wait until it resumes. That is holding, not consistency:
   `docker pause` flushes nothing, so never pause a database; stop it, or
   dump it.
+- `stop`: stopped for the copy, a clean shutdown (a database's raw files);
+  started again and waited for until healthy.
+- `custom`: devopsy copies nothing and touches nothing; the parent's
+  `push` capability copies it, after devopsy has copied the rest (a
+  database to dump). It is required then.
 
-Order on each side: pause, stop, copy, start (healthy), resume. The
+A project without any labeled service clones nothing ("nothing to
+clone"), and the child's `run` step still runs.
+
+Order on each side: flush, pause, stop, copy, start (healthy), resume,
+then the parent's `push` for the `custom` services. The
 child's services are paused and stopped before the parent's and resumed
 after them. The child's side holds its release lock for the whole clone;
 the parent's holds a shared one, so a release of the parent waits for the
@@ -554,13 +569,14 @@ copy. Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 
 **The clone capability** (`.devopsy/capabilities/clone/`, see
-Capabilities) replaces a part of this: `prepare` and `finish` on the
-child's side, `push` on the parent's, for data a copy cannot clone, like
-a database to dump. The drupal11 template's `push` rsyncs its files and
+Capabilities) adds to this, each action only where its file is: `flush`
+on both sides, `prepare` and `finish` on the child's, around devopsy's own
+handling, and `push` on the parent's for the `custom` services, like a
+database to dump. A `push` alone, with no `custom` service, is not run
+(devopsy says so). With its database labeled `custom`, a project's `push`
 pipes a dump into the child's database, in short:
 
 ```sh
-devopsy --clone-rsync storage logs -- $DEVOPSY_CLONE_ARGS
 devopsy exec -T database sh -c 'mariadb-dump --single-transaction ...' </dev/null |
   devopsy --clone-exec exec -T database sh -c 'mariadb ...'
 ```
@@ -710,14 +726,22 @@ lists them with their contracts):
   (`DEVOPSY_ENV_COMPUTE` is set). A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
-- **clone:** replaces parts of a clone (Parent environments and clones),
-  each action only its own; the rest stays devopsy's.
+- **clone:** hooks into a clone (Parent environments and clones); each
+  action runs only when its file is there, besides devopsy's own handling
+  of the `devopsy.clone` labels.
+  - `flush <service>` runs on each side, once per running service labeled
+    `live` or `pause`, before it is paused or copied (child: before its
+    services are paused; parent: before its own are paused and copied).
+    Not for `stop`, `skip` or `custom`. A failure aborts the clone.
   - `prepare` runs on the child's server, in its current release under its
-    release lock, before the copy, instead of pausing and stopping its
-    labeled services. A failure aborts the clone (`finish abort` runs).
-  - `push` runs on the parent's server, in its current release, instead of
-    pausing and stopping the parent's labeled services and copying their
-    mounts. It gets `DEVOPSY_CLONE_TO` (the child's server as
+    release lock, before the copy, then devopsy flushes, pauses and stops
+    the child's labeled services. A failure aborts the clone (`finish
+    abort` runs).
+  - `push` runs on the parent's server, in its current release, after
+    devopsy has copied the services labeled `live`, `pause` and `stop`,
+    when any is labeled `custom` (then it is required; without one it is
+    not run). It gets `DEVOPSY_CLONE_CUSTOM` (those services, space
+    separated), `DEVOPSY_CLONE_TO` (the child's server as
     `user@hostname`, empty on the same server), `DEVOPSY_CLONE_SSH_PORT`,
     `DEVOPSY_CLONE_TO_BASE` and `DEVOPSY_CLONE_TO_DIR` (the child's
     directory and its current `.devopsy/`), `DEVOPSY_CLONE_TO_PROJECT`,
@@ -730,10 +754,10 @@ lists them with their contracts):
     the parent's variables), stdin and stdout passed through. Exit 0 lets
     the child go on.
   - `finish go|abort` runs on the child's server after the copy (`go`) or
-    a failure (`abort`), instead of starting, waiting for and resuming its
-    labeled services. After `go`, the release's `run` step runs.
-  - `prepare` and `finish` get `DEVOPSY_CLONE_FROM_TARGET` and
-    `DEVOPSY_CLONE_ARGS`.
+    a failure (`abort`), after devopsy has started, waited for and resumed
+    its labeled services. After `go`, the release's `run` step runs.
+  - `flush` (on the child), `prepare` and `finish` get
+    `DEVOPSY_CLONE_FROM_TARGET` and `DEVOPSY_CLONE_ARGS`.
 
 ## License
 

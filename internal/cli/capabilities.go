@@ -62,24 +62,29 @@ var Capabilities = []Capability{
 	},
 	{
 		Name:     "clone",
-		What:     "replaces parts of a clone (a child environment's data from its parent's, devopsy @<child> --clone and a child's first release), for projects that dump databases or need their own steps; each action replaces only its own part, the rest stays devopsy's (devopsy.clone labels and rsync)",
-		Who:      "projects whose data a plain copy of .devopsy/mnt cannot clone, like a database to dump",
+		What:     "hooks into a clone (a child environment's data from its parent's, devopsy @<child> --clone and a child's first release); each action runs only when its file is there, besides devopsy's handling of the devopsy.clone labels (skip by default; live, pause and stop rsynced; custom left to push)",
+		Who:      "projects whose data a plain copy of .devopsy/mnt cannot clone, like a database to dump, or that flush caches before a copy",
 		CalledBy: "devopsy @<child> --clone, and a child's first release or --release --clone",
 		Actions: []CapabilityAction{
 			{
+				Name:  "flush",
+				Usage: "flush <service>",
+				Does:  "on each side, once per running service labeled devopsy.clone=live or pause, before it is paused or copied (the child's before its services are paused, the parent's before its own are paused and copied); never for stop, skip or custom. A failure aborts the clone",
+			},
+			{
 				Name:  "prepare",
 				Usage: "prepare",
-				Does:  "on the child's server, in its current release under its release lock, before the copy: readies it to be written (instead of pausing and stopping its labeled services). Gets DEVOPSY_CLONE_FROM_TARGET (the parent's address) and DEVOPSY_CLONE_ARGS (--clone's arguments after --). A failure aborts the clone; finish abort runs",
+				Does:  "on the child's server, in its current release under its release lock, before the copy: readies it to be written, before devopsy flushes, pauses and stops its labeled services. Gets DEVOPSY_CLONE_FROM_TARGET (the parent's address) and DEVOPSY_CLONE_ARGS (--clone's arguments after --). A failure aborts the clone; finish abort runs",
 			},
 			{
 				Name:  "push",
 				Usage: "push",
-				Does:  "on the parent's server, in its current release under a shared hold of its lock: copies into the child (instead of pausing and stopping the parent's labeled services and rsyncing the mounts). Gets DEVOPSY_CLONE_TO (user@host of the child's server, empty on the same one), DEVOPSY_CLONE_SSH_PORT, DEVOPSY_CLONE_TO_BASE and DEVOPSY_CLONE_TO_DIR (the child's directory and its current .devopsy/), DEVOPSY_CLONE_TO_PROJECT, DEVOPSY_CLONE_TO_TARGET, DEVOPSY_CLONE_FROM_TARGET and DEVOPSY_CLONE_ARGS, its own to use; stdin is empty. Helpers: devopsy --clone-rsync <entry of mnt>... [-- rsync args] copies those entries as the generic path does; devopsy --clone-exec <devopsy args> runs devopsy in the child's current release as its project, with a clean environment, stdin and stdout through: devopsy exec -T db mariadb-dump app | devopsy --clone-exec exec -T db mariadb app. Exit 0 lets the child go on",
+				Does:  "on the parent's server, in its current release under a shared hold of its lock, after devopsy has copied the services labeled live, pause and stop: copies those labeled custom (required when any is, not run when none is). Gets DEVOPSY_CLONE_CUSTOM (those services, space separated), DEVOPSY_CLONE_TO (user@host of the child's server, empty on the same one), DEVOPSY_CLONE_SSH_PORT, DEVOPSY_CLONE_TO_BASE and DEVOPSY_CLONE_TO_DIR (the child's directory and its current .devopsy/), DEVOPSY_CLONE_TO_PROJECT, DEVOPSY_CLONE_TO_TARGET, DEVOPSY_CLONE_FROM_TARGET and DEVOPSY_CLONE_ARGS, its own to use; stdin is empty. Helpers: devopsy --clone-rsync <entry of mnt>... [-- rsync args] copies those entries as the generic path does; devopsy --clone-exec <devopsy args> runs devopsy in the child's current release as its project, with a clean environment, stdin and stdout through: devopsy exec -T db mariadb-dump app | devopsy --clone-exec exec -T db mariadb app. Exit 0 lets the child go on",
 			},
 			{
 				Name:  "finish",
 				Usage: "finish go|abort",
-				Does:  "on the child's server, after the copy (go) or a failure (abort): restores what prepare changed (instead of starting the stopped labeled services, waiting for them to be healthy, and unpausing the paused). Same variables as prepare. After go, the release's run step runs",
+				Does:  "on the child's server, after the copy (go) or a failure (abort), once devopsy has started the stopped labeled services, waited for them to be healthy and unpaused the paused: restores what prepare changed. Same variables as prepare. After go, the release's run step runs",
 			},
 		},
 	},

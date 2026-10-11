@@ -12,7 +12,8 @@ import (
 
 // cloneFakeDocker logs every call, with its compose project, to
 // $DOCKER_LOG, answers compose config and ps for a project whose app is
-// labeled pause and db stop, and copies what the rsync containers would:
+// labeled pause and db stop (FAKE_APP and FAKE_DB change them, none for no
+// label), and copies what the rsync containers would:
 // within one host, or from the daemon's mount (remembered) across hosts.
 const cloneFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
@@ -20,7 +21,8 @@ if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
 case "$*" in
   *" config --format json")
-    printf '{"services":{"app":{"labels":{"devopsy.clone":"pause"},"volumes":[{"type":"bind","source":"%s/mnt/storage"}]},"db":{"labels":{"devopsy.clone":"stop"},"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$dir" "$dir" ;;
+    lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.clone\":\"$1\"}"; fi; }
+    printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/storage"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") echo app; echo db ;;
   *" ps --services --status paused") echo app ;;
@@ -412,7 +414,7 @@ func TestCloneCapability(t *testing.T) {
 	caps := filepath.Join(s.dot, "capabilities", "clone")
 	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare in $COMPOSE_PROJECT_NAME from $DEVOPSY_CLONE_FROM_TARGET\"\n", 0o755)
 	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
-	write(t, filepath.Join(caps, "push"), "#!/bin/sh\nset -e\necho \"push from $COMPOSE_PROJECT_NAME to $DEVOPSY_CLONE_TO_PROJECT args=$DEVOPSY_CLONE_ARGS\"\ndevopsy --clone-rsync storage -- --checksum\necho \"dump of $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\" | devopsy --clone-exec show\n", 0o755)
+	write(t, filepath.Join(caps, "push"), "#!/bin/sh\nset -e\necho \"push from $COMPOSE_PROJECT_NAME to $DEVOPSY_CLONE_TO_PROJECT custom=$DEVOPSY_CLONE_CUSTOM args=$DEVOPSY_CLONE_ARGS\"\ndevopsy --clone-rsync storage -- --checksum\necho \"dump of $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\" | devopsy --clone-exec show\n", 0o755)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
@@ -421,25 +423,48 @@ func TestCloneCapability(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("--release with arguments (%d):\n%s", code, out)
 	}
-	out, code = s.run(nil, "@dev", "--release")
+	// db is custom: devopsy copies the rest first, then the push copies it.
+	// The prepare and finish hooks run with the generic handling, around
+	// it.
+	custom := []string{"FAKE_DB=custom"}
+	out, code = s.run(custom, "@dev", "--release")
 	docker, _ := s.logs()
-	for _, want := range []string{"prepare in shop-dev from devopsy@one:prod", "push from shop-prod to shop-dev args=", "show project=shop-dev pw=child-secret", "dump of shop-prod pw=parent-secret", "finish go in shop-dev", "deploy in shop-dev"} {
-		if code != 0 || !strings.Contains(out, want) {
-			t.Errorf("missing %q (%d):\n%s", want, code, out)
+	rest := out
+	for _, want := range []string{"prepare in shop-dev from devopsy@one:prod", "devopsy: pausing app", "Copying", "devopsy: pausing app", "rsync mnt/storage", "devopsy: unpausing app", "push from shop-prod to shop-dev custom=db args=", "show project=shop-dev pw=child-secret", "dump of shop-prod pw=parent-secret", "devopsy: unpausing app", "finish go in shop-dev", "deploy in shop-dev"} {
+		i := strings.Index(rest, want)
+		if code != 0 || i < 0 {
+			t.Fatalf("missing %q in order (%d):\n%s", want, code, out)
 		}
+		rest = rest[i+len(want):]
 	}
-	if strings.Contains(docker, "pause") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/ /dst/storage/") || strings.Contains(docker, "/src/db/") {
+	if strings.Contains(docker, "stop db") || !strings.Contains(docker, "--numeric-ids /src/storage/ /dst/storage/") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/ /dst/storage/") || strings.Contains(docker, "/src/db/") {
 		t.Errorf("docker:\n%s", docker)
 	}
 	// --clone's arguments are the push's: --clone-rsync only takes its own.
-	out, code = s.run(nil, "@dev", "--clone", "--yes", "--", "--exclude=css")
+	out, code = s.run(custom, "@dev", "--clone", "--yes", "--", "--exclude=css")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "args=--exclude=css") || strings.Contains(docker, "--exclude=css") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/") {
+	if code != 0 || !strings.Contains(out, "args=--exclude=css") || strings.Contains(docker, "--checksum --exclude=css") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/") {
 		t.Errorf("--clone -- args (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
 		t.Errorf("not copied: %q", got)
 	}
+
+	// A push without a custom service is not run; a custom service
+	// without a push fails the clone.
+	out, code = s.run(nil, "@dev", "--clone", "--yes")
+	if code != 0 || !strings.Contains(out, "capabilities/clone/push present but no service labeled devopsy.clone=custom: not run") || strings.Contains(out, "push from") {
+		t.Errorf("push without custom (%d):\n%s", code, out)
+	}
+	s.logs()
+	if err := os.Remove(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "clone", "push")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(custom, "@dev", "--clone", "--yes")
+	if code == 0 || !strings.Contains(out, "db labeled devopsy.clone=custom: the parent's release needs an executable .devopsy/capabilities/clone/push") || !strings.Contains(out, "aborting the clone") {
+		t.Errorf("custom without push (%d):\n%s", code, out)
+	}
+	s.logs()
 
 	// The helpers only run inside a push, on entries of mnt.
 	prod := filepath.Join(s.root, "shop", "prod", "current")
@@ -619,7 +644,7 @@ func TestCloneInterrupt(t *testing.T) {
 	}
 	cmd := exec.Command(binary, "@dev", "--clone", "--yes")
 	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started)
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started, "FAKE_DB=custom")
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = outFile, outFile
 	if err := cmd.Start(); err != nil {
@@ -645,5 +670,54 @@ func TestCloneInterrupt(t *testing.T) {
 	}
 	if !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
 		t.Errorf("child not restored:\n%s", docker)
+	}
+}
+
+// Labels opt in: without any, nothing is copied or touched; the flush hook
+// runs for each live and pause service, on both sides, before it is
+// paused or copied, never for stop; a failing flush aborts.
+func TestCloneLabels(t *testing.T) {
+	s := newCloneSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "clone", "flush"), "#!/bin/sh\necho \"flush $1 in $COMPOSE_PROJECT_NAME\"\n[ \"${FAIL_FLUSH:-}\" != \"$COMPOSE_PROJECT_NAME\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release", "--no-clone"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	out, code := s.run([]string{"FAKE_APP=none", "FAKE_DB=none"}, "@dev", "--clone", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "nothing to clone: no service labeled devopsy.clone") || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "flush") ||
+		strings.Contains(docker, "pause") || strings.Contains(docker, "rsync") {
+		t.Fatalf("no labels (%d):\n%s\n%s", code, out, docker)
+	}
+
+	out, code = s.run(nil, "@dev", "--clone", "--yes")
+	s.logs()
+	rest := out
+	for _, want := range []string{"flush app in shop-dev", "devopsy: pausing app", "devopsy: stopping db", "Copying", "flush app in shop-prod", "devopsy: pausing app", "rsync mnt/db", "deploy in shop-dev"} {
+		i := strings.Index(rest, want)
+		if code != 0 || i < 0 {
+			t.Fatalf("missing %q in order (%d):\n%s", want, code, out)
+		}
+		rest = rest[i+len(want):]
+	}
+	if strings.Contains(out, "flush db") {
+		t.Errorf("flush for a stop service:\n%s", out)
+	}
+	out, code = s.run([]string{"FAKE_DB=live"}, "@dev", "--clone", "--yes")
+	s.logs()
+	if code != 0 || strings.Count(out, "flush db in") != 2 || strings.Count(out, "flush app in") != 2 {
+		t.Errorf("flush for live services (%d):\n%s", code, out)
+	}
+
+	// A failing flush aborts like a failing prepare: on the child before
+	// the copy, on the parent through the push.
+	for _, side := range []string{"shop-dev", "shop-prod"} {
+		out, code = s.run([]string{"FAIL_FLUSH=" + side}, "@dev", "--clone", "--yes")
+		docker, _ = s.logs()
+		if code == 0 || !strings.Contains(out, "flush app in "+side) || strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
+			t.Errorf("failing flush on %s (%d):\n%s\n%s", side, code, out, docker)
+		}
 	}
 }
