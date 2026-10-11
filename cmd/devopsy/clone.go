@@ -860,6 +860,9 @@ func runCloneServices(cwd string, args []string, color bool) int {
 		}
 		return 0
 	case "prepare":
+		// A session gone is no reason to die halfway: the holder
+		// restores what this paused or stopped.
+		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 		err = prepareServices(cwd, services)
 	default:
 		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)

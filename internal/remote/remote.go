@@ -444,7 +444,7 @@ echo "devopsy: current is now $id" >&2
 fi
 cd "$base"
 [ "$status" = 0 ] || failed=clone
-`
+` + cloneRestorePipe
 	}
 	if len(p.Run) > 0 {
 		s += `if [ "$status" = 0 ]; then
