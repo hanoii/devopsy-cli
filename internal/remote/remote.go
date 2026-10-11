@@ -652,7 +652,7 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 
 	cmd := SSHCommand(args...)
 	if ctx.Done() != nil {
-		cmd = sshCommandContext(ctx, args...)
+		cmd = SSHCommandContext(ctx, args...)
 	}
 	cmd.Stdin = stdin
 	if stdin == nil {
@@ -690,7 +690,9 @@ func SSHCommand(args ...string) *exec.Cmd {
 // SIGKILL, and its output to close after it exits.
 var SSHKillDelay = 2 * time.Second
 
-func sshCommandContext(ctx context.Context, args ...string) *exec.Cmd {
+// SSHCommandContext is SSHCommand ended by ctx: SIGTERM, which closes the
+// session, then SIGKILL after SSHKillDelay.
+func SSHCommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	plain := SSHCommand(args...)
 	cmd := exec.CommandContext(ctx, plain.Path, plain.Args[1:]...)
 	cmd.Err = plain.Err

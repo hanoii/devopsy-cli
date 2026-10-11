@@ -590,8 +590,9 @@ the paused and stopped services on both sides and skips the child's `run`
 step; on a first release, the release is marked failed and nothing is
 current, and the next release clones again. The child's `mnt` may be
 partly copied then; rsync picks up from there. Interrupted (Ctrl-C) during the
-copy, devopsy ends its session to the parent's server first, then tells
-the child's to restore its services. If devopsy itself goes away
+copy, devopsy ends its session to the parent's server, which stops the
+copy and restores its own services, then tells the child's to restore
+its services. If devopsy itself goes away
 mid-clone (killed, connection lost), the child's side restores its
 services on its own and writes what happened to
 `<environment>/.devopsy-clone.log` on its server.

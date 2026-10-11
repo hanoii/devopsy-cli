@@ -37,8 +37,9 @@ case "$*" in
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
     mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
-  "run --rm -v "*)
+  "run --rm --name devopsy-clone-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit 23
+    if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
     d=${last2#/src/}
     mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
@@ -61,6 +62,9 @@ for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
+# FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
+# its stdin closing tells it the session is gone.
+case "$s" in *--clone-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&0 & wait $!; exit $?; fi ;; esac
 case "$opts" in *" -R "*) [ -z "${FAKE_NO_FORWARD:-}" ] || { echo "Error: remote port forwarding failed for listen port 1" >&2; exit 255; } ;; esac
 exec sh -c "$s"
 `
@@ -168,8 +172,8 @@ func TestCloneSameHost(t *testing.T) {
 	// Order on each side: pause, stop, copy, start (healthy), unpause; the
 	// child's around the parent's; one container copies, no daemon.
 	order := []string{"shop-dev compose", "pause app", "shop-dev compose", "stop db", "shop-prod compose", "pause app", "stop db",
-		"run --rm -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
-		"run --rm -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-clone-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
+		"run --rm --name devopsy-clone-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "unpause app", "shop-dev compose", "start db", "unpause app"}
 	rest := docker
 	for _, want := range order {
@@ -719,5 +723,64 @@ func TestCloneLabels(t *testing.T) {
 		if code == 0 || !strings.Contains(out, "flush app in "+side) || strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
 			t.Errorf("failing flush on %s (%d):\n%s\n%s", side, code, out, docker)
 		}
+	}
+}
+
+// Interrupted during the copy, the parent's push stops at once, though
+// its session outlives devopsy's ssh: the closed stdin tells it. It
+// removes the rsync container, restores its services, and never runs the
+// capability's push for the custom services.
+func TestCloneInterruptCopy(t *testing.T) {
+	s := newCloneSetup(t)
+	tmp := t.TempDir()
+	started, pushed := filepath.Join(tmp, "started"), filepath.Join(tmp, "pushed")
+	write(t, filepath.Join(s.dot, "capabilities", "clone", "push"), "#!/bin/sh\ntouch \"$FAKE_PUSHED\"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release", "--no-clone"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	outFile, err := os.CreateTemp(tmp, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@dev", "--clone", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_RSYNC="+started, "FAKE_PUSHED="+pushed, "FAKE_DB=custom", "FAKE_SSH_DETACH=1")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if i > 200 {
+			_ = cmd.Process.Kill()
+			t.Fatal("the copy never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	start := time.Now()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	if cmd.ProcessState.ExitCode() == 0 {
+		t.Fatalf("interrupted clone succeeded:\n%s", readString(outFile.Name()))
+	}
+	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " unpause app"
+	for !strings.Contains(readString(s.log), restored) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the parent did not restore in time:\n%s\n%s", readString(s.log), readString(outFile.Name()))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if !strings.Contains(readString(s.log), "rm -f devopsy-clone-") {
+		t.Errorf("the rsync container was not removed:\n%s", readString(s.log))
+	}
+	if _, err := os.Stat(pushed); err == nil {
+		t.Errorf("the capability's push ran after the interrupt")
 	}
 }
