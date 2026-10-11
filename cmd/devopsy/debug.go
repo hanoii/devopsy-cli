@@ -152,7 +152,28 @@ type yamlTarget struct {
 	Rollback *yamlSteps        `yaml:"rollback,omitempty"`
 	Destroy  string            `yaml:"destroy,omitempty"`
 	Keep     int               `yaml:"keep,omitempty"`
+	Parent   *yamlParent       `yaml:"parent,omitempty"`
+	Inherit  []string          `yaml:"inherit,omitempty"`
 	Env      map[string]string `yaml:"env,omitempty"`
+}
+
+// yamlParent is an environment's parent, with its address once it has a
+// server.
+type yamlParent struct {
+	Name    string `yaml:"name"`
+	Address string `yaml:"target,omitempty"`
+}
+
+// parentOf is t's parent for --debug: its name, and its address or why
+// there is none yet.
+func parentOf(t *remote.Target) (name, address string) {
+	if t.Parent == "" {
+		return "", ""
+	}
+	if p := t.ParentTarget; p != nil && p.Host != "" {
+		return t.Parent, p.Address
+	}
+	return t.Parent, ""
 }
 
 type yamlSteps struct {
@@ -215,8 +236,13 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 				continue
 			}
 			var value yaml.Node
+			var parent *yamlParent
+			if name, address := parentOf(t); name != "" {
+				parent = &yamlParent{Name: name, Address: address}
+			}
 			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
-				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Keep: t.Keep, Env: t.Env}); err != nil {
+				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Keep: t.Keep,
+				Parent: parent, Inherit: t.Inherit, Env: t.Env}); err != nil {
 				cli.Fprint(os.Stderr, red, err.Error(), color)
 				return 1
 			}
@@ -272,6 +298,10 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		if t.Keep > 0 {
 			row("keep", fmt.Sprint(t.Keep), t.From["keep"])
 		}
+		if name, address := parentOf(t); name != "" {
+			row("parent", name+" "+cmp.Or(address, st.warn("no server yet")), t.From["parent"])
+		}
+		row("inherit", strings.Join(t.Inherit, ", "), t.From["inherit"])
 		keys := make([]string, 0, len(t.Env))
 		for k := range t.Env {
 			keys = append(keys, k)
@@ -446,6 +476,7 @@ func debugLabels(st style, projectDir string, color bool) int {
 		{cli.RoleLabel + "=<name>", "a role only one compose project per host holds, checked at --release"},
 		{cli.ExportPrefix + "<KEY>=<value>", "a fact for other projects, read from running containers"},
 		{cli.ImportPrefix + "<VAR>=<role or project>/<KEY>[?]", "at --release, into target.env unless the target sets VAR; ? if optional"},
+		{cli.CloneLabel + "=live|skip|stop|pause", "in a clone: copy its mounts under mnt (live, default) or not (skip); stop it, or pause it (never a database), for the copy"},
 	} {
 		fmt.Printf("  %s\n      %s\n", st.name(l[0]), l[1])
 	}

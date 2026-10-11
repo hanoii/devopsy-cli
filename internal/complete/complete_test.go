@@ -83,9 +83,15 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--env", "--debug", "--destroy", "--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--env", "--debug", "--destroy", "--clone", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--release", ""}, []string{"--yes", "--clone", "--no-clone", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--release", "--yes", "--"}, []string{"--clone", "--no-clone"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--cl"}, []string{"--clone"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--clone", ""}, []string{"--from", "--yes", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--clone", "--from", ""}, []string{"prod", "staging"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--clone", "--from", "staging", ""}, []string{"--yes"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--clone", "--yes", "--", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", ""}, []string{"get", "set", "unset"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--vars", "set", "TOKEN", ""}, []string{"USER_NAME"}, nil, DirectiveNoFileComp},
@@ -99,7 +105,7 @@ func TestComplete(t *testing.T) {
 		// or release.
 		{[]string{"@a-traefik", "dep"}, nil, []string{"dep"}, DirectiveNoFileComp},
 		{[]string{"@a-traefik", "--vars", "set", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@a-traefik", "--release", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@a-traefik", "--release", "--h"}, []string{"--help"}, nil, DirectiveNoFileComp},
 	}
 	for _, c := range cases {
 		r := Complete(root, c.words, os.Environ())

@@ -106,6 +106,7 @@ var remoteCommands = []Candidate{
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
+	{"--clone", "replace a child's data with its parent's", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }
 
@@ -250,15 +251,68 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return r
 	}
 
-	switch words[0] {
-	case "--release", "--rollback":
-		// They take no command: their steps are in config.yaml.
-		if len(words) == 2 {
-			r := filter(Result{Candidates: []Candidate{{"--help", "what it runs, and how", GroupDevopsy}}}, cur)
-			r.Directive = DirectiveNoFileComp
-			return r
+	// flags offers those of list not given yet, while every word so far is
+	// one of them; --help only first.
+	flags := func(list []Candidate) Result {
+		given := words[1 : len(words)-1]
+		var r Result
+		for _, w := range given {
+			if !slices.ContainsFunc(list, func(c Candidate) bool { return c.Value == w }) {
+				return none
+			}
 		}
-		return none
+		for _, c := range list {
+			if !slices.Contains(given, c.Value) && (c.Value != "--help" || len(given) == 0) {
+				r.Candidates = append(r.Candidates, c)
+			}
+		}
+		r = filter(r, cur)
+		r.Directive = DirectiveNoFileComp
+		return r
+	}
+	help := Candidate{"--help", "what it runs, and how", GroupDevopsy}
+	switch words[0] {
+	case "--release":
+		// It takes no command: its steps are in config.yaml.
+		return flags([]Candidate{
+			{"--yes", "create a new instance without asking", GroupDevopsy},
+			{"--clone", "clone the parent's data into it, on any release", GroupDevopsy},
+			{"--no-clone", "never clone, even on a child's first release", GroupDevopsy},
+			help,
+		})
+	case "--rollback":
+		return flags([]Candidate{help})
+	case "--clone":
+		if len(words) > 2 && words[len(words)-2] == "--from" {
+			// Another environment of this project, as for targets.
+			r := Result{Directive: DirectiveNoFileComp}
+			if !user {
+				for _, t := range remote.Targets(projectDir) {
+					if !t.User {
+						r.Candidates = append(r.Candidates, Candidate{t.Name, targetDescription(t), GroupTarget})
+					}
+				}
+			}
+			return filter(r, cur)
+		}
+		// After --, rsync's (or the clone capability's) arguments.
+		given := words[1 : len(words)-1]
+		if slices.Contains(given, "--") {
+			return none
+		}
+		var r Result
+		for _, c := range []Candidate{
+			{"--from", "copy from another environment than its parent", GroupDevopsy},
+			{"--yes", "do not ask for the environment's name", GroupDevopsy},
+			help,
+		} {
+			if !slices.Contains(given, c.Value) && (c.Value != "--help" || len(given) == 0) {
+				r.Candidates = append(r.Candidates, c)
+			}
+		}
+		r = filter(r, cur)
+		r.Directive = DirectiveNoFileComp
+		return r
 	case "--vars":
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
