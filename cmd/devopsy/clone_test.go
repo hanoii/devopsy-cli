@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -579,5 +580,53 @@ func TestCloneInherit(t *testing.T) {
 	}
 	if got := readString(filepath.Join(shop, "a", ".env")); got != "INST_KEY='i 1'\n" {
 		t.Errorf("instance .env: %q", got)
+	}
+}
+
+// Interrupted during the copy, devopsy ends the push session first, then
+// aborts: the child's services come back and its run step does not run.
+func TestCloneInterrupt(t *testing.T) {
+	s := newCloneSetup(t)
+	started := filepath.Join(t.TempDir(), "started")
+	write(t, filepath.Join(s.dot, "capabilities", "clone", "push"), "#!/bin/sh\ntouch \"$FAKE_STARTED\"\nexec sleep 20\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release", "--no-clone"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	// Output to a file: the push's sleep, orphaned, keeps a pipe open.
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@dev", "--clone", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if i > 200 {
+			_ = cmd.Process.Kill()
+			t.Fatal("the push never started")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	start := time.Now()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	out := readString(outFile.Name())
+	docker, _ := s.logs()
+	if cmd.ProcessState.ExitCode() == 0 || time.Since(start) > 15*time.Second || !strings.Contains(out, "stopping the copy from @devopsy@one:prod, then aborting") || strings.Contains(out, "deploy in shop-dev") {
+		t.Fatalf("interrupt (%d, %s):\n%s", cmd.ProcessState.ExitCode(), time.Since(start), out)
+	}
+	if !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
+		t.Errorf("child not restored:\n%s", docker)
 	}
 }

@@ -212,18 +212,53 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 		code, err := remote.SSHWith(job.child, remote.KeepAlive, script, r, mw, false, rlog)
 		done <- result{code, err}
 	}()
+	// Interrupted before the marker, devopsy just exits: the holder gets
+	// no answer and restores on its own. After it, the push ends first, so
+	// nothing copies into the child once its services are back, then the
+	// holder gets abort.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
 	var res result
 	select {
 	case res = <-done:
+	case <-sigs:
+		say(red, "devopsy: interrupted: the child's server restores what it paused or stopped")
+		return 130
 	case base := <-mw.marker:
-		code := runPush(job, base, rlog, color)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		pushed := make(chan int, 1)
+		go func() { pushed <- runPush(ctx, job, base, rlog, color) }()
+		var code int
+		interrupted := false
+		select {
+		case code = <-pushed:
+		case <-sigs:
+			interrupted = true
+			say(red, "devopsy: interrupted: stopping the copy from @"+job.parent.Address+", then aborting the clone")
+			cancel()
+			<-pushed
+		}
 		answer := "go\n"
-		if code != 0 {
+		if interrupted {
+			answer = "abort\n"
+		} else if code != 0 {
 			answer = "abort\n"
 			say(red, fmt.Sprintf("devopsy: the copy from @%s failed (%d): aborting the clone", job.parent.Address, code))
 		}
 		_, _ = w.WriteString(answer)
 		w.Close()
+		if interrupted {
+			// The holder's restoring is worth seeing, unless interrupted
+			// again.
+			select {
+			case <-done:
+			case <-sigs:
+			}
+			mw.flush()
+			return 130
+		}
 		res = <-done
 	}
 	mw.flush()
@@ -238,7 +273,7 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 // server, into the child's directory base. Across servers it forwards the
 // SSH agent, so the parent's server reaches the child's for this session
 // only.
-func runPush(job *cloneJob, base string, rlog *releaseLog, color bool) int {
+func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, color bool) int {
 	p := job.parent
 	env := map[string]string{
 		remote.CloneToEnv:         job.to,
@@ -264,7 +299,7 @@ func runPush(job *cloneJob, base string, rlog *releaseLog, color bool) int {
 		return 1
 	}
 	defer null.Close()
-	code, err := remote.SSHWith(p, extra, remote.PushScript(p, job.parentName, env), null, nil, false, rlog)
+	code, err := remote.SSHContext(ctx, p, extra, remote.PushScript(p, job.parentName, env), null, nil, false, rlog)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		rlog.Line(err.Error())

@@ -15,6 +15,7 @@ package remote
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -624,6 +626,13 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 // SSHWith is SSHLog with extra ssh options after SSHOptions (a clone's push
 // session forwards the agent: -o ForwardAgent=yes).
 func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
+	return SSHContext(context.Background(), t, extra, script, stdin, stdout, tty, log)
+}
+
+// SSHContext is SSHWith ended when ctx is done: ssh gets
+// SIGTERM, which closes the session, and SIGKILL after SSHKillDelay. Its
+// output is cut then too, should something it started still hold it.
+func SSHContext(ctx context.Context, t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	ttyFlag := "-T"
 	if tty {
 		ttyFlag = "-t"
@@ -642,6 +651,9 @@ func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout i
 	}
 
 	cmd := SSHCommand(args...)
+	if ctx.Done() != nil {
+		cmd = sshCommandContext(ctx, args...)
+	}
 	cmd.Stdin = stdin
 	if stdin == nil {
 		cmd.Stdin = os.Stdin
@@ -672,6 +684,19 @@ func SSHCommand(args ...string) *exec.Cmd {
 		return exec.Command("sh", append([]string{"-c", custom + ` "$@"`, "sh"}, args...)...)
 	}
 	return exec.Command("ssh", args...)
+}
+
+// SSHKillDelay is how long an ssh ended by its context has to exit before
+// SIGKILL, and its output to close after it exits.
+var SSHKillDelay = 2 * time.Second
+
+func sshCommandContext(ctx context.Context, args ...string) *exec.Cmd {
+	plain := SSHCommand(args...)
+	cmd := exec.CommandContext(ctx, plain.Path, plain.Args[1:]...)
+	cmd.Err = plain.Err
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = SSHKillDelay
+	return cmd
 }
 
 // LogFile is a release's log, in its directory: what its release printed,

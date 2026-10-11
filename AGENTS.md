@@ -210,6 +210,18 @@ repositories fit together and the open ideas.
   prepare until the services are restored the holder ignores SIGPIPE
   (`trap '' PIPE`, reset before `run`) and restores before it reports, so
   a session gone during prepare cannot leave them paused either.
+- **Interrupts** (SIGINT, SIGTERM in `runCloneSession`): before the marker
+  devopsy just exits, and the holder restores on its own. After it, the
+  push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
+  output cut after `SSHKillDelay`) and is waited for, then the holder gets
+  `abort`, and devopsy exits 130. The parent's `--clone-push` does not see
+  the session end until it writes to it: the generic path stops at its
+  next write to the session; a capability push across servers at the
+  latest at its next SSH connection to the child (`--clone-rsync`,
+  `--clone-exec`), which fails since the forwarded agent died with the push
+  session. A connection already open runs to its end, and on one server
+  nothing stops a capability push: until then it may still write into the
+  child.
 - **Who pauses what:** the child's labeled services by the holder, for the
   whole clone (capability `prepare`/`finish`, else `--clone-services
   prepare|finish`); the parent's inside `--clone-push` (capability `push`,
