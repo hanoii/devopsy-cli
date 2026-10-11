@@ -235,7 +235,9 @@ repositories fit together and the open ideas.
   command-line forwardings too (`ssh_config(5)`); a taken port retries
   another (3 tries, 20000-60000). `--clone-exec`'s session keeps
   `ClearAllForwardings`. No agent on the parent with `DEVOPSY_CLONE_TO`
-  set means a `restrict`ed key: say so.
+  set means a `restrict`ed key: say so. A `restrict`ed key also refuses
+  the `-R` (`port-forwarding`), which sshd reports like a taken port: after
+  the last try, say both.
 - **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
   on each host from `RsyncDockerfile` when missing), as root with
   `--numeric-ids`: owners and modes survive, the deploy user's permissions

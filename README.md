@@ -519,9 +519,10 @@ through your machine. So, across servers:
   resolves it here (user, hostname, port; its host key is accepted on
   first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
   relay through your machine is not supported yet;
-- a CI key from devopsy-server needs `restrict,agent-forwarding` in the
-  deploy user's `authorized_keys` (its `ci-key` writes it); a plain
-  `restrict` refuses the agent, and the parent's side says so.
+- a CI key from devopsy-server needs `restrict,agent-forwarding,port-forwarding`
+  in the deploy user's `authorized_keys` on both servers: the agent for the
+  parent's session, the reverse forward for the child's. A plain `restrict`
+  refuses both, and devopsy says which.
 
 ```sh
 devopsy @develop --clone                         # asks for the environment's name
