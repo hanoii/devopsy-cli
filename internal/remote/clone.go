@@ -214,7 +214,7 @@ func CurrentExistsScript(t *Target) string {
 
 // buildRsyncImage builds RsyncImage when the host lacks it.
 func buildRsyncImage() string {
-	return "docker image inspect " + Quote(RsyncImage) + " >/dev/null 2>&1 || printf '%s\\n' " + quoteAll(RsyncDockerfile) + " | docker build -q -t " + Quote(RsyncImage) + " - >&2\n"
+	return "docker image inspect " + Quote(RsyncImage) + " >/dev/null 2>&1 || { echo \"devopsy: building " + RsyncImage + "\" >&2; printf '%s\\n' " + quoteAll(RsyncDockerfile) + " | docker build -q -t " + Quote(RsyncImage) + " - >/dev/null; }\n"
 }
 
 // CloneReceiveScript runs on the child's server, from the parent's over SSH

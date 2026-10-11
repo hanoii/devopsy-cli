@@ -618,7 +618,7 @@ func ensureRsyncImage(ctx context.Context) error {
 	sayErr("devopsy: building " + remote.RsyncImage)
 	cmd := exec.CommandContext(ctx, "docker", remote.BuildRsyncImageArgs()...)
 	cmd.Stdin = strings.NewReader(strings.Join(remote.RsyncDockerfile, "\n") + "\n")
-	cmd.Stdout, cmd.Stderr = errOut, errOut
+	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("building %s: %w", remote.RsyncImage, err)
 	}
@@ -813,7 +813,12 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 	}
 	// Removed whatever happens, an interrupt included (ctx is cancelled
 	// then: not this).
-	defer func() { _ = docker(context.Background(), "rm", "-f", id) }()
+	defer func() {
+		trace([]string{"docker", "rm", "-f", id})
+		cmd := exec.Command("docker", "rm", "-f", id)
+		cmd.Stderr = errOut // stdout: the id again
+		_ = cmd.Run()
+	}()
 	ip, err := dockerOut(ctx, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", id)
 	if err != nil || ip == "" {
 		return fmt.Errorf("the rsync daemon's address: %v", err)
