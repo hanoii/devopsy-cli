@@ -353,7 +353,7 @@ func TestCloneCapability(t *testing.T) {
 	caps := filepath.Join(s.dot, "capabilities", "clone")
 	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare in $COMPOSE_PROJECT_NAME from $DEVOPSY_CLONE_FROM_TARGET\"\n", 0o755)
 	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
-	write(t, filepath.Join(caps, "push"), "#!/bin/sh\nset -e\necho \"push from $COMPOSE_PROJECT_NAME to $DEVOPSY_CLONE_TO_PROJECT args=$DEVOPSY_CLONE_ARGS\"\ndevopsy --clone-rsync storage\necho \"dump of $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\" | devopsy --clone-exec show\n", 0o755)
+	write(t, filepath.Join(caps, "push"), "#!/bin/sh\nset -e\necho \"push from $COMPOSE_PROJECT_NAME to $DEVOPSY_CLONE_TO_PROJECT args=$DEVOPSY_CLONE_ARGS\"\ndevopsy --clone-rsync storage -- --checksum\necho \"dump of $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\" | devopsy --clone-exec show\n", 0o755)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
@@ -369,8 +369,14 @@ func TestCloneCapability(t *testing.T) {
 			t.Errorf("missing %q (%d):\n%s", want, code, out)
 		}
 	}
-	if strings.Contains(docker, "pause") || !strings.Contains(docker, "/src/storage/ /dst/storage/") || strings.Contains(docker, "/src/db/") {
+	if strings.Contains(docker, "pause") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/ /dst/storage/") || strings.Contains(docker, "/src/db/") {
 		t.Errorf("docker:\n%s", docker)
+	}
+	// --clone's arguments are the push's: --clone-rsync only takes its own.
+	out, code = s.run(nil, "@dev", "--clone", "--yes", "--", "--exclude=css")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "args=--exclude=css") || strings.Contains(docker, "--exclude=css") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/") {
+		t.Errorf("--clone -- args (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
 		t.Errorf("not copied: %q", got)

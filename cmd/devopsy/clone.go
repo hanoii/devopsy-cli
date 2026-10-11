@@ -605,7 +605,8 @@ var mntEntryRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 // runCloneRsync implements the hidden --clone-rsync <entry>... [--
 // <rsync args>...] for a clone capability's push: cloneRsync with the
-// clone's arguments (DEVOPSY_CLONE_ARGS), then these.
+// arguments after --, only those. DEVOPSY_CLONE_ARGS are the push's to
+// use (its own switches, or passed here explicitly after --).
 func runCloneRsync(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(errOut, red, "devopsy: "+msg, color)
@@ -642,7 +643,7 @@ func runCloneRsync(cwd string, args []string, color bool) int {
 	if err := ensureRsyncImage(ctx); err != nil {
 		return fail(err.Error())
 	}
-	if err := cloneRsync(ctx, projectDir, entries, append(strings.Fields(os.Getenv(remote.CloneArgsEnv)), extra...)); err != nil {
+	if err := cloneRsync(ctx, projectDir, entries, extra); err != nil {
 		return fail(err.Error())
 	}
 	return 0

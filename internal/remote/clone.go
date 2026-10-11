@@ -51,7 +51,8 @@ const (
 	CloneToProjectEnv = "DEVOPSY_CLONE_TO_PROJECT"
 	CloneToTargetEnv  = "DEVOPSY_CLONE_TO_TARGET"
 	// CloneArgsEnv are the arguments after --clone's --, space-joined: for
-	// rsync in the generic path and the helpers.
+	// rsync in the generic path; a clone capability's push owns them (its
+	// own switches, or passed to --clone-rsync after --).
 	CloneArgsEnv = "DEVOPSY_CLONE_ARGS"
 	// CloneFromTargetEnv is the parent's address.
 	CloneFromTargetEnv = "DEVOPSY_CLONE_FROM_TARGET"
