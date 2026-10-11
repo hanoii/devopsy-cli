@@ -584,7 +584,7 @@ func TestDebugTargets(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "app", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels:\n      - devopsy.shell=true\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  env:\n    A: one\nenvironments:\n  prod:\n    path: /srv/app\n    env:\n      B: two\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  env:\n    A: one\nenvironments:\n  prod:\n    path: /srv/app\n    inherit: [DB]\n    env:\n      B: two\n  dev: {parent: prod}\n", 0o644)
 	env := []string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_SERVER=h"}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "environments", "prod")
 	for _, want := range []string{"prod  (", "mode      image  (defaults in ", "env       A='one'  (defaults in ", "env       B='two'  (" + filepath.Join(dot, "config.yaml")} {
@@ -592,16 +592,28 @@ func TestDebugTargets(t *testing.T) {
 			t.Errorf("missing %q (%d):\n%s", want, code, out)
 		}
 	}
+	if !strings.Contains(out, "inherit   DB  (") {
+		t.Errorf("inherit:\n%s", out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "environments", "dev")
+	if code != 0 || !strings.Contains(out, "parent    prod h:prod  (") {
+		t.Errorf("parent (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env[:1], "--debug", "environments", "dev")
+	if code != 0 || !strings.Contains(out, "parent    prod no server yet") {
+		t.Errorf("parent without a server (%d):\n%s", code, out)
+	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug")
-	if code != 0 || !regexp.MustCompile(`(?m)^environments +prod$`).MatchString(out) || !strings.Contains(out, "web: devopsy.shell=true") {
+	if code != 0 || !regexp.MustCompile(`(?m)^environments +dev, prod$`).MatchString(out) || !strings.Contains(out, "web: devopsy.shell=true") {
 		t.Errorf("summary (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "environments", "--yaml")
-	if code != 0 || !strings.Contains(out, "prod:\n  target: h:prod\n  server: h\n  path: /srv/app\n  mode: image\n") || !strings.Contains(out, "    A: one") {
+	if code != 0 || !strings.Contains(out, "prod:\n  target: h:prod\n  server: h\n  path: /srv/app\n  mode: image\n") || !strings.Contains(out, "    A: one") ||
+		!strings.Contains(out, "  parent:\n    name: prod\n    target: h:prod\n") || !strings.Contains(out, "  inherit:\n    - DB\n") {
 		t.Errorf("--yaml (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
-	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") {
+	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") || !strings.Contains(out, "finish go|abort") {
 		t.Errorf("capabilities (%d):\n%s", code, out)
 	}
 }
@@ -680,7 +692,7 @@ esac
 		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "labels")
-	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) {
+	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.clone=live|skip|stop|pause") {
 		t.Errorf("--debug labels (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "imports")

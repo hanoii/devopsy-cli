@@ -220,8 +220,17 @@ func TestCloneSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback", "--clone"); code == 0 || !strings.Contains(out, "--rollback takes no --clone") {
 		t.Errorf("--rollback --clone (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--clone", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --clone") {
+	if out, code := s.run(nil, "@dev", "--clone", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --clone [--from <target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.clone=pause") {
 		t.Errorf("--clone --help (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "[--clone | --no-clone]") {
+		t.Errorf("--release --help (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--clone [--from <target>]") {
+		t.Errorf("@dev help (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "--clone"); code == 0 || !strings.Contains(out, "--clone needs a target") {
+		t.Errorf("--clone without a target (%d):\n%s", code, out)
 	}
 }
 

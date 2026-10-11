@@ -302,7 +302,8 @@ func CommandDescription(path string) string {
 
 // RemoteHelp describes `devopsy @<target>` commands.
 const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ..., or @<alias>):
-  --release [--yes]      upload a new release, make it current, run its steps
+  --release [--yes] [--clone | --no-clone]
+                         upload a new release, make it current, run its steps
   --rollback             back to the previous release, and run its steps
   --releases             the releases on the server
   --log [<id>]           what a release or rollback printed: the last, or one
@@ -316,6 +317,9 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
                          what devopsy sees there
   --ssh-config           a ~/.ssh/config block for the target's host
   --destroy [--yes]      remove the environment, data included
+  --clone [--from <target>] [--yes] [-- args...]
+                         replace a child's data with its parent's, run its
+                         run step
   <command> [args]       a project or compose command, in the current release
   -- <args>              docker compose <args> there
   devopsy @<target> <flag> --help   details of each
@@ -324,12 +328,67 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"--clone": `Usage: devopsy @<target> --clone [--from <address>] [--yes] [-- <rsync args>...]
+	"--clone": `Usage: devopsy @<target> --clone [--from <target>] [--yes] [-- args...]
 
 Replaces a child environment's data (shared/mnt) with its parent's, then
-runs its release's run step.
+runs its release's run step. A child is an environment with parent: in
+config.yaml; its first release clones on its own, between switching current
+and the run step (--release --no-clone skips that), so --clone is for
+resyncing later. Nothing goes through this machine: the parent's server
+copies into the child's.
+
+  environments:
+    prod:
+      inherit: [CLONE_DATABASE]   # variables every child gets
+    dev:
+      parent: prod
+
+  --from <target>   copy from another environment of the project instead
+                    (@vm1:prod, a/prod...), with its inherit:
+  --yes             do not ask for the environment's name (CI)
+  -- args...        DEVOPSY_CLONE_ARGS: rsync's arguments (--exclude=cache),
+                    or the clone capability's to use
+
+What runs where:
+  - the child's server, under its release lock: its services labeled
+    devopsy.clone=pause are paused, those labeled stop stopped, then it
+    waits for the copy; after it, stopped ones start (and become healthy),
+    paused ones resume, and the run step runs. A failed copy restores the
+    services and skips the run step.
+  - the parent's server, under a shared hold of its lock (its releases
+    wait): the same for its own labeled services, the copy, the restart.
+
+The copy is rsync -a --delete --numeric-ids, as root in devopsy's own
+image (devopsy-rsync, built on each server when missing), of each entry of
+.devopsy/mnt a service bind-mounts, unless the service is labeled skip.
+Labels, on compose services:
+
+  devopsy.clone=live    (default) untouched; its mounts are copied
+  devopsy.clone=skip    its mounts are not copied (a database it dumps)
+  devopsy.clone=stop    stopped for the copy: a clean shutdown (a database's
+                        files)
+  devopsy.clone=pause   frozen for the copy, its requests held (the routed
+                        app). Holding, not consistency: never a database
+
+On one server, one container copies between the two directories. Across
+servers, the parent's runs an rsync daemon for the copy and reaches the
+child's over SSH with your agent, forwarded for that session only: an agent
+must be running here (in CI too), and the child's host must be reachable
+from the parent's as ssh -G resolves it here (no ProxyCommand or ProxyJump).
+A CI key from devopsy-server needs restrict,agent-forwarding.
+
+The parent comes from the child's instance and the usual server variables
+(DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), else the child's server. Before
+copying, the variables the parent's inherit: names are copied from its
+server's .env files into the child's, at the same level (shared/.env, the
+instance's or the project's .env); names are printed, never values.
+
+The clone capability (capabilities/clone) replaces the generic steps:
+prepare and finish on the child's server, push on the parent's (devopsy
+--debug capabilities). Asks for the environment's name, unless --yes. The
+log goes with the current release: devopsy @<target> --log.
 `,
-	"--release": `Usage: devopsy @<target> --release [--yes]
+	"--release": `Usage: devopsy @<target> --release [--yes] [--clone | --no-clone]
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from .devopsy/config.yaml (required), in
@@ -378,6 +437,12 @@ else the server's, at most the server's max_keep (all default 5).
 The first release of an instance the server does not have yet asks before
 creating it (a typo would otherwise make a new site); --yes skips that, for
 CI.
+
+The first release of a child (an environment with parent:) clones its
+parent's data once current, before its run step, so the run step works on
+that data and no empty site is served; a failed copy does not go live.
+--clone clones on any release, --no-clone never (devopsy @<target> --clone
+--help).
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 
