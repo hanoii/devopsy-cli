@@ -49,3 +49,23 @@ func TestSSHConfig(t *testing.T) {
 		t.Errorf("without ssh -G:\n%s", got)
 	}
 }
+
+// A child's server is reached directly from the parent's: no proxies.
+func TestChildAddress(t *testing.T) {
+	old := SSHEffective
+	defer func() { SSHEffective = old }()
+	eff := map[string]string{"user": "devopsy", "hostname": "203.0.113.7", "port": "2222", "proxycommand": "none"}
+	SSHEffective = func(string) (map[string]string, error) { return eff, nil }
+	if u, h, p, err := ChildAddress("vm2"); err != nil || u != "devopsy" || h != "203.0.113.7" || p != "2222" {
+		t.Errorf("direct: %s %s %s %v", u, h, p, err)
+	}
+	eff["proxyjump"] = "bastion"
+	if _, _, _, err := ChildAddress("vm2"); err == nil || !strings.Contains(err.Error(), "ProxyJump") {
+		t.Errorf("proxyjump: %v", err)
+	}
+	delete(eff, "proxyjump")
+	eff["proxycommand"] = "orb ssh %h"
+	if _, _, _, err := ChildAddress("vm2"); err == nil || !strings.Contains(err.Error(), "ProxyCommand") {
+		t.Errorf("proxycommand: %v", err)
+	}
+}

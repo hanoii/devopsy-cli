@@ -362,8 +362,17 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 // missing once live; the switch; the run step, going back to the previous
 // release when it fails and restarting that one; pruning; remote after
 // steps. Nothing before the switch changes what is live.
-func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases) string {
-	s := prelude(t) + "lock\n"
+//
+// With clone, a release clones its parent's data once current, before
+// the run step (CloneOptions): it pauses and stops the release's services,
+// prints CloneMarker and waits for devopsy's go or abort on stdin. Not for
+// rollbacks.
+func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, clone *CloneOptions) string {
+	s := prelude(t)
+	if clone != nil {
+		s += cloneStdin
+	}
+	s += "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 `
 	if rollback {
@@ -414,23 +423,44 @@ done
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
-	if len(p.Run) > 0 {
-		restart := ""
-		if len(p.Restart) > 0 {
-			restart = fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
+	restart := ""
+	if len(p.Restart) > 0 {
+		restart = fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
     (cd "$base/current" && %s) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
-		}
-		s += `status=0
-` + fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `(cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
-if [ "$status" != 0 ]; then
+	}
+	if clone != nil || len(p.Run) > 0 {
+		s += "status=0\nfailed=run\n"
+	}
+	if clone != nil {
+		s += clone.exports() + `cd "$base/current"
+` + cloneFinish(projectName) + clonePrepare(projectName) + `if [ "$status" = 0 ]; then
+` + cloneWait("the release does not go live") + `  if [ "$reply" != go ]; then
+    clone_finish abort || true
+    status=1
+  else
+    clone_finish go || status=$?
+  fi
+fi
+cd "$base"
+[ "$status" = 0 ] || failed=clone
+`
+	}
+	if len(p.Run) > 0 {
+		s += `if [ "$status" = 0 ]; then
+` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
+fi
+`
+	}
+	if clone != nil || len(p.Run) > 0 {
+		s += `if [ "$status" != 0 ]; then
   touch "$rel/.devopsy-failed"
   if [ -n "$prev" ]; then
     make_current "$prev"
-    echo "devopsy: run failed ($status), current is back to ${prev#releases/}" >&2
+    echo "devopsy: $failed failed ($status), current is back to ${prev#releases/}" >&2
 ` + restart + `  else
     rm -f "$base/current"
-    echo "devopsy: run failed ($status), no previous release to go back to" >&2
+    echo "devopsy: $failed failed ($status), no previous release to go back to" >&2
   fi
   exit "$status"
 fi
@@ -588,6 +618,12 @@ var SSHOptions = []string{"-o", "ClearAllForwardings=yes"}
 
 // SSHLog is SSH, also copying the session's output, both streams, to log.
 func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
+	return SSHWith(t, nil, script, stdin, stdout, tty, log)
+}
+
+// SSHWith is SSHLog with extra ssh options after SSHOptions (a clone's push
+// session forwards the agent: -o ForwardAgent=yes).
+func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	ttyFlag := "-T"
 	if tty {
 		ttyFlag = "-t"
@@ -595,21 +631,17 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	// devopsy's sessions never need the host's port forwardings from
 	// ~/.ssh/config: each one would try to bind them again, and warn that
 	// they are in use while another session (or the user's own) holds them.
-	args := append(append([]string{}, SSHOptions...), ttyFlag, t.Host, "sh -c "+Quote(script))
+	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
+		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
 		if TraceScripts {
-			Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", ttyFlag, t.Host, strings.TrimRight(script, "\n")))
+			Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", opts, t.Host, strings.TrimRight(script, "\n")))
 		} else {
-			Trace(fmt.Sprintf("devopsy: ssh %s %s", ttyFlag, t.Host))
+			Trace(fmt.Sprintf("devopsy: ssh %s %s", opts, t.Host))
 		}
 	}
 
-	var cmd *exec.Cmd
-	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
-		cmd = exec.Command("sh", append([]string{"-c", custom + ` "$@"`, "sh"}, args...)...)
-	} else {
-		cmd = exec.Command("ssh", args...)
-	}
+	cmd := SSHCommand(args...)
 	cmd.Stdin = stdin
 	if stdin == nil {
 		cmd.Stdin = os.Stdin
@@ -631,6 +663,15 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 		return 1, err
 	}
 	return 0, nil
+}
+
+// SSHCommand is ssh with args, or DEVOPSY_SSH_COMMAND, which replaces
+// "ssh" like GIT_SSH_COMMAND, with them.
+func SSHCommand(args ...string) *exec.Cmd {
+	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
+		return exec.Command("sh", append([]string{"-c", custom + ` "$@"`, "sh"}, args...)...)
+	}
+	return exec.Command("ssh", args...)
 }
 
 // LogFile is a release's log, in its directory: what its release printed,

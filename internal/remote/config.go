@@ -97,6 +97,15 @@ type Target struct {
 	Destroy string `yaml:"destroy"`
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
+	// Parent is the environment this one is a copy of (a concrete key of
+	// environments:): its first release clones the parent's data, and
+	// --clone resyncs it. Empty: not a child.
+	Parent string `yaml:"parent"`
+	// ParentTarget is Parent resolved for a command, one level only (its
+	// own ParentTarget stays nil): the child's instance, the server from
+	// the usual variables, else the child's. nil without a parent, and
+	// when DescribeTarget cannot resolve it.
+	ParentTarget *Target `yaml:"-"`
 
 	// Address is the resolved target, <server>:[<instance>/]<environment>.
 	Address string `yaml:"-"`
@@ -424,10 +433,14 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
 			case "path", "mode", "env", "release", "rollback", "destroy", "releases":
+			case "parent":
+				if v := n.Content[i+1]; v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value) {
+					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern)", file, name)
+				}
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases, parent)", file, name, k)
 			}
 		}
 	}
@@ -461,6 +474,7 @@ func origins(t *Target, from string) map[string]string {
 	set("rollback", t.Rollback != nil)
 	set("destroy", t.Destroy != "")
 	set("keep", t.Releases != nil && t.Releases.Keep > 0)
+	set("parent", t.Parent != "")
 	for k := range t.Env {
 		o["env."+k] = from
 	}
@@ -520,6 +534,9 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	}
 	if t.Releases == nil {
 		t.Releases = base.Releases
+	}
+	if t.Parent == "" {
+		t.Parent = base.Parent
 	}
 	env := map[string]string{}
 	for k, v := range base.Env {
@@ -602,7 +619,36 @@ func LoadConfig(projectDir string) (*Config, error) {
 			c.Environments[n] = mergeDefaults(defaults, t, t.nulls)
 		}
 	}
+	if err := validateParents(c.Environments); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// validateParents checks each environment's parent: a concrete environment
+// of the project. An environment whose parent is itself has none, so
+// defaults: {parent: prod} gives every environment but prod one.
+func validateParents(envs map[string]*Target) error {
+	var names []string
+	for n := range envs {
+		if !strings.Contains(n, "*") {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	for n, t := range envs {
+		switch p := t.Parent; {
+		case p == "":
+		case p == n:
+			t.Parent = ""
+			delete(t.From, "parent")
+		default:
+			if _, ok := envs[p]; !ok || strings.Contains(p, "*") {
+				return fmt.Errorf("%s: environments: %s: parent %s is not an environment of the project (environments: %s)", t.File, n, p, strings.Join(names, ", "))
+			}
+		}
+	}
+	return nil
 }
 
 // ValidName reports whether s can be a project's or an instance's name.
@@ -989,6 +1035,33 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		return nil, fmt.Errorf("set project: (its name on servers) in %s", filepath.Join(projectDir, ConfigFile))
 	}
 
+	t, err := resolveTarget(project, envs, a, addr, alias, aliasName, projectEnv, strict, "")
+	if err != nil {
+		return nil, err
+	}
+	// The parent, one level: at the child's instance (none when the parent
+	// has its own path), on the server its variables name, else the
+	// child's. Its own parent is never resolved, so two environments can
+	// be each other's parent. DescribeTarget leaves it unresolved.
+	if t.Parent != "" && strict {
+		pa := address{env: t.Parent, instance: t.Instance, instanceSet: true}
+		if pt := envs[t.Parent]; pt != nil && pt.Path != "" {
+			pa.instance = ""
+		}
+		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, t.Host)
+		if err != nil {
+			return nil, fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
+		}
+		t.ParentTarget = p
+	}
+	return t, nil
+}
+
+// resolveTarget resolves address a of project, whose environments are envs
+// (nil for an alias without source), for loadTarget; addr is how errors
+// show it. fallbackHost is the server when neither the address nor a
+// variable names one (a parent's: its child's).
+func resolveTarget(project *Project, envs map[string]*Target, a address, addr string, alias *Alias, aliasName string, projectEnv func(string) (string, bool), strict bool, fallbackHost string) (*Target, error) {
 	// The environment: defined, or matched by a pattern. An alias without
 	// source has no config: any environment, nothing to release.
 	var t Target
@@ -1066,6 +1139,9 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 				t.Host, t.From["server"] = v, k
 				break
 			}
+		}
+		if t.Host == "" && fallbackHost != "" {
+			t.Host, t.From["server"] = fallbackHost, "the child's server"
 		}
 	}
 	if strings.Contains(t.Host, ":") {

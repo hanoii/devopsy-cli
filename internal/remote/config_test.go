@@ -155,6 +155,8 @@ func TestConfigErrors(t *testing.T) {
 		"step with two keys": "project: app\nenvironments:\n  prod: {release: {after: [{local: a, remote: b}], run: deploy}}\n",
 		"bad pattern":        "project: app\nenvironments:\n  \"pr/*\": {}\n",
 		"aliases":            "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
+		"missing parent":     "project: app\nenvironments:\n  prod: {}\n  dev: {parent: stage}\n",
+		"pattern parent":     "project: app\nenvironments:\n  \"pr-*\": {}\n  prod: {parent: \"pr-*\"}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
@@ -355,7 +357,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	run := func(tg *Target, id string) string {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
-		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{}))
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{}, nil))
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -414,5 +416,91 @@ func TestServers(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "vm1 vm2" {
 		t.Errorf("servers: %v", got)
+	}
+}
+
+// Parents resolve one level, at the child's instance, on the server their
+// variables name, else the child's.
+func TestParents(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	for _, k := range []string{"DEVOPSY_SERVER", "DEVOPSY_INSTANCE", "DEVOPSY_SERVER_PROD"} {
+		t.Setenv(k, "")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), `
+project: shop
+defaults:
+  parent: prod
+environments:
+  prod: {}
+  dev: {}
+  "pr-*": {}
+  legacy: {path: /srv/legacy}
+  old: {parent: legacy}
+  a: {parent: b}
+  b: {parent: a}
+`)
+	load := func(addr string) *Target {
+		t.Helper()
+		tg, err := LoadTarget(dir, addr, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", addr, err)
+		}
+		return tg
+	}
+	tg := load("vm1:dev")
+	if tg.Parent != "prod" || tg.ParentTarget == nil || tg.ParentTarget.Address != "vm1:prod" || tg.ParentTarget.Path != "shop/prod" ||
+		tg.ParentTarget.From["server"] != "the child's server" || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+		t.Fatalf("dev: %+v %+v", tg, tg.ParentTarget)
+	}
+	// The parent itself has none, though defaults give one.
+	if tg := load("vm1:prod"); tg.Parent != "" || tg.ParentTarget != nil {
+		t.Errorf("prod: %q %+v", tg.Parent, tg.ParentTarget)
+	}
+	if tg := load("vm1:x/dev"); tg.ParentTarget.Address != "vm1:x/prod" || tg.ParentTarget.Path != "shop/x/prod" {
+		t.Errorf("instance kept: %+v", tg.ParentTarget)
+	}
+	if tg := load("vm1:pr-3"); tg.ParentTarget.Address != "vm1:prod" {
+		t.Errorf("pattern child: %+v", tg.ParentTarget)
+	}
+	// A parent with its own path takes no instance.
+	if tg := load("vm1:x/old"); tg.ParentTarget.Address != "vm1:legacy" || tg.ParentTarget.Path != "/srv/legacy" {
+		t.Errorf("parent with a path: %+v", tg.ParentTarget)
+	}
+	// One level: two environments can be each other's parent.
+	if tg := load("vm1:a"); tg.ParentTarget.Name != "b" || tg.ParentTarget.ParentTarget != nil || tg.ParentTarget.Parent != "a" {
+		t.Errorf("one level: %+v", tg.ParentTarget)
+	}
+	// Variables name the parent's server first; the child's comes last.
+	t.Setenv("DEVOPSY_SERVER_PROD", "vm9")
+	if tg := load("vm1:dev"); tg.ParentTarget.Host != "vm9" || tg.ParentTarget.Address != "vm9:prod" {
+		t.Errorf("DEVOPSY_SERVER_PROD: %+v", tg.ParentTarget)
+	}
+	t.Setenv("DEVOPSY_SERVER_PROD", "")
+	t.Setenv("DEVOPSY_SERVER", "vm2")
+	if tg := load("vm1:dev"); tg.ParentTarget.Host != "vm2" {
+		t.Errorf("DEVOPSY_SERVER: %+v", tg.ParentTarget)
+	}
+	// --debug and help leave it unresolved.
+	if tg, err := DescribeTarget(dir, "dev", nil); err != nil || tg.Parent != "prod" || tg.ParentTarget != nil {
+		t.Errorf("describe: %+v %v", tg, err)
+	}
+
+	for name, config := range map[string]string{
+		"pattern parent": "project: app\nenvironments:\n  prod: {}\n  dev: {parent: \"pr-*\"}\n  \"pr-*\": {}\n",
+		"missing parent": "project: app\nenvironments:\n  prod: {}\n  dev: {parent: nope}\n",
+		"not a name":     "project: app\nenvironments:\n  prod: {}\n  dev: {parent: [prod]}\n",
+	} {
+		d := t.TempDir()
+		write(t, filepath.Join(d, ConfigFile), config)
+		if _, err := LoadTarget(d, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), "parent") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A parent that cannot be resolved fails the child, strictly.
+	d := t.TempDir()
+	write(t, filepath.Join(d, ConfigFile), "project: app\ninstances: required\nenvironments:\n  prod: {}\n  dev: {path: /srv/dev, parent: prod}\n")
+	if _, err := LoadTarget(d, "vm1:dev", nil); err == nil || !strings.Contains(err.Error(), "environment dev: parent prod: app needs an instance") {
+		t.Errorf("unresolved parent: %v", err)
 	}
 }
