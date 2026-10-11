@@ -85,3 +85,23 @@ func VarsSetScript(t *Target, level *Level) string {
 func VarsUnsetScript(t *Target, level *Level) string {
 	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset")
 }
+
+// InheritSeparator starts the line before each file InheritReadScript
+// prints, followed by its level: shared, instance or project.
+const InheritSeparator = "=devopsy-vars= "
+
+// InheritReadScript prints a parent's variables files for inherit:, its
+// environment's shared/.env, then its instance's and project's .env (those
+// it has), each after a InheritSeparator line naming its level.
+func InheritReadScript(t *Target) string {
+	s := "set -eu\n" + basePrelude(t) + `show() {
+  printf '%s%s\n' ` + Quote(InheritSeparator) + ` "$1"
+  [ ! -f "$2" ] || { cat "$2"; echo; }
+}
+show shared "$base/shared/.env"
+`
+	for i := len(t.Levels) - 1; i >= 0; i-- {
+		s += "show " + t.Levels[i].Name + ` "$root"/` + Quote(t.Levels[i].Dir+"/.env") + "\n"
+	}
+	return s
+}

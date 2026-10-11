@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -103,9 +104,14 @@ type Target struct {
 	Parent string `yaml:"parent"`
 	// ParentTarget is Parent resolved for a command, one level only (its
 	// own ParentTarget stays nil): the child's instance, the server from
-	// the usual variables, else the child's. nil without a parent, and
-	// when DescribeTarget cannot resolve it.
+	// the usual variables, else the child's. nil without a parent; under
+	// DescribeTarget it may have no server yet, and is nil when it cannot
+	// be resolved at all.
 	ParentTarget *Target `yaml:"-"`
+	// Inherit names the variables this environment's children get from it:
+	// read from its server's .env files and written at the same level on
+	// the child's side, on a child's first release and every --clone.
+	Inherit []string `yaml:"inherit"`
 
 	// Address is the resolved target, <server>:[<instance>/]<environment>.
 	Address string `yaml:"-"`
@@ -131,7 +137,8 @@ type Target struct {
 	// Keep is how many releases to keep: the environment's releases.keep,
 	// else the project's, else 0 (the server's default).
 	Keep int `yaml:"-"`
-	// nulls are its env keys set to null: they remove a default.
+	// nulls are what it sets to null, removing a default: "env.KEY",
+	// "parent", "inherit".
 	nulls map[string]bool
 	// From says where each value came from, for --debug: "server", "path",
 	// "mode", "release", "rollback", "destroy", "keep", "env.KEY". A file,
@@ -434,13 +441,17 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 			switch k := n.Content[i].Value; k {
 			case "path", "mode", "env", "release", "rollback", "destroy", "releases":
 			case "parent":
-				if v := n.Content[i+1]; v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value) {
-					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern)", file, name)
+				if v := n.Content[i+1]; v.Tag != "!!null" && (v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value)) {
+					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern), or ~ for none", file, name)
+				}
+			case "inherit":
+				if err := checkInherit(n.Content[i+1]); err != nil {
+					return nil, nil, fmt.Errorf("%s: %s: inherit: %w", file, name, err)
 				}
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases, parent)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases, parent, inherit)", file, name, k)
 			}
 		}
 	}
@@ -448,10 +459,12 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	if err := n.Decode(&t); err != nil {
 		return nil, nil, fmt.Errorf("%s: %s: %w", file, name, err)
 	}
-	nulls := nullEnv(n)
+	nulls := nullKeys(n)
 	if t != nil {
 		for k := range nulls {
-			delete(t.Env, k)
+			if env, ok := strings.CutPrefix(k, "env."); ok {
+				delete(t.Env, env)
+			}
 		}
 		if t.Releases != nil && t.Releases.Keep < 0 {
 			return nil, nil, fmt.Errorf("%s: %s: releases: keep is at least 1", file, name)
@@ -475,30 +488,58 @@ func origins(t *Target, from string) map[string]string {
 	set("destroy", t.Destroy != "")
 	set("keep", t.Releases != nil && t.Releases.Keep > 0)
 	set("parent", t.Parent != "")
+	set("inherit", t.Inherit != nil)
 	for k := range t.Env {
 		o["env."+k] = from
 	}
 	return o
 }
 
-// nullEnv lists the env keys a target node sets to null (KEY: ~).
-func nullEnv(n *yaml.Node) map[string]bool {
+// nullKeys lists what a target node sets to null, removing a default:
+// "env.KEY" for env's KEY: ~, "parent" and "inherit".
+func nullKeys(n *yaml.Node) map[string]bool {
 	nulls := map[string]bool{}
 	if n.Kind != yaml.MappingNode {
 		return nulls
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value != "env" || n.Content[i+1].Kind != yaml.MappingNode {
-			continue
-		}
-		env := n.Content[i+1]
-		for j := 0; j+1 < len(env.Content); j += 2 {
-			if env.Content[j+1].Tag == "!!null" {
-				nulls[env.Content[j].Value] = true
+		switch k, v := n.Content[i].Value, n.Content[i+1]; {
+		case (k == "parent" || k == "inherit") && v.Tag == "!!null":
+			nulls[k] = true
+		case k == "env" && v.Kind == yaml.MappingNode:
+			for j := 0; j+1 < len(v.Content); j += 2 {
+				if v.Content[j+1].Tag == "!!null" {
+					nulls["env."+v.Content[j].Value] = true
+				}
 			}
 		}
 	}
 	return nulls
+}
+
+// checkInherit checks an inherit: list: variable names, each once, none of
+// devopsy's own (DEVOPSY_*, COMPOSE_PROJECT_NAME: deployment facts).
+func checkInherit(n *yaml.Node) error {
+	if n.Tag == "!!null" {
+		return nil
+	}
+	if n.Kind != yaml.SequenceNode {
+		return errors.New("a list of variable names")
+	}
+	seen := map[string]bool{}
+	for _, v := range n.Content {
+		k := v.Value
+		switch {
+		case v.Kind != yaml.ScalarNode || !VarNameRe.MatchString(k):
+			return fmt.Errorf("%q is not a variable name", k)
+		case strings.HasPrefix(k, "DEVOPSY_") || k == "COMPOSE_PROJECT_NAME":
+			return fmt.Errorf("%s is devopsy's, set for each environment: not inherited", k)
+		case seen[k]:
+			return fmt.Errorf("%s is listed twice", k)
+		}
+		seen[k] = true
+	}
+	return nil
 }
 
 // mergeDefaults returns over's fields on top of base's: for two defaults,
@@ -514,7 +555,7 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 		from[k] = v
 	}
 	for k := range nulls {
-		delete(from, "env."+k)
+		delete(from, k)
 	}
 	for k, v := range over.From {
 		from[k] = v
@@ -535,15 +576,20 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	if t.Releases == nil {
 		t.Releases = base.Releases
 	}
-	if t.Parent == "" {
+	if t.Parent == "" && !nulls["parent"] {
 		t.Parent = base.Parent
+	}
+	if t.Inherit == nil && !nulls["inherit"] {
+		t.Inherit = base.Inherit
 	}
 	env := map[string]string{}
 	for k, v := range base.Env {
 		env[k] = v
 	}
 	for k := range nulls {
-		delete(env, k)
+		if e, ok := strings.CutPrefix(k, "env."); ok {
+			delete(env, e)
+		}
 	}
 	for k, v := range over.Env {
 		env[k] = v
@@ -1042,14 +1088,15 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 	// The parent, one level: at the child's instance (none when the parent
 	// has its own path), on the server its variables name, else the
 	// child's. Its own parent is never resolved, so two environments can
-	// be each other's parent. DescribeTarget leaves it unresolved.
-	if t.Parent != "" && strict {
+	// be each other's parent. Under DescribeTarget it may have no server,
+	// and stays nil when it cannot be resolved.
+	if t.Parent != "" {
 		pa := address{env: t.Parent, instance: t.Instance, instanceSet: true}
 		if pt := envs[t.Parent]; pt != nil && pt.Path != "" {
 			pa.instance = ""
 		}
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, t.Host)
-		if err != nil {
+		if err != nil && strict {
 			return nil, fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
 		}
 		t.ParentTarget = p
