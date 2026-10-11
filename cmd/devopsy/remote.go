@@ -323,6 +323,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			first := strings.TrimSpace(out.String()) == "none"
 			if cloneFlag || first {
+				if t.ParentErr != nil {
+					return fail(t.ParentErr.Error())
+				}
 				if job, err = clonePreflight(t, t.ParentTarget, projectName, nil); err != nil {
 					return fail(err.Error() + "\nNothing changed. --no-clone releases without the parent's data.")
 				}

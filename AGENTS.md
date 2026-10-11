@@ -183,8 +183,10 @@ repositories fit together and the open ideas.
   environments can be each other's parent): at the child's instance (none
   when the parent has a `path:`), its server from the usual variables, else
   the child's (`From["server"]` is "the child's server"). Strict loading
-  fails on an unresolvable parent; `DescribeTarget` resolves it leniently,
-  maybe without a server. `target.env` and local steps get
+  records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
+  instead of failing: only `--clone` and a `--release` that clones fail
+  with it, so every other command works on the child. `DescribeTarget`
+  resolves it leniently, maybe without a server. `target.env` and local steps get
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`.
 - **When:** a child's first release (`CurrentExistsScript` prints `current`
   or `none`, exit 0; one extra session on every release of a child),

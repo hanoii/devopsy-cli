@@ -108,6 +108,10 @@ type Target struct {
 	// DescribeTarget it may have no server yet, and is nil when it cannot
 	// be resolved at all.
 	ParentTarget *Target `yaml:"-"`
+	// ParentErr is why LoadTarget could not resolve Parent (ParentTarget
+	// is nil then): an error only for what clones, so every other command
+	// works on a child whatever its parent's state.
+	ParentErr error `yaml:"-"`
 	// Inherit names the variables this environment's children get from it:
 	// read from its server's .env files and written at the same level on
 	// the child's side, on a child's first release and every --clone.
@@ -1097,7 +1101,7 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		}
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, t.Host)
 		if err != nil && strict {
-			return nil, fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
+			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
 		}
 		t.ParentTarget = p
 	}
