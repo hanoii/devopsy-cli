@@ -692,7 +692,7 @@ esac
 		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "labels")
-	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.clone=live|skip|stop|pause") {
+	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.clone=skip|live|pause|stop|custom") {
 		t.Errorf("--debug labels (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "imports")

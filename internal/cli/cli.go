@@ -350,25 +350,34 @@ copies into the child's.
                     or the clone capability's to use
 
 What runs where:
-  - the child's server, under its release lock: its services labeled
-    devopsy.clone=pause are paused, those labeled stop stopped, then it
-    waits for the copy; after it, stopped ones start (and become healthy),
-    paused ones resume, and the run step runs. A failed copy restores the
-    services and skips the run step.
+  - the child's server, under its release lock: the prepare hook, then
+    its services labeled devopsy.clone=live or pause are flushed (the
+    flush hook), those labeled pause paused, those labeled stop stopped,
+    then it waits for the copy; after it, stopped ones start (and become
+    healthy), paused ones resume, the finish hook runs, then the run step.
+    A failed copy restores the services and skips the run step.
   - the parent's server, under a shared hold of its lock (its releases
-    wait): the same for its own labeled services, the copy, the restart.
+    wait): the same for its own labeled services, the copy, the restart,
+    then the push capability for the services labeled custom.
 
-The copy is rsync -a --delete --numeric-ids, as root in devopsy's own
-image (devopsy-rsync, built on each server when missing), of each entry of
-.devopsy/mnt a service bind-mounts, unless the service is labeled skip.
-Labels, on compose services:
+Services opt in. The copy is rsync -a --delete --numeric-ids, as root in
+devopsy's own image (devopsy-rsync, built on each server when missing), of
+each entry of .devopsy/mnt a service labeled live, pause or stop
+bind-mounts. Labels, on compose services:
 
-  devopsy.clone=live    (default) untouched; its mounts are copied
-  devopsy.clone=skip    its mounts are not copied (a database it dumps)
+  devopsy.clone=skip    (default) neither copied nor touched
+  devopsy.clone=live    untouched; flushed, its mounts copied
+  devopsy.clone=pause   flushed, then frozen for the copy, its requests held
+                        (the routed app); its mounts copied. Holding, not
+                        consistency: never a database
   devopsy.clone=stop    stopped for the copy: a clean shutdown (a database's
-                        files)
-  devopsy.clone=pause   frozen for the copy, its requests held (the routed
-                        app). Holding, not consistency: never a database
+                        files); its mounts copied
+  devopsy.clone=custom  devopsy copies and touches nothing: the parent's
+                        push capability (required then) copies it, after the
+                        rest (a database it dumps)
+
+Without any labeled service there is nothing to clone; the run step still
+runs.
 
 On one server, one container copies between the two directories. Across
 servers, the parent's runs an rsync daemon for the copy and reaches the
@@ -383,9 +392,9 @@ copying, the variables the parent's inherit: names are copied from its
 server's .env files into the child's, at the same level (shared/.env, the
 instance's or the project's .env); names are printed, never values.
 
-The clone capability (capabilities/clone) replaces the generic steps:
-prepare and finish on the child's server, push on the parent's (devopsy
---debug capabilities). Asks for the environment's name, unless --yes. The
+The clone capability (capabilities/clone) adds hooks, each run only where
+its file is: flush on both servers, prepare and finish on the child's, push
+on the parent's for the custom services (devopsy --debug capabilities). Asks for the environment's name, unless --yes. The
 log goes with the current release: devopsy @<target> --log.
 `,
 	"--release": `Usage: devopsy @<target> --release [--yes] [--clone | --no-clone]

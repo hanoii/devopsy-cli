@@ -224,11 +224,20 @@ repositories fit together and the open ideas.
   session. A connection already open runs to its end, and on one server
   nothing stops a capability push: until then it may still write into the
   child.
+- **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
+  touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`
+  is left to the parent's `push`. No labeled service: "nothing to clone",
+  success, and the run step still runs.
 - **Who pauses what:** the child's labeled services by the holder, for the
-  whole clone (capability `prepare`/`finish`, else `--clone-services
-  prepare|finish`); the parent's inside `--clone-push` (capability `push`,
-  else the generic path, whose finish is deferred). Each capability action
-  replaces only its own part. `--clone-services finish` is stateless: it
+  whole clone: the `prepare` hook, then `--clone-services prepare` (the
+  `flush` hook per running `live`/`pause` service, pause, stop); after the
+  copy `--clone-services finish`, then the `finish` hook (`clone_finish`
+  runs both whatever either did). The parent's inside `--clone-push`: the
+  generic path for `live`/`pause`/`stop` (flush, pause, stop, rsync,
+  finish), then the capability's `push` with `DEVOPSY_CLONE_CUSTOM` when a
+  service is `custom` (required then; present without one: a notice, not
+  run). Hooks only run where their file is, and never replace devopsy's
+  handling. A failing flush fails prepare. `--clone-services finish` is stateless: it
   reads container state (exited, paused), so it also recovers after an
   interrupted clone. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
   SIGPIPE and restores; servers' commands write to `errOut`, never an
@@ -263,7 +272,7 @@ repositories fit together and the open ideas.
   `--numeric-ids`: owners and modes survive, the deploy user's permissions
   do not matter. Bump the tag whenever the Dockerfile changes (the alpine
   version included): hosts never rebuild an image they have. Entries are
-  the top-level entries of `mnt` that non-`skip` services bind-mount
+  the top-level entries of `mnt` that `live`, `pause` and `stop` services bind-mount
   (`docker compose --profile '*' config`, lexical and resolved paths;
   `.` subsumes the rest).
 - **inherit:** `inheritVars` reads the parent's three files in one session

@@ -34,8 +34,10 @@ func TestCloneServices(t *testing.T) {
 			"labels":  map[string]string{CloneLabel: "skip"},
 			"volumes": []any{bind(dot + "/mnt/database")},
 		},
-		"goaccess": map[string]any{"profiles": []string{"tools"}, "volumes": []any{bind(resolved + "/report")}},
+		"goaccess": map[string]any{"profiles": []string{"tools"}, "labels": map[string]string{CloneLabel: "live"}, "volumes": []any{bind(resolved + "/report")}},
 		"mntnot":   map[string]any{"volumes": []any{bind(dot + "/mntx/a")}},
+		"plain":    map[string]any{"volumes": []any{bind(dot + "/mnt/plain")}},
+		"search":   map[string]any{"labels": map[string]string{CloneLabel: "custom"}, "volumes": []any{bind(dot + "/mnt/index")}},
 	}}
 	out, _ := json.Marshal(config)
 	var gotEnv []string
@@ -48,18 +50,24 @@ func TestCloneServices(t *testing.T) {
 		t.Fatalf("%v %s %v", err, dir, gotEnv)
 	}
 	want := []CloneService{
-		{Name: "app", Policy: ClonePause, Dirs: []string{"logs", "storage"}},
-		{Name: "database", Policy: CloneSkip, Dirs: []string{"database"}},
-		{Name: "goaccess", Policy: CloneLive, Dirs: []string{"report"}},
-		{Name: "mntnot", Policy: CloneLive},
+		{Name: "app", Policy: ClonePause, Dirs: []string{"logs", "storage"}, Labeled: true},
+		{Name: "database", Policy: CloneSkip, Dirs: []string{"database"}, Labeled: true},
+		{Name: "goaccess", Policy: CloneLive, Dirs: []string{"report"}, Labeled: true},
+		{Name: "mntnot", Policy: CloneSkip},
+		// Without the label, skip: neither copied nor touched.
+		{Name: "plain", Policy: CloneSkip, Dirs: []string{"plain"}},
+		{Name: "search", Policy: CloneCustom, Dirs: []string{"index"}, Labeled: true},
+	}
+	if len(services) != len(want) {
+		t.Fatalf("services: %+v", services)
 	}
 	for i, s := range services {
-		if s.Name != want[i].Name || s.Policy != want[i].Policy || strings.Join(s.Dirs, ",") != strings.Join(want[i].Dirs, ",") {
+		if s.Name != want[i].Name || s.Policy != want[i].Policy || s.Labeled != want[i].Labeled || strings.Join(s.Dirs, ",") != strings.Join(want[i].Dirs, ",") {
 			t.Errorf("%d: %+v, want %+v", i, s, want[i])
 		}
 	}
 	if got := strings.Join(CloneDirs(services), ","); got != "logs,report,storage" {
-		t.Errorf("dirs, skip left out: %s", got)
+		t.Errorf("dirs, skip and custom left out: %s", got)
 	}
 	if got := ClonePolicy(services, ClonePause); len(got) != 1 || got[0] != "app" {
 		t.Errorf("pause: %v", got)
@@ -70,7 +78,7 @@ func TestCloneServices(t *testing.T) {
 	if got := strings.Join(CloneDirs(services), ","); got != "." {
 		t.Errorf("whole mnt: %s", got)
 	}
-	if got, err := parseCloneServices([]byte(`{"services":{"x":{"volumes":[{"type":"bind","source":"`+dot+`/mnt"}]}}}`), dot); err != nil || got[0].Dirs[0] != "." {
+	if got, err := parseCloneServices([]byte(`{"services":{"x":{"labels":{"devopsy.clone":"live"},"volumes":[{"type":"bind","source":"`+dot+`/mnt"}]}}}`), dot); err != nil || got[0].Dirs[0] != "." || CloneDirs(got)[0] != "." {
 		t.Errorf("mnt bind: %+v %v", got, err)
 	}
 

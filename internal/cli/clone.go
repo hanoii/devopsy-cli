@@ -13,14 +13,17 @@ import (
 // CloneLabel tunes how a clone treats a service (CloneLive and so on).
 const CloneLabel = "devopsy.clone"
 
-// Clone policies, CloneLabel's values.
+// Clone policies, CloneLabel's values. A service opts in: without the
+// label it is CloneSkip.
 const (
-	// CloneLive (the default): nothing happens to the service; its binds
-	// under mnt are copied.
-	CloneLive = "live"
-	// CloneSkip: its binds are not copied (data a project copies its own
-	// way, like a database it dumps).
+	// CloneSkip (the default): the service is neither copied nor touched.
 	CloneSkip = "skip"
+	// CloneLive: nothing happens to the service; its binds under mnt are
+	// copied (after the flush hook).
+	CloneLive = "live"
+	// CloneCustom: devopsy copies nothing and touches nothing; the clone
+	// capability's push, required then, copies it after the rest.
+	CloneCustom = "custom"
 	// CloneStop: stopped for the copy, a clean shutdown (a database's raw
 	// files).
 	CloneStop = "stop"
@@ -38,10 +41,12 @@ const (
 )
 
 // CloneService is a service of the project as a clone sees it: its policy
-// and the entries of mnt its binds hold ("." for mnt itself).
+// and the entries of mnt its binds hold ("." for mnt itself). Labeled is
+// whether it has CloneLabel.
 type CloneService struct {
 	Name, Policy string
 	Dirs         []string
+	Labeled      bool
 }
 
 // ComposeConfig prints the project's compose configuration as JSON, every
@@ -64,7 +69,7 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 }
 
 // CloneServices lists the services of the project at cwd, sorted, with
-// their policy (CloneLabel, default CloneLive) and the entries of
+// their policy (CloneLabel, default CloneSkip) and the entries of
 // .devopsy/mnt their bind mounts hold. projectDir is the project's
 // .devopsy/.
 func CloneServices(cwd string, environ []string) (projectDir string, services []CloneService, err error) {
@@ -103,15 +108,15 @@ func parseCloneServices(out []byte, projectDir string) ([]CloneService, error) {
 	}
 	var services []CloneService
 	for name, s := range config.Services {
-		policy := s.Labels[CloneLabel]
+		policy, labeled := s.Labels[CloneLabel]
 		switch policy {
 		case "":
-			policy = CloneLive
-		case CloneLive, CloneSkip, CloneStop, ClonePause:
+			policy = CloneSkip
+		case CloneLive, CloneSkip, CloneStop, ClonePause, CloneCustom:
 		default:
-			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s or %s", name, CloneLabel, policy, CloneLive, CloneSkip, CloneStop, ClonePause)
+			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s, %s or %s", name, CloneLabel, policy, CloneSkip, CloneLive, CloneCustom, CloneStop, ClonePause)
 		}
-		cs := CloneService{Name: name, Policy: policy}
+		cs := CloneService{Name: name, Policy: policy, Labeled: labeled}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" {
 				continue
@@ -143,12 +148,12 @@ func mntEntry(source string, mnts []string) string {
 	return ""
 }
 
-// CloneDirs are the entries of mnt a clone copies: those of every service
-// not labeled skip, sorted; "." (all of mnt) subsumes the rest.
+// CloneDirs are the entries of mnt a clone copies: those of the services
+// labeled live, pause or stop, sorted; "." (all of mnt) subsumes the rest.
 func CloneDirs(services []CloneService) []string {
 	var dirs []string
 	for _, s := range services {
-		if s.Policy == CloneSkip {
+		if s.Policy == CloneSkip || s.Policy == CloneCustom {
 			continue
 		}
 		for _, d := range s.Dirs {

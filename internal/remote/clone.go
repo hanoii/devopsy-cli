@@ -62,6 +62,9 @@ const (
 	CloneArgsEnv = "DEVOPSY_CLONE_ARGS"
 	// CloneFromTargetEnv is the parent's address.
 	CloneFromTargetEnv = "DEVOPSY_CLONE_FROM_TARGET"
+	// CloneCustomEnv names the parent's services labeled
+	// devopsy.clone=custom, space-separated, for the clone capability's push.
+	CloneCustomEnv = "DEVOPSY_CLONE_CUSTOM"
 )
 
 // CloneOptions make ActivateScript clone the parent's data into the new
@@ -84,23 +87,27 @@ func (o *CloneOptions) exports() string {
 const cloneStdin = "exec 3<&0 </dev/null\n"
 
 // cloneFinish defines clone_finish go|abort, in the child's current
-// release: the clone capability's finish, else --clone-services finish
-// (start what was stopped, wait for it to be healthy, unpause).
+// release: --clone-services finish (start what was stopped, wait for it to
+// be healthy, unpause), then the clone capability's finish hook when the
+// project has one. Both run whatever the other did; it fails if either
+// did.
 func cloneFinish(projectName string) string {
 	return `clone_finish() {
+  finished=0
+  ` + devopsyCall(projectName, []string{"--clone-services", "finish"}, false) + ` || finished=$?
   if [ -x .devopsy/capabilities/clone/finish ]; then
     echo "devopsy: running 'devopsy --capability clone finish $1'" >&2
-    ` + devopsyCall(projectName, []string{"--capability", "clone", "finish"}, false) + ` "$1"
-  else
-    ` + devopsyCall(projectName, []string{"--clone-services", "finish"}, false) + `
+    ` + devopsyCall(projectName, []string{"--capability", "clone", "finish"}, false) + ` "$1" || finished=$?
   fi
+  return "$finished"
 }
 `
 }
 
 // clonePrepare readies the child's current release to be written: the
-// clone capability's prepare, else --clone-services prepare (pause, then
-// stop). A failure sets $status and restores what it changed.
+// clone capability's prepare hook when the project has one, then
+// --clone-services prepare (flush, pause, stop). A failure sets $status
+// and restores what they changed.
 //
 // From here until the services are restored, SIGPIPE is ignored
 // (cloneRestorePipe ends that): if devopsy goes away, a write to this
@@ -110,7 +117,8 @@ func clonePrepare(projectName string) string {
 if [ -x .devopsy/capabilities/clone/prepare ]; then
   echo "devopsy: running 'devopsy --capability clone prepare'" >&2
   ` + devopsyCall(projectName, []string{"--capability", "clone", "prepare"}, false) + ` || status=$?
-else
+fi
+if [ "$status" = 0 ]; then
   ` + devopsyCall(projectName, []string{"--clone-services", "prepare"}, false) + ` || status=$?
 fi
 if [ "$status" != 0 ]; then
