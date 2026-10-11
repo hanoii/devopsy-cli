@@ -216,14 +216,19 @@ repositories fit together and the open ideas.
   devopsy just exits, and the holder restores on its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
-  `abort`, and devopsy exits 130. The parent's `--clone-push` does not see
-  the session end until it writes to it: the generic path stops at its
-  next write to the session; a capability push across servers at the
-  latest at its next SSH connection to the child (`--clone-rsync`,
-  `--clone-exec`), which fails since the forwarded agent died with the push
-  session. A connection already open runs to its end, and on one server
-  nothing stops a capability push: until then it may still write into the
-  child.
+  `abort`, and devopsy exits 130. The push session's stdin is a pipe
+  devopsy keeps open (`CloneWatchEnv` says so: an older devopsy's
+  `/dev/null` would read as a session gone at once), so the parent's
+  `--clone-push` sees EOF as soon as the session ends, not at its next
+  write, which a silent copy may not make for minutes (seen on OrbStack:
+  the parent stayed paused, then ran the capability's push into the
+  aborted child). EOF or a signal cancels it: the same-host rsync
+  container is removed (`dockerRun`: killing the docker client leaves the
+  container copying), the `-R` session ends (`SSHCommandContext`), the
+  parent's services are restored, and the capability's push is not
+  started, or, running in its own process group, gets SIGTERM, a
+  pipeline's commands included. What runs inside a container on its own
+  (an import already under way in `docker exec`) runs to its end.
 - **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
   touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`
   is left to the parent's `push`. No labeled service: "nothing to clone",

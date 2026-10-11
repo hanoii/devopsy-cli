@@ -65,6 +65,10 @@ const (
 	// CloneCustomEnv names the parent's services labeled
 	// devopsy.clone=custom, space-separated, for the clone capability's push.
 	CloneCustomEnv = "DEVOPSY_CLONE_CUSTOM"
+	// CloneWatchEnv tells --clone-push that its stdin stays open for as
+	// long as devopsy's push session lives: EOF means the session is gone,
+	// and the push stops.
+	CloneWatchEnv = "DEVOPSY_CLONE_WATCH"
 )
 
 // CloneOptions make ActivateScript clone the parent's data into the new

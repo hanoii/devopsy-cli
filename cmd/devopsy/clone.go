@@ -284,6 +284,7 @@ func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, 
 		remote.CloneToTargetEnv:   job.child.Address,
 		remote.CloneArgsEnv:       strings.Join(job.args, " "),
 		remote.CloneFromTargetEnv: p.Address,
+		remote.CloneWatchEnv:      "1",
 	}
 	extra := remote.KeepAlive
 	where := "same server"
@@ -294,12 +295,16 @@ func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, 
 	msg := fmt.Sprintf("Copying @%s (%s:%s) into @%s, %s...", p.Address, p.Host, p.Path, job.child.Address, where)
 	cli.Fprint(os.Stderr, cyan, msg, color)
 	rlog.Line(msg)
-	null, err := os.Open(os.DevNull)
+	// The session's stdin stays open until the push ends: the parent's
+	// server sees EOF when the session is gone (interrupted, connection
+	// lost) and stops copying at once, instead of at its next write.
+	r, w, err := os.Pipe()
 	if err != nil {
 		return 1
 	}
-	defer null.Close()
-	code, err := remote.SSHContext(ctx, p, extra, remote.PushScript(p, job.parentName, env), null, nil, false, rlog)
+	defer r.Close()
+	defer w.Close()
+	code, err := remote.SSHContext(ctx, p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		rlog.Line(err.Error())
@@ -561,6 +566,33 @@ func interruptible() (context.Context, func()) {
 	return ctx, func() { signal.Stop(sigs); cancel() }
 }
 
+// watchSession cancels ctx when stdin reaches EOF: devopsy keeps the push
+// session's stdin open (CloneWatchEnv), so EOF means the session is gone.
+// Without it, a silent copy would only notice at its next write.
+func watchSession(ctx context.Context) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		cancel()
+	}()
+	return ctx
+}
+
+// dockerRun runs docker run args as a container named name, removed when
+// ctx ends: killing the docker client alone leaves its container running.
+func dockerRun(ctx context.Context, name string, args ...string) error {
+	full := append([]string{"run", "--rm", "--name", name}, args...)
+	trace(append([]string{"docker"}, full...))
+	cmd := exec.CommandContext(ctx, "docker", full...)
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	cmd.Cancel = func() error {
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = 5 * time.Second
+	return cmd.Run()
+}
+
 // docker runs docker args, its output to errOut.
 func docker(ctx context.Context, args ...string) error {
 	trace(append([]string{"docker"}, args...))
@@ -625,6 +657,9 @@ func runClonePush(cwd string, color bool) int {
 	}
 	ctx, stop := interruptible()
 	defer stop()
+	if os.Getenv(remote.CloneWatchEnv) != "" {
+		ctx = watchSession(ctx)
+	}
 
 	_, services, err := cli.CloneServices(cwd, os.Environ())
 	if err != nil {
@@ -675,19 +710,32 @@ func runClonePush(cwd string, color bool) int {
 		return 0
 	}
 
-	// Then the custom services, the capability's.
+	// Then the custom services, the capability's, unless the clone was
+	// interrupted meanwhile: the child is restoring its services already.
 	if len(custom) == 0 {
 		return 0
+	}
+	if ctx.Err() != nil {
+		return fail("interrupted: 'devopsy --capability clone push' not run")
 	}
 	sayErr("devopsy: running 'devopsy --capability clone push' (" + strings.Join(custom, " ") + ")")
 	self, err := os.Executable()
 	if err != nil {
 		self = "devopsy"
 	}
-	cmd := exec.Command(self, "--capability", "clone", "push")
+	// Its own process group, all of it ended when the clone is
+	// interrupted: a pipeline's commands too (a dump and its import).
+	cmd := exec.CommandContext(ctx, self, "--capability", "clone", "push")
 	cmd.Env = append(os.Environ(), remote.CloneCustomEnv+"="+strings.Join(custom, " "))
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, errOut, errOut
-	return exitCode(cmd.Run())
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		return fail("interrupted: 'devopsy --capability clone push' ended")
+	}
+	return exitCode(err)
 }
 
 func isExecutable(p string) bool {
@@ -744,10 +792,14 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		if err != nil {
 			return fmt.Errorf("the child's mnt: %w", err)
 		}
-		for _, d := range present {
+		for i, d := range present {
 			sayErr("devopsy: rsync mnt/" + d)
-			run := append(append([]string{"run", "--rm", "-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.RsyncImage}, rsync...), args...)
-			if err := docker(ctx, append(run, "/src/"+d+"/", "/dst/"+d+"/")...); err != nil {
+			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.RsyncImage}, rsync...), args...)
+			name := fmt.Sprintf("devopsy-clone-%d-%d", os.Getpid(), i)
+			if err := dockerRun(ctx, name, append(run, "/src/"+d+"/", "/dst/"+d+"/")...); err != nil {
+				if ctx.Err() != nil {
+					return errors.New("interrupted")
+				}
 				return fmt.Errorf("rsync mnt/%s: %w", d, err)
 			}
 		}
@@ -785,7 +837,7 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		}
 		sshArgs = append(sshArgs, to, "sh -c "+remote.Quote(remote.CloneReceiveScript(toDir, port, present, args)))
 		trace(append([]string{"ssh"}, sshArgs[:len(sshArgs)-1]...))
-		cmd := remote.SSHCommand(sshArgs...)
+		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
 		cmd.Stdout = errOut
