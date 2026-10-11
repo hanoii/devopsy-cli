@@ -58,6 +58,7 @@ for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
+case "$opts" in *" -R "*) [ -z "${FAKE_NO_FORWARD:-}" ] || { echo "Error: remote port forwarding failed for listen port 1" >&2; exit 255; } ;; esac
 exec sh -c "$s"
 `
 
@@ -325,6 +326,14 @@ func TestCloneDifferentHosts(t *testing.T) {
 	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded to") || !strings.Contains(out, "restrict,agent-forwarding") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
 		t.Fatalf("restricted key (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// A key restricted on the child's server refuses the reverse forward,
+	// which sshd reports as a taken port: three tries, then both causes.
+	out, code = s.run(append(agent, "FAKE_NO_FORWARD=1"), "@devopsy@two:dev", "--clone", "--yes")
+	docker, ssh = s.logs()
+	if code == 0 || !strings.Contains(out, "refused the reverse forward 3 times") || !strings.Contains(out, "port-forwarding") || strings.Count(ssh, " -R ") != 3 || !strings.Contains(docker, " rm -f cid123") {
+		t.Fatalf("refused forward (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 }
 

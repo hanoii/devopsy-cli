@@ -558,7 +558,7 @@ func runClonePush(cwd string, color bool) int {
 	}
 	if to := os.Getenv(remote.CloneToEnv); to != "" && os.Getenv("SSH_AUTH_SOCK") == "" {
 		host, _ := os.Hostname()
-		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it; authorize it with `restrict,agent-forwarding`, or use a key without restrictions", host))
+		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it; authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions", host))
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
@@ -715,8 +715,12 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		if ctx.Err() != nil {
 			return errors.New("interrupted")
 		}
-		if attempt < 2 && strings.Contains(stderr.String(), "remote port forwarding failed") {
-			continue
+		if strings.Contains(stderr.String(), "remote port forwarding failed") {
+			if attempt < 2 {
+				continue
+			}
+			// sshd answers a refused forward as it does a taken port.
+			return fmt.Errorf("copying into %s: its server refused the reverse forward %d times: a key with `restrict` needs `port-forwarding` too (`restrict,agent-forwarding,port-forwarding`), and sshd's AllowTcpForwarding must allow remote forwards", to, attempt+1)
 		}
 		return fmt.Errorf("copying into %s: %w", to, err)
 	}
