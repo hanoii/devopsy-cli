@@ -308,16 +308,31 @@ func TestCloneDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -T devopsy@one") {
+	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
+	}
+	// Every session of the clone keeps itself alive: the holder, the push
+	// and the receive.
+	keep := "-o ServerAliveInterval=30 -o ServerAliveCountMax=4"
+	if strings.Count(ssh, keep) != 3 || !strings.Contains(ssh, keep+" -T devopsy@two\n") {
+		t.Errorf("keepalive on holder, push and receive:\n%s", ssh)
 	}
 	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
+	}
+
+	// --clone-exec across servers keeps its session alive too.
+	execEnv := append(agent, "DEVOPSY_CLONE_TO=devopsy@two", "DEVOPSY_CLONE_SSH_PORT=22", "DEVOPSY_CLONE_TO_DIR="+filepath.Join(s.root, "shop", "dev", "current", ".devopsy"), "DEVOPSY_CLONE_TO_PROJECT=shop-dev")
+	if out, code := s.run(execEnv, "--clone-exec", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
+		t.Fatalf("--clone-exec (%d):\n%s", code, out)
+	}
+	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes -o StrictHostKeyChecking=accept-new "+keep+" -T -p 22 devopsy@two") {
+		t.Errorf("--clone-exec session: %s", ssh)
 	}
 
 	// A restricted key refuses the agent: the parent's side says so, and

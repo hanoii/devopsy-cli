@@ -209,7 +209,7 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 	}
 	done := make(chan result, 1)
 	go func() {
-		code, err := remote.SSHLog(job.child, script, r, mw, false, rlog)
+		code, err := remote.SSHWith(job.child, remote.KeepAlive, script, r, mw, false, rlog)
 		done <- result{code, err}
 	}()
 	var res result
@@ -250,10 +250,10 @@ func runPush(job *cloneJob, base string, rlog *releaseLog, color bool) int {
 		remote.CloneArgsEnv:       strings.Join(job.args, " "),
 		remote.CloneFromTargetEnv: p.Address,
 	}
-	var extra []string
+	extra := remote.KeepAlive
 	where := "same server"
 	if !job.sameHost {
-		extra = []string{"-o", "ForwardAgent=yes"}
+		extra = append([]string{"-o", "ForwardAgent=yes"}, remote.KeepAlive...)
 		where = "from " + p.Host + " to " + job.to
 	}
 	msg := fmt.Sprintf("Copying @%s (%s:%s) into @%s, %s...", p.Address, p.Host, p.Path, job.child.Address, where)
@@ -697,7 +697,8 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := []string{"-o", "StrictHostKeyChecking=accept-new", "-o", "ExitOnForwardFailure=yes", "-T", "-R", "127.0.0.1:" + port + ":" + ip + ":873"}
+		sshArgs := append([]string{"-o", "StrictHostKeyChecking=accept-new", "-o", "ExitOnForwardFailure=yes"}, remote.KeepAlive...)
+		sshArgs = append(sshArgs, "-T", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		if p := os.Getenv(remote.CloneSSHPortEnv); p != "" {
 			sshArgs = append(sshArgs, "-p", p)
 		}
@@ -810,7 +811,8 @@ func runCloneExec(args []string, color bool) int {
 	}
 	if to := os.Getenv(remote.CloneToEnv); to != "" {
 		remote.Verbose = cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0
-		sshArgs := []string{"-o", "ClearAllForwardings=yes", "-o", "StrictHostKeyChecking=accept-new", "-T"}
+		sshArgs := append([]string{"-o", "ClearAllForwardings=yes", "-o", "StrictHostKeyChecking=accept-new"}, remote.KeepAlive...)
+		sshArgs = append(sshArgs, "-T")
 		if p := os.Getenv(remote.CloneSSHPortEnv); p != "" {
 			sshArgs = append(sshArgs, "-p", p)
 		}

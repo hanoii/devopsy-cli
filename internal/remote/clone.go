@@ -26,6 +26,12 @@ const CloneMarker = "devopsy: ready for clone in "
 // release whose log the clone's is appended to.
 var CloningInto = regexp.MustCompile(`devopsy: cloning into ([0-9]{14})`)
 
+// KeepAlive are the ssh options of a clone's sessions (the holder, the
+// push, and the parent's sessions to the child): a session can stay quiet
+// for the whole copy, and a NAT or firewall dropping it would abort the
+// clone halfway, or leave a push writing into a child already restored.
+var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
+
 // RsyncImage is devopsy's rsync image, built on a server from
 // RsyncDockerfile when missing. Its tag changes with the Dockerfile.
 const RsyncImage = "devopsy-rsync:1"
