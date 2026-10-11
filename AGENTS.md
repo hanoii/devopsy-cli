@@ -16,7 +16,11 @@ repositories fit together and the open ideas.
   (`roles.go`); capabilities.
 - `internal/remote/`: config and targets (`config.go`), the documented
   schemas (`schema.go`), packing a release, and the POSIX `sh` scripts run on
-  servers (checked with `sh -n` in tests; GNU coreutils, `mv -T`).
+  servers (checked with `sh -n` in tests; GNU coreutils, `mv -T`); a
+  clone's sessions and scripts in `clone.go`.
+- `cmd/devopsy/clone.go`: clones, the operator's side (`runClone`,
+  `runCloneSession`, `inheritVars`) and the hidden flags servers run;
+  `internal/cli/clone.go`: the `devopsy.clone` labels and `CloneServices`.
 - `internal/complete/`: completion candidates, and the bash, zsh and fish
   scripts (embedded).
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
@@ -67,9 +71,10 @@ repositories fit together and the open ideas.
   over it, and the user's `~/.config/devopsy/config.yaml` (`aliases:`; on
   servers `releases:`). Never `~/.devopsy`: discovery would take the home
   directory for a project. Unknown keys are errors.
-- `defaults:` gives environments `mode`, steps, `releases` and `env`; `env`
-  merges key by key, `KEY: ~` removes, `""` stays empty (hence parsing YAML
-  nodes). `path` is never a default.
+- `defaults:` gives environments `mode`, steps, `releases`, `parent`,
+  `inherit` and `env`; `env` merges key by key, `KEY: ~` removes, `""` stays
+  empty (hence parsing YAML nodes: `nullKeys`); `parent: ~` and `inherit: ~`
+  remove theirs. `path` is never a default.
 - **Deployment facts never live in a project's config:** servers
   (`server:` is an error) and instance names. They come from the target,
   variables or aliases.
@@ -170,6 +175,82 @@ repositories fit together and the open ideas.
 - A target path with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 
+### Clones
+
+- **Parents:** `parent:` names a concrete environment (a pattern is an
+  error; one naming itself has none, so `defaults: {parent: prod}` works).
+  It resolves one level only (`ParentTarget`, whose own stays nil, so two
+  environments can be each other's parent): at the child's instance (none
+  when the parent has a `path:`), its server from the usual variables, else
+  the child's (`From["server"]` is "the child's server"). Strict loading
+  fails on an unresolvable parent; `DescribeTarget` resolves it leniently,
+  maybe without a server. `target.env` and local steps get
+  `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`.
+- **When:** a child's first release (`CurrentExistsScript` prints `current`
+  or `none`, exit 0; one extra session on every release of a child),
+  `--release --clone` (any release), never `--no-clone`, and `@<child>
+  --clone`, which asks for the name like `--destroy` and reruns `run`.
+  Everything that can fail (`clonePreflight`: a run step, the parent
+  released, across servers an agent here and a child reachable without
+  `ProxyCommand`/`ProxyJump`) is checked before the upload or the holder.
+- **Two sessions,** both from the operator (`runCloneSession`): the holder
+  on the child's server (`HolderScript`, or `ActivateScript` with
+  `CloneOptions` between `make_current` and `run`) takes the release lock,
+  runs prepare, and prints the marker with its directory
+  (`CloneMarker` + `$base`: the operator does not know the release root),
+  swallowed by `markerWriter`. Then the push on the parent's (`PushScript`:
+  shared `flock -s` on its lock, `devopsy --clone-push`), with
+  `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
+  to the holder; the holder's exit is the command's.
+- **fd 3:** the holder keeps devopsy's answer on fd 3 and gives every
+  command `/dev/null` as stdin, so nothing it runs can eat or wait on the
+  answer. No answer (devopsy interrupted, connection lost): the holder
+  sends its output to `$base/.devopsy-clone.log` (a write to the dead
+  session would kill what restores the services) and restores.
+- **Who pauses what:** the child's labeled services by the holder, for the
+  whole clone (capability `prepare`/`finish`, else `--clone-services
+  prepare|finish`); the parent's inside `--clone-push` (capability `push`,
+  else the generic path, whose finish is deferred). Each capability action
+  replaces only its own part. `--clone-services finish` is stateless: it
+  reads container state (exited, paused), so it also recovers after an
+  interrupted clone. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
+  SIGPIPE and restores; servers' commands write to `errOut`, never an
+  `*os.File`, so a gone session cannot kill them with a broken pipe.
+- **Hidden flags** (dispatched in `main.go` before anything else):
+  `--clone-push`, `--clone-rsync <entry>... [-- rsync args]`,
+  `--clone-exec <devopsy args>`, `--clone-services prepare|finish|list`.
+  The first three need the push's `DEVOPSY_CLONE_TO_DIR` and
+  `DEVOPSY_CLONE_TO_PROJECT`. `DEVOPSY_CLONE_ARGS` (space-joined, split
+  like `StepArgs`) go to rsync in the generic path only: a capability's
+  push owns them, and `--clone-rsync` takes only what follows its `--`.
+- **Clean environment:** on the same server the child's devopsy
+  (`--clone-exec`) runs with `cleanEnv`: the machine's variables and the
+  child's `COMPOSE_PROJECT_NAME` only. The caller's environment wins over
+  a project's `.env`, so the parent's secrets and project name would leak
+  into the child's commands. Over SSH the login environment is clean.
+- **SSH between servers:** through `DEVOPSY_SSH_COMMAND` too, with
+  `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the
+  parent's daemon, `--network host` on the child) passes
+  `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which clears
+  command-line forwardings too (`ssh_config(5)`); a taken port retries
+  another (3 tries, 20000-60000). `--clone-exec`'s session keeps
+  `ClearAllForwardings`. No agent on the parent with `DEVOPSY_CLONE_TO`
+  set means a `restrict`ed key: say so.
+- **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
+  on each host from `RsyncDockerfile` when missing), as root with
+  `--numeric-ids`: owners and modes survive, the deploy user's permissions
+  do not matter. Bump the tag whenever the Dockerfile changes (the alpine
+  version included): hosts never rebuild an image they have. Entries are
+  the top-level entries of `mnt` that non-`skip` services bind-mount
+  (`docker compose --profile '*' config`, lexical and resolved paths;
+  `.` subsumes the rest).
+- **inherit:** `inheritVars` reads the parent's three files in one session
+  (`InheritReadScript`), takes each key from the nearest level, and writes
+  it at that level on the child (`VarsSetScript`, values on stdin, under
+  the level's lock); same server and same level directory: skipped. After
+  the confirmation, before the holder; on a release after local before
+  steps and before the upload. Notices name keys, never values.
+
 ## Roles, exports and imports
 
 - Labels for facts shared between projects on a host (`roles.go`):
@@ -244,6 +325,13 @@ repositories fit together and the open ideas.
   --upgrade vX.Y.Z` installs one directly.
 - Go's HTTPS to github.com is slow (about 1.5 s), hence the detached check.
 - Traefik picks up a new container a few seconds after `up` returns.
+- `docker pause` flushes nothing: rsync sees what the kernel has, not what
+  sits in a paused process's buffers. `pause` holds requests, `stop` (or a
+  dump) gives consistency; never `pause` a database.
+- A stopped routed container loses its Traefik router (404); a paused one
+  keeps it, and Docker skips healthchecks while paused.
+- OrbStack machines are `ProxyCommand` hosts from macOS: clones across
+  servers need hosts reachable directly (`ssh -G` without a proxy).
 
 ## Checks
 
