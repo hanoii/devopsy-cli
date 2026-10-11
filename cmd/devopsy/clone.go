@@ -450,6 +450,9 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 		}
 	}
 	p := t.ParentTarget
+	if from == "" && t.ParentErr != nil {
+		return fail(t.ParentErr.Error())
+	}
 	if from != "" {
 		var err error
 		if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {

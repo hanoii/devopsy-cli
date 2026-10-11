@@ -465,6 +465,23 @@ func TestCloneCapability(t *testing.T) {
 // What --clone refuses before anything starts.
 func TestCloneGuards(t *testing.T) {
 	s := newCloneSetup(t)
+	// A parent that cannot be resolved only fails what clones.
+	bad := []string{"DEVOPSY_SERVER_PROD=bad:host"}
+	for _, args := range [][]string{{"@dev", "--clone", "--yes"}, {"@dev", "--release"}} {
+		if out, code := s.run(bad, args...); code == 0 || !strings.Contains(out, `environment dev: parent prod: server "bad:host"`) || s.current("dev") != "" {
+			t.Errorf("%v, unresolved parent (%d):\n%s", args, code, out)
+		}
+	}
+	if out, code := s.run(bad, "@dev", "--release", "--no-clone"); code != 0 || s.current("dev") == "" {
+		t.Errorf("--no-clone, unresolved parent (%d):\n%s", code, out)
+	}
+	if out, code := s.run(bad, "@dev", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
+		t.Errorf("a command, unresolved parent (%d):\n%s", code, out)
+	}
+	if err := os.RemoveAll(filepath.Join(s.root, "shop", "dev")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
 	if out, code := s.run(nil, "@solo", "--clone", "--yes"); code == 0 || !strings.Contains(out, "@solo is not a child") {
 		t.Errorf("not a child (%d):\n%s", code, out)
 	}
