@@ -421,7 +421,9 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed
   copy does not go live. `--release --clone` clones on any release,
-  `--no-clone` never (see Parent environments and clones).
+  asking for the environment's name first when it already has one, as
+  `--clone` does (`--yes` skips it); `--no-clone` never clones (see Parent
+  environments and clones).
 - **Logs:** each release and rollback is recorded and saved on the server,
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
@@ -532,9 +534,10 @@ devopsy @develop --clone --from b/prod           # another environment of the pr
 devopsy @develop --clone --yes -- --exclude=cache  # arguments for rsync
 ```
 
-`--clone` asks you to type the environment's name, as `--destroy` does;
-`--yes` skips it. First-release clones never ask. `--from` copies from
-another environment of the project instead of the parent. What follows
+`--clone` asks you to type the environment's name, as `--destroy` does,
+and so does `--release --clone` on a child already released; `--yes`
+skips it. First-release clones never ask. `--from` copies from another
+environment of the project instead of the parent. What follows
 `--` goes to rsync (as `DEVOPSY_CLONE_ARGS`; a clone capability's `push`
 uses it as it sees fit).
 

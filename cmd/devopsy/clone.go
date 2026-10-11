@@ -427,15 +427,8 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 	}
 	run := remote.StepArgs(t.Release.Run)
 	if !yes {
-		where := t.Host + ":" + t.Path
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return fail("--clone replaces the data of " + where + " with its parent's: add --yes when not at a terminal")
-		}
-		fmt.Fprintf(os.Stderr, "This replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then runs 'devopsy %s' there. Type %s to go on: ",
-			t.Address, where, p.Address, p.Host, p.Path, strings.Join(run, " "), t.Name)
-		line, _ := stdinReader.ReadString('\n')
-		if strings.TrimSpace(line) != t.Name {
-			return fail("Nothing cloned.")
+		if err := confirmClone(t, p, "runs 'devopsy "+strings.Join(run, " ")+"' there"); err != nil {
+			return fail(cloneRefused(err, "Nothing cloned."))
 		}
 	}
 
@@ -458,6 +451,34 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 		}
 	}
 	return code
+}
+
+// errNotConfirmed: the name typed was not the environment's.
+var errNotConfirmed = errors.New("")
+
+// cloneRefused is what a refused confirmation prints, then nothing.
+func cloneRefused(err error, nothing string) string {
+	if err == errNotConfirmed {
+		return nothing
+	}
+	return err.Error() + "\n" + nothing
+}
+
+// confirmClone asks for the child's environment name before its data is
+// replaced, like --destroy; then says what follows the copy. Not at a
+// terminal it fails: --yes is the way there.
+func confirmClone(t, p *remote.Target, then string) error {
+	where := t.Host + ":" + t.Path
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return errors.New("--clone replaces the data of " + where + " with its parent's: add --yes when not at a terminal")
+	}
+	fmt.Fprintf(os.Stderr, "This replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s. Type %s to go on: ",
+		t.Address, where, p.Address, p.Host, p.Path, then, t.Name)
+	line, _ := stdinReader.ReadString('\n')
+	if strings.TrimSpace(line) != t.Name {
+		return errNotConfirmed
+	}
+	return nil
 }
 
 // Server side: the hidden flags a clone runs.

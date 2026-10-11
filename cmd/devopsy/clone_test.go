@@ -210,10 +210,18 @@ func TestCloneSameHost(t *testing.T) {
 		t.Errorf("--log (%d):\n%s", code, out)
 	}
 
-	// --release --clone clones on any release; --no-clone never.
+	// --release --clone clones on any release, asking first on one that
+	// has data (--yes, or a terminal); --no-clone never.
 	next()
-	if out, code := s.run(nil, "@dev", "--release", "--clone"); code != 0 || !strings.Contains(out, "Cloning @devopsy@one:prod's data") {
-		t.Fatalf("--release --clone (%d):\n%s", code, out)
+	before, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
+	if out, code := s.run(nil, "@dev", "--release", "--clone"); code == 0 || !strings.Contains(out, "add --yes when not at a terminal") || !strings.Contains(out, "Nothing released.") {
+		t.Fatalf("--release --clone without --yes (%d):\n%s", code, out)
+	}
+	if after, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases")); len(after) != len(before) {
+		t.Errorf("uploaded before asking: %d releases, then %d", len(before), len(after))
+	}
+	if out, code := s.run(nil, "@dev", "--release", "--clone", "--yes"); code != 0 || !strings.Contains(out, "Cloning @devopsy@one:prod's data") {
+		t.Fatalf("--release --clone --yes (%d):\n%s", code, out)
 	}
 	s.logs()
 	if out, code := s.run(nil, "@dev", "--release", "--clone", "--no-clone"); code == 0 || !strings.Contains(out, "not both") {
@@ -243,7 +251,8 @@ func TestReleaseFirstClone(t *testing.T) {
 	s := newCloneSetup(t)
 	s.releaseProd(nil)
 
-	out, code := s.run([]string{"FAIL_RSYNC=1"}, "@dev", "--release")
+	// A first release never asks, --clone or not.
+	out, code := s.run([]string{"FAIL_RSYNC=1"}, "@dev", "--release", "--clone")
 	docker, _ := s.logs()
 	if code == 0 || s.current("dev") != "" || !strings.Contains(out, "clone failed (1), no previous release to go back to") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("failed clone (%d), current %q:\n%s", code, s.current("dev"), out)
