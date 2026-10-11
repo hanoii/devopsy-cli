@@ -324,6 +324,11 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
+	"--clone": `Usage: devopsy @<target> --clone [--from <address>] [--yes] [-- <rsync args>...]
+
+Replaces a child environment's data (shared/mnt) with its parent's, then
+runs its release's run step.
+`,
 	"--release": `Usage: devopsy @<target> --release [--yes]
 
 Uploads the project to the target as a new release, makes it current and

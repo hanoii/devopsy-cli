@@ -25,7 +25,8 @@ releases:
   keep: 5
 
 # What every environment takes unless it sets its own: mode, release,
-# rollback, destroy, releases and env (env merges key by key). Not path.
+# rollback, destroy, releases, parent and env (env merges key by key). Not
+# path.
 defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
@@ -70,7 +71,13 @@ environments:
   prod:
     env:
       DEVOPSY_DOMAINS: example.org www.example.org
-  staging: {}
+  staging:
+    # A child of prod (an environment of this project, not a pattern): its
+    # first release copies prod's data (shared/mnt) once current, before
+    # its run step; devopsy @staging --clone copies it again. Resolved at
+    # the child's instance, on the server DEVOPSY_SERVER_PROD names, else
+    # the child's. In defaults too: the parent itself then has none.
+    parent: prod
   "pr-*":
     releases:
       keep: 1

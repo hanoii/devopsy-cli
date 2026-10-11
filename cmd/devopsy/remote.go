@@ -151,6 +151,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
+	case "--clone":
+		return runClone(t, projectDir, projectEnv, projectName, args[1:], color)
+
 	case "--log":
 		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
 			return fail("usage: devopsy @" + t.Name + " --log [<release id>]")
@@ -162,9 +165,27 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
 	case "--release", "--rollback":
-		yes := len(args) == 2 && (args[1] == "--yes" || args[1] == "-y") && args[0] == "--release"
-		if len(args) > 1 && !yes {
-			return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
+		yes, cloneFlag, noClone := false, false, false
+		for _, a := range args[1:] {
+			release := args[0] == "--release"
+			switch {
+			case release && (a == "--yes" || a == "-y"):
+				yes = true
+			case release && a == "--clone":
+				cloneFlag = true
+			case release && a == "--no-clone":
+				noClone = true
+			case a == "--clone" || a == "--no-clone":
+				return fail(fmt.Sprintf("--rollback takes no %s: it restores a release, never data", a))
+			default:
+				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
+			}
+		}
+		if cloneFlag && noClone {
+			return fail("--clone or --no-clone: not both")
+		}
+		if cloneFlag && t.Parent == "" {
+			return fail(fmt.Sprintf("--clone: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
 		}
 		steps := t.Release
 		if args[0] == "--rollback" {
@@ -237,7 +258,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
 			say(cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path))
-			if code := session(remote.ActivateScript(t, "", true, projectName, phases)); code != 0 {
+			if code := session(remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
 				return save("", code)
 			}
 			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
@@ -285,6 +306,33 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 
+		// A child's first release clones its parent's data once current,
+		// before its run step, so deploy runs on that data and no empty
+		// site is ever served; --clone does it on any release. Decided and
+		// checked before anything changes, so a release never goes live on
+		// empty data after a late failure.
+		var job *cloneJob
+		if t.Parent != "" && !noClone {
+			first := false
+			if !cloneFlag {
+				var out bytes.Buffer
+				code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
+				if err != nil {
+					return fail(err.Error())
+				}
+				if code != 0 {
+					return code
+				}
+				first = strings.TrimSpace(out.String()) == "none"
+			}
+			if cloneFlag || first {
+				var err error
+				if job, err = clonePreflight(t, t.ParentTarget, projectName, nil); err != nil {
+					return fail(err.Error() + "\nNothing changed. --no-clone releases without the parent's data.")
+				}
+			}
+		}
+
 		projectRoot := filepath.Dir(projectDir)
 		files, err := remote.Files(projectRoot, t.Mode)
 		if err != nil {
@@ -325,8 +373,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			return code
 		}
-		if code := session(remote.ActivateScript(t, record.ID, false, projectName, phases)); code != 0 {
-			return save(record.ID, code)
+		if job == nil {
+			if code := session(remote.ActivateScript(t, record.ID, false, projectName, phases, nil)); code != 0 {
+				return save(record.ID, code)
+			}
+		} else {
+			say(cyan, fmt.Sprintf("Cloning @%s's data into it before its run step (--no-clone skips it)...", job.parent.Address))
+			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.CloneOptions{From: job.parent.Address})
+			if code := runCloneSession(job, script, rlog, color); code != 0 {
+				return save(record.ID, code)
+			}
 		}
 		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
 			return save(record.ID, stop(fmt.Sprintf("an after step failed (%d): the release stays", code)))
@@ -354,6 +410,11 @@ func runLocalStep(t *remote.Target, args []string, commit string) int {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.Env = append(cmd.Env, "DEVOPSY_TARGET="+t.Address, "DEVOPSY_ENVIRONMENT="+t.Name, "DEVOPSY_INSTANCE="+t.Instance)
+	for _, kv := range parentEnv(t) {
+		if _, ok := t.Env[kv[0]]; !ok {
+			cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
+		}
+	}
 	if commit != "" {
 		cmd.Env = append(cmd.Env, "DEVOPSY_RELEASE_COMMIT="+commit)
 	}
@@ -419,6 +480,12 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 			}
 		}
 	}
+	// Its parent, for a child: what clones copy from.
+	for _, kv := range parentEnv(t) {
+		if _, ok := t.Env[kv[0]]; !ok {
+			b.WriteString(cli.DotenvLine(kv[0], kv[1]) + "\n")
+		}
+	}
 	// The commit released, for image tags: in image mode, compose.yaml can
 	// use the image CI built from that commit, so each release, and each
 	// rollback, runs its own image.
@@ -434,6 +501,19 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 		b.WriteString(cli.DotenvLine(k, t.Env[k]) + "\n")
 	}
 	return []byte(b.String())
+}
+
+// parentEnv is DEVOPSY_PARENT and DEVOPSY_PARENT_TARGET for a child: its
+// parent's name and resolved address.
+func parentEnv(t *remote.Target) [][2]string {
+	if t.Parent == "" {
+		return nil
+	}
+	env := [][2]string{{"DEVOPSY_PARENT", t.Parent}}
+	if t.ParentTarget != nil {
+		env = append(env, [2]string{"DEVOPSY_PARENT_TARGET", t.ParentTarget.Address})
+	}
+	return env
 }
 
 // runDestroy implements `devopsy @target --destroy [--yes]`: the

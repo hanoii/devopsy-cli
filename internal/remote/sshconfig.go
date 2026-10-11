@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"strings"
 )
 
@@ -23,11 +22,12 @@ func SSHDestination(dest string) (user, host, port string) {
 	return "", dest, ""
 }
 
-// SSHEffective is ssh's resolved configuration for a destination, ssh -G:
-// read on this machine, it never connects. Keys are lowercase, as ssh prints
-// them. Replaceable in tests.
+// SSHEffective is ssh's resolved configuration for a destination, ssh -G
+// (through DEVOPSY_SSH_COMMAND, whose options count): read on this machine,
+// it never connects. Keys are lowercase, as ssh prints them. Replaceable in
+// tests.
 var SSHEffective = func(dest string) (map[string]string, error) {
-	out, err := exec.Command("ssh", "-G", dest).Output()
+	out, err := SSHCommand("-G", dest).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -86,4 +86,25 @@ func SSHConfig(t *Target, effective map[string]string) string {
   #ServerAliveCountMax 3
 `, host)
 	return b.String()
+}
+
+// ChildAddress is where a parent's server reaches a child's host for a
+// clone: the user, hostname and port ssh -G gives here. A host behind a
+// ProxyCommand or ProxyJump is out of the parent's reach: a relay through
+// this machine is not supported yet.
+func ChildAddress(host string) (user, hostname, port string, err error) {
+	eff, err := SSHEffective(host)
+	if err != nil {
+		return "", "", "", fmt.Errorf("ssh -G %s: %w", host, err)
+	}
+	for _, k := range []string{"proxycommand", "proxyjump"} {
+		if v := eff[k]; v != "" && v != "none" {
+			return "", "", "", fmt.Errorf("%s is reached through a %s (%s): the parent's server cannot reach it directly; a relay through this machine is not supported yet", host, map[string]string{"proxycommand": "ProxyCommand", "proxyjump": "ProxyJump"}[k], v)
+		}
+	}
+	user, hostname, port = eff["user"], eff["hostname"], eff["port"]
+	if hostname == "" {
+		return "", "", "", fmt.Errorf("ssh -G %s gives no hostname", host)
+	}
+	return user, hostname, port, nil
 }

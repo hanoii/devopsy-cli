@@ -99,6 +99,17 @@ func run() int {
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
 	}
+	// A clone's parts on servers, run by its sessions (cmd/devopsy/clone.go).
+	switch args[0] {
+	case cli.ClonePushFlag:
+		return runClonePush(cwd, color)
+	case cli.CloneRsyncFlag:
+		return runCloneRsync(cwd, args[1:], color)
+	case cli.CloneExecFlag:
+		return runCloneExec(args[1:], color)
+	case cli.CloneServicesFlag:
+		return runCloneServices(cwd, args[1:], color)
+	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
 		return runRemote(cwd, args, color, verboseLevel)

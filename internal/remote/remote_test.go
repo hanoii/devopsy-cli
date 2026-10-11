@@ -153,19 +153,27 @@ func TestQuote(t *testing.T) {
 func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "/srv/it's app", Mode: ModeImage}
 	scripts := map[string]string{
-		"upload":       UploadScript(tg, "20261005120000"),
-		"activate":     ActivateScript(tg, "20261005120000", false, "", Phases{}),
-		"activate+cmd": ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, Restart: []string{"deploy"}, After: [][]string{{"warm"}}}),
-		"rollback+cmd": ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}),
-		"run":          RunScript(tg, "app", []string{"logs", "-f"}),
-		"releases":     ReleasesScript(tg),
-		"shell":        ShellScript(tg),
-		"vars":         VarsReadScript(tg, nil),
-		"vars set":     VarsSetScript(tg, nil),
-		"vars unset":   VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
-		"destroy":      DestroyScript(tg, "app", []string{"destroy"}),
-		"environments": EnvironmentsScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
-		"role holders": RoleHoldersScript(tg, "proxy"),
+		"upload":         UploadScript(tg, "20261005120000"),
+		"activate":       ActivateScript(tg, "20261005120000", false, "", Phases{}, nil),
+		"activate+cmd":   ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, Restart: []string{"deploy"}, After: [][]string{{"warm"}}}, nil),
+		"rollback+cmd":   ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
+		"run":            RunScript(tg, "app", []string{"logs", "-f"}),
+		"releases":       ReleasesScript(tg),
+		"shell":          ShellScript(tg),
+		"vars":           VarsReadScript(tg, nil),
+		"vars set":       VarsSetScript(tg, nil),
+		"vars unset":     VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
+		"destroy":        DestroyScript(tg, "app", []string{"destroy"}),
+		"environments":   EnvironmentsScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+		"role holders":   RoleHoldersScript(tg, "proxy"),
+		"activate+clone": ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}, Restart: []string{"deploy"}}, &CloneOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
+		"clone only":     ActivateScript(tg, "20261005120000", false, "app", Phases{}, &CloneOptions{From: "vm1:prod"}),
+		"holder":         HolderScript(tg, "app-dev", "vm1:prod", []string{"-v"}, []string{"deploy"}),
+		"push":           PushScript(tg, "app-prod", map[string]string{CloneToEnv: "devopsy@h2", CloneToDirEnv: "/srv/it's/current/.devopsy"}),
+		"current":        CurrentExistsScript(tg),
+		"receive":        CloneReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, []string{"--exclude=x y"}),
+		"receive bare":   CloneReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage"}, nil),
+		"exec":           CloneExecScript("/srv/it's/current/.devopsy", "app-dev", []string{"exec", "-T", "db", "sh", "-c", "mariadb x"}),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -218,7 +226,7 @@ func TestPlainDirectories(t *testing.T) {
 	}
 	for name, script := range map[string]string{
 		"upload":   UploadScript(tg, "20261006000000"),
-		"rollback": ActivateScript(tg, "", true, "", Phases{}),
+		"rollback": ActivateScript(tg, "", true, "", Phases{}, nil),
 		"releases": ReleasesScript(tg),
 	} {
 		out, err := run(script)
@@ -367,4 +375,116 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 			t.Errorf("left behind: base %v, instance %v:\n%s", baseErr, instanceErr, out)
 		}
 	}
+}
+
+// A release with a clone: once current, the services are prepared, the
+// marker printed, and devopsy's answer decides: go finishes and runs the
+// run step; abort, or a failing prepare, restores and does not go live.
+func TestActivateClone(t *testing.T) {
+	bin := t.TempDir()
+	// The fake devopsy logs its calls (cwd basename and arguments), and fails
+	// --clone-services prepare when told.
+	fake := `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+echo "$* from=${DEVOPSY_CLONE_FROM_TARGET:-} args=${DEVOPSY_CLONE_ARGS:-}" >> "$FAKE_ROOT/calls"
+[ "$*" = "--clone-services prepare" ] && exit ${FAIL_PREPARE:-0}
+exit 0
+`
+	write(t, filepath.Join(bin, "devopsy"), fake)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
+	for _, f := range []string{"devopsy", "flock", "mv"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tg := &Target{Name: "dev", Path: "app/dev"}
+	phases := Phases{Run: []string{"deploy"}, Restart: []string{"deploy", "--back"}}
+	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
+		t.Helper()
+		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-dev", phases, &CloneOptions{From: "vm1:prod", Args: []string{"-v"}}))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, extra...)
+		cmd.Stdin = strings.NewReader(stdin)
+		var o, e strings.Builder
+		cmd.Stdout, cmd.Stderr = &o, &e
+		err = cmd.Run()
+		return o.String(), e.String(), err
+	}
+	calls := func(root string) string {
+		data, _ := os.ReadFile(filepath.Join(root, "calls"))
+		os.Remove(filepath.Join(root, "calls"))
+		return string(data)
+	}
+	current := func(root string) string {
+		l, _ := os.Readlink(filepath.Join(root, tg.Path, "current"))
+		return l
+	}
+
+	// go, on a first release.
+	root := t.TempDir()
+	out, errOut, err := run(root, "1", "go\n")
+	base := filepath.Join(root, tg.Path)
+	if err != nil || out != CloneMarker+base+"\n" || current(root) != "releases/1" {
+		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
+	}
+	if got := calls(root); got != "--missing-vars from= args=\n--clone-services prepare from=vm1:prod args=-v\n--clone-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
+		t.Errorf("go calls:\n%s", got)
+	}
+
+	// abort, on a later release: back to the previous one, restarted.
+	_, errOut, err = run(root, "2", "abort\n")
+	if err == nil || current(root) != "releases/1" || !strings.Contains(errOut, "clone failed (1), current is back to 1") {
+		t.Fatalf("abort (%v), current %q:\n%s", err, current(root), errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "releases", "2", ".devopsy-failed")); err != nil {
+		t.Errorf("not marked failed: %v", err)
+	}
+	if got := calls(root); !strings.Contains(got, "--clone-services finish") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
+		t.Errorf("abort calls:\n%s", got)
+	}
+
+	// abort, or no answer, on a first release: nothing current, the
+	// directory kept (the data is partly there).
+	for _, stdin := range []string{"abort\n", ""} {
+		root := t.TempDir()
+		_, errOut, err := run(root, "1", stdin)
+		if err == nil || current(root) != "" || !strings.Contains(errOut+readFile(filepath.Join(root, tg.Path, ".devopsy-clone.log")), "no previous release to go back to") {
+			t.Fatalf("first abort %q (%v), current %q:\n%s", stdin, err, current(root), errOut)
+		}
+		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+			t.Errorf("first abort %q calls:\n%s", stdin, got)
+		}
+	}
+
+	// A failing prepare prints no marker, restores, and does not go live.
+	root = t.TempDir()
+	out, errOut, err = run(root, "1", "go\n", "FAIL_PREPARE=3")
+	if err == nil || out != "" || current(root) != "" || !strings.Contains(errOut, "preparing the clone failed (3)") {
+		t.Fatalf("failing prepare (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
+	}
+	if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+		t.Errorf("failing prepare calls:\n%s", got)
+	}
+
+	// The capability replaces the generic services handling.
+	root = t.TempDir()
+	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "prepare"), "")
+	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "finish"), "")
+	for _, a := range []string{"prepare", "finish"} {
+		if err := os.Chmod(filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", a), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, errOut, err := run(root, "1", "go\n"); err != nil {
+		t.Fatalf("capability (%v):\n%s", err, errOut)
+	}
+	if got := calls(root); !strings.Contains(got, "--capability clone prepare from") || !strings.Contains(got, "--capability clone finish go from") || strings.Contains(got, "--clone-services") {
+		t.Errorf("capability calls:\n%s", got)
+	}
+}
+
+func readFile(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
 }
