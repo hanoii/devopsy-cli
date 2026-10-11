@@ -310,14 +310,19 @@ environments:
   prod:
     env:
       DEVOPSY_DOMAINS: example.org www.example.org
+    inherit: [CLONE_DATABASE]   # variables its children get from its server
   staging: {}
+  develop:
+    parent: prod                # a child: its first release clones prod's data
   "pr-*":                       # a pattern: @pr-12, @pr-feature
     releases: {keep: 1}
+    parent: prod
 ```
 
 Commit it: no secrets, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
-sets an empty value and `~` removes a default. An environment's `path:`
+sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
+remove theirs. An environment's `path:`
 moves its directory on the server, never its name. Patterns match one or
 more name characters; an exact name wins, then the most literal characters;
 `"*"` allows any. Unknown keys are errors.
@@ -353,6 +358,14 @@ under the server's release root, and its compose project, containers,
 volumes are named `<project>[-<instance>]-<environment>`
 (`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
+A child's **parent** (`parent:`, a concrete environment of the project)
+resolves like a target of its own, one level only: at the child's instance
+(none if the parent has a `path:`), on the server its variables name
+(`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), else on the
+child's server. `@vm2:develop` with `DEVOPSY_SERVER_PROD=vm1` clones from
+`vm1:prod`; without it, from `vm2:prod`. Two environments can be each
+other's parent. `devopsy --debug environments` shows it resolved.
+
 ### Releases
 
 ```sh
@@ -361,6 +374,8 @@ devopsy @vm1:prod --rollback     # back to the previous release, run the rollbac
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
+devopsy @vm1:develop --clone     # replace a child's data with its parent's, run its run step
+devopsy @vm1:develop --release --clone     # clone on this release too (--no-clone: never)
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -402,6 +417,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Hence local before steps first and local after steps last. Remote before
   steps run in the current release, with its commands, and none run on a
   first release.
+- **A child's first release** clones its parent's data between switching
+  `current` and `run`, so `run` (`deploy`: database updates, cache clears)
+  works on the parent's data and no empty site is ever served. A failed
+  copy does not go live. `--release --clone` clones on any release,
+  `--no-clone` never (see Parent environments and clones).
 - **Logs:** each release and rollback is recorded and saved on the server,
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
@@ -417,7 +437,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   in `shared/mnt`, which the deploy user cannot. A failed step removes
   nothing; files left that the deploy user cannot remove fail the removal.
 - **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
-  resolved target) and `DEVOPSY_RELEASE_COMMIT`, never the server's `.env`.
+  resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
+  `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
   Without steps, devopsy prints a starting point.
 
 - **build** mode (default) uploads the project as git sees it, uncommitted
@@ -455,11 +476,109 @@ reason the environment's `destroy` step, not devopsy, removes what
 containers own there. Back up `shared/.env` and `shared/mnt` (databases as
 dumps).
 
+**Parent environments and clones.** A child (`develop: {parent: prod}`)
+is a copy of its parent: its first release clones the parent's data, and
+`devopsy @<child> --clone` does it again later, then reruns the child's
+`run` step. devopsy knows nothing of what the data is: it copies the
+entries of `.devopsy/mnt` the project's services bind-mount (`./mnt/files`
+gives `files`; `./mnt` itself, all of it), from the parent's `shared/mnt`
+into the child's, with `rsync -a --delete --numeric-ids`: the child's
+copy equals the parent's, owners and modes included. `shared/.env` is
+never copied: the child keeps its own secrets.
+
+A label per service, `devopsy.clone`, tunes it, on both sides:
+
+- `live` (the default): nothing happens to the service; its mounts are
+  copied.
+- `skip`: its mounts are not copied (a database the project dumps).
+- `stop`: stopped for the copy, a clean shutdown (a database's raw files);
+  started again and waited for until healthy.
+- `pause`: frozen for the copy (the routed app): its router stays and
+  requests wait until it resumes. That is holding, not consistency:
+  `docker pause` flushes nothing, so never pause a database; stop it, or
+  dump it.
+
+Order on each side: pause, stop, copy, start (healthy), resume. The
+child's services are paused and stopped before the parent's and resumed
+after them. The child's side holds its release lock for the whole clone;
+the parent's holds a shared one, so a release of the parent waits for the
+copy and other clones from it do not.
+
+The copy runs as root in `devopsy-rsync`, devopsy's own image (alpine
+with rsync), built on each server the first time, so ownership and the
+deploy user's permissions do not matter. **On one server**, one container
+copies between the two directories, without SSH. **Across servers**, the
+parent's server starts an rsync daemon (read-only, no published port) and
+reaches the child's over SSH, through a reverse forward, with your SSH
+agent forwarded for that session only; data goes server to server, never
+through your machine. So, across servers:
+
+- an agent must be running where devopsy runs, with a key both servers
+  accept (in CI, `eval $(ssh-agent); ssh-add` with the CI key);
+- the child's server must be reachable from the parent's as `ssh -G`
+  resolves it here (user, hostname, port; its host key is accepted on
+  first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
+  relay through your machine is not supported yet;
+- a CI key from devopsy-server needs `restrict,agent-forwarding` in the
+  deploy user's `authorized_keys` (its `ci-key` writes it); a plain
+  `restrict` refuses the agent, and the parent's side says so.
+
+```sh
+devopsy @develop --clone                         # asks for the environment's name
+devopsy @develop --clone --yes                   # CI
+devopsy @develop --clone --from b/prod           # another environment of the project
+devopsy @develop --clone --yes -- --exclude=cache  # arguments for rsync
+```
+
+`--clone` asks you to type the environment's name, as `--destroy` does;
+`--yes` skips it. First-release clones never ask. `--from` copies from
+another environment of the project instead of the parent. What follows
+`--` goes to rsync (as `DEVOPSY_CLONE_ARGS`; a clone capability's `push`
+uses it as it sees fit).
+
+**Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
+`defaults:`) names variables its children get: read from the parent's
+`shared/.env`, instance `.env` and project `.env` on its server, and
+written at the same level on the child's (its `shared/.env`, its
+instance's or project's `.env`), the parent's value replacing the child's
+there. On one server the instance and project files are the parent's own:
+nothing to write. A value the child sets nearer still wins (its
+`shared/.env` over the instance's). On a first release this happens before
+the upload, so the variables check finds them; on `--clone`, before the
+copy. Names are printed, never values; keys the parent does not set are
+listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
+
+**The clone capability** (`.devopsy/capabilities/clone/`, see
+Capabilities) replaces a part of this: `prepare` and `finish` on the
+child's side, `push` on the parent's, for data a copy cannot clone, like
+a database to dump. The drupal11 template's `push` rsyncs its files and
+pipes a dump into the child's database, in short:
+
+```sh
+devopsy --clone-rsync storage logs -- $DEVOPSY_CLONE_ARGS
+devopsy exec -T database sh -c 'mariadb-dump --single-transaction ...' </dev/null |
+  devopsy --clone-exec exec -T database sh -c 'mariadb ...'
+```
+
+Each side's database credentials stay its own: the dump runs with the
+parent's, the import with the child's.
+
+**Logs and failures:** a clone's output goes into the log of the release
+it cloned into (`--log`), after the release's own. A failed copy restores
+the paused and stopped services on both sides and skips the child's `run`
+step; on a first release, the release is marked failed and nothing is
+current, and the next release clones again. The child's `mnt` may be
+partly copied then; rsync picks up from there. If devopsy itself goes
+away mid-clone (interrupted, connection lost), the child's side restores
+its services on its own and writes what happened to
+`<environment>/.devopsy-clone.log` on its server.
+
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 the instance's `.env` (`<project>/<instance>/.env`), the project's
 (`<project>/.env`), then the release's `target.env`, written from the
 config with `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
-`DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT`.
+`DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT` (and a
+child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
 Rollbacks bring back their release's `target.env`.
 
 ```sh
@@ -584,6 +703,30 @@ lists them with their contracts):
   (`DEVOPSY_ENV_COMPUTE` is set). A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
+- **clone:** replaces parts of a clone (Parent environments and clones),
+  each action only its own; the rest stays devopsy's.
+  - `prepare` runs on the child's server, in its current release under its
+    release lock, before the copy, instead of pausing and stopping its
+    labeled services. A failure aborts the clone (`finish abort` runs).
+  - `push` runs on the parent's server, in its current release, instead of
+    pausing and stopping the parent's labeled services and copying their
+    mounts. It gets `DEVOPSY_CLONE_TO` (the child's server as
+    `user@hostname`, empty on the same server), `DEVOPSY_CLONE_SSH_PORT`,
+    `DEVOPSY_CLONE_TO_BASE` and `DEVOPSY_CLONE_TO_DIR` (the child's
+    directory and its current `.devopsy/`), `DEVOPSY_CLONE_TO_PROJECT`,
+    `DEVOPSY_CLONE_TO_TARGET`, `DEVOPSY_CLONE_FROM_TARGET` and
+    `DEVOPSY_CLONE_ARGS` (what followed `--clone`'s `--`, its own to use).
+    Two helpers do the transport: `devopsy --clone-rsync <entry>... [--
+    <rsync args>]` copies entries of `mnt` as the generic path does, and
+    `devopsy --clone-exec <devopsy args>` runs devopsy in the child's
+    current release, as its project and with a clean environment (none of
+    the parent's variables), stdin and stdout passed through. Exit 0 lets
+    the child go on.
+  - `finish go|abort` runs on the child's server after the copy (`go`) or
+    a failure (`abort`), instead of starting, waiting for and resuming its
+    labeled services. After `go`, the release's `run` step runs.
+  - `prepare` and `finish` get `DEVOPSY_CLONE_FROM_TARGET` and
+    `DEVOPSY_CLONE_ARGS`.
 
 ## License
 
