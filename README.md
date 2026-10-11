@@ -511,7 +511,8 @@ copies between the two directories, without SSH. **Across servers**, the
 parent's server starts an rsync daemon (read-only, no published port) and
 reaches the child's over SSH, through a reverse forward, with your SSH
 agent forwarded for that session only; data goes server to server, never
-through your machine. So, across servers:
+through your machine. The clone's SSH sessions send keepalives every 30
+seconds, so a firewall does not drop a quiet copy. So, across servers:
 
 - an agent must be running where devopsy runs, with a key both servers
   accept (in CI, `eval $(ssh-agent); ssh-add` with the CI key);

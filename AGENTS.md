@@ -237,7 +237,10 @@ repositories fit together and the open ideas.
   `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which clears
   command-line forwardings too (`ssh_config(5)`); a taken port retries
   another (3 tries, 20000-60000). `--clone-exec`'s session keeps
-  `ClearAllForwardings`. No agent on the parent with `DEVOPSY_CLONE_TO`
+  `ClearAllForwardings`. All four clone sessions (holder, push, `-R`,
+  `--clone-exec`) pass `KeepAlive` (`ServerAliveInterval=30`,
+  `ServerAliveCountMax=4`): the holder is quiet for the whole copy, and a
+  dropped one aborts mid-copy. No agent on the parent with `DEVOPSY_CLONE_TO`
   set means a `restrict`ed key: say so. A `restrict`ed key also refuses
   the `-R` (`port-forwarding`), which sshd reports like a taken port: after
   the last try, say both.
