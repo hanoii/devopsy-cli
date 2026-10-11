@@ -441,8 +441,9 @@ CI.
 The first release of a child (an environment with parent:) clones its
 parent's data once current, before its run step, so the run step works on
 that data and no empty site is served; a failed copy does not go live.
---clone clones on any release, --no-clone never (devopsy @<target> --clone
---help).
+--clone clones on any release, asking for the environment's name when it
+already has a current release (--yes skips it), --no-clone never
+(devopsy @<target> --clone --help).
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 

@@ -313,22 +313,25 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// empty data after a late failure.
 		var job *cloneJob
 		if t.Parent != "" && !noClone {
-			first := false
-			if !cloneFlag {
-				var out bytes.Buffer
-				code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
-				if err != nil {
-					return fail(err.Error())
-				}
-				if code != 0 {
-					return code
-				}
-				first = strings.TrimSpace(out.String()) == "none"
+			var out bytes.Buffer
+			code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
+			if err != nil {
+				return fail(err.Error())
 			}
+			if code != 0 {
+				return code
+			}
+			first := strings.TrimSpace(out.String()) == "none"
 			if cloneFlag || first {
-				var err error
 				if job, err = clonePreflight(t, t.ParentTarget, projectName, nil); err != nil {
 					return fail(err.Error() + "\nNothing changed. --no-clone releases without the parent's data.")
+				}
+			}
+			// Replacing a live child's data asks, as --clone does; a first
+			// release has none to lose.
+			if cloneFlag && !first && !yes {
+				if err := confirmClone(t, job.parent, "the release's run step runs on it"); err != nil {
+					return fail(cloneRefused(err, "Nothing released."))
 				}
 			}
 		}
