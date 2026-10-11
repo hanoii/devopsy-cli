@@ -20,6 +20,7 @@ for a; do last2=${last:-}; last=$a; done
 case "$*" in
   *" config --format json")
     printf '{"services":{"app":{"labels":{"devopsy.clone":"pause"},"volumes":[{"type":"bind","source":"%s/mnt/storage"}]},"db":{"labels":{"devopsy.clone":"stop"},"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$dir" "$dir" ;;
+  *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") echo app; echo db ;;
   *" ps --services --status paused") echo app ;;
   *" ps --services --all --status exited") echo db ;;
@@ -351,6 +352,21 @@ func TestCloneAbort(t *testing.T) {
 	}
 	if s.current("dev") == "" {
 		t.Error("an aborted clone changed current")
+	}
+
+	// The parent's stop fails: what it paused or stopped comes back.
+	out, code = s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--clone", "--yes")
+	docker, _ = s.logs()
+	if code != 1 || !strings.Contains(out, "aborting the clone") {
+		t.Fatalf("parent's stop fails (%d):\n%s", code, out)
+	}
+	rest = docker
+	for _, want := range []string{"shop-prod compose", "stop db", "shop-prod compose", "start db", "shop-prod compose", "unpause app"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("parent not restored, missing %q in order:\n%s", want, docker)
+		}
+		rest = rest[i+len(want):]
 	}
 }
 

@@ -591,7 +591,13 @@ func runClonePush(cwd string, color bool) int {
 		return fail(err.Error())
 	}
 	if err := prepareServices(cwd, services); err != nil {
-		return fail(err.Error())
+		// What it paused or stopped before failing comes back: finish
+		// reads the containers' state, not what prepare did.
+		code := fail(err.Error())
+		if err := finishServices(cwd, services); err != nil {
+			fail(err.Error())
+		}
+		return code
 	}
 	code := 0
 	if err := cloneRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.CloneArgsEnv))); err != nil {
