@@ -752,7 +752,9 @@ lists them with their contracts):
     `devopsy --clone-exec <devopsy args>` runs devopsy in the child's
     current release, as its project and with a clean environment (none of
     the parent's variables), stdin and stdout passed through. Exit 0 lets
-    the child go on.
+    the child go on. On a child's first release none of its services has
+    run yet: a `push` that needs one starts it first (`devopsy
+    --clone-exec up -d --wait database`).
   - `finish go|abort` runs on the child's server after the copy (`go`) or
     a failure (`abort`), after devopsy has started, waited for and resumed
     its labeled services. After `go`, the release's `run` step runs.
