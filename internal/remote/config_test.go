@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -157,6 +158,11 @@ func TestConfigErrors(t *testing.T) {
 		"aliases":            "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
 		"missing parent":     "project: app\nenvironments:\n  prod: {}\n  dev: {parent: stage}\n",
 		"pattern parent":     "project: app\nenvironments:\n  \"pr-*\": {}\n  prod: {parent: \"pr-*\"}\n",
+		"inherit a string":   "project: app\nenvironments:\n  prod: {inherit: DB}\n",
+		"inherit a bad name": "project: app\nenvironments:\n  prod: {inherit: [DB-X]}\n",
+		"inherit DEVOPSY_":   "project: app\nenvironments:\n  prod: {inherit: [DEVOPSY_DOMAINS]}\n",
+		"inherit compose":    "project: app\ndefaults: {inherit: [COMPOSE_PROJECT_NAME]}\nenvironments:\n  prod: {}\n",
+		"inherit twice":      "project: app\nenvironments:\n  prod: {inherit: [DB, DB]}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
@@ -481,9 +487,14 @@ environments:
 	if tg := load("vm1:dev"); tg.ParentTarget.Host != "vm2" {
 		t.Errorf("DEVOPSY_SERVER: %+v", tg.ParentTarget)
 	}
-	// --debug and help leave it unresolved.
-	if tg, err := DescribeTarget(dir, "dev", nil); err != nil || tg.Parent != "prod" || tg.ParentTarget != nil {
+	// --debug and help resolve it leniently: without a server, it has none
+	// yet.
+	if tg, err := DescribeTarget(dir, "dev", nil); err != nil || tg.Parent != "prod" || tg.ParentTarget == nil || tg.ParentTarget.Host != "vm2" {
 		t.Errorf("describe: %+v %v", tg, err)
+	}
+	t.Setenv("DEVOPSY_SERVER", "")
+	if tg, err := DescribeTarget(dir, "dev", nil); err != nil || tg.ParentTarget == nil || tg.ParentTarget.Host != "" || tg.ParentTarget.Name != "prod" {
+		t.Errorf("describe without a server: %+v %v", tg, err)
 	}
 
 	for name, config := range map[string]string{
@@ -497,6 +508,19 @@ environments:
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// parent: ~ removes a parent defaults give, as env's KEY: ~ does.
+	d0 := t.TempDir()
+	write(t, filepath.Join(d0, ConfigFile), "project: app\ndefaults: {parent: prod, inherit: [DB]}\nenvironments:\n  prod: {}\n  dev: {}\n  solo: {parent: ~, inherit: ~}\n  qa: {inherit: [A, B]}\n")
+	if tg, err := LoadTarget(d0, "vm1:solo", nil); err != nil || tg.Parent != "" || tg.ParentTarget != nil || tg.From["parent"] != "" || tg.Inherit != nil || tg.From["inherit"] != "" {
+		t.Errorf("parent: ~: %+v %v", tg, err)
+	}
+	if tg, err := LoadTarget(d0, "vm1:dev", nil); err != nil || tg.Parent != "prod" || !slices.Equal(tg.ParentTarget.Inherit, []string{"DB"}) || !strings.HasPrefix(tg.ParentTarget.From["inherit"], "defaults in ") {
+		t.Errorf("inherit from defaults: %+v %v", tg, err)
+	}
+	if tg, err := LoadTarget(d0, "vm1:qa", nil); err != nil || !slices.Equal(tg.Inherit, []string{"A", "B"}) {
+		t.Errorf("inherit: %+v %v", tg, err)
+	}
+
 	// A parent that cannot be resolved fails the child, strictly.
 	d := t.TempDir()
 	write(t, filepath.Join(d, ConfigFile), "project: app\ninstances: required\nenvironments:\n  prod: {}\n  dev: {path: /srv/dev, parent: prod}\n")

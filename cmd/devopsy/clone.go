@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"golang.org/x/term"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -272,6 +273,119 @@ func runPush(job *cloneJob, base string, rlog *releaseLog, color bool) int {
 	return code
 }
 
+// inheritVars copies the variables the parent's inherit: names from its
+// server's .env files into the child's, each at the level it has there:
+// the parent's shared/.env into the child's, its instance's and project's
+// .env into the child's instance and project levels (on the same server
+// those are the same files: nothing to write). A key the parent does not
+// set is reported, never written. Values travel over SSH's stdin, and only
+// names are printed.
+func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
+	c, p := job.child, job.parent
+	if len(p.Inherit) == 0 {
+		return nil
+	}
+	say := func(colr, msg string) {
+		cli.Fprint(os.Stderr, colr, msg, color)
+		rlog.Line(msg)
+	}
+	var out bytes.Buffer
+	code, err := remote.SSH(p, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
+	}
+	files := map[string]map[string]string{}
+	level := ""
+	var content strings.Builder
+	flush := func() error {
+		if level == "" {
+			return nil
+		}
+		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(string) (string, bool) { return "", false })
+		if err != nil {
+			return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
+		}
+		files[level] = vars
+		content.Reset()
+		return nil
+	}
+	for _, line := range strings.SplitAfter(out.String(), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), remote.InheritSeparator); ok {
+			if err := flush(); err != nil {
+				return err
+			}
+			level = name
+			continue
+		}
+		content.WriteString(line)
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+
+	// Nearest first, as the server reads them.
+	order := []string{"shared", "instance", "project"}
+	writes := map[string][]string{}
+	var missing []string
+	for _, k := range p.Inherit {
+		found := false
+		for _, l := range order {
+			if _, ok := files[l][k]; ok {
+				writes[l] = append(writes[l], k)
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, k)
+		}
+	}
+	levelOf := func(t *remote.Target, name string) *remote.Level {
+		for i := range t.Levels {
+			if t.Levels[i].Name == name {
+				return &t.Levels[i]
+			}
+		}
+		return nil
+	}
+	for _, l := range order {
+		keys := writes[l]
+		if len(keys) == 0 {
+			continue
+		}
+		// The child's level of the same name; its shared/.env when it has
+		// none (a path:, or no instance).
+		var to *remote.Level
+		if l != "shared" {
+			to = levelOf(c, l)
+			if from := levelOf(p, l); to != nil && from != nil && job.sameHost && to.Dir == from.Dir {
+				say(cyan, fmt.Sprintf("Inherited %s from @%s: the same %s .env on %s.", strings.Join(keys, ", "), p.Address, l, c.Host))
+				continue
+			}
+		}
+		var lines strings.Builder
+		for _, k := range keys {
+			lines.WriteString(cli.DotenvLine(k, files[l][k]) + "\n")
+		}
+		var res bytes.Buffer
+		code, err := remote.SSH(c, remote.VarsSetScript(c, to), strings.NewReader(lines.String()), &res, false)
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return fmt.Errorf("could not write %s on %s (%d)", strings.Join(keys, ", "), c.Host, code)
+		}
+		say(cyan, fmt.Sprintf("Inherited %s from @%s's %s .env into %s:%s.", strings.Join(keys, ", "), p.Address, l, c.Host, strings.TrimSpace(res.String())))
+	}
+	if len(missing) > 0 {
+		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
+	}
+	return nil
+}
+
 // runClone implements devopsy @<child> --clone [--from <address>] [--yes]
 // [-- args...]: the parent's data into the child's current release, then
 // its run step.
@@ -329,6 +443,9 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 	msg := fmt.Sprintf("Cloning @%s into @%s (%s:%s)...", p.Address, t.Address, t.Host, t.Path)
 	cli.Fprint(os.Stderr, cyan, msg, color)
 	rlog.Line(msg)
+	if err := inheritVars(job, rlog, color); err != nil {
+		return fail("inherit: " + err.Error() + "\nNothing cloned.")
+	}
 	code := runCloneSession(job, remote.HolderScript(t, projectName, p.Address, rsyncArgs, run), rlog, color)
 
 	// The log goes with the release cloned into, after its own.

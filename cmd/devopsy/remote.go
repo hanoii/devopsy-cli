@@ -346,6 +346,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
+		// What the child inherits, after the local before steps and before
+		// the upload, so the variables check finds it.
+		if job != nil {
+			if err := inheritVars(job, rlog, color); err != nil {
+				return stop("inherit: " + err.Error() + "\nNothing released.")
+			}
+		}
 		src := record.Mode
 		if record.Commit != "" {
 			src += ", " + record.Branch + "@" + record.Commit[:min(10, len(record.Commit))]
