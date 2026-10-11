@@ -365,9 +365,14 @@ repositories fit together and the open ideas.
   sits in a paused process's buffers. `pause` holds requests, `stop` (or a
   dump) gives consistency; never `pause` a database.
 - A stopped routed container loses its Traefik router (404); a paused one
-  keeps it, and Docker skips healthchecks while paused.
+  keeps it only until Traefik reads the containers again: Docker 29 reports
+  it unhealthy while paused (devopsy-traefik's AGENTS.md).
 - OrbStack machines are `ProxyCommand` hosts from macOS: clones across
-  servers need hosts reachable directly (`ssh -G` without a proxy).
+  servers need hosts reachable directly (`ssh -G` without a proxy), like
+  `<machine>.orb.local` with a key of your own. Their
+  `/etc/ssh/ssh_config.d/10-orbstack.conf` sets `IdentityAgent`, which
+  hides a forwarded agent from the parent's `ssh` ("get_agent_identities:
+  Permission denied"): remove it on test machines.
 
 ## Checks
 
