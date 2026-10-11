@@ -388,6 +388,10 @@ func TestActivateClone(t *testing.T) {
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_CLONE_FROM_TARGET:-} args=${DEVOPSY_CLONE_ARGS:-}" >> "$FAKE_ROOT/calls"
+if [ "$*" = "--clone-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
+  echo PREPARING >&2
+  while [ ! -e "$FAKE_ROOT/closed" ]; do sleep 0.05; done
+fi
 [ "$*" = "--clone-services prepare" ] && exit ${FAIL_PREPARE:-0}
 exit 0
 `
@@ -482,6 +486,54 @@ exit 0
 	}
 	if got := calls(root); !strings.Contains(got, "--capability clone prepare from") || !strings.Contains(got, "--capability clone finish go from") || strings.Contains(got, "--clone-services") {
 		t.Errorf("capability calls:\n%s", got)
+	}
+
+	// devopsy goes away while the services are being paused (its session
+	// closed: writes to it fail): they are restored all the same, prepare
+	// failing or not, in a release and in --clone.
+	hangup := func(root, script string, extra ...string) {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "FAKE_HANGUP=1"}, extra...)
+		cmd.Stdin = strings.NewReader("")
+		cmd.Stdout, cmd.Stderr = w, w
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		w.Close()
+		buf := make([]byte, 4096)
+		var seen string
+		for !strings.Contains(seen, "PREPARING") {
+			n, err := r.Read(buf)
+			if err != nil {
+				t.Fatalf("no PREPARING: %v\n%s", err, seen)
+			}
+			seen += string(buf[:n])
+		}
+		r.Close()
+		write(t, filepath.Join(root, "closed"), "")
+		_ = cmd.Wait()
+	}
+	for _, fail := range []string{"0", "3"} {
+		root := t.TempDir()
+		write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
+		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &CloneOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
+		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+			t.Errorf("release, session gone, prepare exits %s: calls:\n%s", fail, got)
+		}
+		root = t.TempDir()
+		write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
+		if err := os.Symlink("releases/1", filepath.Join(root, tg.Path, "current")); err != nil {
+			t.Fatal(err)
+		}
+		hangup(root, HolderScript(tg, "app-dev", "vm1:prod", nil, []string{"deploy"}), "FAIL_PREPARE="+fail)
+		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+			t.Errorf("--clone, session gone, prepare exits %s: calls:\n%s", fail, got)
+		}
 	}
 }
 

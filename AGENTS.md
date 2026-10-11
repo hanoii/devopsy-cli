@@ -206,7 +206,10 @@ repositories fit together and the open ideas.
   command `/dev/null` as stdin, so nothing it runs can eat or wait on the
   answer. No answer (devopsy interrupted, connection lost): the holder
   sends its output to `$base/.devopsy-clone.log` (a write to the dead
-  session would kill what restores the services) and restores.
+  session would kill what restores the services) and restores. From
+  prepare until the services are restored the holder ignores SIGPIPE
+  (`trap '' PIPE`, reset before `run`) and restores before it reports, so
+  a session gone during prepare cannot leave them paused either.
 - **Who pauses what:** the child's labeled services by the holder, for the
   whole clone (capability `prepare`/`finish`, else `--clone-services
   prepare|finish`); the parent's inside `--clone-push` (capability `push`,

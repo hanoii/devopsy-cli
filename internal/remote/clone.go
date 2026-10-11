@@ -95,26 +95,35 @@ func cloneFinish(projectName string) string {
 // clonePrepare readies the child's current release to be written: the
 // clone capability's prepare, else --clone-services prepare (pause, then
 // stop). A failure sets $status and restores what it changed.
+//
+// From here until the services are restored, SIGPIPE is ignored
+// (cloneRestorePipe ends that): if devopsy goes away, a write to this
+// session fails instead of killing what restores them.
 func clonePrepare(projectName string) string {
-	return `if [ -x .devopsy/capabilities/clone/prepare ]; then
+	return `trap '' PIPE
+if [ -x .devopsy/capabilities/clone/prepare ]; then
   echo "devopsy: running 'devopsy --capability clone prepare'" >&2
   ` + devopsyCall(projectName, []string{"--capability", "clone", "prepare"}, false) + ` || status=$?
 else
   ` + devopsyCall(projectName, []string{"--clone-services", "prepare"}, false) + ` || status=$?
 fi
 if [ "$status" != 0 ]; then
-  echo "devopsy: preparing the clone failed ($status)" >&2
   clone_finish abort || true
+  echo "devopsy: preparing the clone failed ($status)" >&2 || true
 fi
 `
 }
+
+// cloneRestorePipe ends clonePrepare's SIGPIPE exemption, before the run
+// step, which runs as release steps always do.
+const cloneRestorePipe = "trap - PIPE\n"
 
 // cloneWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
 // reads this session any more, and a write to it would kill what restores
 // the services, so the rest goes to a file in $base.
 func cloneWait(failed string) string {
-	return `  echo "` + CloneMarker + `$base"
+	return `  echo "` + CloneMarker + `$base" || true
   reply=
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
@@ -148,8 +157,8 @@ status=0
   clone_finish abort || true
   exit 1
 fi
-clone_finish go
-`
+clone_finish go || exit "$?"
+` + cloneRestorePipe
 	if len(run) > 0 {
 		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + devopsyCall(projectName, run, false) + "\n"
 	}
