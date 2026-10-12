@@ -334,14 +334,17 @@ func TestCloneDifferentHosts(t *testing.T) {
 	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	// The parent's sessions to the child: never the forwarded agent, no
+	// password prompt, and a short connect timeout.
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Every session of the clone keeps itself alive: the holder, the push,
 	// the push's look at the child's services (--clone-exec) and the
 	// receive.
 	keep := "-o ServerAliveInterval=30 -o ServerAliveCountMax=4"
-	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, "-o StrictHostKeyChecking=accept-new "+keep+" -T -p 22 devopsy@two\n") {
+	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
 	}
 	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", " rm -f cid123"} {
@@ -355,7 +358,7 @@ func TestCloneDifferentHosts(t *testing.T) {
 	if out, code := s.run(execEnv, "--clone-exec", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
 		t.Fatalf("--clone-exec (%d):\n%s", code, out)
 	}
-	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes -o StrictHostKeyChecking=accept-new "+keep+" -T -p 22 devopsy@two") {
+	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" "+keep+" -T -p 22 devopsy@two") {
 		t.Errorf("--clone-exec session: %s", ssh)
 	}
 
