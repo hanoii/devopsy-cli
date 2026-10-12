@@ -363,10 +363,11 @@ volumes are named `<project>[-<instance>]-<environment>`
 A child's **parent** (`parent:`, a concrete environment of the project)
 resolves like a target of its own, one level only: at the child's instance
 (none if the parent has a `path:`), on the server its variables name
-(`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), else on the
-child's server. `@vm2:develop` with `DEVOPSY_SERVER_PROD=vm1` clones from
-`vm1:prod`; without it, from `vm2:prod`. Two environments can be each
-other's parent. `devopsy --debug environments` shows it resolved.
+(`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
+child's: a guess could copy the wrong data, so a clone without one fails
+and says which variable to set. `@vm2:develop` with
+`DEVOPSY_SERVER_PROD=vm1` clones from `vm1:prod`. Two environments can be
+each other's parent. `devopsy --debug environments` shows it resolved.
 
 ### Releases
 
