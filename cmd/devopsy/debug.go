@@ -143,18 +143,27 @@ func debugSummary(st style, projectDir string) {
 
 // yamlTarget is an environment as devopsy uses it, for --debug environments --yaml.
 type yamlTarget struct {
-	Address  string            `yaml:"target,omitempty"`
-	Host     string            `yaml:"server,omitempty"`
-	Path     string            `yaml:"path"`
-	Mode     string            `yaml:"mode"`
-	Source   string            `yaml:"source,omitempty"`
-	Release  *yamlSteps        `yaml:"release,omitempty"`
-	Rollback *yamlSteps        `yaml:"rollback,omitempty"`
-	Destroy  string            `yaml:"destroy,omitempty"`
-	Keep     int               `yaml:"keep,omitempty"`
-	Parent   *yamlParent       `yaml:"parent,omitempty"`
-	Inherit  []string          `yaml:"inherit,omitempty"`
-	Env      map[string]string `yaml:"env,omitempty"`
+	Address  string              `yaml:"target,omitempty"`
+	Host     string              `yaml:"server,omitempty"`
+	Path     string              `yaml:"path"`
+	Mode     string              `yaml:"mode"`
+	Source   string              `yaml:"source,omitempty"`
+	Release  *yamlSteps          `yaml:"release,omitempty"`
+	Rollback *yamlSteps          `yaml:"rollback,omitempty"`
+	Destroy  string              `yaml:"destroy,omitempty"`
+	Keep     int                 `yaml:"keep,omitempty"`
+	Parent   *yamlParent         `yaml:"parent,omitempty"`
+	Inherit  []remote.InheritVar `yaml:"inherit,omitempty"`
+	Env      map[string]string   `yaml:"env,omitempty"`
+}
+
+// inheritList prints an inherit: list, conditions in parentheses.
+func inheritList(vars []remote.InheritVar) string {
+	parts := make([]string, len(vars))
+	for i, v := range vars {
+		parts[i] = v.String()
+	}
+	return strings.Join(parts, ", ")
 }
 
 // yamlParent is an environment's parent, with its address once it has a
@@ -301,7 +310,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		if name, address := parentOf(t); name != "" {
 			row("parent", name+" "+cmp.Or(address, st.warn("no server yet")), t.From["parent"])
 		}
-		row("inherit", strings.Join(t.Inherit, ", "), t.From["inherit"])
+		row("inherit", inheritList(t.Inherit), t.From["inherit"])
 		keys := make([]string, 0, len(t.Env))
 		for k := range t.Env {
 			keys = append(keys, k)

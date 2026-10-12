@@ -329,8 +329,9 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 		cli.Fprint(os.Stderr, colr, msg, color)
 		rlog.Line(msg)
 	}
+	conditioned := slices.ContainsFunc(p.Inherit, func(v remote.InheritVar) bool { return len(v.When) > 0 })
 	var out bytes.Buffer
-	code, err := remote.SSH(p, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false)
+	code, err := remote.SSH(p, remote.InheritReadScript(p, p.ComposeName(), conditioned), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return err
 	}
@@ -338,17 +339,25 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 		return fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
 	}
 	files := map[string]map[string]string{}
+	policies := map[string]string{}
 	level := ""
 	var content strings.Builder
 	flush := func() error {
-		if level == "" {
-			return nil
+		switch level {
+		case "":
+		case remote.InheritServices:
+			for _, line := range strings.Split(content.String(), "\n") {
+				if f := strings.Split(line, "\t"); len(f) >= 2 {
+					policies[f[0]] = f[1]
+				}
+			}
+		default:
+			vars, err := dotenv.UnmarshalWithLookup(content.String(), func(string) (string, bool) { return "", false })
+			if err != nil {
+				return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
+			}
+			files[level] = vars
 		}
-		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(string) (string, bool) { return "", false })
-		if err != nil {
-			return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
-		}
-		files[level] = vars
 		content.Reset()
 		return nil
 	}
@@ -369,8 +378,25 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 	// Nearest first, as the server reads them.
 	order := []string{"shared", "instance", "project"}
 	writes := map[string][]string{}
-	var missing []string
-	for _, k := range p.Inherit {
+	var missing, skipped []string
+	for _, v := range p.Inherit {
+		k := v.Name
+		if len(v.When) > 0 {
+			holds := true
+			for service, policy := range v.When {
+				have, ok := policies[service]
+				if !ok {
+					return fmt.Errorf("inherit: %s: @%s has no service %s", v, p.Address, service)
+				}
+				if have != policy {
+					holds = false
+					skipped = append(skipped, fmt.Sprintf("%s (%s is %s)", k, service, have))
+				}
+			}
+			if !holds {
+				continue
+			}
+		}
 		found := false
 		for _, l := range order {
 			if _, ok := files[l][k]; ok {
@@ -419,6 +445,9 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 			return fmt.Errorf("could not write %s on %s (%d)", strings.Join(keys, ", "), c.Host, code)
 		}
 		say(cyan, fmt.Sprintf("Inherited %s from @%s's %s .env into %s:%s.", strings.Join(keys, ", "), p.Address, l, c.Host, strings.TrimSpace(res.String())))
+	}
+	if len(skipped) > 0 {
+		say(cyan, fmt.Sprintf("Not inherited from @%s, its services' clone labels say: %s.", p.Address, strings.Join(skipped, ", ")))
 	}
 	if len(missing) > 0 {
 		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))

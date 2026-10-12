@@ -1,10 +1,10 @@
 package remote
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -163,6 +163,10 @@ func TestConfigErrors(t *testing.T) {
 		"inherit DEVOPSY_":   "project: app\nenvironments:\n  prod: {inherit: [DEVOPSY_DOMAINS]}\n",
 		"inherit compose":    "project: app\ndefaults: {inherit: [COMPOSE_PROJECT_NAME]}\nenvironments:\n  prod: {}\n",
 		"inherit twice":      "project: app\nenvironments:\n  prod: {inherit: [DB, DB]}\n",
+		"inherit bad policy": "project: app\nenvironments:\n  prod: {inherit: [{DB: {database: dump}}]}\n",
+		"inherit no service": "project: app\nenvironments:\n  prod: {inherit: [{DB: {}}]}\n",
+		"inherit two keys":   "project: app\nenvironments:\n  prod: {inherit: [{DB: {database: stop}, X: {}}]}\n",
+		"inherit bad svc":    "project: app\nenvironments:\n  prod: {inherit: [{DB: {\"a b\": stop}}]}\n",
 	} {
 		dir := t.TempDir()
 		write(t, filepath.Join(dir, ConfigFile), config)
@@ -521,10 +525,10 @@ environments:
 	if tg, err := LoadTarget(d0, "vm1:solo", nil); err != nil || tg.Parent != "" || tg.ParentTarget != nil || tg.From["parent"] != "" || tg.Inherit != nil || tg.From["inherit"] != "" {
 		t.Errorf("parent: ~: %+v %v", tg, err)
 	}
-	if tg, err := LoadTarget(d0, "vm1:dev", nil); err != nil || tg.Parent != "prod" || !slices.Equal(tg.ParentTarget.Inherit, []string{"DB"}) || !strings.HasPrefix(tg.ParentTarget.From["inherit"], "defaults in ") {
+	if tg, err := LoadTarget(d0, "vm1:dev", nil); err != nil || tg.Parent != "prod" || fmt.Sprint(tg.ParentTarget.Inherit) != "[DB]" || !strings.HasPrefix(tg.ParentTarget.From["inherit"], "defaults in ") {
 		t.Errorf("inherit from defaults: %+v %v", tg, err)
 	}
-	if tg, err := LoadTarget(d0, "vm1:qa", nil); err != nil || !slices.Equal(tg.Inherit, []string{"A", "B"}) {
+	if tg, err := LoadTarget(d0, "vm1:qa", nil); err != nil || fmt.Sprint(tg.Inherit) != "[A B]" {
 		t.Errorf("inherit: %+v %v", tg, err)
 	}
 

@@ -292,7 +292,14 @@ repositories fit together and the open ideas.
   it at that level on the child (`VarsSetScript`, values on stdin, under
   the level's lock); same server and same level directory: skipped. After
   the confirmation, before the holder; on a release after local before
-  steps and before the upload. Notices name keys, never values.
+  steps and before the upload. Notices name keys, never values. An entry
+  conditioned on the parent's labels (`InheritVar.When`, `NAME:
+  {<service>: <policy>}`) makes the same session list the parent's
+  services first (`--clone-services list` in its current release, after
+  the `InheritServices` separator); every named service must carry the
+  policy, a missing service is an error, a mismatch skips the entry with
+  a notice. `ClonePolicies` mirrors `cli`'s values: the two packages do
+  not import each other.
 
 ## Roles, exports and imports
 

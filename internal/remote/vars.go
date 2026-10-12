@@ -86,15 +86,28 @@ func VarsUnsetScript(t *Target, level *Level) string {
 	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset")
 }
 
-// InheritSeparator starts the line before each file InheritReadScript
-// prints, followed by its level: shared, instance or project.
+// InheritSeparator starts the line before each part InheritReadScript
+// prints, followed by its name: the levels shared, instance or project,
+// or InheritServices.
 const InheritSeparator = "=devopsy-vars= "
+
+// InheritServices names the part of InheritReadScript's output listing
+// the parent's services (--clone-services list), for conditioned entries.
+const InheritServices = "services"
 
 // InheritReadScript prints a parent's variables files for inherit:, its
 // environment's shared/.env, then its instance's and project's .env (those
-// it has), each after a InheritSeparator line naming its level.
-func InheritReadScript(t *Target) string {
-	s := "set -eu\n" + basePrelude(t) + `show() {
+// it has), each after a InheritSeparator line naming its level; with
+// services, first its services' clone policies from its current release,
+// as the parent's compose project projectName.
+func InheritReadScript(t *Target, projectName string, services bool) string {
+	s := "set -eu\n" + basePrelude(t)
+	if services {
+		s += `printf '%s%s\n' ` + Quote(InheritSeparator) + ` ` + InheritServices + `
+(cd "$base/current" && ` + devopsyCall(projectName, []string{"--clone-services", "list"}, false) + `)
+`
+	}
+	s += `show() {
   printf '%s%s\n' ` + Quote(InheritSeparator) + ` "$1"
   [ ! -f "$2" ] || { cat "$2"; echo; }
 }
