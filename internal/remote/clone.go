@@ -194,9 +194,11 @@ clone_finish go || exit "$?"
 }
 
 // PushScript is the parent's side of a clone: under a shared hold of the
-// parent's release lock (a release of the parent waits, other clones from
-// it do not), devopsy --clone-push in its current release, with env (the
-// DEVOPSY_CLONE_* variables).
+// parent's release lock (a release of the parent waits) and an exclusive
+// one on its clone lock (other clones from it wait: each push pauses,
+// stops and restores the parent's services from their state, so two at
+// once would restore them under the other's copy), devopsy --clone-push
+// in its current release, with env (the DEVOPSY_CLONE_* variables).
 func PushScript(p *Target, projectName string, env map[string]string) string {
 	keys := make([]string, 0, len(env))
 	for k := range env {
@@ -210,6 +212,8 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
 exec 9>"$base/.lock"
 flock -s -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+exec 8>"$base/.clone-lock"
+flock -w 600 8 || { echo "devopsy: another clone from $base is running" >&2; exit 75; }
 cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--clone-push"}, true) + "\n"
 }

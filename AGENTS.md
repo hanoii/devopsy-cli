@@ -201,7 +201,8 @@ repositories fit together and the open ideas.
   runs prepare, and prints the marker with its directory
   (`CloneMarker` + `$base`: the operator does not know the release root),
   swallowed by `markerWriter`. Then the push on the parent's (`PushScript`:
-  shared `flock -s` on its lock, `devopsy --clone-push`), with
+  shared `flock -s` on its release lock, exclusive on `.clone-lock` so
+  clones from one parent serialize, `devopsy --clone-push`), with
   `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
   to the holder; the holder's exit is the command's.
 - **fd 3:** the holder keeps devopsy's answer on fd 3 and gives every
