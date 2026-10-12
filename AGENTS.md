@@ -227,7 +227,9 @@ repositories fit together and the open ideas.
   container copying), the `-R` session ends (`SSHCommandContext`), the
   parent's services are restored, and the capability's push is not
   started, or, running in its own process group, gets SIGTERM, a
-  pipeline's commands included. What runs inside a container on its own
+  pipeline's commands included. From the cancellation on, `errOut` also
+  appends to the parent's `$base/.devopsy-clone.log` (`quietWriter.keep`,
+  the holder's file on the child's side), after a timestamped line. What runs inside a container on its own
   (an import already under way in `docker exec`) runs to its end.
 - **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
   touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`

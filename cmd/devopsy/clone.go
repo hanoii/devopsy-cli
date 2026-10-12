@@ -562,14 +562,42 @@ func confirmClone(t, p *remote.Target, then string) error {
 // commands write to a pipe devopsy drains and never die of a broken pipe
 // when the session that called devopsy is gone (they would leave services
 // paused or stopped).
-var errOut io.Writer = quietWriter{os.Stderr}
+var errOut = &quietWriter{w: os.Stderr}
 
-type quietWriter struct{ w io.Writer }
+// quietWriter never fails, and also appends to a file once the session
+// is gone (keep): what restores the parent's services then has a reader.
+type quietWriter struct {
+	w    io.Writer
+	mu   sync.Mutex
+	file *os.File
+}
 
-func (q quietWriter) Write(p []byte) (int, error) {
+func (q *quietWriter) Write(p []byte) (int, error) {
 	_, _ = q.w.Write(p)
+	q.mu.Lock()
+	if q.file != nil {
+		_, _ = q.file.Write(p)
+	}
+	q.mu.Unlock()
 	return len(p), nil
 }
+
+// keep sends what follows to $base/.devopsy-clone.log too, like the
+// holder does on the child when nobody reads the session any more.
+func (q *quietWriter) keep(base string) {
+	f, err := os.OpenFile(filepath.Join(base, cloneLog), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return
+	}
+	q.mu.Lock()
+	q.file = f
+	q.mu.Unlock()
+	sayErr("devopsy: " + time.Now().UTC().Format("2006-01-02 15:04:05") + ": the clone's session is gone: restoring what was paused or stopped")
+}
+
+// cloneLog is the holder's and the push's log for what happened after the
+// operator's devopsy was gone, in the environment's directory.
+const cloneLog = ".devopsy-clone.log"
 
 // sayErr prints a server-side notice.
 func sayErr(msg string) { fmt.Fprintln(errOut, msg) }
@@ -692,6 +720,18 @@ func runClonePush(cwd string, color bool) int {
 	if os.Getenv(remote.CloneWatchEnv) != "" {
 		ctx = watchSession(ctx)
 	}
+	// Cancelled before the end (a signal, the session's EOF): nobody
+	// reads this session any more, so the rest goes to the log too. cwd
+	// is $base/current, as the push script's cd left it.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			errOut.keep(filepath.Dir(cwd))
+		case <-done:
+		}
+	}()
 
 	_, services, err := cli.CloneServices(cwd, os.Environ())
 	if err != nil {
