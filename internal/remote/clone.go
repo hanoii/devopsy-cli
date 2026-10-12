@@ -227,6 +227,14 @@ func buildRsyncImage() string {
 	return "docker image inspect " + Quote(RsyncImage) + " >/dev/null 2>&1 || { echo \"devopsy: building " + RsyncImage + "\" >&2; printf '%s\\n' " + quoteAll(RsyncDockerfile) + " | docker build -q -t " + Quote(RsyncImage) + " - >/dev/null; }\n"
 }
 
+// RsyncVanished is rsync's exit code when files vanished between its scan
+// and their copy: what a live service does to its own temporary files.
+// The copy is complete without them, so both paths say so and go on.
+const RsyncVanished = 24
+
+// RsyncVanishedNotice follows "rsync mnt/<entry>: " on both paths.
+const RsyncVanishedNotice = "some files vanished during the copy (a running service removed them), the rest is copied"
+
 // CloneReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/), as root in
@@ -235,7 +243,10 @@ func CloneReceiveScript(toDir, port string, dirs, args []string) string {
 	return "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
 		"for d in " + quoteAll(dirs) + `; do
   echo "devopsy: rsync mnt/$d" >&2
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/mnt/$d/" "/mnt/$d/"`) + ` >&2
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/mnt/$d/" "/mnt/$d/"`) + ` >&2 || {
+    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || exit 1
+    echo "devopsy: rsync mnt/$d: ` + RsyncVanishedNotice + `" >&2
+  }
 done
 `
 }

@@ -920,6 +920,10 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 				if ctx.Err() != nil {
 					return errors.New("interrupted")
 				}
+				if exitCode(err) == remote.RsyncVanished {
+					sayErr("devopsy: rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
+					continue
+				}
 				return fmt.Errorf("rsync mnt/%s: %w", d, err)
 			}
 		}
