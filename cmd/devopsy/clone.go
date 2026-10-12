@@ -72,6 +72,9 @@ func clonePreflight(c, p *remote.Target, projectName string, args []string) (*cl
 		if os.Getenv("SSH_AUTH_SOCK") == "" {
 			return nil, fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the clone, and none is running here: eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", p.Host, c.Host)
 		}
+		if err := agentHasKeys(p.Host, c.Host); err != nil {
+			return nil, err
+		}
 		user, hostname, port, err := remote.ChildAddress(c.Host)
 		if err != nil {
 			return nil, err
@@ -678,7 +681,7 @@ func runClonePush(cwd string, color bool) int {
 	}
 	if to := os.Getenv(remote.CloneToEnv); to != "" && os.Getenv("SSH_AUTH_SOCK") == "" {
 		host, _ := os.Hostname()
-		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it; authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions", host))
+		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it (authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions), and so does sshd with AllowAgentForwarding no", host))
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
@@ -1347,4 +1350,24 @@ func waitHealthy(cwd string, services []string) error {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// agentHasKeys asks the local agent for its keys before anything starts:
+// SSH_AUTH_SOCK set is not an agent (macOS always sets it, CI may leave a
+// stale one), and a parent with a forwarded agent holding no key would
+// only find out after the child's services were paused. A missing
+// ssh-add is not an error: ssh itself reports later.
+func agentHasKeys(parent, child string) error {
+	err := exec.Command("ssh-add", "-l").Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return nil
+	}
+	switch exit.ExitCode() {
+	case 1:
+		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the clone, and it holds no key: ssh-add the key %s accepts (in CI, each server's CI key)", parent, child, child)
+	case 2:
+		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the clone, and none answers at SSH_AUTH_SOCK (%s): eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", parent, child, os.Getenv("SSH_AUTH_SOCK"))
+	}
+	return nil
 }

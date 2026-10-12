@@ -280,8 +280,11 @@ repositories fit together and the open ideas.
   `ClearAllForwardings`. All four clone sessions (holder, push, `-R`,
   `--clone-exec`) pass `KeepAlive` (`ServerAliveInterval=30`,
   `ServerAliveCountMax=4`): the holder is quiet for the whole copy, and a
-  dropped one aborts mid-copy. No agent on the parent with `DEVOPSY_CLONE_TO`
-  set means a `restrict`ed key: say so. A `restrict`ed key also refuses
+  dropped one aborts mid-copy. The preflight asks the local agent for its
+  keys (`agentHasKeys`, `ssh-add -l`: `SSH_AUTH_SOCK` set is not an
+  agent), so an empty or dead one fails before any session. No agent on
+  the parent with `DEVOPSY_CLONE_TO` set means a `restrict`ed key or
+  sshd's `AllowAgentForwarding no`: say so. A `restrict`ed key also refuses
   the `-R` (`port-forwarding`), which sshd reports like a taken port: after
   the last try, say both.
 - **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
