@@ -683,6 +683,16 @@ func runClonePush(cwd string, color bool) int {
 	// The generic path first: flush, pause and stop, rsync, start and
 	// unpause the services labeled live, pause and stop.
 	if dirs := cli.CloneDirs(services); len(dirs) > 0 {
+		// Before the parent pauses anything: what the copy would change
+		// under a running service of the child, left running by its own
+		// labels, is a mismatch, not a clone.
+		child, err := childServices(ctx)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if conflicts := cloneConflicts(services, child); len(conflicts) > 0 {
+			return fail(strings.Join(conflicts, "\ndevopsy: "))
+		}
 		if err := ensureRsyncImage(ctx); err != nil {
 			return fail(err.Error())
 		}
@@ -736,6 +746,84 @@ func runClonePush(cwd string, color bool) int {
 		return fail("interrupted: 'devopsy --capability clone push' ended")
 	}
 	return exitCode(err)
+}
+
+// childService is a line of the child's --clone-services list: a service,
+// its policy there, its containers' state (running, paused, exited...,
+// none without one, "" from a devopsy that does not say) and its entries
+// of mnt.
+type childService struct {
+	Name, Policy, State string
+	Dirs                []string
+}
+
+// childServices asks the child's release for its services, through
+// --clone-exec, after it prepared them.
+func childServices(ctx context.Context) ([]childService, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, self, cli.CloneExecFlag, cli.CloneServicesFlag, "list")
+	cmd.Stdout, cmd.Stderr = &out, errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("listing the child's services: %w", err)
+	}
+	var services []childService
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 3 {
+			continue
+		}
+		cs := childService{Name: f[0], Policy: f[1]}
+		if len(f) >= 4 {
+			cs.State, cs.Dirs = f[2], strings.Fields(f[3])
+		} else {
+			cs.Dirs = strings.Fields(f[2])
+		}
+		services = append(services, cs)
+	}
+	return services, nil
+}
+
+// cloneConflicts names the child's services the copy would change under:
+// running, with an entry the parent copies among their mounts, and not
+// labeled live there (which says so on purpose). A pause or stop label
+// on the child has already paused or stopped it; custom or no label
+// leaves it running, and the two sides disagree.
+func cloneConflicts(parent []cli.CloneService, child []childService) []string {
+	dirs := cli.CloneDirs(parent)
+	if len(dirs) == 0 {
+		return nil
+	}
+	copied := func(d string) bool { return d == "." || dirs[0] == "." || slices.Contains(dirs, d) }
+	from := func(d string) string {
+		for _, s := range parent {
+			if s.Policy != cli.CloneSkip && s.Policy != cli.CloneCustom && (d == "." || slices.Contains(s.Dirs, d) || slices.Contains(s.Dirs, ".")) {
+				return s.Name + " (" + cli.CloneLabel + "=" + s.Policy + ")"
+			}
+		}
+		return "another service"
+	}
+	var conflicts []string
+	for _, c := range child {
+		if c.State != "running" && c.State != "restarting" || c.Policy == cli.CloneLive {
+			continue
+		}
+		for _, d := range c.Dirs {
+			if !copied(d) {
+				continue
+			}
+			label := "labeled " + cli.CloneLabel + "=" + c.Policy
+			if c.Policy == cli.CloneSkip {
+				label = "without a " + cli.CloneLabel + " label"
+			}
+			conflicts = append(conflicts, fmt.Sprintf("the child's %s is running, %s, and mnt/%s would change under it: the parent copies it for %s. Label it alike on both sides (an inherited variable keeps them so), or live to copy under a running service.", c.Name, label, d, from(d)))
+			break
+		}
+	}
+	return conflicts
 }
 
 func isExecutable(p string) bool {
@@ -979,8 +1067,8 @@ func runCloneExec(args []string, color bool) int {
 // runCloneServices implements the hidden --clone-services
 // prepare|finish|list, in the current project: pause the services labeled
 // pause, then stop those labeled stop; start those again, wait until they
-// are healthy, unpause; or list them, name, policy and entries of mnt, one
-// per line.
+// are healthy, unpause; or list them, name, policy, state and entries of
+// mnt, one per line.
 func runCloneServices(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(errOut, red, "devopsy: "+msg, color)
@@ -995,8 +1083,12 @@ func runCloneServices(cwd string, args []string, color bool) int {
 	}
 	switch args[0] {
 	case "list":
+		states, err := serviceStates(cwd)
+		if err != nil {
+			return fail(err.Error())
+		}
 		for _, s := range services {
-			fmt.Printf("%s\t%s\t%s\n", s.Name, s.Policy, strings.Join(s.Dirs, " "))
+			fmt.Printf("%s\t%s\t%s\t%s\n", s.Name, s.Policy, cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "))
 		}
 		return 0
 	case "prepare":
@@ -1173,6 +1265,27 @@ func parsePS(out []byte) ([]psEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// serviceStates is the state of each service's container (docker compose
+// ps: running, paused, exited...), a running one winning when a service
+// has several.
+func serviceStates(cwd string) (map[string]string, error) {
+	var out bytes.Buffer
+	if err := compose(cwd, &out, "ps", "--all", "--format", "json"); err != nil {
+		return nil, fmt.Errorf("docker compose ps: %w", err)
+	}
+	entries, err := parsePS(out.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("docker compose ps: %w", err)
+	}
+	states := map[string]string{}
+	for _, e := range entries {
+		if states[e.Service] != "running" {
+			states[e.Service] = e.State
+		}
+	}
+	return states, nil
 }
 
 // waitHealthy waits until every container of services runs and, when it
