@@ -232,7 +232,14 @@ repositories fit together and the open ideas.
 - **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
   touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`
   is left to the parent's `push`. No labeled service: "nothing to clone",
-  success, and the run step still runs.
+  success, and the run step still runs. Each side reads its own labels;
+  before the generic path pauses anything, `--clone-push` asks the child
+  for `--clone-services list` (through `--clone-exec`, one more session
+  across servers) and refuses (`cloneConflicts`) when a child service
+  mounting a copied entry is running and not `live` there: a `custom` or
+  unlabeled service the copy would change under. The list's third column
+  is the container's state (`none` without one); a child devopsy that
+  prints no state is not checked.
 - **Who pauses what:** the child's labeled services by the holder, for the
   whole clone: the `prepare` hook, then `--clone-services prepare` (the
   `flush` hook per running `live`/`pause` service, pause, stop); after the

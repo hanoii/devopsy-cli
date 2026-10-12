@@ -514,6 +514,16 @@ The label's values, on both sides:
 A project without any labeled service clones nothing ("nothing to
 clone"), and the child's `run` step still runs.
 
+Each side reads the labels from its own release, so they can differ: a
+variable in the label (`devopsy.clone=${CLONE_DATABASE:-stop}`) that the
+parent inherits to its children keeps them alike. What the parent copies
+must not change under a running service of the child: before pausing
+anything of its own, the parent looks at the child's services and refuses
+when one that mounts a copied entry is still running there, labeled
+`custom` or not at all (`pause` and `stop` have already paused or stopped
+it; `live` on the child says a running copy is wanted). The child
+restores its services, nothing was copied.
+
 Order on each side: flush, pause, stop, copy, start (healthy), resume,
 then the parent's `push` for the `custom` services. The
 child's services are paused and stopped before the parent's and resumed

@@ -13,10 +13,14 @@ import (
 // cloneFakeDocker logs every call, with its compose project, to
 // $DOCKER_LOG, answers compose config and ps for a project whose app is
 // labeled pause and db stop (FAKE_APP and FAKE_DB change them, none for no
-// label), and copies what the rsync containers would:
-// within one host, or from the daemon's mount (remembered) across hosts.
+// label; $DOCKER_LOG.<compose project> sets them for one side, past the
+// clean environment), with each container in the state its label gives
+// it (paused, exited, else running), and copies what the rsync containers
+// would: within one host, or from the daemon's mount (remembered) across
+// hosts.
 const cloneFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
+[ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
 case "$*" in
@@ -28,6 +32,9 @@ case "$*" in
   *" ps --services --status paused") echo app ;;
   *" ps --services --all --status exited") echo db ;;
   *" ps --all --format json db") echo '{"Service":"db","State":"running","Health":"healthy"}' ;;
+  *" ps --all --format json")
+    st() { case $1 in pause) echo paused ;; stop) echo exited ;; *) echo running ;; esac; }
+    printf '{"Service":"app","State":"%s"}\n{"Service":"db","State":"%s"}\n' "$(st "${FAKE_APP:-pause}")" "$(st "${FAKE_DB:-stop}")" ;;
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; esac; done
     echo cid123 ;;
@@ -330,11 +337,12 @@ func TestCloneDifferentHosts(t *testing.T) {
 	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
-	// Every session of the clone keeps itself alive: the holder, the push
-	// and the receive.
+	// Every session of the clone keeps itself alive: the holder, the push,
+	// the push's look at the child's services (--clone-exec) and the
+	// receive.
 	keep := "-o ServerAliveInterval=30 -o ServerAliveCountMax=4"
-	if strings.Count(ssh, keep) != 3 || !strings.Contains(ssh, keep+" -T devopsy@two\n") {
-		t.Errorf("keepalive on holder, push and receive:\n%s", ssh)
+	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, "-o StrictHostKeyChecking=accept-new "+keep+" -T -p 22 devopsy@two\n") {
+		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
 	}
 	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
@@ -724,6 +732,48 @@ func TestCloneLabels(t *testing.T) {
 			t.Errorf("failing flush on %s (%d):\n%s\n%s", side, code, out, docker)
 		}
 	}
+}
+
+// A service the parent copies that the child leaves running (custom or no
+// label there) fails the push before the parent pauses anything: the
+// child restores its services; live on the child says running is fine.
+func TestCloneMismatch(t *testing.T) {
+	s := newCloneSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release", "--no-clone"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	for _, label := range []string{"custom", "none"} {
+		write(t, s.log+".shop-dev", "FAKE_DB="+label+"\n", 0o644)
+		out, code := s.run(nil, "@dev", "--clone", "--yes")
+		docker, _ := s.logs()
+		want := "labeled devopsy.clone=custom"
+		if label == "none" {
+			want = "without a devopsy.clone label"
+		}
+		if code == 0 || !strings.Contains(out, "the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.clone=stop)") ||
+			strings.Contains(out, "deploy in shop-dev") || strings.Count(docker, "shop-prod compose") != 1 || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
+			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
+			t.Errorf("child db %s (%d):\n%s\n%s", label, code, out, docker)
+		}
+	}
+	write(t, s.log+".shop-dev", "FAKE_DB=live\n", 0o644)
+	out, code := s.run(nil, "@dev", "--clone", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "/src/db/ /dst/db/") {
+		t.Errorf("child db live (%d):\n%s\n%s", code, out, docker)
+	}
+	// The other way round, the child stops what the parent leaves to its
+	// push: nothing to refuse.
+	os.Remove(s.log + ".shop-dev")
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "clone", "push"), "#!/bin/sh\necho push\n", 0o755)
+	out, code = s.run([]string{"FAKE_DB=custom"}, "@dev", "--clone", "--yes")
+	s.logs()
+	if code != 0 || !strings.Contains(out, "deploy in shop-dev") {
+		t.Errorf("parent custom (%d):\n%s", code, out)
+	}
+	os.Remove(s.log + ".shop-dev")
 }
 
 // Interrupted during the copy, the parent's push stops at once, though
