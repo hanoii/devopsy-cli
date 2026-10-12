@@ -620,9 +620,9 @@ partly copied then; rsync picks up from there. Interrupted (Ctrl-C) during the
 copy, devopsy ends its session to the parent's server, which stops the
 copy and restores its own services, then tells the child's to restore
 its services. If devopsy itself goes away
-mid-clone (killed, connection lost), the child's side restores its
-services on its own and writes what happened to
-`<environment>/.devopsy-clone.log` on its server.
+mid-clone (killed, connection lost), each side restores its own
+services and writes what happened to `<environment>/.devopsy-clone.log`
+on its server.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 the instance's `.env` (`<project>/<instance>/.env`), the project's
