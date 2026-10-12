@@ -547,7 +547,8 @@ refuses its key, in seconds rather than pausing its services for minutes.
 So, across servers:
 
 - an agent must be running where devopsy runs, with keys both servers
-  accept: the parent's server reaches the child's through it. In CI,
+  accept: the parent's server reaches the child's through it (devopsy
+  checks the agent has keys before anything starts, not which). In CI,
   `eval $(ssh-agent); ssh-add` with each server's CI key (devopsy-server
   generates one per server), instead of `ssh -i`;
 - the child's server must be reachable from the parent's as `ssh -G`

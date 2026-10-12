@@ -94,6 +94,8 @@ func newCloneSetup(t *testing.T) *cloneSetup {
 	write(t, filepath.Join(bin, "fakessh"), cloneFakeSSH, 0o755)
 	write(t, filepath.Join(bin, "docker"), cloneFakeDocker, 0o755)
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	// The agent's keys (ssh-add -l): FAKE_AGENT=empty has none, dead no agent.
+	write(t, filepath.Join(bin, "ssh-add"), "#!/bin/sh\ncase ${FAKE_AGENT:-} in empty) exit 1 ;; dead) exit 2 ;; esac\nexit 0\n", 0o755)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
 	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
 		t.Fatal(err)
@@ -307,8 +309,18 @@ func TestCloneDifferentHosts(t *testing.T) {
 	if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
 		t.Errorf("sessions before the agent check (only the first-release check expected):\n%s", ssh)
 	}
-	// A child behind a jump host is out of the parent's reach.
+	// An agent without keys, or none behind the socket: the same, before
+	// any session.
 	agent := append(env, "SSH_AUTH_SOCK=/tmp/agent.sock")
+	for fake, want := range map[string]string{"empty": "holds no key: ssh-add the key devopsy@two accepts", "dead": "none answers at SSH_AUTH_SOCK (/tmp/agent.sock)"} {
+		if out, code := s.run(append(agent, "FAKE_AGENT="+fake), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, want) || s.current("dev") != "" {
+			t.Fatalf("agent %s (%d):\n%s", fake, code, out)
+		}
+		if _, ssh := s.logs(); strings.Count(ssh, "\n") != 1 {
+			t.Errorf("sessions before the agent check (%s):\n%s", fake, ssh)
+		}
+	}
+	// A child behind a jump host is out of the parent's reach.
 	if out, code := s.run(append(agent, "FAKE_PROXYJUMP=bastion"), "@devopsy@two:dev", "--release"); code == 0 || !strings.Contains(out, "relay through this machine is not supported yet") {
 		t.Fatalf("proxyjump (%d):\n%s", code, out)
 	}
