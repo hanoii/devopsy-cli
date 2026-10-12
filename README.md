@@ -489,8 +489,10 @@ with a label, `devopsy.clone`, and devopsy copies the entries of
 `.devopsy/mnt` those services bind-mount (`./mnt/files` gives `files`;
 `./mnt` itself, all of it), from the parent's `shared/mnt` into the
 child's, with `rsync -a --delete --numeric-ids`: the child's copy equals
-the parent's, owners and modes included. `shared/.env` is never copied:
-the child keeps its own secrets.
+the parent's, owners and modes included. Files a running service removes
+during the copy (rsync's "vanished", its exit 24) are a notice, not a
+failure: the rest is copied. `shared/.env` is never copied: the child
+keeps its own secrets.
 
 The label's values, on both sides:
 

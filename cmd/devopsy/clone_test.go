@@ -40,12 +40,12 @@ case "$*" in
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
   "run --rm --network host "*)
-    [ -z "${FAIL_RSYNC:-}" ] || exit 23
+    [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
     mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
   "run --rm --name devopsy-clone-"*)
-    [ -z "${FAIL_RSYNC:-}" ] || exit 23
+    [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
     d=${last2#/src/}
@@ -195,6 +195,15 @@ func TestCloneSameHost(t *testing.T) {
 	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent") {
 		t.Errorf("same host used a daemon or the agent:\n%s\n%s", docker, ssh)
 	}
+	// Files vanished during the copy (rsync's 24, a live service's
+	// temporary files): a notice per entry, both entries copied, the run
+	// step runs.
+	s.logs()
+	out, code = s.run([]string{"FAIL_RSYNC=24"}, "@dev", "--clone", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Count(out, "some files vanished during the copy") != 2 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "/src/storage/ /dst/storage/") {
+		t.Errorf("vanished files (%d):\n%s\n%s", code, out, docker)
+	}
 	data := readString(filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "target.env"))
 	if !strings.Contains(data, "DEVOPSY_PARENT='prod'\n") || !strings.Contains(data, "DEVOPSY_PARENT_TARGET='devopsy@one:prod'\n") {
 		t.Errorf("target.env:\n%s", data)
@@ -268,7 +277,7 @@ func TestReleaseFirstClone(t *testing.T) {
 	s.releaseProd(nil)
 
 	// A first release never asks, --clone or not.
-	out, code := s.run([]string{"FAIL_RSYNC=1"}, "@dev", "--release", "--clone")
+	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release", "--clone")
 	docker, _ := s.logs()
 	if code == 0 || s.current("dev") != "" || !strings.Contains(out, "clone failed (1), no previous release to go back to") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("failed clone (%d), current %q:\n%s", code, s.current("dev"), out)
@@ -364,6 +373,12 @@ func TestCloneDifferentHosts(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
 	}
+	// Vanished files across servers: the receive script goes on too.
+	s.logs()
+	if out, code := s.run(append(agent, "FAIL_RSYNC=24"), "@devopsy@two:dev", "--clone", "--yes"); code != 0 || strings.Count(out, "some files vanished during the copy") != 2 || !strings.Contains(out, "deploy in shop-dev") {
+		t.Errorf("vanished files across servers (%d):\n%s", code, out)
+	}
+	s.logs()
 
 	// --clone-exec across servers keeps its session alive too.
 	execEnv := append(agent, "DEVOPSY_CLONE_TO=devopsy@two", "DEVOPSY_CLONE_SSH_PORT=22", "DEVOPSY_CLONE_TO_DIR="+filepath.Join(s.root, "shop", "dev", "current", ".devopsy"), "DEVOPSY_CLONE_TO_PROJECT=shop-dev")
@@ -400,7 +415,7 @@ func TestCloneAbort(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
-	out, code := s.run([]string{"FAIL_RSYNC=1"}, "@dev", "--clone", "--yes")
+	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--clone", "--yes")
 	docker, _ := s.logs()
 	if code != 1 || !strings.Contains(out, "aborting the clone") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("abort (%d):\n%s", code, out)
