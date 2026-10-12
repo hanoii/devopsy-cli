@@ -543,8 +543,10 @@ agent forwarded for that session only; data goes server to server, never
 through your machine. The clone's SSH sessions send keepalives every 30
 seconds, so a firewall does not drop a quiet copy. So, across servers:
 
-- an agent must be running where devopsy runs, with a key both servers
-  accept (in CI, `eval $(ssh-agent); ssh-add` with the CI key);
+- an agent must be running where devopsy runs, with keys both servers
+  accept: the parent's server reaches the child's through it. In CI,
+  `eval $(ssh-agent); ssh-add` with each server's CI key (devopsy-server
+  generates one per server), instead of `ssh -i`;
 - the child's server must be reachable from the parent's as `ssh -G`
   resolves it here (user, hostname, port; its host key is accepted on
   first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
