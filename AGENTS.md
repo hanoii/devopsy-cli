@@ -267,7 +267,12 @@ repositories fit together and the open ideas.
   a project's `.env`, so the parent's secrets and project name would leak
   into the child's commands. Over SSH the login environment is clean.
 - **SSH between servers:** through `DEVOPSY_SSH_COMMAND` too, with
-  `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the
+  `ChildSSH` on the parent's sessions to the child: `ForwardAgent=no`
+  (the operator's agent reaches the parent, never the child, whatever
+  the parent's ssh config says), `BatchMode=yes` (a refused key fails
+  instead of prompting), `ConnectTimeout=30` (an unreachable child fails
+  before the TCP timeout, with the parent's services paused meanwhile)
+  and `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the
   parent's daemon, `--network host` on the child) passes
   `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which clears
   command-line forwardings too (`ssh_config(5)`); a taken port retries

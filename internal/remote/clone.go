@@ -32,6 +32,16 @@ var CloningInto = regexp.MustCompile(`devopsy: cloning into ([0-9]{14})`)
 // clone halfway, or leave a push writing into a child already restored.
 var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
 
+// ChildSSH are the options of the parent's sessions to the child (the
+// rsync session and --clone-exec), with KeepAlive: the operator's agent,
+// forwarded to the parent for the push, never goes one hop further
+// (the child is the unreviewed side, and a ForwardAgent in the parent's
+// ssh config would send it), a key the child refuses fails at once
+// instead of waiting for a password nobody can type, and a child the
+// parent cannot reach fails in seconds, not after the TCP timeout, with
+// its services paused meanwhile.
+var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=accept-new"}
+
 // RsyncImage is devopsy's rsync image, built on a server from
 // RsyncDockerfile when missing. Its tag changes with the Dockerfile.
 const RsyncImage = "devopsy-rsync:1"

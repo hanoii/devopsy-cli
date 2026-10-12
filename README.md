@@ -539,9 +539,12 @@ deploy user's permissions do not matter. **On one server**, one container
 copies between the two directories, without SSH. **Across servers**, the
 parent's server starts an rsync daemon (read-only, no published port) and
 reaches the child's over SSH, through a reverse forward, with your SSH
-agent forwarded for that session only; data goes server to server, never
-through your machine. The clone's SSH sessions send keepalives every 30
-seconds, so a firewall does not drop a quiet copy. So, across servers:
+agent forwarded for that session only, and never on to the child; data
+goes server to server, never through your machine. The clone's SSH
+sessions send keepalives every 30 seconds, so a firewall does not drop a
+quiet copy, and the parent gives up on a child it cannot reach, or that
+refuses its key, in seconds rather than pausing its services for minutes.
+So, across servers:
 
 - an agent must be running where devopsy runs, with keys both servers
   accept: the parent's server reaches the child's through it. In CI,
