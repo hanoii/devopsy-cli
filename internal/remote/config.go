@@ -115,7 +115,7 @@ type Target struct {
 	// Inherit names the variables this environment's children get from it:
 	// read from its server's .env files and written at the same level on
 	// the child's side, on a child's first release and every --clone.
-	Inherit []string `yaml:"inherit"`
+	Inherit []InheritVar `yaml:"inherit"`
 
 	// Address is the resolved target, <server>:[<instance>/]<environment>.
 	Address string `yaml:"-"`
@@ -521,25 +521,89 @@ func nullKeys(n *yaml.Node) map[string]bool {
 	return nulls
 }
 
+// InheritVar is an entry of inherit:: a variable name, or the name
+// conditioned on the clone policies of the parent's services (NAME:
+// {<service>: <policy>}): inherited only when every named service has
+// that devopsy.clone label on the parent, for what a copy carries (a raw
+// datadir has the parent's database password in it; a dump does not).
+type InheritVar struct {
+	Name string
+	When map[string]string
+}
+
+func (v InheritVar) String() string {
+	if len(v.When) == 0 {
+		return v.Name
+	}
+	keys := make([]string, 0, len(v.When))
+	for k := range v.When {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + ": " + v.When[k]
+	}
+	return v.Name + " (" + strings.Join(parts, ", ") + ")"
+}
+
+func (v *InheritVar) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		v.Name = n.Value
+		return nil
+	}
+	if n.Kind != yaml.MappingNode || len(n.Content) != 2 {
+		return errors.New("a variable name, or NAME: {<service>: <policy>}")
+	}
+	v.Name = n.Content[0].Value
+	return n.Content[1].Decode(&v.When)
+}
+
+func (v InheritVar) MarshalYAML() (any, error) {
+	if len(v.When) == 0 {
+		return v.Name, nil
+	}
+	return map[string]map[string]string{v.Name: v.When}, nil
+}
+
+// ClonePolicies are devopsy.clone's values, for inherit: conditions
+// (cli.CloneLabel's, kept in step with internal/cli/clone.go).
+var ClonePolicies = []string{"skip", "live", "pause", "stop", "custom"}
+
 // checkInherit checks an inherit: list: variable names, each once, none of
-// devopsy's own (DEVOPSY_*, COMPOSE_PROJECT_NAME: deployment facts).
+// devopsy's own (DEVOPSY_*, COMPOSE_PROJECT_NAME: deployment facts), a
+// condition's services named and its policies devopsy.clone's.
 func checkInherit(n *yaml.Node) error {
 	if n.Tag == "!!null" {
 		return nil
 	}
 	if n.Kind != yaml.SequenceNode {
-		return errors.New("a list of variable names")
+		return errors.New("a list of variable names, or NAME: {<service>: <policy>} entries")
 	}
 	seen := map[string]bool{}
 	for _, v := range n.Content {
-		k := v.Value
+		var e InheritVar
+		if err := v.Decode(&e); err != nil {
+			return err
+		}
+		k := e.Name
 		switch {
-		case v.Kind != yaml.ScalarNode || !VarNameRe.MatchString(k):
+		case !VarNameRe.MatchString(k):
 			return fmt.Errorf("%q is not a variable name", k)
 		case strings.HasPrefix(k, "DEVOPSY_") || k == "COMPOSE_PROJECT_NAME":
 			return fmt.Errorf("%s is devopsy's, set for each environment: not inherited", k)
 		case seen[k]:
 			return fmt.Errorf("%s is listed twice", k)
+		case v.Kind == yaml.MappingNode && len(e.When) == 0:
+			return fmt.Errorf("%s: a condition names a service and its devopsy.clone policy, like {database: stop}", k)
+		}
+		for service, policy := range e.When {
+			if !envName.MatchString(service) {
+				return fmt.Errorf("%s: %q is not a service name", k, service)
+			}
+			if !slices.Contains(ClonePolicies, policy) {
+				return fmt.Errorf("%s: %s: %q is not a devopsy.clone policy (%s)", k, service, policy, strings.Join(ClonePolicies, ", "))
+			}
 		}
 		seen[k] = true
 	}

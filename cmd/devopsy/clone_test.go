@@ -776,6 +776,37 @@ func TestCloneMismatch(t *testing.T) {
 	os.Remove(s.log + ".shop-dev")
 }
 
+// An inherit: entry conditioned on the parent's clone labels (NAME:
+// {<service>: <policy>}) is inherited only when they hold; a service the
+// parent does not have is an error.
+func TestCloneInheritWhen(t *testing.T) {
+	s := newCloneSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY, {DB_PASSWORD: {db: stop}}, {OTHER: {db: custom, app: pause}}]}\n  dev: {parent: prod}\n", 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "SHARED_KEY=s\nDB_PASSWORD=p\nOTHER=o\n", 0o600)
+	childEnv := filepath.Join(s.root, "shop", "dev", "shared", ".env")
+
+	out, code := s.run(nil, "@dev", "--release")
+	if code != 0 || !strings.Contains(out, "Inherited SHARED_KEY, DB_PASSWORD from @devopsy@one:prod's shared .env") || !strings.Contains(out, "Not inherited from @devopsy@one:prod, its services' clone labels say: OTHER (db is stop).") {
+		t.Fatalf("db stop (%d):\n%s", code, out)
+	}
+	if got := readString(childEnv); got != "SHARED_KEY='s'\nDB_PASSWORD='p'\n" {
+		t.Errorf("child's shared/.env: %q", got)
+	}
+	s.logs()
+	out, code = s.run([]string{"FAKE_DB=live"}, "@dev", "--clone", "--yes")
+	if code != 0 || !strings.Contains(out, "Inherited SHARED_KEY from") || !strings.Contains(out, "clone labels say: DB_PASSWORD (db is live), OTHER (db is live).") {
+		t.Errorf("db live (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "--debug", "environments"); code != 0 || !strings.Contains(out, "SHARED_KEY, DB_PASSWORD (db: stop), OTHER (app: pause, db: custom)") {
+		t.Errorf("--debug environments (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [{X: {nope: stop}}]}\n  dev: {parent: prod}\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--clone", "--yes"); code == 0 || !strings.Contains(out, "inherit: X (nope: stop): @devopsy@one:prod has no service nope") {
+		t.Errorf("unknown service (%d):\n%s", code, out)
+	}
+}
+
 // Interrupted during the copy, the parent's push stops at once, though
 // its session outlives devopsy's ssh: the closed stdin tells it. It
 // removes the rsync container, restores its services, and never runs the
