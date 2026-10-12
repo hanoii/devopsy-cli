@@ -72,6 +72,13 @@ case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 # FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
 # its stdin closing tells it the session is gone.
 case "$s" in *--clone-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&0 & wait $!; exit $?; fi ;; esac
+# FAKE_HOLDER_DIE: the holder's session dies once the copy started (the
+# file named exists), as a dropped connection would end it.
+case "$s" in *"ready for clone in"*) if [ -n "${FAKE_HOLDER_DIE:-}" ]; then
+  sh -c "$s" <&0 & pid=$!
+  while [ ! -e "$FAKE_HOLDER_DIE" ]; do sleep 0.1; done
+  kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 255
+fi ;; esac
 case "$opts" in *" -R "*) [ -z "${FAKE_NO_FORWARD:-}" ] || { echo "Error: remote port forwarding failed for listen port 1" >&2; exit 255; } ;; esac
 exec sh -c "$s"
 `
@@ -897,5 +904,26 @@ func TestCloneInterruptCopy(t *testing.T) {
 	// What the parent did once nobody read its session is in its log.
 	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-clone.log")); !strings.Contains(log, ": the clone's session is gone: restoring what was paused or stopped") || !strings.Contains(log, "devopsy: unpausing app") {
 		t.Errorf("the parent's clone log:\n%s", log)
+	}
+}
+
+// The holder's session ends during the copy: the push is stopped, the
+// parent restored, nothing answered, no run step.
+func TestCloneHolderGone(t *testing.T) {
+	s := newCloneSetup(t)
+	started := filepath.Join(t.TempDir(), "started")
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release", "--no-clone"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--clone", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || strings.Contains(out, "deploy in shop-dev") {
+		t.Fatalf("holder gone (%d):\n%s", code, out)
+	}
+	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " unpause app"
+	if !strings.Contains(docker, restored) || !strings.Contains(docker, "rm -f devopsy-clone-") {
+		t.Errorf("the parent was not restored or the copy not stopped:\n%s", docker)
 	}
 }

@@ -242,6 +242,20 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 			say(red, "devopsy: interrupted: stopping the copy from @"+job.parent.Address+", then aborting the clone")
 			cancel()
 			<-pushed
+		case res = <-done:
+			// The holder is gone (its server's connection dropped, its
+			// session killed): it restored the child's services on its
+			// way out, so nothing may copy into them any more, and
+			// nobody is left to answer.
+			why := fmt.Sprint(res.code)
+			if res.err != nil {
+				why = res.err.Error()
+			}
+			say(red, "devopsy: the session on @"+job.child.Address+" ended during the copy ("+why+"): stopping the copy from @"+job.parent.Address)
+			cancel()
+			<-pushed
+			mw.flush()
+			return cmp.Or(res.code, 1)
 		}
 		answer := "go\n"
 		if interrupted {
