@@ -534,7 +534,8 @@ then the parent's `push` for the `custom` services. The
 child's services are paused and stopped before the parent's and resumed
 after them. The child's side holds its release lock for the whole clone;
 the parent's holds a shared one, so a release of the parent waits for the
-copy and other clones from it do not.
+copy, and a clone lock of its own, so clones from one parent run one at
+a time (each pauses and restores the parent's services).
 
 The copy runs as root in `devopsy-rsync`, devopsy's own image (alpine
 with rsync), built on each server the first time, so ownership and the

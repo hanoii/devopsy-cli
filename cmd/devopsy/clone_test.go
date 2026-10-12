@@ -100,7 +100,7 @@ func newCloneSetup(t *testing.T) *cloneSetup {
 	bin := filepath.Join(tmp, "bin")
 	write(t, filepath.Join(bin, "fakessh"), cloneFakeSSH, 0o755)
 	write(t, filepath.Join(bin, "docker"), cloneFakeDocker, 0o755)
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\nexit 0\n", 0o755)
 	// The agent's keys (ssh-add -l): FAKE_AGENT=empty has none, dead no agent.
 	write(t, filepath.Join(bin, "ssh-add"), "#!/bin/sh\ncase ${FAKE_AGENT:-} in empty) exit 1 ;; dead) exit 2 ;; esac\nexit 0\n", 0o755)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
@@ -201,6 +201,11 @@ func TestCloneSameHost(t *testing.T) {
 	}
 	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent") {
 		t.Errorf("same host used a daemon or the agent:\n%s\n%s", docker, ssh)
+	}
+	// The push holds the parent's release lock shared and its clone lock
+	// exclusively; the holder the child's release lock.
+	if i, j := strings.Index(docker, "flock -s -w 600 9"), strings.Index(docker, "flock -w 600 8"); i < 0 || j < i || !strings.Contains(docker, "flock -w 600 9") {
+		t.Errorf("locks:\n%s", docker)
 	}
 	// Files vanished during the copy (rsync's 24, a live service's
 	// temporary files): a notice per entry, both entries copied, the run
