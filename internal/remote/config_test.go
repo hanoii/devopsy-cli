@@ -458,9 +458,14 @@ environments:
 		}
 		return tg
 	}
+	// The parent's server is never the child's: without a variable it
+	// has none, which only a clone minds.
+	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "environment dev: parent prod: no server: set DEVOPSY_SERVER_PROD (or DEVOPSY_SERVER)" || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
+	}
+	t.Setenv("DEVOPSY_SERVER", "vm1")
 	tg := load("vm1:dev")
-	if tg.Parent != "prod" || tg.ParentTarget == nil || tg.ParentTarget.Address != "vm1:prod" || tg.ParentTarget.Path != "shop/prod" ||
-		tg.ParentTarget.From["server"] != "the child's server" || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+	if tg.ParentTarget == nil || tg.ParentTarget.Address != "vm1:prod" || tg.ParentTarget.Path != "shop/prod" || tg.ParentTarget.From["server"] != "DEVOPSY_SERVER" {
 		t.Fatalf("dev: %+v %+v", tg, tg.ParentTarget)
 	}
 	// The parent itself has none, though defaults give one.
@@ -481,7 +486,7 @@ environments:
 	if tg := load("vm1:a"); tg.ParentTarget.Name != "b" || tg.ParentTarget.ParentTarget != nil || tg.ParentTarget.Parent != "a" {
 		t.Errorf("one level: %+v", tg.ParentTarget)
 	}
-	// Variables name the parent's server first; the child's comes last.
+	// The parent's own variable comes first.
 	t.Setenv("DEVOPSY_SERVER_PROD", "vm9")
 	if tg := load("vm1:dev"); tg.ParentTarget.Host != "vm9" || tg.ParentTarget.Address != "vm9:prod" {
 		t.Errorf("DEVOPSY_SERVER_PROD: %+v", tg.ParentTarget)
@@ -507,6 +512,7 @@ environments:
 	if tg, err := DescribeTarget(dir, "dev", nil); err != nil || tg.ParentTarget == nil || tg.ParentTarget.Host != "" || tg.ParentTarget.Name != "prod" {
 		t.Errorf("describe without a server: %+v %v", tg, err)
 	}
+	t.Setenv("DEVOPSY_SERVER", "vm1")
 
 	for name, config := range map[string]string{
 		"pattern parent": "project: app\nenvironments:\n  prod: {}\n  dev: {parent: \"pr-*\"}\n  \"pr-*\": {}\n",

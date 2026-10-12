@@ -181,8 +181,8 @@ repositories fit together and the open ideas.
   error; one naming itself has none, so `defaults: {parent: prod}` works).
   It resolves one level only (`ParentTarget`, whose own stays nil, so two
   environments can be each other's parent): at the child's instance (none
-  when the parent has a `path:`), its server from the usual variables, else
-  the child's (`From["server"]` is "the child's server"). Strict loading
+  when the parent has a `path:`), its server from the usual variables
+  only, never the child's (a guess would copy the wrong data). Strict loading
   records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
   instead of failing: only `--clone` and a `--release` that clones fail
   with it, so every other command works on the child. `DescribeTarget`

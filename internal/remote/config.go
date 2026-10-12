@@ -1149,7 +1149,7 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		return nil, fmt.Errorf("set project: (its name on servers) in %s", filepath.Join(projectDir, ConfigFile))
 	}
 
-	t, err := resolveTarget(project, envs, a, addr, alias, aliasName, projectEnv, strict, "")
+	t, err := resolveTarget(project, envs, a, addr, alias, aliasName, projectEnv, strict, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1163,7 +1163,7 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		if pt := envs[t.Parent]; pt != nil && pt.Path != "" {
 			pa.instance = ""
 		}
-		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, t.Host)
+		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, true)
 		if err != nil && strict {
 			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
 		}
@@ -1174,9 +1174,9 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 
 // resolveTarget resolves address a of project, whose environments are envs
 // (nil for an alias without source), for loadTarget; addr is how errors
-// show it. fallbackHost is the server when neither the address nor a
-// variable names one (a parent's: its child's).
-func resolveTarget(project *Project, envs map[string]*Target, a address, addr string, alias *Alias, aliasName string, projectEnv func(string) (string, bool), strict bool, fallbackHost string) (*Target, error) {
+// show it. A parent's server comes from its variables only, never from
+// its child's: a guess would copy the wrong data.
+func resolveTarget(project *Project, envs map[string]*Target, a address, addr string, alias *Alias, aliasName string, projectEnv func(string) (string, bool), strict, parent bool) (*Target, error) {
 	// The environment: defined, or matched by a pattern. An alias without
 	// source has no config: any environment, nothing to release.
 	var t Target
@@ -1255,14 +1255,14 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 				break
 			}
 		}
-		if t.Host == "" && fallbackHost != "" {
-			t.Host, t.From["server"] = fallbackHost, "the child's server"
-		}
 	}
 	if strings.Contains(t.Host, ":") {
 		return nil, fmt.Errorf("server %q: no ':' in a server; use an ~/.ssh/config alias for ports", t.Host)
 	}
 	if strict && t.Host == "" {
+		if parent {
+			return nil, fmt.Errorf("no server: set %s (or %s)", EnvironmentVar(a.env), ServerVar)
+		}
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
 	}
 
