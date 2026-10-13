@@ -248,7 +248,9 @@ repositories fit together and the open ideas.
   prints no state is not checked.
 - **Who pauses what:** the child's labeled services by the holder, for the
   whole clone: the `prepare` hook, then `--clone-services prepare` (the
-  `flush` hook per running `live`/`pause` service, pause, stop); after the
+  `flush` hook per running `live`/`pause` service, pause, stop; all the
+  `stop` services in one `compose stop`, later one `start`, so Compose
+  orders them by `depends_on`, dependents first: keep it one call); after the
   copy `--clone-services finish`, then the `finish` hook (`clone_finish`
   runs both whatever either did). The parent's inside `--clone-push`: the
   generic path for `live`/`pause`/`stop` (flush, pause, stop, rsync,

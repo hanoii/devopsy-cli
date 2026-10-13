@@ -530,7 +530,11 @@ it; `live` on the child says a running copy is wanted). The child
 restores its services, nothing was copied.
 
 Order on each side: flush, pause, stop, copy, start (healthy), resume,
-then the parent's `push` for the `custom` services. The
+then the parent's `push` for the `custom` services. The `stop` services
+go to one `docker compose stop`, and later one `start`, so Compose
+orders them by `depends_on`: an app that depends on its database stops
+first and starts last, its requests in flight finished before the
+database goes (each service's `stop_grace_period`). The
 child's services are paused and stopped before the parent's and resumed
 after them. The child's side holds its release lock for the whole clone;
 the parent's holds a shared one, so a release of the parent waits for the
