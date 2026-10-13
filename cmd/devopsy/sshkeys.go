@@ -14,25 +14,25 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// runKeys implements devopsy @<target> --keys [list | add <file> |
+// runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file> |
 // remove <key> | generate] [--restricted] [--comment <c>] [--out <file>]:
 // the deploy user's authorized_keys on the target's server, edited over
 // the usual session, as that user. Private keys never travel: generate
 // makes the pair here and sends the public half.
-func runKeys(t *remote.Target, args []string, color bool) int {
+func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
 	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
-	usage := "usage: devopsy @" + t.Name + " --keys [list | add <public key file> | remove <fingerprint or comment> | generate] [--restricted] [--comment <text>] [--out <file>]"
+	usage := "usage: devopsy @" + t.Name + " --ssh-keys [list | add <public key file> | remove <fingerprint or comment> | generate] [--restricted] [--comment <text>] [--out <file>]"
 	restricted := false
 	comment, out := "", ""
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--help", "-h":
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--keys"]))
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--ssh-keys"]))
 			return 0
 		case "--restricted":
 			restricted = true
@@ -181,7 +181,7 @@ func runKeys(t *remote.Target, args []string, color bool) int {
 		}
 		switch len(matches) {
 		case 0:
-			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + t.Name + " --keys lists them)")
+			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + t.Name + " --ssh-keys lists them)")
 		case 1:
 		default:
 			return fail(words[0] + " matches several keys: give more of the fingerprint")
@@ -225,7 +225,7 @@ func runKeys(t *remote.Target, args []string, color bool) int {
 			out = filepath.Join(home, ".ssh", strings.NewReplacer(":", "-", "/", "-").Replace(name))
 		}
 		if _, err := os.Lstat(out); err == nil {
-			return fail(out + " exists: --out another file, or add its public key (devopsy @" + t.Name + " --keys add " + out + ".pub)")
+			return fail(out + " exists: --out another file, or add its public key (devopsy @" + t.Name + " --ssh-keys add " + out + ".pub)")
 		}
 		if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 			return fail(err.Error())

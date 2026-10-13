@@ -103,7 +103,7 @@ var remoteCommands = []Candidate{
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
-	{"--keys", "who may log in as the deploy user on the server", GroupDevopsy},
+	{"--ssh-keys", "who may log in as the deploy user on the server", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
@@ -284,7 +284,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		})
 	case "--rollback", "--inherit":
 		return flags([]Candidate{help})
-	case "--keys":
+	case "--ssh-keys":
 		opts := []Candidate{{"--restricted", "a machine's key: commands only, forwardings for clones", GroupDevopsy}, {"--comment", "the key's comment", GroupDevopsy}, {"--out", "where generate writes the private key", GroupDevopsy}, help}
 		switch {
 		case len(words) == 2:

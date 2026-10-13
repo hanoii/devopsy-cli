@@ -368,7 +368,7 @@ repositories fit together and the open ideas.
 
 ## Other features
 
-- **`--keys`** (`cmd/devopsy/keys.go`, scripts in `internal/remote/keys.go`)
+- **`--ssh-keys`** (`cmd/devopsy/sshkeys.go`, scripts in `internal/remote/keys.go`)
   edits the deploy user's own `~/.ssh/authorized_keys` over the usual
   session: no root, so devopsy-cli stays out of host setup except for
   this file, which that user owns anyway. Lines are parsed here

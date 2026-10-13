@@ -726,16 +726,16 @@ through a jump host or VPN. `devopsy @<target> --ssh-config` prints a
 keepalives, commented out. It never connects.
 
 **Keys on a server.** Who may log in as the deploy user is its
-`~/.ssh/authorized_keys`, and `devopsy @<target> --keys` edits it over the
-usual session, as that user, no root; any target on the server does. `--keys`
-lists them (fingerprint, type, comment, options), `--keys add <file>`
-authorizes a public key, `--keys remove <fingerprint or comment>` removes
-one (never the last: it would lock everyone out), and `--keys generate`
+`~/.ssh/authorized_keys`, and `devopsy @<target> --ssh-keys` edits it over the
+usual session, as that user, no root; any target on the server does. `--ssh-keys`
+lists them (fingerprint, type, comment, options), `--ssh-keys add <file>`
+authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
+one (never the last: it would lock everyone out), and `--ssh-keys generate`
 makes an ed25519 pair on your machine, authorizes the public half and
 keeps the private key in `~/.ssh/devopsy[-ci]-<host>`, never sent anywhere.
 `--restricted` is for a machine's key: `restrict` (commands only, no
 shell) plus the agent and port forwarding a clone across servers needs.
-For CI: `--keys generate --restricted`, the private key as a protected
+For CI: `--ssh-keys generate --restricted`, the private key as a protected
 file variable, and in the job `eval "$(ssh-agent)"; ssh-add
 "$DEVOPSY_SSH_KEY"` before `devopsy @prod --release`. Rotate by generating
 another and removing the old one. (devopsy-server's `ci-key` step does the
