@@ -1026,12 +1026,13 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 				run = append(run, "--inplace")
 			}
 			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
-				if ctx.Err() != nil {
-					return errors.New("interrupted")
-				}
-				if exitCode(err) == remote.RsyncVanished {
+				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
 					sayErr("devopsy: rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
 					continue
+				}
+				sayErr("devopsy: mnt/" + d + " " + remote.HalfCopiedNotice)
+				if ctx.Err() != nil {
+					return errors.New("interrupted")
 				}
 				return fmt.Errorf("rsync mnt/%s: %w", d, err)
 			}
@@ -1085,6 +1086,9 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 			return nil
 		}
 		if ctx.Err() != nil {
+			// The child's script says which entry when rsync fails; cut
+			// by the session's end, it says nothing.
+			sayErr("devopsy: the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
 			return errors.New("interrupted")
 		}
 		if strings.Contains(stderr.String(), "remote port forwarding failed") {

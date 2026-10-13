@@ -1013,6 +1013,10 @@ func TestCloneInterruptCopy(t *testing.T) {
 	if _, err := os.Stat(pushed); err == nil {
 		t.Errorf("the capability's push ran after the interrupt")
 	}
+	// Said where the parent's words go once its session is cut: its log.
+	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-clone.log")); !strings.Contains(log, "devopsy: mnt/storage is half copied: a database copied raw cannot start on it until the next clone completes it") {
+		t.Errorf("no word on the entry cut:\n%s", log)
+	}
 	// What the parent did once nobody read its session is in its log.
 	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-clone.log")); !strings.Contains(log, ": the clone's session is gone: restoring what was paused or stopped") || !strings.Contains(log, "devopsy: unpausing app") {
 		t.Errorf("the parent's clone log:\n%s", log)
