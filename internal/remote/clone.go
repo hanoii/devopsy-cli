@@ -181,7 +181,7 @@ func HolderScript(t *Target, projectName, fromTarget string, args, run []string)
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: nothing to clone into" >&2
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first (it clones on its own)" >&2; exit 1; }
+[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it clones on its own, or --no-clone releases without the data and --clone later fills it" >&2; exit 1; }
 `, t.Name) + cloneStdin + `exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + `
 id=$(readlink "$base/current"); id=${id#releases/}
