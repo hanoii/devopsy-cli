@@ -715,12 +715,18 @@ func TestCloneInherit(t *testing.T) {
 	// child's run step: a failed copy leaves the child's file as it was.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s3\n", 0o600)
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	s.logs()
 	out, code = s.run(env, "@devopsy@two:a/dev", "--clone", "--yes")
 	if code != 0 {
 		t.Fatalf("--clone (%d):\n%s", code, out)
 	}
 	if i, j, k := strings.Index(out, "Copying "), strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "deploy in shop-a-dev"); i < 0 || j < i || k < j {
 		t.Errorf("inherited before the copy or after the run step:\n%s", out)
+	}
+	// The holder holds the child's lock while the write happens: the
+	// write takes none (it waited for the holder, which waited for it).
+	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 1 {
+		t.Errorf("the child's lock taken more than once during a re-clone:\n%s", docker)
 	}
 	if got := readString(childInherit); got != "SHARED_KEY='s3'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
 		t.Errorf("child's inherit.env: %q", got)

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -360,7 +361,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// before the upload, so the variables check finds it; a re-clone
 		// inherits once the copy is in (runCloneSession).
 		if job != nil && job.first {
-			if err := inheritVars(job, rlog, color); err != nil {
+			if err := inheritVars(context.Background(), job, rlog, color, false); err != nil {
 				return stop("inherit: " + err.Error() + "\nNothing released.")
 			}
 		}

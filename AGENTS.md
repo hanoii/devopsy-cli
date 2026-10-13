@@ -333,7 +333,10 @@ repositories fit together and the open ideas.
   them all as the child's `shared/inherit.env` (`InheritWriteScript`,
   values on stdin, under the child's lock, the whole file: a resync
   replaces it), which `shared/*` linking puts in every release and the
-  loader reads below `.env`. The script prints the keys the child's own
+  loader reads below `.env`. On a re-clone the holder holds that lock,
+  so the write takes none (`locked`: taking it waited for the holder,
+  which waited for the answer), and both sessions run under the clone's
+  context, so an interrupt during them aborts instead of waiting. The script prints the keys the child's own
   `shared/.env` also sets, for the notice. `--inherit` (`runInherit`)
   runs it alone, both sides released. On a
   first release (`cloneJob.first`) after local before steps and before
