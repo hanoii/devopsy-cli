@@ -81,7 +81,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	// A user-level target belongs to no project, so nothing may be released
 	// to it from wherever devopsy happens to run: only from its source,
 	// where it then acts as the project's own target.
-	if args[0] == "--release" || args[0] == "--rollback" {
+	if strings.HasPrefix(args[0], "--release") || args[0] == "--rollback" {
 		ok, why := t.ReleasesHere(projectDir)
 		if !ok {
 			return fail(why)
@@ -171,35 +171,34 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
-	case "--release", "--rollback":
-		yes, syncFlag, noSync := false, false, false
+	case "--release", "--release-sync", "--release-no-sync", "--rollback":
+		// --release-sync and --release-no-sync are releases that sync
+		// whatever the child's state, or never; what is recorded, run and
+		// said is a release.
+		rollback := args[0] == "--rollback"
+		syncFlag, noSync := args[0] == "--release-sync", args[0] == "--release-no-sync"
+		kind := "release"
+		if rollback {
+			kind = "rollback"
+		}
+		yes := false
 		for _, a := range args[1:] {
-			release := args[0] == "--release"
 			switch {
-			case release && (a == "--yes" || a == "-y"):
+			case !rollback && (a == "--yes" || a == "-y"):
 				yes = true
-			case release && a == "--sync":
-				syncFlag = true
-			case release && a == "--no-sync":
-				noSync = true
-			case a == "--sync" || a == "--no-sync":
-				return fail(fmt.Sprintf("--rollback takes no %s: it restores a release, never data", a))
 			default:
-				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
+				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], kind, t.File))
 			}
 		}
-		if syncFlag && noSync {
-			return fail("--sync or --no-sync: not both")
-		}
 		if syncFlag && t.Parent == "" {
-			return fail(fmt.Sprintf("--sync: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
+			return fail(fmt.Sprintf("--release-sync: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
 		}
 		steps := t.Release
-		if args[0] == "--rollback" {
+		if rollback {
 			steps = t.Rollback
 		}
 		if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
-			return fail(missingSteps(t, strings.TrimPrefix(args[0], "--")))
+			return fail(missingSteps(t, kind))
 		}
 		// When run fails, current goes back to the previous release, and its
 		// own run step brings its containers back: the rollback's, else the
@@ -212,7 +211,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 		// The whole run is recorded and saved on the server once it has
 		// been touched: devopsy @<target> --log.
-		what := strings.TrimPrefix(args[0], "--")
+		what := kind
 		rlog := newReleaseLog(what, t)
 		say := func(c, msg string) {
 			cli.Fprint(os.Stderr, c, msg, color)
@@ -260,7 +259,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return 0
 		}
 
-		if args[0] == "--rollback" {
+		if rollback {
 			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
@@ -334,7 +333,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					return fail(t.ParentErr.Error())
 				}
 				if job, err = syncPreflight(t, t.ParentTarget, projectName, nil); err != nil {
-					return fail(err.Error() + "\nNothing changed. --no-sync releases without the parent's data.")
+					return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
 				}
 				job.first = first
 			}
@@ -400,7 +399,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return save(record.ID, code)
 			}
 		} else {
-			say(cyan, fmt.Sprintf("Syncing @%s's data into it before its run step (--no-sync skips it)...", job.parent.Address))
+			say(cyan, fmt.Sprintf("Syncing @%s's data into it before its run step (--release-no-sync skips it)...", job.parent.Address))
 			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address})
 			if code := runSyncSession(job, script, rlog, color); code != 0 {
 				return save(record.ID, code)

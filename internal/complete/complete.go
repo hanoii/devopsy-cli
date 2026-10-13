@@ -97,6 +97,8 @@ var builtins = []Candidate{
 // remoteCommands follow @<target>.
 var remoteCommands = []Candidate{
 	{"--release", "upload a new release and run its steps", GroupDevopsy},
+	{"--release-sync", "a release, and the parent's data synced in", GroupDevopsy},
+	{"--release-no-sync", "a release, never syncing", GroupDevopsy},
 	{"--rollback", "back to the previous release, and run its steps", GroupDevopsy},
 	{"--releases", "list the releases on the server", GroupDevopsy},
 	{"--log", "what the last release or rollback printed, or one release's", GroupDevopsy},
@@ -284,15 +286,13 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	}
 	help := Candidate{"--help", "what it runs, and how", GroupDevopsy}
 	switch words[0] {
-	case "--release":
+	case "--release", "--release-sync":
 		// It takes no command: its steps are in config.yaml.
 		return flags([]Candidate{
-			{"--yes", "create a new instance without asking", GroupDevopsy},
-			{"--sync", "sync the parent's data into it, on any release", GroupDevopsy},
-			{"--no-sync", "never sync, even on a child's first release", GroupDevopsy},
+			{"--yes", "create a new instance, or replace a child's data, without asking", GroupDevopsy},
 			help,
 		})
-	case "--rollback", "--inherit":
+	case "--release-no-sync", "--rollback", "--inherit":
 		return flags([]Candidate{help})
 	case "--ssh-keys":
 		switch {

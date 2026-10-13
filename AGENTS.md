@@ -194,7 +194,7 @@ repositories fit together and the open ideas.
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`.
 - **When:** a child's first release (`CurrentExistsScript` prints `current`
   or `none`, exit 0; one extra session on every release of a child),
-  `--release --sync` (any release), never `--no-sync`, and `@<child>
+  `--release-sync` (any release), never `--release-no-sync`, and `@<child>
   --sync`, which asks for the name like `--destroy` and reruns `run`.
   Everything that can fail (`syncPreflight`: a run step, the parent
   released, across servers an agent here and a child reachable without
