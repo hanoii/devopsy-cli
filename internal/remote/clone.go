@@ -79,6 +79,9 @@ const (
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
 	CloneWatchEnv = "DEVOPSY_CLONE_WATCH"
+	// ColorEnv tells --clone-push that the operator's terminal takes
+	// colors: servers have no terminal of their own to ask.
+	ColorEnv = "DEVOPSY_COLOR"
 )
 
 // CloneOptions make ActivateScript clone the parent's data into the new

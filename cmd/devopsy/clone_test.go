@@ -26,7 +26,7 @@ for a; do last2=${last:-}; last=$a; done
 case "$*" in
   *" config --format json")
     lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.clone\":\"$1\"}"; fi; }
-    printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/storage"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
+    printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") echo app; echo db ;;
   *" ps --services --status paused") echo app ;;
@@ -790,6 +790,18 @@ func TestCloneLabels(t *testing.T) {
 	s.logs()
 	if code != 0 || strings.Count(out, "flush db in") != 2 || strings.Count(out, "flush app in") != 2 {
 		t.Errorf("flush for live services (%d):\n%s", code, out)
+	}
+
+	// An app mounting mnt whole copies the skipped db's entry too: a notice.
+	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--clone", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: devopsy.clone.exclude=db on app leaves them out") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
+		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
+	}
+	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--clone", "--yes")
+	s.logs()
+	if code != 0 || strings.Contains(out, "copies mnt whole") {
+		t.Errorf("notice for a stop db under mnt whole (%d):\n%s", code, out)
 	}
 
 	// A failing flush aborts like a failing prepare: on the child before

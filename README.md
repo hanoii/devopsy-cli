@@ -518,7 +518,10 @@ The label's values, on both sides:
 `mnt` it mounts that are not copied through it anyway: an access log
 next to the site's files (`./mnt/logs`), which a child does not want.
 Another service mounting the same entry without excluding it still gets
-it copied.
+it copied. A service mounting `./mnt` itself copies everything, the
+entries of `skip` and `custom` services included, against their labels:
+the parent says so before the copy, with the exclude label to write.
+Mounting entries, one per concern, says who owns what.
 
 A project without any labeled service clones nothing ("nothing to
 clone"), and the child's `run` step still runs.

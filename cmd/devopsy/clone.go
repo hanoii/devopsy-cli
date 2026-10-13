@@ -316,6 +316,9 @@ func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, 
 		remote.CloneFromTargetEnv: p.Address,
 		remote.CloneWatchEnv:      "1",
 	}
+	if color {
+		env[remote.ColorEnv] = "1"
+	}
 	extra := remote.KeepAlive
 	where := "same server"
 	if !job.sameHost {
@@ -614,6 +617,10 @@ const cloneLog = ".devopsy-clone.log"
 // sayErr prints a server-side notice.
 func sayErr(msg string) { fmt.Fprintln(errOut, msg) }
 
+// sayWarn is a notice worth a color on the operator's terminal
+// (ColorEnv): the release log strips it.
+func sayWarn(msg string) { cli.Fprint(errOut, yellow, msg, os.Getenv(remote.ColorEnv) != "") }
+
 // trace prints a command devopsy runs on a server, with DEVOPSY_VERBOSE.
 func trace(args []string) {
 	if cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0 {
@@ -767,6 +774,9 @@ func runClonePush(cwd string, color bool) int {
 	// The generic path first: flush, pause and stop, rsync, start and
 	// unpause the services labeled live, pause and stop.
 	if dirs := cli.CloneDirs(services); len(dirs) > 0 {
+		if msg := cli.CloneWholeNotice(services); msg != "" {
+			sayWarn(msg)
+		}
 		// Before the parent pauses anything: what the copy would change
 		// under a running service of the child, left running by its own
 		// labels, is a mismatch, not a clone.
