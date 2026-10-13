@@ -36,13 +36,16 @@ case "$*" in
     st() { case $1 in pause) echo paused ;; stop) echo exited ;; *) echo running ;; esac; }
     printf '{"Service":"app","State":"%s"}\n{"Service":"db","State":"%s"}\n' "$(st "${FAKE_APP:-pause}")" "$(st "${FAKE_DB:-stop}")" ;;
   "run --rm -d "*)
-    for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; esac; done
+    for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
   "run --rm --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
+    # Only a module the daemon was given (its name, or mnt for all of it).
+    m=${last2#rsync://127.0.0.1:*/}; m=${m%/}
+    grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
     mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
   "run --rm --name devopsy-clone-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
@@ -380,7 +383,7 @@ func TestCloneDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
 	}
-	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", " rm -f cid123"} {
+	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}

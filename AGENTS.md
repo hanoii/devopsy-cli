@@ -299,7 +299,9 @@ repositories fit together and the open ideas.
 - **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
   on each host from `RsyncDockerfile` when missing), as root with
   `--numeric-ids`: owners and modes survive, the deploy user's permissions
-  do not matter. rsync's exit 24 (files vanished during the copy, a
+  do not matter. Across servers the parent's daemon serves one module per
+  entry being copied (`rsyncdConf`, `RsyncModule`: the entry's name, `mnt`
+  for `.`), so nothing else under `mnt` can be asked for. rsync's exit 24 (files vanished during the copy, a
   `live` service's temporary files) is a notice on both paths
   (`RsyncVanished`), any other failure aborts. Bump the tag whenever the Dockerfile changes (the alpine
   version included): hosts never rebuild an image they have. Entries are

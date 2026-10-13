@@ -543,7 +543,8 @@ The copy runs as root in `devopsy-rsync`, devopsy's own image (alpine
 with rsync), built on each server the first time, so ownership and the
 deploy user's permissions do not matter. **On one server**, one container
 copies between the two directories, without SSH. **Across servers**, the
-parent's server starts an rsync daemon (read-only, no published port) and
+parent's server starts an rsync daemon (read-only, serving only the
+entries being copied, no published port) and
 reaches the child's over SSH, through a reverse forward, with your SSH
 agent forwarded for that session only, and never on to the child; data
 goes server to server, never through your machine. The clone's SSH

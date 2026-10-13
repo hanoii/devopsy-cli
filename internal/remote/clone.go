@@ -239,15 +239,26 @@ const RsyncVanished = 24
 // RsyncVanishedNotice follows "rsync mnt/<entry>: " on both paths.
 const RsyncVanishedNotice = "some files vanished during the copy (a running service removed them), the rest is copied"
 
+// RsyncModule is the daemon's module for an entry of mnt: its name, and
+// mnt for `.` (all of it).
+func RsyncModule(entry string) string {
+	if entry == "." {
+		return "mnt"
+	}
+	return entry
+}
+
 // CloneReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
-// per entry of the child's mnt (toDir is its current .devopsy/), as root in
-// RsyncImage, on the host's network to reach the forward.
+// per entry of the child's mnt (toDir is its current .devopsy/), from the
+// daemon's module of that name (RsyncModule), as root in RsyncImage, on
+// the host's network to reach the forward.
 func CloneReceiveScript(toDir, port string, dirs, args []string) string {
 	return "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
 		"for d in " + quoteAll(dirs) + `; do
   echo "devopsy: rsync mnt/$d" >&2
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/mnt/$d/" "/mnt/$d/"`) + ` >&2 || {
+  m=$d; [ "$d" != . ] || m=mnt
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$m/" "/mnt/$d/"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || exit 1
     echo "devopsy: rsync mnt/$d: ` + RsyncVanishedNotice + `" >&2
   }
