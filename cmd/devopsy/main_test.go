@@ -357,6 +357,14 @@ func TestRemoteVars(t *testing.T) {
 	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "p@ss word\n" {
 		t.Fatalf("get (%d): %q", code, out)
 	}
+	// DEVOPSY_COLOR set here: colors forced, and exported into the session
+	// (the fake runs it here: the remote script's own output is colored).
+	cmd := exec.Command(binary, "@prod", "--vars")
+	cmd.Dir = project
+	cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_COLOR=1"}, env...)
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "\x1b[") {
+		t.Errorf("DEVOPSY_COLOR: %v\n%q", err, out)
+	}
 	if out, code := run("", "@prod", "--vars", "unset", "TOKEN"); code != 0 || !strings.Contains(out, "Unset TOKEN") {
 		t.Fatalf("unset (%d):\n%s", code, out)
 	}

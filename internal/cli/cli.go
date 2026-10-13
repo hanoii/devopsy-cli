@@ -992,9 +992,20 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 	}, nil
 }
 
+// ColorEnv set means the output ends on a terminal that takes colors,
+// even through a pipe: devopsy on a server, whose session has none, so
+// its messages and Compose's output (--ansi always) come colored to the
+// operator. devopsy exports it into every session when its own stderr is
+// a terminal; set by hand it forces colors, like FORCE_COLOR elsewhere.
+const ColorEnv = "DEVOPSY_COLOR"
+
 // compose plans `docker compose` with the project's files and args.
 func (p *loadedProject) compose(args []string) *Plan {
-	composeArgs := []string{"docker", "compose", "-f", p.composeFile}
+	composeArgs := []string{"docker", "compose"}
+	if v, _ := p.env.Lookup(ColorEnv); v != "" {
+		composeArgs = append(composeArgs, "--ansi", "always")
+	}
+	composeArgs = append(composeArgs, "-f", p.composeFile)
 	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
 		override := filepath.Join(p.dir, name)
 		if fi, err := os.Stat(override); err == nil && fi.Mode().IsRegular() {

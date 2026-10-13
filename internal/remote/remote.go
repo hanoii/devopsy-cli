@@ -258,6 +258,10 @@ func quoteAll(args []string) string {
 // older versions ignore).
 var Verbose bool
 
+// Color exports ColorEnv into every session: the operator's terminal
+// takes colors, so devopsy and Compose on the server send them.
+var Color bool
+
 // Trace, when set, receives each SSH command, and with TraceScripts the
 // script it runs.
 var (
@@ -655,6 +659,9 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 	// devopsy's sessions never need the host's port forwardings from
 	// ~/.ssh/config: each one would try to bind them again, and warn that
 	// they are in use while another session (or the user's own) holds them.
+	if Color {
+		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
+	}
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
 		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
