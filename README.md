@@ -657,8 +657,9 @@ the paused and stopped services on both sides and skips the child's `run`
 step; on a first release, the release is marked failed and nothing is
 current, and the next release clones again. The child's `mnt` may be
 partly copied then; rsync picks up from there, and a database copied raw
-is unusable until it does (its container restarts in a loop, and the
-next clone stops it like a running one). Interrupted (Ctrl-C) during the
+is unusable until it does (devopsy says which entry was cut; its
+container restarts in a loop, and the next clone stops it like a
+running one). Interrupted (Ctrl-C) during the
 copy, devopsy ends its session to the parent's server, which stops the
 copy and restores its own services, then tells the child's to restore
 its services. If devopsy itself goes away

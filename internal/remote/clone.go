@@ -18,6 +18,10 @@ import (
 // or abort, and the holder restarts the services and runs the release's run
 // step.
 
+// HalfCopiedNotice follows "mnt/<entry>" when a copy was cut: what a
+// service that reads the entry raw is left with.
+const HalfCopiedNotice = "is half copied: a database copied raw cannot start on it until the next clone completes it"
+
 // CloneMarker starts the line the holder prints on stdout, followed by the
 // child's directory on its server ($base), once the child is ready to be
 // written. The only stdout devopsy reads from that session.
@@ -262,7 +266,7 @@ func CloneReceiveScript(toDir, port string, dirs, files, args []string) string {
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
   docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
-    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || exit 1
+    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { echo "devopsy: mnt/$1 ` + HalfCopiedNotice + `" >&2; exit 1; }
     echo "devopsy: rsync mnt/$1: ` + RsyncVanishedNotice + `" >&2
   }
 }
