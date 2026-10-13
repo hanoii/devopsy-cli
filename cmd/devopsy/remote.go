@@ -115,7 +115,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	switch args[0] {
 	case "--shell-host":
 		if len(args) > 1 {
-			return fail("--shell-host takes no arguments: for one command, use 'devopsy @" + t.Name + " <command>'")
+			return fail("--shell-host takes no arguments: for one command, use 'devopsy @" + targetRef(t) + " <command>'")
 		}
 		return ssh(remote.ShellScript(t), nil, tty)
 
@@ -163,7 +163,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 	case "--log":
 		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
-			return fail("usage: devopsy @" + t.Name + " --log [<release id>]")
+			return fail("usage: devopsy @" + targetRef(t) + " --log [<release id>]")
 		}
 		prefix := ""
 		if len(args) == 2 {

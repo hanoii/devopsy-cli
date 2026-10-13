@@ -24,7 +24,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return 1
 	}
 	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
-	usage := "usage: devopsy @" + t.Name + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]"
+	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys generate [<name>] [--out <file>]   (a key pair here, no target)"
 	restricted := false
 	var words []string
 	for i := 0; i < len(args); i++ {
@@ -164,7 +164,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		switch len(matches) {
 		case 0:
-			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + t.Name + " --ssh-keys lists them)")
+			return fail(words[0] + " matches none of " + t.Host + "'s keys (devopsy @" + targetRef(t) + " --ssh-keys lists them)")
 		case 1:
 		default:
 			return fail(words[0] + " matches several keys: give more of the fingerprint")
@@ -187,7 +187,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return 0
 
 	case "generate":
-		return fail("generate runs here, without a target: devopsy --ssh-keys generate [<name>], then devopsy @" + t.Name + " --ssh-keys add ~/.ssh/<name>.pub [--restricted]")
+		return fail("generate runs here, without a target: devopsy --ssh-keys generate [<name>], then devopsy @" + targetRef(t) + " --ssh-keys add ~/.ssh/<name>.pub [--restricted]")
 	}
 	return fail(usage)
 }
@@ -253,4 +253,13 @@ func runSSHKeysGenerate(args []string, color bool) int {
 	fp, _ := k.Fingerprint()
 	cli.Fprint(os.Stderr, cyan, "Made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub. Authorize it on a server with devopsy @<target> --ssh-keys add "+out+".pub, --restricted for CI (commands only, no shell); then store the private key in CI as a protected file variable and load it in the job: eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\".", color)
 	return 0
+}
+
+// targetRef is how the user named the target: its alias, else its
+// environment, for usage lines.
+func targetRef(t *remote.Target) string {
+	if t.Alias != "" {
+		return t.Alias
+	}
+	return t.Name
 }

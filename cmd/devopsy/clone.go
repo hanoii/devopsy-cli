@@ -455,7 +455,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		return 1
 	}
 	if len(args) > 0 {
-		return fail("usage: devopsy @" + t.Name + " --inherit")
+		return fail("usage: devopsy @" + targetRef(t) + " --inherit")
 	}
 	if t.Parent == "" {
 		return fail(fmt.Sprintf("@%s is not a child: no parent: in its config", t.Address))
@@ -496,7 +496,7 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + t.Name + " --clone [--from <address>] [--yes] [-- <rsync args>...]"
+	usage := "usage: devopsy @" + targetRef(t) + " --clone [--from <address>] [--yes] [-- <rsync args>...]"
 	yes, from := false, ""
 	var rsyncArgs []string
 	for i := 0; i < len(args); i++ {
