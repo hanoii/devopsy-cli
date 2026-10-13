@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"os"
 	"regexp"
 	"strings"
@@ -13,7 +14,7 @@ import (
 type style struct{ on bool }
 
 func styleFor(f *os.File) style {
-	return style{on: os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(f.Fd()))}
+	return style{on: os.Getenv("NO_COLOR") == "" && (term.IsTerminal(int(f.Fd())) || os.Getenv(cli.ColorEnv) != "")}
 }
 
 func (s style) wrap(code, text string) string {

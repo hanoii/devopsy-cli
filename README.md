@@ -287,7 +287,10 @@ capability computed. Secrets are masked as above, unless `--show`. For a
 target, the caller's environment is the server's SSH session plus the
 `COMPOSE_PROJECT_NAME` your devopsy sends.
 
-Help and `--debug` are in color on a terminal, unless `NO_COLOR=1`.
+Help, `--debug`, devopsy's messages and Compose's output are in color on a
+terminal, unless `NO_COLOR=1`, on servers too: devopsy tells the server
+your terminal takes them (`DEVOPSY_COLOR=1`, which also forces them when
+set by hand). Logs are saved without them.
 
 ## Servers
 

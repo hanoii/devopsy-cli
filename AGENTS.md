@@ -60,8 +60,13 @@ repositories fit together and the open ideas.
   express. `--shell-host` is never overridable: the way in when a project is
   broken.
 - Few dependencies, standard library first. Linux and macOS only.
-- **Color** only on a terminal and without `NO_COLOR` (`styleFor`); help is
-  colored by layout (headings end with `:`, entries start with two spaces).
+- **Color** only on a terminal and without `NO_COLOR` (`styleFor`), or
+  with `DEVOPSY_COLOR` set (`cli.ColorEnv`): devopsy exports it into every
+  session when its stderr is a terminal (`remote.Color`, a line before each
+  script), so devopsy on the server colors its messages and Compose gets
+  `--ansi always` (the `-T` sessions of a sync have no tty); release logs
+  strip the codes. Help is colored by layout (headings end with `:`,
+  entries start with two spaces).
 - Project-specific behavior belongs in projects' `.devopsy/commands/`.
 
 ## Config and targets

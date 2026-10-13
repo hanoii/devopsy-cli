@@ -90,6 +90,15 @@ func TestBuildComposePassthrough(t *testing.T) {
 	if dir, _ := envValue(t, plan.Env, "DEVOPSY_PROJECT_DIR"); dir != filepath.Join(root, ProjectDirName) {
 		t.Fatalf("DEVOPSY_PROJECT_DIR %q", dir)
 	}
+	// DEVOPSY_COLOR: a terminal at the other end of the pipe (a session
+	// from a terminal), so Compose colors its output.
+	plan, err = build(root, []string{"ps"}, []string{ColorEnv + "=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"docker", "compose", "--ansi", "always", "-f", compose, "ps"}; !slices.Equal(plan.Args, want) {
+		t.Fatalf("colored args\n got %q\nwant %q", plan.Args, want)
+	}
 }
 
 // A script in the arguments is only counted in the notice; -vv has it whole.
