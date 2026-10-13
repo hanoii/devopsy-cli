@@ -238,7 +238,10 @@ repositories fit together and the open ideas.
   cancelled the same way, nothing is answered, and the clone fails.
 - **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
   touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`
-  is left to the parent's `push`. No labeled service: "nothing to clone",
+  is left to the parent's `push`. `devopsy.clone.exclude` (`CloneExcludeLabel`,
+  entries of `mnt`, comma or space separated) drops entries from a
+  service's `Dirs` at parse time, so every consumer (copy, guard, list)
+  agrees. No labeled service: "nothing to clone",
   success, and the run step still runs. Each side reads its own labels;
   before the generic path pauses anything, `--clone-push` asks the child
   for `--clone-services list` (through `--clone-exec`, one more session
