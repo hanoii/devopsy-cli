@@ -509,10 +509,13 @@ The label's values, on both sides:
 
 - `skip`, the default: the service is neither copied nor touched.
 - `live`: nothing happens to the service; its mounts are copied.
-- `pause`: frozen for the copy (the routed app): its router stays and
-  requests wait until it resumes. That is holding, not consistency:
-  `docker pause` flushes nothing, so never pause a database; stop it, or
-  dump it.
+- `pause`: frozen for the copy (the routed app): requests wait in its
+  socket until it resumes, as long as nothing else happens on the host
+  meanwhile (Traefik drops a paused container's router the next time a
+  container starts, stops or reports its health, and a clone stops
+  things: see devopsy-template-traefik's README, "Holding requests").
+  That is holding, not consistency: `docker pause` flushes nothing, so
+  never pause a database; stop it, or dump it.
 - `stop`: stopped for the copy, a clean shutdown (a database's raw files);
   started again and waited for until healthy.
 - `custom`: devopsy copies nothing and touches nothing; the parent's
@@ -647,7 +650,9 @@ it cloned into (`--log`), after the release's own. A failed copy restores
 the paused and stopped services on both sides and skips the child's `run`
 step; on a first release, the release is marked failed and nothing is
 current, and the next release clones again. The child's `mnt` may be
-partly copied then; rsync picks up from there. Interrupted (Ctrl-C) during the
+partly copied then; rsync picks up from there, and a database copied raw
+is unusable until it does (its container restarts in a loop, and the
+next clone stops it like a running one). Interrupted (Ctrl-C) during the
 copy, devopsy ends its session to the parent's server, which stops the
 copy and restores its own services, then tells the child's to restore
 its services. If devopsy itself goes away
