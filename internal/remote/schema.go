@@ -72,9 +72,10 @@ environments:
     env:
       DEVOPSY_DOMAINS: example.org www.example.org
     # Variables its children get: read from prod's .env files on its
-    # server (shared/.env, the instance's, the project's) and written at
-    # the same level on the child's, on a child's first release and every
-    # --clone. Variable names, never DEVOPSY_* or COMPOSE_PROJECT_NAME.
+    # server (shared/.env, the instance's, the project's) and written as
+    # the child's shared/inherit.env, below its own shared/.env, on a
+    # child's first release, every --clone and --inherit. Variable names,
+    # never DEVOPSY_* or COMPOSE_PROJECT_NAME.
     inherit: [CLONE_DATABASE, SITE_BASIC_AUTH]
   staging:
     # A child of prod (an environment of this project, not a pattern): its

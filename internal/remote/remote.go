@@ -42,6 +42,7 @@ func excluded(rel string) bool {
 	case rel == ".devopsy/.env",
 		rel == ".devopsy/"+LocalConfigFile,
 		rel == ".devopsy/project.env", rel == ".devopsy/instance.env",
+		rel == ".devopsy/"+InheritFile,
 		rel == ".devopsy/"+TargetEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",

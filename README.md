@@ -581,18 +581,20 @@ environment of the project instead of the parent. What follows
 uses it as it sees fit).
 
 **Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
-`defaults:`) names variables its children get: read from the parent's
-`shared/.env`, instance `.env` and project `.env` on its server, and
-written at the same level on the child's (its `shared/.env`, its
-instance's or project's `.env`), the parent's value replacing the child's
-there. On one server the instance and project files are the parent's own:
-nothing to write. A value the child sets nearer still wins (its
-`shared/.env` over the instance's). On a first release this happens before
-the upload, so the variables check finds them (they stay if the clone
-fails: the next release is a first one again); on `--clone` and a later
-`--release --clone`, once the copy is in and before the child's run step,
-so a failed copy leaves the child's own values with its own data. Names
-are printed, never values; keys the parent does not set are
+`defaults:`) names variables its children get, whatever the labels say
+about the data: read from the parent's `shared/.env`, instance `.env` and
+project `.env` on its server (nearest first) and written as the child's
+`shared/inherit.env`, the whole file each time, so a resync replaces it.
+The child reads it below its own `shared/.env` and above its server's
+instance and project files: a value the child sets itself wins (devopsy
+says so when one shadows an inherited key: `--vars unset` it to inherit),
+and no other environment on the child's server is touched. On a first
+release this happens before the upload, so the variables check finds
+them (they stay if the clone fails: the next release is a first one
+again); on `--clone` and a later `--release --clone`, once the copy is in
+and before the child's run step, so a failed copy leaves the child as it
+was; `devopsy @<child> --inherit` does it alone, no data, no run step.
+Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 
 **The clone capability** (`.devopsy/capabilities/clone/`, see
@@ -625,6 +627,7 @@ services and writes what happened to `<environment>/.devopsy-clone.log`
 on its server.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
+a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
 the instance's `.env` (`<project>/<instance>/.env`), the project's
 (`<project>/.env`), then the release's `target.env`, written from the
 config with `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,

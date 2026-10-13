@@ -107,6 +107,7 @@ var remoteCommands = []Candidate{
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
 	{"--clone", "replace a child's data with its parent's", GroupDevopsy},
+	{"--inherit", "the parent's inherited variables again, no data", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }
 
@@ -280,7 +281,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			{"--no-clone", "never clone, even on a child's first release", GroupDevopsy},
 			help,
 		})
-	case "--rollback":
+	case "--rollback", "--inherit":
 		return flags([]Candidate{help})
 	case "--clone":
 		if len(words) > 2 && words[len(words)-2] == "--from" {

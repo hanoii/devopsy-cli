@@ -12,7 +12,7 @@ import (
 )
 
 // RemoteOnly are devopsy's flags that need a target: devopsy @<target> <flag>.
-var RemoteOnly = []string{"--release", "--rollback", "--releases", "--shell-host", "--vars", "--destroy", "--clone", "--log", "--ssh-config"}
+var RemoteOnly = []string{"--release", "--rollback", "--releases", "--shell-host", "--vars", "--destroy", "--clone", "--inherit", "--log", "--ssh-config"}
 
 // ComposeCommands lists docker compose's commands, from its own completion
 // (cobra's protocol: "name<TAB>description" lines, then ":<directive>").

@@ -153,7 +153,8 @@ repositories fit together and the open ideas.
   `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`,
   `DEVOPSY_RELEASE_COMMIT`), so it applies however devopsy runs on the
   server and rollbacks restore it. Precedence there: caller, `shared/.env`,
-  `instance.env`, `project.env`, `target.env`.
+  `inherit.env` (a child's, from its parent's `inherit:`), `instance.env`,
+  `project.env`, `target.env`.
 - A nested devopsy (`DEVOPSY_PROJECT_DIR` set) ignores the inherited
   `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
 - `mode:` defaults to `build`: it works for every project, where a wrong
@@ -307,8 +308,12 @@ repositories fit together and the open ideas.
   `.` subsumes the rest).
 - **inherit:** `inheritVars` reads the parent's three files in one session
   (`InheritReadScript`), takes each key from the nearest level, and writes
-  it at that level on the child (`VarsSetScript`, values on stdin, under
-  the level's lock); same server and same level directory: skipped. On a
+  them all as the child's `shared/inherit.env` (`InheritWriteScript`,
+  values on stdin, under the child's lock, the whole file: a resync
+  replaces it), which `shared/*` linking puts in every release and the
+  loader reads below `.env`. The script prints the keys the child's own
+  `shared/.env` also sets, for the notice. `--inherit` (`runInherit`)
+  runs it alone, both sides released. On a
   first release (`cloneJob.first`) after local before steps and before
   the upload, so `--missing-vars` sees them, and kept on failure (the
   next release is first again); on a re-clone (`--clone`, `--release
