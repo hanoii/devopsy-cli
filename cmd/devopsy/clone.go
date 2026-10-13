@@ -272,9 +272,21 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 		} else if !job.first {
 			// The copy is in: now the parent's variables, which the run
 			// step uses. A failure here aborts, and nothing was written.
-			if err := inheritVars(job, rlog, color); err != nil {
+			// The holder holds the child's lock: the write takes none.
+			inherited := make(chan error, 1)
+			go func() { inherited <- inheritVars(ctx, job, rlog, color, true) }()
+			select {
+			case err := <-inherited:
+				if err != nil {
+					answer = "abort\n"
+					say(red, "devopsy: inherit: "+err.Error()+": aborting the clone")
+				}
+			case <-sigs:
+				interrupted = true
 				answer = "abort\n"
-				say(red, "devopsy: inherit: "+err.Error()+": aborting the clone")
+				say(red, "devopsy: interrupted: aborting the clone")
+				cancel()
+				<-inherited
 			}
 		}
 		_, _ = w.WriteString(answer)
@@ -352,7 +364,7 @@ func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, 
 // so a resync replaces it. The child's own shared/.env wins over it, and
 // a key set there too is named. A key the parent does not set is reported,
 // never written. Values travel over SSH's stdin, and only names are printed.
-func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
+func inheritVars(ctx context.Context, job *cloneJob, rlog *releaseLog, color bool, locked bool) error {
 	c, p := job.child, job.parent
 	if len(p.Inherit) == 0 {
 		return nil
@@ -362,7 +374,7 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 		rlog.Line(msg)
 	}
 	var out bytes.Buffer
-	code, err := remote.SSH(p, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false)
+	code, err := remote.SSHContext(ctx, p, nil, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false, nil)
 	if err != nil {
 		return err
 	}
@@ -416,7 +428,7 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 		}
 	}
 	var res bytes.Buffer
-	code, err = remote.SSH(c, remote.InheritWriteScript(c, keys), strings.NewReader(lines.String()), &res, false)
+	code, err = remote.SSHContext(ctx, c, nil, remote.InheritWriteScript(c, keys, locked), strings.NewReader(lines.String()), &res, false, nil)
 	if err != nil {
 		return err
 	}
@@ -470,7 +482,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		}
 	}
 	job := &cloneJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
-	if err := inheritVars(job, newReleaseLog("inherit", t), color); err != nil {
+	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
 	return 0
