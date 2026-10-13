@@ -265,9 +265,13 @@ repositories fit together and the open ideas.
   finish), then the capability's `push` with `DEVOPSY_CLONE_CUSTOM` when a
   service is `custom` (required then; present without one: a notice, not
   run). Hooks only run where their file is, and never replace devopsy's
-  handling. A failing flush fails prepare. `--clone-services finish` is stateless: it
-  reads container state (exited, paused), so it also recovers after an
-  interrupted clone. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
+  handling. A failing flush fails prepare. `--clone-services prepare`
+  records what it pauses and stops in `$base/.devopsy-clone.services`
+  (`cloneState`, before the first pause) and `finish` restores those,
+  from container state (exited, paused), so it also recovers after an
+  interrupted clone, and a service down before the clone (a maintenance
+  stop) stays down; without a record it restores every labeled service.
+  A finish that restored everything removes the record. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
   SIGPIPE and restores; servers' commands write to `errOut`, never an
   `*os.File`, so a gone session cannot kill them with a broken pipe.
 - **Hidden flags** (dispatched in `main.go` before anything else):

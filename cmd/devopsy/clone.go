@@ -610,6 +610,13 @@ func (q *quietWriter) keep(base string) {
 	sayErr("devopsy: " + time.Now().UTC().Format("2006-01-02 15:04:05") + ": the clone's session is gone: restoring what was paused or stopped")
 }
 
+// cloneState records, next to cloneLog, the services prepare paused or
+// stopped ("pause app", "stop db" lines), so finish restores those and
+// leaves a service that was down before the clone down (a maintenance
+// stop). Written before the first pause, removed by a finish that
+// restored everything; absent, finish restores every labeled service.
+const cloneState = ".devopsy-clone.services"
+
 // cloneLog is the holder's and the push's log for what happened after the
 // operator's devopsy was gone, in the environment's directory.
 const cloneLog = ".devopsy-clone.log"
@@ -1299,6 +1306,19 @@ func prepareServices(cwd, projectDir string, services []cli.CloneService) error 
 		}
 	}
 	pause, stop = intersect(pause, running), intersect(stop, running)
+	if len(pause)+len(stop) == 0 {
+		return nil
+	}
+	state := ""
+	for _, name := range pause {
+		state += "pause " + name + "\n"
+	}
+	for _, name := range stop {
+		state += "stop " + name + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(cwd), cloneState), []byte(state), 0o644); err != nil {
+		return fmt.Errorf("recording the services to restore: %w", err)
+	}
 	if len(pause) > 0 {
 		sayErr("devopsy: pausing " + strings.Join(pause, " "))
 		if err := compose(cwd, errOut, append([]string{"pause"}, pause...)...); err != nil {
@@ -1322,11 +1342,28 @@ const healthyTimeout = 5 * time.Minute
 
 // finishServices starts the stopped services labeled stop, waits until
 // they run and are healthy, then unpauses the paused ones labeled pause,
-// whatever happened before. It reads the containers' state, not what
-// prepare did, so it also recovers after an interrupted clone.
+// whatever happened before: those prepare recorded (cloneState), else
+// every one. It reads the containers' state, so it also recovers after
+// an interrupted clone.
 func finishServices(cwd string, services []cli.CloneService) error {
 	pause, stop := cli.ClonePolicy(services, cli.ClonePause), cli.ClonePolicy(services, cli.CloneStop)
+	stateFile := filepath.Join(filepath.Dir(cwd), cloneState)
+	if state, err := os.ReadFile(stateFile); err == nil {
+		var recordedPause, recordedStop []string
+		for _, line := range strings.Split(string(state), "\n") {
+			if action, name, ok := strings.Cut(line, " "); ok {
+				switch action {
+				case "pause":
+					recordedPause = append(recordedPause, name)
+				case "stop":
+					recordedStop = append(recordedStop, name)
+				}
+			}
+		}
+		pause, stop = intersect(pause, recordedPause), intersect(stop, recordedStop)
+	}
 	if len(pause)+len(stop) == 0 {
+		_ = os.Remove(stateFile)
 		return nil
 	}
 	var errs []error
@@ -1355,6 +1392,9 @@ func finishServices(cwd string, services []cli.CloneService) error {
 				errs = append(errs, fmt.Errorf("docker compose unpause: %w", err))
 			}
 		}
+	}
+	if len(errs) == 0 {
+		_ = os.Remove(stateFile)
 	}
 	return errors.Join(errs...)
 }

@@ -28,7 +28,7 @@ case "$*" in
     lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.clone\":\"$1\"}"; fi; }
     printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
-  *" ps --services --status running") echo app; echo db ;;
+  *" ps --services --status running") echo app; [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
   *" ps --services --status paused") echo app ;;
   *" ps --services --all --status exited") echo db ;;
   *" ps --all --format json db") echo '{"Service":"db","State":"running","Health":"healthy"}' ;;
@@ -816,6 +816,46 @@ func TestCloneLabels(t *testing.T) {
 	s.logs()
 	if code != 0 || strings.Count(out, "flush db in") != 2 || strings.Count(out, "flush app in") != 2 {
 		t.Errorf("flush for live services (%d):\n%s", code, out)
+	}
+
+	// A db down before the clone (a maintenance stop) stays down: finish
+	// restores what prepare recorded, and the record goes afterwards.
+	out, code = s.run([]string{"FAKE_DB_DOWN=1"}, "@dev", "--clone", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(out, "stopping db") || strings.Contains(out, "starting db") || strings.Contains(docker, "start db") || strings.Count(out, "unpausing app") != 2 {
+		t.Errorf("db down before the clone (%d):\n%s\n%s", code, out, docker)
+	}
+	for _, env := range []string{"prod", "dev"} {
+		if _, err := os.Stat(filepath.Join(s.root, "shop", env, ".devopsy-clone.services")); err == nil {
+			t.Errorf("%s: the record of services to restore stays", env)
+		}
+	}
+	// finish alone, in the parent's current release: with a record it
+	// restores what the record says; without one (an older prepare, a
+	// lost file) every labeled service, as before.
+	record := filepath.Join(s.root, "shop", "prod", ".devopsy-clone.services")
+	finish := func() (string, string) {
+		t.Helper()
+		cmd := exec.Command(binary, "--clone-services", "finish")
+		cmd.Dir = filepath.Join(s.root, "shop", "prod", "current")
+		// PWD as a shell's cd leaves it: the record lives next to current.
+		cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-prod", "PWD="+cmd.Dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("finish: %v\n%s", err, out)
+		}
+		docker, _ := s.logs()
+		return string(out), docker
+	}
+	write(t, record, "pause app\n", 0o644)
+	if out, docker := finish(); strings.Contains(docker, "start db") || !strings.Contains(docker, "unpause app") {
+		t.Errorf("finish with a record:\n%s\n%s", out, docker)
+	}
+	if _, err := os.Stat(record); err == nil {
+		t.Errorf("the record stays after finish")
+	}
+	if out, docker := finish(); !strings.Contains(docker, "start db") || !strings.Contains(docker, "unpause app") {
+		t.Errorf("finish without a record:\n%s\n%s", out, docker)
 	}
 
 	// An app mounting mnt whole copies the skipped db's entry too: a notice.
