@@ -668,14 +668,22 @@ func TestCloneInherit(t *testing.T) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
-	if i, j := strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "Copying "); i < 0 || j < i {
-		t.Errorf("inherited after the copy:\n%s", out)
+	// A re-clone inherits once the copy is in, before the child's run
+	// step: a failed copy leaves the child's own values with its own data.
+	if i, j, k := strings.Index(out, "Copying "), strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "deploy in shop-a-dev"); i < 0 || j < i || k < j {
+		t.Errorf("inherited before the copy or after the run step:\n%s", out)
 	}
 	if got := readString(childEnv); got != "OWN=1\nSHARED_KEY='s2'\n" {
 		t.Errorf("child's shared/.env: %q", got)
 	}
 	if got := readString(filepath.Join(shop, "a", ".env")); got != "INST_KEY='i 1'\n" {
 		t.Errorf("instance .env: %q", got)
+	}
+	// A failed re-clone writes nothing (something to copy, so rsync runs).
+	write(t, filepath.Join(shop, "a", "prod", "shared", "mnt", "storage", "f"), "x\n", 0o644)
+	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s3\n", 0o600)
+	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--clone", "--yes"); code == 0 || strings.Contains(out, "Inherited") || readString(childEnv) != "OWN=1\nSHARED_KEY='s2'\n" {
+		t.Errorf("failed re-clone (%d): %q\n%s", code, readString(childEnv), out)
 	}
 }
 
