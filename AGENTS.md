@@ -425,8 +425,9 @@ repositories fit together and the open ideas.
   sits in a paused process's buffers. `pause` holds requests, `stop` (or a
   dump) gives consistency; never `pause` a database.
 - A stopped routed container loses its Traefik router (404); a paused one
-  keeps it only until Traefik reads the containers again: Docker 29 reports
-  it unhealthy while paused (devopsy-traefik's AGENTS.md).
+  keeps it only until Traefik reads the containers again (any start, die
+  or health event on the host): Traefik 3.7 filters paused containers as
+  non-running (devopsy-traefik's AGENTS.md).
 - OrbStack machines are `ProxyCommand` hosts from macOS: clones across
   servers need hosts reachable directly (`ssh -G` without a proxy), like
   `<machine>.orb.local` with a key of your own. Their
