@@ -173,8 +173,8 @@ func TestScriptsParse(t *testing.T) {
 		"holder":         HolderScript(tg, "app-dev", "vm1:prod", []string{"-v"}, []string{"deploy"}),
 		"push":           PushScript(tg, "app-prod", map[string]string{CloneToEnv: "devopsy@h2", CloneToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":        CurrentExistsScript(tg),
-		"receive":        CloneReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, []string{"--exclude=x y"}),
-		"receive bare":   CloneReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage"}, nil),
+		"receive":        CloneReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}),
+		"receive bare":   CloneReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil),
 		"exec":           CloneExecScript("/srv/it's/current/.devopsy", "app-dev", []string{"exec", "-T", "db", "sh", "-c", "mariadb x"}),
 	}
 	for name, s := range scripts {

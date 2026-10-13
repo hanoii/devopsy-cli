@@ -314,7 +314,10 @@ repositories fit together and the open ideas.
   version included): hosts never rebuild an image they have. Entries are
   the top-level entries of `mnt` that `live`, `pause` and `stop` services bind-mount
   (`docker compose --profile '*' config`, lexical and resolved paths;
-  `.` subsumes the rest).
+  `.` subsumes the rest). An entry that is a file on the parent is copied
+  as one (`files` in `cloneRsync`: no trailing slash, into `mnt`; across
+  servers its module is `/mnt` filtered to it, a module being a
+  directory).
 - **inherit:** `inheritVars` reads the parent's three files in one session
   (`InheritReadScript`), takes each key from the nearest level, and writes
   them all as the child's `shared/inherit.env` (`InheritWriteScript`,
