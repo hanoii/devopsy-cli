@@ -546,7 +546,9 @@ child's services are paused and stopped before the parent's and resumed
 after them. The child's side holds its release lock for the whole clone;
 the parent's holds a shared one, so a release of the parent waits for the
 copy, and a clone lock of its own, so clones from one parent run one at
-a time (each pauses and restores the parent's services).
+a time (each pauses and restores the parent's services). A lock held by
+something else is announced ("waiting for the release running on
+..."), then waited for up to 10 minutes, like every release lock.
 
 The copy runs as root in `devopsy-rsync`, devopsy's own image (alpine
 with rsync), built on each server the first time, so ownership and the
