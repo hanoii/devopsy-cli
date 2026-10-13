@@ -952,21 +952,31 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if out, code := run("", "@prod", "--ssh-keys"); code != 0 || !strings.Contains(out, "has no authorized keys") {
 		t.Fatalf("empty list (%d):\n%s", code, out)
 	}
-	// generate: a pair here (--out), the public half restricted there,
-	// the private key never sent.
+	// generate: a pair here, no target, then its public half restricted
+	// there; the private key never sent.
 	priv := filepath.Join(tmp, "ci-key")
-	out, code := run("", "@prod", "--ssh-keys", "generate", "--restricted", "--out", priv)
-	if code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(devopsy-ci@server)") || !strings.Contains(out, "Restricted") || !strings.Contains(out, "Private key: "+priv) {
+	out, code := run("", "--ssh-keys", "generate", "ci-server", "--out", priv)
+	if code != 0 || !strings.Contains(out, "Made SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "private key "+priv+", public key "+priv+".pub") {
 		t.Fatalf("generate (%d):\n%s", code, out)
-	}
-	if got := readString(authorized); !strings.HasPrefix(got, "restrict,agent-forwarding,port-forwarding ssh-ed25519 ") || !strings.Contains(got, " devopsy-ci@server\n") || strings.Contains(got, "PRIVATE") {
-		t.Errorf("authorized_keys after generate: %q", got)
 	}
 	if _, err := os.Stat(priv); err != nil {
 		t.Errorf("private key: %v", err)
 	}
-	if out, code := run("", "@prod", "--ssh-keys", "generate", "--restricted", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
+	if out, code := run("", "--ssh-keys", "generate", "ci-server", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
 		t.Errorf("generate over an existing file (%d):\n%s", code, out)
+	}
+	if out, code := run("", "@prod", "--ssh-keys", "generate"); code == 0 || !strings.Contains(out, "generate runs here, without a target") {
+		t.Errorf("generate with a target (%d):\n%s", code, out)
+	}
+	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "needs a target") {
+		t.Errorf("list without a target (%d):\n%s", code, out)
+	}
+	out, code = run("", "@prod", "--ssh-keys", "add", priv+".pub", "--restricted")
+	if code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "Restricted") {
+		t.Fatalf("add restricted (%d):\n%s", code, out)
+	}
+	if got := readString(authorized); !strings.HasPrefix(got, "restrict,agent-forwarding,port-forwarding ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
+		t.Errorf("authorized_keys after add: %q", got)
 	}
 	// add a plain key, from a file and from stdin, never twice.
 	pub := filepath.Join(tmp, "sample.pub")
@@ -981,7 +991,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys")
-	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "devopsy-ci@server  [restrict,agent-forwarding,port-forwarding]") {
+	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "ci-server  [restrict,agent-forwarding,port-forwarding]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.
@@ -992,7 +1002,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("remove by comment (%d):\n%s", code, out)
 	}
 	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--ssh-keys"), "SHA256:", 2)[1], " ", 2)[0])
-	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code != 4 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "devopsy-ci@server") {
+	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code != 4 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "ci-server") {
 		t.Errorf("remove the last key (%d):\n%s", code, out)
 	}
 }

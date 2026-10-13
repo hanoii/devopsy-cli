@@ -730,16 +730,16 @@ keepalives, commented out. It never connects.
 usual session, as that user, no root; any target on the server does. `--ssh-keys`
 lists them (fingerprint, type, comment, options), `--ssh-keys add <file>`
 authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
-one (never the last: it would lock everyone out), and `--ssh-keys generate`
-makes an ed25519 pair on your machine, authorizes the public half and
-keeps the private key in `~/.ssh/devopsy[-ci]-<host>`, never sent anywhere.
-`--restricted` is for a machine's key: `restrict` (commands only, no
-shell) plus the agent and port forwarding a clone across servers needs.
-For CI: `--ssh-keys generate --restricted`, the private key as a protected
-file variable, and in the job `eval "$(ssh-agent)"; ssh-add
+one (never the last: it would lock everyone out). `add --restricted` is
+for a machine's key: `restrict` (commands only, no shell) plus the agent
+and port forwarding a clone across servers needs. Without a target,
+`devopsy --ssh-keys generate [<name>]` makes an ed25519 pair in `~/.ssh`
+(`devopsy-ci` by default), nothing sent anywhere. For CI: generate, `add`
+the `.pub` on each server with `--restricted`, the private key as a
+protected file variable, and in the job `eval "$(ssh-agent)"; ssh-add
 "$DEVOPSY_SSH_KEY"` before `devopsy @prod --release`. Rotate by generating
-another and removing the old one. (devopsy-server's `ci-key` step does the
-same on the server itself, for a setup without a laptop.)
+another, adding it, then removing the old one. (devopsy-server's `ci-key`
+step makes one on the server itself, for a setup without a laptop.)
 
 ### Aliases
 

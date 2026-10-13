@@ -66,6 +66,15 @@ func run() int {
 			return runCompletion(args[1:], color)
 		case "--probe":
 			return runProbe(args[1:], color)
+		case "--ssh-keys":
+			// generate runs here; the rest needs a target (below).
+			if len(args) > 1 && (args[1] == "generate" || args[1] == "--help" || args[1] == "-h") {
+				if args[1] != "generate" {
+					fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--ssh-keys"]))
+					return 0
+				}
+				return runSSHKeysGenerate(args[2:], color)
+			}
 		case "--release-settings":
 			return runReleaseSettings(color)
 		}

@@ -14,20 +14,18 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file> |
-// remove <key> | generate] [--restricted] [--comment <c>] [--out <file>]:
-// the deploy user's authorized_keys on the target's server, edited over
-// the usual session, as that user. Private keys never travel: generate
-// makes the pair here and sends the public half.
+// runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file>
+// [--restricted] | remove <key>]: the deploy user's authorized_keys on the
+// target's server, edited over the usual session, as that user. Public
+// keys only ever travel; runSSHKeysGenerate makes a pair here.
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
 	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
-	usage := "usage: devopsy @" + t.Name + " --ssh-keys [list | add <public key file> | remove <fingerprint or comment> | generate] [--restricted] [--comment <text>] [--out <file>]"
+	usage := "usage: devopsy @" + t.Name + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]"
 	restricted := false
-	comment, out := "", ""
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -36,16 +34,6 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 			return 0
 		case "--restricted":
 			restricted = true
-		case "--comment", "--out":
-			if i+1 >= len(args) {
-				return fail(a + " needs a value")
-			}
-			i++
-			if a == "--comment" {
-				comment = args[i]
-			} else {
-				out = args[i]
-			}
 		default:
 			if strings.HasPrefix(a, "-") && a != "-" {
 				return fail(usage)
@@ -57,11 +45,6 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	if len(words) > 0 {
 		action, words = words[0], words[1:]
 	}
-	host := t.Host
-	if i := strings.Index(host, "@"); i >= 0 {
-		host = host[i+1:]
-	}
-
 	list := func() ([]remote.AuthorizedKey, error) {
 		var buf bytes.Buffer
 		code, err := remote.SSH(t, remote.KeysReadScript(), bytes.NewReader(nil), &buf, false)
@@ -103,7 +86,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 
 	switch action {
 	case "list":
-		if len(words) > 0 || restricted || comment != "" || out != "" {
+		if len(words) > 0 || restricted {
 			return fail(usage)
 		}
 		keys, err := list()
@@ -129,7 +112,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return 0
 
 	case "add":
-		if len(words) != 1 || comment != "" || out != "" {
+		if len(words) != 1 {
 			return fail(usage)
 		}
 		var content []byte
@@ -164,7 +147,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return add(*key)
 
 	case "remove":
-		if len(words) != 1 || restricted || comment != "" || out != "" {
+		if len(words) != 1 || restricted {
 			return fail(usage)
 		}
 		keys, err := list()
@@ -204,50 +187,70 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return 0
 
 	case "generate":
-		if len(words) > 0 {
-			return fail(usage)
-		}
-		if comment == "" {
-			comment = "devopsy@" + host
-			if restricted {
-				comment = "devopsy-ci@" + host
+		return fail("generate runs here, without a target: devopsy --ssh-keys generate [<name>], then devopsy @" + t.Name + " --ssh-keys add ~/.ssh/<name>.pub [--restricted]")
+	}
+	return fail(usage)
+}
+
+// runSSHKeysGenerate implements devopsy --ssh-keys generate [<name>]
+// [--out <file>]: an ed25519 pair here, with ssh-keygen, for a CI system
+// or a machine, to authorize with devopsy @<target> --ssh-keys add. The
+// private key stays where it was made.
+func runSSHKeysGenerate(args []string, color bool) int {
+	fail := func(msg string) int {
+		cli.Fprint(os.Stderr, red, msg, color)
+		return 1
+	}
+	usage := "usage: devopsy --ssh-keys generate [<name>] [--out <file>]"
+	name, out := "", ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--help", "-h":
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--ssh-keys"]))
+			return 0
+		case "--out":
+			if i+1 >= len(args) {
+				return fail(a + " needs a value")
 			}
-		}
-		if out == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fail(err.Error())
+			i++
+			out = args[i]
+		default:
+			if strings.HasPrefix(a, "-") || name != "" || !remote.ValidName(a) {
+				return fail(usage)
 			}
-			name := "devopsy-" + host
-			if restricted {
-				name = "devopsy-ci-" + host
-			}
-			out = filepath.Join(home, ".ssh", strings.NewReplacer(":", "-", "/", "-").Replace(name))
+			name = a
 		}
-		if _, err := os.Lstat(out); err == nil {
-			return fail(out + " exists: --out another file, or add its public key (devopsy @" + t.Name + " --ssh-keys add " + out + ".pub)")
-		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
-			return fail(err.Error())
-		}
-		cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", out)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, os.Stderr, os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fail("ssh-keygen: " + err.Error())
-		}
-		pub, err := os.ReadFile(out + ".pub")
+	}
+	if name == "" {
+		name = "devopsy-ci"
+	}
+	if out == "" {
+		home, err := os.UserHomeDir()
 		if err != nil {
 			return fail(err.Error())
 		}
-		k, err := remote.ParseAuthorizedKey(string(pub))
-		if err != nil || k == nil {
-			return fail(out + ".pub: " + errors.New("not a public key").Error())
-		}
-		if code := add(*k); code != 0 {
-			return code
-		}
-		say("Private key: " + out + " (never sent anywhere). In CI, store it as a protected file variable and load it into an agent: eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\". Host keys for its known hosts: ssh-keyscan " + host + ".")
-		return 0
+		out = filepath.Join(home, ".ssh", name)
 	}
-	return fail(usage)
+	if _, err := os.Lstat(out); err == nil {
+		return fail(out + " exists: another name, or --out another file")
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+		return fail(err.Error())
+	}
+	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", out)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fail("ssh-keygen: " + err.Error())
+	}
+	pub, err := os.ReadFile(out + ".pub")
+	if err != nil {
+		return fail(err.Error())
+	}
+	k, err := remote.ParseAuthorizedKey(string(pub))
+	if err != nil || k == nil {
+		return fail(out + ".pub: " + errors.New("not a public key").Error())
+	}
+	fp, _ := k.Fingerprint()
+	cli.Fprint(os.Stderr, cyan, "Made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub. Authorize it on a server with devopsy @<target> --ssh-keys add "+out+".pub, --restricted for CI (commands only, no shell); then store the private key in CI as a protected file variable and load it in the job: eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\".", color)
+	return 0
 }

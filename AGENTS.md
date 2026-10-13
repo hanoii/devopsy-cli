@@ -376,10 +376,11 @@ repositories fit together and the open ideas.
   fingerprint is computed from the blob, no ssh-keygen needed) and
   edited on the server under a lock next to the file, by blob, so a
   comment is never what identifies a key. `add` refuses a duplicate
-  (exit 3), `remove` the last key (exit 4). `generate` runs `ssh-keygen`
-  here and sends the public half only. `--restricted` is
-  `RestrictedKeyOptions`, what devopsy-server's `ci-key` writes: keep
-  the two in step.
+  (exit 3), `remove` the last key (exit 4). `generate` is local, no
+  target (`main.go` dispatches it before the remote-only check): just
+  `ssh-keygen` into `~/.ssh/<name>`, nothing sent; the `.pub` is added
+  per server. `--restricted` on `add` is `RestrictedKeyOptions`, what
+  devopsy-server's `ci-key` writes: keep the two in step.
 - **Completion** lives in Go (`internal/complete`); the scripts only pass
   words to the hidden `--complete` and show what it prints, cobra's
   protocol (`value<TAB>description<TAB>group` lines, then `:<directive>`),
