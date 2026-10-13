@@ -108,7 +108,7 @@ applications, with an environment per branch or pull request, from your own
 repository and in relatively little time.
 
 They are GitHub template repositories: start a project from one ("Use this
-template"), or clone it and keep it as a remote to pull its changes when you
+template"), or sync it and keep it as a remote to pull its changes when you
 choose, then adapt it to your needs. They define one particular way of
 doing things; devopsy enforces none of it, beyond the labels they use for
 its features.
@@ -310,10 +310,10 @@ environments:
   prod:
     env:
       DEVOPSY_DOMAINS: example.org www.example.org
-    inherit: [CLONE_DATABASE]   # variables its children get from its server
+    inherit: [SYNC_DATABASE]   # variables its children get from its server
   staging: {}
   develop:
-    parent: prod                # a child: its first release clones prod's data
+    parent: prod                # a child: its first release syncs prod's data
   "pr-*":                       # a pattern: @pr-12, @pr-feature
     releases: {keep: 1}
     parent: prod
@@ -362,12 +362,12 @@ A child's **parent** (`parent:`, a concrete environment of the project)
 resolves like a target of its own, one level only: at the child's instance
 (none if the parent has a `path:`), on the server its variables name
 (`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
-child's: a guess could copy the wrong data, so a clone without one fails
+child's: a guess could copy the wrong data, so a sync without one fails
 and says which variable to set. `@vm2:develop` with
-`DEVOPSY_SERVER_PROD=vm1` clones from `vm1:prod`. Parents can chain
+`DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Parents can chain
 (`pr-*` from `staging` from `prod`), never in a cycle: two environments
 that are each other's parent could never be released, since a child's
-first release clones from a released parent. `devopsy --debug
+first release syncs from a released parent. `devopsy --debug
 environments` shows it resolved.
 
 ### Releases
@@ -378,8 +378,8 @@ devopsy @vm1:prod --rollback     # back to the previous release, run the rollbac
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
-devopsy @vm1:develop --clone     # replace a child's data with its parent's, run its run step
-devopsy @vm1:develop --release --clone     # clone on this release too (--no-clone: never)
+devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
+devopsy @vm1:develop --release --sync     # sync on this release too (--no-sync: never)
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -421,13 +421,13 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Hence local before steps first and local after steps last. Remote before
   steps run in the current release, with its commands, and none run on a
   first release.
-- **A child's first release** clones its parent's data between switching
+- **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed
-  copy does not go live. `--release --clone` clones on any release,
+  copy does not go live. `--release --sync` syncs on any release,
   asking for the environment's name first when it already has one, as
-  `--clone` does (`--yes` skips it); `--no-clone` never clones (see Parent
-  environments and clones).
+  `--sync` does (`--yes` skips it); `--no-sync` never syncs (see Parent
+  environments and syncs).
 - **Logs:** each release and rollback is recorded and saved on the server,
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
@@ -486,11 +486,11 @@ reason the environment's `destroy` step, not devopsy, removes what
 containers own there. Back up `shared/.env` and `shared/mnt` (databases as
 dumps).
 
-**Parent environments and clones.** A child (`develop: {parent: prod}`)
-is a copy of its parent: its first release clones the parent's data, and
-`devopsy @<child> --clone` does it again later, then reruns the child's
+**Parent environments and syncs.** A child (`develop: {parent: prod}`)
+is a clone of its parent: its first release syncs the parent's data, and
+`devopsy @<child> --sync` does it again later, then reruns the child's
 `run` step. devopsy knows nothing of what the data is: services opt in
-with a label, `devopsy.clone`, and devopsy copies the entries of
+with a label, `devopsy.sync`, and devopsy copies the entries of
 `.devopsy/mnt` those services bind-mount (`./mnt/files` gives `files`;
 a file, `./mnt/app.ini`, itself, written in place so the container
 mounting it sees the new content; `./mnt` itself, all of it), from the
@@ -503,7 +503,7 @@ keeps its own secrets.
 
 The label's values, on both sides:
 
-| `devopsy.clone` | flush hook | rsync of its mounts | push capability |
+| `devopsy.sync` | flush hook | rsync of its mounts | push capability |
 | --------------- | ---------- | ------------------- | --------------- |
 | `skip` (no label) | no | no | no |
 | `live` | yes | yes | no |
@@ -516,7 +516,7 @@ The label's values, on both sides:
 - `pause`: frozen for the copy (the routed app): requests wait in its
   socket until it resumes, as long as nothing else happens on the host
   meanwhile (Traefik drops a paused container's router the next time a
-  container starts, stops or reports its health, and a clone stops
+  container starts, stops or reports its health, and a sync stops
   things: see devopsy-template-traefik's AGENTS.md). A service of the
   project's own on a lower-priority router answers meanwhile and waits
   for the app (devopsy-template-drupal11's `alwaysup`).
@@ -528,7 +528,7 @@ The label's values, on both sides:
   `push` capability copies it, after devopsy has copied the rest (a
   database to dump). It is required then.
 
-`devopsy.clone.exclude=<entry>[,<entry>...]` on a service names entries of
+`devopsy.sync.exclude=<entry>[,<entry>...]` on a service names entries of
 `mnt` it mounts that are not copied through it anyway: an access log
 next to the site's files (`./mnt/logs`), which a child does not want.
 Another service mounting the same entry without excluding it still gets
@@ -537,11 +537,11 @@ entries of `skip` and `custom` services included, against their labels:
 the parent says so before the copy, with the exclude label to write.
 Mounting entries, one per concern, says who owns what.
 
-A project without any labeled service clones nothing ("nothing to
-clone"), and the child's `run` step still runs.
+A project without any labeled service syncs nothing ("nothing to
+sync"), and the child's `run` step still runs.
 
 Each side reads the labels from its own release, so they can differ: a
-variable in the label (`devopsy.clone=${CLONE_DATABASE:-stop}`) that the
+variable in the label (`devopsy.sync=${SYNC_DATABASE:-stop}`) that the
 parent inherits to its children keeps them alike. What the parent copies
 must not change under a running service of the child: before pausing
 anything of its own, the parent looks at the child's services and refuses
@@ -557,9 +557,9 @@ orders them by `depends_on`: an app that depends on its database stops
 first and starts last, its requests in flight finished before the
 database goes (each service's `stop_grace_period`). The
 child's services are paused and stopped before the parent's and resumed
-after them. The child's side holds its release lock for the whole clone;
+after them. The child's side holds its release lock for the whole sync;
 the parent's holds a shared one, so a release of the parent waits for the
-copy, and a clone lock of its own, so clones from one parent run one at
+copy, and a sync lock of its own, so syncs from one parent run one at
 a time (each pauses and restores the parent's services). A lock held by
 something else is announced ("waiting for the release running on
 ..."), then waited for up to 10 minutes, like every release lock.
@@ -572,7 +572,7 @@ parent's server starts an rsync daemon (read-only, serving only the
 entries being copied, no published port) and
 reaches the child's over SSH, through a reverse forward, with your SSH
 agent forwarded for that session only, and never on to the child; data
-goes server to server, never through your machine. The clone's SSH
+goes server to server, never through your machine. The sync's SSH
 sessions send keepalives every 30 seconds, so a firewall does not drop a
 quiet copy, and the parent gives up on a child it cannot reach, or that
 refuses its key, in seconds rather than pausing its services for minutes.
@@ -585,9 +585,9 @@ So, across servers:
   generates one per server), instead of `ssh -i`;
 - the parent's server can use every key in that agent for the session,
   not only the child's: with `prod` the parent of `staging` and `staging`
-  the parent of `pr-*`, a clone of `pr-12` forwards the agent to
+  the parent of `pr-*`, a sync of `pr-12` forwards the agent to
   staging's server, prod's key included. When servers trust each other
-  less than that, load only the keys the clone needs, or constrain them
+  less than that, load only the keys the sync needs, or constrain them
   to their path (OpenSSH 8.9 or later, hosts as in `known_hosts`):
 
   ```sh
@@ -605,17 +605,17 @@ So, across servers:
   refuses both, and devopsy says which.
 
 ```sh
-devopsy @develop --clone                         # asks for the environment's name
-devopsy @develop --clone --yes                   # CI
-devopsy @develop --clone --from b/prod           # another environment of the project
-devopsy @develop --clone --yes -- --exclude=cache  # arguments for rsync
+devopsy @develop --sync                         # asks for the environment's name
+devopsy @develop --sync --yes                   # CI
+devopsy @develop --sync --from b/prod           # another environment of the project
+devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
 ```
 
-`--clone` asks you to type the environment's name, as `--destroy` does,
-and so does `--release --clone` on a child already released; `--yes`
-skips it. First-release clones never ask. `--from` copies from another
+`--sync` asks you to type the environment's name, as `--destroy` does,
+and so does `--release --sync` on a child already released; `--yes`
+skips it. First-release syncs never ask. `--from` copies from another
 environment of the project instead of the parent. What follows
-`--` goes to rsync (as `DEVOPSY_CLONE_ARGS`; a clone capability's `push`
+`--` goes to rsync (as `DEVOPSY_SYNC_ARGS`; a sync capability's `push`
 uses it as it sees fit).
 
 **Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
@@ -628,14 +628,14 @@ instance and project files: a value the child sets itself wins (devopsy
 says so when one shadows an inherited key: `--vars unset` it to inherit),
 and no other environment on the child's server is touched. On a first
 release this happens before the upload, so the variables check finds
-them (they stay if the clone fails: the next release is a first one
-again); on `--clone` and a later `--release --clone`, once the copy is in
+them (they stay if the sync fails: the next release is a first one
+again); on `--sync` and a later `--release --sync`, once the copy is in
 and before the child's run step, so a failed copy leaves the child as it
 was; `devopsy @<child> --inherit` does it alone, no data, no run step.
 Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 
-**The clone capability** (`.devopsy/capabilities/clone/`, see
+**The sync capability** (`.devopsy/capabilities/sync/`, see
 Capabilities) adds to this, each action only where its file is: `flush`
 on both sides, `prepare` and `finish` on the child's, around devopsy's own
 handling, and `push` on the parent's for the `custom` services, like a
@@ -645,28 +645,28 @@ pipes a dump into the child's database, in short:
 
 ```sh
 devopsy exec -T database sh -c 'mariadb-dump --single-transaction ...' </dev/null |
-  devopsy --clone-exec exec -T database sh -c 'mariadb ...'
+  devopsy --sync-exec exec -T database sh -c 'mariadb ...'
 ```
 
 Each side's database credentials stay its own: the dump runs with the
 parent's, the import with the child's.
 
-**Logs and failures:** a clone's output goes into the log of the release
-it cloned into (`--log`), after the release's own. A failed copy restores
+**Logs and failures:** a sync's output goes into the log of the release
+it syncd into (`--log`), after the release's own. A failed copy restores
 the paused and stopped services on both sides and skips the child's `run`
 step; on a first release, the release is marked failed and nothing is
-current, and the next release clones again. The child's `mnt` may be
+current, and the next release syncs again. The child's `mnt` may be
 partly copied then; rsync picks up from there, and a database copied raw
 is unusable until it does (devopsy says which entry was cut; its
-container restarts in a loop, and the next clone stops it like a
+container restarts in a loop, and the next sync stops it like a
 running one). Interrupted (Ctrl-C) during the
 copy, devopsy ends its session to the parent's server, which stops the
 copy and restores its own services, then tells the child's to restore
 its services. If devopsy itself goes away
-mid-clone (killed, connection lost), each side restores its own
-services and writes what happened to `<environment>/.devopsy-clone.log`
-on its server. Restoring means what the clone paused or stopped
-(`<environment>/.devopsy-clone.services` meanwhile): a service that was
+mid-sync (killed, connection lost), each side restores its own
+services and writes what happened to `<environment>/.devopsy-sync.log`
+on its server. Restoring means what the sync paused or stopped
+(`<environment>/.devopsy-sync.services` meanwhile): a service that was
 down before it, stopped for maintenance, stays down.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
@@ -732,7 +732,7 @@ lists them (fingerprint, type, comment, options), `--ssh-keys add <file>`
 authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
 one (never the last: it would lock everyone out). `add --restricted` is
 for a machine's key: `restrict` (commands only, no shell) plus the agent
-and port forwarding a clone across servers needs. Without a target,
+and port forwarding a sync across servers needs. Without a target,
 `devopsy --ssh-keys generate [<name>]` makes an ed25519 pair in `~/.ssh`
 (`devopsy-ci` by default), nothing sent anywhere. For CI: generate, `add`
 the `.pub` on each server with `--restricted`, the private key as a
@@ -816,35 +816,35 @@ lists them with their contracts):
   (`DEVOPSY_ENV_COMPUTE` is set). A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
-- **clone:** hooks into a clone (Parent environments and clones); each
+- **sync:** hooks into a sync (Parent environments and syncs); each
   action runs only when its file is there, besides devopsy's own handling
-  of the `devopsy.clone` labels.
+  of the `devopsy.sync` labels.
   - `flush <service>` runs on each side, once per running service labeled
     `live` or `pause`, before it is paused or copied (child: before its
     services are paused; parent: before its own are paused and copied).
-    Not for `stop`, `skip` or `custom`. A failure aborts the clone.
+    Not for `stop`, `skip` or `custom`. A failure aborts the sync.
   - `prepare` runs on the child's server, in its current release under its
     release lock, before the copy, then devopsy flushes, pauses and stops
-    the child's labeled services. A failure aborts the clone (`finish
+    the child's labeled services. A failure aborts the sync (`finish
     abort` runs).
   - `push` runs on the parent's server, in its current release, after
     devopsy has copied the services labeled `live`, `pause` and `stop`,
     when any is labeled `custom` (then it is required; without one it is
-    not run). It gets `DEVOPSY_CLONE_CUSTOM` (those services, space
-    separated), `DEVOPSY_CLONE_TO` (the child's server as
-    `user@hostname`, empty on the same server), `DEVOPSY_CLONE_SSH_PORT`,
-    `DEVOPSY_CLONE_TO_BASE` and `DEVOPSY_CLONE_TO_DIR` (the child's
-    directory and its current `.devopsy/`), `DEVOPSY_CLONE_TO_PROJECT`,
-    `DEVOPSY_CLONE_TO_TARGET`, `DEVOPSY_CLONE_FROM_TARGET` and
-    `DEVOPSY_CLONE_ARGS` (what followed `--clone`'s `--`, its own to use).
-    Two helpers do the transport: `devopsy --clone-rsync <entry>... [--
+    not run). It gets `DEVOPSY_SYNC_CUSTOM` (those services, space
+    separated), `DEVOPSY_SYNC_TO` (the child's server as
+    `user@hostname`, empty on the same server), `DEVOPSY_SYNC_SSH_PORT`,
+    `DEVOPSY_SYNC_TO_BASE` and `DEVOPSY_SYNC_TO_DIR` (the child's
+    directory and its current `.devopsy/`), `DEVOPSY_SYNC_TO_PROJECT`,
+    `DEVOPSY_SYNC_TO_TARGET`, `DEVOPSY_SYNC_FROM_TARGET` and
+    `DEVOPSY_SYNC_ARGS` (what followed `--sync`'s `--`, its own to use).
+    Two helpers do the transport: `devopsy --sync-rsync <entry>... [--
     <rsync args>]` copies entries of `mnt` as the generic path does, and
-    `devopsy --clone-exec <devopsy args>` runs devopsy in the child's
+    `devopsy --sync-exec <devopsy args>` runs devopsy in the child's
     current release, as its project and with a clean environment (none of
     the parent's variables), stdin and stdout passed through. Exit 0 lets
     the child go on. On a child's first release none of its services has
     run yet: a `push` that needs one starts it first (`devopsy
-    --clone-exec up -d --wait database`).
+    --sync-exec up -d --wait database`).
   - `finish go|abort` runs on the child's server after the copy (`go`) or
     a failure (`abort`), after devopsy has started, waited for and resumed
     the labeled services it paused or stopped. After `go` it is where a
@@ -855,7 +855,7 @@ lists them with their contracts):
     first (`up -d --wait`), as the run step's `up` would a moment later:
     the hook finds them running either way.
   - `flush` (on the child), `prepare` and `finish` get
-    `DEVOPSY_CLONE_FROM_TARGET` and `DEVOPSY_CLONE_ARGS`.
+    `DEVOPSY_SYNC_FROM_TARGET` and `DEVOPSY_SYNC_ARGS`.
 
 ## License
 

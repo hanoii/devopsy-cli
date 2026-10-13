@@ -74,13 +74,13 @@ environments:
     # Variables its children get: read from prod's .env files on its
     # server (shared/.env, the instance's, the project's) and written as
     # the child's shared/inherit.env, below its own shared/.env, on a
-    # child's first release, every --clone and --inherit. Variable names,
+    # child's first release, every --sync and --inherit. Variable names,
     # never DEVOPSY_* or COMPOSE_PROJECT_NAME.
-    inherit: [CLONE_DATABASE, SITE_BASIC_AUTH]
+    inherit: [SYNC_DATABASE, SITE_BASIC_AUTH]
   staging:
     # A child of prod (an environment of this project, not a pattern): its
     # first release copies prod's data (shared/mnt) once current, before
-    # its run step; devopsy @staging --clone copies it again. Resolved at
+    # its run step; devopsy @staging --sync copies it again. Resolved at
     # the child's instance, on the server DEVOPSY_SERVER_PROD names, else
     # the child's. In defaults too: the parent itself then has none, and
     # parent: ~ removes it from another.

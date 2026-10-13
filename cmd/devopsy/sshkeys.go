@@ -78,7 +78,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		what += " for " + t.Host + " in " + strings.TrimSpace(buf.String()) + "."
 		if restricted {
-			what += " Restricted: commands only, no shell, with the agent and port forwarding clones across servers need."
+			what += " Restricted: commands only, no shell, with the agent and port forwarding syncs across servers need."
 		}
 		say(what)
 		return 0

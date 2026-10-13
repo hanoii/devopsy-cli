@@ -8,7 +8,7 @@ import (
 )
 
 // RestrictedKeyOptions is what a CI key gets in authorized_keys: no shell,
-// no X11, nothing but commands, plus the two forwardings a clone across
+// no X11, nothing but commands, plus the two forwardings a sync across
 // servers needs (the operator's agent to the parent, the parent's reverse
 // forward to the child's rsync daemon).
 const RestrictedKeyOptions = "restrict,agent-forwarding,port-forwarding"

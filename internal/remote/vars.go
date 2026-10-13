@@ -96,7 +96,7 @@ const InheritFile = "inherit.env"
 // InheritFile, under its release lock, and prints the names among the
 // keys given that the child's own shared/.env also sets: those win over
 // what was just written. With locked, the caller's holder session holds
-// that lock for the clone, and taking it here would wait for it forever.
+// that lock for the sync, and taking it here would wait for it forever.
 func InheritWriteScript(t *Target, keys []string, locked bool) string {
 	lock := `exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + "\n"

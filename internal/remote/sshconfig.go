@@ -89,7 +89,7 @@ func SSHConfig(t *Target, effective map[string]string) string {
 }
 
 // ChildAddress is where a parent's server reaches a child's host for a
-// clone: the user, hostname and port ssh -G gives here. A host behind a
+// sync: the user, hostname and port ssh -G gives here. A host behind a
 // ProxyCommand or ProxyJump is out of the parent's reach: a relay through
 // this machine is not supported yet.
 func ChildAddress(host string) (user, hostname, port string, err error) {

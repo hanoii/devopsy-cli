@@ -12,7 +12,7 @@ import (
 // stdout: everything but the marker line, partial lines held only while
 // they can still become it, and the base handed over once.
 func TestMarkerWriter(t *testing.T) {
-	marker := remote.CloneMarker
+	marker := remote.SyncMarker
 	for name, c := range map[string]struct {
 		writes []string
 		out    string

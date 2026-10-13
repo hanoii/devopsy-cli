@@ -10,46 +10,46 @@ import (
 	"strings"
 )
 
-// CloneLabel tunes how a clone treats a service (CloneLive and so on).
-const CloneLabel = "devopsy.clone"
+// SyncLabel tunes how a sync treats a service (SyncLive and so on).
+const SyncLabel = "devopsy.sync"
 
-// CloneExcludeLabel names entries of mnt a service mounts that a clone
+// SyncExcludeLabel names entries of mnt a service mounts that a sync
 // leaves out anyway (comma or space separated): an access log next to
 // the files, say. The service is still paused or stopped as its
-// CloneLabel says; only those entries are not copied through it.
-const CloneExcludeLabel = "devopsy.clone.exclude"
+// SyncLabel says; only those entries are not copied through it.
+const SyncExcludeLabel = "devopsy.sync.exclude"
 
-// Clone policies, CloneLabel's values. A service opts in: without the
-// label it is CloneSkip.
+// Sync policies, SyncLabel's values. A service opts in: without the
+// label it is SyncSkip.
 const (
-	// CloneSkip (the default): the service is neither copied nor touched.
-	CloneSkip = "skip"
-	// CloneLive: nothing happens to the service; its binds under mnt are
+	// SyncSkip (the default): the service is neither copied nor touched.
+	SyncSkip = "skip"
+	// SyncLive: nothing happens to the service; its binds under mnt are
 	// copied (after the flush hook).
-	CloneLive = "live"
-	// CloneCustom: devopsy copies nothing and touches nothing; the clone
+	SyncLive = "live"
+	// SyncCustom: devopsy copies nothing and touches nothing; the sync
 	// capability's push, required then, copies it after the rest.
-	CloneCustom = "custom"
-	// CloneStop: stopped for the copy, a clean shutdown (a database's raw
+	SyncCustom = "custom"
+	// SyncStop: stopped for the copy, a clean shutdown (a database's raw
 	// files).
-	CloneStop = "stop"
-	// ClonePause: frozen for the copy, so its router stays and requests
+	SyncStop = "stop"
+	// SyncPause: frozen for the copy, so its router stays and requests
 	// wait (the routed app). Holding, not integrity: never a database.
-	ClonePause = "pause"
+	SyncPause = "pause"
 )
 
-// The hidden flags of a clone, run on servers.
+// The hidden flags of a sync, run on servers.
 const (
-	ClonePushFlag     = "--clone-push"
-	CloneRsyncFlag    = "--clone-rsync"
-	CloneExecFlag     = "--clone-exec"
-	CloneServicesFlag = "--clone-services"
+	SyncPushFlag     = "--sync-push"
+	SyncRsyncFlag    = "--sync-rsync"
+	SyncExecFlag     = "--sync-exec"
+	SyncServicesFlag = "--sync-services"
 )
 
-// CloneService is a service of the project as a clone sees it: its policy
+// SyncService is a service of the project as a sync sees it: its policy
 // and the entries of mnt its binds hold ("." for mnt itself). Labeled is
-// whether it has CloneLabel.
-type CloneService struct {
+// whether it has SyncLabel.
+type SyncService struct {
 	Name, Policy string
 	Dirs         []string
 	Labeled      bool
@@ -74,11 +74,11 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 	return out, nil
 }
 
-// CloneServices lists the services of the project at cwd, sorted, with
-// their policy (CloneLabel, default CloneSkip) and the entries of
+// SyncServices lists the services of the project at cwd, sorted, with
+// their policy (SyncLabel, default SyncSkip) and the entries of
 // .devopsy/mnt their bind mounts hold. projectDir is the project's
 // .devopsy/.
-func CloneServices(cwd string, environ []string) (projectDir string, services []CloneService, err error) {
+func SyncServices(cwd string, environ []string) (projectDir string, services []SyncService, err error) {
 	projectDir, err = FindProjectDir(cwd)
 	if err != nil {
 		return "", nil, err
@@ -87,15 +87,15 @@ func CloneServices(cwd string, environ []string) (projectDir string, services []
 	if err != nil {
 		return "", nil, err
 	}
-	services, err = parseCloneServices(out, projectDir)
+	services, err = parseSyncServices(out, projectDir)
 	return projectDir, services, err
 }
 
-// parseCloneServices reads compose's JSON configuration. Bind sources are
+// parseSyncServices reads compose's JSON configuration. Bind sources are
 // absolute there, under the compose file's directory as written (on
 // servers .devopsy/mnt is a link to shared/mnt, which compose may have
 // resolved): both count.
-func parseCloneServices(out []byte, projectDir string) ([]CloneService, error) {
+func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	var config struct {
 		Services map[string]struct {
 			Labels  map[string]string `json:"labels"`
@@ -112,21 +112,21 @@ func parseCloneServices(out []byte, projectDir string) ([]CloneService, error) {
 	if r, err := filepath.EvalSymlinks(mnts[0]); err == nil && r != mnts[0] {
 		mnts = append(mnts, r)
 	}
-	var services []CloneService
+	var services []SyncService
 	for name, s := range config.Services {
-		policy, labeled := s.Labels[CloneLabel]
+		policy, labeled := s.Labels[SyncLabel]
 		switch policy {
 		case "":
-			policy = CloneSkip
-		case CloneLive, CloneSkip, CloneStop, ClonePause, CloneCustom:
+			policy = SyncSkip
+		case SyncLive, SyncSkip, SyncStop, SyncPause, SyncCustom:
 		default:
-			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s, %s or %s", name, CloneLabel, policy, CloneSkip, CloneLive, CloneCustom, CloneStop, ClonePause)
+			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s, %s or %s", name, SyncLabel, policy, SyncSkip, SyncLive, SyncCustom, SyncStop, SyncPause)
 		}
-		cs := CloneService{Name: name, Policy: policy, Labeled: labeled}
-		exclude := strings.FieldsFunc(s.Labels[CloneExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
+		cs := SyncService{Name: name, Policy: policy, Labeled: labeled}
+		exclude := strings.FieldsFunc(s.Labels[SyncExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
 		for _, e := range exclude {
 			if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
-				return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, CloneExcludeLabel, s.Labels[CloneExcludeLabel])
+				return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, SyncExcludeLabel, s.Labels[SyncExcludeLabel])
 			}
 		}
 		for _, v := range s.Volumes {
@@ -160,12 +160,12 @@ func mntEntry(source string, mnts []string) string {
 	return ""
 }
 
-// CloneDirs are the entries of mnt a clone copies: those of the services
+// SyncDirs are the entries of mnt a sync copies: those of the services
 // labeled live, pause or stop, sorted; "." (all of mnt) subsumes the rest.
-func CloneDirs(services []CloneService) []string {
+func SyncDirs(services []SyncService) []string {
 	var dirs []string
 	for _, s := range services {
-		if s.Policy == CloneSkip || s.Policy == CloneCustom {
+		if s.Policy == SyncSkip || s.Policy == SyncCustom {
 			continue
 		}
 		for _, d := range s.Dirs {
@@ -181,19 +181,19 @@ func CloneDirs(services []CloneService) []string {
 	return dirs
 }
 
-// CloneWholeNotice is a notice for a copy of mnt itself (an entry "."):
+// SyncWholeNotice is a notice for a copy of mnt itself (an entry "."):
 // it includes the entries of the services labeled skip or custom too,
 // which their labels say not to copy, or to copy another way. Empty
 // when nothing is copied against a label.
-func CloneWholeNotice(services []CloneService) string {
-	dirs := CloneDirs(services)
+func SyncWholeNotice(services []SyncService) string {
+	dirs := SyncDirs(services)
 	if len(dirs) != 1 || dirs[0] != "." {
 		return ""
 	}
 	var whole, included, exclude []string
 	for _, s := range services {
 		switch {
-		case s.Policy != CloneSkip && s.Policy != CloneCustom:
+		case s.Policy != SyncSkip && s.Policy != SyncCustom:
 			if slices.Contains(s.Dirs, ".") {
 				whole = append(whole, s.Name)
 			}
@@ -211,13 +211,13 @@ func CloneWholeNotice(services []CloneService) string {
 	}
 	msg := fmt.Sprintf("devopsy: %s copies mnt whole, %s included", strings.Join(whole, ", "), strings.Join(included, ", "))
 	if len(exclude) > 0 {
-		msg += fmt.Sprintf(": %s=%s on %s leaves them out", CloneExcludeLabel, strings.Join(exclude, ","), strings.Join(whole, ", "))
+		msg += fmt.Sprintf(": %s=%s on %s leaves them out", SyncExcludeLabel, strings.Join(exclude, ","), strings.Join(whole, ", "))
 	}
 	return msg
 }
 
-// ClonePolicy lists the names of services with policy.
-func ClonePolicy(services []CloneService, policy string) []string {
+// SyncPolicy lists the names of services with policy.
+func SyncPolicy(services []SyncService, policy string) []string {
 	var names []string
 	for _, s := range services {
 		if s.Policy == policy {

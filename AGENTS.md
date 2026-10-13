@@ -17,10 +17,10 @@ repositories fit together and the open ideas.
 - `internal/remote/`: config and targets (`config.go`), the documented
   schemas (`schema.go`), packing a release, and the POSIX `sh` scripts run on
   servers (checked with `sh -n` in tests; GNU coreutils, `mv -T`); a
-  clone's sessions and scripts in `clone.go`.
-- `cmd/devopsy/clone.go`: clones, the operator's side (`runClone`,
-  `runCloneSession`, `inheritVars`) and the hidden flags servers run;
-  `internal/cli/clone.go`: the `devopsy.clone` labels and `CloneServices`.
+  sync's sessions and scripts in `sync.go`.
+- `cmd/devopsy/sync.go`: syncs, the operator's side (`runSync`,
+  `runSyncSession`, `inheritVars`) and the hidden flags servers run;
+  `internal/cli/sync.go`: the `devopsy.sync` labels and `SyncServices`.
 - `internal/complete/`: completion candidates, and the bash, zsh and fish
   scripts (embedded).
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
@@ -178,53 +178,53 @@ repositories fit together and the open ideas.
 - A target path with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 
-### Clones
+### Syncs
 
 - **Parents:** `parent:` names a concrete environment (a pattern is an
   error; one naming itself has none, so `defaults: {parent: prod}` works;
   a cycle is an error: with mutual parents neither could be released
-  first, a first release cloning from a released parent). It resolves one
+  first, a first release syncing from a released parent). It resolves one
   level only (`ParentTarget`, whose own stays nil): at the child's instance (none
   when the parent has a `path:`), its server from the usual variables
   only, never the child's (a guess would copy the wrong data). Strict loading
   records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
-  instead of failing: only `--clone` and a `--release` that clones fail
+  instead of failing: only `--sync` and a `--release` that syncs fail
   with it, so every other command works on the child. `DescribeTarget`
   resolves it leniently, maybe without a server. `target.env` and local steps get
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`.
 - **When:** a child's first release (`CurrentExistsScript` prints `current`
   or `none`, exit 0; one extra session on every release of a child),
-  `--release --clone` (any release), never `--no-clone`, and `@<child>
-  --clone`, which asks for the name like `--destroy` and reruns `run`.
-  Everything that can fail (`clonePreflight`: a run step, the parent
+  `--release --sync` (any release), never `--no-sync`, and `@<child>
+  --sync`, which asks for the name like `--destroy` and reruns `run`.
+  Everything that can fail (`syncPreflight`: a run step, the parent
   released, across servers an agent here and a child reachable without
   `ProxyCommand`/`ProxyJump`) is checked before the upload or the holder.
-- **Two sessions,** both from the operator (`runCloneSession`): the holder
+- **Two sessions,** both from the operator (`runSyncSession`): the holder
   on the child's server (`HolderScript`, or `ActivateScript` with
-  `CloneOptions` between `make_current` and `run`) takes the release lock,
+  `SyncOptions` between `make_current` and `run`) takes the release lock,
   runs prepare, and prints the marker with its directory
-  (`CloneMarker` + `$base`: the operator does not know the release root),
+  (`SyncMarker` + `$base`: the operator does not know the release root),
   swallowed by `markerWriter`. Then the push on the parent's (`PushScript`:
-  shared `flock -s` on its release lock, exclusive on `.clone-lock` so
-  clones from one parent serialize, `devopsy --clone-push`), with
+  shared `flock -s` on its release lock, exclusive on `.sync-lock` so
+  syncs from one parent serialize, `devopsy --sync-push`), with
   `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
   to the holder; the holder's exit is the command's.
 - **fd 3:** the holder keeps devopsy's answer on fd 3 and gives every
   command `/dev/null` as stdin, so nothing it runs can eat or wait on the
   answer. No answer (devopsy interrupted, connection lost): the holder
-  sends its output to `$base/.devopsy-clone.log` (a write to the dead
+  sends its output to `$base/.devopsy-sync.log` (a write to the dead
   session would kill what restores the services) and restores. From
   prepare until the services are restored the holder ignores SIGPIPE
   (`trap '' PIPE`, reset before `run`) and restores before it reports, so
   a session gone during prepare cannot leave them paused either.
-- **Interrupts** (SIGINT, SIGTERM in `runCloneSession`): before the marker
+- **Interrupts** (SIGINT, SIGTERM in `runSyncSession`): before the marker
   devopsy just exits, and the holder restores on its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
   `abort`, and devopsy exits 130. The push session's stdin is a pipe
-  devopsy keeps open (`CloneWatchEnv` says so: an older devopsy's
+  devopsy keeps open (`SyncWatchEnv` says so: an older devopsy's
   `/dev/null` would read as a session gone at once), so the parent's
-  `--clone-push` sees EOF as soon as the session ends, not at its next
+  `--sync-push` sees EOF as soon as the session ends, not at its next
   write, which a silent copy may not make for minutes (seen on OrbStack:
   the parent stayed paused, then ran the capability's push into the
   aborted child). EOF or a signal cancels it: the same-host rsync
@@ -233,61 +233,61 @@ repositories fit together and the open ideas.
   parent's services are restored, and the capability's push is not
   started, or, running in its own process group, gets SIGTERM, a
   pipeline's commands included. From the cancellation on, `errOut` also
-  appends to the parent's `$base/.devopsy-clone.log` (`quietWriter.keep`,
+  appends to the parent's `$base/.devopsy-sync.log` (`quietWriter.keep`,
   the holder's file on the child's side), after a timestamped line. What runs inside a container on its own
   (an import already under way in `docker exec`) runs to its end. The
   holder ending first (its server's connection dropped) is a case of the
   same select: it restored the child on its way out, so the push is
-  cancelled the same way, nothing is answered, and the clone fails.
-- **Labels opt in:** no `devopsy.clone` is `skip` (neither copied nor
-  touched); `live`, `pause`, `stop` are rsynced (`CloneDirs`); `custom`
-  is left to the parent's `push`. `devopsy.clone.exclude` (`CloneExcludeLabel`,
+  cancelled the same way, nothing is answered, and the sync fails.
+- **Labels opt in:** no `devopsy.sync` is `skip` (neither copied nor
+  touched); `live`, `pause`, `stop` are rsynced (`SyncDirs`); `custom`
+  is left to the parent's `push`. `devopsy.sync.exclude` (`SyncExcludeLabel`,
   entries of `mnt`, comma or space separated) drops entries from a
   service's `Dirs` at parse time, so every consumer (copy, guard, list)
   agrees. A `.` entry (`./mnt` itself) subsumes the rest, the `skip` and
-  `custom` services' entries too: `--clone-push` says so
-  (`CloneWholeNotice`, in yellow when the operator's terminal takes
+  `custom` services' entries too: `--sync-push` says so
+  (`SyncWholeNotice`, in yellow when the operator's terminal takes
   colors, `ColorEnv` passed with the push's variables), never excludes
-  by itself. No labeled service: "nothing to clone",
+  by itself. No labeled service: "nothing to sync",
   success, and the run step still runs. Each side reads its own labels;
-  before the generic path pauses anything, `--clone-push` asks the child
-  for `--clone-services list` (through `--clone-exec`, one more session
-  across servers) and refuses (`cloneConflicts`) when a child service
+  before the generic path pauses anything, `--sync-push` asks the child
+  for `--sync-services list` (through `--sync-exec`, one more session
+  across servers) and refuses (`syncConflicts`) when a child service
   mounting a copied entry is running and not `live` there: a `custom` or
   unlabeled service the copy would change under. The list's third column
   is the container's state (`none` without one); a child devopsy that
   prints no state is not checked.
 - **Who pauses what:** the child's labeled services by the holder, for the
-  whole clone: the `prepare` hook, then `--clone-services prepare` (the
+  whole sync: the `prepare` hook, then `--sync-services prepare` (the
   `flush` hook per running `live`/`pause` service, pause, stop; all the
   `stop` services in one `compose stop`, later one `start`, so Compose
   orders them by `depends_on`, dependents first: keep it one call); after the
-  copy `--clone-services finish`, then the `finish` hook (`clone_finish`
-  runs both whatever either did). The parent's inside `--clone-push`: the
+  copy `--sync-services finish`, then the `finish` hook (`sync_finish`
+  runs both whatever either did). The parent's inside `--sync-push`: the
   generic path for `live`/`pause`/`stop` (flush, pause, stop, rsync,
-  finish), then the capability's `push` with `DEVOPSY_CLONE_CUSTOM` when a
+  finish), then the capability's `push` with `DEVOPSY_SYNC_CUSTOM` when a
   service is `custom` (required then; present without one: a notice, not
   run). Hooks only run where their file is, and never replace devopsy's
-  handling. A failing flush fails prepare. `--clone-services prepare`
-  records what it pauses and stops in `$base/.devopsy-clone.services`
-  (`cloneState`, before the first pause) and `finish` restores those,
+  handling. A failing flush fails prepare. `--sync-services prepare`
+  records what it pauses and stops in `$base/.devopsy-sync.services`
+  (`syncState`, before the first pause) and `finish` restores those,
   from container state (exited, paused), so it also recovers after an
-  interrupted clone, and a service down before the clone (a maintenance
+  interrupted sync, and a service down before the sync (a maintenance
   stop) stays down; without a record it restores every labeled service.
   A labeled service without a container (a first release) is created
   (`up -d --wait`) before the finish hook, which expects them up.
-  A finish that restored everything removes the record. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
+  A finish that restored everything removes the record. `--sync-push` cancels on SIGINT, SIGTERM, SIGHUP,
   SIGPIPE and restores; servers' commands write to `errOut`, never an
   `*os.File`, so a gone session cannot kill them with a broken pipe.
 - **Hidden flags** (dispatched in `main.go` before anything else):
-  `--clone-push`, `--clone-rsync <entry>... [-- rsync args]`,
-  `--clone-exec <devopsy args>`, `--clone-services prepare|finish|list`.
-  The first three need the push's `DEVOPSY_CLONE_TO_DIR` and
-  `DEVOPSY_CLONE_TO_PROJECT`. `DEVOPSY_CLONE_ARGS` (space-joined, split
+  `--sync-push`, `--sync-rsync <entry>... [-- rsync args]`,
+  `--sync-exec <devopsy args>`, `--sync-services prepare|finish|list`.
+  The first three need the push's `DEVOPSY_SYNC_TO_DIR` and
+  `DEVOPSY_SYNC_TO_PROJECT`. `DEVOPSY_SYNC_ARGS` (space-joined, split
   like `StepArgs`) go to rsync in the generic path only: a capability's
-  push owns them, and `--clone-rsync` takes only what follows its `--`.
+  push owns them, and `--sync-rsync` takes only what follows its `--`.
 - **Clean environment:** on the same server the child's devopsy
-  (`--clone-exec`) runs with `cleanEnv`: the machine's variables and the
+  (`--sync-exec`) runs with `cleanEnv`: the machine's variables and the
   child's `COMPOSE_PROJECT_NAME` only. The caller's environment wins over
   a project's `.env`, so the parent's secrets and project name would leak
   into the child's commands. Over SSH the login environment is clean.
@@ -304,14 +304,14 @@ repositories fit together and the open ideas.
   parent's daemon, `--network host` on the child) passes
   `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which clears
   command-line forwardings too (`ssh_config(5)`); a taken port retries
-  another (3 tries, 20000-60000). `--clone-exec`'s session keeps
-  `ClearAllForwardings`. All four clone sessions (holder, push, `-R`,
-  `--clone-exec`) pass `KeepAlive` (`ServerAliveInterval=30`,
+  another (3 tries, 20000-60000). `--sync-exec`'s session keeps
+  `ClearAllForwardings`. All four sync sessions (holder, push, `-R`,
+  `--sync-exec`) pass `KeepAlive` (`ServerAliveInterval=30`,
   `ServerAliveCountMax=4`): the holder is quiet for the whole copy, and a
   dropped one aborts mid-copy. The preflight asks the local agent for its
   keys (`agentHasKeys`, `ssh-add -l`: `SSH_AUTH_SOCK` set is not an
   agent), so an empty or dead one fails before any session. No agent on
-  the parent with `DEVOPSY_CLONE_TO` set means a `restrict`ed key or
+  the parent with `DEVOPSY_SYNC_TO` set means a `restrict`ed key or
   sshd's `AllowAgentForwarding no`: say so. A `restrict`ed key also refuses
   the `-R` (`port-forwarding`), which sshd reports like a taken port: after
   the last try, say both.
@@ -327,7 +327,7 @@ repositories fit together and the open ideas.
   the top-level entries of `mnt` that `live`, `pause` and `stop` services bind-mount
   (`docker compose --profile '*' config`, lexical and resolved paths;
   `.` subsumes the rest). An entry that is a file on the parent is copied
-  as one (`files` in `cloneRsync`: no trailing slash, into `mnt`,
+  as one (`files` in `syncRsync`: no trailing slash, into `mnt`,
   `--inplace` so the container bind-mounting it sees the new content,
   a bind mount being the file's inode; across servers its module is
   `/mnt` filtered to it, a module being a directory).
@@ -336,16 +336,16 @@ repositories fit together and the open ideas.
   them all as the child's `shared/inherit.env` (`InheritWriteScript`,
   values on stdin, under the child's lock, the whole file: a resync
   replaces it), which `shared/*` linking puts in every release and the
-  loader reads below `.env`. On a re-clone the holder holds that lock,
+  loader reads below `.env`. On a re-sync the holder holds that lock,
   so the write takes none (`locked`: taking it waited for the holder,
-  which waited for the answer), and both sessions run under the clone's
+  which waited for the answer), and both sessions run under the sync's
   context, so an interrupt during them aborts instead of waiting. The script prints the keys the child's own
   `shared/.env` also sets, for the notice. `--inherit` (`runInherit`)
   runs it alone, both sides released. On a
-  first release (`cloneJob.first`) after local before steps and before
+  first release (`syncJob.first`) after local before steps and before
   the upload, so `--missing-vars` sees them, and kept on failure (the
-  next release is first again); on a re-clone (`--clone`, `--release
-  --clone` of a released child) in `runCloneSession` after the push
+  next release is first again); on a re-sync (`--sync`, `--release
+  --sync` of a released child) in `runSyncSession` after the push
   succeeded and before `go`, so a failed copy writes nothing; an inherit
   failure there aborts. Notices name keys, never values.
 
@@ -443,7 +443,7 @@ repositories fit together and the open ideas.
   keeps it only until Traefik reads the containers again (any start, die
   or health event on the host): Traefik 3.7 filters paused containers as
   non-running (devopsy-traefik's AGENTS.md).
-- OrbStack machines are `ProxyCommand` hosts from macOS: clones across
+- OrbStack machines are `ProxyCommand` hosts from macOS: syncs across
   servers need hosts reachable directly (`ssh -G` without a proxy), like
   `<machine>.orb.local` with a key of your own. Their
   `/etc/ssh/ssh_config.d/10-orbstack.conf` sets `IdentityAgent`, which

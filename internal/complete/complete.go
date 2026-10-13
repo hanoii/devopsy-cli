@@ -108,7 +108,7 @@ var remoteCommands = []Candidate{
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
-	{"--clone", "replace a child's data with its parent's", GroupDevopsy},
+	{"--sync", "replace a child's data with its parent's", GroupDevopsy},
 	{"--inherit", "the parent's inherited variables again, no data", GroupDevopsy},
 	{"--help", "help on server commands", GroupDevopsy},
 }
@@ -288,8 +288,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		// It takes no command: its steps are in config.yaml.
 		return flags([]Candidate{
 			{"--yes", "create a new instance without asking", GroupDevopsy},
-			{"--clone", "clone the parent's data into it, on any release", GroupDevopsy},
-			{"--no-clone", "never clone, even on a child's first release", GroupDevopsy},
+			{"--sync", "sync the parent's data into it, on any release", GroupDevopsy},
+			{"--no-sync", "never sync, even on a child's first release", GroupDevopsy},
 			help,
 		})
 	case "--rollback", "--inherit":
@@ -302,10 +302,10 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		case words[1] == "add" && len(words) == 3 && !strings.HasPrefix(cur, "-"):
 			return Result{} // a file
 		case words[1] == "add" && strings.HasPrefix(cur, "-"):
-			return filter(Result{Candidates: []Candidate{{"--restricted", "a machine's key: commands only, forwardings for clones", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+			return filter(Result{Candidates: []Candidate{{"--restricted", "a machine's key: commands only, forwardings for syncs", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
-	case "--clone":
+	case "--sync":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			// Another environment of this project, as for targets.
 			r := Result{Directive: DirectiveNoFileComp}
@@ -318,7 +318,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			}
 			return filter(r, cur)
 		}
-		// After --, rsync's (or the clone capability's) arguments.
+		// After --, rsync's (or the sync capability's) arguments.
 		given := words[1 : len(words)-1]
 		if slices.Contains(given, "--") {
 			return none

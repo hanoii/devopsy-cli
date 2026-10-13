@@ -108,16 +108,16 @@ func run() int {
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
 	}
-	// A clone's parts on servers, run by its sessions (cmd/devopsy/clone.go).
+	// A sync's parts on servers, run by its sessions (cmd/devopsy/sync.go).
 	switch args[0] {
-	case cli.ClonePushFlag:
-		return runClonePush(cwd, color)
-	case cli.CloneRsyncFlag:
-		return runCloneRsync(cwd, args[1:], color)
-	case cli.CloneExecFlag:
-		return runCloneExec(args[1:], color)
-	case cli.CloneServicesFlag:
-		return runCloneServices(cwd, args[1:], color)
+	case cli.SyncPushFlag:
+		return runSyncPush(cwd, color)
+	case cli.SyncRsyncFlag:
+		return runSyncRsync(cwd, args[1:], color)
+	case cli.SyncExecFlag:
+		return runSyncExec(args[1:], color)
+	case cli.SyncServicesFlag:
+		return runSyncServices(cwd, args[1:], color)
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
