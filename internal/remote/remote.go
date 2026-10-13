@@ -312,6 +312,10 @@ func prelude(t *Target) string {
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
   exit 1
 fi
+if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
+  echo "devopsy: $base/current is a directory, not a link to a release: containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root. Take them down (docker compose -p <project> down) and remove it (docker run --rm -v \"$base:/env\" alpine rm -rf /env/current), then release again" >&2
+  exit 1
+fi
 mkdir -p "$base/releases" "$base/shared/mnt"
 make_current() { ln -sfn "$1" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 lock() {
