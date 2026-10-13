@@ -257,30 +257,27 @@ func TestSyncSameHost(t *testing.T) {
 		t.Errorf("--log (%d):\n%s", code, out)
 	}
 
-	// --release --sync syncs on any release, asking first on one that
-	// has data (--yes, or a terminal); --no-sync never.
+	// --release-sync syncs on any release, asking first on one that
+	// has data (--yes, or a terminal); --release-no-sync never.
 	next()
 	before, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--release", "--sync"); code == 0 || !strings.Contains(out, "add --yes when not at a terminal") || !strings.Contains(out, "Nothing released.") {
-		t.Fatalf("--release --sync without --yes (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@dev", "--release-sync"); code == 0 || !strings.Contains(out, "add --yes when not at a terminal") || !strings.Contains(out, "Nothing released.") {
+		t.Fatalf("--release-sync without --yes (%d):\n%s", code, out)
 	}
 	if after, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases")); len(after) != len(before) {
 		t.Errorf("uploaded before asking: %d releases, then %d", len(before), len(after))
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--sync", "--yes"); code != 0 || !strings.Contains(out, "Syncing @devopsy@one:prod's data") {
-		t.Fatalf("--release --sync --yes (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@dev", "--release-sync", "--yes"); code != 0 || !strings.Contains(out, "Syncing @devopsy@one:prod's data") {
+		t.Fatalf("--release-sync --yes (%d):\n%s", code, out)
 	}
 	s.logs()
-	if out, code := s.run(nil, "@dev", "--release", "--sync", "--no-sync"); code == 0 || !strings.Contains(out, "not both") {
-		t.Errorf("--sync --no-sync (%d):\n%s", code, out)
-	}
-	if out, code := s.run(nil, "@dev", "--rollback", "--sync"); code == 0 || !strings.Contains(out, "--rollback takes no --sync") {
+	if out, code := s.run(nil, "@dev", "--rollback", "--yes"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
 		t.Errorf("--rollback --sync (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=pause") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "[--sync | --no-sync]") {
+	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--yes]") {
 		t.Errorf("--release --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from <target>]") {
@@ -293,7 +290,7 @@ func TestSyncSameHost(t *testing.T) {
 
 // A first release whose copy fails does not go live: the release is marked
 // failed, nothing is current, the services restored, and the next release
-// syncs again; --no-sync releases without the data.
+// syncs again; --release-no-sync releases without the data.
 func TestReleaseFirstSync(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -311,7 +308,7 @@ func TestReleaseFirstSync(t *testing.T) {
 	os.RemoveAll(filepath.Join(s.root, "shop", "dev"))
 
 	// A first release never asks, --sync or not.
-	out, code = s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release", "--sync")
+	out, code = s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release-sync")
 	docker, _ = s.logs()
 	if code == 0 || s.current("dev") != "" || !strings.Contains(out, "sync failed (1), no previous release to go back to") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("failed sync (%d), current %q:\n%s", code, s.current("dev"), out)
@@ -329,11 +326,11 @@ func TestReleaseFirstSync(t *testing.T) {
 	}
 
 	next()
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 || strings.Contains(out, "Syncing") || s.current("dev") == "" {
-		t.Fatalf("--no-sync (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Syncing") || s.current("dev") == "" {
+		t.Fatalf("--release-no-sync (%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "pause") {
-		t.Errorf("--no-sync paused:\n%s", docker)
+		t.Errorf("--release-no-sync paused:\n%s", docker)
 	}
 }
 
@@ -599,8 +596,8 @@ func TestSyncGuards(t *testing.T) {
 			t.Errorf("%v, unresolved parent (%d):\n%s", args, code, out)
 		}
 	}
-	if out, code := s.run(bad, "@dev", "--release", "--no-sync"); code != 0 || s.current("dev") == "" {
-		t.Errorf("--no-sync, unresolved parent (%d):\n%s", code, out)
+	if out, code := s.run(bad, "@dev", "--release-no-sync"); code != 0 || s.current("dev") == "" {
+		t.Errorf("--release-no-sync, unresolved parent (%d):\n%s", code, out)
 	}
 	if out, code := s.run(bad, "@dev", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
 		t.Errorf("a command, unresolved parent (%d):\n%s", code, out)
@@ -612,13 +609,13 @@ func TestSyncGuards(t *testing.T) {
 	if out, code := s.run(nil, "@solo", "--sync", "--yes"); code == 0 || !strings.Contains(out, "@solo is not a child") {
 		t.Errorf("not a child (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@solo", "--release", "--sync"); code == 0 || !strings.Contains(out, "@solo is not a child") {
-		t.Errorf("--release --sync, not a child (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@solo", "--release-sync"); code == 0 || !strings.Contains(out, "@solo is not a child") {
+		t.Errorf("--release-sync, not a child (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") {
 		t.Errorf("parent not released (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "has no current release") || !strings.Contains(out, "--no-sync") {
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "has no current release") || !strings.Contains(out, "--release-no-sync") {
 		t.Errorf("first release, parent not released (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev")); !os.IsNotExist(err) {
@@ -641,7 +638,7 @@ func TestSyncGuards(t *testing.T) {
 	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
 		t.Fatalf("solo (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.mnt("solo"), "storage", "file.txt"), "from solo\n", 0o644)
@@ -653,7 +650,7 @@ func TestSyncGuards(t *testing.T) {
 // inherit: on the parent names variables its children get from its
 // server's files, written at the same level on the child's side, before the
 // upload of a first release and before a --sync's copy; never with
-// --no-sync.
+// --release-no-sync.
 func TestSyncInherit(t *testing.T) {
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY, INST_KEY, PROJ_KEY, MISSING_KEY]}\n  dev: {parent: prod}\n", 0o644)
@@ -712,11 +709,11 @@ func TestSyncInherit(t *testing.T) {
 	}
 	next := func() { time.Sleep(1100 * time.Millisecond) }
 
-	// --no-sync inherits nothing.
+	// --release-no-sync inherits nothing.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s2\n", 0o600)
 	next()
-	if out, code := s.run(nil, "@a/dev", "--release", "--no-sync"); code != 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
-		t.Fatalf("--no-sync (%d): %q\n%s", code, readString(childInherit), out)
+	if out, code := s.run(nil, "@a/dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
+		t.Fatalf("--release-no-sync (%d): %q\n%s", code, readString(childInherit), out)
 	}
 
 	// --inherit resyncs the variables alone: no copy, no run step.
@@ -764,7 +761,7 @@ func TestSyncInterrupt(t *testing.T) {
 	started := filepath.Join(t.TempDir(), "started")
 	write(t, filepath.Join(s.dot, "capabilities", "sync", "push"), "#!/bin/sh\ntouch \"$FAKE_STARTED\"\nexec sleep 20\n", 0o755)
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -812,7 +809,7 @@ func TestSyncLabels(t *testing.T) {
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "sync", "flush"), "#!/bin/sh\necho \"flush $1 in $COMPOSE_PROJECT_NAME\"\n[ \"${FAIL_FLUSH:-}\" != \"$COMPOSE_PROJECT_NAME\" ]\n", 0o755)
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -920,7 +917,7 @@ func TestSyncLabels(t *testing.T) {
 func TestSyncMismatch(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -966,7 +963,7 @@ func TestSyncInterruptCopy(t *testing.T) {
 	started, pushed := filepath.Join(tmp, "started"), filepath.Join(tmp, "pushed")
 	write(t, filepath.Join(s.dot, "capabilities", "sync", "push"), "#!/bin/sh\ntouch \"$FAKE_PUSHED\"\n", 0o755)
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -1029,7 +1026,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s := newSyncSetup(t)
 	started := filepath.Join(t.TempDir(), "started")
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release", "--no-sync"); code != 0 {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()

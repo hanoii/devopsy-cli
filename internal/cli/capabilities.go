@@ -64,7 +64,7 @@ var Capabilities = []Capability{
 		Name:     "sync",
 		What:     "hooks into a sync (a child environment's data from its parent's, devopsy @<child> --sync and a child's first release); each action runs only when its file is there, besides devopsy's handling of the devopsy.sync labels (skip by default; live, pause and stop rsynced; custom left to push)",
 		Who:      "projects whose data a plain copy of .devopsy/mnt cannot sync, like a database to dump, or that flush caches before a copy",
-		CalledBy: "devopsy @<child> --sync, and a child's first release or --release --sync",
+		CalledBy: "devopsy @<child> --sync, and a child's first release or --release-sync",
 		Actions: []CapabilityAction{
 			{
 				Name:  "flush",

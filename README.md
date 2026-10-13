@@ -379,7 +379,7 @@ devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
-devopsy @vm1:develop --release --sync     # sync on this release too (--no-sync: never)
+devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -424,10 +424,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed
-  copy does not go live. `--release --sync` syncs on any release,
+  copy does not go live. `--release-sync` does that on any release,
   asking for the environment's name first when it already has one, as
-  `--sync` does (`--yes` skips it); `--no-sync` never syncs (see Parent
-  environments and syncs).
+  `--sync` does (`--yes` skips it); `--release-no-sync` never syncs, a
+  child's first release included (see Parent environments and syncs).
 - **Logs:** each release and rollback is recorded and saved on the server,
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
@@ -612,7 +612,7 @@ devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
 ```
 
 `--sync` asks you to type the environment's name, as `--destroy` does,
-and so does `--release --sync` on a child already released; `--yes`
+and so does `--release-sync` on a child already released; `--yes`
 skips it. First-release syncs never ask. `--from` copies from another
 environment of the project instead of the parent. What follows
 `--` goes to rsync (as `DEVOPSY_SYNC_ARGS`; a sync capability's `push`
@@ -629,7 +629,7 @@ says so when one shadows an inherited key: `--vars unset` it to inherit),
 and no other environment on the child's server is touched. On a first
 release this happens before the upload, so the variables check finds
 them (they stay if the sync fails: the next release is a first one
-again); on `--sync` and a later `--release --sync`, once the copy is in
+again); on `--sync` and a later `--release-sync`, once the copy is in
 and before the child's run step, so a failed copy leaves the child as it
 was; `devopsy @<child> --inherit` does it alone, no data, no run step.
 Names are printed, never values; keys the parent does not set are

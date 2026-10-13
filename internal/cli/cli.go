@@ -302,8 +302,10 @@ func CommandDescription(path string) string {
 
 // RemoteHelp describes `devopsy @<target>` commands.
 const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ..., or @<alias>):
-  --release [--yes] [--sync | --no-sync]
-                         upload a new release, make it current, run its steps
+  --release [--yes]      upload a new release, make it current, run its steps
+                         (a child's first one syncs its parent's data)
+  --release-sync [--yes] the same, and sync the parent's data in, any time
+  --release-no-sync      the same, never syncing, a child's first one included
   --rollback             back to the previous release, and run its steps
   --releases             the releases on the server
   --log [<id>]           what a release or rollback printed: the last, or one
@@ -336,7 +338,7 @@ var RemoteCommandHelp = map[string]string{
 Replaces a child environment's data (shared/mnt) with its parent's, then
 runs its release's run step. A child is an environment with parent: in
 config.yaml; its first release syncs on its own, between switching current
-and the run step (--release --no-sync skips that), so --sync is for
+and the run step (--release-no-sync skips that), so --sync is for
 resyncing later. Nothing goes through this machine: the parent's server
 copies into the child's.
 
@@ -417,7 +419,9 @@ file; its server's instance and project .env come below it.
     dev:
       parent: prod
 `,
-	"--release": `Usage: devopsy @<target> --release [--yes] [--sync | --no-sync]
+	"--release": `Usage: devopsy @<target> --release [--yes]
+       devopsy @<target> --release-sync [--yes]
+       devopsy @<target> --release-no-sync
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from .devopsy/config.yaml (required), in
@@ -470,9 +474,10 @@ CI.
 The first release of a child (an environment with parent:) syncs its
 parent's data once current, before its run step, so the run step works on
 that data and no empty site is served; a failed copy does not go live.
---sync syncs on any release, asking for the environment's name when it
-already has a current release (--yes skips it), --no-sync never
-(devopsy @<target> --sync --help).
+--release-sync does that on any release, asking for the environment's
+name when it already has a current release (--yes skips it): new code
+and fresh data with one run step. --release-no-sync never syncs, a
+child's first release included (devopsy @<target> --sync --help).
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 
@@ -642,6 +647,12 @@ Examples:
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
   devopsy @prod --ssh-keys remove ci-prod1
 `,
+}
+
+func init() {
+	// The three releases share one explanation.
+	RemoteCommandHelp["--release-sync"] = RemoteCommandHelp["--release"]
+	RemoteCommandHelp["--release-no-sync"] = RemoteCommandHelp["--release"]
 }
 
 // DebugHelp is `devopsy --debug --help`.
