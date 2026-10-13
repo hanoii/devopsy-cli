@@ -154,6 +154,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--clone":
 		return runClone(t, projectDir, projectEnv, projectName, args[1:], color)
 
+	case "--inherit":
+		return runInherit(t, projectName, args[1:], color)
+
 	case "--log":
 		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
 			return fail("usage: devopsy @" + t.Name + " --log [<release id>]")

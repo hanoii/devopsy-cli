@@ -343,13 +343,12 @@ func runPush(ctx context.Context, job *cloneJob, base string, rlog *releaseLog, 
 	return code
 }
 
-// inheritVars copies the variables the parent's inherit: names from its
-// server's .env files into the child's, each at the level it has there:
-// the parent's shared/.env into the child's, its instance's and project's
-// .env into the child's instance and project levels (on the same server
-// those are the same files: nothing to write). A key the parent does not
-// set is reported, never written. Values travel over SSH's stdin, and only
-// names are printed.
+// inheritVars writes the variables the parent's inherit: names, read from
+// its server's files (its shared/.env, then its instance's and project's
+// .env, nearest first), as the child's shared/inherit.env: the whole file,
+// so a resync replaces it. The child's own shared/.env wins over it, and
+// a key set there too is named. A key the parent does not set is reported,
+// never written. Values travel over SSH's stdin, and only names are printed.
 func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 	c, p := job.child, job.parent
 	if len(p.Inherit) == 0 {
@@ -397,14 +396,14 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 	}
 
 	// Nearest first, as the server reads them.
-	order := []string{"shared", "instance", "project"}
-	writes := map[string][]string{}
-	var missing []string
+	var lines strings.Builder
+	var keys, missing []string
 	for _, k := range p.Inherit {
 		found := false
-		for _, l := range order {
-			if _, ok := files[l][k]; ok {
-				writes[l] = append(writes[l], k)
+		for _, l := range []string{"shared", "instance", "project"} {
+			if v, ok := files[l][k]; ok {
+				lines.WriteString(cli.DotenvLine(k, v) + "\n")
+				keys = append(keys, k)
 				found = true
 				break
 			}
@@ -413,47 +412,65 @@ func inheritVars(job *cloneJob, rlog *releaseLog, color bool) error {
 			missing = append(missing, k)
 		}
 	}
-	levelOf := func(t *remote.Target, name string) *remote.Level {
-		for i := range t.Levels {
-			if t.Levels[i].Name == name {
-				return &t.Levels[i]
-			}
-		}
-		return nil
+	var res bytes.Buffer
+	code, err = remote.SSH(c, remote.InheritWriteScript(c, keys), strings.NewReader(lines.String()), &res, false)
+	if err != nil {
+		return err
 	}
-	for _, l := range order {
-		keys := writes[l]
-		if len(keys) == 0 {
-			continue
-		}
-		// The child's level of the same name; its shared/.env when it has
-		// none (a path:, or no instance).
-		var to *remote.Level
-		if l != "shared" {
-			to = levelOf(c, l)
-			if from := levelOf(p, l); to != nil && from != nil && job.sameHost && to.Dir == from.Dir {
-				say(cyan, fmt.Sprintf("Inherited %s from @%s: the same %s .env on %s.", strings.Join(keys, ", "), p.Address, l, c.Host))
-				continue
-			}
-		}
-		var lines strings.Builder
-		for _, k := range keys {
-			lines.WriteString(cli.DotenvLine(k, files[l][k]) + "\n")
-		}
-		var res bytes.Buffer
-		code, err := remote.SSH(c, remote.VarsSetScript(c, to), strings.NewReader(lines.String()), &res, false)
-		if err != nil {
-			return err
-		}
-		if code != 0 {
-			return fmt.Errorf("could not write %s on %s (%d)", strings.Join(keys, ", "), c.Host, code)
-		}
-		say(cyan, fmt.Sprintf("Inherited %s from @%s's %s .env into %s:%s.", strings.Join(keys, ", "), p.Address, l, c.Host, strings.TrimSpace(res.String())))
+	if code != 0 {
+		return fmt.Errorf("could not write @%s's inherited variables (%d)", c.Address, code)
+	}
+	if len(keys) > 0 {
+		say(cyan, fmt.Sprintf("Inherited %s from @%s into @%s's shared/%s.", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
+	}
+	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
+		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), c.Name))
 	}
 	if len(missing) > 0 {
 		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
 	}
 	return nil
+}
+
+// runInherit implements devopsy @<child> --inherit: the parent's inherited
+// variables into the child, nothing copied, no run step.
+func runInherit(t *remote.Target, projectName string, args []string, color bool) int {
+	fail := func(msg string) int {
+		cli.Fprint(os.Stderr, red, msg, color)
+		return 1
+	}
+	if len(args) > 0 {
+		return fail("usage: devopsy @" + t.Name + " --inherit")
+	}
+	if t.Parent == "" {
+		return fail(fmt.Sprintf("@%s is not a child: no parent: in its config", t.Address))
+	}
+	if t.ParentErr != nil {
+		return fail(t.ParentErr.Error())
+	}
+	p := t.ParentTarget
+	if len(p.Inherit) == 0 {
+		cli.Fprint(os.Stderr, yellow, fmt.Sprintf("@%s inherits nothing: no inherit: on %s", t.Address, p.Name), color)
+		return 0
+	}
+	for _, x := range []*remote.Target{p, t} {
+		var out bytes.Buffer
+		code, err := remote.SSH(x, remote.CurrentExistsScript(x), bytes.NewReader(nil), &out, false)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if code != 0 {
+			return fail(fmt.Sprintf("could not check @%s (%d)", x.Address, code))
+		}
+		if strings.TrimSpace(out.String()) != "current" {
+			return fail(fmt.Sprintf("@%s (%s:%s) has no current release: release it first", x.Address, x.Host, x.Path))
+		}
+	}
+	job := &cloneJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
+	if err := inheritVars(job, newReleaseLog("inherit", t), color); err != nil {
+		return fail("inherit: " + err.Error())
+	}
+	return 0
 }
 
 // runClone implements devopsy @<child> --clone [--from <address>] [--yes]

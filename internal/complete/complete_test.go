@@ -83,7 +83,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--env", "--debug", "--destroy", "--clone", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--env", "--debug", "--destroy", "--clone", "--inherit", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", ""}, []string{"--yes", "--clone", "--no-clone", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", "--yes", "--"}, []string{"--clone", "--no-clone"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},

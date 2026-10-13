@@ -86,6 +86,30 @@ func VarsUnsetScript(t *Target, level *Level) string {
 	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset")
 }
 
+// InheritFile is a child's inherited variables, shared/inherit.env on its
+// server (linked into each release like every shared entry), written
+// whole by every inherit, below the child's own shared/.env and above its
+// server's instance and project files.
+const InheritFile = "inherit.env"
+
+// InheritWriteScript writes the KEY=value lines on stdin as the target's
+// InheritFile, under its release lock, and prints the names among the
+// keys given that the child's own shared/.env also sets: those win over
+// what was just written.
+func InheritWriteScript(t *Target, keys []string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/shared" ] || { echo "devopsy: $base has no shared directory: not a released environment" >&2; exit 1; }
+exec 9>"$base/.lock"
+flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+file="$base/shared/` + InheritFile + `"
+cat > "$file.tmp"
+chmod 600 "$file.tmp"
+mv -f "$file.tmp" "$file"
+[ ! -f "$base/shared/.env" ] || for k in ` + quoteAll(keys) + `; do
+  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$k[[:space:]]*=" "$base/shared/.env" && echo "$k" || true
+done
+`
+}
+
 // InheritSeparator starts the line before each file InheritReadScript
 // prints, followed by its level: shared, instance or project.
 const InheritSeparator = "=devopsy-vars= "

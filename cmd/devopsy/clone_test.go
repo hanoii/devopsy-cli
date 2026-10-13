@@ -617,19 +617,20 @@ func TestCloneInherit(t *testing.T) {
 	write(t, filepath.Join(shop, "a", ".env"), "INST_KEY='i 1'\n", 0o600)
 	write(t, filepath.Join(shop, ".env"), "PROJ_KEY=p1\nSHARED_KEY=lower\n", 0o600)
 	childEnv := filepath.Join(shop, "a", "dev", "shared", ".env")
-	write(t, childEnv, "OWN=1\nSHARED_KEY=child\n", 0o600)
+	childInherit := filepath.Join(shop, "a", "dev", "shared", "inherit.env")
+	write(t, childEnv, "OWN=1\nPROJ_KEY=child\n", 0o600)
 	s.logs()
 
-	// Same server: shared/.env is written, the instance's and project's are
-	// the parent's own files.
+	// A first release inherits before the upload: every key from the
+	// parent's nearest file into the child's shared/inherit.env, whole;
+	// the child's own shared/.env is untouched and named where it wins.
 	out, code := s.run(nil, "@a/dev", "--release", "--yes")
 	if code != 0 {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
-		"Inherited SHARED_KEY from @devopsy@one:a/prod's shared .env into devopsy@one:" + childEnv,
-		"Inherited INST_KEY from @devopsy@one:a/prod: the same instance .env on devopsy@one.",
-		"Inherited PROJ_KEY from @devopsy@one:a/prod: the same project .env on devopsy@one.",
+		"Inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod into @devopsy@one:a/dev's shared/inherit.env.",
+		"@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @dev --vars unset to inherit it).",
 		"@devopsy@one:a/prod does not set MISSING_KEY",
 	} {
 		if !strings.Contains(out, want) {
@@ -639,51 +640,62 @@ func TestCloneInherit(t *testing.T) {
 	if i, j := strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "Releasing "); i < 0 || j < i {
 		t.Errorf("inherited after the upload:\n%s", out)
 	}
-	if got := readString(childEnv); got != "OWN=1\nSHARED_KEY='s1'\n" {
-		t.Errorf("child's shared/.env: %q", got)
+	if got := readString(childInherit); got != "SHARED_KEY='s1'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
+		t.Errorf("child's inherit.env: %q", got)
+	}
+	if got := readString(childEnv); got != "OWN=1\nPROJ_KEY=child\n" {
+		t.Errorf("child's shared/.env changed: %q", got)
 	}
 	if strings.Contains(out, "s1") || strings.Contains(readString(filepath.Join(s.root, "shop", "a", "dev", "current", ".devopsy-log")), "s1") {
 		t.Errorf("a value was printed:\n%s", out)
 	}
+	// The release links it, and devopsy loads it below the child's own
+	// .env and above the instance's and project's.
+	if _, err := os.Lstat(filepath.Join(shop, "a", "dev", "current", ".devopsy", "inherit.env")); err != nil {
+		t.Errorf("inherit.env not linked into the release: %v", err)
+	}
+	out, code = s.run(nil, "@a/dev", "--env")
+	if code != 0 || !strings.Contains(out, "SHARED_KEY='s1'\n") || !strings.Contains(out, "PROJ_KEY='child'\n") || !strings.Contains(out, "INST_KEY='i 1'\n") {
+		t.Errorf("effective variables (%d):\n%s", code, out)
+	}
+	next := func() { time.Sleep(1100 * time.Millisecond) }
 
 	// --no-clone inherits nothing.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s2\n", 0o600)
 	next()
-	if out, code := s.run(nil, "@a/dev", "--release", "--no-clone"); code != 0 || strings.Contains(out, "Inherited") || readString(childEnv) != "OWN=1\nSHARED_KEY='s1'\n" {
-		t.Fatalf("--no-clone (%d): %q\n%s", code, readString(childEnv), out)
+	if out, code := s.run(nil, "@a/dev", "--release", "--no-clone"); code != 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
+		t.Fatalf("--no-clone (%d): %q\n%s", code, readString(childInherit), out)
 	}
 
-	// Across servers each level is written on the child's, before the copy.
+	// --inherit resyncs the variables alone: no copy, no run step.
+	s.logs()
+	out, code = s.run(nil, "@a/dev", "--inherit")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "Inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
+		t.Fatalf("--inherit (%d): %q\n%s\n%s", code, readString(childInherit), out, docker)
+	}
+	if out, code := s.run(nil, "@a/prod", "--inherit"); code == 0 || !strings.Contains(out, "is not a child") {
+		t.Errorf("--inherit on prod (%d):\n%s", code, out)
+	}
+
+	// Across servers a re-clone inherits once the copy is in, before the
+	// child's run step: a failed copy leaves the child's file as it was.
+	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s3\n", 0o600)
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	out, code = s.run(env, "@devopsy@two:a/dev", "--clone", "--yes")
 	if code != 0 {
 		t.Fatalf("--clone (%d):\n%s", code, out)
 	}
-	for _, want := range []string{
-		"Inherited SHARED_KEY from @devopsy@one:a/prod's shared .env into devopsy@two:" + childEnv,
-		"Inherited INST_KEY from @devopsy@one:a/prod's instance .env into devopsy@two:" + filepath.Join(shop, "a", ".env"),
-		"Inherited PROJ_KEY from @devopsy@one:a/prod's project .env into devopsy@two:" + filepath.Join(shop, ".env"),
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q:\n%s", want, out)
-		}
-	}
-	// A re-clone inherits once the copy is in, before the child's run
-	// step: a failed copy leaves the child's own values with its own data.
 	if i, j, k := strings.Index(out, "Copying "), strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "deploy in shop-a-dev"); i < 0 || j < i || k < j {
 		t.Errorf("inherited before the copy or after the run step:\n%s", out)
 	}
-	if got := readString(childEnv); got != "OWN=1\nSHARED_KEY='s2'\n" {
-		t.Errorf("child's shared/.env: %q", got)
+	if got := readString(childInherit); got != "SHARED_KEY='s3'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
+		t.Errorf("child's inherit.env: %q", got)
 	}
-	if got := readString(filepath.Join(shop, "a", ".env")); got != "INST_KEY='i 1'\n" {
-		t.Errorf("instance .env: %q", got)
-	}
-	// A failed re-clone writes nothing (something to copy, so rsync runs).
 	write(t, filepath.Join(shop, "a", "prod", "shared", "mnt", "storage", "f"), "x\n", 0o644)
-	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s3\n", 0o600)
-	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--clone", "--yes"); code == 0 || strings.Contains(out, "Inherited") || readString(childEnv) != "OWN=1\nSHARED_KEY='s2'\n" {
-		t.Errorf("failed re-clone (%d): %q\n%s", code, readString(childEnv), out)
+	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s4\n", 0o600)
+	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--clone", "--yes"); code == 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s3'") {
+		t.Errorf("failed re-clone (%d): %q\n%s", code, readString(childInherit), out)
 	}
 }
 

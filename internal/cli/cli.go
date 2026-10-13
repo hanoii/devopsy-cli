@@ -320,6 +320,7 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
   --clone [--from <target>] [--yes] [-- args...]
                          replace a child's data with its parent's, run its
                          run step
+  --inherit              the parent's inherited variables again, no data
   <command> [args]       a project or compose command, in the current release
   -- <args>              docker compose <args> there
   devopsy @<target> <flag> --help   details of each
@@ -396,6 +397,20 @@ The clone capability (capabilities/clone) adds hooks, each run only where
 its file is: flush on both servers, prepare and finish on the child's, push
 on the parent's for the custom services (devopsy --debug capabilities). Asks for the environment's name, unless --yes. The
 log goes with the current release: devopsy @<target> --log.
+`,
+	"--inherit": `Usage: devopsy @<target> --inherit
+
+Writes the variables the parent's inherit: names, read from the parent's
+server, as the child's shared/inherit.env again: a resync of variables
+without a copy of data and without the run step. A clone does the same
+along with the data. The child's own shared/.env wins over the inherited
+file; its server's instance and project .env come below it.
+
+  environments:
+    prod:
+      inherit: [CLONE_DATABASE, DB_PASSWORD]
+    dev:
+      parent: prod
 `,
 	"--release": `Usage: devopsy @<target> --release [--yes] [--clone | --no-clone]
 
@@ -715,9 +730,10 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	if err := load(dotenvFile); err != nil {
 		return nil, err
 	}
-	// On servers, the instance's and the project's .env, shared by their
-	// environments: links releases get, nearest first.
-	for _, shared := range []string{"instance.env", "project.env"} {
+	// On servers, a child's inherited variables (shared/inherit.env, below
+	// its own .env), then the instance's and the project's .env, shared by
+	// their environments: links releases get, nearest first.
+	for _, shared := range []string{"inherit.env", "instance.env", "project.env"} {
 		if err := load(filepath.Join(projectDir, shared)); err != nil {
 			return nil, err
 		}
