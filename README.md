@@ -383,6 +383,7 @@ devopsy @vm1:prod --log          # what the last release or rollback printed (or
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
+devopsy @vm1:prod --status       # the release there, its containers, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -809,6 +810,12 @@ Interfaces devopsy defines and a project implements, as executables in
 project's directory with its environment (`devopsy --debug capabilities`
 lists them with their contracts):
 
+- **status:** `show` prints the project's own lines under `devopsy
+  --status`, after the containers: its URL, a maintenance mode, a version,
+  one fact per line, with the project's environment loaded (the drupal11
+  template's). Locally and on servers (`devopsy @prod --status` runs it
+  in the current release there, after the release's record, the parent
+  and the last sync).
 - **env:** `compute` runs before every devopsy command in the project
   (not help or completion), locally and on servers, and prints `.env`
   lines; devopsy sets those not set yet, at the lowest precedence, and

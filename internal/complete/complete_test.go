@@ -83,7 +83,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--ssh-keys", "--env", "--debug", "--destroy", "--sync", "--inherit", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--ssh-keys", "--status", "--env", "--debug", "--destroy", "--sync", "--inherit", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", "add", "k.pub", "--"}, []string{"--restricted", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"--ssh-keys", ""}, []string{"generate"}, nil, DirectiveNoFileComp},

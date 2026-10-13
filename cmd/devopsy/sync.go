@@ -1449,7 +1449,7 @@ func finishServices(cwd string, services []cli.SyncService) error {
 
 // psEntry is a container in docker compose ps --format json.
 type psEntry struct {
-	Service, State, Health string
+	Service, State, Health, Status string
 }
 
 // parsePS reads docker compose ps --format json: one object per line, or

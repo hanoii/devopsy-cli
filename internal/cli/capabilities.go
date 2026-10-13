@@ -48,6 +48,19 @@ var Capabilities = []Capability{
 		},
 	},
 	{
+		Name:     "status",
+		What:     "lines of the project's own under devopsy --status, after the containers: its URL, a maintenance mode, a version",
+		Who:      "any project with something to say about itself",
+		CalledBy: "devopsy [@<target>] --status, locally and on servers",
+		Actions: []CapabilityAction{
+			{
+				Name:  "show",
+				Usage: "show",
+				Does:  "prints what to add, one fact per line, with the project's environment loaded; stdout goes through as it is",
+			},
+		},
+	},
+	{
 		Name:     "shell",
 		What:     "replaces devopsy's own --shell, for a project needing more than its labels say (devopsy.shell picks the service, devopsy.shell.user the user)",
 		Who:      "any project; most need only the labels",

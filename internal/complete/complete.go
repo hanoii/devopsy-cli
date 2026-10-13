@@ -81,6 +81,7 @@ func Script(shell string) string {
 var builtins = []Candidate{
 	{"--help", "devopsy's help", GroupDevopsy},
 	{"--version", "devopsy's and docker compose's versions", GroupDevopsy},
+	{"--status", "the containers, and the project's own status", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes", GroupDevopsy},
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
@@ -107,6 +108,7 @@ var remoteCommands = []Candidate{
 	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--ssh-keys", "who may log in as the deploy user on the server", GroupDevopsy},
+	{"--status", "the release there, its containers, the project's own status", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
@@ -292,7 +294,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			{"--yes", "create a new instance, or replace a child's data, without asking", GroupDevopsy},
 			help,
 		})
-	case "--release-no-sync", "--rollback", "--inherit":
+	case "--release-no-sync", "--rollback", "--inherit", "--status":
 		return flags([]Candidate{help})
 	case "--ssh-keys":
 		switch {
