@@ -118,7 +118,9 @@ repositories fit together and the open ideas.
   `release:`/`rollback:` (`remote.Steps`: before, prepare, run, after; a
   plain string is run alone) are required. Phases, not a free list, so the
   upload and the switch are never hidden in a step. The remote steps share
-  one SSH session, which holds the lock (a `flock`): so before is local
+  one SSH session, which holds the lock (a `flock`, `lockWait`: `-n`
+  first, then a "waiting for" line and `-w 600`, so a wait is never
+  silent): so before is local
   steps then remote ones, after is remote then local, checked when the
   config is read. Local steps get the target's env, `DEVOPSY_TARGET` (the
   resolved address) and the commit, never the server's `.env`.

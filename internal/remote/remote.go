@@ -282,6 +282,16 @@ func devopsyCall(projectName string, args []string, exec bool) string {
 	return env + "devopsy " + quoteAll(args)
 }
 
+// lockWait takes the lock on fd (shared with -s): at once, or saying what
+// it waits for, up to 10 minutes, then giving up with 75.
+func lockWait(fd int, shared bool, what string) string {
+	opt := ""
+	if shared {
+		opt = "-s "
+	}
+	return fmt.Sprintf(`flock -n %s%d || { echo "devopsy: waiting for %s, up to 10 minutes" >&2; flock %s-w 600 %d || { echo "devopsy: %s did not end in 10 minutes" >&2; exit 75; }; }`, opt, fd, what, opt, fd, what)
+}
+
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
 // target's directory: its path, relative to $root unless absolute. The
@@ -306,7 +316,7 @@ mkdir -p "$base/releases" "$base/shared/mnt"
 make_current() { ln -sfn "$1" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 lock() {
   exec 9>"$base/.lock"
-  flock -w 600 9 || { echo "devopsy: another release is running on $base" >&2; exit 75; }
+  ` + lockWait(9, false, "the release running on $base") + `
 }
 `
 }
@@ -760,7 +770,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   exit 1
 fi
 exec 9>"$base/.lock"
-flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+`+lockWait(9, false, "the release running on $base")+`
 if [ -d "$base/current" ]; then
   echo "devopsy: running 'devopsy %s' (destroy)" >&2
   (cd "$base/current" && %s) || { s=$?; echo "devopsy: the destroy step failed ($s): nothing removed" >&2; exit "$s"; }

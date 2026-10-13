@@ -179,7 +179,7 @@ func HolderScript(t *Target, projectName, fromTarget string, args, run []string)
 fi
 [ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first (it clones on its own)" >&2; exit 1; }
 `, t.Name) + cloneStdin + `exec 9>"$base/.lock"
-flock -w 600 9 || { echo "devopsy: another release is running on $base" >&2; exit 75; }
+` + lockWait(9, false, "the release running on $base") + `
 id=$(readlink "$base/current"); id=${id#releases/}
 echo "devopsy: cloning into $id" >&2
 ` + (&CloneOptions{From: fromTarget, Args: args}).exports() + `cd "$base/current"
@@ -215,9 +215,9 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
 exec 9>"$base/.lock"
-flock -s -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+` + lockWait(9, true, "the release running on $base") + `
 exec 8>"$base/.clone-lock"
-flock -w 600 8 || { echo "devopsy: another clone from $base is running" >&2; exit 75; }
+` + lockWait(8, false, "another clone from $base") + `
 cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--clone-push"}, true) + "\n"
 }

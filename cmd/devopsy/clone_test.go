@@ -207,7 +207,7 @@ func TestCloneSameHost(t *testing.T) {
 	}
 	// The push holds the parent's release lock shared and its clone lock
 	// exclusively; the holder the child's release lock.
-	if i, j := strings.Index(docker, "flock -s -w 600 9"), strings.Index(docker, "flock -w 600 8"); i < 0 || j < i || !strings.Contains(docker, "flock -w 600 9") {
+	if i, j := strings.Index(docker, "flock -n -s 9"), strings.Index(docker, "flock -n 8"); i < 0 || j < i || !strings.Contains(docker, "flock -n 9\n") {
 		t.Errorf("locks:\n%s", docker)
 	}
 	// Files vanished during the copy (rsync's 24, a live service's

@@ -44,10 +44,10 @@ func VarsReadScript(t *Target, level *Level) string {
 // one per line, and their lines are dropped. Comments, blank lines and
 // everything else stay as they are. Releases take the release lock, so this
 // never interleaves with a deploy writing its own secrets.
-const varsEdit = `if [ -z "$plain" ]; then
+var varsEdit = `if [ -z "$plain" ]; then
   mkdir -p "$(dirname "$file")"
   exec 9>"$base/.lock"
-  flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+  ` + lockWait(9, false, "the release running on $base") + `
 fi
 umask 077
 [ -f "$file" ] || : > "$file"
@@ -103,7 +103,7 @@ func InheritWriteScript(t *Target, keys []string) string {
 fi
 mkdir -p "$base/shared"
 exec 9>"$base/.lock"
-flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
+` + lockWait(9, false, "the release running on $base") + `
 file="$base/shared/` + InheritFile + `"
 cat > "$file.tmp"
 chmod 600 "$file.tmp"
