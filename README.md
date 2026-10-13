@@ -364,8 +364,11 @@ resolves like a target of its own, one level only: at the child's instance
 (`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
 child's: a guess could copy the wrong data, so a clone without one fails
 and says which variable to set. `@vm2:develop` with
-`DEVOPSY_SERVER_PROD=vm1` clones from `vm1:prod`. Two environments can be
-each other's parent. `devopsy --debug environments` shows it resolved.
+`DEVOPSY_SERVER_PROD=vm1` clones from `vm1:prod`. Parents can chain
+(`pr-*` from `staging` from `prod`), never in a cycle: two environments
+that are each other's parent could never be released, since a child's
+first release clones from a released parent. `devopsy --debug
+environments` shows it resolved.
 
 ### Releases
 

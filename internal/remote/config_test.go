@@ -158,6 +158,8 @@ func TestConfigErrors(t *testing.T) {
 		"aliases":            "project: app\naliases: {}\nenvironments:\n  prod: {}\n",
 		"missing parent":     "project: app\nenvironments:\n  prod: {}\n  dev: {parent: stage}\n",
 		"pattern parent":     "project: app\nenvironments:\n  \"pr-*\": {}\n  prod: {parent: \"pr-*\"}\n",
+		"mutual parents":     "project: app\nenvironments:\n  a: {parent: b}\n  b: {parent: a}\n",
+		"parent cycle":       "project: app\nenvironments:\n  a: {parent: b}\n  b: {parent: c}\n  c: {parent: a}\n  \"pr-*\": {parent: a}\n",
 		"inherit a string":   "project: app\nenvironments:\n  prod: {inherit: DB}\n",
 		"inherit a bad name": "project: app\nenvironments:\n  prod: {inherit: [DB-X]}\n",
 		"inherit DEVOPSY_":   "project: app\nenvironments:\n  prod: {inherit: [DEVOPSY_DOMAINS]}\n",
@@ -444,7 +446,7 @@ environments:
   legacy: {path: /srv/legacy}
   old: {parent: legacy}
   a: {parent: b}
-  b: {parent: a}
+  b: {parent: prod}
 `)
 	load := func(addr string) *Target {
 		t.Helper()
@@ -478,8 +480,8 @@ environments:
 	if tg := load("vm1:x/old"); tg.ParentTarget.Address != "vm1:legacy" || tg.ParentTarget.Path != "/srv/legacy" {
 		t.Errorf("parent with a path: %+v", tg.ParentTarget)
 	}
-	// One level: two environments can be each other's parent.
-	if tg := load("vm1:a"); tg.ParentTarget.Name != "b" || tg.ParentTarget.ParentTarget != nil || tg.ParentTarget.Parent != "a" {
+	// One level: a chain resolves the parent only, not its own.
+	if tg := load("vm1:a"); tg.ParentTarget.Name != "b" || tg.ParentTarget.ParentTarget != nil || tg.ParentTarget.Parent != "prod" {
 		t.Errorf("one level: %+v", tg.ParentTarget)
 	}
 	// The parent's own variable comes first.
