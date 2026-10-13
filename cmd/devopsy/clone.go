@@ -44,6 +44,12 @@ type cloneJob struct {
 	to, port string
 	// args go to rsync (after --clone's --).
 	args []string
+	// first: the child's first release, with no data of its own yet. Its
+	// inherited variables are written before the upload, so the variables
+	// check sees them, and stay if the clone fails: the next release is a
+	// first one again. A re-clone inherits after the copy succeeded, so a
+	// failed one leaves the child's own values with its own data.
+	first bool
 }
 
 // clonePreflight checks a clone of p into c can start, before anything
@@ -263,6 +269,13 @@ func runCloneSession(job *cloneJob, script string, rlog *releaseLog, color bool)
 		} else if code != 0 {
 			answer = "abort\n"
 			say(red, fmt.Sprintf("devopsy: the copy from @%s failed (%d): aborting the clone", job.parent.Address, code))
+		} else if !job.first {
+			// The copy is in: now the parent's variables, which the run
+			// step uses. A failure here aborts, and nothing was written.
+			if err := inheritVars(job, rlog, color); err != nil {
+				answer = "abort\n"
+				say(red, "devopsy: inherit: "+err.Error()+": aborting the clone")
+			}
 		}
 		_, _ = w.WriteString(answer)
 		w.Close()
@@ -525,9 +538,6 @@ func runClone(t *remote.Target, projectDir string, projectEnv func(string) (stri
 	msg := fmt.Sprintf("Cloning @%s into @%s (%s:%s)...", p.Address, t.Address, t.Host, t.Path)
 	cli.Fprint(os.Stderr, cyan, msg, color)
 	rlog.Line(msg)
-	if err := inheritVars(job, rlog, color); err != nil {
-		return fail("inherit: " + err.Error() + "\nNothing cloned.")
-	}
 	code := runCloneSession(job, remote.HolderScript(t, projectName, p.Address, rsyncArgs, run), rlog, color)
 
 	// The log goes with the release cloned into, after its own.

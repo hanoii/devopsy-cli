@@ -329,6 +329,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				if job, err = clonePreflight(t, t.ParentTarget, projectName, nil); err != nil {
 					return fail(err.Error() + "\nNothing changed. --no-clone releases without the parent's data.")
 				}
+				job.first = first
 			}
 			// Replacing a live child's data asks, as --clone does; a first
 			// release has none to lose.
@@ -352,9 +353,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
-		// What the child inherits, after the local before steps and before
-		// the upload, so the variables check finds it.
-		if job != nil {
+		// What a first release inherits, after the local before steps and
+		// before the upload, so the variables check finds it; a re-clone
+		// inherits once the copy is in (runCloneSession).
+		if job != nil && job.first {
 			if err := inheritVars(job, rlog, color); err != nil {
 				return stop("inherit: " + err.Error() + "\nNothing released.")
 			}

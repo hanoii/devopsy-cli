@@ -590,8 +590,11 @@ instance's or project's `.env`), the parent's value replacing the child's
 there. On one server the instance and project files are the parent's own:
 nothing to write. A value the child sets nearer still wins (its
 `shared/.env` over the instance's). On a first release this happens before
-the upload, so the variables check finds them; on `--clone`, before the
-copy. Names are printed, never values; keys the parent does not set are
+the upload, so the variables check finds them (they stay if the clone
+fails: the next release is a first one again); on `--clone` and a later
+`--release --clone`, once the copy is in and before the child's run step,
+so a failed copy leaves the child's own values with its own data. Names
+are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 An entry can depend on what the copy carries: `DB_PASSWORD: {database:
 stop}` is inherited only while the parent's `database` service has

@@ -308,9 +308,13 @@ repositories fit together and the open ideas.
 - **inherit:** `inheritVars` reads the parent's three files in one session
   (`InheritReadScript`), takes each key from the nearest level, and writes
   it at that level on the child (`VarsSetScript`, values on stdin, under
-  the level's lock); same server and same level directory: skipped. After
-  the confirmation, before the holder; on a release after local before
-  steps and before the upload. Notices name keys, never values. An entry
+  the level's lock); same server and same level directory: skipped. On a
+  first release (`cloneJob.first`) after local before steps and before
+  the upload, so `--missing-vars` sees them, and kept on failure (the
+  next release is first again); on a re-clone (`--clone`, `--release
+  --clone` of a released child) in `runCloneSession` after the push
+  succeeded and before `go`, so a failed copy writes nothing; an inherit
+  failure there aborts. Notices name keys, never values. An entry
   conditioned on the parent's labels (`InheritVar.When`, `NAME:
   {<service>: <policy>}`) makes the same session list the parent's
   services first (`--clone-services list` in its current release, after
