@@ -30,6 +30,7 @@ case "$*" in
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") echo app; [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
   *" ps --services --status paused") echo app ;;
+  *" ps --services --status restarting") [ -z "${FAKE_DB_RESTARTING:-}" ] || echo db ;;
   *" ps --services --all --status exited") echo db ;;
   *" ps --all --format json db") echo '{"Service":"db","State":"running","Health":"healthy"}' ;;
   *" ps --all --format json")
@@ -830,6 +831,14 @@ func TestCloneLabels(t *testing.T) {
 	docker, _ = s.logs()
 	if code != 0 || strings.Contains(out, "stopping db") || strings.Contains(out, "starting db") || strings.Contains(docker, "start db") || strings.Count(out, "unpausing app") != 2 {
 		t.Errorf("db down before the clone (%d):\n%s\n%s", code, out, docker)
+	}
+	// A db in a restart loop (an aborted copy left its datadir half
+	// written) is stopped like a running one: the parent's guard counts
+	// it as running.
+	out, code = s.run([]string{"FAKE_DB_DOWN=1", "FAKE_DB_RESTARTING=1"}, "@dev", "--clone", "--yes")
+	s.logs()
+	if code != 0 || strings.Count(out, "stopping db") != 2 || strings.Count(out, "starting db") != 2 {
+		t.Errorf("db restarting before the clone (%d):\n%s", code, out)
 	}
 	for _, env := range []string{"prod", "dev"} {
 		if _, err := os.Stat(filepath.Join(s.root, "shop", env, ".devopsy-clone.services")); err == nil {
