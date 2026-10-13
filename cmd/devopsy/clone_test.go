@@ -1047,3 +1047,20 @@ func TestCloneHolderGone(t *testing.T) {
 		t.Errorf("the copy was not stopped:\n%s", docker)
 	}
 }
+
+// A current that is a directory (Docker recreated a restarting
+// container's bind mounts under it after a failed first release removed
+// the link) fails the release before the upload, with the way out.
+func TestReleaseCurrentDirectory(t *testing.T) {
+	s := newCloneSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	os.Remove(current)
+	if err := os.MkdirAll(filepath.Join(current, ".devopsy", "mnt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, "@prod", "--release")
+	if code == 0 || !strings.Contains(out, "current is a directory, not a link to a release") || !strings.Contains(out, "rm -rf /env/current") || strings.Contains(out, "current is now") {
+		t.Errorf("release over a current directory (%d):\n%s", code, out)
+	}
+}

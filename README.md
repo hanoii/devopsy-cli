@@ -459,6 +459,10 @@ for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
 anything else (a `compose.override.yaml`). Local `.env`, `mnt/` and override
 files are never uploaded. Each release records its commit, branch and who
 made it. A first release that fails before going live leaves nothing behind.
+One that fails in its `run` step leaves what the step started: a container
+left restarting recreates its bind mounts under `current` as a directory
+(Docker does, as root), and the next release refuses until it is taken
+down and that directory removed, saying how.
 
 **Data and mounts.** `.devopsy/mnt/` is devopsy's one data directory:
 releases never upload it, and on servers it is a link to `shared/mnt`, one
