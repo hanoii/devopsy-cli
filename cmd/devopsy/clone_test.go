@@ -44,15 +44,15 @@ case "$*" in
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
     # Only a module the daemon was given (its name, or mnt for all of it).
-    m=${last2#rsync://127.0.0.1:*/}; m=${m%/}
+    m=${last2#rsync://127.0.0.1:*/}; m=${m%/}; f=${m#*/}; m=${m%%/*}
     grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
-    mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
+    if [ "$f" != "$m" ]; then cp "$src/$f" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
   "run --rm --name devopsy-clone-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
     d=${last2#/src/}
-    mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d" ;;
+    if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
 esac
 exit 0
 `
@@ -315,6 +315,32 @@ func TestReleaseFirstClone(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "pause") {
 		t.Errorf("--no-clone paused:\n%s", docker)
+	}
+}
+
+// A service bind-mounting a file of mnt: copied as a file, on both paths.
+func TestCloneFileEntry(t *testing.T) {
+	s := newCloneSetup(t)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.mnt("prod"), "app.ini"), "[prod]\n", 0o644)
+	env := []string{"FAKE_APP_MOUNT=/app.ini"}
+
+	out, code := s.run(env, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(docker, "devopsy-rsync:1 rsync -a --delete --numeric-ids /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
+	}
+
+	env = append(env, "DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock")
+	out, code = s.run(env, "@devopsy@two:dev", "--clone", "--yes")
+	docker, _ = s.logs()
+	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "/app.ini/app.ini /mnt/\n"} {
+		if code != 0 || !strings.Contains(docker, want) {
+			t.Fatalf("across servers (%d), missing %q:\n%s\n%s", code, want, out, docker)
+		}
+	}
+	if got := readString(filepath.Join(s.mnt("dev"), "app.ini")); got != "[prod]\n" {
+		t.Errorf("file not copied across servers: %q", got)
 	}
 }
 

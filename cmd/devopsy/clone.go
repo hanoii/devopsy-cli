@@ -942,9 +942,14 @@ func exitCode(err error) int {
 // owner's files are read; nothing else under mnt can be asked for (a
 // custom database's datadir, an unlabeled service's directory). The daemon
 // lives for one copy and publishes no port.
-func rsyncdConf(entries []string) string {
+func rsyncdConf(entries, files []string) string {
 	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
 	for _, e := range entries {
+		if slices.Contains(files, e) {
+			// A module is a directory: mnt, filtered down to the file.
+			conf += "[" + e + "]\npath = /mnt\ninclude = /" + e + "\nexclude = *\n"
+			continue
+		}
 		conf += "[" + remote.RsyncModule(e) + "]\npath = " + path.Join("/mnt", e) + "\n"
 	}
 	return conf
@@ -964,13 +969,19 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 	if err != nil {
 		return fmt.Errorf("the parent's mnt: %w", err)
 	}
-	var present []string
+	// Entries are directories, or files a service bind-mounts alone
+	// (./mnt/app.ini): copied into mnt, not as a directory.
+	var present, files []string
 	for _, d := range dirs {
-		if _, err := os.Lstat(filepath.Join(parentMnt, d)); err != nil {
+		info, err := os.Stat(filepath.Join(parentMnt, d))
+		if err != nil {
 			sayErr("devopsy: mnt/" + d + " does not exist here: skipped")
 			continue
 		}
 		present = append(present, d)
+		if !info.IsDir() {
+			files = append(files, d)
+		}
 	}
 	if len(present) == 0 {
 		return nil
@@ -987,7 +998,11 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 			sayErr("devopsy: rsync mnt/" + d)
 			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.RsyncImage}, rsync...), args...)
 			name := fmt.Sprintf("devopsy-clone-%d-%d", os.Getpid(), i)
-			if err := dockerRun(ctx, name, append(run, "/src/"+d+"/", "/dst/"+d+"/")...); err != nil {
+			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
+			if slices.Contains(files, d) {
+				src, dst = "/src/"+d, "/dst/"
+			}
+			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
 				if ctx.Err() != nil {
 					return errors.New("interrupted")
 				}
@@ -1001,7 +1016,7 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		return nil
 	}
 
-	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present), remote.RsyncImage,
+	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.RsyncImage,
 		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
@@ -1035,7 +1050,7 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		if p := os.Getenv(remote.CloneSSHPortEnv); p != "" {
 			sshArgs = append(sshArgs, "-p", p)
 		}
-		sshArgs = append(sshArgs, to, "sh -c "+remote.Quote(remote.CloneReceiveScript(toDir, port, present, args)))
+		sshArgs = append(sshArgs, to, "sh -c "+remote.Quote(remote.CloneReceiveScript(toDir, port, present, files, args)))
 		trace(append([]string{"ssh"}, sshArgs[:len(sshArgs)-1]...))
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer

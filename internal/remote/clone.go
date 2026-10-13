@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -256,17 +257,25 @@ func RsyncModule(entry string) string {
 // per entry of the child's mnt (toDir is its current .devopsy/), from the
 // daemon's module of that name (RsyncModule), as root in RsyncImage, on
 // the host's network to reach the forward.
-func CloneReceiveScript(toDir, port string, dirs, args []string) string {
-	return "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
-		"for d in " + quoteAll(dirs) + `; do
-  echo "devopsy: rsync mnt/$d" >&2
-  m=$d; [ "$d" != . ] || m=mnt
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$m/" "/mnt/$d/"`) + ` >&2 || {
+func CloneReceiveScript(toDir, port string, dirs, files, args []string) string {
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
+		`copy() {
+  echo "devopsy: rsync mnt/$1" >&2
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || exit 1
-    echo "devopsy: rsync mnt/$d: ` + RsyncVanishedNotice + `" >&2
+    echo "devopsy: rsync mnt/$1: ` + RsyncVanishedNotice + `" >&2
   }
-done
+}
 `
+	for _, d := range dirs {
+		src, dst := RsyncModule(d)+"/", d+"/"
+		if slices.Contains(files, d) {
+			// A file: its module serves it alone, into mnt.
+			src, dst = d+"/"+d, ""
+		}
+		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + "\n"
+	}
+	return script
 }
 
 // CloneExecScript runs devopsy args in the child's current release (toDir
