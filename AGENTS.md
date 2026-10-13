@@ -292,7 +292,10 @@ repositories fit together and the open ideas.
 - **SSH between servers:** through `DEVOPSY_SSH_COMMAND` too, with
   `ChildSSH` on the parent's sessions to the child: `ForwardAgent=no`
   (the operator's agent reaches the parent, never the child, whatever
-  the parent's ssh config says), `BatchMode=yes` (a refused key fails
+  the parent's ssh config says; the parent can use every key in it for
+  the session, prod's included when a chain's middle environment is the
+  parent, which only the operator's agent limits: fewer keys, or
+  `ssh-add -h` constraints, README), `BatchMode=yes` (a refused key fails
   instead of prompting), `ConnectTimeout=30` (an unreachable child fails
   before the TCP timeout, with the parent's services paused meanwhile)
   and `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the

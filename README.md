@@ -572,6 +572,18 @@ So, across servers:
   checks the agent has keys before anything starts, not which). In CI,
   `eval $(ssh-agent); ssh-add` with each server's CI key (devopsy-server
   generates one per server), instead of `ssh -i`;
+- the parent's server can use every key in that agent for the session,
+  not only the child's: with `prod` the parent of `staging` and `staging`
+  the parent of `pr-*`, a clone of `pr-12` forwards the agent to
+  staging's server, prod's key included. When servers trust each other
+  less than that, load only the keys the clone needs, or constrain them
+  to their path (OpenSSH 8.9 or later, hosts as in `known_hosts`):
+
+  ```sh
+  ssh-add -h vm1 ~/.ssh/vm1                # the parent's server, from here only
+  ssh-add -h vm2 -h 'vm1>vm2' ~/.ssh/vm2   # the child's: from here and from vm1
+  ```
+
 - the child's server must be reachable from the parent's as `ssh -G`
   resolves it here (user, hostname, port; its host key is accepted on
   first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
