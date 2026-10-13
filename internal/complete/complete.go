@@ -103,6 +103,7 @@ var remoteCommands = []Candidate{
 	{"--shell-host", "a shell on the server itself", GroupDevopsy},
 	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
+	{"--keys", "who may log in as the deploy user on the server", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
 	{"--destroy", "remove the environment from the server", GroupDevopsy},
@@ -283,6 +284,18 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		})
 	case "--rollback", "--inherit":
 		return flags([]Candidate{help})
+	case "--keys":
+		opts := []Candidate{{"--restricted", "a machine's key: commands only, forwardings for clones", GroupDevopsy}, {"--comment", "the key's comment", GroupDevopsy}, {"--out", "where generate writes the private key", GroupDevopsy}, help}
+		switch {
+		case len(words) == 2:
+			r := Result{Candidates: []Candidate{{"list", "the authorized keys", GroupDevopsy}, {"add", "authorize a public key file", GroupDevopsy}, {"remove", "remove a key by fingerprint or comment", GroupDevopsy}, {"generate", "make a key pair here and authorize it", GroupDevopsy}}, Directive: DirectiveNoFileComp}
+			return filter(r, cur)
+		case words[1] == "add" && len(words) == 3:
+			return Result{} // a file
+		case strings.HasPrefix(cur, "-"):
+			return filter(Result{Candidates: opts, Directive: DirectiveNoFileComp}, cur)
+		}
+		return Result{Directive: DirectiveNoFileComp}
 	case "--clone":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			// Another environment of this project, as for targets.

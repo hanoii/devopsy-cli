@@ -368,6 +368,18 @@ repositories fit together and the open ideas.
 
 ## Other features
 
+- **`--keys`** (`cmd/devopsy/keys.go`, scripts in `internal/remote/keys.go`)
+  edits the deploy user's own `~/.ssh/authorized_keys` over the usual
+  session: no root, so devopsy-cli stays out of host setup except for
+  this file, which that user owns anyway. Lines are parsed here
+  (`ParseAuthorizedKey`: options, type, blob, comment; the SHA256
+  fingerprint is computed from the blob, no ssh-keygen needed) and
+  edited on the server under a lock next to the file, by blob, so a
+  comment is never what identifies a key. `add` refuses a duplicate
+  (exit 3), `remove` the last key (exit 4). `generate` runs `ssh-keygen`
+  here and sends the public half only. `--restricted` is
+  `RestrictedKeyOptions`, what devopsy-server's `ci-key` writes: keep
+  the two in step.
 - **Completion** lives in Go (`internal/complete`); the scripts only pass
   words to the hidden `--complete` and show what it prints, cobra's
   protocol (`value<TAB>description<TAB>group` lines, then `:<directive>`),
