@@ -676,8 +676,10 @@ func LoadConfig(projectDir string) (*Config, error) {
 }
 
 // validateParents checks each environment's parent: a concrete environment
-// of the project. An environment whose parent is itself has none, so
-// defaults: {parent: prod} gives every environment but prod one.
+// of the project, and no cycle. An environment whose parent is itself has
+// none, so defaults: {parent: prod} gives every environment but prod one.
+// Two environments that are each other's parent could never be released:
+// a child's first release clones from a released parent.
 func validateParents(envs map[string]*Target) error {
 	var names []string
 	for n := range envs {
@@ -695,6 +697,18 @@ func validateParents(envs map[string]*Target) error {
 		default:
 			if _, ok := envs[p]; !ok || strings.Contains(p, "*") {
 				return fmt.Errorf("%s: environments: %s: parent %s is not an environment of the project (environments: %s)", t.File, n, p, strings.Join(names, ", "))
+			}
+		}
+	}
+	for _, n := range names {
+		chain := []string{n}
+		for p := envs[n].Parent; p != ""; p = envs[p].Parent {
+			chain = append(chain, p)
+			if p == n {
+				return fmt.Errorf("%s: environments: parents form a cycle: %s", envs[n].File, strings.Join(chain, " > "))
+			}
+			if len(chain) > len(names) {
+				break // a cycle elsewhere, reported from its own environment
 			}
 		}
 	}
@@ -1091,9 +1105,9 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 	}
 	// The parent, one level: at the child's instance (none when the parent
 	// has its own path), on the server its variables name, else the
-	// child's. Its own parent is never resolved, so two environments can
-	// be each other's parent. Under DescribeTarget it may have no server,
-	// and stays nil when it cannot be resolved.
+	// child's. Its own parent is never resolved: a clone only needs the
+	// parent. Under DescribeTarget it may have no server, and stays nil
+	// when it cannot be resolved.
 	if t.Parent != "" {
 		pa := address{env: t.Parent, instance: t.Instance, instanceSet: true}
 		if pt := envs[t.Parent]; pt != nil && pt.Path != "" {

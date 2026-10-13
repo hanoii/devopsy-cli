@@ -181,9 +181,10 @@ repositories fit together and the open ideas.
 ### Clones
 
 - **Parents:** `parent:` names a concrete environment (a pattern is an
-  error; one naming itself has none, so `defaults: {parent: prod}` works).
-  It resolves one level only (`ParentTarget`, whose own stays nil, so two
-  environments can be each other's parent): at the child's instance (none
+  error; one naming itself has none, so `defaults: {parent: prod}` works;
+  a cycle is an error: with mutual parents neither could be released
+  first, a first release cloning from a released parent). It resolves one
+  level only (`ParentTarget`, whose own stays nil): at the child's instance (none
   when the parent has a `path:`), its server from the usual variables
   only, never the child's (a guess would copy the wrong data). Strict loading
   records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
