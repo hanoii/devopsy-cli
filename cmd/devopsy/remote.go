@@ -152,8 +152,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
-	case "--clone":
-		return runClone(t, projectDir, projectEnv, projectName, args[1:], color)
+	case "--sync":
+		return runSync(t, projectDir, projectEnv, projectName, args[1:], color)
 
 	case "--inherit":
 		return runInherit(t, projectName, args[1:], color)
@@ -172,27 +172,27 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
 
 	case "--release", "--rollback":
-		yes, cloneFlag, noClone := false, false, false
+		yes, syncFlag, noSync := false, false, false
 		for _, a := range args[1:] {
 			release := args[0] == "--release"
 			switch {
 			case release && (a == "--yes" || a == "-y"):
 				yes = true
-			case release && a == "--clone":
-				cloneFlag = true
-			case release && a == "--no-clone":
-				noClone = true
-			case a == "--clone" || a == "--no-clone":
+			case release && a == "--sync":
+				syncFlag = true
+			case release && a == "--no-sync":
+				noSync = true
+			case a == "--sync" || a == "--no-sync":
 				return fail(fmt.Sprintf("--rollback takes no %s: it restores a release, never data", a))
 			default:
 				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], strings.TrimPrefix(args[0], "--"), t.File))
 			}
 		}
-		if cloneFlag && noClone {
-			return fail("--clone or --no-clone: not both")
+		if syncFlag && noSync {
+			return fail("--sync or --no-sync: not both")
 		}
-		if cloneFlag && t.Parent == "" {
-			return fail(fmt.Sprintf("--clone: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
+		if syncFlag && t.Parent == "" {
+			return fail(fmt.Sprintf("--sync: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
 		}
 		steps := t.Release
 		if args[0] == "--rollback" {
@@ -313,13 +313,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 
-		// A child's first release clones its parent's data once current,
+		// A child's first release syncs its parent's data once current,
 		// before its run step, so deploy runs on that data and no empty
-		// site is ever served; --clone does it on any release. Decided and
+		// site is ever served; --sync does it on any release. Decided and
 		// checked before anything changes, so a release never goes live on
 		// empty data after a late failure.
-		var job *cloneJob
-		if t.Parent != "" && !noClone {
+		var job *syncJob
+		if t.Parent != "" && !noSync {
 			var out bytes.Buffer
 			code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
 			if err != nil {
@@ -329,20 +329,20 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return code
 			}
 			first := strings.TrimSpace(out.String()) == "none"
-			if cloneFlag || first {
+			if syncFlag || first {
 				if t.ParentErr != nil {
 					return fail(t.ParentErr.Error())
 				}
-				if job, err = clonePreflight(t, t.ParentTarget, projectName, nil); err != nil {
-					return fail(err.Error() + "\nNothing changed. --no-clone releases without the parent's data.")
+				if job, err = syncPreflight(t, t.ParentTarget, projectName, nil); err != nil {
+					return fail(err.Error() + "\nNothing changed. --no-sync releases without the parent's data.")
 				}
 				job.first = first
 			}
-			// Replacing a live child's data asks, as --clone does; a first
+			// Replacing a live child's data asks, as --sync does; a first
 			// release has none to lose.
-			if cloneFlag && !first && !yes {
-				if err := confirmClone(t, job.parent, "the release's run step runs on it"); err != nil {
-					return fail(cloneRefused(err, "Nothing released."))
+			if syncFlag && !first && !yes {
+				if err := confirmSync(t, job.parent, "the release's run step runs on it"); err != nil {
+					return fail(syncRefused(err, "Nothing released."))
 				}
 			}
 		}
@@ -361,8 +361,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
 		// What a first release inherits, after the local before steps and
-		// before the upload, so the variables check finds it; a re-clone
-		// inherits once the copy is in (runCloneSession).
+		// before the upload, so the variables check finds it; a re-sync
+		// inherits once the copy is in (runSyncSession).
 		if job != nil && job.first {
 			if err := inheritVars(context.Background(), job, rlog, color, false); err != nil {
 				return stop("inherit: " + err.Error() + "\nNothing released.")
@@ -400,9 +400,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return save(record.ID, code)
 			}
 		} else {
-			say(cyan, fmt.Sprintf("Cloning @%s's data into it before its run step (--no-clone skips it)...", job.parent.Address))
-			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.CloneOptions{From: job.parent.Address})
-			if code := runCloneSession(job, script, rlog, color); code != 0 {
+			say(cyan, fmt.Sprintf("Syncing @%s's data into it before its run step (--no-sync skips it)...", job.parent.Address))
+			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address})
+			if code := runSyncSession(job, script, rlog, color); code != 0 {
 				return save(record.ID, code)
 			}
 		}
@@ -502,7 +502,7 @@ func targetEnv(t *remote.Target, projectName, commit string) []byte {
 			}
 		}
 	}
-	// Its parent, for a child: what clones copy from.
+	// Its parent, for a child: what syncs copy from.
 	for _, kv := range parentEnv(t) {
 		if _, ok := t.Env[kv[0]]; !ok {
 			b.WriteString(cli.DotenvLine(kv[0], kv[1]) + "\n")

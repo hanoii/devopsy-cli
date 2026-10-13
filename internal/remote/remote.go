@@ -380,14 +380,14 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 // release when it fails and restarting that one; pruning; remote after
 // steps. Nothing before the switch changes what is live.
 //
-// With clone, a release clones its parent's data once current, before
-// the run step (CloneOptions): it pauses and stops the release's services,
-// prints CloneMarker and waits for devopsy's go or abort on stdin. Not for
+// With sync, a release syncs its parent's data once current, before
+// the run step (SyncOptions): it pauses and stops the release's services,
+// prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
-func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, clone *CloneOptions) string {
+func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
 	s := prelude(t)
-	if clone != nil {
-		s += cloneStdin
+	if sync != nil {
+		s += syncStdin
 	}
 	s += "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -446,22 +446,22 @@ echo "devopsy: current is now $id" >&2
     (cd "$base/current" && %s) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
 	}
-	if clone != nil || len(p.Run) > 0 {
+	if sync != nil || len(p.Run) > 0 {
 		s += "status=0\nfailed=run\n"
 	}
-	if clone != nil {
-		s += clone.exports() + `cd "$base/current"
-` + cloneFinish(projectName) + clonePrepare(projectName) + `if [ "$status" = 0 ]; then
-` + cloneWait("the release does not go live") + `  if [ "$reply" != go ]; then
-    clone_finish abort || true
+	if sync != nil {
+		s += sync.exports() + `cd "$base/current"
+` + syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
+` + syncWait("the release does not go live") + `  if [ "$reply" != go ]; then
+    sync_finish abort || true
     status=1
   else
-    clone_finish go || status=$?
+    sync_finish go || status=$?
   fi
 fi
 cd "$base"
-[ "$status" = 0 ] || failed=clone
-` + cloneRestorePipe
+[ "$status" = 0 ] || failed=sync
+` + syncRestorePipe
 	}
 	if len(p.Run) > 0 {
 		s += `if [ "$status" = 0 ]; then
@@ -469,7 +469,7 @@ cd "$base"
 fi
 `
 	}
-	if clone != nil || len(p.Run) > 0 {
+	if sync != nil || len(p.Run) > 0 {
 		s += `if [ "$status" != 0 ]; then
   touch "$rel/.devopsy-failed"
   if [ -n "$prev" ]; then
@@ -638,7 +638,7 @@ func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty boo
 	return SSHWith(t, nil, script, stdin, stdout, tty, log)
 }
 
-// SSHWith is SSHLog with extra ssh options after SSHOptions (a clone's push
+// SSHWith is SSHLog with extra ssh options after SSHOptions (a sync's push
 // session forwards the agent: -o ForwardAgent=yes).
 func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
 	return SSHContext(context.Background(), t, extra, script, stdin, stdout, tty, log)

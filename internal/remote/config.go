@@ -99,8 +99,8 @@ type Target struct {
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
 	// Parent is the environment this one is a copy of (a concrete key of
-	// environments:): its first release clones the parent's data, and
-	// --clone resyncs it. Empty: not a child.
+	// environments:): its first release syncs the parent's data, and
+	// --sync resyncs it. Empty: not a child.
 	Parent string `yaml:"parent"`
 	// ParentTarget is Parent resolved for a command, one level only (its
 	// own ParentTarget stays nil): the child's instance, the server from
@@ -109,12 +109,12 @@ type Target struct {
 	// be resolved at all.
 	ParentTarget *Target `yaml:"-"`
 	// ParentErr is why LoadTarget could not resolve Parent (ParentTarget
-	// is nil then): an error only for what clones, so every other command
+	// is nil then): an error only for what syncs, so every other command
 	// works on a child whatever its parent's state.
 	ParentErr error `yaml:"-"`
 	// Inherit names the variables this environment's children get from it:
 	// read from its server's .env files and written at the same level on
-	// the child's side, on a child's first release and every --clone.
+	// the child's side, on a child's first release and every --sync.
 	Inherit []string `yaml:"inherit"`
 
 	// Address is the resolved target, <server>:[<instance>/]<environment>.
@@ -679,7 +679,7 @@ func LoadConfig(projectDir string) (*Config, error) {
 // of the project, and no cycle. An environment whose parent is itself has
 // none, so defaults: {parent: prod} gives every environment but prod one.
 // Two environments that are each other's parent could never be released:
-// a child's first release clones from a released parent.
+// a child's first release syncs from a released parent.
 func validateParents(envs map[string]*Target) error {
 	var names []string
 	for n := range envs {
@@ -1105,7 +1105,7 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 	}
 	// The parent, one level: at the child's instance (none when the parent
 	// has its own path), on the server its variables name, else the
-	// child's. Its own parent is never resolved: a clone only needs the
+	// child's. Its own parent is never resolved: a sync only needs the
 	// parent. Under DescribeTarget it may have no server, and stays nil
 	// when it cannot be resolved.
 	if t.Parent != "" {

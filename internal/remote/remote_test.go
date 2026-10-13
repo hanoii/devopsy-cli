@@ -172,14 +172,14 @@ func TestScriptsParse(t *testing.T) {
 		"destroy":        DestroyScript(tg, "app", []string{"destroy"}),
 		"environments":   EnvironmentsScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
 		"role holders":   RoleHoldersScript(tg, "proxy"),
-		"activate+clone": ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}, Restart: []string{"deploy"}}, &CloneOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
-		"clone only":     ActivateScript(tg, "20261005120000", false, "app", Phases{}, &CloneOptions{From: "vm1:prod"}),
+		"activate+sync":  ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}, Restart: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
+		"sync only":      ActivateScript(tg, "20261005120000", false, "app", Phases{}, &SyncOptions{From: "vm1:prod"}),
 		"holder":         HolderScript(tg, "app-dev", "vm1:prod", []string{"-v"}, []string{"deploy"}),
-		"push":           PushScript(tg, "app-prod", map[string]string{CloneToEnv: "devopsy@h2", CloneToDirEnv: "/srv/it's/current/.devopsy"}),
+		"push":           PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":        CurrentExistsScript(tg),
-		"receive":        CloneReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}),
-		"receive bare":   CloneReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil),
-		"exec":           CloneExecScript("/srv/it's/current/.devopsy", "app-dev", []string{"exec", "-T", "db", "sh", "-c", "mariadb x"}),
+		"receive":        SyncReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}),
+		"receive bare":   SyncReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil),
+		"exec":           SyncExecScript("/srv/it's/current/.devopsy", "app-dev", []string{"exec", "-T", "db", "sh", "-c", "mariadb x"}),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -383,21 +383,21 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 	}
 }
 
-// A release with a clone: once current, the services are prepared, the
+// A release with a sync: once current, the services are prepared, the
 // marker printed, and devopsy's answer decides: go finishes and runs the
 // run step; abort, or a failing prepare, restores and does not go live.
-func TestActivateClone(t *testing.T) {
+func TestActivateSync(t *testing.T) {
 	bin := t.TempDir()
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
-	// --clone-services prepare when told.
+	// --sync-services prepare when told.
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
-echo "$* from=${DEVOPSY_CLONE_FROM_TARGET:-} args=${DEVOPSY_CLONE_ARGS:-}" >> "$FAKE_ROOT/calls"
-if [ "$*" = "--clone-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
+echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}" >> "$FAKE_ROOT/calls"
+if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
   while [ ! -e "$FAKE_ROOT/closed" ]; do sleep 0.05; done
 fi
-[ "$*" = "--clone-services prepare" ] && exit ${FAIL_PREPARE:-0}
+[ "$*" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
 exit 0
 `
 	write(t, filepath.Join(bin, "devopsy"), fake)
@@ -413,7 +413,7 @@ exit 0
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
-		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-dev", phases, &CloneOptions{From: "vm1:prod", Args: []string{"-v"}}))
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-dev", phases, &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}))
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, extra...)
 		cmd.Stdin = strings.NewReader(stdin)
 		var o, e strings.Builder
@@ -435,22 +435,22 @@ exit 0
 	root := t.TempDir()
 	out, errOut, err := run(root, "1", "go\n")
 	base := filepath.Join(root, tg.Path)
-	if err != nil || out != CloneMarker+base+"\n" || current(root) != "releases/1" {
+	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	if got := calls(root); got != "--missing-vars from= args=\n--clone-services prepare from=vm1:prod args=-v\n--clone-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
+	if got := calls(root); got != "--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
 	// abort, on a later release: back to the previous one, restarted.
 	_, errOut, err = run(root, "2", "abort\n")
-	if err == nil || current(root) != "releases/1" || !strings.Contains(errOut, "clone failed (1), current is back to 1") {
+	if err == nil || current(root) != "releases/1" || !strings.Contains(errOut, "sync failed (1), current is back to 1") {
 		t.Fatalf("abort (%v), current %q:\n%s", err, current(root), errOut)
 	}
 	if _, err := os.Stat(filepath.Join(base, "releases", "2", ".devopsy-failed")); err != nil {
 		t.Errorf("not marked failed: %v", err)
 	}
-	if got := calls(root); !strings.Contains(got, "--clone-services finish") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
+	if got := calls(root); !strings.Contains(got, "--sync-services finish") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
 		t.Errorf("abort calls:\n%s", got)
 	}
 
@@ -459,10 +459,10 @@ exit 0
 	for _, stdin := range []string{"abort\n", ""} {
 		root := t.TempDir()
 		_, errOut, err := run(root, "1", stdin)
-		if err == nil || current(root) != "" || !strings.Contains(errOut+readFile(filepath.Join(root, tg.Path, ".devopsy-clone.log")), "no previous release to go back to") {
+		if err == nil || current(root) != "" || !strings.Contains(errOut+readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no previous release to go back to") {
 			t.Fatalf("first abort %q (%v), current %q:\n%s", stdin, err, current(root), errOut)
 		}
-		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("first abort %q calls:\n%s", stdin, got)
 		}
 	}
@@ -470,19 +470,19 @@ exit 0
 	// A failing prepare prints no marker, restores, and does not go live.
 	root = t.TempDir()
 	out, errOut, err = run(root, "1", "go\n", "FAIL_PREPARE=3")
-	if err == nil || out != "" || current(root) != "" || !strings.Contains(errOut, "preparing the clone failed (3)") {
+	if err == nil || out != "" || current(root) != "" || !strings.Contains(errOut, "preparing the sync failed (3)") {
 		t.Fatalf("failing prepare (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+	if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 		t.Errorf("failing prepare calls:\n%s", got)
 	}
 
-	// The clone capability's prepare and finish hooks.
+	// The sync capability's prepare and finish hooks.
 	root = t.TempDir()
-	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "prepare"), "")
-	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", "finish"), "")
+	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", "prepare"), "")
+	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", "finish"), "")
 	for _, a := range []string{"prepare", "finish"} {
-		if err := os.Chmod(filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "clone", a), 0o755); err != nil {
+		if err := os.Chmod(filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", a), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -491,13 +491,13 @@ exit 0
 	}
 	// The hooks run besides the generic handling: prepare before it,
 	// finish after it.
-	if got := calls(root); !strings.Contains(got, "--capability clone prepare from=vm1:prod args=-v\n--clone-services prepare from=vm1:prod args=-v\n--clone-services finish from=vm1:prod args=-v\n--capability clone finish go from") {
+	if got := calls(root); !strings.Contains(got, "--capability sync prepare from=vm1:prod args=-v\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\n--capability sync finish go from") {
 		t.Errorf("capability calls:\n%s", got)
 	}
 
 	// devopsy goes away while the services are being paused (its session
 	// closed: writes to it fail): they are restored all the same, prepare
-	// failing or not, in a release and in --clone.
+	// failing or not, in a release and in --sync.
 	hangup := func(root, script string, extra ...string) {
 		t.Helper()
 		r, w, err := os.Pipe()
@@ -528,8 +528,8 @@ exit 0
 	for _, fail := range []string{"0", "3"} {
 		root := t.TempDir()
 		write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
-		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &CloneOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
-		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
+		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
+		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("release, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
 		root = t.TempDir()
@@ -538,8 +538,8 @@ exit 0
 			t.Fatal(err)
 		}
 		hangup(root, HolderScript(tg, "app-dev", "vm1:prod", nil, []string{"deploy"}), "FAIL_PREPARE="+fail)
-		if got := calls(root); !strings.Contains(got, "--clone-services finish") || strings.Contains(got, "deploy") {
-			t.Errorf("--clone, session gone, prepare exits %s: calls:\n%s", fail, got)
+		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
+			t.Errorf("--sync, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
 	}
 }

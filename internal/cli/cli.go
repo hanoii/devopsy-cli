@@ -302,7 +302,7 @@ func CommandDescription(path string) string {
 
 // RemoteHelp describes `devopsy @<target>` commands.
 const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ..., or @<alias>):
-  --release [--yes] [--clone | --no-clone]
+  --release [--yes] [--sync | --no-sync]
                          upload a new release, make it current, run its steps
   --rollback             back to the previous release, and run its steps
   --releases             the releases on the server
@@ -319,7 +319,7 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
                          what devopsy sees there
   --ssh-config           a ~/.ssh/config block for the target's host
   --destroy [--yes]      remove the environment, data included
-  --clone [--from <target>] [--yes] [-- args...]
+  --sync [--from <target>] [--yes] [-- args...]
                          replace a child's data with its parent's, run its
                          run step
   --inherit              the parent's inherited variables again, no data
@@ -331,30 +331,30 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"--clone": `Usage: devopsy @<target> --clone [--from <target>] [--yes] [-- args...]
+	"--sync": `Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]
 
 Replaces a child environment's data (shared/mnt) with its parent's, then
 runs its release's run step. A child is an environment with parent: in
-config.yaml; its first release clones on its own, between switching current
-and the run step (--release --no-clone skips that), so --clone is for
+config.yaml; its first release syncs on its own, between switching current
+and the run step (--release --no-sync skips that), so --sync is for
 resyncing later. Nothing goes through this machine: the parent's server
 copies into the child's.
 
   environments:
     prod:
-      inherit: [CLONE_DATABASE]   # variables every child gets
+      inherit: [SYNC_DATABASE]   # variables every child gets
     dev:
       parent: prod
 
   --from <target>   copy from another environment of the project instead
                     (@vm1:prod, a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
-  -- args...        DEVOPSY_CLONE_ARGS: rsync's arguments (--exclude=cache),
-                    or the clone capability's to use
+  -- args...        DEVOPSY_SYNC_ARGS: rsync's arguments (--exclude=cache),
+                    or the sync capability's to use
 
 What runs where:
   - the child's server, under its release lock: the prepare hook, then
-    its services labeled devopsy.clone=live or pause are flushed (the
+    its services labeled devopsy.sync=live or pause are flushed (the
     flush hook), those labeled pause paused, those labeled stop stopped,
     then it waits for the copy; after it, stopped ones start (and become
     healthy), paused ones resume, the finish hook runs, then the run step.
@@ -368,21 +368,21 @@ devopsy's own image (devopsy-rsync, built on each server when missing), of
 each entry of .devopsy/mnt a service labeled live, pause or stop
 bind-mounts. Labels, on compose services:
 
-  devopsy.clone=skip    (default) neither copied nor touched
-  devopsy.clone=live    untouched; flushed, its mounts copied
-  devopsy.clone=pause   flushed, then frozen for the copy, its requests held
+  devopsy.sync=skip    (default) neither copied nor touched
+  devopsy.sync=live    untouched; flushed, its mounts copied
+  devopsy.sync=pause   flushed, then frozen for the copy, its requests held
                         (the routed app); its mounts copied. Holding, not
                         consistency: never a database
-  devopsy.clone=stop    stopped for the copy: a clean shutdown (a database's
+  devopsy.sync=stop    stopped for the copy: a clean shutdown (a database's
                         files); its mounts copied
-  devopsy.clone=custom  devopsy copies and touches nothing: the parent's
+  devopsy.sync=custom  devopsy copies and touches nothing: the parent's
                         push capability (required then) copies it, after the
                         rest (a database it dumps)
-  devopsy.clone.exclude=<entry>[,<entry>...]
+  devopsy.sync.exclude=<entry>[,<entry>...]
                         entries of mnt this service mounts that are not
                         copied through it anyway (an access log)
 
-Without any labeled service there is nothing to clone; the run step still
+Without any labeled service there is nothing to sync; the run step still
 runs.
 
 On one server, one container copies between the two directories. Across
@@ -398,7 +398,7 @@ copying, the variables the parent's inherit: names are copied from its
 server's .env files into the child's, at the same level (shared/.env, the
 instance's or the project's .env); names are printed, never values.
 
-The clone capability (capabilities/clone) adds hooks, each run only where
+The sync capability (capabilities/sync) adds hooks, each run only where
 its file is: flush on both servers, prepare and finish on the child's, push
 on the parent's for the custom services (devopsy --debug capabilities). Asks for the environment's name, unless --yes. The
 log goes with the current release: devopsy @<target> --log.
@@ -407,17 +407,17 @@ log goes with the current release: devopsy @<target> --log.
 
 Writes the variables the parent's inherit: names, read from the parent's
 server, as the child's shared/inherit.env again: a resync of variables
-without a copy of data and without the run step. A clone does the same
+without a copy of data and without the run step. A sync does the same
 along with the data. The child's own shared/.env wins over the inherited
 file; its server's instance and project .env come below it.
 
   environments:
     prod:
-      inherit: [CLONE_DATABASE, DB_PASSWORD]
+      inherit: [SYNC_DATABASE, DB_PASSWORD]
     dev:
       parent: prod
 `,
-	"--release": `Usage: devopsy @<target> --release [--yes] [--clone | --no-clone]
+	"--release": `Usage: devopsy @<target> --release [--yes] [--sync | --no-sync]
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from .devopsy/config.yaml (required), in
@@ -467,12 +467,12 @@ The first release of an instance the server does not have yet asks before
 creating it (a typo would otherwise make a new site); --yes skips that, for
 CI.
 
-The first release of a child (an environment with parent:) clones its
+The first release of a child (an environment with parent:) syncs its
 parent's data once current, before its run step, so the run step works on
 that data and no empty site is served; a failed copy does not go live.
---clone clones on any release, asking for the environment's name when it
-already has a current release (--yes skips it), --no-clone never
-(devopsy @<target> --clone --help).
+--sync syncs on any release, asking for the environment's name when it
+already has a current release (--yes skips it), --no-sync never
+(devopsy @<target> --sync --help).
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 
@@ -619,7 +619,7 @@ root. Any target on the server does; the keys are the server's.
     --restricted            for a machine's key, like CI's: restrict
                             (commands only, no shell, no X11), with
                             agent-forwarding and port-forwarding, which a
-                            clone across servers needs. A person's key is
+                            sync across servers needs. A person's key is
                             added plain.
   --ssh-keys remove <key>   remove the key with that fingerprint (a prefix
                             will do) or that exact comment. The last key is

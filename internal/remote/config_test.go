@@ -457,7 +457,7 @@ environments:
 		return tg
 	}
 	// The parent's server is never the child's: without a variable it
-	// has none, which only a clone minds.
+	// has none, which only a sync minds.
 	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "environment dev: parent prod: no server: set DEVOPSY_SERVER_PROD (or DEVOPSY_SERVER)" || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
 		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
 	}
@@ -495,7 +495,7 @@ environments:
 		t.Errorf("DEVOPSY_SERVER: %+v", tg.ParentTarget)
 	}
 	// A parent that cannot be resolved is no error for the child, until
-	// something clones.
+	// something syncs.
 	t.Setenv("DEVOPSY_SERVER_PROD", "bad:host")
 	if tg := load("vm1:dev"); tg.ParentTarget != nil || tg.ParentErr == nil || !strings.HasPrefix(tg.ParentErr.Error(), "environment dev: parent prod: server \"bad:host\"") {
 		t.Errorf("unresolved parent: %+v %v", tg.ParentTarget, tg.ParentErr)
@@ -537,7 +537,7 @@ environments:
 	}
 
 	// A parent that cannot be resolved is the child's ParentErr, for what
-	// clones: the child itself loads.
+	// syncs: the child itself loads.
 	d := t.TempDir()
 	write(t, filepath.Join(d, ConfigFile), "project: app\ninstances: required\nenvironments:\n  prod: {}\n  dev: {path: /srv/dev, parent: prod}\n")
 	if tg, err := LoadTarget(d, "vm1:dev", nil); err != nil || tg.ParentTarget != nil || tg.ParentErr == nil || !strings.Contains(tg.ParentErr.Error(), "environment dev: parent prod: app needs an instance") {
