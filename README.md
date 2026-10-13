@@ -634,7 +634,9 @@ copy and restores its own services, then tells the child's to restore
 its services. If devopsy itself goes away
 mid-clone (killed, connection lost), each side restores its own
 services and writes what happened to `<environment>/.devopsy-clone.log`
-on its server.
+on its server. Restoring means what the clone paused or stopped
+(`<environment>/.devopsy-clone.services` meanwhile): a service that was
+down before it, stopped for maintenance, stays down.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
