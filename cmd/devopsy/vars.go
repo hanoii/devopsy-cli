@@ -27,7 +27,7 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + t.Name + " --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]"
+	usage := "usage: devopsy @" + targetRef(t) + " --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
 	var level *remote.Level
 	var words []string
