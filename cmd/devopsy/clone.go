@@ -1019,7 +1019,11 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 			name := fmt.Sprintf("devopsy-clone-%d-%d", os.Getpid(), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
 			if slices.Contains(files, d) {
+				// In place: a container bind-mounts the file's inode,
+				// and a replaced file would leave it reading the old one
+				// until recreated.
 				src, dst = "/src/"+d, "/dst/"
+				run = append(run, "--inplace")
 			}
 			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
 				if ctx.Err() != nil {
