@@ -75,9 +75,16 @@ func TestCloneServices(t *testing.T) {
 	}
 
 	// mnt itself subsumes every entry.
+	if got := CloneWholeNotice(services); got != "" {
+		t.Errorf("notice without mnt itself: %s", got)
+	}
 	services = append(services, CloneService{Name: "all", Policy: CloneStop, Dirs: []string{"."}})
 	if got := strings.Join(CloneDirs(services), ","); got != "." {
 		t.Errorf("whole mnt: %s", got)
+	}
+	// Then the skipped and custom services' entries go too: a notice.
+	if got, want := CloneWholeNotice(services), "devopsy: all copies mnt whole, database (skip: database), plain (skip: plain), search (custom: index) included: devopsy.clone.exclude=database,plain,index on all leaves them out"; got != want {
+		t.Errorf("whole mnt notice:\n%s\n%s", got, want)
 	}
 	if got, err := parseCloneServices([]byte(`{"services":{"x":{"labels":{"devopsy.clone":"live"},"volumes":[{"type":"bind","source":"`+dot+`/mnt"}]}}}`), dot); err != nil || got[0].Dirs[0] != "." || CloneDirs(got)[0] != "." {
 		t.Errorf("mnt bind: %+v %v", got, err)

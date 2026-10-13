@@ -241,7 +241,11 @@ repositories fit together and the open ideas.
   is left to the parent's `push`. `devopsy.clone.exclude` (`CloneExcludeLabel`,
   entries of `mnt`, comma or space separated) drops entries from a
   service's `Dirs` at parse time, so every consumer (copy, guard, list)
-  agrees. No labeled service: "nothing to clone",
+  agrees. A `.` entry (`./mnt` itself) subsumes the rest, the `skip` and
+  `custom` services' entries too: `--clone-push` says so
+  (`CloneWholeNotice`, in yellow when the operator's terminal takes
+  colors, `ColorEnv` passed with the push's variables), never excludes
+  by itself. No labeled service: "nothing to clone",
   success, and the run step still runs. Each side reads its own labels;
   before the generic path pauses anything, `--clone-push` asks the child
   for `--clone-services list` (through `--clone-exec`, one more session

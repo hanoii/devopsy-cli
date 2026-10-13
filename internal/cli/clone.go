@@ -181,6 +181,41 @@ func CloneDirs(services []CloneService) []string {
 	return dirs
 }
 
+// CloneWholeNotice is a notice for a copy of mnt itself (an entry "."):
+// it includes the entries of the services labeled skip or custom too,
+// which their labels say not to copy, or to copy another way. Empty
+// when nothing is copied against a label.
+func CloneWholeNotice(services []CloneService) string {
+	dirs := CloneDirs(services)
+	if len(dirs) != 1 || dirs[0] != "." {
+		return ""
+	}
+	var whole, included, exclude []string
+	for _, s := range services {
+		switch {
+		case s.Policy != CloneSkip && s.Policy != CloneCustom:
+			if slices.Contains(s.Dirs, ".") {
+				whole = append(whole, s.Name)
+			}
+		case len(s.Dirs) > 0:
+			included = append(included, s.Name+" ("+s.Policy+": "+strings.Join(s.Dirs, ", ")+")")
+			for _, d := range s.Dirs {
+				if d != "." && !slices.Contains(exclude, d) {
+					exclude = append(exclude, d)
+				}
+			}
+		}
+	}
+	if len(included) == 0 {
+		return ""
+	}
+	msg := fmt.Sprintf("devopsy: %s copies mnt whole, %s included", strings.Join(whole, ", "), strings.Join(included, ", "))
+	if len(exclude) > 0 {
+		msg += fmt.Sprintf(": %s=%s on %s leaves them out", CloneExcludeLabel, strings.Join(exclude, ","), strings.Join(whole, ", "))
+	}
+	return msg
+}
+
 // ClonePolicy lists the names of services with policy.
 func ClonePolicy(services []CloneService, policy string) []string {
 	var names []string
