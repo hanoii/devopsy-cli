@@ -310,9 +310,7 @@ environments:
   prod:
     env:
       DEVOPSY_DOMAINS: example.org www.example.org
-    inherit:                    # variables its children get from its server
-      - CLONE_DATABASE
-      - DB_PASSWORD: {database: stop}   # only while database is copied raw
+    inherit: [CLONE_DATABASE]   # variables its children get from its server
   staging: {}
   develop:
     parent: prod                # a child: its first release clones prod's data
@@ -596,12 +594,6 @@ fails: the next release is a first one again); on `--clone` and a later
 so a failed copy leaves the child's own values with its own data. Names
 are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
-An entry can depend on what the copy carries: `DB_PASSWORD: {database:
-stop}` is inherited only while the parent's `database` service has
-`devopsy.clone=stop` (a raw datadir holds the parent's password; a dump
-does not). Every named service must have that label on the parent for
-the entry to apply (a service the parent lacks is an error); otherwise
-it is skipped and devopsy says why.
 
 **The clone capability** (`.devopsy/capabilities/clone/`, see
 Capabilities) adds to this, each action only where its file is: `flush`
