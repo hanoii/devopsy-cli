@@ -74,14 +74,8 @@ environments:
     # Variables its children get: read from prod's .env files on its
     # server (shared/.env, the instance's, the project's) and written at
     # the same level on the child's, on a child's first release and every
-    # --clone. Variable names, never DEVOPSY_* or COMPOSE_PROJECT_NAME. An
-    # entry NAME: {<service>: <policy>} is inherited only while the
-    # parent's services have those devopsy.clone labels: a raw datadir
-    # carries the parent's database password, a dump does not.
-    inherit:
-      - CLONE_DATABASE
-      - SITE_BASIC_AUTH
-      - DB_PASSWORD: {database: stop}
+    # --clone. Variable names, never DEVOPSY_* or COMPOSE_PROJECT_NAME.
+    inherit: [CLONE_DATABASE, SITE_BASIC_AUTH]
   staging:
     # A child of prod (an environment of this project, not a pattern): its
     # first release copies prod's data (shared/mnt) once current, before

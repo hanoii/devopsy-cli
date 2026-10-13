@@ -314,14 +314,7 @@ repositories fit together and the open ideas.
   next release is first again); on a re-clone (`--clone`, `--release
   --clone` of a released child) in `runCloneSession` after the push
   succeeded and before `go`, so a failed copy writes nothing; an inherit
-  failure there aborts. Notices name keys, never values. An entry
-  conditioned on the parent's labels (`InheritVar.When`, `NAME:
-  {<service>: <policy>}`) makes the same session list the parent's
-  services first (`--clone-services list` in its current release, after
-  the `InheritServices` separator); every named service must carry the
-  policy, a missing service is an error, a mismatch skips the entry with
-  a notice. `ClonePolicies` mirrors `cli`'s values: the two packages do
-  not import each other.
+  failure there aborts. Notices name keys, never values.
 
 ## Roles, exports and imports
 
