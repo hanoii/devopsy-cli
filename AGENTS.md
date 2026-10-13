@@ -373,6 +373,14 @@ repositories fit together and the open ideas.
 
 ## Other features
 
+- **`--status`** (`cmd/devopsy/status.go`): locally, `docker compose ps
+  --all --format json` as a table, then the `status` capability's `show`
+  with stdout through. With a target, `StatusScript` prints header lines
+  (the release's record, releases kept, the last sync from the logs'
+  "sync of" and "Syncing @" lines), `---`, then `devopsy --status` in
+  the current release; the operator formats the header (`ago`) and
+  prints the rest as it came. A server's devopsy without `--status`
+  fails there, which the output shows.
 - **`--ssh-keys`** (`cmd/devopsy/sshkeys.go`, scripts in `internal/remote/keys.go`)
   edits the deploy user's own `~/.ssh/authorized_keys` over the usual
   session: no root, so devopsy-cli stays out of host setup except for

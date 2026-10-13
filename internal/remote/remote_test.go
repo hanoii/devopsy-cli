@@ -167,6 +167,7 @@ func TestScriptsParse(t *testing.T) {
 		"inherit write":  InheritWriteScript(tg, []string{"A", "B"}, false),
 		"inherit locked": InheritWriteScript(tg, []string{"A", "B"}, true),
 		"keys read":      KeysReadScript(),
+		"status":         StatusScript(tg),
 		"keys add":       KeysAddScript(),
 		"keys remove":    KeysRemoveScript(),
 		"destroy":        DestroyScript(tg, "app", []string{"destroy"}),

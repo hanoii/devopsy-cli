@@ -1065,3 +1065,34 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 		t.Errorf("release over a current directory (%d):\n%s", code, out)
 	}
 }
+
+// --status: the containers and the status capability's lines, locally;
+// with a target, the release's record and the last sync first.
+func TestStatus(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), "#!/bin/sh\necho \"url https://$COMPOSE_PROJECT_NAME.example\"\n", 0o755)
+	out, code := s.run(nil, "--status")
+	if code != 0 || !strings.Contains(out, "containers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db ") || !strings.Contains(out, "exited") || !strings.Contains(out, "url https://shop.example\n") {
+		t.Fatalf("local status (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet") {
+		t.Fatalf("unreleased status (%d):\n%s", code, out)
+	}
+	s.releaseProd(nil)
+	out, code = s.run(nil, "@prod", "--status")
+	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url https://shop-prod.example\n") || strings.Contains(out, "parent") {
+		t.Fatalf("prod status (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  never synced") {
+		t.Fatalf("dev status before a sync (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("sync (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  last synced just now") {
+		t.Fatalf("dev status after a sync (%d):\n%s", code, out)
+	}
+}

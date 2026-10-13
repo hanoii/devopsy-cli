@@ -124,6 +124,10 @@ func run() int {
 		return runRemote(cwd, args, color, verboseLevel)
 	}
 
+	if args[0] == "--status" {
+		return runStatus(cwd, args[1:], color)
+	}
+
 	// devopsy's flags for servers, used without a target.
 	if slices.Contains(cli.RemoteOnly, args[0]) {
 		var names []string

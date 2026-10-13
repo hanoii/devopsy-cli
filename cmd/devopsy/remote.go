@@ -162,6 +162,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--ssh-keys":
 		return runSSHKeys(t, args[1:], color)
 
+	case "--status":
+		return runRemoteStatus(t, args[1:], color)
+
 	case "--log":
 		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
 			return fail("usage: devopsy @" + targetRef(t) + " --log [<release id>]")

@@ -316,6 +316,7 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
                          the server's variables (shared/.env)
   --ssh-keys [list | add <file> [--restricted] | remove <key>]
                          who may log in as the deploy user there
+  --status               the release there, its containers, the project's own lines
   --env                  the variables devopsy loads and computes there
   --debug [env | capabilities | labels | imports]
                          what devopsy sees there
@@ -612,6 +613,19 @@ Examples:
   devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
 `,
+	"--status": `Usage: devopsy [@<target>] --status
+
+What is running. In a project: its containers (every one, state and
+health, as docker compose ps sees them), then what the project's status
+capability prints (.devopsy/capabilities/status/show), its URL, say.
+With a target: the current release there (id, commit, when, by whom, how
+many releases are kept), the parent and the last sync for a child, then
+the same from the current release on the server.
+
+Examples:
+  devopsy --status
+  devopsy @prod --status
+`,
 	"--ssh-keys": `Usage: devopsy @<target> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys generate [<name>] [--out <file>]
 
@@ -700,6 +714,7 @@ devopsy:
   --help, -h             this help
 
 Project:
+  --status               its containers, and what its status capability adds
   --env                  the variables devopsy loads and computes (.env format)
   --shell [service] [exec options...] [-- command...]
                          a shell, or the command, in a container
