@@ -828,8 +828,9 @@ lists them with their contracts):
     copy of production is sanitized (emails and passwords scrubbed, a
     login set for a child that had none: devopsy-template-drupal11's);
     then the release's `run` step runs. On a child's first release
-    nothing of it runs yet, here either: a `finish` that needs a service
-    starts it (`devopsy up -d --wait database app`).
+    nothing of it exists yet, so devopsy creates the labeled services
+    first (`up -d --wait`), as the run step's `up` would a moment later:
+    the hook finds them running either way.
   - `flush` (on the child), `prepare` and `finish` get
     `DEVOPSY_CLONE_FROM_TARGET` and `DEVOPSY_CLONE_ARGS`.
 

@@ -274,6 +274,8 @@ repositories fit together and the open ideas.
   from container state (exited, paused), so it also recovers after an
   interrupted clone, and a service down before the clone (a maintenance
   stop) stays down; without a record it restores every labeled service.
+  A labeled service without a container (a first release) is created
+  (`up -d --wait`) before the finish hook, which expects them up.
   A finish that restored everything removes the record. `--clone-push` cancels on SIGINT, SIGTERM, SIGHUP,
   SIGPIPE and restores; servers' commands write to `errOut`, never an
   `*os.File`, so a gone session cannot kill them with a broken pipe.

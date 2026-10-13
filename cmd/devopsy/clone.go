@@ -1370,6 +1370,26 @@ const healthyTimeout = 5 * time.Minute
 // an interrupted clone.
 func finishServices(cwd string, services []cli.CloneService) error {
 	pause, stop := cli.ClonePolicy(services, cli.ClonePause), cli.ClonePolicy(services, cli.CloneStop)
+	var errs []error
+	// A child's first release has no containers yet: nothing was paused
+	// or stopped, and the finish hook still expects the labeled services
+	// up. Create those without a container, as the run step's up will.
+	states, err := serviceStates(cwd)
+	if err != nil {
+		return err
+	}
+	var create []string
+	for _, name := range append(append([]string{}, pause...), stop...) {
+		if states[name] == "" {
+			create = append(create, name)
+		}
+	}
+	if len(create) > 0 {
+		sayErr("devopsy: creating " + strings.Join(create, " "))
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--wait"}, create...)...); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose up: %w", err))
+		}
+	}
 	stateFile := filepath.Join(filepath.Dir(cwd), cloneState)
 	if state, err := os.ReadFile(stateFile); err == nil {
 		var recordedPause, recordedStop []string
@@ -1386,10 +1406,11 @@ func finishServices(cwd string, services []cli.CloneService) error {
 		pause, stop = intersect(pause, recordedPause), intersect(stop, recordedStop)
 	}
 	if len(pause)+len(stop) == 0 {
-		_ = os.Remove(stateFile)
-		return nil
+		if len(errs) == 0 {
+			_ = os.Remove(stateFile)
+		}
+		return errors.Join(errs...)
 	}
-	var errs []error
 	if len(stop) > 0 {
 		exited, err := composeList(cwd, "--all", "--status", "exited")
 		if err != nil {

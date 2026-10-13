@@ -23,19 +23,22 @@ echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
+# FAKE_ABSENT names services without a container (a first release).
+absent() { case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 case "$*" in
   *" config --format json")
     lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.clone\":\"$1\"}"; fi; }
     printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
-  *" ps --services --status running") echo app; [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
-  *" ps --services --status paused") echo app ;;
+  *" ps --services --status running") absent app || echo app; absent db || [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
+  *" ps --services --status paused") absent app || echo app ;;
   *" ps --services --status restarting") [ -z "${FAKE_DB_RESTARTING:-}" ] || echo db ;;
-  *" ps --services --all --status exited") echo db ;;
+  *" ps --services --all --status exited") absent db || echo db ;;
   *" ps --all --format json db") echo '{"Service":"db","State":"running","Health":"healthy"}' ;;
   *" ps --all --format json")
     st() { case $1 in pause) echo paused ;; stop) echo exited ;; *) echo running ;; esac; }
-    printf '{"Service":"app","State":"%s"}\n{"Service":"db","State":"%s"}\n' "$(st "${FAKE_APP:-pause}")" "$(st "${FAKE_DB:-stop}")" ;;
+    absent app || printf '{"Service":"app","State":"%s"}\n' "$(st "${FAKE_APP:-pause}")"
+    absent db || printf '{"Service":"db","State":"%s"}\n' "$(st "${FAKE_DB:-stop}")" ;;
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
@@ -295,9 +298,21 @@ func TestReleaseFirstClone(t *testing.T) {
 	s := newCloneSetup(t)
 	s.releaseProd(nil)
 
-	// A first release never asks, --clone or not.
-	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release", "--clone")
+	// Nothing of the child exists on its first release: finish creates
+	// the labeled services before its hook, where a re-clone restores
+	// them, and the run step's up finds them running.
+	write(t, s.log+".shop-dev", "FAKE_ABSENT='app db'\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release")
 	docker, _ := s.logs()
+	os.Remove(s.log + ".shop-dev")
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db") || strings.Count(out, "devopsy: pausing app") != 1 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait app db") || strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" up -d") {
+		t.Fatalf("first release with no containers (%d):\n%s\n%s", code, out, docker)
+	}
+	os.RemoveAll(filepath.Join(s.root, "shop", "dev"))
+
+	// A first release never asks, --clone or not.
+	out, code = s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release", "--clone")
+	docker, _ = s.logs()
 	if code == 0 || s.current("dev") != "" || !strings.Contains(out, "clone failed (1), no previous release to go back to") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("failed clone (%d), current %q:\n%s", code, s.current("dev"), out)
 	}
@@ -1019,8 +1034,16 @@ func TestCloneHolderGone(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
+	// The push outlives devopsy's session: its restore may still be
+	// under way when devopsy has exited.
 	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " unpause app"
-	if !strings.Contains(docker, restored) || !strings.Contains(docker, "rm -f devopsy-clone-") {
-		t.Errorf("the parent was not restored or the copy not stopped:\n%s", docker)
+	for start := time.Now(); !strings.Contains(docker, restored); docker += readString(s.log) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the parent was not restored:\n%s", docker)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(docker, "rm -f devopsy-clone-") {
+		t.Errorf("the copy was not stopped:\n%s", docker)
 	}
 }
