@@ -261,19 +261,20 @@ func CloneReceiveScript(toDir, port string, dirs, files, args []string) string {
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || exit 1
     echo "devopsy: rsync mnt/$1: ` + RsyncVanishedNotice + `" >&2
   }
 }
 `
 	for _, d := range dirs {
-		src, dst := RsyncModule(d)+"/", d+"/"
+		src, dst, opts := RsyncModule(d)+"/", d+"/", ""
 		if slices.Contains(files, d) {
-			// A file: its module serves it alone, into mnt.
-			src, dst = d+"/"+d, ""
+			// A file: its module serves it alone, into mnt, and in place
+			// (a container bind-mounts the file's inode).
+			src, dst, opts = d+"/"+d, "", "--inplace"
 		}
-		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + "\n"
+		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
 	}
 	return script
 }

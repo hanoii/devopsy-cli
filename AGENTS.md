@@ -325,9 +325,10 @@ repositories fit together and the open ideas.
   the top-level entries of `mnt` that `live`, `pause` and `stop` services bind-mount
   (`docker compose --profile '*' config`, lexical and resolved paths;
   `.` subsumes the rest). An entry that is a file on the parent is copied
-  as one (`files` in `cloneRsync`: no trailing slash, into `mnt`; across
-  servers its module is `/mnt` filtered to it, a module being a
-  directory).
+  as one (`files` in `cloneRsync`: no trailing slash, into `mnt`,
+  `--inplace` so the container bind-mounting it sees the new content,
+  a bind mount being the file's inode; across servers its module is
+  `/mnt` filtered to it, a module being a directory).
 - **inherit:** `inheritVars` reads the parent's three files in one session
   (`InheritReadScript`), takes each key from the nearest level, and writes
   them all as the child's `shared/inherit.env` (`InheritWriteScript`,
