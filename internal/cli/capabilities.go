@@ -84,7 +84,7 @@ var Capabilities = []Capability{
 			{
 				Name:  "finish",
 				Usage: "finish go|abort",
-				Does:  "on the child's server, after the copy (go) or a failure (abort), once devopsy has started the stopped labeled services, waited for them to be healthy and unpaused the paused: restores what prepare changed. Same variables as prepare. After go, the release's run step runs",
+				Does:  "on the child's server, after the copy (go) or a failure (abort), once devopsy has started the stopped labeled services, waited for them to be healthy and unpaused the paused: restores what prepare changed, and after go sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs. Same variables as prepare",
 			},
 		},
 	},

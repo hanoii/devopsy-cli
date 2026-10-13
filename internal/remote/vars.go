@@ -97,7 +97,11 @@ const InheritFile = "inherit.env"
 // keys given that the child's own shared/.env also sets: those win over
 // what was just written.
 func InheritWriteScript(t *Target, keys []string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -d "$base/shared" ] || { echo "devopsy: $base has no shared directory: not a released environment" >&2; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  echo "devopsy: $base is a plain directory: nothing inherits into it" >&2
+  exit 1
+fi
+mkdir -p "$base/shared"
 exec 9>"$base/.lock"
 flock -w 600 9 || { echo "devopsy: a release is running on $base" >&2; exit 75; }
 file="$base/shared/` + InheritFile + `"

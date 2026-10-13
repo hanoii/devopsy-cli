@@ -621,19 +621,17 @@ func TestCloneInherit(t *testing.T) {
 	write(t, filepath.Join(shop, ".env"), "PROJ_KEY=p1\nSHARED_KEY=lower\n", 0o600)
 	childEnv := filepath.Join(shop, "a", "dev", "shared", ".env")
 	childInherit := filepath.Join(shop, "a", "dev", "shared", "inherit.env")
-	write(t, childEnv, "OWN=1\nPROJ_KEY=child\n", 0o600)
 	s.logs()
 
-	// A first release inherits before the upload: every key from the
-	// parent's nearest file into the child's shared/inherit.env, whole;
-	// the child's own shared/.env is untouched and named where it wins.
+	// A first release, nothing of the child on the server yet, inherits
+	// before the upload: every key from the parent's nearest file into the
+	// child's shared/inherit.env, whole.
 	out, code := s.run(nil, "@a/dev", "--release", "--yes")
 	if code != 0 {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
 		"Inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod into @devopsy@one:a/dev's shared/inherit.env.",
-		"@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @dev --vars unset to inherit it).",
 		"@devopsy@one:a/prod does not set MISSING_KEY",
 	} {
 		if !strings.Contains(out, want) {
@@ -645,6 +643,12 @@ func TestCloneInherit(t *testing.T) {
 	}
 	if got := readString(childInherit); got != "SHARED_KEY='s1'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
 		t.Errorf("child's inherit.env: %q", got)
+	}
+	// The child's own shared/.env is untouched and wins; a key set there
+	// too is named.
+	write(t, childEnv, "OWN=1\nPROJ_KEY=child\n", 0o600)
+	if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @dev --vars unset to inherit it).") {
+		t.Errorf("shadowed key (%d):\n%s", code, out)
 	}
 	if got := readString(childEnv); got != "OWN=1\nPROJ_KEY=child\n" {
 		t.Errorf("child's shared/.env changed: %q", got)
