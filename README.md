@@ -817,10 +817,12 @@ lists them with their contracts):
     --clone-exec up -d --wait database`).
   - `finish go|abort` runs on the child's server after the copy (`go`) or
     a failure (`abort`), after devopsy has started, waited for and resumed
-    its labeled services. After `go` it is where a copy of production is
-    sanitized (emails and passwords scrubbed, a login set for a child
-    that had none: devopsy-template-drupal11's); then the release's `run`
-    step runs.
+    the labeled services it paused or stopped. After `go` it is where a
+    copy of production is sanitized (emails and passwords scrubbed, a
+    login set for a child that had none: devopsy-template-drupal11's);
+    then the release's `run` step runs. On a child's first release
+    nothing of it runs yet, here either: a `finish` that needs a service
+    starts it (`devopsy up -d --wait database app`).
   - `flush` (on the child), `prepare` and `finish` get
     `DEVOPSY_CLONE_FROM_TARGET` and `DEVOPSY_CLONE_ARGS`.
 
