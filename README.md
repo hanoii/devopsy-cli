@@ -513,7 +513,9 @@ The label's values, on both sides:
   socket until it resumes, as long as nothing else happens on the host
   meanwhile (Traefik drops a paused container's router the next time a
   container starts, stops or reports its health, and a clone stops
-  things: see devopsy-template-traefik's README, "Holding requests").
+  things: see devopsy-template-traefik's AGENTS.md). A service of the
+  project's own on a lower-priority router answers meanwhile and waits
+  for the app (devopsy-template-drupal11's `alwaysup`).
   That is holding, not consistency: `docker pause` flushes nothing, so
   never pause a database; stop it, or dump it.
 - `stop`: stopped for the copy, a clean shutdown (a database's raw files);
