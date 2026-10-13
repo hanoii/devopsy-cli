@@ -927,9 +927,18 @@ func exitCode(err error) int {
 	return 1
 }
 
-// rsyncdConf serves mnt read-only, as root, so every owner's files are
-// read; the daemon lives for one clone and publishes no port.
-const rsyncdConf = "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[mnt]\npath = /mnt\n"
+// rsyncdConf serves the entries of mnt being copied, each as a module of
+// its name (`.`, all of mnt, as `mnt`), read-only, as root, so every
+// owner's files are read; nothing else under mnt can be asked for (a
+// custom database's datadir, an unlabeled service's directory). The daemon
+// lives for one copy and publishes no port.
+func rsyncdConf(entries []string) string {
+	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
+	for _, e := range entries {
+		conf += "[" + remote.RsyncModule(e) + "]\npath = " + path.Join("/mnt", e) + "\n"
+	}
+	return conf
+}
 
 // cloneRsync copies dirs (entries of the parent's mnt) into the child's,
 // replacing what is there (--delete), as root in devopsy's rsync image.
@@ -982,7 +991,7 @@ func cloneRsync(ctx context.Context, projectDir string, dirs, args []string) err
 		return nil
 	}
 
-	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf, remote.RsyncImage,
+	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present), remote.RsyncImage,
 		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
