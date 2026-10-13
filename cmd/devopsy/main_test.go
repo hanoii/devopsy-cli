@@ -918,9 +918,9 @@ source "$1"; words=(${(z)2}); [[ $2 == *' ' ]] && words+=(''); CURRENT=${#words}
 	}
 }
 
-// --keys edits the deploy user's authorized_keys on the server (here: HOME
+// --ssh-keys edits the deploy user's authorized_keys on the server (here: HOME
 // under tmp, the fake ssh running the scripts locally).
-func TestRemoteKeys(t *testing.T) {
+func TestRemoteSSHKeys(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -949,13 +949,13 @@ func TestRemoteKeys(t *testing.T) {
 	authorized := filepath.Join(tmp, ".ssh", "authorized_keys")
 	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g sample@test"
 
-	if out, code := run("", "@prod", "--keys"); code != 0 || !strings.Contains(out, "has no authorized keys") {
+	if out, code := run("", "@prod", "--ssh-keys"); code != 0 || !strings.Contains(out, "has no authorized keys") {
 		t.Fatalf("empty list (%d):\n%s", code, out)
 	}
 	// generate: a pair here (--out), the public half restricted there,
 	// the private key never sent.
 	priv := filepath.Join(tmp, "ci-key")
-	out, code := run("", "@prod", "--keys", "generate", "--restricted", "--out", priv)
+	out, code := run("", "@prod", "--ssh-keys", "generate", "--restricted", "--out", priv)
 	if code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(devopsy-ci@server)") || !strings.Contains(out, "Restricted") || !strings.Contains(out, "Private key: "+priv) {
 		t.Fatalf("generate (%d):\n%s", code, out)
 	}
@@ -965,34 +965,34 @@ func TestRemoteKeys(t *testing.T) {
 	if _, err := os.Stat(priv); err != nil {
 		t.Errorf("private key: %v", err)
 	}
-	if out, code := run("", "@prod", "--keys", "generate", "--restricted", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
+	if out, code := run("", "@prod", "--ssh-keys", "generate", "--restricted", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
 		t.Errorf("generate over an existing file (%d):\n%s", code, out)
 	}
 	// add a plain key, from a file and from stdin, never twice.
 	pub := filepath.Join(tmp, "sample.pub")
 	write(t, pub, key+"\n", 0o644)
-	if out, code := run("", "@prod", "--keys", "add", pub); code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(sample@test) for devopsy@server") || strings.Contains(out, "Restricted") {
+	if out, code := run("", "@prod", "--ssh-keys", "add", pub); code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(sample@test) for devopsy@server") || strings.Contains(out, "Restricted") {
 		t.Fatalf("add (%d):\n%s", code, out)
 	}
-	if out, code := run(key+"\n", "@prod", "--keys", "add", "-"); code != 3 || !strings.Contains(out, "authorized already") {
+	if out, code := run(key+"\n", "@prod", "--ssh-keys", "add", "-"); code != 3 || !strings.Contains(out, "authorized already") {
 		t.Errorf("add twice (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--keys", "add", priv); code == 0 || !strings.Contains(out, "private key") {
+	if out, code := run("", "@prod", "--ssh-keys", "add", priv); code == 0 || !strings.Contains(out, "private key") {
 		t.Errorf("add a private key (%d):\n%s", code, out)
 	}
-	out, code = run("", "@prod", "--keys")
+	out, code = run("", "@prod", "--ssh-keys")
 	if code != 0 || strings.Count(out, "SHA256:") != 2 || !strings.Contains(out, "ed25519  sample@test\n") || !strings.Contains(out, "devopsy-ci@server  [restrict,agent-forwarding,port-forwarding]") {
 		t.Fatalf("list (%d):\n%s", code, out)
 	}
 	// remove by comment, by fingerprint prefix; never the last one.
-	if out, code := run("", "@prod", "--keys", "remove", "nobody@nowhere"); code != 1 || !strings.Contains(out, "matches none") {
+	if out, code := run("", "@prod", "--ssh-keys", "remove", "nobody@nowhere"); code != 1 || !strings.Contains(out, "matches none") {
 		t.Errorf("remove unknown (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--keys", "remove", "sample@test"); code != 0 || !strings.Contains(out, "Removed SHA256:") || strings.Contains(readString(authorized), "sample@test") {
+	if out, code := run("", "@prod", "--ssh-keys", "remove", "sample@test"); code != 0 || !strings.Contains(out, "Removed SHA256:") || strings.Contains(readString(authorized), "sample@test") {
 		t.Errorf("remove by comment (%d):\n%s", code, out)
 	}
-	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--keys"), "SHA256:", 2)[1], " ", 2)[0])
-	if out, code := run("", "@prod", "--keys", "remove", fp[:8]); code != 4 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "devopsy-ci@server") {
+	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--ssh-keys"), "SHA256:", 2)[1], " ", 2)[0])
+	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code != 4 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "devopsy-ci@server") {
 		t.Errorf("remove the last key (%d):\n%s", code, out)
 	}
 }
