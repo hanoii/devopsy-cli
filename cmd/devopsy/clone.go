@@ -1321,7 +1321,14 @@ func prepareServices(cwd, projectDir string, services []cli.CloneService) error 
 			}
 		}
 	}
-	pause, stop = intersect(pause, running), intersect(stop, running)
+	// A container in a restart loop (a database on a datadir an aborted
+	// copy left half written) is up as far as the copy is concerned, and
+	// the guard on the parent's side counts it as running: stop it too.
+	restarting, err := composeList(cwd, "--status", "restarting")
+	if err != nil {
+		return fmt.Errorf("docker compose ps: %w", err)
+	}
+	pause, stop = intersect(pause, running), intersect(stop, append(running, restarting...))
 	if len(pause)+len(stop) == 0 {
 		return nil
 	}
