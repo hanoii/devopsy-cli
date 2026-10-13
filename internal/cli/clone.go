@@ -13,6 +13,12 @@ import (
 // CloneLabel tunes how a clone treats a service (CloneLive and so on).
 const CloneLabel = "devopsy.clone"
 
+// CloneExcludeLabel names entries of mnt a service mounts that a clone
+// leaves out anyway (comma or space separated): an access log next to
+// the files, say. The service is still paused or stopped as its
+// CloneLabel says; only those entries are not copied through it.
+const CloneExcludeLabel = "devopsy.clone.exclude"
+
 // Clone policies, CloneLabel's values. A service opts in: without the
 // label it is CloneSkip.
 const (
@@ -117,11 +123,17 @@ func parseCloneServices(out []byte, projectDir string) ([]CloneService, error) {
 			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s, %s or %s", name, CloneLabel, policy, CloneSkip, CloneLive, CloneCustom, CloneStop, ClonePause)
 		}
 		cs := CloneService{Name: name, Policy: policy, Labeled: labeled}
+		exclude := strings.FieldsFunc(s.Labels[CloneExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
+		for _, e := range exclude {
+			if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
+				return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, CloneExcludeLabel, s.Labels[CloneExcludeLabel])
+			}
+		}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" {
 				continue
 			}
-			if d := mntEntry(filepath.Clean(v.Source), mnts); d != "" && !slices.Contains(cs.Dirs, d) {
+			if d := mntEntry(filepath.Clean(v.Source), mnts); d != "" && !slices.Contains(cs.Dirs, d) && !slices.Contains(exclude, d) {
 				cs.Dirs = append(cs.Dirs, d)
 			}
 		}

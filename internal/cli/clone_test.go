@@ -27,7 +27,7 @@ func TestCloneServices(t *testing.T) {
 	}
 	config := map[string]any{"services": map[string]any{
 		"app": map[string]any{
-			"labels":  map[string]string{CloneLabel: "pause"},
+			"labels":  map[string]string{CloneLabel: "pause", CloneExcludeLabel: "logs, cache"},
 			"volumes": []any{bind(dot + "/mnt/storage/files"), bind(dot + "/mnt/logs"), bind("/etc/hosts"), map[string]string{"type": "volume", "source": "cache"}},
 		},
 		"database": map[string]any{
@@ -50,7 +50,8 @@ func TestCloneServices(t *testing.T) {
 		t.Fatalf("%v %s %v", err, dir, gotEnv)
 	}
 	want := []CloneService{
-		{Name: "app", Policy: ClonePause, Dirs: []string{"logs", "storage"}, Labeled: true},
+		// logs excluded by its label.
+		{Name: "app", Policy: ClonePause, Dirs: []string{"storage"}, Labeled: true},
 		{Name: "database", Policy: CloneSkip, Dirs: []string{"database"}, Labeled: true},
 		{Name: "goaccess", Policy: CloneLive, Dirs: []string{"report"}, Labeled: true},
 		{Name: "mntnot", Policy: CloneSkip},
@@ -66,8 +67,8 @@ func TestCloneServices(t *testing.T) {
 			t.Errorf("%d: %+v, want %+v", i, s, want[i])
 		}
 	}
-	if got := strings.Join(CloneDirs(services), ","); got != "logs,report,storage" {
-		t.Errorf("dirs, skip and custom left out: %s", got)
+	if got := strings.Join(CloneDirs(services), ","); got != "report,storage" {
+		t.Errorf("dirs, skip, custom and excluded left out: %s", got)
 	}
 	if got := ClonePolicy(services, ClonePause); len(got) != 1 || got[0] != "app" {
 		t.Errorf("pause: %v", got)
@@ -85,5 +86,9 @@ func TestCloneServices(t *testing.T) {
 	// A value devopsy does not know is an error naming the service.
 	if _, err := parseCloneServices([]byte(`{"services":{"db":{"labels":{"devopsy.clone":"freeze"}}}}`), dot); err == nil || !strings.Contains(err.Error(), "service db: devopsy.clone=freeze") {
 		t.Errorf("bad label: %v", err)
+	}
+	// Excluded entries are plain names of mnt's entries.
+	if _, err := parseCloneServices([]byte(`{"services":{"app":{"labels":{"devopsy.clone":"live","devopsy.clone.exclude":"logs/old"}}}}`), dot); err == nil || !strings.Contains(err.Error(), "service app: devopsy.clone.exclude=logs/old") {
+		t.Errorf("bad exclude: %v", err)
 	}
 }

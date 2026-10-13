@@ -514,6 +514,12 @@ The label's values, on both sides:
   `push` capability copies it, after devopsy has copied the rest (a
   database to dump). It is required then.
 
+`devopsy.clone.exclude=<entry>[,<entry>...]` on a service names entries of
+`mnt` it mounts that are not copied through it anyway: an access log
+next to the site's files (`./mnt/logs`), which a child does not want.
+Another service mounting the same entry without excluding it still gets
+it copied.
+
 A project without any labeled service clones nothing ("nothing to
 clone"), and the child's `run` step still runs.
 

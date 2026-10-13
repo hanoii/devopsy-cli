@@ -376,6 +376,9 @@ bind-mounts. Labels, on compose services:
   devopsy.clone=custom  devopsy copies and touches nothing: the parent's
                         push capability (required then) copies it, after the
                         rest (a database it dumps)
+  devopsy.clone.exclude=<entry>[,<entry>...]
+                        entries of mnt this service mounts that are not
+                        copied through it anyway (an access log)
 
 Without any labeled service there is nothing to clone; the run step still
 runs.
