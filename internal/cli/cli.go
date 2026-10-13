@@ -312,7 +312,7 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
   --shell-host           a shell on the server itself
   --vars [--project | --instance] [get | set | unset KEY...]
                          the server's variables (shared/.env)
-  --ssh-keys [list | add <file> | remove <key> | generate] [--restricted]
+  --ssh-keys [list | add <file> [--restricted] | remove <key>]
                          who may log in as the deploy user there
   --env                  the variables devopsy loads and computes there
   --debug [env | capabilities | labels | imports]
@@ -607,37 +607,40 @@ Examples:
   devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
 `,
-	"--ssh-keys": `Usage: devopsy @<target> --ssh-keys [list | add <public key file> | remove <fingerprint or comment> | generate] [--restricted] [--comment <text>] [--out <file>]
+	"--ssh-keys": `Usage: devopsy @<target> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
+       devopsy --ssh-keys generate [<name>] [--out <file>]
 
 The keys that may log in as the deploy user on the target's server: its
 ~/.ssh/authorized_keys, edited over the usual session as that user, no
 root. Any target on the server does; the keys are the server's.
 
-  --ssh-keys                  list them: fingerprint, type, comment, options
-  --ssh-keys add <file>       authorize the public key in <file> (- for stdin)
-  --ssh-keys remove <key>     remove the key with that fingerprint (a prefix
-                          will do) or that exact comment. The last key is
-                          never removed: it would lock everyone out.
-  --ssh-keys generate         make an ed25519 pair here (ssh-keygen) and
-                          authorize its public half. The private key stays
-                          in --out (default ~/.ssh/devopsy[-ci]-<host>) and
-                          is never sent anywhere; the comment is
-                          devopsy[-ci]@<host> unless --comment.
-    --restricted          for a machine's key, like CI's: restrict (commands
-                          only, no shell, no X11), with agent-forwarding and
-                          port-forwarding, which a clone across servers needs.
-                          A person's key is added plain.
+  --ssh-keys                list them: fingerprint, type, comment, options
+  --ssh-keys add <file>     authorize the public key in <file> (- for stdin)
+    --restricted            for a machine's key, like CI's: restrict
+                            (commands only, no shell, no X11), with
+                            agent-forwarding and port-forwarding, which a
+                            clone across servers needs. A person's key is
+                            added plain.
+  --ssh-keys remove <key>   remove the key with that fingerprint (a prefix
+                            will do) or that exact comment. The last key is
+                            never removed: it would lock everyone out.
 
-For CI: generate --restricted, store the private key as a protected file
-variable, and in the job load it into an agent (eval "$(ssh-agent)";
-ssh-add "$DEVOPSY_SSH_KEY") before devopsy @<target> --release. Rotate by
-generating another, then removing the old one.
+Without a target, generate makes an ed25519 pair here with ssh-keygen,
+~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
+comment the name. Nothing is sent anywhere: add the .pub to each server.
+
+For CI: generate, add the .pub with --restricted, store the private key as
+a protected file variable, and in the job load it into an agent (eval
+"$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY") before devopsy @<target>
+--release. Rotate by generating another, adding it, then removing the old
+one.
 
 Examples:
   devopsy @prod --ssh-keys
-  devopsy @prod --ssh-keys generate --restricted
+  devopsy --ssh-keys generate ci-prod1
+  devopsy @prod --ssh-keys add ~/.ssh/ci-prod1.pub --restricted
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
-  devopsy @prod --ssh-keys remove devopsy-ci@vm1
+  devopsy @prod --ssh-keys remove ci-prod1
 `,
 }
 
@@ -703,6 +706,9 @@ Tools:
   --probe [--ip <ip>] <host>...
                          DNS, certificate and HTTPS of hosts, from here
                          (--probe --help)
+  --ssh-keys generate [<name>]
+                         an SSH key pair in ~/.ssh, for CI, to add to a
+                         server with @<target> --ssh-keys add
 
 `)
 	if projectDir == "" {

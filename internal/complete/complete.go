@@ -85,6 +85,7 @@ var builtins = []Candidate{
 	{"--shell", "a shell in a container", GroupDevopsy},
 	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
 	{"--probe", "DNS, certificate and HTTPS of hosts, from here", GroupDevopsy},
+	{"--ssh-keys", "generate an SSH key pair here, for CI", GroupDevopsy},
 	{"--environments", "the project's environments on its servers", GroupDevopsy},
 	{"--init", "a new .devopsy/config.yaml", GroupDevopsy},
 	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
@@ -159,6 +160,15 @@ func Complete(cwd string, words []string, environ []string) Result {
 	}
 
 	switch first := words[0]; {
+	case first == "--ssh-keys":
+		r := Result{Directive: DirectiveNoFileComp}
+		switch {
+		case len(words) == 2:
+			r.Candidates = []Candidate{{"generate", "an ed25519 pair in ~/.ssh", GroupDevopsy}}
+		case words[1] == "generate" && strings.HasPrefix(cur, "-"):
+			r.Candidates = []Candidate{{"--out", "where the private key goes", GroupDevopsy}, {"--help", "how", GroupDevopsy}}
+		}
+		return filter(r, cur)
 	case first == "--shell":
 		if len(words) == 2 && !strings.HasPrefix(cur, "-") {
 			return shellServices(projectDir, cur)
@@ -285,15 +295,14 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--rollback", "--inherit":
 		return flags([]Candidate{help})
 	case "--ssh-keys":
-		opts := []Candidate{{"--restricted", "a machine's key: commands only, forwardings for clones", GroupDevopsy}, {"--comment", "the key's comment", GroupDevopsy}, {"--out", "where generate writes the private key", GroupDevopsy}, help}
 		switch {
 		case len(words) == 2:
-			r := Result{Candidates: []Candidate{{"list", "the authorized keys", GroupDevopsy}, {"add", "authorize a public key file", GroupDevopsy}, {"remove", "remove a key by fingerprint or comment", GroupDevopsy}, {"generate", "make a key pair here and authorize it", GroupDevopsy}}, Directive: DirectiveNoFileComp}
+			r := Result{Candidates: []Candidate{{"list", "the authorized keys", GroupDevopsy}, {"add", "authorize a public key file", GroupDevopsy}, {"remove", "remove a key by fingerprint or comment", GroupDevopsy}}, Directive: DirectiveNoFileComp}
 			return filter(r, cur)
-		case words[1] == "add" && len(words) == 3:
+		case words[1] == "add" && len(words) == 3 && !strings.HasPrefix(cur, "-"):
 			return Result{} // a file
-		case strings.HasPrefix(cur, "-"):
-			return filter(Result{Candidates: opts, Directive: DirectiveNoFileComp}, cur)
+		case words[1] == "add" && strings.HasPrefix(cur, "-"):
+			return filter(Result{Candidates: []Candidate{{"--restricted", "a machine's key: commands only, forwardings for clones", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
 	case "--clone":
