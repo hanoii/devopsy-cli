@@ -258,8 +258,9 @@ func quoteAll(args []string) string {
 // older versions ignore).
 var Verbose bool
 
-// Color exports ColorEnv into every session: the operator's terminal
-// takes colors, so devopsy and Compose on the server send them.
+// Color says the operator's terminal takes colors: sessions' lines are
+// colored here as they arrive (Colorize), and ColorEnv is exported into
+// every session for what the server can color itself.
 var Color bool
 
 // Trace, when set, receives each SSH command, and with TraceScripts the
@@ -680,16 +681,30 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 	if stdin == nil {
 		cmd.Stdin = os.Stdin
 	}
+	// The terminal gets the session's lines colored (Color); a caller's
+	// own writer (parsed output) and the log get them as they are.
+	var colored []*ColorWriter
+	term := func(f *os.File) io.Writer {
+		if !Color {
+			return f
+		}
+		c := Colorize(f)
+		colored = append(colored, c)
+		return c
+	}
 	cmd.Stdout = stdout
 	if stdout == nil {
-		cmd.Stdout = os.Stdout
+		cmd.Stdout = term(os.Stdout)
 	}
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = term(os.Stderr)
 	if log != nil {
 		cmd.Stdout = io.MultiWriter(cmd.Stdout, log)
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, log)
 	}
 	err := cmd.Run()
+	for _, c := range colored {
+		c.Flush()
+	}
 	if ee, ok := err.(*exec.ExitError); ok {
 		return ee.ExitCode(), nil
 	}

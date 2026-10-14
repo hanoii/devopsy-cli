@@ -211,7 +211,21 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	defer r.Close()
 	defer w.Close()
-	mw := newMarkerWriter(os.Stdout)
+	// The marker is taken out before the lines are colored for the
+	// terminal (the holder's stdout is read here, not in SSHContext).
+	var out io.Writer = os.Stdout
+	var colored *remote.ColorWriter
+	if color {
+		colored = remote.Colorize(os.Stdout)
+		out = colored
+	}
+	mw := newMarkerWriter(out)
+	flush := func() {
+		mw.flush()
+		if colored != nil {
+			colored.Flush()
+		}
+	}
 	type result struct {
 		code int
 		err  error
@@ -260,7 +274,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			say(red, "devopsy: the session on @"+job.child.Address+" ended during the copy ("+why+"): stopping the copy from @"+job.parent.Address)
 			cancel()
 			<-pushed
-			mw.flush()
+			flush()
 			return cmp.Or(res.code, 1)
 		}
 		answer := "go\n"
@@ -298,12 +312,12 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			case <-done:
 			case <-sigs:
 			}
-			mw.flush()
+			flush()
 			return 130
 		}
 		res = <-done
 	}
-	mw.flush()
+	flush()
 	if res.err != nil {
 		say(red, res.err.Error())
 		return 1
