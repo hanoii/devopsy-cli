@@ -28,23 +28,6 @@ var ComposeCommands = func(environ []string) ([]string, error) {
 	return parseCompletion(out)
 }
 
-// ComposeHelp is compose's own help for devopsy's: from its Usage line
-// on, verbatim, with "docker compose" read as "devopsy". Nothing parsed,
-// so a compose change cannot break it. Replaceable in tests.
-var ComposeHelp = func(environ []string) string {
-	cmd := exec.Command("docker", "compose", "--help")
-	cmd.Env = environ
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	text := string(out)
-	if i := strings.Index(text, "Usage:"); i >= 0 {
-		text = text[i:]
-	}
-	return strings.ReplaceAll(strings.TrimRight(text, "\n"), "docker compose", "devopsy") + "\n"
-}
-
 // ComposeCommandsCache is where the list is kept between runs: refreshed
 // when a word is missing from it, so a compose upgrade's new commands are
 // found the first time they are used, and the usual check reads one file.
