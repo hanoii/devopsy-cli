@@ -393,7 +393,7 @@ servers, the parent's runs an rsync daemon for the copy and reaches the
 child's over SSH with your agent, forwarded for that session only: an agent
 must be running here (in CI too), and the child's host must be reachable
 from the parent's as ssh -G resolves it here (no ProxyCommand or ProxyJump).
-A CI key from devopsy-server needs restrict,agent-forwarding,port-forwarding.
+A CI key needs restrict,agent-forwarding,port-forwarding (--ssh-keys add --restricted).
 
 The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), else the child's server. Before

@@ -28,7 +28,9 @@ absent() { case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 case "$*" in
   *" config --format json")
     lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.sync\":\"$1\"}"; fi; }
-    printf '{"services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}}}\n' "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" ;;
+    printf '{"name":"%s","services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" "${COMPOSE_PROJECT_NAME:-}" ;;
+  # FAKE_NETWORK_OWNER: every network exists and is that project's.
+  "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") absent app || echo app; absent db || [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
   *" ps --services --status paused") absent app || echo app ;;
@@ -1094,5 +1096,17 @@ func TestStatus(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  last synced just now") {
 		t.Fatalf("dev status after a sync (%d):\n%s", code, out)
+	}
+}
+
+// A release never takes over another project's network: the networks a
+// project names are its own, or external.
+func TestReleaseNetworkOwned(t *testing.T) {
+	s := newSyncSetup(t)
+	if out, code := s.run([]string{"FAKE_NETWORK_OWNER=other-prod"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "network shop-prod_default is other-prod's") || !strings.Contains(out, "join its network as external") || s.current("prod") != "" {
+		t.Errorf("another project's network (%d):\n%s", code, out)
+	}
+	if out, code := s.run([]string{"FAKE_NETWORK_OWNER=shop-prod"}, "@prod", "--release"); code != 0 || s.current("prod") == "" {
+		t.Errorf("own network (%d):\n%s", code, out)
 	}
 }

@@ -437,6 +437,9 @@ done
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
+		// A network the project names that another project owns already:
+		// they would share it (cli.NetworkConflicts).
+		s += "(cd \"$rel\" && " + devopsyCall(projectName, []string{"--check-networks"}, false) + ") || not_live 1\n"
 	}
 	for _, args := range p.Prepare {
 		s += step("prepare", `"$rel"`, args, "not_live $?")
