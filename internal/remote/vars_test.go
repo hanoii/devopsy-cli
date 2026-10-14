@@ -34,9 +34,13 @@ func runVarsScript(t *testing.T, script, stdin string) string {
 }
 
 func TestVarsScripts(t *testing.T) {
+	root := t.TempDir()
+	varsRoot = root
+	defer func() { varsRoot = os.TempDir() }()
+
 	// A release environment before its first release: shared/.env is created.
-	base := filepath.Join(t.TempDir(), "app's prod")
-	tg := &Target{Name: "prod", Host: "h", Path: base}
+	base := filepath.Join(root, "app's prod")
+	tg := &Target{Name: "prod", Host: "h", Path: "app's prod"}
 	file := filepath.Join(base, "shared", ".env")
 	if out := runVarsScript(t, VarsSetScript(tg, nil), "A='1'\n"); strings.TrimSpace(out) != file {
 		t.Fatalf("set printed %q", out)
@@ -70,11 +74,11 @@ func TestVarsScripts(t *testing.T) {
 	}
 
 	// A plain directory: its .devopsy/.env, and nothing else is created.
-	plain := t.TempDir()
+	plain := filepath.Join(root, "traefik", "main")
 	if err := os.MkdirAll(filepath.Join(plain, ".devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tp := &Target{Name: "vm1-traefik", Host: "h", Path: plain}
+	tp := &Target{Name: "vm1-traefik", Host: "h", Path: "traefik/main"}
 	runVarsScript(t, VarsSetScript(tp, nil), "TOKEN='x'\n")
 	if got, _ := os.ReadFile(filepath.Join(plain, ".devopsy", ".env")); string(got) != "TOKEN='x'\n" {
 		t.Fatalf("plain .env %q", got)
@@ -84,8 +88,8 @@ func TestVarsScripts(t *testing.T) {
 	}
 
 	// Reading a target with nothing yet creates nothing.
-	empty := filepath.Join(t.TempDir(), "new")
-	if out := runVarsScript(t, VarsReadScript(&Target{Path: empty}, nil), ""); out != empty+"/shared/.env\n" {
+	empty := filepath.Join(root, "new")
+	if out := runVarsScript(t, VarsReadScript(&Target{Path: "new"}, nil), ""); out != empty+"/shared/.env\n" {
 		t.Fatalf("read empty %q", out)
 	}
 	if _, err := os.Stat(empty); err == nil {
@@ -93,9 +97,6 @@ func TestVarsScripts(t *testing.T) {
 	}
 
 	// A level: the project's .env under the release root, shared.
-	root := t.TempDir()
-	varsRoot = root
-	defer func() { varsRoot = os.TempDir() }()
 	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
 	tl := &Target{Name: "prod", Path: "app/prod"}
 	if out := runVarsScript(t, VarsSetScript(tl, level), "SHARED='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", ".env") {
@@ -104,8 +105,7 @@ func TestVarsScripts(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(root, "app", ".env")); string(got) != "SHARED='1'\n" {
 		t.Fatalf("level .env %q", got)
 	}
-	// And a relative path resolves under the root.
 	if out := runVarsScript(t, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
-		t.Fatalf("relative path printed %q", out)
+		t.Fatalf("own .env printed %q", out)
 	}
 }

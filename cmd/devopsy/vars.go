@@ -46,7 +46,7 @@ func runVars(t *remote.Target, args []string, lookup func(string) (string, bool)
 				}
 			}
 			if level == nil {
-				return fail(fmt.Sprintf("%s: @%s has no %s level (an instance, or the default path, <project>[/<instance>]/<target>)", a, t.Name, name))
+				return fail(fmt.Sprintf("%s: @%s has no instance (the project's instances: true)", a, t.Name))
 			}
 		default:
 			words = append(words, a)

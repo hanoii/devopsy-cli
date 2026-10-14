@@ -36,6 +36,6 @@ function __devopsy_complete
 end
 
 # Replaces earlier rules, so sourcing it again is clean. -k keeps devopsy's
-# order: targets, project commands, then devopsy's and docker compose's.
+# order: targets, servers, project commands, then devopsy's and docker compose's.
 complete -c devopsy -e
 complete -c devopsy -f -k -a '(__devopsy_complete)'

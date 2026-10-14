@@ -108,8 +108,16 @@ func run() int {
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
 	}
-	if args[0] == cli.CheckNetworksFlag {
-		if err := cli.NetworkConflicts(cwd, os.Environ()); err != nil {
+	if args[0] == cli.CheckNamesFlag {
+		if len(args) != 2 {
+			cli.Fprint(os.Stderr, red, "devopsy: "+cli.CheckNamesFlag+" <environment directory>", color)
+			return 2
+		}
+		err := cli.ProjectConflict(cwd, args[1], os.Environ())
+		if err == nil {
+			err = cli.NetworkConflicts(cwd, os.Environ())
+		}
+		if err != nil {
 			cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
 			return 1
 		}

@@ -311,16 +311,12 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
   --log [<id>]           what a release or rollback printed: the last, or one
   --shell [service] [-- command...]
                          a shell, or the command, in a container
-  --shell-host           a shell on the server itself
   --vars [--project | --instance] [get | set | unset KEY...]
                          the server's variables (shared/.env)
-  --ssh-keys [list | add <file> [--restricted] | remove <key>]
-                         who may log in as the deploy user there
   --status               the release there, its containers, the project's own lines
   --env                  the variables devopsy loads and computes there
   --debug [env | capabilities | labels | imports]
                          what devopsy sees there
-  --ssh-config           a ~/.ssh/config block for the target's host
   --destroy [--yes]      remove the environment, data included
   --sync [--from <target>] [--yes] [-- args...]
                          replace a child's data with its parent's, run its
@@ -328,7 +324,18 @@ const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ...,
   --inherit              the parent's inherited variables again, no data
   <command> [args]       a project or compose command, in the current release
   -- <args>              docker compose <args> there
-  devopsy @<target> <flag> --help   details of each
+
+Servers (devopsy @<server> ..., @<server>: when a name is ambiguous, or any
+target: only its server is used):
+  --shell-host           a shell on the server itself
+  --ssh-keys [list | add <file> [--restricted] | remove <key>]
+                         who may log in as the deploy user there
+  --ssh-config           a ~/.ssh/config block for the server
+  --environments         the project's environments there
+  --upgrade [v]          replace the server's devopsy with the latest release,
+                         or v
+
+devopsy @<target> <flag> --help   details of each
 `
 
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
@@ -562,17 +569,32 @@ Asks for the target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
 .env stay.
 `,
-	"--shell-host": `Usage: devopsy @<target> --shell-host
+	"--shell-host": `Usage: devopsy @<server> --shell-host
+       devopsy @<target> --shell-host
 
-Opens your login shell on the target's host, over SSH, in the current
-release, or in the target's path for a plain devopsy directory. devopsy and
-docker compose work there as on any project. It never depends on the
-project: the way in when something is broken. For a shell in a container:
-devopsy @<target> --shell.
+Opens your login shell on the server, over SSH: in its release root for a
+server named alone, else in the environment's current release, or its
+directory for a plain devopsy directory. devopsy and docker compose work
+there as on any project. It never depends on the project: the way in when
+something is broken. For a shell in a container: devopsy @<target> --shell.
 `,
-	"--ssh-config": `Usage: devopsy @<target> --ssh-config
+	"--environments": `Usage: devopsy @<server> --environments
+       devopsy --environments
 
-Prints a Host block for the target's host, for ~/.ssh/config: Hostname,
+The project's environments on the server, as addresses: <environment>, or
+<instance>/<environment> for a project with instances: true. The project is
+the checkout's, or an alias's. Without a target, on every server
+DEVOPSY_SERVER and the environments' DEVOPSY_SERVER_<ENVIRONMENT> name (the
+caller's environment, then .devopsy/.env).
+`,
+	"--upgrade": `Usage: devopsy @<server> --upgrade [vX.Y.Z]
+
+Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
+deploy user, who owns it. devopsy --upgrade does the same here.
+`,
+	"--ssh-config": `Usage: devopsy @<server> --ssh-config
+
+Prints a Host block for the server, for ~/.ssh/config: Hostname,
 User and Port as the target and ssh -G resolve them, then suggestions,
 commented out: connection sharing (one connection for all of a release's
 sessions instead of a handshake each) and keepalives. It never connects.
@@ -626,12 +648,12 @@ Examples:
   devopsy --status
   devopsy @prod --status
 `,
-	"--ssh-keys": `Usage: devopsy @<target> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
+	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
        devopsy --ssh-keys generate [<name>] [--out <file>]
 
-The keys that may log in as the deploy user on the target's server: its
+The keys that may log in as the deploy user on the server: its
 ~/.ssh/authorized_keys, edited over the usual session as that user, no
-root. Any target on the server does; the keys are the server's.
+root. Any target on the server does too; the keys are the server's.
 
   --ssh-keys                list them: fingerprint, type, comment, options
   --ssh-keys add <file>     authorize the public key in <file> (- for stdin)
@@ -718,8 +740,7 @@ Project:
   --env                  the variables devopsy loads and computes (.env format)
   --shell [service] [exec options...] [-- command...]
                          a shell, or the command, in a container
-  --environments [server]
-                         the project's environments on its servers
+  --environments         the project's environments on its servers
   --init [project]       a new .devopsy/config.yaml
   --context-hash [service]
                          a hash of what the service's image is built from

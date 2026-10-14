@@ -55,6 +55,13 @@ repositories fit together and the open ideas.
   compose's output with `docker compose` read as `devopsy`, captured, not
   exec'd, no notice. Arguments starting with a flag go to compose unchecked; `--` is
   the escape hatch. Flags that need a target say so without one.
+- **Two scopes:** a flag in `cli.ServerScope` (`--shell-host`,
+  `--ssh-keys`, `--ssh-config`, `--environments`, `--upgrade`) needs only
+  a server and resolves with `remote.ServerTarget`: `@<server>:` alone, a
+  bare name that is no environment (exact or pattern) or alias, or any
+  target leniently (no instance needed, a server is). A server named
+  alone has no `Name`. Every other flag needs an environment, and
+  `@<server>:` with one says so. A new `@` flag picks its scope.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.
@@ -102,12 +109,17 @@ repositories fit together and the open ideas.
   `DEVOPSY_SERVER_<ENVIRONMENT>`, the pattern's (`PatternVar`: `pr-*` gives
   `DEVOPSY_SERVER_PR`), `DEVOPSY_SERVER`, and `DEVOPSY_INSTANCE`: the
   caller's environment, then the project's `.env`, never for aliases. No
-  server: error. `instances:` is `required`, `none` or unset (optional).
+  server: error. `instances: true` makes every target name an instance
+  (an alias's from its `to:` only); otherwise none may, so a project's
+  environments never mix `<project>/<env>` and `<project>/<instance>/<env>`
+  on a server, and `--environments` lists one layout. Explicit none
+  (`@vm1:/prod`) only parses: it is the default.
 - **Names come only from project, instance and environment:** compose name
   `<project>[-<instance>]-<environment>`
   (`Target.ComposeName`), directory `<project>/[<instance>/]<environment>`
-  under the server's release root. `path:` moves the directory only (and
-  then takes no instance and no shared `.env` levels). `project:` is
+  under the server's release root, nothing else: `path:`, which moved
+  the directory, went (October 2026; the release root is the server's
+  `releases: root`). `project:` is
   required for anything remote, never taken from the checkout's folder.
 - **Patterns:** environment keys with `*` (one or more name characters);
   exact name, then most literal characters; a tie is an error.
@@ -147,7 +159,10 @@ repositories fit together and the open ideas.
   project's and instance's `.env` (`project.env`, `instance.env`, linked
   even when missing) into the release; `--prepare-release` when the compose
   files use role or import labels (`PrepareScript`, releases only);
-  `--check-networks` (`cli.NetworkConflicts`: a network the compose config
+  `--check-names "$base"` (`cli.ProjectConflict`: containers of the
+  same compose project with a working directory outside `$base`, since
+  `-`-joined names can coincide, `a-b`/`c` and `a`/`b-c`; then
+  `cli.NetworkConflicts`: a network the compose config
   names as its own that another compose project's label owns fails the
   release, since Compose would just share it; external ones are how a
   project joins another's; an unreadable config is skipped, the up will
@@ -199,7 +214,7 @@ repositories fit together and the open ideas.
   like every `shared/` entry. Its contents and their ownership are the
   project's; devopsy only checks whether it is empty (`NotLive`), never
   removes anything in it.
-- A target path with `.devopsy/` and no `current` is a plain directory:
+- An environment's directory with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 
 ### Syncs
@@ -208,8 +223,7 @@ repositories fit together and the open ideas.
   error; one naming itself has none, so `defaults: {parent: prod}` works;
   a cycle is an error: with mutual parents neither could be released
   first, a first release syncing from a released parent). It resolves one
-  level only (`ParentTarget`, whose own stays nil): at the child's instance (none
-  when the parent has a `path:`), its server from the usual variables
+  level only (`ParentTarget`, whose own stays nil): at the child's instance, its server from the usual variables
   only, never the child's (a guess would copy the wrong data). Strict loading
   records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
   instead of failing: only `--sync` and a `--release` that syncs fail
@@ -420,7 +434,10 @@ repositories fit together and the open ideas.
   words to the hidden `--complete` and show what it prints, cobra's
   protocol (`value<TAB>description<TAB>group` lines, then `:<directive>`),
   so compose's own completion passes through. It never connects to
-  servers. New flags and subcommands go in its lists. `TestCompletionShells`
+  servers; after `@` it offers `~/.ssh/config`'s hosts as `@<host>:`
+  (`sshHosts`: `Host` lines and `Include`s, patterns skipped, read in Go
+  like the shells' own ssh completion, not delegated to them, so every
+  shell gets the same), with no space when only those are left. New flags and subcommands go in its lists. `TestCompletionShells`
   runs the scripts in every installed shell (bash, macOS's bash 3.2, zsh
   with `_describe` stubbed, fish); CI installs zsh and fish. bash splits
   words at `:`, so its script rebuilds them from `COMP_LINE`.

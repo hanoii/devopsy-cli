@@ -11,16 +11,16 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// runEnvironments implements `devopsy --environments [<server>]`: the
-// project's environments on a server, as addresses. Without a server, on
-// every server the project's variables name (remote.Servers).
+// runEnvironments implements `devopsy --environments`: the project's
+// environments on every server its variables name (remote.Servers), as
+// addresses. On one server: devopsy @<server> --environments.
 func runEnvironments(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	if len(args) > 1 || (len(args) == 1 && strings.HasPrefix(args[0], "-")) {
-		return fail("usage: devopsy --environments [<server>]")
+	if len(args) > 0 {
+		return fail("usage: devopsy --environments, or on one server: devopsy @<server> --environments")
 	}
 	projectDir, _ := cli.FindProjectDir(cwd)
 	if projectDir == "" {
@@ -34,23 +34,24 @@ func runEnvironments(cwd string, args []string, color bool) int {
 		return fail("--environments: no project: in " + filepath.Join(projectDir, remote.ConfigFile))
 	}
 
-	var servers []string
-	if len(args) == 1 {
-		servers = []string{args[0]}
-	} else {
-		// The caller's environment, then the project's .env, as for targets.
-		env := cli.NewEnv(os.Environ())
-		if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
-			return fail(err.Error())
-		}
-		if servers, err = remote.Servers(projectDir, env.Lookup); err != nil {
-			return fail(err.Error())
-		}
-		if len(servers) == 0 {
-			return fail(fmt.Sprintf("--environments: no server: devopsy --environments <server>, or %s (or %s)", remote.ServerVar, remote.EnvironmentVar("<environment>")))
-		}
+	// The caller's environment, then the project's .env, as for targets.
+	env := cli.NewEnv(os.Environ())
+	if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
+		return fail(err.Error())
 	}
+	servers, err := remote.Servers(projectDir, env.Lookup)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if len(servers) == 0 {
+		return fail(fmt.Sprintf("--environments: no server: devopsy @<server> --environments, or %s (or %s)", remote.ServerVar, remote.EnvironmentVar("<environment>")))
+	}
+	return listEnvironments(project, servers, color)
+}
 
+// listEnvironments prints project's environments on each server, as
+// addresses.
+func listEnvironments(project *remote.Project, servers []string, color bool) int {
 	code := 0
 	for _, server := range servers {
 		if strings.Contains(server, ":") {

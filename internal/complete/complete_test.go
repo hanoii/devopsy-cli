@@ -26,11 +26,15 @@ func setup(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
 	write(t, filepath.Join(home, "config.yaml"), "aliases:\n  a-traefik: {project: traefik, to: \"vm1:main\"}\n", 0o644)
+	// ~/.ssh/config's hosts: patterns are none, includes are followed.
+	t.Setenv("HOME", home)
+	write(t, filepath.Join(home, ".ssh", "config"), "# hosts\nHost vm1 \"vm 2\" *.internal !bad\n  User devopsy\nInclude conf.d/*\nhost=builder1\nMatch all\nHost vm1\n", 0o644)
+	write(t, filepath.Join(home, ".ssh", "conf.d", "orb"), "Host orb\n", 0o644)
 	root := filepath.Join(t.TempDir(), "app")
 	dot := filepath.Join(root, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
 	write(t, filepath.Join(dot, ".env"), "# comment\nTOKEN=x\nexport USER_NAME='y'\n", 0o644)
-	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n  prod:\n    path: /srv/app-prod\n  staging:\n    path: /srv/app-staging\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\ninstances: true\nenvironments:\n  prod: {}\n  staging: {}\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
 	return root
 }
@@ -69,7 +73,9 @@ func TestComplete(t *testing.T) {
 		directive int
 	}{
 		{[]string{""}, []string{"@prod", "@staging", "@a-traefik", "deploy"}, []string{""}, DirectiveNoFileComp},
-		{[]string{"@"}, []string{"@prod", "@staging", "@a-traefik"}, nil, DirectiveNoFileComp},
+		{[]string{"@"}, []string{"@prod", "@staging", "@a-traefik", "@vm1:", "@vm 2:", "@orb:", "@builder1:"}, nil, DirectiveNoFileComp},
+		{[]string{"@vm"}, []string{"@vm1:", "@vm 2:"}, nil, DirectiveNoFileComp | DirectiveNoSpace},
+		{[]string{"@b"}, []string{"@builder1:"}, nil, DirectiveNoFileComp | DirectiveNoSpace},
 		{[]string{"--up"}, []string{"--upgrade"}, []string{"--up"}, DirectiveNoFileComp},
 		{[]string{"-v", "@st"}, []string{"@staging"}, nil, DirectiveNoFileComp},
 		{[]string{"de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
@@ -83,7 +89,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--ssh-keys", "--status", "--env", "--debug", "--destroy", "--sync", "--inherit", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--shell", "--shell-host", "--ssh-config", "--vars", "--ssh-keys", "--environments", "--upgrade", "--status", "--env", "--debug", "--destroy", "--sync", "--inherit", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", "add", "k.pub", "--"}, []string{"--restricted", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"--ssh-keys", ""}, []string{"generate"}, nil, DirectiveNoFileComp},

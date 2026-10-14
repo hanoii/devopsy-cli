@@ -655,7 +655,7 @@ func TestSyncGuards(t *testing.T) {
 // --release-no-sync.
 func TestSyncInherit(t *testing.T) {
 	s := newSyncSetup(t)
-	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY, INST_KEY, PROJ_KEY, MISSING_KEY]}\n  dev: {parent: prod}\n", 0o644)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ninstances: true\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY, INST_KEY, PROJ_KEY, MISSING_KEY]}\n  dev: {parent: prod}\n", 0o644)
 	if out, code := s.run(nil, "@a/prod", "--release", "--yes"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -43,14 +42,6 @@ func UserConfigFile() string {
 // DefaultKeep is how many releases stay on a server when nothing says.
 const DefaultKeep = 5
 
-// Values of a project's instances:.
-const (
-	// InstancesRequired makes every remote command name an instance.
-	InstancesRequired = "required"
-	// InstancesNone refuses instances.
-	InstancesNone = "none"
-)
-
 // Modes of a target.
 const (
 	ModeImage = "image" // only .devopsy/ is released; images come from a registry
@@ -62,8 +53,9 @@ type Project struct {
 	// Name is the project's name on every server: its directory under the
 	// release root, and the start of its compose project names.
 	Name string
-	// Instances is InstancesRequired, InstancesNone or "" (optional).
-	Instances string
+	// Instances is the project's instances: true makes every target name
+	// one, false refuses them.
+	Instances bool
 	// Keep is the project's releases.keep, 0 when it sets none.
 	Keep int
 	// Dir is the project's .devopsy/.
@@ -80,9 +72,9 @@ type Target struct {
 	// the address, DEVOPSY_SERVER_<ENVIRONMENT> or DEVOPSY_SERVER. Never in
 	// a project's config: where it runs is a deployment fact.
 	Host string `yaml:"-"`
-	// Path is the directory on the server: relative to its release root,
-	// or absolute. Without one, <project>[/<instance>]/<environment>.
-	Path string `yaml:"path"`
+	// Path is the directory on the server, relative to its release root:
+	// <project>[/<instance>]/<environment>.
+	Path string `yaml:"-"`
 	Mode string `yaml:"mode"`
 	// Env is written into each release as .devopsy/target.env: per-
 	// environment, committed, non-secret settings like DEVOPSY_DOMAINS.
@@ -136,7 +128,7 @@ type Target struct {
 	Instance string `yaml:"-"`
 	// Levels are the directories above the target's path holding shared
 	// .env files, relative to the release root: the project's and the
-	// instance's. None for an explicit path.
+	// instance's.
 	Levels []Level `yaml:"-"`
 	// Keep is how many releases to keep: the environment's releases.keep,
 	// else the project's, else 0 (the server's default).
@@ -329,13 +321,14 @@ type Releases struct {
 
 // configFile is one config file as read.
 type configFile struct {
-	project, instances string
-	keep               int
-	releases           *Releases
-	defaults           *Target
-	defaultsNulls      map[string]bool
-	environments       map[string]*Target
-	aliases            map[string]Alias
+	project       string
+	instances     *bool
+	keep          int
+	releases      *Releases
+	defaults      *Target
+	defaultsNulls map[string]bool
+	environments  map[string]*Target
+	aliases       map[string]Alias
 }
 
 // readConfigFile reads a project's (user false) or the user-level (user
@@ -357,9 +350,11 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: project: lowercase letters, digits and -", file)
 			}
 		case key == "instances" && !user:
-			if err := node.Decode(&f.instances); err != nil || (f.instances != InstancesRequired && f.instances != InstancesNone) {
-				return nil, fmt.Errorf("%s: instances: %q or %q", file, InstancesRequired, InstancesNone)
+			var b bool
+			if err := node.Decode(&b); err != nil {
+				return nil, fmt.Errorf("%s: instances: true or false", file)
 			}
+			f.instances = &b
 		case key == "releases":
 			var r Releases
 			if err := node.Decode(&r); err != nil {
@@ -383,9 +378,6 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			t, nulls, err := decodeTarget(file, "defaults", &node)
 			if err != nil {
 				return nil, err
-			}
-			if t != nil && t.Path != "" {
-				return nil, fmt.Errorf("%s: defaults: path belongs to each environment", file)
 			}
 			if t != nil {
 				t.From = origins(t, "defaults in "+file)
@@ -443,7 +435,7 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
-			case "path", "mode", "env", "release", "rollback", "destroy", "releases":
+			case "mode", "env", "release", "rollback", "destroy", "releases":
 			case "parent":
 				if v := n.Content[i+1]; v.Tag != "!!null" && (v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value)) {
 					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern), or ~ for none", file, name)
@@ -455,7 +447,7 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (path, mode, env, release, rollback, destroy, releases, parent, inherit)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, releases, parent, inherit)", file, name, k)
 			}
 		}
 	}
@@ -485,7 +477,6 @@ func origins(t *Target, from string) map[string]string {
 			o[field] = from
 		}
 	}
-	set("path", t.Path != "")
 	set("mode", t.Mode != "")
 	set("release", t.Release != nil)
 	set("rollback", t.Rollback != nil)
@@ -651,8 +642,8 @@ func LoadConfig(projectDir string) (*Config, error) {
 		if f.project != "" {
 			c.Project.Name = f.project
 		}
-		if f.instances != "" {
-			c.Project.Instances = f.instances
+		if f.instances != nil {
+			c.Project.Instances = *f.instances
 		}
 		if f.keep > 0 {
 			c.Project.Keep = f.keep
@@ -735,8 +726,8 @@ func LoadProject(projectDir string) (*Project, error) {
 		if f.project != "" {
 			p.Name = f.project
 		}
-		if f.instances != "" {
-			p.Instances = f.instances
+		if f.instances != nil {
+			p.Instances = *f.instances
 		}
 		if f.keep > 0 {
 			p.Keep = f.keep
@@ -1033,6 +1024,47 @@ func LoadTarget(projectDir, addr string, projectEnv func(string) (string, bool))
 	return loadTarget(projectDir, addr, projectEnv, true)
 }
 
+// ServerTarget resolves an address for a command that needs only a server
+// (cli.ServerScope). <server>: names one alone. A bare name is, as for
+// LoadTarget, the project's environment (exact, or a pattern's) or an
+// alias, else a server. Anything else resolves as for DescribeTarget, so
+// no instance is needed, but a server is. A server named alone gives a
+// target without Name, its Project the checkout's (nil without one).
+func ServerTarget(projectDir, addr string, projectEnv func(string) (string, bool)) (*Target, error) {
+	c, err := LoadConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	server := ""
+	if s, ok := strings.CutSuffix(addr, ":"); ok && !strings.ContainsAny(s, ":/") {
+		if s == "" {
+			return nil, fmt.Errorf("@%s: no server before the :", addr)
+		}
+		server = s
+	} else if !strings.ContainsAny(addr, ":/") {
+		_, alias := c.Aliases[addr]
+		env, _, err := match(c.Environments, addr)
+		if !alias && env == nil && err == nil {
+			server = addr
+		}
+	}
+	if server != "" {
+		t := &Target{Host: server, From: map[string]string{"server": "the address"}}
+		if c.Project != nil && c.Project.Name != "" {
+			t.Project = c.Project
+		}
+		return t, nil
+	}
+	t, err := DescribeTarget(projectDir, addr, projectEnv)
+	if err != nil {
+		return nil, err
+	}
+	if t.Host == "" {
+		return nil, fmt.Errorf("no server for @%s: devopsy @<server>, or %s (or %s)", addr, ServerVar, EnvironmentVar(t.Name))
+	}
+	return t, nil
+}
+
 // DescribeTarget is LoadTarget for --debug: a missing server or required
 // instance is shown, not an error.
 func DescribeTarget(projectDir, addr string, projectEnv func(string) (string, bool)) (*Target, error) {
@@ -1065,6 +1097,8 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		if a, err = parseAddress(alias.To); err != nil {
 			return nil, fmt.Errorf("alias %s: %w", aliasName, err)
 		}
+		// An alias's instance is its to:'s, never DEVOPSY_INSTANCE's.
+		a.instanceSet = true
 		projectEnv = nil
 		project, envs = nil, nil
 		switch {
@@ -1082,7 +1116,8 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 			if !nameRe.MatchString(alias.Project) {
 				return nil, fmt.Errorf("alias %s: project: lowercase letters, digits and -", aliasName)
 			}
-			project = &Project{Name: alias.Project}
+			// No config to say: the project has instances when to: names one.
+			project = &Project{Name: alias.Project, Instances: a.instance != ""}
 		default:
 			return nil, fmt.Errorf("alias %s: needs source: (the project's checkout) or project: (its name)", aliasName)
 		}
@@ -1103,16 +1138,12 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 	if err != nil {
 		return nil, err
 	}
-	// The parent, one level: at the child's instance (none when the parent
-	// has its own path), on the server its variables name, else the
-	// child's. Its own parent is never resolved: a sync only needs the
+	// The parent, one level: at the child's instance, on the server its
+	// variables name. Its own parent is never resolved: a sync only needs the
 	// parent. Under DescribeTarget it may have no server, and stays nil
 	// when it cannot be resolved.
 	if t.Parent != "" {
 		pa := address{env: t.Parent, instance: t.Instance, instanceSet: true}
-		if pt := envs[t.Parent]; pt != nil && pt.Path != "" {
-			pa.instance = ""
-		}
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, true)
 		if err != nil && strict {
 			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
@@ -1178,11 +1209,9 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		}
 	}
 	switch {
-	case instance != "" && project.Instances == InstancesNone:
-		return nil, fmt.Errorf("%s takes no instance (instances: none), but %s names %s", project.Name, from, instance)
-	case instance != "" && t.Path != "":
-		return nil, fmt.Errorf("environment %s has its own path (%s), so it takes no instance", a.env, t.Path)
-	case strict && instance == "" && project.Instances == InstancesRequired && t.Path == "":
+	case instance != "" && !project.Instances:
+		return nil, fmt.Errorf("%s has no instances (instances: true in %s turns them on), but %s names %s", project.Name, ConfigFile, from, instance)
+	case strict && instance == "" && project.Instances:
 		return nil, fmt.Errorf("%s needs an instance: devopsy @[<server>:]<instance>/%s, or %s", project.Name, a.env, InstanceVar)
 	}
 	t.Instance = instance
@@ -1216,25 +1245,16 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
 	}
 
-	if t.Path == "" {
-		dir := project.Name
-		t.Levels = []Level{{Name: "project", Dir: dir, Link: "project.env"}}
-		if instance != "" {
-			dir += "/" + instance
-			t.Levels = append(t.Levels, Level{Name: "instance", Dir: dir, Link: "instance.env"})
-		} else if !strict && project.Instances == InstancesRequired {
-			dir += "/<instance>"
-		}
-		t.Path = dir + "/" + a.env
-		t.From["path"] = "<project>[/<instance>]/<environment>, under the server's release root"
+	dir := project.Name
+	t.Levels = []Level{{Name: "project", Dir: dir, Link: "project.env"}}
+	if instance != "" {
+		dir += "/" + instance
+		t.Levels = append(t.Levels, Level{Name: "instance", Dir: dir, Link: "instance.env"})
+	} else if !strict && project.Instances {
+		dir += "/<instance>"
 	}
-	if strict {
-		clean := path.Clean(t.Path)
-		if clean == "/" || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-			return nil, fmt.Errorf("environment %q: path must be a directory under the release root, or absolute (not /)", a.env)
-		}
-		t.Path = clean
-	}
+	t.Path = dir + "/" + a.env
+	t.From["path"] = "<project>[/<instance>]/<environment>, under the server's release root"
 
 	if t.Releases != nil && t.Releases.Keep > 0 {
 		t.Keep = t.Releases.Keep

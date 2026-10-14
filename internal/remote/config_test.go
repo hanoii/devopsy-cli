@@ -16,16 +16,8 @@ func TestLoadTarget(t *testing.T) {
 project: app
 environments:
   prod: {}
-  custom:
-    path: /srv/app-custom/
-  relative:
-    path: elsewhere/x
   bad-mode:
     mode: rsync
-  root:
-    path: /
-  up:
-    path: ../x
 `)
 	tg, err := LoadTarget(dir, "vm1:prod", nil)
 	if err != nil {
@@ -37,14 +29,7 @@ environments:
 	if len(tg.Levels) != 1 || tg.Levels[0].Dir != "app" || tg.Levels[0].Link != "project.env" {
 		t.Fatalf("levels: %+v", tg.Levels)
 	}
-	// A path moves the directory, never the name.
-	if tg, err := LoadTarget(dir, "vm1:custom", nil); err != nil || tg.Path != "/srv/app-custom" || len(tg.Levels) != 0 || tg.ComposeName() != "app-custom" {
-		t.Fatalf("absolute path: %+v %v", tg, err)
-	}
-	if tg, err := LoadTarget(dir, "vm1:relative", nil); err != nil || tg.Path != "elsewhere/x" || tg.ComposeName() != "app-relative" {
-		t.Fatalf("relative path: %+v %v", tg, err)
-	}
-	for _, addr := range []string{"vm1:bad-mode", "vm1:root", "vm1:up", "vm1:missing", "prod", ":prod", "vm1:a:b/prod", "vm1:Bad/prod", "vm1:"} {
+	for _, addr := range []string{"vm1:bad-mode", "vm1:missing", "prod", ":prod", "vm1:a:b/prod", "vm1:Bad/prod", "vm1:"} {
 		if _, err := LoadTarget(dir, addr, nil); err == nil {
 			t.Errorf("%s: want an error", addr)
 		}
@@ -66,7 +51,7 @@ environments:
 func TestServerAndInstanceVariables(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, ConfigFile), "project: shop\nenvironments:\n  prod: {}\n  staging-eu: {}\n")
+	write(t, filepath.Join(dir, ConfigFile), "project: shop\ninstances: true\nenvironments:\n  prod: {}\n  staging-eu: {}\n")
 	env := map[string]string{}
 	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 	load := func(addr string) *Target {
@@ -92,8 +77,8 @@ func TestServerAndInstanceVariables(t *testing.T) {
 	if tg := load("vm2:prod"); tg.Host != "vm2" || tg.Instance != "a" {
 		t.Errorf("address server, variable instance: %+v", tg)
 	}
-	if tg := load("vm2:/prod"); tg.Instance != "" || tg.Address != "vm2:prod" {
-		t.Errorf("explicitly none: %+v", tg)
+	if _, err := LoadTarget(dir, "vm2:/prod", projectEnv); err == nil || !strings.Contains(err.Error(), "shop needs an instance") {
+		t.Errorf("explicitly none: %v", err)
 	}
 	if tg := load("b/prod"); tg.Instance != "b" || tg.Host != "vm1" {
 		t.Errorf("address instance: %+v", tg)
@@ -108,7 +93,7 @@ func TestInstancesSetting(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	t.Setenv("DEVOPSY_INSTANCE", "")
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, ConfigFile), "project: shop\ninstances: required\nenvironments:\n  prod: {}\n  fixed: {path: /srv/fixed}\n")
+	write(t, filepath.Join(dir, ConfigFile), "project: shop\ninstances: true\nenvironments:\n  prod: {}\n")
 	if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), "shop needs an instance") {
 		t.Fatalf("required: %v", err)
 	}
@@ -118,22 +103,32 @@ func TestInstancesSetting(t *testing.T) {
 	if tg, err := LoadTarget(dir, "vm1:site1/prod", nil); err != nil || tg.Path != "shop/site1/prod" || tg.ComposeName() != "shop-site1-prod" || len(tg.Levels) != 2 {
 		t.Fatalf("required, given: %+v %v", tg, err)
 	}
-	if _, err := LoadTarget(dir, "vm1:fixed", nil); err != nil {
-		t.Fatalf("an own path needs no instance: %v", err)
-	}
 	if tg, err := DescribeTarget(dir, "prod", nil); err != nil || tg.Path != "shop/<instance>/prod" {
 		t.Fatalf("describe: %+v %v", tg, err)
 	}
-	write(t, filepath.Join(dir, LocalConfigFile), "instances: none\n")
-	if _, err := LoadTarget(dir, "vm1:a/prod", nil); err == nil || !strings.Contains(err.Error(), "instances: none") {
-		t.Fatalf("none: %v", err)
+	if tg, err := LoadTarget(dir, "vm1:prod", func(k string) (string, bool) { return "site2", k == "DEVOPSY_INSTANCE" }); err != nil || tg.Instance != "site2" {
+		t.Fatalf("required, from .env: %+v %v", tg, err)
+	}
+	write(t, filepath.Join(dir, LocalConfigFile), "instances: false\n")
+	if _, err := LoadTarget(dir, "vm1:a/prod", nil); err == nil || !strings.Contains(err.Error(), "shop has no instances (instances: true in config.yaml turns them on), but the address names a") {
+		t.Fatalf("false: %v", err)
 	}
 	t.Setenv("DEVOPSY_INSTANCE", "a")
-	if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil {
-		t.Fatal("none, from the variable")
+	if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), "but DEVOPSY_INSTANCE names a") {
+		t.Fatalf("false, from the variable: %v", err)
 	}
 	if tg, err := LoadTarget(dir, "vm1:/prod", nil); err != nil || tg.Instance != "" {
-		t.Fatalf("none, explicitly: %+v %v", tg, err)
+		t.Fatalf("false, explicitly none: %+v %v", tg, err)
+	}
+	// Aliases take their instance from to: only.
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	write(t, UserConfigFile(), "aliases:\n  site: {to: \"vm1:b/prod\", project: shop}\n  plain: {to: \"vm1:main\", project: traefik}\n")
+	if tg, err := LoadTarget(dir, "site", nil); err != nil || tg.Instance != "b" || tg.Path != "shop/b/prod" {
+		t.Fatalf("alias with an instance: %+v %v", tg, err)
+	}
+	if tg, err := LoadTarget(dir, "plain", nil); err != nil || tg.Instance != "" || tg.Path != "traefik/main" {
+		t.Fatalf("alias, DEVOPSY_INSTANCE set: %+v %v", tg, err)
 	}
 }
 
@@ -147,7 +142,8 @@ func TestConfigErrors(t *testing.T) {
 		"host":               "project: app\nenvironments:\n  prod: {host: h}\n",
 		"root in a project":  "project: app\nreleases: {root: /srv}\nenvironments:\n  prod: {}\n",
 		"max_keep":           "project: app\nreleases: {max_keep: 9}\nenvironments:\n  prod: {}\n",
-		"instances":          "project: app\ninstances: maybe\nenvironments:\n  prod: {}\n",
+		"instances":          "project: app\ninstances: required\nenvironments:\n  prod: {}\n",
+		"path":               "project: app\nenvironments:\n  prod: {path: /srv/app}\n",
 		"server in defaults": "project: app\ndefaults: {server: vm1}\nenvironments:\n  prod: {}\n",
 		"unknown step":       "project: app\nenvironments:\n  prod: {release: {remote: deploy}}\n",
 		"bare before step":   "project: app\nenvironments:\n  prod: {release: {before: [image], run: deploy}}\n",
@@ -443,8 +439,6 @@ environments:
   prod: {}
   dev: {}
   "pr-*": {}
-  legacy: {path: /srv/legacy}
-  old: {parent: legacy}
   a: {parent: b}
   b: {parent: prod}
 `)
@@ -470,15 +464,18 @@ environments:
 	if tg := load("vm1:prod"); tg.Parent != "" || tg.ParentTarget != nil {
 		t.Errorf("prod: %q %+v", tg.Parent, tg.ParentTarget)
 	}
-	if tg := load("vm1:x/dev"); tg.ParentTarget.Address != "vm1:x/prod" || tg.ParentTarget.Path != "shop/x/prod" {
-		t.Errorf("instance kept: %+v", tg.ParentTarget)
-	}
 	if tg := load("vm1:pr-3"); tg.ParentTarget.Address != "vm1:prod" {
 		t.Errorf("pattern child: %+v", tg.ParentTarget)
 	}
-	// A parent with its own path takes no instance.
-	if tg := load("vm1:x/old"); tg.ParentTarget.Address != "vm1:legacy" || tg.ParentTarget.Path != "/srv/legacy" {
-		t.Errorf("parent with a path: %+v", tg.ParentTarget)
+	if _, err := LoadTarget(dir, "vm1:x/dev", nil); err == nil || !strings.Contains(err.Error(), "shop has no instances") {
+		t.Errorf("no instances: %v", err)
+	}
+	write(t, filepath.Join(dir, LocalConfigFile), "instances: true\n")
+	if tg := load("vm1:x/dev"); tg.ParentTarget.Address != "vm1:x/prod" || tg.ParentTarget.Path != "shop/x/prod" {
+		t.Errorf("instance kept: %+v", tg.ParentTarget)
+	}
+	if err := os.Remove(filepath.Join(dir, LocalConfigFile)); err != nil {
+		t.Fatal(err)
 	}
 	// One level: a chain resolves the parent only, not its own.
 	if tg := load("vm1:a"); tg.ParentTarget.Name != "b" || tg.ParentTarget.ParentTarget != nil || tg.ParentTarget.Parent != "prod" {
@@ -535,12 +532,52 @@ environments:
 	if tg, err := LoadTarget(d0, "vm1:qa", nil); err != nil || !slices.Equal(tg.Inherit, []string{"A", "B"}) {
 		t.Errorf("inherit: %+v %v", tg, err)
 	}
+}
 
-	// A parent that cannot be resolved is the child's ParentErr, for what
-	// syncs: the child itself loads.
-	d := t.TempDir()
-	write(t, filepath.Join(d, ConfigFile), "project: app\ninstances: required\nenvironments:\n  prod: {}\n  dev: {path: /srv/dev, parent: prod}\n")
-	if tg, err := LoadTarget(d, "vm1:dev", nil); err != nil || tg.ParentTarget != nil || tg.ParentErr == nil || !strings.Contains(tg.ParentErr.Error(), "environment dev: parent prod: app needs an instance") {
-		t.Errorf("unresolved parent: %v", err)
+// Server commands take a server alone, or any target for its server.
+func TestServerTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("DEVOPSY_HOME", home)
+	t.Setenv("DEVOPSY_SERVER", "")
+	t.Setenv("DEVOPSY_INSTANCE", "")
+	write(t, filepath.Join(home, ConfigFile), "aliases:\n  box: {project: box, to: \"vm9:live\"}\n")
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), "project: shop\ninstances: true\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n")
+	env := map[string]string{"DEVOPSY_SERVER": "vm1"}
+	projectEnv := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	for addr, want := range map[string]string{
+		"vm2":        "vm2", // no environment or alias of that name
+		"vm2:":       "vm2",
+		"prod:":      "prod", // explicitly a server
+		"prod":       "vm1",  // the environment's server, no instance needed
+		"pr-3":       "vm1",  // a pattern's
+		"vm3:prod":   "vm3",
+		"vm3:b/prod": "vm3",
+		"box":        "vm9", // an alias's
+	} {
+		tg, err := ServerTarget(dir, addr, projectEnv)
+		if err != nil || tg.Host != want {
+			t.Errorf("%s: %+v %v", addr, tg, err)
+			continue
+		}
+		if strings.HasSuffix(addr, ":") || addr == "vm2" {
+			if tg.Name != "" || tg.Project == nil || tg.Project.Name != "shop" {
+				t.Errorf("%s: a server alone, with the checkout's project: %+v", addr, tg)
+			}
+		}
+	}
+	if _, err := ServerTarget(dir, ":", projectEnv); err == nil {
+		t.Error(": alone")
+	}
+	delete(env, "DEVOPSY_SERVER")
+	if _, err := ServerTarget(dir, "prod", projectEnv); err == nil || !strings.Contains(err.Error(), "no server for @prod") {
+		t.Errorf("an environment without a server: %v", err)
+	}
+	// Outside a project: no project, aliases still.
+	if tg, err := ServerTarget("", "vm2", nil); err != nil || tg.Host != "vm2" || tg.Project != nil {
+		t.Errorf("outside a project: %+v %v", tg, err)
+	}
+	if tg, err := ServerTarget("", "box", nil); err != nil || tg.Host != "vm9" {
+		t.Errorf("alias outside a project: %+v %v", tg, err)
 	}
 }
