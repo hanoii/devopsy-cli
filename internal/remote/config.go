@@ -58,6 +58,12 @@ type Project struct {
 	Instances bool
 	// Keep is the project's releases.keep, 0 when it sets none.
 	Keep int
+	// Secrets are the names (and * patterns) of the variables whose
+	// values devopsy masks.
+	Secrets []string
+	// Public are names that look like secrets and are not: the release's
+	// and --vars set's check skips them.
+	Public []string
 	// Dir is the project's .devopsy/.
 	Dir string
 }
@@ -324,6 +330,8 @@ type configFile struct {
 	project       string
 	instances     *bool
 	keep          int
+	secrets       []string
+	public        []string
 	releases      *Releases
 	defaults      *Target
 	defaultsNulls map[string]bool
@@ -355,6 +363,18 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: instances: true or false", file)
 			}
 			f.instances = &b
+		case key == "secrets" && !user:
+			secrets, err := decodeSecrets(&node)
+			if err != nil {
+				return nil, fmt.Errorf("%s: secrets: %w", file, err)
+			}
+			f.secrets = secrets
+		case key == "public" && !user:
+			public, err := decodeSecrets(&node)
+			if err != nil {
+				return nil, fmt.Errorf("%s: public: %w", file, err)
+			}
+			f.public = public
 		case key == "releases":
 			var r Releases
 			if err := node.Decode(&r); err != nil {
@@ -429,6 +449,41 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 		}
 	}
 	return f, nil
+}
+
+// secretPattern is a secrets: entry: a variable name, * standing for any
+// characters.
+var secretPattern = regexp.MustCompile(`^[A-Za-z_*][A-Za-z0-9_*]*$`)
+
+// decodeSecrets reads a secrets: or public: list.
+func decodeSecrets(n *yaml.Node) ([]string, error) {
+	if n.Kind != yaml.SequenceNode {
+		return nil, errors.New("a list of variable names, * for any characters")
+	}
+	secrets := []string{}
+	for _, v := range n.Content {
+		if v.Kind != yaml.ScalarNode || !secretPattern.MatchString(v.Value) {
+			return nil, fmt.Errorf("%q is not a variable name (* for any characters)", v.Value)
+		}
+		secrets = append(secrets, v.Value)
+	}
+	return secrets, nil
+}
+
+// ConfigSecrets reads only secrets: from a config's content, leniently: a
+// server's config may come from another devopsy version. ok is false when
+// it cannot tell.
+func ConfigSecrets(data []byte) (secrets []string, ok bool) {
+	var top map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil, false
+	}
+	n, found := top["secrets"]
+	if !found {
+		return nil, true
+	}
+	secrets, err := decodeSecrets(&n)
+	return secrets, err == nil
 }
 
 func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, error) {
@@ -648,6 +703,12 @@ func LoadConfig(projectDir string) (*Config, error) {
 		if f.keep > 0 {
 			c.Project.Keep = f.keep
 		}
+		if f.secrets != nil {
+			c.Project.Secrets = f.secrets
+		}
+		if f.public != nil {
+			c.Project.Public = f.public
+		}
 		if f.defaults != nil {
 			defaults = mergeDefaults(defaults, f.defaults, f.defaultsNulls)
 		}
@@ -731,6 +792,12 @@ func LoadProject(projectDir string) (*Project, error) {
 		}
 		if f.keep > 0 {
 			p.Keep = f.keep
+		}
+		if f.secrets != nil {
+			p.Secrets = f.secrets
+		}
+		if f.public != nil {
+			p.Public = f.public
 		}
 	}
 	return p, nil

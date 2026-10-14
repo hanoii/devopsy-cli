@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -29,7 +31,7 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [get KEY | set [--show] KEY... | unset KEY...]"
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--show | get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
 	var words []string
 	for _, a := range args {
@@ -66,8 +68,8 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 	if len(args) > 0 {
 		action, args = args[0], args[1:]
 	}
-	if show && action != "set" {
-		return fail("--show only applies to set")
+	if show && action != "set" && action != "" && action != "list" {
+		return fail("--show applies to the list and to set")
 	}
 	for _, k := range args {
 		if !remote.VarNameRe.MatchString(k) {
@@ -91,8 +93,12 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if code != 0 {
 			return code
 		}
-		file, content, _ := strings.Cut(out.String(), "\n")
-		vars, err := dotenv.UnmarshalWithLookup(content, func(string) (string, bool) { return "", false })
+		read, err := remote.ReadVarsOutput(out.String())
+		if err != nil {
+			return fail(err.Error())
+		}
+		file := read.File
+		vars, err := dotenv.UnmarshalWithLookup(read.Content, func(string) (string, bool) { return "", false })
 		if err != nil {
 			return fail(fmt.Sprintf("%s:%s: %v", t.Host, file, err))
 		}
@@ -109,15 +115,24 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 			names = append(names, k)
 		}
 		sort.Strings(names)
-		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("%s:%s (values hidden: --vars get KEY)", t.Host, file), color)
+		secrets, note := varsSecrets(t, read.Configs), " (secrets masked: --show)"
+		if show {
+			secrets, note = nil, ""
+		}
+		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("%s:%s%s", t.Host, file, note), color)
 		for _, k := range names {
-			fmt.Println(k)
+			fmt.Println(cli.DotenvLine(k, secrets.Value(k, vars[k])))
 		}
 		return 0
 
 	case "set":
 		if len(args) == 0 {
 			return fail(usage)
+		}
+		if t.Project != nil && t.Project.Dir != "" {
+			if err := confirmUnnamedSecrets(args, t.Project, false); err != nil {
+				return fail(err.Error())
+			}
 		}
 		var lines strings.Builder
 		for _, k := range args {
@@ -181,4 +196,71 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 	cli.Fprint(os.Stderr, cyan, fmt.Sprintf("%s %s in %s:%s. Running containers keep their old values until they are recreated, as by the next release.",
 		strings.ToUpper(verb[:1])+verb[1:], strings.Join(keys, ", "), t.Host, strings.TrimSpace(out.String())), color)
 	return 0
+}
+
+// varsSecrets masks a --vars listing: the secrets: of the server's
+// configs, which name what the releases there treat as secret, and the
+// local project's, which may be newer. A config devopsy cannot read is
+// skipped.
+func varsSecrets(t *remote.Target, configs []string) *cli.Secrets {
+	dir := ""
+	if t.Project != nil {
+		dir = t.Project.Dir
+	}
+	names := localSecrets(dir)
+	for _, c := range configs {
+		n, _ := remote.ConfigSecrets([]byte(c))
+		names = append(names, n...)
+	}
+	return cli.NewSecrets(cli.NewEnv(nil), names)
+}
+
+// confirmUnnamedSecrets asks before going on with variables named like
+// secrets that the project's secrets: does not list, whose values devopsy
+// would print. Without a terminal, or with yes, it fails: an answer
+// nobody gives is no.
+func confirmUnnamedSecrets(names []string, p *remote.Project, yes bool) error {
+	unnamed := cli.UnnamedSecrets(names, p.Secrets, p.Public)
+	if len(unnamed) == 0 {
+		return nil
+	}
+	file := filepath.Join(p.Dir, remote.ConfigFile)
+	what, its, them := unnamed[0]+" looks like a secret", "its value", "it"
+	if len(unnamed) > 1 {
+		what, its, them = strings.Join(unnamed, ", ")+" look like secrets", "their values", "them"
+	}
+	prompt := !yes && term.IsTerminal(int(os.Stdin.Fd()))
+	st := styleFor(os.Stderr)
+	key := func(k string) string {
+		if prompt {
+			return st.name("`" + k + "`")
+		}
+		return "`" + k + "`"
+	}
+	warning := fmt.Sprintf("%s, but `secrets:` does not list %s.", what, them)
+	info := fmt.Sprintf("devopsy would print %s in --env, --vars and its messages.\n"+
+		"Add %s to %s in %s to mask %s, or to %s if not secret.",
+		its, them, key("secrets:"), file, its, key("public:"))
+	if !prompt {
+		return errors.New(warning + "\n" + info)
+	}
+	fmt.Fprintf(os.Stderr, "%s\n%s\nGo on anyway? [y/N] ", st.warn("[warning] "+warning), info)
+	line, _ := stdinReader.ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+		return errors.New("Nothing changed.")
+	}
+	return nil
+}
+
+// localSecrets is the local project's secrets: list, nil outside a project
+// or without a config devopsy can read.
+func localSecrets(projectDir string) []string {
+	if projectDir == "" {
+		return nil
+	}
+	p, err := remote.LoadProject(projectDir)
+	if err != nil || p == nil {
+		return nil
+	}
+	return p.Secrets
 }

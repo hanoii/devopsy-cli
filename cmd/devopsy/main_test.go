@@ -296,8 +296,8 @@ func TestTargetEnv(t *testing.T) {
 	}
 }
 
-// With -v, each SSH session is printed; with -vv, also its script, secrets
-// from the project's .env masked. devopsy on the server is verbose too.
+// With -v, each SSH session is printed; with -vv, also its script, the
+// project's secrets masked. devopsy on the server is verbose too.
 func TestRemoteVerbose(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -305,10 +305,9 @@ func TestRemoteVerbose(t *testing.T) {
 	}
 	project := filepath.Join(tmp, "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nsecrets: [DB_PASSWORD]\nenvironments:\n  prod: {}\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DB_PASSWORD=dotenv-secret-value\n", 0o644)
-	// true stands in for ssh: only devopsy's own output remains. Values from
-	// .env are masked, so the server comes from the environment here.
+	// true stands in for ssh: only devopsy's own output remains.
 	env := []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}
 	out, code := runDevopsy(t, project, env, "-vv", "@prod", "exec", "db", "dotenv-secret-value")
 	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server, running:") ||
@@ -340,7 +339,7 @@ func TestRemoteVars(t *testing.T) {
 	server := filepath.Join(tmp, "app", "prod")
 	project := filepath.Join(tmp, "src", "app")
 	write(t, filepath.Join(project, ".devopsy", "compose.yaml"), "services: {}\n", 0o644)
-	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nsecrets: [REG_PASSWORD, TOK*]\nenvironments:\n  prod: {}\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@server\nREG_USER=deploy\nREG_PASSWORD='p@ss word'\n", 0o644)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(stdin string, args ...string) (string, int) {
@@ -369,8 +368,13 @@ func TestRemoteVars(t *testing.T) {
 		t.Fatalf(".env\n got %q\nwant %q", got, want)
 	}
 
-	if out, code := run("", "@prod", "--vars"); code != 0 || !strings.Contains(out, "REG_PASSWORD\nREG_USER\nTOKEN\n") || strings.Contains(out, "p@ss") {
+	// Secrets masked: the local config's, and the release's on the server.
+	write(t, filepath.Join(server, "current", ".devopsy", "config.yaml"), "project: app\nsecrets: [REG_USER]\n", 0o644)
+	if out, code := run("", "@prod", "--vars"); code != 0 || !strings.Contains(out, "REG_PASSWORD='***'\nREG_USER='***'\nTOKEN='***'\n") || strings.Contains(out, "p@ss") {
 		t.Fatalf("list (%d):\n%s", code, out)
+	}
+	if out, code := run("", "@prod", "--vars", "--show"); code != 0 || !strings.Contains(out, "REG_PASSWORD='p@ss word'\nREG_USER='deploy'\nTOKEN='from-stdin'\n") {
+		t.Fatalf("list --show (%d):\n%s", code, out)
 	}
 	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "p@ss word\n" {
 		t.Fatalf("get (%d): %q", code, out)
@@ -391,11 +395,12 @@ func TestRemoteVars(t *testing.T) {
 		t.Fatalf("get unset (%d):\n%s", code, out)
 	}
 
-	// --help anywhere after --vars only explains; --show is for set only.
+	// --help anywhere after --vars only explains; --show is for the list
+	// and set.
 	if out, code := run("", "@prod", "--vars", "set", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --vars") {
 		t.Fatalf("set --help (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--vars", "get", "--show", "TOKEN"); code == 0 || !strings.Contains(out, "--show only applies to set") {
+	if out, code := run("", "@prod", "--vars", "get", "--show", "TOKEN"); code == 0 || !strings.Contains(out, "--show applies to the list and to set") {
 		t.Fatalf("get --show (%d):\n%s", code, out)
 	}
 	// Without a terminal, --show still reads stdin.
@@ -404,6 +409,12 @@ func TestRemoteVars(t *testing.T) {
 	}
 	if out, _ := run("", "@prod", "--vars", "get", "SHOWN"); out != "shown\n" {
 		t.Fatalf("get SHOWN: %q", out)
+	}
+
+	// A name like a secret's that secrets: does not list: refused without
+	// a terminal.
+	if out, code := run("x\n", "@prod", "--vars", "set", "API_KEY"); code == 0 || !strings.Contains(out, "API_KEY looks like a secret") {
+		t.Fatalf("unnamed secret (%d):\n%s", code, out)
 	}
 
 	// Values never go in arguments.
@@ -538,6 +549,14 @@ func TestReleaseSteps(t *testing.T) {
 	if _, err := os.Stat(server); !os.IsNotExist(err) {
 		t.Fatalf("local commands touched the server: %v", err)
 	}
+
+	// A variable named like a secret that secrets: does not list stops
+	// the release before anything runs, --yes or not; public: lets it go.
+	if out, code := run(nil, "@prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "SECRET looks like a secret, but `secrets:` does not list it.") || strings.Contains(out, "check target") {
+		t.Fatalf("unnamed secret (%d):\n%s", code, out)
+	}
+	targets = "public: [SECRET]\n" + targets
+	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 
 	// A failing local before step stops before the server.
 	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "check target=devopsy@server:prod site=one") || !strings.Contains(out, "nothing changed on devopsy@server:prod") {
@@ -687,6 +706,7 @@ func TestDebugEnv(t *testing.T) {
 	}
 	dot := filepath.Join(tmp, "current", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: shop\nsecrets: [DB_PASS*]\n", 0o644)
 	write(t, filepath.Join(tmp, "shared", ".env"), "LEVEL=shared\nDB_PASSWORD=hunter2hunter2\nCALLED=file\n", 0o644)
 	if err := os.Symlink(filepath.Join(tmp, "shared", ".env"), filepath.Join(dot, ".env")); err != nil {
 		t.Fatal(err)
@@ -714,6 +734,18 @@ func TestDebugEnv(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "DB_PASSWORD='hunter2hunter2'\n") || !strings.Contains(out, "project.env: 'oldoldoldold'") ||
 		!strings.Contains(out, "NOPE not set\n") || !strings.Contains(out, "\n  set by      the caller's environment\n") || strings.Contains(out, "LEVEL") {
 		t.Errorf("--show (%d):\n%s", code, out)
+	}
+	// --env masks the same, --show shows everything.
+	out, code = runDevopsy(t, dir, nil, "--env")
+	if code != 0 || !strings.Contains(out, "DB_PASSWORD='***'\n") || !strings.Contains(out, "LEVEL='shared'\n") || strings.Contains(out, "hunter2") {
+		t.Errorf("--env (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, dir, nil, "--env", "--show")
+	if code != 0 || !strings.Contains(out, "DB_PASSWORD='hunter2hunter2'\n") {
+		t.Errorf("--env --show (%d):\n%s", code, out)
+	}
+	if out, code = runDevopsy(t, dir, nil, "--env", "x"); code == 0 || !strings.Contains(out, "usage: devopsy --env [--show]") {
+		t.Errorf("--env x (%d):\n%s", code, out)
 	}
 	// Without release files, devopsy names the compose project itself.
 	write(t, filepath.Join(tmp, "app", ".devopsy", "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)

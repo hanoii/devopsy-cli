@@ -19,6 +19,18 @@ project: shop
 # never listed here: the target, DEVOPSY_INSTANCE or an alias names them.
 instances: true
 
+# Optional. The variables whose values are secret, wherever they are set
+# (.env, shared/.env, the caller's environment): names, * for any
+# characters. devopsy prints their values as *** in --env, --vars, --debug
+# env and its own messages (--show shows them). Nothing else is masked.
+secrets: [DB_PASSWORD, DATABASE_URL, "*_TOKEN"]
+
+# Optional. Variables named like secrets (PASSWORD, TOKEN, KEY...) that are
+# not: --release and --vars set ask before going on with a variable named
+# like one that secrets: does not list, and fail without a terminal or
+# with --yes. Same format.
+public: [SORT_KEY]
+
 # Optional. How many releases each environment keeps on a server (default:
 # the server's keep, else 5), never more than the server's max_keep.
 releases:

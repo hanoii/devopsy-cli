@@ -35,10 +35,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	// DEVOPSY_INSTANCE).
 	var projectEnv func(string) (string, bool)
 	env := cli.NewEnv(os.Environ())
-	dotenvFile := ""
 	if projectDir != "" {
-		dotenvFile = filepath.Join(projectDir, ".env")
-		if err := cli.LoadDotenv(env, dotenvFile); err != nil {
+		if err := cli.LoadDotenv(env, filepath.Join(projectDir, ".env")); err != nil {
 			return fail(err.Error())
 		}
 		projectEnv = env.Lookup
@@ -55,7 +53,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	if verbose > 0 {
 		// Each SSH session (-vv: and its script), with the project's secrets
 		// masked. devopsy on the server is verbose too.
-		secrets := cli.NewSecrets(env, dotenvFile)
+		secrets := cli.NewSecrets(env, localSecrets(projectDir))
 		remote.Verbose = true
 		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
 		remote.TraceScripts = verbose > 1
@@ -327,6 +325,20 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return save("", stop(fmt.Sprintf("an after step failed (%d): the rollback stays", code)))
 			}
 			return save("", 0)
+		}
+
+		// Variables named like secrets that secrets: does not list: the
+		// compose files' and the environment's env:, asked about before
+		// anything runs.
+		names, err := cli.ComposeVariables(projectDir)
+		if err != nil {
+			return fail(err.Error())
+		}
+		for k := range t.Env {
+			names = append(names, k)
+		}
+		if err := confirmUnnamedSecrets(names, t.Project, yes); err != nil {
+			return fail(err.Error())
 		}
 
 		// A role taken by another compose project on the server fails before

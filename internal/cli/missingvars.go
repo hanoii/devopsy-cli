@@ -12,18 +12,45 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// composeFiles are the compose files devopsy runs a project with.
+func composeFiles(projectDir string) []string {
+	files := []string{filepath.Join(projectDir, "compose.yaml")}
+	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
+		if fi, err := os.Stat(filepath.Join(projectDir, name)); err == nil && fi.Mode().IsRegular() {
+			files = append(files, filepath.Join(projectDir, name))
+			break
+		}
+	}
+	return files
+}
+
+// ComposeVariables lists the variables the project's compose files
+// interpolate.
+func ComposeVariables(projectDir string) ([]string, error) {
+	var names []string
+	for _, file := range composeFiles(projectDir) {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		var dict map[string]any
+		if err := yaml.Unmarshal(data, &dict); err != nil {
+			return nil, fmt.Errorf("%s: %v", file, err)
+		}
+		for name := range template.ExtractVariables(dict, nil) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // MissingVars lists the variables p's compose files require (${VAR:?msg},
 // ${VAR?msg}) that its environment leaves unset (or empty, for :?), with
 // compose's message for each. Compose refuses every command while one is
 // missing, so releases check them before going live.
 func MissingVars(p *loadedProject) ([][2]string, error) {
-	files := []string{p.composeFile}
-	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
-		if fi, err := os.Stat(filepath.Join(p.dir, name)); err == nil && fi.Mode().IsRegular() {
-			files = append(files, filepath.Join(p.dir, name))
-			break
-		}
-	}
+	files := composeFiles(p.dir)
 	var missing [][2]string
 	seen := map[string]bool{}
 	for _, file := range files {

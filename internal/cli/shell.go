@@ -43,7 +43,7 @@ var RunningServices = func(p *loadedProject) ([]string, error) {
 // same arguments. Otherwise the service is the one named, else the one
 // labeled devopsy.shell=true, else the only one running.
 func shell(p *loadedProject, args []string) (*Plan, error) {
-	secrets := NewSecrets(p.env, p.dotenvFile)
+	secrets := p.newSecrets()
 	open := filepath.Join(p.dir, "capabilities", "shell", "open")
 	if isExecutableFile(open) {
 		cmdArgs := append([]string{open}, args...)

@@ -3,6 +3,8 @@ package remote
 import (
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 // VarNameRe is what `--vars` accepts as a variable name.
@@ -31,11 +33,56 @@ fi
 `
 }
 
-// VarsReadScript prints the variables file's path, then its content, if any.
+// VarsReadScript prints the variables file's path, then sections (see
+// ReadVarsOutput): the file's content, if any, and the configs of the
+// releases that read it, for their secrets: (every environment's current
+// one under a project's or an instance's directory).
 func VarsReadScript(t *Target, level *Level) string {
+	configs := `"$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml`
+	if level != nil {
+		configs = `"$base"/*/current/.devopsy/config*.yaml`
+		if level.Name == "project" {
+			configs += ` "$base"/*/*/current/.devopsy/config*.yaml`
+		}
+	}
 	return varsPrelude(t, level) + `printf '%s\n' "$file"
-[ ! -f "$file" ] || cat "$file"
+emit() { printf '%s %s\n' "$1" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; }
+if [ -f "$file" ]; then emit env "$file"; fi
+for c in ` + configs + `; do
+  if [ -f "$c" ]; then emit config "$c"; fi
+done
 `
+}
+
+// VarsOutput is what VarsReadScript printed.
+type VarsOutput struct {
+	File    string
+	Content string
+	// Configs are the contents of the configs found.
+	Configs []string
+}
+
+// ReadVarsOutput parses VarsReadScript's output: the file's path on a
+// line, then sections, each a "<kind> <bytes>" line and that many bytes.
+func ReadVarsOutput(out string) (VarsOutput, error) {
+	var v VarsOutput
+	v.File, out, _ = strings.Cut(out, "\n")
+	for out != "" {
+		header, rest, _ := strings.Cut(out, "\n")
+		kind, size, _ := strings.Cut(header, " ")
+		n, err := strconv.Atoi(size)
+		if err != nil || n < 0 || n > len(rest) {
+			return v, fmt.Errorf("unexpected output from the server: %q", header)
+		}
+		switch kind {
+		case "env":
+			v.Content = rest[:n]
+		case "config":
+			v.Configs = append(v.Configs, rest[:n])
+		}
+		out = rest[n:]
+	}
+	return v, nil
 }
 
 // varsEdit rewrites $file with awk. For set, stdin has the new KEY=value

@@ -44,7 +44,7 @@ repositories fit together and the open ideas.
   notices and errors, the server scripts' `echo` lines included (`>&2`), so
   pipes stay clean and the two never interleave out of order. Anything that
   can contain arguments or scripts goes through `cli.Secrets` (values from
-  `.env`, secret-named variables). Scripts are for `-vv`: an SSH session's,
+  `secrets:`). Scripts are for `-vv`: an SSH session's,
   and an argument of several lines in the "Running" notice (`Plan.running`),
   which otherwise only counts its lines.
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
@@ -85,6 +85,20 @@ repositories fit together and the open ideas.
   every other project command gets neither, so an outer one's address
   never reaches an inner one. Never the target's variables: the command
   calls devopsy with the address.
+- **Secrets are opt in:** `secrets:` in `config.yaml` (names, `*`
+  patterns, `path.Match`) is the only rule, whatever set the value. No
+  guessing from names (a regex went, October 2026), no "everything in
+  `.env`", no mask-everything fallback. `cli.Secrets`: `Value` for
+  listings (`--env`, `--vars`, `--debug env`: `***` whatever the length,
+  `--show` unmasks), `Mask` for messages (values of 8 characters or more).
+  On a server the release's config decides; `--vars` masks locally from
+  the configs `VarsReadScript` sends (every `current` under a level's
+  directory, read with the lenient `ConfigSecrets`) plus the checkout's.
+  The secret-like names (`secretLike`, the old regex) only ask:
+  `confirmUnnamedSecrets` before `--release` (`ComposeVariables` and the
+  target's `env:`, locally, no session: names only in the server's files
+  are left to `--vars set`) and on `--vars set`, a prompt at a terminal,
+  else a failure, `--yes` included. `public:` lets a name through.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.
@@ -119,7 +133,7 @@ repositories fit together and the open ideas.
 ## Config and targets
 
 - Files: the project's `.devopsy/config.yaml` (`project:`, `instances:`,
-  `releases: {keep}`, `defaults:`, `environments:`), its `config.local.yaml`
+  `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), its `config.local.yaml`
   over it, and the user's `~/.config/devopsy/config.yaml` (`aliases:`; on
   servers `releases:`). Never `~/.devopsy`: discovery would take the home
   directory for a project. Unknown keys are errors.
