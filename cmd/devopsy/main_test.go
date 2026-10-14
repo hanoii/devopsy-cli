@@ -240,7 +240,7 @@ func TestUserTargets(t *testing.T) {
 
 	// Outside a project the target resolves (help needs no SSH).
 	out, code = runDevopsy(t, t.TempDir(), withHome, "@vm1-traefik", "--help")
-	if code != 0 || !strings.Contains(out, "Targets (") {
+	if code != 0 || !strings.Contains(out, "Where each runs:") {
 		t.Errorf("outside a project (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, t.TempDir(), env, "@missing", "ps")
@@ -375,13 +375,14 @@ func TestRemoteVars(t *testing.T) {
 	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "p@ss word\n" {
 		t.Fatalf("get (%d): %q", code, out)
 	}
-	// DEVOPSY_COLOR set here: colors forced, and exported into the session
-	// (the fake runs it here: the remote script's own output is colored).
+	// FORCE_COLOR set here: colors forced, and exported into the session
+	// as devopsy's own (the fake runs it here: the remote script's own
+	// output is colored).
 	cmd := exec.Command(binary, "@prod", "--vars")
 	cmd.Dir = project
-	cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir(), "DEVOPSY_COLOR=1"}, env...)
+	cmd.Env = append([]string{"DEVOPSY_HOME=" + t.TempDir(), "FORCE_COLOR=1"}, env...)
 	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "\x1b[") {
-		t.Errorf("DEVOPSY_COLOR: %v\n%q", err, out)
+		t.Errorf("FORCE_COLOR: %v\n%q", err, out)
 	}
 	if out, code := run("", "@prod", "--vars", "unset", "TOKEN"); code != 0 || !strings.Contains(out, "Unset TOKEN") {
 		t.Fatalf("unset (%d):\n%s", code, out)
@@ -769,8 +770,15 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("instance required (%d):\n%s", code, out)
 	}
 	// A shared value for the whole project on that server, before any release.
-	if out, code := run([]string{"SHARED=yes"}, "@b/prod", "--vars", "--project", "set", "SHARED"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
-		t.Fatalf("--vars --project (%d):\n%s", code, out)
+	if out, code := run([]string{"SHARED=yes"}, "@b/prod", "--vars-project", "set", "SHARED"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
+		t.Fatalf("--vars-project (%d):\n%s", code, out)
+	}
+	// On a server named alone: the checkout's project.
+	if out, code := run([]string{"OTHER=1"}, "@devopsy@server", "--vars-project", "set", "OTHER"); code != 0 || !strings.Contains(out, filepath.Join(root, "shop", ".env")) {
+		t.Fatalf("@server --vars-project (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server: --vars-instance needs an environment, devopsy @devopsy@server:<environment> --vars-instance)") {
+		t.Fatalf("@server --vars-instance (%d):\n%s", code, out)
 	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `New instance: devopsy@server has no "b" instance of shop yet.`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
@@ -990,17 +998,17 @@ func TestRemoteSSHKeys(t *testing.T) {
 	// generate: a pair here, no target, then its public half restricted
 	// there; the private key never sent.
 	priv := filepath.Join(tmp, "ci-key")
-	out, code := run("", "--ssh-keys", "generate", "ci-server", "--out", priv)
+	out, code := run("", "--ssh-keys-generate", "ci-server", "--out", priv)
 	if code != 0 || !strings.Contains(out, "Made SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "private key "+priv+", public key "+priv+".pub") {
 		t.Fatalf("generate (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(priv); err != nil {
 		t.Errorf("private key: %v", err)
 	}
-	if out, code := run("", "--ssh-keys", "generate", "ci-server", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
+	if out, code := run("", "--ssh-keys-generate", "ci-server", "--out", priv); code == 0 || !strings.Contains(out, "exists") {
 		t.Errorf("generate over an existing file (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--ssh-keys", "generate"); code == 0 || !strings.Contains(out, "generate runs here, without a target") {
+	if out, code := run("", "@prod", "--ssh-keys", "generate"); code == 0 || !strings.Contains(out, "--ssh-keys-generate") {
 		t.Errorf("generate with a target (%d):\n%s", code, out)
 	}
 	if out, code := run("", "--ssh-keys"); code == 0 || !strings.Contains(out, "needs a target") {

@@ -9,12 +9,12 @@ import (
 	"golang.org/x/term"
 )
 
-// style colors output for a terminal, and does nothing otherwise or with
-// NO_COLOR set (https://no-color.org).
+// style colors output for a terminal, or with FORCE_COLOR, and does
+// nothing otherwise or with NO_COLOR set (https://no-color.org).
 type style struct{ on bool }
 
 func styleFor(f *os.File) style {
-	return style{on: os.Getenv("NO_COLOR") == "" && (term.IsTerminal(int(f.Fd())) || os.Getenv(cli.ColorEnv) != "")}
+	return style{on: os.Getenv("NO_COLOR") == "" && (term.IsTerminal(int(f.Fd())) || cli.ColorForced(os.LookupEnv))}
 }
 
 func (s style) wrap(code, text string) string {
@@ -30,9 +30,22 @@ func (s style) dim(t string) string  { return s.wrap("\033[2m", t) }
 func (s style) ok(t string) string   { return s.wrap("\033[0;32m", t) }
 func (s style) warn(t string) string { return s.wrap("\033[0;33m", t) }
 
-// helpEntry is an entry line of devopsy's help: two spaces, then what you
-// type (a flag, a target, a command), then two spaces or the line's end.
-var helpEntry = regexp.MustCompile(`^(  )(\S(?:\S| \S)*)(  |$)`)
+// scope colors an entry's scope: targets and servers apart.
+func (s style) scope(t string) string {
+	if strings.Contains(t, "@s") {
+		return s.wrap("\033[0;33m", t)
+	}
+	return s.wrap("\033[0;35m", t)
+}
+
+// scopePrefix is an entry's scope, before what you type.
+var scopePrefix = regexp.MustCompile(`^(\[?@[ts]\]?)(?: (.*))?$`)
+
+// helpEntry is an entry line of devopsy's help: two to seven spaces (an
+// entry's scope is right aligned), then what you type (a flag, a target, a
+// command), then two spaces or the line's end. Descriptions continued on
+// the next line start further in.
+var helpEntry = regexp.MustCompile(`^( {2,7})(\S(?:\S| \S)*)(  |$)`)
 
 // help colors devopsy's help text: headings in bold, what you type in cyan.
 func (s style) help(text string) string {
@@ -47,6 +60,13 @@ func (s style) help(text string) string {
 		case helpEntry.MatchString(l):
 			lines[i] = helpEntry.ReplaceAllStringFunc(l, func(m string) string {
 				p := helpEntry.FindStringSubmatch(m)
+				if q := scopePrefix.FindStringSubmatch(p[2]); q != nil {
+					if q[2] == "" {
+						// The legend.
+						return p[1] + s.scope(q[1]) + p[3]
+					}
+					return p[1] + s.scope(q[1]) + " " + s.name(q[2]) + p[3]
+				}
 				return p[1] + s.name(p[2]) + p[3]
 			})
 		}

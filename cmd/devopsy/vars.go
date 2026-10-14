@@ -17,39 +17,48 @@ import (
 )
 
 // runVars handles `devopsy @target --vars ...`: the target's variables file,
-// shared/.env for releases or .devopsy/.env for a plain directory. Values
+// shared/.env for releases or .devopsy/.env for a plain directory; with
+// flag --vars-project or --vars-instance, the project's or the instance's
+// .env on that server. Values
 // never travel in arguments: set sends them on SSH's stdin, and they come
 // from lookup (the caller's environment, plus the project's .env for project
 // targets), a prompt (hidden unless --show), or stdin. --help and --show can
 // go anywhere after --vars: names never start with "-".
-func runVars(t *remote.Target, args []string, lookup func(string) (string, bool), color bool) int {
+func runVars(t *remote.Target, flag string, args []string, lookup func(string) (string, bool), color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]"
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [get KEY | set [--show] KEY... | unset KEY...]"
 	show := false
-	var level *remote.Level
 	var words []string
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--vars"]))
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[flag]))
 			return 0
 		case "--show":
 			show = true
-		case "--project", "--instance":
-			name := strings.TrimPrefix(a, "--")
-			for i := range t.Levels {
-				if t.Levels[i].Name == name {
-					level = &t.Levels[i]
-				}
-			}
-			if level == nil {
-				return fail(fmt.Sprintf("%s: @%s has no instance (the project's instances: true)", a, t.Name))
-			}
 		default:
 			words = append(words, a)
+		}
+	}
+	var level *remote.Level
+	switch flag {
+	case "--vars-project":
+		// On a server named alone too: only the project's name matters.
+		if t.Project == nil {
+			return fail("--vars-project edits a project's .env: run it in its checkout, or through an alias")
+		}
+		level = &remote.Level{Name: "project", Dir: t.Project.Name, Link: "project.env"}
+	case "--vars-instance":
+		for i := range t.Levels {
+			if t.Levels[i].Name == "instance" {
+				level = &t.Levels[i]
+			}
+		}
+		if level == nil {
+			return fail(fmt.Sprintf("--vars-instance: @%s has no instance (the project's instances: true)", targetRef(t)))
 		}
 	}
 	args = words

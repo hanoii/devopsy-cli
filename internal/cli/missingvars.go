@@ -83,7 +83,7 @@ func missingVars(p *loadedProject) error {
 		fmt.Fprintf(&b, "  %-*s  %s\n", width, m[0], m[1])
 	}
 	if target, _ := p.env.Lookup("DEVOPSY_TARGET"); target != "" {
-		fmt.Fprintf(&b, "Set them, then try again: devopsy @%s --vars set <KEY>...\n(--instance or --project for the instance's or the project's .env).", target)
+		fmt.Fprintf(&b, "Set them, then try again: devopsy @%s --vars set <KEY>...\n(--vars-instance or --vars-project for the instance's or the project's .env).", target)
 	} else {
 		b.WriteString("Set them in " + p.dotenvFile + " or the environment.")
 	}

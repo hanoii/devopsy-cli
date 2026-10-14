@@ -300,44 +300,6 @@ func CommandDescription(path string) string {
 	return ""
 }
 
-// RemoteHelp describes `devopsy @<target>` commands.
-const RemoteHelp = `Targets (devopsy @[<server>:][<instance>/]<environment> ..., or @<alias>):
-  --release [--yes]      upload a new release, make it current, run its steps
-                         (a child's first one syncs its parent's data)
-  --release-sync [--yes] the same, and sync the parent's data in, any time
-  --release-no-sync      the same, never syncing, a child's first one included
-  --rollback             back to the previous release, and run its steps
-  --releases             the releases on the server
-  --log [<id>]           what a release or rollback printed: the last, or one
-  --shell [service] [-- command...]
-                         a shell, or the command, in a container
-  --vars [--project | --instance] [get | set | unset KEY...]
-                         the server's variables (shared/.env)
-  --status               the release there, its containers, the project's own lines
-  --env                  the variables devopsy loads and computes there
-  --debug [env | capabilities | labels | imports]
-                         what devopsy sees there
-  --destroy [--yes]      remove the environment, data included
-  --sync [--from <target>] [--yes] [-- args...]
-                         replace a child's data with its parent's, run its
-                         run step
-  --inherit              the parent's inherited variables again, no data
-  <command> [args]       a project or compose command, in the current release
-  -- <args>              docker compose <args> there
-
-Servers (devopsy @<server> ..., @<server>: when a name is ambiguous, or any
-target: only its server is used):
-  --shell-host           a shell on the server itself
-  --ssh-keys [list | add <file> [--restricted] | remove <key>]
-                         who may log in as the deploy user there
-  --ssh-config           a ~/.ssh/config block for the server
-  --environments         the project's environments there
-  --upgrade [v]          replace the server's devopsy with the latest release,
-                         or v
-
-devopsy @<target> <flag> --help   details of each
-`
-
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
@@ -599,17 +561,21 @@ User and Port as the target and ssh -G resolve them, then suggestions,
 commented out: connection sharing (one connection for all of a release's
 sessions instead of a handshake each) and keepalives. It never connects.
 `,
-	"--vars": `Usage: devopsy @<target> --vars [--project | --instance] [get KEY | set [--show] KEY... | unset KEY...]
+	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
+       devopsy @<target> --vars-instance [...]
+       devopsy @<server> --vars-project [...]
 
 The target's variables on the server: shared/.env for an environment with
 releases (it can be set before the first release), or .devopsy/.env for a
 plain directory. These are its secrets and overrides, linked into every
 release; config.yaml's env goes to target.env instead.
 
-  --project           the project's .env on that server instead, shared by
-                      all its environments there (<root>/<project>/.env)
-  --instance          the instance's, shared by its environments
-                      (<root>/<project>/<instance>/.env; @<server>:<instance>/<env>)
+  --vars-instance     the instance's .env instead, shared by its
+                      environments (<root>/<project>/<instance>/.env)
+  --vars-project      the project's .env on the server, shared by all its
+                      environments there (<root>/<project>/.env); the
+                      project is the checkout's or an alias's, so a server
+                      alone does (@vm1)
 
 Nearest wins: the caller, the environment's, the instance's, the project's,
 then target.env.
@@ -634,6 +600,8 @@ Examples:
   printf '%s' "$TOKEN" | devopsy @prod --vars set CF_DNS_API_TOKEN
   devopsy @prod --vars set --show LOG_LEVEL                  # visible prompt
   devopsy @vm1-traefik --vars
+  devopsy @b/prod --vars-instance set SITE_ID                # the instance's
+  devopsy @vm1 --vars-project set SHARED_KEY                 # the project's
 `,
 	"--status": `Usage: devopsy [@<target>] --status
 
@@ -649,7 +617,7 @@ Examples:
   devopsy @prod --status
 `,
 	"--ssh-keys": `Usage: devopsy @<server> --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]
-       devopsy --ssh-keys generate [<name>] [--out <file>]
+       devopsy --ssh-keys-generate [<name>] [--out <file>]
 
 The keys that may log in as the deploy user on the server: its
 ~/.ssh/authorized_keys, edited over the usual session as that user, no
@@ -666,11 +634,11 @@ root. Any target on the server does too; the keys are the server's.
                             will do) or that exact comment. The last key is
                             never removed: it would lock everyone out.
 
-Without a target, generate makes an ed25519 pair here with ssh-keygen,
+--ssh-keys-generate, without a target, makes an ed25519 pair here with ssh-keygen,
 ~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
 comment the name. Nothing is sent anywhere: add the .pub to each server.
 
-For CI: generate, add the .pub with --restricted, store the private key as
+For CI: generate one, add the .pub with --restricted, store the private key as
 a protected file variable, and in the job load it into an agent (eval
 "$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY") before devopsy @<target>
 --release. Rotate by generating another, adding it, then removing the old
@@ -678,7 +646,7 @@ one.
 
 Examples:
   devopsy @prod --ssh-keys
-  devopsy --ssh-keys generate ci-prod1
+  devopsy --ssh-keys-generate ci-prod1
   devopsy @prod --ssh-keys add ~/.ssh/ci-prod1.pub --restricted
   devopsy @prod --ssh-keys add ~/.ssh/id_ed25519.pub
   devopsy @prod --ssh-keys remove ci-prod1
@@ -689,6 +657,9 @@ func init() {
 	// The three releases share one explanation.
 	RemoteCommandHelp["--release-sync"] = RemoteCommandHelp["--release"]
 	RemoteCommandHelp["--release-no-sync"] = RemoteCommandHelp["--release"]
+	RemoteCommandHelp["--vars-project"] = RemoteCommandHelp["--vars"]
+	RemoteCommandHelp["--ssh-keys-generate"] = RemoteCommandHelp["--ssh-keys"]
+	RemoteCommandHelp["--vars-instance"] = RemoteCommandHelp["--vars"]
 }
 
 // DebugHelp is `devopsy --debug --help`.
@@ -719,43 +690,15 @@ func Usage(projectDir string) string {
 	b.WriteString(`devopsy: docker compose for projects with a .devopsy/ directory.
 
 Usage:
-  devopsy <command> [args...]     a project command, else docker compose's
-  devopsy @<target> <command>     the same on a server
-  devopsy [@<target>] --<flag>    devopsy's own (below)
-  devopsy [@<target>] -- <args>   docker compose <args>, past project commands
-  devopsy -v|-vv ...              any of these, verbose (below)
+  devopsy [@<target>] <command> [args...]   a project command, else compose's
+  devopsy [@<target>] --<flag>              devopsy's own, below
+  devopsy [@<target>] -- <args>             docker compose <args>, always
 
-devopsy:
-  -v, -vv                before anything else: also what devopsy found and
-                         runs, and SSH sessions; -vv also scripts, theirs
-                         and the ones in a command's arguments
-                         (DEVOPSY_VERBOSE=1 or 2 does the same)
-  --version              devopsy's, docker's and docker compose's versions
-  --upgrade [v]          replace devopsy with the latest release, or v
-  --completion <shell>   shell completion for bash, zsh or fish
-  --help, -h             this help
-
-Project:
-  --status               its containers, and what its status capability adds
-  --env                  the variables devopsy loads and computes (.env format)
-  --shell [service] [exec options...] [-- command...]
-                         a shell, or the command, in a container
-  --environments         the project's environments on its servers
-  --init [project]       a new .devopsy/config.yaml
-  --context-hash [service]
-                         a hash of what the service's image is built from
-  --debug [topic]        what devopsy sees and computes (--debug --help)
-
-`)
-	b.WriteString(RemoteHelp)
-	b.WriteString(`
-Tools:
-  --probe [--ip <ip>] <host>...
-                         DNS, certificate and HTTPS of hosts, from here
-                         (--probe --help)
-  --ssh-keys generate [<name>]
-                         an SSH key pair in ~/.ssh, for CI, to add to a
-                         server with @<target> --ssh-keys add
+Where each runs:
+    @t   on a target: @[<server>:][<instance>/]<environment>, or an alias
+    @s   on a server: @<server> (@<server>: when a name is ambiguous), or any
+         target's
+  [@t]   optional: without it, on your machine, in the project you are in
 
 `)
 	if projectDir == "" {
@@ -764,23 +707,19 @@ Tools:
 		cmds := CustomCommands(projectDir)
 		fmt.Fprintf(&b, "Project commands (%s):\n", filepath.Join(projectDir, "commands"))
 		if len(cmds) == 0 {
-			b.WriteString("  none\n")
-		}
-		width := 0
-		for _, c := range cmds {
-			width = max(width, len(c))
+			helpLine(&b, "", "none", "")
 		}
 		for _, c := range cmds {
-			desc := CommandDescription(filepath.Join(projectDir, "commands", c))
-			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
+			helpLine(&b, "[@t]", c, CommandDescription(filepath.Join(projectDir, "commands", c)))
 		}
-		b.WriteString(`
-Any other word is docker compose's, with the project's files: devopsy up -d,
+		b.WriteString(`Any other word is docker compose's, with the project's files: devopsy up -d,
 devopsy logs -f <service>; anything else is an error. Compose's own help, as
 devopsy's: devopsy -- --help, devopsy <command> --help.
 
 `)
 	}
+	b.WriteString(flagsHelp())
+	b.WriteString("Details of each: devopsy [@<target>] <flag> --help\n")
 	b.WriteString("More in the README: https://github.com/hanoii/devopsy-cli\n")
 	return b.String()
 }
@@ -1032,14 +971,26 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 // ColorEnv set means the output ends on a terminal that takes colors,
 // even through a pipe: devopsy on a server, whose session has none, so
 // its messages and Compose's output (--ansi always) come colored to the
-// operator. devopsy exports it into every session when its own stderr is
-// a terminal; set by hand it forces colors, like FORCE_COLOR elsewhere.
-const ColorEnv = "DEVOPSY_COLOR"
+// operator. Internal: devopsy exports it into every session when it
+// colors here; what a person sets is FORCE_COLOR (ColorForced).
+const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
+
+// ColorForced reports whether colors are wanted without a terminal:
+// ColorEnv, or FORCE_COLOR set to anything but 0 or false (chalk's
+// convention, honored by many tools). NO_COLOR, checked by the callers,
+// wins over both.
+func ColorForced(lookup func(string) (string, bool)) bool {
+	if v, _ := lookup(ColorEnv); v != "" {
+		return true
+	}
+	v, _ := lookup("FORCE_COLOR")
+	return v != "" && v != "0" && !strings.EqualFold(v, "false")
+}
 
 // compose plans `docker compose` with the project's files and args.
 func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
-	if v, _ := p.env.Lookup(ColorEnv); v != "" {
+	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
 	}
 	composeArgs = append(composeArgs, "-f", p.composeFile)

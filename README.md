@@ -296,12 +296,14 @@ target, the caller's environment is the server's SSH session plus the
 `COMPOSE_PROJECT_NAME` your devopsy sends.
 
 Help, `--debug`, devopsy's messages and the lines a server sends are in
-color on a terminal, unless `NO_COLOR=1` (`DEVOPSY_COLOR=1` forces them).
+color on a terminal, unless `NO_COLOR=1`; `FORCE_COLOR=1` forces them
+through a pipe or in CI (`0` or `false` do not), and `NO_COLOR` wins.
 A release that syncs runs its session without a terminal, so its run step
 gets one on the server (`script`, from util-linux) sized like yours, and a
-build's live progress looks as it does on a plain release (`DEVOPSY_TTY='120
-40'` set by hand forces that, a terminal here or not). Logs are saved
-without any of it.
+build's live progress looks as it does on a plain release. Logs are saved
+without any of it. Variables named `DEVOPSY_INTERNAL_*` are how one devopsy
+tells another these things: never set or read them, they change in any
+release.
 
 ## Servers
 
@@ -409,7 +411,9 @@ environment, then `.devopsy/.env`). It lists the project's layout only:
 `<instance>/<environment>` with `instances: true`, else `<environment>`.
 
 **Server commands** need only a server: `--shell-host`, `--ssh-keys`,
-`--ssh-config`, `--environments` and `--upgrade`. They take `@<server>`
+`--ssh-config`, `--environments`, `--vars-project` and `--upgrade`
+(`--environments` and `--vars-project` with the checkout's project, or an
+alias's). They take `@<server>`
 alone, as well as any target, whose server they use (no instance
 needed). A bare name is still the project's environment or an alias
 first, as for every target, else a server; `@<server>:` says it is a
@@ -728,7 +732,8 @@ devopsy @vm1:prod --vars set DB_PASSWORD       # from your environment or .env, 
 devopsy @vm1:prod --vars set --show LOG_LEVEL  # a visible prompt
 devopsy @vm1:prod --vars get DB_PASSWORD
 devopsy @vm1:prod --vars unset API_KEY
-devopsy @vm1:b/prod --vars --instance set SITE_ID   # the instance's .env; --project: the project's
+devopsy @vm1:b/prod --vars-instance set SITE_ID   # the instance's .env
+devopsy @vm1 --vars-project set SHARED_KEY        # the project's .env on vm1
 ```
 
 Values travel over SSH's stdin, never as arguments. Running containers see
@@ -778,7 +783,7 @@ authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
 one (never the last: it would lock everyone out). `add --restricted` is
 for a machine's key: `restrict` (commands only, no shell) plus the agent
 and port forwarding a sync across servers needs. Without a target,
-`devopsy --ssh-keys generate [<name>]` makes an ed25519 pair in `~/.ssh`
+`devopsy --ssh-keys-generate [<name>]` makes an ed25519 pair in `~/.ssh`
 (`devopsy-ci` by default), nothing sent anywhere. For CI: generate, `add`
 the `.pub` on each server with `--restricted`, the private key as a
 protected file variable, and in the job `eval "$(ssh-agent)"; ssh-add
@@ -864,8 +869,7 @@ lists them with their contracts):
   `--env` shows them. For values a project derives from others, like the
   site templates' hosts and Traefik rule from `COMPOSE_PROJECT_NAME`, the
   imported `DEVOPSY_WILDCARD_DOMAIN` and their own `DEVOPSY_DOMAINS`. It
-  runs every time, so keep it fast; a devopsy it calls skips it
-  (`DEVOPSY_ENV_COMPUTE` is set). A failure stops the command.
+  runs every time, so keep it fast; a devopsy it calls skips it. A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
 - **sync:** hooks into a sync (Parent environments and syncs); each

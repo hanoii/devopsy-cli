@@ -270,7 +270,7 @@ var Color bool
 var TTY string
 
 // TTYEnv carries TTY to the server.
-const TTYEnv = "DEVOPSY_TTY"
+const TTYEnv = "DEVOPSY_INTERNAL_TTY"
 
 // Trace, when set, receives each SSH command, and with TraceScripts the
 // script it runs.
@@ -313,8 +313,8 @@ func lockWait(fd int, shared bool, what string) string {
 func basePrelude(t *Target) string {
 	return `settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
 with_tty() {
-  if [ -n "${DEVOPSY_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
-    script -qec "stty cols ${DEVOPSY_TTY%% *} rows ${DEVOPSY_TTY#* } 2>/dev/null; $1" /dev/null
+  if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
+    script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
   else
     eval "$1"
   fi

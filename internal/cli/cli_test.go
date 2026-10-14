@@ -90,14 +90,30 @@ func TestBuildComposePassthrough(t *testing.T) {
 	if dir, _ := envValue(t, plan.Env, "DEVOPSY_PROJECT_DIR"); dir != filepath.Join(root, ProjectDirName) {
 		t.Fatalf("DEVOPSY_PROJECT_DIR %q", dir)
 	}
-	// DEVOPSY_COLOR: a terminal at the other end of the pipe (a session
-	// from a terminal), so Compose colors its output.
-	plan, err = build(root, []string{"ps"}, []string{ColorEnv + "=1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"docker", "compose", "--ansi", "always", "-f", compose, "ps"}; !slices.Equal(plan.Args, want) {
-		t.Fatalf("colored args\n got %q\nwant %q", plan.Args, want)
+	// ColorEnv: a terminal at the other end of the pipe (a session from a
+	// terminal), so Compose colors its output; FORCE_COLOR too, unless 0,
+	// and NO_COLOR wins.
+	for _, c := range []struct {
+		env     []string
+		colored bool
+	}{
+		{[]string{ColorEnv + "=1"}, true},
+		{[]string{"FORCE_COLOR=1"}, true},
+		{[]string{"FORCE_COLOR=0"}, false},
+		{[]string{"FORCE_COLOR=false"}, false},
+		{[]string{"FORCE_COLOR=1", "NO_COLOR=1"}, false},
+	} {
+		plan, err = build(root, []string{"ps"}, c.env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"docker", "compose", "-f", compose, "ps"}
+		if c.colored {
+			want = []string{"docker", "compose", "--ansi", "always", "-f", compose, "ps"}
+		}
+		if !slices.Equal(plan.Args, want) {
+			t.Fatalf("%q: args\n got %q\nwant %q", c.env, plan.Args, want)
+		}
 	}
 }
 
@@ -215,9 +231,19 @@ func TestUsage(t *testing.T) {
 		"commands/plain*":  "#!/bin/sh\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Project:", "--version", "--env", "Targets (", "Project commands (", "deploy  Pull and roll out", "  plain", "anything else is an error", "--shell [service]", "--shell-host", "--release", "Tools:", "devopsy:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "anything else is an error", "Releases:", "    @t --release [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	// Project commands, then devopsy's flags.
+	if strings.Index(text, "Project commands (") > strings.Index(text, "Releases:") {
+		t.Errorf("project commands come first:\n%s", text)
+	}
+	// Every line fits a terminal.
+	for _, l := range strings.Split(text, "\n") {
+		if len(l) > 80 && !strings.Contains(l, "Project commands (") {
+			t.Errorf("over 80 columns: %q", l)
 		}
 	}
 	if !strings.Contains(Usage(""), "Not in a devopsy project") {
@@ -309,7 +335,7 @@ func TestEnvCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := "#!/bin/sh\n" +
-		"[ -z \"$DEVOPSY_ENV_COMPUTE\" ] && exit 9\n" +
+		"[ -z \"$DEVOPSY_INTERNAL_ENV_COMPUTE\" ] && exit 9\n" +
 		"echo \"SITE_HOST='$COMPOSE_PROJECT_NAME.localhost'\"\n" +
 		"echo \"SITE_URL='https://$COMPOSE_PROJECT_NAME.localhost'\"\n"
 	if err := os.WriteFile(compute, []byte(script), 0o755); err != nil {
@@ -326,7 +352,7 @@ func TestEnvCapability(t *testing.T) {
 	if got, _ := envValue(t, plan.Env, "SITE_URL"); got != "https://override.example.org" {
 		t.Errorf("SITE_URL = %q", got)
 	}
-	if _, ok := envValue(t, plan.Env, "DEVOPSY_ENV_COMPUTE"); ok {
+	if _, ok := envValue(t, plan.Env, "DEVOPSY_INTERNAL_ENV_COMPUTE"); ok {
 		t.Error("the guard leaked into the command's environment")
 	}
 	_, err = build(root, []string{"--env"}, nil)
@@ -334,7 +360,7 @@ func TestEnvCapability(t *testing.T) {
 		t.Errorf("--env: %v", err)
 	}
 	// Inside the capability, devopsy does not run it again.
-	plan, err = build(root, []string{"ps"}, []string{"DEVOPSY_ENV_COMPUTE=1"})
+	plan, err = build(root, []string{"ps"}, []string{"DEVOPSY_INTERNAL_ENV_COMPUTE=1"})
 	if err != nil {
 		t.Fatal(err)
 	}
