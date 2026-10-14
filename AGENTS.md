@@ -240,7 +240,10 @@ repositories fit together and the open ideas.
   devopsy just exits, and the holder restores on its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
-  `abort`, and devopsy exits 130. The push session's stdin is a pipe
+  `abort`, and devopsy exits 130. After `go`, during the run step, the
+  first Ctrl-C only says the step goes on on the server (cutting the
+  session would fail it and bring the previous release back); the
+  second cuts it. The push session's stdin is a pipe
   devopsy keeps open (`SyncWatchEnv` says so: an older devopsy's
   `/dev/null` would read as a session gone at once), so the parent's
   `--sync-push` sees EOF as soon as the session ends, not at its next

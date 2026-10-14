@@ -676,7 +676,10 @@ container restarts in a loop, and the next sync stops it like a
 running one). Interrupted (Ctrl-C) during the
 copy, devopsy ends its session to the parent's server, which stops the
 copy and restores its own services, then tells the child's to restore
-its services. If devopsy itself goes away
+its services. Once the copy is in and the run step runs, a Ctrl-C only
+says so: the step is the server's, and cutting the session would fail it
+and bring the previous release back, which a second Ctrl-C does. If
+devopsy itself goes away
 mid-sync (killed, connection lost), each side restores its own
 services and writes what happened to `<environment>/.devopsy-sync.log`
 on its server. Restoring means what the sync paused or stopped
