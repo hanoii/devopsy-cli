@@ -56,12 +56,19 @@ repositories fit together and the open ideas.
   exec'd, no notice. Arguments starting with a flag go to compose unchecked; `--` is
   the escape hatch. Flags that need a target say so without one.
 - **Two scopes:** a flag in `cli.ServerScope` (`--shell-host`,
-  `--ssh-keys`, `--ssh-config`, `--environments`, `--upgrade`) needs only
+  `--ssh-keys`, `--ssh-config`, `--environments`, `--vars-project`,
+  `--upgrade`) needs only
   a server and resolves with `remote.ServerTarget`: `@<server>:` alone, a
   bare name that is no environment (exact or pattern) or alias, or any
   target leniently (no instance needed, a server is). A server named
   alone has no `Name`. Every other flag needs an environment, and
-  `@<server>:` with one says so. A new `@` flag picks its scope.
+  `@<server>:` with one says so.
+- **`cli.Flags` is every flag of devopsy's,** by task group, each with its
+  scope (`Here`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
+  list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and
+  `ServerScope` all come from it, so a new flag is one entry there (a
+  flag that differs here and on a server, like `--upgrade`, has one per
+  scope). Lines fit 80 columns (`TestUsage`).
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.
@@ -71,18 +78,22 @@ repositories fit together and the open ideas.
   broken.
 - Few dependencies, standard library first. Linux and macOS only.
 - **Color** only on a terminal and without `NO_COLOR` (`styleFor`), or
-  with `DEVOPSY_COLOR` set (`cli.ColorEnv`). A session's lines are colored
+  forced (`cli.ColorForced`: `FORCE_COLOR`, not `0` or `false`, or the
+  internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`: in a
+  session it would reach every tool there, which would then color what
+  scripts capture. A session's lines are colored
   here as they arrive (`remote.Colorize`, line-buffered, on the terminal
   writers only, the marker taken out first in a sync): `devopsy:` lines
   cyan, red when they report a failure, Compose's done steps green and
   the steps on the way dim, errors red; coloring on the server reaches
   nothing (plain progress, echoed lines). `remote.Color` also exports
-  `DEVOPSY_COLOR` into sessions, for the little the server colors itself.
+  `DEVOPSY_INTERNAL_COLOR` into sessions, for the little the server colors itself.
   Release logs get the raw lines. Help is colored by layout (headings end
-  with `:`, entries start with two spaces). A terminal is another thing:
-  `remote.TTY` (`DEVOPSY_TTY='<cols> <rows>'`, exported into sessions
-  when stderr is one, colors or not, 80x24 when its size is unknown, or
-  whatever the operator set by hand) lets a session without a tty (a
+  with `:`, entries start with two to seven spaces, a scope `@t` magenta
+  and `@s` yellow). A terminal is another thing:
+  `remote.TTY` (`DEVOPSY_INTERNAL_TTY='<cols> <rows>'`, exported into
+  sessions when stderr is one, colors or not, 80x24 when its size is
+  unknown) lets a session without a tty (a
   sync's `-T` holder) run the run step under `script` (util-linux, like
   `flock`; `with_tty` in `basePrelude`, plain when `script` is missing or
   stdout is a tty already), so BuildKit draws its live progress through
@@ -202,7 +213,9 @@ repositories fit together and the open ideas.
   `image` fails the release.
 - Releases are full tar streams (no rsync: macOS ships openrsync). Server
   needs: `devopsy`, `tar`, `flock` and `script` (util-linux; without the last, no live build progress on syncing releases); locally only `ssh`.
-- `--vars` sends values over SSH's stdin, never as arguments; edits replace
+- `--vars`, `--vars-instance` and `--vars-project` (one file each, so
+  flags, not options of `--vars`) send values over SSH's stdin, never as
+  arguments; edits replace
   keys in place, under the release lock (deploy commands write secrets too).
 - `--destroy`: the environment's `destroy:` step (one command, required)
   in the current release under the lock, then `rm -rf` of the directory;
@@ -425,8 +438,8 @@ repositories fit together and the open ideas.
   fingerprint is computed from the blob, no ssh-keygen needed) and
   edited on the server under a lock next to the file, by blob, so a
   comment is never what identifies a key. `add` refuses a duplicate
-  (exit 3), `remove` the last key (exit 4). `generate` is local, no
-  target (`main.go` dispatches it before the remote-only check): just
+  (exit 3), `remove` the last key (exit 4). `--ssh-keys-generate` is local,
+  its own flag (it never takes a target): just
   `ssh-keygen` into `~/.ssh/<name>`, nothing sent; the `.pub` is added
   per server. `--restricted` on `add` is `RestrictedKeyOptions`, the one
   place that line is written (devopsy-server's `ci-key` step went).
@@ -437,7 +450,7 @@ repositories fit together and the open ideas.
   servers; after `@` it offers `~/.ssh/config`'s hosts as `@<host>:`
   (`sshHosts`: `Host` lines and `Include`s, patterns skipped, read in Go
   like the shells' own ssh completion, not delegated to them, so every
-  shell gets the same), with no space when only those are left. New flags and subcommands go in its lists. `TestCompletionShells`
+  shell gets the same), with no space when only those are left. New flags go in `cli.Flags`, subcommands in its lists. `TestCompletionShells`
   runs the scripts in every installed shell (bash, macOS's bash 3.2, zsh
   with `_describe` stubbed, fish); CI installs zsh and fish. bash splits
   words at `:`, so its script rebuilds them from `COMP_LINE`.
@@ -456,7 +469,12 @@ repositories fit together and the open ideas.
   runs the `env` capability (`computeEnv`) before every command but help
   and completion: projects derive hosts, rules and URLs themselves, from
   the name and imported facts. Its output only fills unset variables;
-  `DEVOPSY_ENV_COMPUTE` keeps a devopsy it calls from running it again.
+  `DEVOPSY_INTERNAL_ENV_COMPUTE` keeps a devopsy it calls from running it
+  again.
+- **`DEVOPSY_INTERNAL_*`** are devopsy talking to devopsy (`COLOR`, `TTY`,
+  `ENV_COMPUTE`, `SYNC_WATCH`): never documented as settings, free to
+  change in any release. Settings people set and the contract projects
+  read keep plain `DEVOPSY_*` names.
 - **`--probe`** is a tool with plain arguments, not a contract: it knows no
   proxy. A server never drives local devopsy (devopsy execs ssh and cannot
   watch its output, and a server must not make a laptop act): proxies print

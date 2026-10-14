@@ -24,7 +24,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		return 1
 	}
 	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
-	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys generate [<name>] [--out <file>]   (a key pair here, no target)"
+	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a key pair here, no target)"
 	restricted := false
 	var words []string
 	for i := 0; i < len(args); i++ {
@@ -186,13 +186,11 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		say(what + " from " + t.Host + "'s " + strings.TrimSpace(buf.String()) + ".")
 		return 0
 
-	case "generate":
-		return fail("generate runs here, without a target: devopsy --ssh-keys generate [<name>], then devopsy @" + targetRef(t) + " --ssh-keys add ~/.ssh/<name>.pub [--restricted]")
 	}
 	return fail(usage)
 }
 
-// runSSHKeysGenerate implements devopsy --ssh-keys generate [<name>]
+// runSSHKeysGenerate implements devopsy --ssh-keys-generate [<name>]
 // [--out <file>]: an ed25519 pair here, with ssh-keygen, for a CI system
 // or a machine, to authorize with devopsy @<target> --ssh-keys add. The
 // private key stays where it was made.
@@ -201,12 +199,12 @@ func runSSHKeysGenerate(args []string, color bool) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy --ssh-keys generate [<name>] [--out <file>]"
+	usage := "usage: devopsy --ssh-keys-generate [<name>] [--out <file>]"
 	name, out := "", ""
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--help", "-h":
-			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--ssh-keys"]))
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--ssh-keys-generate"]))
 			return 0
 		case "--out":
 			if i+1 >= len(args) {

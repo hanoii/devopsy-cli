@@ -43,10 +43,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		projectEnv = env.Lookup
 	}
 	remote.Color = color
-	if v := os.Getenv(remote.TTYEnv); v != "" {
-		// Set by hand: a pseudo-terminal for the run step whatever this is.
-		remote.TTY = v
-	} else if term.IsTerminal(int(os.Stderr.Fd())) {
+	if term.IsTerminal(int(os.Stderr.Fd())) {
 		// A terminal of unknown size (one script gave us) is still one.
 		w, h, err := term.GetSize(int(os.Stderr.Fd()))
 		if err != nil || w <= 0 || h <= 0 {
@@ -77,6 +74,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return fail(fmt.Sprintf("%s needs an environment: devopsy @%s<environment> %s", args[1], addr, args[1]))
 	}
 	t, err := load(projectDir, addr, projectEnv)
+	if err != nil && !help && len(args) > 1 {
+		// Maybe a server named alone, for a command that needs an
+		// environment: the error stays, a typo in a name being as likely.
+		if st, serr := remote.ServerTarget(projectDir, addr, projectEnv); serr == nil && st.Name == "" {
+			err = fmt.Errorf("%w\n(for a server: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
+		}
+	}
 	if err != nil {
 		if help && len(args) > 2 {
 			// Help only explains: it never needs the target.
@@ -89,7 +93,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	}
 	args = args[1:]
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Print(styleFor(os.Stdout).help(cli.RemoteHelp))
+		fmt.Print(styleFor(os.Stdout).help(cli.Usage(projectDir)))
 		return 0
 	}
 
@@ -173,14 +177,14 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		fmt.Print(remote.SSHConfig(t, effective))
 		return 0
 
-	case "--vars":
+	case "--vars", "--vars-project", "--vars-instance":
 		// A user-level target belongs to no project: its values never come
 		// from the .env of whatever project devopsy runs in.
 		lookup := os.LookupEnv
 		if !t.User && projectEnv != nil {
 			lookup = projectEnv
 		}
-		return runVars(t, args[1:], lookup, color)
+		return runVars(t, args[0], args[1:], lookup, color)
 
 	case "--releases":
 		var out bytes.Buffer

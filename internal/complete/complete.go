@@ -49,7 +49,7 @@ const (
 	// GroupServer is a host from ~/.ssh/config, as @<host>:.
 	GroupServer  = "server"
 	GroupProject = "project"
-	GroupDevopsy    = "devopsy"
+	GroupDevopsy = "devopsy"
 	// GroupCompose marks the delegate's candidates.
 	GroupCompose = "compose"
 )
@@ -79,46 +79,16 @@ func Script(shell string) string {
 	return string(data)
 }
 
-// builtins are the flags devopsy itself takes first.
-var builtins = []Candidate{
-	{"--help", "devopsy's help", GroupDevopsy},
-	{"--version", "devopsy's and docker compose's versions", GroupDevopsy},
-	{"--status", "the containers, and the project's own status", GroupDevopsy},
-	{"--env", "the variables devopsy loads and computes", GroupDevopsy},
-	{"--shell", "a shell in a container", GroupDevopsy},
-	{"--context-hash", "a hash of what an image is built from", GroupDevopsy},
-	{"--probe", "DNS, certificate and HTTPS of hosts, from here", GroupDevopsy},
-	{"--ssh-keys", "generate an SSH key pair here, for CI", GroupDevopsy},
-	{"--environments", "the project's environments on its servers", GroupDevopsy},
-	{"--init", "a new .devopsy/config.yaml", GroupDevopsy},
-	{"--upgrade", "replace devopsy with the latest release", GroupDevopsy},
-	{"--debug", "what devopsy sees and computes", GroupDevopsy},
-	{"-v", "also print what devopsy found and runs; -vv: also the scripts run over SSH", GroupDevopsy},
-	{"--completion", "a shell completion script", GroupDevopsy},
-}
+// builtins are the flags devopsy takes without a target, remoteCommands
+// those after @<target>: cli.Flags, so help and completion agree.
+var builtins, remoteCommands = candidates(cli.LocalFlags()), candidates(cli.RemoteFlags())
 
-// remoteCommands follow @<target>.
-var remoteCommands = []Candidate{
-	{"--release", "upload a new release and run its steps", GroupDevopsy},
-	{"--release-sync", "a release, and the parent's data synced in", GroupDevopsy},
-	{"--release-no-sync", "a release, never syncing", GroupDevopsy},
-	{"--rollback", "back to the previous release, and run its steps", GroupDevopsy},
-	{"--releases", "list the releases on the server", GroupDevopsy},
-	{"--log", "what the last release or rollback printed, or one release's", GroupDevopsy},
-	{"--shell", "a shell in a container", GroupDevopsy},
-	{"--shell-host", "a shell on the server itself", GroupDevopsy},
-	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
-	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
-	{"--ssh-keys", "who may log in as the deploy user on the server", GroupDevopsy},
-	{"--environments", "the project's environments on the server", GroupDevopsy},
-	{"--upgrade", "replace the server's devopsy", GroupDevopsy},
-	{"--status", "the release there, its containers, the project's own status", GroupDevopsy},
-	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
-	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
-	{"--destroy", "remove the environment from the server", GroupDevopsy},
-	{"--sync", "replace a child's data with its parent's", GroupDevopsy},
-	{"--inherit", "the parent's inherited variables again, no data", GroupDevopsy},
-	{"--help", "help on server commands", GroupDevopsy},
+func candidates(flags []cli.Flag) []Candidate {
+	var out []Candidate
+	for _, f := range flags {
+		out = append(out, Candidate{f.Name, f.Desc, GroupDevopsy})
+	}
+	return out
 }
 
 // Complete returns the candidates for words, the arguments after `devopsy`,
@@ -179,12 +149,9 @@ func Complete(cwd string, words []string, environ []string) Result {
 	}
 
 	switch first := words[0]; {
-	case first == "--ssh-keys":
+	case first == "--ssh-keys-generate":
 		r := Result{Directive: DirectiveNoFileComp}
-		switch {
-		case len(words) == 2:
-			r.Candidates = []Candidate{{"generate", "an ed25519 pair in ~/.ssh", GroupDevopsy}}
-		case words[1] == "generate" && strings.HasPrefix(cur, "-"):
+		if strings.HasPrefix(cur, "-") {
 			r.Candidates = []Candidate{{"--out", "where the private key goes", GroupDevopsy}, {"--help", "how", GroupDevopsy}}
 		}
 		return filter(r, cur)
@@ -269,7 +236,15 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 
 	if len(words) == 1 {
 		r := Result{Candidates: projectCommands(projectDir)}
+		// --vars-instance only for a project with instances.
+		var p *remote.Project
+		if projectDir != "" {
+			p, _ = remote.LoadProject(projectDir)
+		}
 		for _, c := range remoteCommands {
+			if c.Value == "--vars-instance" && (p == nil || !p.Instances) {
+				continue
+			}
 			if strings.HasPrefix(c.Value, "-") == strings.HasPrefix(cur, "-") {
 				r.Candidates = append(r.Candidates, c)
 			}
@@ -353,7 +328,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		r = filter(r, cur)
 		r.Directive = DirectiveNoFileComp
 		return r
-	case "--vars":
+	case "--vars", "--vars-instance", "--vars-project":
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
 		case len(words) == 2:

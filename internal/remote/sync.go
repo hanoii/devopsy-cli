@@ -83,10 +83,10 @@ const (
 	// SyncWatchEnv tells --sync-push that its stdin stays open for as
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
-	SyncWatchEnv = "DEVOPSY_SYNC_WATCH"
+	SyncWatchEnv = "DEVOPSY_INTERNAL_SYNC_WATCH"
 	// ColorEnv tells --sync-push that the operator's terminal takes
 	// colors: servers have no terminal of their own to ask.
-	ColorEnv = "DEVOPSY_COLOR"
+	ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 )
 
 // SyncOptions make ActivateScript sync the parent's data into the new

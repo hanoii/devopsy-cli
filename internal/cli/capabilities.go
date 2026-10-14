@@ -120,7 +120,7 @@ func ImplementedActions(projectDir string, c Capability) []string {
 
 // EnvGuard is set while the env capability runs, so a devopsy it calls
 // does not run it again.
-const EnvGuard = "DEVOPSY_ENV_COMPUTE"
+const EnvGuard = "DEVOPSY_INTERNAL_ENV_COMPUTE"
 
 // computeEnv runs the project's env capability, if it has one, and sets
 // the variables it prints that are not set yet.
