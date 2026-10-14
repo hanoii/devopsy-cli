@@ -753,11 +753,29 @@ Tools:
 			desc := CommandDescription(filepath.Join(projectDir, "commands", c))
 			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
 		}
-		b.WriteString(`
-Other words are docker compose's commands, with the project's files
+		b.WriteString("\n")
+		if list, err := ComposeCommandsDescribed(os.Environ()); err == nil && len(list) > 0 {
+			b.WriteString("Compose commands, with the project's files (devopsy up -d, devopsy logs -f <service>;\ndevopsy <command> --help for each):\n")
+			width := 0
+			for _, c := range list {
+				width = max(width, len(c[0]))
+			}
+			for _, c := range list {
+				fmt.Fprintf(&b, "  %-*s  %s\n", width, c[0], c[1])
+			}
+			if flags := ComposeFlags(os.Environ()); len(flags) > 0 {
+				b.WriteString("\nCompose flags, before the command (devopsy --profile tools run ...):\n")
+				for _, f := range flags {
+					b.WriteString(f + "\n")
+				}
+			}
+			b.WriteString("\nA word that is neither: anything else is an error.\n\n")
+		} else {
+			b.WriteString(`Other words are docker compose's commands, with the project's files
 (devopsy up -d, devopsy logs -f <service>...); anything else is an error.
 
 `)
+		}
 	}
 	b.WriteString("More in the README: https://github.com/hanoii/devopsy-cli\n")
 	return b.String()

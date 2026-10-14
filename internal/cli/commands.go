@@ -28,6 +28,57 @@ var ComposeCommands = func(environ []string) ([]string, error) {
 	return parseCompletion(out)
 }
 
+// ComposeCommandsDescribed lists compose's commands with their one-line
+// descriptions, from the same completion, for the help. Replaceable in
+// tests.
+var ComposeCommandsDescribed = func(environ []string) ([][2]string, error) {
+	cmd := exec.Command("docker", "__complete", "compose", "")
+	cmd.Env = environ
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := parseCompletion(out); err != nil {
+		return nil, err
+	}
+	var list [][2]string
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, ":") {
+			break
+		}
+		name, desc, _ := strings.Cut(line, "\t")
+		list = append(list, [2]string{name, desc})
+	}
+	return list, nil
+}
+
+// ComposeFlags is compose's own options as its help prints them, for
+// devopsy's help: the lines after "Options:" up to the first empty one,
+// verbatim, nothing parsed. Replaceable in tests.
+var ComposeFlags = func(environ []string) []string {
+	cmd := exec.Command("docker", "compose", "--help")
+	cmd.Env = environ
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	in := false
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.TrimSpace(line) == "Options:":
+			in = true
+		case in && strings.TrimSpace(line) == "":
+			return lines
+		case in:
+			lines = append(lines, strings.ReplaceAll(line, "docker compose", "devopsy"))
+		}
+	}
+	return lines
+}
+
 // ComposeCommandsCache is where the list is kept between runs: refreshed
 // when a word is missing from it, so a compose upgrade's new commands are
 // found the first time they are used, and the usual check reads one file.

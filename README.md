@@ -175,6 +175,13 @@ CI, and `DEVOPSY_NO_UPDATE_CHECK=1` turns it off.
 To run a checkout's code instead, symlink `scripts/devopsy` into your `PATH`
 (it rebuilds on every run, instantly when nothing changed; needs Go).
 
+### Compose's commands and flags
+
+Bare `devopsy` lists the project's commands, then compose's with their
+descriptions and compose's own flags, which go before the command
+(`devopsy --profile tools run --rm jq`). `devopsy <command> --help` is
+compose's help for it, as devopsy's.
+
 ### Shell completion
 
 ```sh

@@ -174,18 +174,33 @@ func run() int {
 			cli.Fprint(os.Stderr, "", line, color)
 		}
 	}
-	if notice := plan.Notice; notice != "" {
-		if verboseLevel > 1 && plan.NoticeFull != "" {
-			notice = plan.NoticeFull
-		}
-		cli.Fprint(os.Stderr, cyan, notice, color)
-	}
 	path := plan.Path
 	if path == "docker" {
 		if path, err = exec.LookPath("docker"); err != nil {
 			cli.Fprint(os.Stderr, red, "docker not found in PATH", color)
 			return 127
 		}
+	}
+	// Compose's own help, as devopsy's: "docker compose up" is "devopsy up"
+	// here, since the files are devopsy's to add. No notice: nothing runs.
+	if plan.Path == "docker" && len(plan.Args) > 1 && plan.Args[1] == "compose" && (slices.Contains(plan.Args, "--help") || slices.Contains(plan.Args, "-h")) {
+		cmd := exec.Command(path, plan.Args[1:]...)
+		cmd.Env = plan.Env
+		out, err := cmd.CombinedOutput()
+		fmt.Print(strings.ReplaceAll(string(out), "docker compose", "devopsy"))
+		if err != nil {
+			if ee, ok := err.(*exec.ExitError); ok {
+				return ee.ExitCode()
+			}
+			return 1
+		}
+		return 0
+	}
+	if notice := plan.Notice; notice != "" {
+		if verboseLevel > 1 && plan.NoticeFull != "" {
+			notice = plan.NoticeFull
+		}
+		cli.Fprint(os.Stderr, cyan, notice, color)
 	}
 	// Replace this process, so signals and the terminal go straight to the
 	// command, as with the shell version's exec.
