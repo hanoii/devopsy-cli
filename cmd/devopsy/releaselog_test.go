@@ -23,3 +23,21 @@ func TestReleaseLogText(t *testing.T) {
 		t.Errorf("no time: %q", l.Text())
 	}
 }
+
+// A progress display that goes back up to redraw its lines (BuildKit on a
+// terminal) leaves only its last frame in the log.
+func TestReleaseLogFrames(t *testing.T) {
+	l := &releaseLog{}
+	for _, chunk := range []string{"start\n", "#1 step one\n#2 step two 0.1s\n", "\x1b[2A\x1b[2K#1 step one DONE\n\x1b[2K#2 step two 0.5s\n", "\x1b[1A\x1b[2K#2 step two DONE\n", "end\n"} {
+		_, _ = l.Write([]byte(chunk))
+	}
+	got := string(l.Text())
+	for _, want := range []string{" start\n", " #1 step one DONE\n", " #2 step two DONE\n", " end\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "step one") != 1 || strings.Count(got, "step two") != 1 {
+		t.Errorf("frames kept:\n%s", got)
+	}
+}

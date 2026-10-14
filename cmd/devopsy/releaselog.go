@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,10 @@ var terminalCodes = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x
 // "⠋ Container ... Starting"): only its final state (✔, ✘) is kept.
 var spinner = regexp.MustCompile(`^\s*[\x{2800}-\x{28FF}]`)
 
+// cursorUp is a progress display (BuildKit's, on a terminal) going back
+// up n lines to redraw them: those n lines are superseded.
+var cursorUp = regexp.MustCompile(`\x1b\[([0-9]*)A`)
+
 // Text is the log as plain text, each line after its time: without
 // terminal codes, with only the last state of lines a progress display
 // rewrote, and without the empty lines its redraws leave.
@@ -109,17 +114,36 @@ func (l *releaseLog) Text() []byte {
 	if l.cur.Len() > 0 {
 		lines = append(lines[:len(lines):len(lines)], logLine{l.start, l.cur.String()})
 	}
-	var b strings.Builder
+	// Frames: a line that moves the cursor up n lines redraws them, so
+	// those n go, empty ones included (hence they are dropped only below).
+	type kept struct {
+		at   time.Time
+		text string
+	}
+	var out []kept
 	for _, line := range lines {
+		for _, m := range cursorUp.FindAllStringSubmatch(line.text, -1) {
+			n := 1
+			if m[1] != "" {
+				n, _ = strconv.Atoi(m[1])
+			}
+			if n > len(out) {
+				n = len(out)
+			}
+			out = out[:len(out)-n]
+		}
 		text := strings.TrimRight(terminalCodes.ReplaceAllString(line.text, ""), "\r")
 		if j := strings.LastIndex(text, "\r"); j >= 0 {
 			text = text[j+1:]
 		}
-		text = strings.TrimRight(text, " \t")
-		if strings.TrimSpace(text) == "" || spinner.MatchString(text) {
+		out = append(out, kept{line.at, strings.TrimRight(text, " \t")})
+	}
+	var b strings.Builder
+	for _, line := range out {
+		if strings.TrimSpace(line.text) == "" || spinner.MatchString(line.text) {
 			continue
 		}
-		b.WriteString(line.at.UTC().Format(logTime) + " " + text + "\n")
+		b.WriteString(line.at.UTC().Format(logTime) + " " + line.text + "\n")
 	}
 	return []byte(b.String())
 }

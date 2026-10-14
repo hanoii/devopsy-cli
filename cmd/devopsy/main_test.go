@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 func fakeBin(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	docker := "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +146,10 @@ func TestEndToEnd(t *testing.T) {
 	out, code = runDevopsy(t, sub, nil)
 	if code != 0 || !strings.Contains(out, "Project commands (") || !strings.Contains(out, "show") {
 		t.Fatalf("bare devopsy in a project (%d):\n%s", code, out)
+	}
+	// Compose's help for a command, as devopsy's.
+	if out, code := runDevopsy(t, sub, nil, "ps", "--help"); code != 0 || !strings.Contains(out, "Usage:  devopsy ps [OPTIONS] [SERVICE...]") || strings.Contains(out, "docker compose") || strings.Contains(out, "Running ") {
+		t.Errorf("compose help (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, t.TempDir(), nil)
 	if code != 0 || !strings.Contains(out, "Not in a devopsy project") {
