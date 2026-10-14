@@ -61,12 +61,15 @@ repositories fit together and the open ideas.
   broken.
 - Few dependencies, standard library first. Linux and macOS only.
 - **Color** only on a terminal and without `NO_COLOR` (`styleFor`), or
-  with `DEVOPSY_COLOR` set (`cli.ColorEnv`): devopsy exports it into every
-  session when its stderr is a terminal (`remote.Color`, a line before each
-  script), so devopsy on the server colors its messages and Compose gets
-  `--ansi always` (the `-T` sessions of a sync have no tty); release logs
-  strip the codes. Help is colored by layout (headings end with `:`,
-  entries start with two spaces).
+  with `DEVOPSY_COLOR` set (`cli.ColorEnv`). A session's lines are colored
+  here as they arrive (`remote.Colorize`, line-buffered, on the terminal
+  writers only, the marker taken out first in a sync): `devopsy:` lines
+  cyan, red when they report a failure, Compose's done steps green and
+  the steps on the way dim, errors red; coloring on the server reaches
+  nothing (plain progress, echoed lines). `remote.Color` also exports
+  `DEVOPSY_COLOR` into sessions, for the little the server colors itself.
+  Release logs get the raw lines. Help is colored by layout (headings end
+  with `:`, entries start with two spaces).
 - Project-specific behavior belongs in projects' `.devopsy/commands/`.
 
 ## Config and targets
