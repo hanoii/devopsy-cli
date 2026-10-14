@@ -753,16 +753,12 @@ Tools:
 			desc := CommandDescription(filepath.Join(projectDir, "commands", c))
 			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
 		}
-		b.WriteString("\n")
-		if help := ComposeHelp(os.Environ()); help != "" {
-			b.WriteString("Any other word is docker compose's, with the project's files, as its own help says\n(devopsy up -d, devopsy logs -f <service>; the flags go before the command); anything else is an error.\n\n")
-			b.WriteString(help + "\n")
-		} else {
-			b.WriteString(`Other words are docker compose's commands, with the project's files
-(devopsy up -d, devopsy logs -f <service>...); anything else is an error.
+		b.WriteString(`
+Any other word is docker compose's, with the project's files: devopsy up -d,
+devopsy logs -f <service>; anything else is an error. Compose's own help, as
+devopsy's: devopsy -- --help, devopsy <command> --help.
 
 `)
-		}
 	}
 	b.WriteString("More in the README: https://github.com/hanoii/devopsy-cli\n")
 	return b.String()
