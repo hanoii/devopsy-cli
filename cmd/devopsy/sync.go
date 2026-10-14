@@ -315,7 +315,20 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			flush()
 			return 130
 		}
-		res = <-done
+		// The run step is the server's now: an interrupt here would only
+		// cut the session, failing the step and bringing the previous
+		// release back. Say so once; a second one does it.
+		select {
+		case res = <-done:
+		case <-sigs:
+			say(yellow, "devopsy: interrupted: the run step goes on on @"+job.child.Address+" (devopsy @"+targetRef(job.child)+" --log shows how it ends). Ctrl-C again ends the session, which fails it: the previous release comes back")
+			select {
+			case res = <-done:
+			case <-sigs:
+				flush()
+				return 130
+			}
+		}
 	}
 	flush()
 	if res.err != nil {
