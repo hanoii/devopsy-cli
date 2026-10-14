@@ -259,7 +259,7 @@ func quoteAll(args []string) string {
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
-// colored here as they arrive (Colorize), and ColorEnv is exported into
+// colored locally as they arrive (Colorize), and ColorEnv is exported into
 // every session for what the server can color itself.
 var Color bool
 

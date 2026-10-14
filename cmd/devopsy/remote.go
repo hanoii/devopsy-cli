@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -65,7 +66,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	help := len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h"))
 	load := remote.LoadTarget
 	switch {
-	case len(args) > 1 && slices.Contains(cli.ServerScope, args[1]):
+	case len(args) > 1 && (slices.Contains(cli.ServerScope, args[1]) || needsServer(projectDir, args[1])):
 		// Only its server: @<server> works too.
 		load = remote.ServerTarget
 	case help:
@@ -306,7 +307,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		local := func(phase string, list []string, commit string) int {
 			for _, step := range list {
 				say(cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase))
-				if code := runLocalStep(t, remote.StepArgs(step), commit); code != 0 {
+				if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
 					rlog.Line(fmt.Sprintf("devopsy: 'devopsy %s' exited %d", step, code))
 					return code
 				}
@@ -466,15 +467,52 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return save(record.ID, 0)
 
 	default:
-		// A local-only command fails here, before connecting: the
+		// A local command that needs an address runs locally, given it as
+		// typed; one that takes none fails locally, before connecting: the
 		// server's devopsy would refuse it too, an older one would run it.
 		if dir := commandsDir(t, projectDir); dir != "" && slices.Contains(cli.CustomCommands(dir), args[0]) {
-			if err := cli.CheckCommandScope(dir, args[0], true); err != nil {
+			run, err := cli.CheckCommand(dir, args[0], cli.Addressed)
+			if err != nil {
 				return fail(err.Error())
+			}
+			if run.RunsLocal() {
+				return runAddressed(filepath.Dir(dir), addr, args, verbose)
 			}
 		}
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)
 	}
+}
+
+// needsServer reports whether name is a local project command that needs
+// only a server: its address resolves as a server's.
+func needsServer(projectDir, name string) bool {
+	if projectDir == "" || !slices.Contains(cli.CustomCommands(projectDir), name) {
+		return false
+	}
+	run, err := cli.ReadCommandRun(filepath.Join(projectDir, "commands", name))
+	return err == nil && run.Needs == "server"
+}
+
+// runAddressed runs a local command that needs an address: devopsy again,
+// replacing this one, in the command's project, with the address as typed.
+func runAddressed(root, address string, args []string, verbose int) int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.Chdir(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	argv := []string{self}
+	for range verbose {
+		argv = append(argv, "-v")
+	}
+	argv = append(argv, args...)
+	err = syscall.Exec(self, argv, cli.CommandTargetEnviron(os.Environ(), address))
+	fmt.Fprintln(os.Stderr, err)
+	return 126
 }
 
 // commandsDir is the .devopsy/ whose commands t runs, as far as this
@@ -489,8 +527,8 @@ func commandsDir(t *remote.Target, projectDir string) string {
 	return ""
 }
 
-// checkStepScopes refuses steps naming a project command where its scope
-// says it does not run, before anything changes: local steps run here,
+// checkStepScopes refuses steps naming a project command where its ## Run:
+// and ## Needs: say it does not run, before anything changes: local steps run locally,
 // the others on the server.
 func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 	cmds := cli.CustomCommands(projectDir)
@@ -499,7 +537,15 @@ func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 		if len(args) == 0 || !slices.Contains(cmds, args[0]) {
 			return nil
 		}
-		if err := cli.CheckCommandScope(projectDir, args[0], onTarget); err != nil {
+		// A local step has its target: a command that needs one gets it.
+		where := cli.OnServer
+		if !onTarget {
+			where = cli.Bare
+			if run, err := cli.ReadCommandRun(filepath.Join(projectDir, "commands", args[0])); err == nil && run.Needs != "" {
+				where = cli.Addressed
+			}
+		}
+		if _, err := cli.CheckCommand(projectDir, args[0], where); err != nil {
 			where := "a remote step"
 			if !onTarget {
 				where = "a local step"
@@ -526,11 +572,11 @@ func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 	return nil
 }
 
-// runLocalStep runs `devopsy args...` here, in the local project, for a
+// runLocalStep runs `devopsy args...` in the local project, for a
 // release or rollback of t: with the target's env, DEVOPSY_TARGET and, for
 // a release, DEVOPSY_RELEASE_COMMIT, over the caller's environment. Never
 // the server's shared/.env: its secrets stay there.
-func runLocalStep(t *remote.Target, args []string, commit string) int {
+func runLocalStep(t *remote.Target, projectDir string, args []string, commit string) int {
 	self, err := os.Executable()
 	if err != nil {
 		self = "devopsy"
@@ -549,6 +595,12 @@ func runLocalStep(t *remote.Target, args []string, commit string) int {
 	}
 	if commit != "" {
 		cmd.Env = append(cmd.Env, "DEVOPSY_RELEASE_COMMIT="+commit)
+	}
+	// A command that needs an address gets the target's.
+	if len(args) > 0 && slices.Contains(cli.CustomCommands(projectDir), args[0]) {
+		if run, err := cli.ReadCommandRun(filepath.Join(projectDir, "commands", args[0])); err == nil && run.Needs != "" {
+			cmd.Env = cli.CommandTargetEnviron(cmd.Env, t.Address)
+		}
 	}
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError

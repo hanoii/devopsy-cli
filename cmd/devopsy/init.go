@@ -14,7 +14,8 @@ import (
 )
 
 // runInit implements `devopsy --init [project]`: a new .devopsy/config.yaml,
-// in the project devopsy finds from here, else in a new .devopsy/ here. An
+// in the project devopsy finds from the current directory, else in a new
+// .devopsy/ there. An
 // existing config is never touched: --debug schema documents every key.
 func runInit(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {

@@ -141,7 +141,7 @@ printf '%s\n' "$f"
 // (exit 3), or the last key left (exit 4: it would lock everyone out).
 func KeysRemoveScript() string {
 	return keysPrelude + keysLock + `blob=$(cat)
-[ -f "$f" ] || { echo "devopsy: no authorized keys here" >&2; exit 3; }
+[ -f "$f" ] || { echo "devopsy: no authorized keys on this server" >&2; exit 3; }
 grep -qF -- " $blob" "$f" || { echo "devopsy: that key is not authorized" >&2; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true
 if ! grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)' "$f.tmp"; then

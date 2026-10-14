@@ -190,8 +190,8 @@ func TestBuildCustomCommand(t *testing.T) {
 	if plan.Path != cmd || !slices.Equal(plan.Args, []string{cmd, "a b", "c"}) {
 		t.Fatalf("plan %+v", plan)
 	}
-	if v, _ := envValue(t, plan.Env, "DEVOPSY_CLI_COMMAND"); v != "deploy" {
-		t.Fatalf("DEVOPSY_CLI_COMMAND %q", v)
+	if v, _ := envValue(t, plan.Env, "DEVOPSY_COMMAND_NAME"); v != "deploy" {
+		t.Fatalf("DEVOPSY_COMMAND_NAME %q", v)
 	}
 
 	// Not executable: not a command, and not compose's either.
@@ -200,28 +200,44 @@ func TestBuildCustomCommand(t *testing.T) {
 	}
 }
 
-// A command's ## Scope: local never runs in a release, target only does.
-func TestBuildCommandScope(t *testing.T) {
+// ## Run: and ## Needs: say where a command runs: local never in a
+// release, target only there, and a local one that needs an address gets
+// it from the devopsy that read it, in DEVOPSY_COMMAND_TARGET.
+func TestBuildCommandRun(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
-		"commands/image*":  "#!/bin/sh\n## Scope: local\n",
-		"commands/deploy*": "#!/bin/sh\n## Scope: Target\n",
-		"commands/both*":   "#!/bin/sh\n## Scope: any\n",
-		"commands/typo*":   "#!/bin/sh\n## Scope: server\n",
+		"commands/image*":  "#!/bin/sh\n## Run: local\n",
+		"commands/deploy*": "#!/bin/sh\n## Run: Target\n",
+		"commands/both*":   "#!/bin/sh\n",
+		"commands/push*":   "#!/bin/sh\n## Run: local\n## Needs: target\n",
+		"commands/tunnel*": "#!/bin/sh\n## Run: local\n## Needs: server\n",
+		"commands/typo*":   "#!/bin/sh\n## Run: server\n",
+		"commands/odd*":    "#!/bin/sh\n## Needs: server\n",
 	})
 	release := filepath.Join(root, ProjectDirName, "target.env")
+	addressed := []string{commandTargetInternal + "=vm1:prod", CommandTargetEnv + "=stale"}
 	for _, c := range []struct {
 		release bool
+		env     []string
 		cmd     string
 		err     string
+		target  string
 	}{
-		{false, "image", ""},
-		{false, "both", ""},
-		{false, "deploy", "deploy runs only on a target (## Scope: target in "},
-		{false, "typo", "## Scope: server is not local, target or any"},
-		{true, "deploy", ""},
-		{true, "both", ""},
-		{true, "image", "image runs only on your machine (## Scope: local in "},
+		{false, nil, "image", "", ""},
+		{false, nil, "both", "", ""},
+		{false, nil, "deploy", "deploy runs only on a target (## Run: target in ", ""},
+		{false, nil, "push", "push needs a target (## Needs: target in ", ""},
+		{false, nil, "tunnel", "tunnel needs a server (## Needs: server in ", ""},
+		{false, nil, "typo", "## Run: server is not local or target", ""},
+		{false, nil, "odd", "## Needs: server takes ## Run: local", ""},
+		{false, addressed, "push", "", "vm1:prod"},
+		{false, addressed, "tunnel", "", "vm1:prod"},
+		{false, addressed, "image", "image runs only on your machine and takes no address", ""},
+		// A command without Needs never sees an outer one's address.
+		{false, []string{CommandTargetEnv + "=stale"}, "both", "", ""},
+		{true, nil, "deploy", "", ""},
+		{true, nil, "both", "", ""},
+		{true, nil, "image", "image runs only on your machine (## Run: local in ", ""},
 	} {
 		if c.release {
 			if err := os.WriteFile(release, nil, 0o644); err != nil {
@@ -230,9 +246,20 @@ func TestBuildCommandScope(t *testing.T) {
 		} else {
 			os.Remove(release)
 		}
-		_, err := build(root, []string{c.cmd}, nil)
+		plan, err := build(root, []string{c.cmd}, c.env)
 		if (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
 			t.Errorf("%s (release %v): %v, want %q", c.cmd, c.release, err, c.err)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		got, _ := envValue(t, plan.Env, CommandTargetEnv)
+		if got != c.target {
+			t.Errorf("%s: %s %q, want %q", c.cmd, CommandTargetEnv, got, c.target)
+		}
+		if _, ok := envValue(t, plan.Env, commandTargetInternal); ok {
+			t.Errorf("%s: %s reached the command", c.cmd, commandTargetInternal)
 		}
 	}
 }
@@ -244,7 +271,7 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 		"commands/top*": "#!/bin/sh\n",
 	})
 	// Inside commands/up, `devopsy up` reaches compose...
-	plan, err := build(root, []string{"up", "-d"}, []string{"DEVOPSY_CLI_COMMAND=up"})
+	plan, err := build(root, []string{"up", "-d"}, []string{"DEVOPSY_COMMAND_NAME=up"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +279,7 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 		t.Fatalf("recursed into the custom command: %+v", plan)
 	}
 	// ...while another custom command still runs.
-	plan, err = build(root, []string{"top"}, []string{"DEVOPSY_CLI_COMMAND=up"})
+	plan, err = build(root, []string{"top"}, []string{"DEVOPSY_COMMAND_NAME=up"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,11 +293,12 @@ func TestUsage(t *testing.T) {
 		"compose.yaml":     minimalCompose,
 		"commands/deploy*": "#!/bin/sh\n## Description: Pull and roll out\n",
 		"commands/plain*":  "#!/bin/sh\n",
-		"commands/image*":  "#!/bin/sh\n## Scope: local\n",
-		"commands/go*":     "#!/bin/sh\n## Scope: target\n",
+		"commands/image*":  "#!/bin/sh\n## Run: local\n",
+		"commands/go*":     "#!/bin/sh\n## Run: target\n",
+		"commands/push*":   "#!/bin/sh\n## Description: Push it\n## Run: local\n## Needs: server\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "anything else is an error", "Releases:", "    @t --release [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

@@ -35,7 +35,7 @@ defaults:
   # devopsy command line. The remote ones share one SSH session, under the
   # release lock.
   release:
-    # Before anything changes: local steps (here), then remote ones (on the
+    # Before anything changes: local steps, then remote ones (on the
     # server, in the current release). A failure stops there.
     before:
       - local: image
@@ -124,7 +124,7 @@ aliases:
 # Settings for releases landing on this machine: on a server, its own
 # file. Never from a project.
 releases:
-  # Where releases live; relative target paths resolve here. Default: home.
+  # Where releases live. Default: home.
   root: /srv
   # Releases each environment keeps unless its project says otherwise.
   keep: 5

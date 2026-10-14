@@ -17,14 +17,14 @@ import (
 // runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file>
 // [--restricted] | remove <key>]: the deploy user's authorized_keys on the
 // target's server, edited over the usual session, as that user. Public
-// keys only ever travel; runSSHKeysGenerate makes a pair here.
+// keys only ever travel; runSSHKeysGenerate makes a local pair.
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
 	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
-	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a key pair here, no target)"
+	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
 	restricted := false
 	var words []string
 	for i := 0; i < len(args); i++ {
@@ -191,7 +191,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 }
 
 // runSSHKeysGenerate implements devopsy --ssh-keys-generate [<name>]
-// [--out <file>]: an ed25519 pair here, with ssh-keygen, for a CI system
+// [--out <file>]: a local ed25519 pair, with ssh-keygen, for a CI system
 // or a machine, to authorize with devopsy @<target> --ssh-keys add. The
 // private key stays where it was made.
 func runSSHKeysGenerate(args []string, color bool) int {

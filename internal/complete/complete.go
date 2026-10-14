@@ -398,14 +398,14 @@ func targetDescription(t *remote.Target) string {
 	return "environment"
 }
 
-// projectCommands are the commands that run here, or on a target.
-func projectCommands(projectDir string, onTarget bool) []Candidate {
+// projectCommands are the commands that run locally, or on a target.
+func projectCommands(projectDir string, addressed bool) []Candidate {
 	if projectDir == "" {
 		return nil
 	}
 	var out []Candidate
 	for _, c := range cli.CustomCommands(projectDir) {
-		if cli.CheckCommandScope(projectDir, c, onTarget) != nil {
+		if !cli.CommandOffered(projectDir, c, addressed) {
 			continue
 		}
 		out = append(out, Candidate{c, cli.CommandDescription(filepath.Join(projectDir, "commands", c)), GroupProject})

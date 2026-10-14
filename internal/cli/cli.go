@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -154,6 +155,16 @@ func (e *Env) Set(k, v string) {
 		e.keys = append(e.keys, k)
 	}
 	e.values[k] = v
+}
+
+// Unset removes a variable.
+func (e *Env) Unset(k string) {
+	if _, ok := e.values[k]; !ok {
+		return
+	}
+	delete(e.values, k)
+	delete(e.caller, k)
+	e.keys = slices.DeleteFunc(e.keys, func(s string) bool { return s == k })
 }
 
 // Mark records k as loaded or computed by devopsy.
@@ -305,46 +316,6 @@ func commandHeader(path, key string) string {
 	return ""
 }
 
-// CommandScope reads a command's `## Scope:` line: local (only on this
-// machine, never in a release), target (only through @<target>, in a
-// release) or any, the default. It is the help's prefix, like a flag's.
-func CommandScope(path string) (Scope, error) {
-	switch v := commandHeader(path, "## Scope:"); strings.ToLower(v) {
-	case "", "any":
-		return LocalOrTarget, nil
-	case "local":
-		return Local, nil
-	case "target":
-		return Target, nil
-	default:
-		return LocalOrTarget, fmt.Errorf("%s: ## Scope: %s is not local, target or any", path, v)
-	}
-}
-
-// InRelease reports whether projectDir is a release's .devopsy/, on a
-// server: every release has target.env, a checkout never does.
-func InRelease(projectDir string) bool {
-	_, err := os.Stat(filepath.Join(projectDir, remote.TargetEnvFile))
-	return err == nil
-}
-
-// CheckCommandScope refuses a project command where its scope says it
-// does not run: remote is true when it is to run on a target.
-func CheckCommandScope(projectDir, name string, remote bool) error {
-	path := filepath.Join(projectDir, "commands", name)
-	scope, err := CommandScope(path)
-	if err != nil {
-		return err
-	}
-	switch {
-	case scope == Local && remote:
-		return fmt.Errorf("%s runs only on your machine (## Scope: local in %s), never on a target", name, path)
-	case scope == Target && !remote:
-		return fmt.Errorf("%s runs only on a target (## Scope: target in %s): devopsy @<target> %s", name, path, name)
-	}
-	return nil
-}
-
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
@@ -405,8 +376,8 @@ runs.
 On one server, one container copies between the two directories. Across
 servers, the parent's runs an rsync daemon for the copy and reaches the
 child's over SSH with your agent, forwarded for that session only: an agent
-must be running here (in CI too), and the child's host must be reachable
-from the parent's as ssh -G resolves it here (no ProxyCommand or ProxyJump).
+must be running locally (in CI too), and the child's host must be reachable
+from the parent's as ssh -G resolves it locally (no ProxyCommand or ProxyJump).
 A CI key needs restrict,agent-forwarding,port-forwarding (--ssh-keys add --restricted).
 
 The parent comes from the child's instance and the usual server variables
@@ -446,14 +417,14 @@ phases:
     prod:
       release:
         before:                # before anything changes; a failure stops
-          - local: image       #   here, on this machine, first
+          - local: image       #   locally, first
           - remote: maint on   #   on the server, in the current release
         prepare: [secrets]     # on the server, in the new release before it
                                # goes live (then: the variables check)
         run: deploy            # once it is current: the release itself
         after:                 # once live; a failure is only reported
           - remote: maint off  #   on the server first
-          - local: notify      #   then here
+          - local: notify      #   then locally
       # or only the run step:
       # release: deploy
 
@@ -597,7 +568,7 @@ caller's environment, then .devopsy/.env).
 	"--upgrade": `Usage: devopsy @<server> --upgrade [vX.Y.Z]
 
 Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
-deploy user, who owns it. devopsy --upgrade does the same here.
+deploy user, who owns it. devopsy --upgrade does the same locally.
 `,
 	"--ssh-config": `Usage: devopsy @<server> --ssh-config
 
@@ -679,7 +650,7 @@ root. Any target on the server does too; the keys are the server's.
                             will do) or that exact comment. The last key is
                             never removed: it would lock everyone out.
 
---ssh-keys-generate, without a target, makes an ed25519 pair here with ssh-keygen,
+--ssh-keys-generate, without a target, makes a local ed25519 pair with ssh-keygen,
 ~/.ssh/<name> and .pub (default devopsy-ci; --out another file), the
 comment the name. Nothing is sent anywhere: add the .pub to each server.
 
@@ -756,8 +727,13 @@ Where each runs:
 		}
 		for _, c := range cmds {
 			path := filepath.Join(projectDir, "commands", c)
-			scope, _ := CommandScope(path)
-			helpLine(&b, scope.prefix(), c, CommandDescription(path))
+			run, _ := ReadCommandRun(path)
+			typed := c
+			if run.RunsLocal() {
+				// The prefix is an address: say it still runs locally.
+				typed += " " + RunsLocallyNote
+			}
+			helpLine(&b, run.Scope().prefix(), typed, CommandDescription(path))
 		}
 		b.WriteString(`Any other word is docker compose's, with the project's files: devopsy up -d,
 devopsy logs -f <service>; anything else is an error. Compose's own help, as
@@ -776,6 +752,9 @@ type loadedProject struct {
 	dir, composeFile, dotenvFile string
 	env                          *Env
 	verbose                      []string
+	// address is a local command's, when the devopsy that read it gave one.
+	address   string
+	addressed bool
 }
 
 // loadProject finds the project from cwd and loads its environment over the
@@ -791,6 +770,12 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 
 	env := NewEnv(environ)
+	// The address of a local command that needs one, from the devopsy
+	// that read it: for that command only, never its children.
+	address, addressed := env.Lookup(commandTargetInternal)
+
+	env.Unset(commandTargetInternal)
+	env.Unset(CommandTargetEnv)
 	env.Set("DEVOPSY_PROJECT_DIR", projectDir)
 	env.first["DEVOPSY_PROJECT_DIR"] = []EnvDef{{Kind: EnvDevopsy, Source: "where it found " + ProjectDirName + "/", Value: projectDir}}
 	verbose := []string{"devopsy: project " + projectDir}
@@ -852,7 +837,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose}, nil
+	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose, address: address, addressed: addressed}, nil
 }
 
 // TraceEnv explains the project's environment as every devopsy command
@@ -940,14 +925,25 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 
 	// A custom command can call `devopsy <same name>` to reach the compose
 	// command it wraps, without recursing into itself.
-	current, _ := env.Lookup("DEVOPSY_CLI_COMMAND")
+	current, _ := env.Lookup("DEVOPSY_COMMAND_NAME")
 	custom := filepath.Join(projectDir, "commands", args[0])
 	secrets := NewSecrets(env, dotenvFile)
 	if current != args[0] && isExecutableFile(custom) {
-		if err := CheckCommandScope(projectDir, args[0], InRelease(projectDir)); err != nil {
+		where := Bare
+		switch {
+		case InRelease(projectDir):
+			where = OnServer
+		case p.addressed:
+			where = Addressed
+		}
+		run, err := CheckCommand(projectDir, args[0], where)
+		if err != nil {
 			return nil, &ExitError{Code: 1, Msg: err.Error()}
 		}
-		env.Set("DEVOPSY_CLI_COMMAND", args[0])
+		if where == Addressed && run.Needs != "" {
+			env.Set(CommandTargetEnv, p.address)
+		}
+		env.Set("DEVOPSY_COMMAND_NAME", args[0])
 		cmdArgs := append([]string{custom}, args[1:]...)
 		return &Plan{
 			Path:    custom,
@@ -1022,7 +1018,7 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 // even through a pipe: devopsy on a server, whose session has none, so
 // its messages and Compose's output (--ansi always) come colored to the
 // operator. Internal: devopsy exports it into every session when it
-// colors here; what a person sets is FORCE_COLOR (ColorForced).
+// colors locally; what a person sets is FORCE_COLOR (ColorForced).
 const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 
 // ColorForced reports whether colors are wanted without a terminal:

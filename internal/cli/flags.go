@@ -12,13 +12,13 @@ type Scope int
 const (
 	// Local runs on this machine only, without a target.
 	Local Scope = iota
-	// LocalOrTarget runs here, or with @<target> on it: [@t].
+	// LocalOrTarget runs locally, or with @<target> on it: [@t].
 	LocalOrTarget
 	// Target needs @<target>: @t.
 	Target
 	// Server needs a server: @<server> or any target's (remote.ServerTarget): @s.
 	Server
-	// LocalOrServer runs here, or with @<server> on one: [@s].
+	// LocalOrServer runs locally, or with @<server> on one: [@s].
 	LocalOrServer
 )
 
@@ -50,7 +50,7 @@ type FlagGroup struct {
 
 // Flags are devopsy's own flags, by task, common first: what help lists,
 // completion offers, and which scope each resolves its address with. A
-// flag that works here and on servers differently (--upgrade) is listed
+// flag that works locally and on servers differently (--upgrade) is listed
 // once for each. A new flag goes here.
 var Flags = []FlagGroup{
 	{"Releases", []Flag{
@@ -80,7 +80,7 @@ var Flags = []FlagGroup{
 		{Name: "--debug", Args: "[topic]", Scope: LocalOrTarget, Desc: "what devopsy sees (--debug --help)"},
 	}},
 	{"Servers and SSH", []Flag{
-		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "an SSH key pair here, for CI"},
+		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "a local SSH key pair, for CI"},
 		{Name: "--ssh-keys", Args: "[list | add <file> | remove <key>]", Scope: Server, Desc: "who may log in as the deploy user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
@@ -88,7 +88,7 @@ var Flags = []FlagGroup{
 	{"Setup and tools", []Flag{
 		{Name: "--init", Args: "[project]", Scope: Local, Desc: "a new .devopsy/config.yaml"},
 		{Name: "--context-hash", Args: "[service]", Scope: Local, Desc: "a hash of an image's build inputs"},
-		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, from here"},
+		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, checked locally"},
 		{Name: "--upgrade", Args: "[v]", Scope: Local, Desc: "this devopsy, to latest or v"},
 		{Name: "--completion", Args: "<shell>", Scope: Local, Desc: "shell completion: bash, zsh or fish"},
 		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},

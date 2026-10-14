@@ -38,6 +38,14 @@ func (s style) scope(t string) string {
 	return s.wrap("\033[0;35m", t)
 }
 
+// entry colors what you type, and a command's "(runs locally)" apart.
+func (s style) entry(t string) string {
+	if name, ok := strings.CutSuffix(t, " "+cli.RunsLocallyNote); ok {
+		return s.name(name) + " " + s.ok(cli.RunsLocallyNote)
+	}
+	return s.name(t)
+}
+
 // scopePrefix is an entry's scope, before what you type.
 var scopePrefix = regexp.MustCompile(`^(\[?@[ts]\]?)(?: (.*))?$`)
 
@@ -65,9 +73,9 @@ func (s style) help(text string) string {
 						// The legend.
 						return p[1] + s.scope(q[1]) + p[3]
 					}
-					return p[1] + s.scope(q[1]) + " " + s.name(q[2]) + p[3]
+					return p[1] + s.scope(q[1]) + " " + s.entry(q[2]) + p[3]
 				}
-				return p[1] + s.name(p[2]) + p[3]
+				return p[1] + s.entry(p[2]) + p[3]
 			})
 		}
 	}

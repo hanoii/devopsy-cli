@@ -74,7 +74,7 @@ func missingVars(p *loadedProject) error {
 		return &Output{}
 	}
 	var b strings.Builder
-	b.WriteString("devopsy: compose requires variables that are not set here:\n")
+	b.WriteString("devopsy: compose requires variables that are not set:\n")
 	width := 0
 	for _, m := range missing {
 		width = max(width, len(m[0]))
