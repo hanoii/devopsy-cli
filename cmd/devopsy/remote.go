@@ -42,6 +42,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		projectEnv = env.Lookup
 	}
 	remote.Color = color
+	if w, h, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
+		remote.TTY = fmt.Sprintf("%d %d", w, h)
+	}
 	if verbose > 0 {
 		// Each SSH session (-vv: and its script), with the project's secrets
 		// masked. devopsy on the server is verbose too.

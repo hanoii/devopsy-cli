@@ -69,7 +69,13 @@ repositories fit together and the open ideas.
   nothing (plain progress, echoed lines). `remote.Color` also exports
   `DEVOPSY_COLOR` into sessions, for the little the server colors itself.
   Release logs get the raw lines. Help is colored by layout (headings end
-  with `:`, entries start with two spaces).
+  with `:`, entries start with two spaces). A terminal is another thing:
+  `remote.TTY` (`DEVOPSY_TTY='<cols> <rows>'`, exported into sessions
+  when stderr is one, colors or not) lets a session without a tty (a
+  sync's `-T` holder) run the run step under `script` (util-linux, like
+  `flock`; `with_tty` in `basePrelude`, plain when `script` is missing or
+  stdout is a tty already), so BuildKit draws its live progress through
+  the pipe as it does on a `-t` release.
 - Project-specific behavior belongs in projects' `.devopsy/commands/`.
 
 ## Config and targets
@@ -174,7 +180,7 @@ repositories fit together and the open ideas.
 - `mode:` defaults to `build`: it works for every project, where a wrong
   `image` fails the release.
 - Releases are full tar streams (no rsync: macOS ships openrsync). Server
-  needs: `devopsy`, `tar`, `flock`; locally only `ssh`.
+  needs: `devopsy`, `tar`, `flock` and `script` (util-linux; without the last, no live build progress on syncing releases); locally only `ssh`.
 - `--vars` sends values over SSH's stdin, never as arguments; edits replace
   keys in place, under the release lock (deploy commands write secrets too).
 - `--destroy`: the environment's `destroy:` step (one command, required)

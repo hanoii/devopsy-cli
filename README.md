@@ -79,7 +79,7 @@ To get there it makes choices for you:
   visible with `devopsy --env`. Anything else is compose's.
 - **Push over SSH, never pull.** The server needs no access to the
   repository: no deploy keys, tokens or webhooks. Locally devopsy needs
-  `ssh`; on the server `devopsy`, `tar` and `flock`.
+  `ssh`; on the server `devopsy`, `tar`, `flock` and `script`.
 - **Releases are complete directories,** run through a `current` symlink;
   `shared/` keeps data and secrets across them. A release never changes a
   live tree in place.
@@ -287,10 +287,12 @@ capability computed. Secrets are masked as above, unless `--show`. For a
 target, the caller's environment is the server's SSH session plus the
 `COMPOSE_PROJECT_NAME` your devopsy sends.
 
-Help, `--debug`, devopsy's messages and Compose's output are in color on a
-terminal, unless `NO_COLOR=1`, on servers too: devopsy tells the server
-your terminal takes them (`DEVOPSY_COLOR=1`, which also forces them when
-set by hand). Logs are saved without them.
+Help, `--debug`, devopsy's messages and the lines a server sends are in
+color on a terminal, unless `NO_COLOR=1` (`DEVOPSY_COLOR=1` forces them).
+A release that syncs runs its session without a terminal, so its run step
+gets one on the server (`script`, from util-linux) sized like yours, and a
+build's live progress looks as it does on a plain release. Logs are saved
+without any of it.
 
 ## Servers
 

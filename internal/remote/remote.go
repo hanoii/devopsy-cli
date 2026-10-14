@@ -263,6 +263,15 @@ var Verbose bool
 // every session for what the server can color itself.
 var Color bool
 
+// TTY is the operator's terminal size, "<cols> <rows>", when stderr is one
+// (whatever the colors), exported into every session as TTYEnv: a session
+// without a tty (a sync's) runs the run step on a pseudo-terminal of that
+// size, so BuildKit draws its live progress (with_tty, basePrelude).
+var TTY string
+
+// TTYEnv carries TTY to the server.
+const TTYEnv = "DEVOPSY_TTY"
+
 // Trace, when set, receives each SSH command, and with TraceScripts the
 // script it runs.
 var (
@@ -303,6 +312,13 @@ func lockWait(fd int, shared bool, what string) string {
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
 	return `settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
+with_tty() {
+  if [ -n "${DEVOPSY_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
+    script -qec "stty cols ${DEVOPSY_TTY%% *} rows ${DEVOPSY_TTY#* } 2>/dev/null; $1" /dev/null
+  else
+    eval "$1"
+  fi
+}
 root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
@@ -473,7 +489,7 @@ cd "$base"
 	}
 	if len(p.Run) > 0 {
 		s += `if [ "$status" = 0 ]; then
-` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && ` + devopsyCall(projectName, p.Run, false) + `) || status=$?
+` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
 fi
 `
 	}
@@ -665,6 +681,9 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 	// they are in use while another session (or the user's own) holds them.
 	if Color {
 		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
+	}
+	if TTY != "" {
+		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
 	}
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
