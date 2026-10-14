@@ -286,6 +286,11 @@ func isExecutableFile(path string) bool {
 // CommandDescription reads a command's `## Description:` line, as ddev does,
 // from the top of the file.
 func CommandDescription(path string) string {
+	return commandHeader(path, "## Description:")
+}
+
+// commandHeader reads a command's `## <Key>:` line from the top of the file.
+func commandHeader(path, key string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -293,11 +298,51 @@ func CommandDescription(path string) string {
 	lines := strings.SplitN(string(data), "\n", 40)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if len(line) > 15 && strings.EqualFold(line[:15], "## Description:") {
-			return strings.TrimSpace(line[15:])
+		if len(line) > len(key) && strings.EqualFold(line[:len(key)], key) {
+			return strings.TrimSpace(line[len(key):])
 		}
 	}
 	return ""
+}
+
+// CommandScope reads a command's `## Scope:` line: local (only on this
+// machine, never in a release), target (only through @<target>, in a
+// release) or any, the default. It is the help's prefix, like a flag's.
+func CommandScope(path string) (Scope, error) {
+	switch v := commandHeader(path, "## Scope:"); strings.ToLower(v) {
+	case "", "any":
+		return LocalOrTarget, nil
+	case "local":
+		return Local, nil
+	case "target":
+		return Target, nil
+	default:
+		return LocalOrTarget, fmt.Errorf("%s: ## Scope: %s is not local, target or any", path, v)
+	}
+}
+
+// InRelease reports whether projectDir is a release's .devopsy/, on a
+// server: every release has target.env, a checkout never does.
+func InRelease(projectDir string) bool {
+	_, err := os.Stat(filepath.Join(projectDir, remote.TargetEnvFile))
+	return err == nil
+}
+
+// CheckCommandScope refuses a project command where its scope says it
+// does not run: remote is true when it is to run on a target.
+func CheckCommandScope(projectDir, name string, remote bool) error {
+	path := filepath.Join(projectDir, "commands", name)
+	scope, err := CommandScope(path)
+	if err != nil {
+		return err
+	}
+	switch {
+	case scope == Local && remote:
+		return fmt.Errorf("%s runs only on your machine (## Scope: local in %s), never on a target", name, path)
+	case scope == Target && !remote:
+		return fmt.Errorf("%s runs only on a target (## Scope: target in %s): devopsy @<target> %s", name, path, name)
+	}
+	return nil
 }
 
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
@@ -710,7 +755,9 @@ Where each runs:
 			helpLine(&b, "", "none", "")
 		}
 		for _, c := range cmds {
-			helpLine(&b, "[@t]", c, CommandDescription(filepath.Join(projectDir, "commands", c)))
+			path := filepath.Join(projectDir, "commands", c)
+			scope, _ := CommandScope(path)
+			helpLine(&b, scope.prefix(), c, CommandDescription(path))
 		}
 		b.WriteString(`Any other word is docker compose's, with the project's files: devopsy up -d,
 devopsy logs -f <service>; anything else is an error. Compose's own help, as
@@ -897,6 +944,9 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	custom := filepath.Join(projectDir, "commands", args[0])
 	secrets := NewSecrets(env, dotenvFile)
 	if current != args[0] && isExecutableFile(custom) {
+		if err := CheckCommandScope(projectDir, args[0], InRelease(projectDir)); err != nil {
+			return nil, &ExitError{Code: 1, Msg: err.Error()}
+		}
 		env.Set("DEVOPSY_CLI_COMMAND", args[0])
 		cmdArgs := append([]string{custom}, args[1:]...)
 		return &Plan{

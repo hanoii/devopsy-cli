@@ -482,10 +482,10 @@ func TestReleaseSteps(t *testing.T) {
 		"  release:\n    before: [local: check, remote: mark before]\n    prepare: secrets\n    run: deploy --fast\n    after: [remote: mark after, local: done]\n"
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
-	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\n## Scope: local\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "mark"), "#!/bin/sh\necho \"mark $*\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "secrets"), "#!/bin/sh\ngrep -q '^SECRET=' \"$DEVOPSY_PROJECT_DIR/.env\" || echo SECRET=generated >> \"$DEVOPSY_PROJECT_DIR/.env\"\n", 0o755)
-	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\n[ \"$1\" = --back ] || exit ${FAIL_REMOTE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Scope: target\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\n[ \"$1\" = --back ] || exit ${FAIL_REMOTE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(extra []string, args ...string) (string, int) {
@@ -504,6 +504,21 @@ func TestReleaseSteps(t *testing.T) {
 
 	if out, code := run(nil, "@prod", "--release", "deploy"); code == 0 || !strings.Contains(out, "--release takes no command") {
 		t.Fatalf("release with a command (%d):\n%s", code, out)
+	}
+
+	// Commands' scopes: a local one never runs on the server, as a step or
+	// a word, refused before connecting.
+	write(t, filepath.Join(dot, "config.yaml"), strings.Replace(targets, "run: deploy --fast", "run: check", 1), 0o644)
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "a remote step: check runs only on your machine") {
+		t.Fatalf("local command as a remote step (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(dot, "config.yaml"), strings.Replace(targets, "local: done", "local: deploy", 1), 0o644)
+	if out, code := run(nil, "@prod", "--release"); code == 0 || !strings.Contains(out, "a local step: deploy runs only on a target") {
+		t.Fatalf("target command as a local step (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
+	if out, code := run(nil, "@prod", "check"); code == 0 || !strings.Contains(out, "check runs only on your machine") {
+		t.Fatalf("local command on a target (%d):\n%s", code, out)
 	}
 
 	// A failing local before step stops before the server.

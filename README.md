@@ -225,6 +225,21 @@ with a flag go to compose unchecked.
 **Project commands:** any executable in `.devopsy/commands/`, run with the
 project's `.env` loaded, `DEVOPSY_PROJECT_DIR` (the `.devopsy/` path) and
 `DEVOPSY_CLI_COMMAND`. A `## Description:` line near the top shows in help.
+A `## Scope:` line says where it runs: `local` only on your machine (a
+build that pushes an image; on a server it fails), `target` only through
+`devopsy @<target>` (a deploy; here it fails), `any` (the default) both.
+Help shows it like a flag's scope, completion offers each command where it
+runs, and a release refuses steps that name one in the wrong place
+(`local:` steps run here, the rest on the server) before anything changes.
+devopsy tells a server from your machine by the release's `target.env`, so
+`target` commands do not run in plain directories.
+
+```sh
+#!/bin/sh
+## Description: Build and push the image
+## Scope: local
+```
+
 A command can wrap a compose command of the same name: `commands/up` calling
 `devopsy up` reaches compose, not itself.
 

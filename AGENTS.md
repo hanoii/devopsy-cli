@@ -64,11 +64,20 @@ repositories fit together and the open ideas.
   alone has no `Name`. Every other flag needs an environment, and
   `@<server>:` with one says so.
 - **`cli.Flags` is every flag of devopsy's,** by task group, each with its
-  scope (`Here`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
+  scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
   list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and
   `ServerScope` all come from it, so a new flag is one entry there (a
   flag that differs here and on a server, like `--upgrade`, has one per
   scope). Lines fit 80 columns (`TestUsage`).
+- **Project commands have a scope** too (`## Scope: local|target|any`,
+  `cli.CommandScope`, the same `Scope` values: `Local`, `Target`,
+  `LocalOrTarget`): help's prefix, completion's filter, and
+  `cli.CheckCommandScope` in `Build`, in `runRemote` before connecting
+  (an older server's devopsy would run it) and on release steps
+  (`checkStepScopes`). Where a command runs is decided by the directory,
+  `cli.InRelease` (`target.env` present), never by a variable: a shell on
+  the server or a plain `ssh` has none, and a variable would reach every
+  child. No server scope: a project command comes from a release.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.

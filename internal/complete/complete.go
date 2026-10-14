@@ -132,7 +132,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 				}
 			}
 		}
-		r.Candidates = append(r.Candidates, projectCommands(projectDir)...)
+		r.Candidates = append(r.Candidates, projectCommands(projectDir, false)...)
 		if strings.HasPrefix(cur, "-") {
 			r.Candidates = append(r.Candidates, builtins...)
 		}
@@ -199,7 +199,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 // compose's.
 func completeCommand(cwd, projectDir string, words []string, environ []string) Result {
 	if len(words) == 1 {
-		r := filter(Result{Candidates: projectCommands(projectDir)}, words[0])
+		r := filter(Result{Candidates: projectCommands(projectDir, false)}, words[0])
 		r.Delegate = composeDelegate(cwd, projectDir, words, environ)
 		r.Directive = DirectiveNoFileComp
 		return r
@@ -235,7 +235,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	none := Result{Directive: DirectiveNoFileComp}
 
 	if len(words) == 1 {
-		r := Result{Candidates: projectCommands(projectDir)}
+		r := Result{Candidates: projectCommands(projectDir, true)}
 		// --vars-instance only for a project with instances.
 		var p *remote.Project
 		if projectDir != "" {
@@ -398,12 +398,16 @@ func targetDescription(t *remote.Target) string {
 	return "environment"
 }
 
-func projectCommands(projectDir string) []Candidate {
+// projectCommands are the commands that run here, or on a target.
+func projectCommands(projectDir string, onTarget bool) []Candidate {
 	if projectDir == "" {
 		return nil
 	}
 	var out []Candidate
 	for _, c := range cli.CustomCommands(projectDir) {
+		if cli.CheckCommandScope(projectDir, c, onTarget) != nil {
+			continue
+		}
 		out = append(out, Candidate{c, cli.CommandDescription(filepath.Join(projectDir, "commands", c)), GroupProject})
 	}
 	return out
