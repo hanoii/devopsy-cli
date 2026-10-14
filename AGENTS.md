@@ -71,7 +71,8 @@ repositories fit together and the open ideas.
   Release logs get the raw lines. Help is colored by layout (headings end
   with `:`, entries start with two spaces). A terminal is another thing:
   `remote.TTY` (`DEVOPSY_TTY='<cols> <rows>'`, exported into sessions
-  when stderr is one, colors or not) lets a session without a tty (a
+  when stderr is one, colors or not, 80x24 when its size is unknown, or
+  whatever the operator set by hand) lets a session without a tty (a
   sync's `-T` holder) run the run step under `script` (util-linux, like
   `flock`; `with_tty` in `basePrelude`, plain when `script` is missing or
   stdout is a tty already), so BuildKit draws its live progress through

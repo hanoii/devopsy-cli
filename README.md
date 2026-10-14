@@ -291,7 +291,8 @@ Help, `--debug`, devopsy's messages and the lines a server sends are in
 color on a terminal, unless `NO_COLOR=1` (`DEVOPSY_COLOR=1` forces them).
 A release that syncs runs its session without a terminal, so its run step
 gets one on the server (`script`, from util-linux) sized like yours, and a
-build's live progress looks as it does on a plain release. Logs are saved
+build's live progress looks as it does on a plain release (`DEVOPSY_TTY='120
+40'` set by hand forces that, a terminal here or not). Logs are saved
 without any of it.
 
 ## Servers

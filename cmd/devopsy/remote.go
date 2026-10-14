@@ -42,7 +42,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		projectEnv = env.Lookup
 	}
 	remote.Color = color
-	if w, h, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
+	if v := os.Getenv(remote.TTYEnv); v != "" {
+		// Set by hand: a pseudo-terminal for the run step whatever this is.
+		remote.TTY = v
+	} else if term.IsTerminal(int(os.Stderr.Fd())) {
+		// A terminal of unknown size (one script gave us) is still one.
+		w, h, err := term.GetSize(int(os.Stderr.Fd()))
+		if err != nil || w <= 0 || h <= 0 {
+			w, h = 80, 24
+		}
 		remote.TTY = fmt.Sprintf("%d %d", w, h)
 	}
 	if verbose > 0 {
