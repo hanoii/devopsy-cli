@@ -200,6 +200,43 @@ func TestBuildCustomCommand(t *testing.T) {
 	}
 }
 
+// A command's ## Scope: local never runs in a release, target only does.
+func TestBuildCommandScope(t *testing.T) {
+	root := project(t, "app", map[string]string{
+		"compose.yaml":     minimalCompose,
+		"commands/image*":  "#!/bin/sh\n## Scope: local\n",
+		"commands/deploy*": "#!/bin/sh\n## Scope: Target\n",
+		"commands/both*":   "#!/bin/sh\n## Scope: any\n",
+		"commands/typo*":   "#!/bin/sh\n## Scope: server\n",
+	})
+	release := filepath.Join(root, ProjectDirName, "target.env")
+	for _, c := range []struct {
+		release bool
+		cmd     string
+		err     string
+	}{
+		{false, "image", ""},
+		{false, "both", ""},
+		{false, "deploy", "deploy runs only on a target (## Scope: target in "},
+		{false, "typo", "## Scope: server is not local, target or any"},
+		{true, "deploy", ""},
+		{true, "both", ""},
+		{true, "image", "image runs only on your machine (## Scope: local in "},
+	} {
+		if c.release {
+			if err := os.WriteFile(release, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			os.Remove(release)
+		}
+		_, err := build(root, []string{c.cmd}, nil)
+		if (c.err == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.err)) {
+			t.Errorf("%s (release %v): %v, want %q", c.cmd, c.release, err, c.err)
+		}
+	}
+}
+
 func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":  minimalCompose,
@@ -229,9 +266,11 @@ func TestUsage(t *testing.T) {
 		"compose.yaml":     minimalCompose,
 		"commands/deploy*": "#!/bin/sh\n## Description: Pull and roll out\n",
 		"commands/plain*":  "#!/bin/sh\n",
+		"commands/image*":  "#!/bin/sh\n## Scope: local\n",
+		"commands/go*":     "#!/bin/sh\n## Scope: target\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "anything else is an error", "Releases:", "    @t --release [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "anything else is an error", "Releases:", "    @t --release [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

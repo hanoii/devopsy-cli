@@ -10,16 +10,16 @@ import (
 type Scope int
 
 const (
-	// Here runs on this machine only, without a target.
-	Here Scope = iota
-	// HereOrTarget runs here, or with @<target> on it: [@t].
-	HereOrTarget
+	// Local runs on this machine only, without a target.
+	Local Scope = iota
+	// LocalOrTarget runs here, or with @<target> on it: [@t].
+	LocalOrTarget
 	// Target needs @<target>: @t.
 	Target
 	// Server needs a server: @<server> or any target's (remote.ServerTarget): @s.
 	Server
-	// HereOrServer runs here, or with @<server> on one: [@s].
-	HereOrServer
+	// LocalOrServer runs here, or with @<server> on one: [@s].
+	LocalOrServer
 )
 
 // prefix is how help shows a scope, before the flag.
@@ -28,10 +28,10 @@ func (s Scope) prefix() string {
 }
 
 // Remote reports whether the scope takes an address.
-func (s Scope) Remote() bool { return s != Here }
+func (s Scope) Remote() bool { return s != Local }
 
-// Local reports whether the scope runs without an address.
-func (s Scope) Local() bool { return s == Here || s == HereOrTarget || s == HereOrServer }
+// Unaddressed reports whether the scope runs without an address.
+func (s Scope) Unaddressed() bool { return s == Local || s == LocalOrTarget || s == LocalOrServer }
 
 // Flag is one of devopsy's own flags, as help and completion show it.
 type Flag struct {
@@ -67,33 +67,33 @@ var Flags = []FlagGroup{
 		{Name: "--inherit", Scope: Target, Desc: "the parent's inherit: variables again"},
 	}},
 	{"Variables", []Flag{
-		{Name: "--env", Scope: HereOrTarget, Desc: "what devopsy loads and computes (.env)"},
+		{Name: "--env", Scope: LocalOrTarget, Desc: "what devopsy loads and computes (.env)"},
 		{Name: "--vars", Args: "[get | set | unset KEY...]", Scope: Target, Desc: "the environment's (shared/.env)"},
 		{Name: "--vars-instance", Args: "[...]", Scope: Target, Desc: "the instance's .env"},
 		{Name: "--vars-project", Args: "[...]", Scope: Server, Desc: "the project's .env on the server"},
 	}},
 	{"Running", []Flag{
-		{Name: "--status", Scope: HereOrTarget, Desc: "containers, and the project's own status"},
-		{Name: "--shell", Args: "[service] [-- command...]", Scope: HereOrTarget, Desc: "a shell, or the command, in a container"},
+		{Name: "--status", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
+		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
 		{Name: "--shell-host", Scope: Server, Desc: "a shell on the server itself"},
-		{Name: "--environments", Scope: HereOrServer, Desc: "the project's environments on its servers"},
-		{Name: "--debug", Args: "[topic]", Scope: HereOrTarget, Desc: "what devopsy sees (--debug --help)"},
+		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},
+		{Name: "--debug", Args: "[topic]", Scope: LocalOrTarget, Desc: "what devopsy sees (--debug --help)"},
 	}},
 	{"Servers and SSH", []Flag{
-		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Here, Desc: "an SSH key pair here, for CI"},
+		{Name: "--ssh-keys-generate", Args: "[<name>]", Scope: Local, Desc: "an SSH key pair here, for CI"},
 		{Name: "--ssh-keys", Args: "[list | add <file> | remove <key>]", Scope: Server, Desc: "who may log in as the deploy user"},
 		{Name: "--ssh-config", Scope: Server, Desc: "a ~/.ssh/config block for the server"},
 		{Name: "--upgrade", Args: "[v]", Scope: Server, Desc: "the server's devopsy, to latest or v"},
 	}},
 	{"Setup and tools", []Flag{
-		{Name: "--init", Args: "[project]", Scope: Here, Desc: "a new .devopsy/config.yaml"},
-		{Name: "--context-hash", Args: "[service]", Scope: Here, Desc: "a hash of an image's build inputs"},
-		{Name: "--probe", Args: "<host>...", Scope: Here, Desc: "DNS, certificates, HTTPS, from here"},
-		{Name: "--upgrade", Args: "[v]", Scope: Here, Desc: "this devopsy, to latest or v"},
-		{Name: "--completion", Args: "<shell>", Scope: Here, Desc: "shell completion: bash, zsh or fish"},
-		{Name: "--version", Scope: Here, Desc: "devopsy's, docker's and compose's versions"},
-		{Name: "-v", Also: "-vv", Scope: Here, Desc: "first: what devopsy runs; -vv: scripts too"},
-		{Name: "--help", Also: "-h", Scope: HereOrTarget, Desc: "this help; after a flag, its own"},
+		{Name: "--init", Args: "[project]", Scope: Local, Desc: "a new .devopsy/config.yaml"},
+		{Name: "--context-hash", Args: "[service]", Scope: Local, Desc: "a hash of an image's build inputs"},
+		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, from here"},
+		{Name: "--upgrade", Args: "[v]", Scope: Local, Desc: "this devopsy, to latest or v"},
+		{Name: "--completion", Args: "<shell>", Scope: Local, Desc: "shell completion: bash, zsh or fish"},
+		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},
+		{Name: "-v", Also: "-vv", Scope: Local, Desc: "first: what devopsy runs; -vv: scripts too"},
+		{Name: "--help", Also: "-h", Scope: LocalOrTarget, Desc: "this help; after a flag, its own"},
 	}},
 }
 
@@ -111,7 +111,7 @@ func flagsWhere(ok func(Scope) bool) []Flag {
 }
 
 // LocalFlags are the flags that run without a target.
-func LocalFlags() []Flag { return flagsWhere(Scope.Local) }
+func LocalFlags() []Flag { return flagsWhere(Scope.Unaddressed) }
 
 // RemoteFlags are the flags that take an address.
 func RemoteFlags() []Flag { return flagsWhere(Scope.Remote) }
@@ -139,7 +139,7 @@ var RemoteOnly = func() []string {
 
 // ServerScope are the flags that need only a server: they take @<server>
 // or @<server>: as well as any target (remote.ServerTarget).
-var ServerScope = names(flagsWhere(func(s Scope) bool { return s == Server || s == HereOrServer }))
+var ServerScope = names(flagsWhere(func(s Scope) bool { return s == Server || s == LocalOrServer }))
 
 // helpColumn is where descriptions start in devopsy's help.
 const helpColumn = 36

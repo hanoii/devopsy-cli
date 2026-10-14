@@ -259,6 +259,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if restart == nil || len(remote.StepArgs(restart.Run)) == 0 {
 			restart = t.Release
 		}
+		if err := checkStepScopes(projectDir, steps, restart); err != nil {
+			return fail(err.Error())
+		}
 		phases := remote.RemotePhases(steps, restart)
 
 		// The whole run is recorded and saved on the server once it has
@@ -463,8 +466,64 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return save(record.ID, 0)
 
 	default:
+		// A local-only command fails here, before connecting: the
+		// server's devopsy would refuse it too, an older one would run it.
+		if dir := commandsDir(t, projectDir); dir != "" && slices.Contains(cli.CustomCommands(dir), args[0]) {
+			if err := cli.CheckCommandScope(dir, args[0], true); err != nil {
+				return fail(err.Error())
+			}
+		}
 		return ssh(remote.RunScript(t, projectName, args), nil, tty)
 	}
+}
+
+// commandsDir is the .devopsy/ whose commands t runs, as far as this
+// machine knows: the project's, an alias's source's, else "".
+func commandsDir(t *remote.Target, projectDir string) string {
+	if !t.User {
+		return projectDir
+	}
+	if src := t.SourceDir(); src != "" {
+		return filepath.Join(src, ".devopsy")
+	}
+	return ""
+}
+
+// checkStepScopes refuses steps naming a project command where its scope
+// says it does not run, before anything changes: local steps run here,
+// the others on the server.
+func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
+	cmds := cli.CustomCommands(projectDir)
+	check := func(step string, onTarget bool) error {
+		args := remote.StepArgs(step)
+		if len(args) == 0 || !slices.Contains(cmds, args[0]) {
+			return nil
+		}
+		if err := cli.CheckCommandScope(projectDir, args[0], onTarget); err != nil {
+			where := "a remote step"
+			if !onTarget {
+				where = "a local step"
+			}
+			return fmt.Errorf("%s: %w", where, err)
+		}
+		return nil
+	}
+	for _, s := range steps {
+		if s == nil {
+			continue
+		}
+		var all []error
+		for _, st := range append(append([]remote.Step{}, s.Before...), s.After...) {
+			all = append(all, check(st.Cmd, st.Remote))
+		}
+		for _, c := range append(append([]string{}, s.Prepare...), s.Run) {
+			all = append(all, check(c, true))
+		}
+		if err := errors.Join(all...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // runLocalStep runs `devopsy args...` here, in the local project, for a

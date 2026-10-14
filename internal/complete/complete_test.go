@@ -36,6 +36,8 @@ func setup(t *testing.T) string {
 	write(t, filepath.Join(dot, ".env"), "# comment\nTOKEN=x\nexport USER_NAME='y'\n", 0o644)
 	write(t, filepath.Join(dot, "config.yaml"), "project: app\ninstances: true\nenvironments:\n  prod: {}\n  staging: {}\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "image"), "#!/bin/sh\n## Scope: local\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "release"), "#!/bin/sh\n## Scope: target\n", 0o755)
 	return root
 }
 
@@ -72,7 +74,7 @@ func TestComplete(t *testing.T) {
 		delegate  []string
 		directive int
 	}{
-		{[]string{""}, []string{"@prod", "@staging", "@a-traefik", "deploy"}, []string{""}, DirectiveNoFileComp},
+		{[]string{""}, []string{"@prod", "@staging", "@a-traefik", "deploy", "image"}, []string{""}, DirectiveNoFileComp},
 		{[]string{"@"}, []string{"@prod", "@staging", "@a-traefik", "@vm1:", "@vm 2:", "@orb:", "@builder1:"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm"}, []string{"@vm1:", "@vm 2:"}, nil, DirectiveNoFileComp | DirectiveNoSpace},
 		{[]string{"@b"}, []string{"@builder1:"}, nil, DirectiveNoFileComp | DirectiveNoSpace},
@@ -84,6 +86,11 @@ func TestComplete(t *testing.T) {
 		{[]string{"--completion", "z"}, []string{"zsh"}, nil, DirectiveNoFileComp},
 		{[]string{"--env", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
+		// Commands by scope: local ones here, target ones after @.
+		{[]string{"im"}, []string{"image"}, []string{"im"}, DirectiveNoFileComp},
+		{[]string{"rel"}, nil, []string{"rel"}, DirectiveNoFileComp},
+		{[]string{"@prod", "im"}, nil, []string{"im"}, DirectiveNoFileComp},
+		{[]string{"@prod", "rel"}, []string{"release"}, []string{"rel"}, DirectiveNoFileComp},
 		{[]string{"@prod", "--rel"}, []string{"--release", "--release-sync", "--release-no-sync", "--releases"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:"}, []string{"@vm1:prod", "@vm1:staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
