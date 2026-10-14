@@ -169,7 +169,7 @@ it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
 binary (with `sudo` when its directory is not yours; on servers set up
 with devopsy-server it is the deploy user's, so `devopsy @<server>
---upgrade` upgrades a server from here). At a terminal it
+--upgrade` upgrades a server from your machine). At a terminal it
 checks for a new release once a day in the background and says so; never in
 CI, and `DEVOPSY_NO_UPDATE_CHECK=1` turns it off.
 
@@ -224,20 +224,34 @@ with a flag go to compose unchecked.
 
 **Project commands:** any executable in `.devopsy/commands/`, run with the
 project's `.env` loaded, `DEVOPSY_PROJECT_DIR` (the `.devopsy/` path) and
-`DEVOPSY_CLI_COMMAND`. A `## Description:` line near the top shows in help.
-A `## Scope:` line says where it runs: `local` only on your machine (a
-build that pushes an image; on a server it fails), `target` only through
-`devopsy @<target>` (a deploy; here it fails), `any` (the default) both.
-Help shows it like a flag's scope, completion offers each command where it
-runs, and a release refuses steps that name one in the wrong place
-(`local:` steps run here, the rest on the server) before anything changes.
-devopsy tells a server from your machine by the release's `target.env`, so
-`target` commands do not run in plain directories.
+`DEVOPSY_COMMAND_NAME`. A `## Description:` line near the top shows in help.
+Two more lines say where it runs:
+
+- `## Run: local`: only on your machine (a build that pushes an image); on
+  a server it fails. `## Run: target`: only through `devopsy @<target>`,
+  on the server (a deploy); locally it fails. Without the line, where it is
+  called: locally, or on the target with one.
+- `## Needs: target` or `## Needs: server`, with `## Run: local`: it runs
+  locally but takes an address, `devopsy @prod <command>` or
+  `devopsy @vm1 <command>` (any target gives its server), and gets it as
+  typed in `DEVOPSY_COMMAND_TARGET`, to call devopsy with: nothing else of
+  the target's. As a release's `local:` step it gets the target's
+  address.
+
+Help shows them like a flag's scope (`(runs locally)` after a local
+command that takes an address), completion offers each command where it runs, and
+a release refuses steps that name one in the wrong place (`local:` steps
+run locally, the rest on the server) before anything changes. devopsy tells a
+server from your machine by the release's `target.env`, so `target`
+commands do not run in plain directories.
 
 ```sh
 #!/bin/sh
-## Description: Build and push the image
-## Scope: local
+## Description: Copy a target's database locally
+## Run: local
+## Needs: target
+devopsy @"$DEVOPSY_COMMAND_TARGET" drush sql-dump > .devopsy/mnt/dump.sql
+devopsy drush sql-cli < .devopsy/mnt/dump.sql
 ```
 
 A command can wrap a compose command of the same name: `commands/up` calling
@@ -452,7 +466,7 @@ release:
   run: deploy            # once it is current: the release itself
   after:                 # once live; a failure is only reported
     - remote: maint off  #   on the server, first
-    - local: notify      #   then here
+    - local: notify      #   then locally
 rollback: deploy         # only a run step: the same phases, in the restored release
 ```
 
@@ -650,12 +664,12 @@ So, across servers:
   to their path (OpenSSH 8.9 or later, hosts as in `known_hosts`):
 
   ```sh
-  ssh-add -h vm1 ~/.ssh/vm1                # the parent's server, from here only
-  ssh-add -h vm2 -h 'vm1>vm2' ~/.ssh/vm2   # the child's: from here and from vm1
+  ssh-add -h vm1 ~/.ssh/vm1                # the parent's server, from your machine only
+  ssh-add -h vm2 -h 'vm1>vm2' ~/.ssh/vm2   # the child's: from your machine and from vm1
   ```
 
 - the child's server must be reachable from the parent's as `ssh -G`
-  resolves it here (user, hostname, port; its host key is accepted on
+  resolves it locally (user, hostname, port; its host key is accepted on
   first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
   relay through your machine is not supported yet;
 - a CI key needs `restrict,agent-forwarding,port-forwarding` in the deploy

@@ -106,7 +106,7 @@ func runUpgradeCheck() int {
 func updateNotice(color bool) {
 	if !update.IsRelease(version) || !term.IsTerminal(int(os.Stderr.Fd())) ||
 		os.Getenv("CI") != "" || os.Getenv("DEVOPSY_NO_UPDATE_CHECK") != "" ||
-		os.Getenv("DEVOPSY_CLI_COMMAND") != "" {
+		os.Getenv("DEVOPSY_COMMAND_NAME") != "" {
 		return
 	}
 	file := update.CacheFile()

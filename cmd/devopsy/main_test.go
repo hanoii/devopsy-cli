@@ -83,7 +83,7 @@ func TestEndToEnd(t *testing.T) {
 	write(t, filepath.Join(dot, ".env"), "FOO=from_env\n", 0o644)
 	// Calls compose's `show` through devopsy, which the guard allows.
 	write(t, filepath.Join(dot, "commands", "show"),
-		"#!/bin/sh\necho \"cmd=$DEVOPSY_CLI_COMMAND args=$#:$*\"\ndevopsy show\n", 0o755)
+		"#!/bin/sh\necho \"cmd=$DEVOPSY_COMMAND_NAME args=$#:$*\"\ndevopsy show\n", 0o755)
 	// No shebang: run with sh.
 	write(t, filepath.Join(dot, "commands", "bare"), "echo bare ran\n", 0o755)
 	sub := filepath.Join(root, "sub", "dir")
@@ -482,10 +482,10 @@ func TestReleaseSteps(t *testing.T) {
 		"  release:\n    before: [local: check, remote: mark before]\n    prepare: secrets\n    run: deploy --fast\n    after: [remote: mark after, local: done]\n"
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
-	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\n## Scope: local\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\n## Run: local\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "mark"), "#!/bin/sh\necho \"mark $*\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "secrets"), "#!/bin/sh\ngrep -q '^SECRET=' \"$DEVOPSY_PROJECT_DIR/.env\" || echo SECRET=generated >> \"$DEVOPSY_PROJECT_DIR/.env\"\n", 0o755)
-	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Scope: target\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\n[ \"$1\" = --back ] || exit ${FAIL_REMOTE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Run: target\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\n[ \"$1\" = --back ] || exit ${FAIL_REMOTE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(extra []string, args ...string) (string, int) {
@@ -519,6 +519,24 @@ func TestReleaseSteps(t *testing.T) {
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	if out, code := run(nil, "@prod", "check"); code == 0 || !strings.Contains(out, "check runs only on your machine") {
 		t.Fatalf("local command on a target (%d):\n%s", code, out)
+	}
+	// A local command that needs an address runs locally with it, as typed,
+	// and nothing of the target's.
+	write(t, filepath.Join(dot, "commands", "addr"), "#!/bin/sh\n## Run: local\n## Needs: target\necho \"addr=$DEVOPSY_COMMAND_TARGET target=$DEVOPSY_TARGET site=$SITE $*\"\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "tunnel"), "#!/bin/sh\n## Run: local\n## Needs: server\necho \"tunnel=$DEVOPSY_COMMAND_TARGET\"\n", 0o755)
+	if out, code := run(nil, "@prod", "addr", "x"); code != 0 || !strings.Contains(out, "addr=prod target= site= x") {
+		t.Fatalf("local command with a target (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "addr"); code == 0 || !strings.Contains(out, "addr needs a target") {
+		t.Fatalf("local command without its target (%d):\n%s", code, out)
+	}
+	for _, a := range []string{"devopsy@server:", "prod"} {
+		if out, code := run(nil, "@"+a, "tunnel"); code != 0 || !strings.Contains(out, "tunnel="+a+"\n") {
+			t.Fatalf("local command with a server, @%s (%d):\n%s", a, code, out)
+		}
+	}
+	if _, err := os.Stat(server); !os.IsNotExist(err) {
+		t.Fatalf("local commands touched the server: %v", err)
 	}
 
 	// A failing local before step stops before the server.

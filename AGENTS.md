@@ -34,7 +34,7 @@ repositories fit together and the open ideas.
   If a feature needs to change compose files, it is the wrong feature.
 - **Compatibility of the basics:** project discovery, `.env` loading
   (compose's parser, caller's environment wins), commands in `commands/`
-  with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_CLI_COMMAND`, the recursion guard,
+  with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`, the recursion guard,
   everything else passed to compose untouched. No migration code for
   anything else: older files and syntax just stop working.
 - devopsy replaces itself with what it runs (`syscall.Exec`): signals, the
@@ -67,17 +67,24 @@ repositories fit together and the open ideas.
   scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
   list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and
   `ServerScope` all come from it, so a new flag is one entry there (a
-  flag that differs here and on a server, like `--upgrade`, has one per
+  flag that differs locally and on a server, like `--upgrade`, has one per
   scope). Lines fit 80 columns (`TestUsage`).
-- **Project commands have a scope** too (`## Scope: local|target|any`,
-  `cli.CommandScope`, the same `Scope` values: `Local`, `Target`,
-  `LocalOrTarget`): help's prefix, completion's filter, and
-  `cli.CheckCommandScope` in `Build`, in `runRemote` before connecting
-  (an older server's devopsy would run it) and on release steps
-  (`checkStepScopes`). Where a command runs is decided by the directory,
-  `cli.InRelease` (`target.env` present), never by a variable: a shell on
-  the server or a plain `ssh` has none, and a variable would reach every
-  child. No server scope: a project command comes from a release.
+- **Project commands say where they run** (`## Run: local|target`,
+  `## Needs: target|server`, `cli.CommandRun`): help's prefix (its
+  `Scope`), completion's filter (`CommandOffered`), and `CheckCommand` in
+  `Build`, in `runRemote` before connecting (an older server's devopsy
+  would run a local one) and on release steps (`checkStepScopes`). Where a
+  command runs is decided by the directory, `cli.InRelease` (`target.env`
+  present), never by a variable: a shell on the server or a plain `ssh`
+  has none, and a variable would reach every child. `Needs:` takes
+  `Run: local` (a server alone has no release to take a command from):
+  `runRemote` resolves the address (`needsServer`: as a server's), then
+  execs devopsy locally in the command's project (`runAddressed`) with the
+  address as typed in `DEVOPSY_INTERNAL_COMMAND_TARGET`, which `Build`
+  removes and turns into `DEVOPSY_COMMAND_TARGET` for that command only:
+  every other project command gets neither, so an outer one's address
+  never reaches an inner one. Never the target's variables: the command
+  calls devopsy with the address.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.
@@ -91,7 +98,7 @@ repositories fit together and the open ideas.
   internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`: in a
   session it would reach every tool there, which would then color what
   scripts capture. A session's lines are colored
-  here as they arrive (`remote.Colorize`, line-buffered, on the terminal
+  locally as they arrive (`remote.Colorize`, line-buffered, on the terminal
   writers only, the marker taken out first in a sync): `devopsy:` lines
   cyan, red when they report a failure, Compose's done steps green and
   the steps on the way dim, errors red; coloring on the server reaches
@@ -257,7 +264,7 @@ repositories fit together and the open ideas.
   `--release-sync` (any release), never `--release-no-sync`, and `@<child>
   --sync`, which asks for the name like `--destroy` and reruns `run`.
   Everything that can fail (`syncPreflight`: a run step, the parent
-  released, across servers an agent here and a child reachable without
+  released, across servers a local agent and a child reachable without
   `ProxyCommand`/`ProxyJump`) is checked before the upload or the holder.
 - **Two sessions,** both from the operator (`runSyncSession`): the holder
   on the child's server (`HolderScript`, or `ActivateScript` with
@@ -442,7 +449,7 @@ repositories fit together and the open ideas.
 - **`--ssh-keys`** (`cmd/devopsy/sshkeys.go`, scripts in `internal/remote/keys.go`)
   edits the deploy user's own `~/.ssh/authorized_keys` over the usual
   session: no root, so devopsy-cli stays out of host setup except for
-  this file, which that user owns anyway. Lines are parsed here
+  this file, which that user owns anyway. Lines are parsed locally
   (`ParseAuthorizedKey`: options, type, blob, comment; the SHA256
   fingerprint is computed from the blob, no ssh-keygen needed) and
   edited on the server under a lock next to the file, by blob, so a
@@ -481,7 +488,7 @@ repositories fit together and the open ideas.
   `DEVOPSY_INTERNAL_ENV_COMPUTE` keeps a devopsy it calls from running it
   again.
 - **`DEVOPSY_INTERNAL_*`** are devopsy talking to devopsy (`COLOR`, `TTY`,
-  `ENV_COMPUTE`, `SYNC_WATCH`): never documented as settings, free to
+  `ENV_COMPUTE`, `SYNC_WATCH`, `COMMAND_TARGET`): never documented as settings, free to
   change in any release. Settings people set and the contract projects
   read keep plain `DEVOPSY_*` names.
 - **`--probe`** is a tool with plain arguments, not a contract: it knows no

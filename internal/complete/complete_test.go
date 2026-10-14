@@ -36,8 +36,9 @@ func setup(t *testing.T) string {
 	write(t, filepath.Join(dot, ".env"), "# comment\nTOKEN=x\nexport USER_NAME='y'\n", 0o644)
 	write(t, filepath.Join(dot, "config.yaml"), "project: app\ninstances: true\nenvironments:\n  prod: {}\n  staging: {}\n", 0o644)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Description: Roll out\n", 0o755)
-	write(t, filepath.Join(dot, "commands", "image"), "#!/bin/sh\n## Scope: local\n", 0o755)
-	write(t, filepath.Join(dot, "commands", "release"), "#!/bin/sh\n## Scope: target\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "image"), "#!/bin/sh\n## Run: local\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "release"), "#!/bin/sh\n## Run: target\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "push"), "#!/bin/sh\n## Run: local\n## Needs: target\n", 0o755)
 	return root
 }
 
@@ -91,6 +92,8 @@ func TestComplete(t *testing.T) {
 		{[]string{"rel"}, nil, []string{"rel"}, DirectiveNoFileComp},
 		{[]string{"@prod", "im"}, nil, []string{"im"}, DirectiveNoFileComp},
 		{[]string{"@prod", "rel"}, []string{"release"}, []string{"rel"}, DirectiveNoFileComp},
+		{[]string{"pu"}, nil, []string{"pu"}, DirectiveNoFileComp},
+		{[]string{"@prod", "pu"}, []string{"push"}, []string{"pu"}, DirectiveNoFileComp},
 		{[]string{"@prod", "--rel"}, []string{"--release", "--release-sync", "--release-no-sync", "--releases"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:"}, []string{"@vm1:prod", "@vm1:staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},

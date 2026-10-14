@@ -24,7 +24,7 @@ func runEnvironments(cwd string, args []string, color bool) int {
 	}
 	projectDir, _ := cli.FindProjectDir(cwd)
 	if projectDir == "" {
-		return fail("--environments: not in a devopsy project (no .devopsy/ here or above)")
+		return fail("--environments: not in a devopsy project (no .devopsy/ in this directory or above)")
 	}
 	project, err := remote.LoadProject(projectDir)
 	if err != nil {

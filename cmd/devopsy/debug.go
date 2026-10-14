@@ -77,12 +77,12 @@ func debugSummary(st style, projectDir string) {
 	field("docker compose", compose)
 	field("user config", tilde(remote.UserConfigFile()))
 	if r, err := remote.ReleaseSettings(); err == nil {
-		field("releases here", fmt.Sprintf("root %s, keep %d, max_keep %d %s", tilde(r.Root), r.Keep, r.MaxKeep, st.dim("(for releases landing on this machine)")))
+		field("local releases", fmt.Sprintf("root %s, keep %d, max_keep %d %s", tilde(r.Root), r.Keep, r.MaxKeep, st.dim("(for releases landing on this machine)")))
 	} else {
-		field("releases here", st.warn(err.Error()))
+		field("local releases", st.warn(err.Error()))
 	}
 	if projectDir == "" {
-		field("project", st.warn("none (no .devopsy/ here or above)"))
+		field("project", st.warn("none (no .devopsy/ in this directory or above)"))
 	} else {
 		files := []string{"compose.yaml"}
 		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "instance.env", "project.env", "target.env", remote.ConfigFile, remote.LocalConfigFile} {

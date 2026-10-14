@@ -265,7 +265,7 @@ func decodePhase(n *yaml.Node, phase string) ([]Step, error) {
 }
 
 // Commands lists the command lines of steps run on the server (remote) or
-// here.
+// locally.
 func Commands(steps []Step, remote bool) []string {
 	var out []string
 	for _, s := range steps {
@@ -886,17 +886,17 @@ func (t *Target) ReleasesHere(projectDir string) (bool, string) {
 		return false, fmt.Sprintf("@%s is an alias (%s) without source: release and rollback need source: <the project's directory> on it", t.Alias, UserConfigFile())
 	}
 	want := t.SourceDir()
-	here := ""
+	current := ""
 	if projectDir != "" {
-		here = filepath.Dir(projectDir)
+		current = filepath.Dir(projectDir)
 	}
-	if here != "" && samePath(here, want) {
+	if current != "" && samePath(current, want) {
 		return true, ""
 	}
-	if here == "" {
-		here = "outside a project"
+	if current == "" {
+		current = "outside a project"
 	}
-	return false, fmt.Sprintf("@%s releases only from its source, %s (%s); here: %s", t.Alias, t.Source, UserConfigFile(), here)
+	return false, fmt.Sprintf("@%s releases only from its source, %s (%s); this project: %s", t.Alias, t.Source, UserConfigFile(), current)
 }
 
 // SourceDir is an alias's source, with "~/" expanded; "" when it

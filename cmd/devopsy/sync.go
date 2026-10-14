@@ -76,7 +76,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syn
 	}
 	if !job.sameHost {
 		if os.Getenv("SSH_AUTH_SOCK") == "" {
-			return nil, fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running here: eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", p.Host, c.Host)
+			return nil, fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none is running locally: eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", p.Host, c.Host)
 		}
 		if err := agentHasKeys(p.Host, c.Host); err != nil {
 			return nil, err
@@ -1004,7 +1004,7 @@ func rsyncdConf(entries, files []string) string {
 // syncRsync copies dirs (entries of the parent's mnt) into the child's,
 // replacing what is there (--delete), as root in devopsy's rsync image.
 // Same server: one container with both mounts. Across servers: an rsync
-// daemon here, reached by the child's server through a reverse forward of
+// daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
 func syncRsync(ctx context.Context, projectDir string, dirs, args []string) error {
 	toDir, _, err := syncEnv(cli.SyncRsyncFlag)
@@ -1021,7 +1021,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 	for _, d := range dirs {
 		info, err := os.Stat(filepath.Join(parentMnt, d))
 		if err != nil {
-			sayErr("devopsy: mnt/" + d + " does not exist here: skipped")
+			sayErr("devopsy: mnt/" + d + " does not exist on this server: skipped")
 			continue
 		}
 		present = append(present, d)
@@ -1165,7 +1165,7 @@ func runSyncRsync(cwd string, args []string, color bool) int {
 			return fail(fmt.Sprintf("%s %s: an entry of .devopsy/mnt, a name (or . for all of it)", cli.SyncRsyncFlag, e))
 		}
 		if _, err := os.Lstat(filepath.Join(projectDir, "mnt", e)); err != nil {
-			return fail(fmt.Sprintf("%s %s: .devopsy/mnt/%s does not exist here", cli.SyncRsyncFlag, e, e))
+			return fail(fmt.Sprintf("%s %s: .devopsy/mnt/%s does not exist on this server", cli.SyncRsyncFlag, e, e))
 		}
 	}
 	ctx, stop := interruptible()
