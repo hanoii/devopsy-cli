@@ -439,7 +439,7 @@ exit 0
 	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	if got := calls(root); got != "--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
+	if got := calls(root); got != "--check-networks from= args=\n--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 

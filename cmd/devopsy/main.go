@@ -108,6 +108,13 @@ func run() int {
 	if args[0] == cli.PrepareReleaseFlag {
 		return runPrepareRelease(cwd, color)
 	}
+	if args[0] == cli.CheckNetworksFlag {
+		if err := cli.NetworkConflicts(cwd, os.Environ()); err != nil {
+			cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
+			return 1
+		}
+		return 0
+	}
 	// A sync's parts on servers, run by its sessions (cmd/devopsy/sync.go).
 	switch args[0] {
 	case cli.SyncPushFlag:

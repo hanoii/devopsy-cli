@@ -137,7 +137,11 @@ repositories fit together and the open ideas.
   project's and instance's `.env` (`project.env`, `instance.env`, linked
   even when missing) into the release; `--prepare-release` when the compose
   files use role or import labels (`PrepareScript`, releases only);
-  `prepare` steps in the release; `--missing-vars` (`cli.MissingVars`:
+  `--check-networks` (`cli.NetworkConflicts`: a network the compose config
+  names as its own that another compose project's label owns fails the
+  release, since Compose would just share it; external ones are how a
+  project joins another's; an unreadable config is skipped, the up will
+  say); `prepare` steps in the release; `--missing-vars` (`cli.MissingVars`:
   compose's `${VAR:?}`/`${VAR?}` left unset, env capability included); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`Phases.Restart`: the rollback's, else the
@@ -395,8 +399,8 @@ repositories fit together and the open ideas.
   (exit 3), `remove` the last key (exit 4). `generate` is local, no
   target (`main.go` dispatches it before the remote-only check): just
   `ssh-keygen` into `~/.ssh/<name>`, nothing sent; the `.pub` is added
-  per server. `--restricted` on `add` is `RestrictedKeyOptions`, what
-  devopsy-server's `ci-key` writes: keep the two in step.
+  per server. `--restricted` on `add` is `RestrictedKeyOptions`, the one
+  place that line is written (devopsy-server's `ci-key` step went).
 - **Completion** lives in Go (`internal/complete`); the scripts only pass
   words to the hidden `--complete` and show what it prints, cobra's
   protocol (`value<TAB>description<TAB>group` lines, then `:<directive>`),

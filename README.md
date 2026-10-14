@@ -417,6 +417,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
   check finds them.
+- **The networks check:** a network the compose file names as its own
+  (not `external`) that belongs to another compose project on the server
+  fails the release before it goes live: Compose would silently share it,
+  and the two projects' containers would reach each other by service
+  name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
+  another project, join its network as `external`.
 - **When `run` fails,** `current` goes back to the previous release, which is
   restarted with its own run step (the rollback's, else the release's), so
   its containers are the previous release's again. Data changes, like
@@ -585,8 +591,8 @@ So, across servers:
 - an agent must be running where devopsy runs, with keys both servers
   accept: the parent's server reaches the child's through it (devopsy
   checks the agent has keys before anything starts, not which). In CI,
-  `eval $(ssh-agent); ssh-add` with each server's CI key (devopsy-server
-  generates one per server), instead of `ssh -i`;
+  `eval $(ssh-agent); ssh-add` with the CI key the servers accept,
+  instead of `ssh -i`;
 - the parent's server can use every key in that agent for the session,
   not only the child's: with `prod` the parent of `staging` and `staging`
   the parent of `pr-*`, a sync of `pr-12` forwards the agent to
@@ -603,10 +609,11 @@ So, across servers:
   resolves it here (user, hostname, port; its host key is accepted on
   first use). A host behind a `ProxyCommand` or `ProxyJump` is refused: a
   relay through your machine is not supported yet;
-- a CI key from devopsy-server needs `restrict,agent-forwarding,port-forwarding`
-  in the deploy user's `authorized_keys` on both servers: the agent for the
-  parent's session, the reverse forward for the child's. A plain `restrict`
-  refuses both, and devopsy says which.
+- a CI key needs `restrict,agent-forwarding,port-forwarding` in the deploy
+  user's `authorized_keys` on both servers, what `--ssh-keys add
+  --restricted` writes: the agent for the parent's session, the reverse
+  forward for the child's. A plain `restrict` refuses both, and devopsy
+  says which.
 
 ```sh
 devopsy @develop --sync                         # asks for the environment's name
@@ -742,8 +749,7 @@ and port forwarding a sync across servers needs. Without a target,
 the `.pub` on each server with `--restricted`, the private key as a
 protected file variable, and in the job `eval "$(ssh-agent)"; ssh-add
 "$DEVOPSY_SSH_KEY"` before `devopsy @prod --release`. Rotate by generating
-another, adding it, then removing the old one. (devopsy-server's `ci-key`
-step makes one on the server itself, for a setup without a laptop.)
+another, adding it, then removing the old one.
 
 ### Aliases
 
