@@ -66,8 +66,9 @@ func TestVarsScripts(t *testing.T) {
 	}
 
 	out := runVarsScript(t, VarsReadScript(tg, nil), "")
-	if out != file+"\n"+string(got) {
-		t.Fatalf("read %q", out)
+	read, err := ReadVarsOutput(out)
+	if err != nil || read.File != file || read.Content != string(got) || len(read.Configs) != 0 {
+		t.Fatalf("read %q: %+v (%v)", out, read, err)
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(file)); len(entries) != 1 {
 		t.Fatalf("leftover files: %v", entries)
@@ -107,5 +108,21 @@ func TestVarsScripts(t *testing.T) {
 	}
 	if out := runVarsScript(t, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
 		t.Fatalf("own .env printed %q", out)
+	}
+
+	// Reading a level brings the configs of every release under it, for
+	// their secrets: (with and without instances).
+	write(t, filepath.Join(root, "app", "prod", "current", ".devopsy", "config.yaml"), "secrets: [A]\n")
+	write(t, filepath.Join(root, "app", "site", "dev", "current", ".devopsy", "config.yaml"), "secrets: [B]\n")
+	read, err = ReadVarsOutput(runVarsScript(t, VarsReadScript(tl, level), ""))
+	if err != nil || read.Content != "SHARED='1'\n" || strings.Join(read.Configs, "") != "secrets: [A]\nsecrets: [B]\n" {
+		t.Fatalf("level read: %+v (%v)", read, err)
+	}
+	read, err = ReadVarsOutput(runVarsScript(t, VarsReadScript(tl, nil), ""))
+	if err != nil || strings.Join(read.Configs, "") != "secrets: [A]\n" {
+		t.Fatalf("own read: %+v (%v)", read, err)
+	}
+	if s, ok := ConfigSecrets([]byte("project: x\nnewer_key: 1\nsecrets: [A, \"*_KEY\"]\n")); !ok || strings.Join(s, " ") != "A *_KEY" {
+		t.Fatalf("ConfigSecrets: %q %v", s, ok)
 	}
 }

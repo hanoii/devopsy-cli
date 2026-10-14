@@ -119,7 +119,7 @@ func TestBuildComposePassthrough(t *testing.T) {
 
 // A script in the arguments is only counted in the notice; -vv has it whole.
 func TestBuildNoticeScript(t *testing.T) {
-	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
+	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, "config.yaml": "secrets: [API_TOKEN]\n"})
 	script := "\n  echo one\n  SECRETVALUE123 two\n"
 	plan, err := build(root, []string{"run", "--rm", "web", "sh", "-c", script, "sh", "x"}, []string{"API_TOKEN=SECRETVALUE123"})
 	if err != nil {
@@ -536,11 +536,13 @@ func TestBuildCapability(t *testing.T) {
 	}
 }
 
-// Secrets never reach the notice or the verbose lines: values from .env,
-// even when the caller sets them, and variables named like secrets.
+// Secrets never reach the notice or the verbose lines: the values of the
+// variables config.yaml's secrets: names, wherever they are set. Nothing
+// else is masked.
 func TestBuildMasksSecrets(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
+		"config.yaml":      "secrets: [DB_PASSWORD, OVERRIDDEN, \"*_TOKEN\", SHORT]\n",
 		".env":             "DB_PASSWORD=from-dotenv-secret\nOVERRIDDEN=dotenv-value-x\nSHORT=abc\n",
 		"commands/deploy*": "#!/bin/sh\n",
 	})

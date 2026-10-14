@@ -96,7 +96,8 @@ To get there it makes choices for you:
   project's config.
 - **Words are yours.** devopsy's own features are flags or `@target`; a word
   is always a project command, then a compose command.
-- **Secrets stay out of sight:** masked in output, never in arguments.
+- **Secrets stay out of sight:** the ones the project names are masked in
+  output, and values never go in arguments.
 
 Everything else is yours to make (an AI skill to help is coming soon).
 
@@ -212,7 +213,7 @@ my-project/.devopsy/
 devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f ...override.yaml] up -d
 devopsy deploy         # .devopsy/commands/deploy
 devopsy                # help: devopsy's own, the project's commands, the rest
-devopsy --env          # the variables devopsy loads and computes
+devopsy --env          # the variables devopsy loads and computes, secrets masked (--show)
 devopsy --shell [service] [-- command]   # a shell, or a command, in a container
 devopsy -- <args>      # docker compose <args>, even if a project command has that name
 devopsy -v deploy      # what devopsy found and runs (-vv: more)
@@ -265,7 +266,7 @@ as in compose.
 whatever the project's `env` capability computes (see Capabilities), which
 is how projects derive values like their hosts.
 
-To run plain compose with the same values: `devopsy --env > /tmp/env &&
+To run plain compose with the same values: `devopsy --env --show > /tmp/env &&
 docker compose -f .devopsy/compose.yaml --env-file /tmp/env config` (a file:
 compose reads `--env-file` more than once).
 
@@ -291,12 +292,27 @@ builds nothing itself.
 
 ### Output, secrets and debugging
 
-devopsy prints what it runs to stderr, with secrets masked as `***`: every
-value from the project's `.env` (on servers `shared/.env`) and every
-variable named like a secret (`PASSWORD`, `TOKEN`, `KEY`...), 8 characters
-or longer. Only the message is masked. Masking is a safety net: pass secrets
-through the environment, not arguments (`devopsy exec -T db sh -c
-'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb'`).
+Secrets are opt in: `secrets:` in `config.yaml` names the variables whose
+values are secret (`[DB_PASSWORD, DATABASE_URL, "*_TOKEN"]`, `*` for any
+characters), wherever they are set: `.env`, `shared/.env`, the caller's
+environment. Name every secret a project uses, the ones it generates
+included: nothing else is masked, and nothing guesses from names.
+
+- `--env`, `--vars` and `--debug env` print those values as `***`, and
+  `--show` prints them all. On a server the release's `config.yaml`
+  decides; `--vars` also takes your checkout's, which may be newer.
+- devopsy's own messages (what it runs, `-v` and `-vv`) mask them too,
+  wherever they appear, when 8 characters or longer. Only the message is
+  masked. Masking is a safety net: pass secrets through the environment,
+  not arguments (`devopsy exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD"
+  mariadb'`).
+- What commands print is theirs: devopsy masks only its own lines.
+- A name that looks like a secret's (`PASSWORD`, `TOKEN`, `KEY`, `SALT`,
+  `AUTH`...) and is not listed stops `--release` (the compose files'
+  variables and the target's `env:`) and `--vars set`: devopsy asks, and
+  fails without a terminal or with `--yes`. List it in `secrets:`, or in
+  `public:` when it is not a secret (`public: [SORT_KEY]`). The names only
+  ask: they never mask.
 
 `-v` (or `DEVOPSY_VERBOSE=1`) also prints the files loaded and, for
 targets, each SSH session; `-vv` (`DEVOPSY_VERBOSE=2`) also the script each
@@ -345,6 +361,8 @@ touches an existing file); `devopsy --debug schema` documents every key.
 project: shop                   # its name on servers: required
 instances: true                 # optional: every target names an instance; default false: none does
 releases: {keep: 5}             # optional: releases kept per environment
+secrets: [DB_PASSWORD, "*_TOKEN"]  # optional: variables whose values devopsy masks
+public: [SORT_KEY]              # optional: named like secrets, but not
 defaults:                       # what every environment takes unless it sets its own
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
@@ -364,7 +382,7 @@ environments:
     parent: prod
 ```
 
-Commit it: no secrets, no servers. `.devopsy/config.local.yaml` (not
+Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
 sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
 remove theirs. Patterns match one or
@@ -427,7 +445,7 @@ devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environ
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --status       # the release there, its containers, the project's own lines
-devopsy @vm1:prod --env          # its variables there, env capability included
+devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
 devopsy --environments           # the project's environments on its servers: vm1:prod, vm1:b/prod...
@@ -474,7 +492,7 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   variable compose requires (`${VAR:?message}`) is set there, env capability
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
-  check finds them.
+  check finds them, and name them in `secrets:`.
 - **The names check:** containers of the release's compose project from
   another environment's directory fail the release before it goes live.
   Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
@@ -756,7 +774,7 @@ child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
 Rollbacks bring back their release's `target.env`.
 
 ```sh
-devopsy @vm1:prod --vars                       # names, values hidden
+devopsy @vm1:prod --vars                       # KEY=value, secrets as *** (--show: all)
 devopsy @vm1:prod --vars set DB_PASSWORD       # from your environment or .env, else a prompt or stdin
 devopsy @vm1:prod --vars set --show LOG_LEVEL  # a visible prompt
 devopsy @vm1:prod --vars get DB_PASSWORD

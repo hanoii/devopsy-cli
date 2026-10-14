@@ -85,7 +85,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"deploy", ""}, nil, nil, 0},
 		{[]string{"logs", ""}, nil, []string{"logs", ""}, 0},
 		{[]string{"--completion", "z"}, []string{"zsh"}, nil, DirectiveNoFileComp},
-		{[]string{"--env", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"--env", ""}, []string{"--show"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "de"}, []string{"deploy"}, []string{"de"}, DirectiveNoFileComp},
 		// Commands by scope: local ones here, target ones after @.
 		{[]string{"im"}, []string{"image"}, []string{"im"}, DirectiveNoFileComp},

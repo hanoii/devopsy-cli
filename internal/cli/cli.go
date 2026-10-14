@@ -449,9 +449,13 @@ The release links the server's shared/ (.env, mnt/...) and writes
 .devopsy/target.env from the target's env in config.yaml, plus
 DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. It lands in
 <project>[/<instance>]/<environment> under the server's release root (its
-user-level config's releases: root, else the deploy user's home), unless
-the target sets a path. It keeps the target's or project's releases: keep,
+user-level config's releases: root, else the deploy user's home). It keeps the target's or project's releases: keep,
 else the server's, at most the server's max_keep (all default 5).
+
+Before anything runs, every variable the compose files use or the target's
+env sets that is named like a secret (PASSWORD, TOKEN, KEY...) must be in
+config.yaml's secrets: (masked) or public: (not a secret): otherwise
+devopsy asks, and fails without a terminal or with --yes.
 
 The first release of an instance the server does not have yet asks before
 creating it (a typo would otherwise make a new site); --yes skips that, for
@@ -487,12 +491,14 @@ Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases whose command failed. * marks the current one.
 `,
-	"--env": `Usage: devopsy @<target> --env
+	"--env": `Usage: devopsy @<target> --env [--show]
 
 The variables devopsy loads and computes in the current release, as
 devopsy --env prints them there: shared/.env, the instance's and project's
 .env, target.env and the project's env capability (capabilities/env/compute,
-from the release on the server, not your checkout). Secrets included.
+from the release on the server, not your checkout). The values of the
+variables the release's config.yaml names in secrets: print as ***, unless
+--show.
 `,
 	"--debug": `Usage: devopsy @<target> --debug [env [--show] [VAR...] | capabilities | labels | imports]
 
@@ -577,7 +583,7 @@ User and Port as the target and ssh -G resolve them, then suggestions,
 commented out: connection sharing (one connection for all of a release's
 sessions instead of a handshake each) and keepalives. It never connects.
 `,
-	"--vars": `Usage: devopsy @<target> --vars [get KEY | set [--show] KEY... | unset KEY...]
+	"--vars": `Usage: devopsy @<target> --vars [--show | get KEY | set [--show] KEY... | unset KEY...]
        devopsy @<target> --vars-instance [...]
        devopsy @<server> --vars-project [...]
 
@@ -596,12 +602,16 @@ release; config.yaml's env goes to target.env instead.
 Nearest wins: the caller, the environment's, the instance's, the project's,
 then target.env.
 
-  --vars              the names, values hidden
+  --vars [--show]     every variable, secrets (config.yaml's secrets:,
+                      the release's or your checkout's) as *** unless
+                      --show
   --vars get KEY      one value, on stdout
   --vars set KEY...   each value from your environment, else the project's
                       .env (not for aliases), else a hidden
                       prompt, else stdin (one key only). Existing keys are
-                      replaced in place, new ones appended.
+                      replaced in place, new ones appended. A key named like
+                      a secret that config.yaml's secrets: and public: do
+                      not list asks first (fails without a terminal).
     --show            echo what you type at the prompt, for values that are
                       not secrets
   --vars unset KEY... remove them
@@ -752,10 +762,15 @@ type loadedProject struct {
 	dir, composeFile, dotenvFile string
 	env                          *Env
 	verbose                      []string
+	// secrets are config.yaml's secrets: names.
+	secrets []string
 	// address is a local command's, when the devopsy that read it gave one.
 	address   string
 	addressed bool
 }
+
+// newSecrets masks the project's secrets as loaded.
+func (p *loadedProject) newSecrets() *Secrets { return NewSecrets(p.env, p.secrets) }
 
 // loadProject finds the project from cwd and loads its environment over the
 // caller's.
@@ -810,11 +825,15 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	// it: releases write it into target.env (<project>[-<instance>]-<environment>);
 	// locally it is the config's project, else compose's name:, else the
 	// directory containing .devopsy (compose would take .devopsy itself).
+	project, err := remote.LoadProject(projectDir)
+	if err != nil {
+		return nil, &ExitError{Code: 1, Msg: err.Error()}
+	}
+	var secrets []string
+	if project != nil {
+		secrets = project.Secrets
+	}
 	if name, _ := env.Lookup("COMPOSE_PROJECT_NAME"); name == "" {
-		project, err := remote.LoadProject(projectDir)
-		if err != nil {
-			return nil, &ExitError{Code: 1, Msg: err.Error()}
-		}
 		from := "project: in " + filepath.Join(projectDir, remote.ConfigFile)
 		if project != nil && project.Name != "" {
 			name = project.Name
@@ -837,7 +856,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose, address: address, addressed: addressed}, nil
+	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
 }
 
 // TraceEnv explains the project's environment as every devopsy command
@@ -855,13 +874,13 @@ func TraceEnv(cwd string, environ, names []string) (string, []EnvVar, *Secrets, 
 	if len(names) == 0 {
 		names = p.env.Marked()
 	}
-	secrets := NewSecrets(p.env, p.dotenvFile)
+	secrets := p.newSecrets()
 	var vars []EnvVar
 	for _, k := range names {
 		defs := p.env.trace(k)
 		// Overridden values are secrets like the ones in use.
 		for _, d := range defs {
-			if d.Source == p.dotenvFile || secretName.MatchString(k) {
+			if secrets.Named(k) {
 				secrets.Add(d.Value)
 			}
 		}
@@ -877,7 +896,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	projectDir, env, verbose, dotenvFile := p.dir, p.env, p.verbose, p.dotenvFile
+	projectDir, env, verbose := p.dir, p.env, p.verbose
 
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		return nil, &Help{Text: Usage(projectDir), Code: 0}
@@ -888,10 +907,18 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	verbose = p.verbose
 	switch args[0] {
 	case "--env":
+		secrets := p.newSecrets()
+		for _, a := range args[1:] {
+			if a != "--show" {
+				return nil, &ExitError{Code: 1, Msg: "usage: devopsy --env [--show]"}
+			}
+			secrets = nil
+		}
 		var b strings.Builder
 		for _, k := range env.Marked() {
 			v, _ := env.Lookup(k)
-			b.WriteString(DotenvLine(k, v) + "\n")
+			// Masked before quoting: quoting can escape a secret out of sight.
+			b.WriteString(DotenvLine(k, secrets.Value(k, v)) + "\n")
 		}
 		return nil, &Output{Text: b.String()}
 	case "--context-hash":
@@ -917,7 +944,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		// The escape hatch: straight to docker compose, past project
 		// commands and the check for compose's commands.
 		plan := p.compose(args[1:])
-		secrets := NewSecrets(env, dotenvFile)
+		secrets := p.newSecrets()
 		plan.running(secrets)
 		plan.Verbose = maskAll(secrets, verbose)
 		return plan, nil
@@ -927,7 +954,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	// command it wraps, without recursing into itself.
 	current, _ := env.Lookup("DEVOPSY_COMMAND_NAME")
 	custom := filepath.Join(projectDir, "commands", args[0])
-	secrets := NewSecrets(env, dotenvFile)
+	secrets := p.newSecrets()
 	if current != args[0] && isExecutableFile(custom) {
 		where := Bare
 		switch {
@@ -1005,7 +1032,7 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 		return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("%s does not provide the %s capability's %s action (no executable %s)", filepath.Dir(p.dir), name, action, file)}
 	}
 	cmdArgs := append([]string{file}, args[2:]...)
-	secrets := NewSecrets(p.env, p.dotenvFile)
+	secrets := p.newSecrets()
 	return &Plan{
 		Path:    file,
 		Args:    cmdArgs,

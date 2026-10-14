@@ -173,6 +173,8 @@ func Complete(cwd string, words []string, environ []string) Result {
 			}
 		}
 		return filter(r, cur)
+	case first == "--env":
+		return showFlag(words, cur)
 	case first == "--completion":
 		if len(words) == 2 {
 			var r Result
@@ -192,6 +194,15 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return Result{Directive: DirectiveNoFileComp}
 	}
 	return completeCommand(cwd, projectDir, words, environ)
+}
+
+// showFlag completes --env's one option.
+func showFlag(words []string, cur string) Result {
+	r := Result{Directive: DirectiveNoFileComp}
+	if len(words) == 2 {
+		r.Candidates = []Candidate{{"--show", "secrets too", GroupDevopsy}}
+	}
+	return filter(r, cur)
 }
 
 // completeCommand completes `<command> [args...]`, run locally or on a
@@ -331,6 +342,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--vars", "--vars-instance", "--vars-project":
 		r := Result{Directive: DirectiveNoFileComp}
 		switch {
+		case len(words) == 2 && strings.HasPrefix(cur, "-"):
+			r.Candidates = []Candidate{{"--show", "secrets too", GroupDevopsy}}
 		case len(words) == 2:
 			r.Candidates = []Candidate{{"get", "one value", GroupDevopsy}, {"set", "set variables", GroupDevopsy}, {"unset", "remove variables", GroupDevopsy}}
 		case words[1] == "set" && strings.HasPrefix(cur, "-"):
@@ -359,7 +372,9 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(r, cur)
 		}
 		return none
-	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--releases", "--env", "--help", "-h":
+	case "--env":
+		return showFlag(words, cur)
+	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--releases", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}

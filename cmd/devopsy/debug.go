@@ -392,7 +392,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		}
 		// Masked before quoting: quoting can escape a secret out of sight.
 		quoted := func(value string) string {
-			return strings.TrimPrefix(cli.DotenvLine("", secrets.Mask(value)), "=")
+			return strings.TrimPrefix(cli.DotenvLine("", secrets.Value(v.Name, value)), "=")
 		}
 		fmt.Printf("%s=%s\n", st.name(v.Name), quoted(v.Defs[0].Value))
 		for i, d := range v.Defs {
