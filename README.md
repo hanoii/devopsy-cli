@@ -168,7 +168,8 @@ It installs the latest release, checksum verified, to `/usr/local/bin` when
 it can, else `~/.local/bin` (`DEVOPSY_VERSION=v0.19.0` and
 `DEVOPSY_INSTALL_DIR` choose). `devopsy --upgrade [vX.Y.Z]` replaces the
 binary (with `sudo` when its directory is not yours; on servers set up
-with devopsy-server it is the deploy user's). At a terminal it
+with devopsy-server it is the deploy user's, so `devopsy @<server>
+--upgrade` upgrades a server from here). At a terminal it
 checks for a new release once a day in the background and says so; never in
 CI, and `DEVOPSY_NO_UPDATE_CHECK=1` turns it off.
 
@@ -190,9 +191,10 @@ echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fi
 ```
 
 It completes targets (`@prod`, and environments after `@vm1:` or `@vm1:b/`),
-aliases, project commands with their descriptions, devopsy's flags and,
-through compose's own completion, compose's commands and services. It never
-connects to servers. The scripts ask devopsy at every Tab, so they follow
+aliases, then servers after `@` (`@vm1:`, from the `Host` lines of
+`~/.ssh/config` and the files it includes), project commands with their
+descriptions, devopsy's flags and, through compose's own completion,
+compose's commands and services. It never connects to servers. The scripts ask devopsy at every Tab, so they follow
 the installed version.
 
 ## Locally
@@ -310,7 +312,7 @@ touches an existing file); `devopsy --debug schema` documents every key.
 
 ```yaml
 project: shop                   # its name on servers: required
-instances: required             # optional: required, or none; unset: optional
+instances: true                 # optional: every target names an instance; default false: none does
 releases: {keep: 5}             # optional: releases kept per environment
 defaults:                       # what every environment takes unless it sets its own
   mode: image                   # build (default) or image
@@ -334,8 +336,7 @@ environments:
 Commit it: no secrets, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
 sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
-remove theirs. An environment's `path:`
-moves its directory on the server, never its name. Patterns match one or
+remove theirs. Patterns match one or
 more name characters; an exact name wins, then the most literal characters;
 `"*"` allows any. Unknown keys are errors.
 
@@ -346,7 +347,6 @@ devopsy @[<server>:][<instance>/]<environment> ...
 
 @vm1:prod                     on vm1: an SSH destination or ~/.ssh/config alias, no ":"
 @vm1:b/prod                   instance b of the project, on vm1
-@vm1:/prod                    no instance, whatever DEVOPSY_INSTANCE says
 @prod                         server and instance from variables
 ```
 
@@ -360,10 +360,13 @@ DEVOPSY_SERVER=vm1             # any environment's
 DEVOPSY_INSTANCE=b
 ```
 
-A missing server is an error. **Instances** are never listed in the
-project: any name works (lowercase, digits, `-`), and the first release of
-one the server lacks asks before creating it (`--release --yes` in CI).
-`instances: required` makes every target name one; `none` refuses them.
+A missing server is an error. **Instances** are opt in: a project with
+`instances: true` has them, and every target names one (the address,
+`DEVOPSY_INSTANCE` or an alias's `to:`); any other refuses them, so one
+project's environments never mix both layouts on a server. They are never
+listed in the project: any name works (lowercase, digits, `-`), and the
+first release of one the server lacks asks before creating it (`--release
+--yes` in CI).
 
 On the server, an environment lives in `<project>/[<instance>/]<environment>`
 under the server's release root, and its compose project, containers,
@@ -371,8 +374,8 @@ volumes are named `<project>[-<instance>]-<environment>`
 (`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
 A child's **parent** (`parent:`, a concrete environment of the project)
-resolves like a target of its own, one level only: at the child's instance
-(none if the parent has a `path:`), on the server its variables name
+resolves like a target of its own, one level only: at the child's instance,
+on the server its variables name
 (`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
 child's: a guess could copy the wrong data, so a sync without one fails
 and says which variable to set. `@vm2:develop` with
@@ -397,13 +400,26 @@ devopsy @vm1:prod --env          # its variables there, env capability included
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
 devopsy --environments           # the project's environments on its servers: vm1:prod, vm1:b/prod...
-devopsy --environments vm2       # on one server
+devopsy @vm2 --environments      # on one server
 ```
 
-`--environments` takes no target: without a server it asks each server
-`DEVOPSY_SERVER` and the environments' `DEVOPSY_SERVER_<ENVIRONMENT>` name
-(the caller's environment, then `.devopsy/.env`). Environments with an
-explicit `path:` live elsewhere and are not listed.
+`--environments` without a target asks each server `DEVOPSY_SERVER` and
+the environments' `DEVOPSY_SERVER_<ENVIRONMENT>` name (the caller's
+environment, then `.devopsy/.env`). It lists the project's layout only:
+`<instance>/<environment>` with `instances: true`, else `<environment>`.
+
+**Server commands** need only a server: `--shell-host`, `--ssh-keys`,
+`--ssh-config`, `--environments` and `--upgrade`. They take `@<server>`
+alone, as well as any target, whose server they use (no instance
+needed). A bare name is still the project's environment or an alias
+first, as for every target, else a server; `@<server>:` says it is a
+server when a name is both. Every other command needs an environment.
+
+```sh
+devopsy @vm1 --ssh-keys          # vm1's deploy user's keys, from anywhere
+devopsy @prod --ssh-keys         # prod's server's, in the project
+devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
+```
 
 Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
 command line:
@@ -426,6 +442,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
   check finds them.
+- **The names check:** containers of the release's compose project from
+  another environment's directory fail the release before it goes live.
+  Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
+  `b-c` are both `<project>-a-b-c`, and Compose would take the other's
+  containers and volumes as its own. Rename an instance or environment.
 - **The networks check:** a network the compose file names as its own
   (not `external`) that belongs to another compose project on the server
   fails the release before it goes live: Compose would silently share it,
@@ -724,10 +745,11 @@ releases:
 ```
 
 **On a server:** `--shell` opens a container shell as locally;
-`--shell-host` your login shell on the server, in the current release,
-independent of the project (the way in when it is broken). A target path
-that is a plain `.devopsy/` directory without releases runs commands in
-place and refuses releases. Project commands come from the current release.
+`--shell-host` your login shell on the server, in the current release
+(in the release root with `@<server>` alone), independent of the project
+(the way in when it is broken). An environment's directory that is a plain
+`.devopsy/` directory without releases runs commands in place and refuses
+releases. Project commands come from the current release.
 
 **CI:** set `DEVOPSY_SSH_COMMAND` for SSH options, like git's
 `GIT_SSH_COMMAND`:
@@ -743,14 +765,14 @@ to bind them again while another holds them.
 
 **SSH settings:** a release opens several SSH sessions (checks, upload,
 activation, its log), each a new connection and handshake: noticeable
-through a jump host or VPN. `devopsy @<target> --ssh-config` prints a
+through a jump host or VPN. `devopsy @<server> --ssh-config` prints a
 `Host` block for `~/.ssh/config`: where it connects (`Hostname`, `User`,
 `Port`), then connection sharing (`ControlMaster`, `ControlPersist`) and
 keepalives, commented out. It never connects.
 
 **Keys on a server.** Who may log in as the deploy user is its
-`~/.ssh/authorized_keys`, and `devopsy @<target> --ssh-keys` edits it over the
-usual session, as that user, no root; any target on the server does. `--ssh-keys`
+`~/.ssh/authorized_keys`, and `devopsy @<server> --ssh-keys` edits it over the
+usual session, as that user, no root; any target on the server does too. `--ssh-keys`
 lists them (fingerprint, type, comment, options), `--ssh-keys add <file>`
 authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
 one (never the last: it would lock everyone out). `add --restricted` is
@@ -777,7 +799,9 @@ aliases:
 `source:` is the project's checkout: its config, and the only directory the
 alias releases from. Without it, `project:` names the project, for commands
 only. Inside a project its own environment of the same name wins; an alias
-never reads a project's `.env`.
+never reads a project's `.env`, and its instance is its `to:`'s, never
+`DEVOPSY_INSTANCE`'s. With `project:`, a `to:` naming an instance is how
+it knows the project has them.
 
 ## Roles, exports and imports
 

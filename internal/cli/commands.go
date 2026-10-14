@@ -14,6 +14,10 @@ import (
 // RemoteOnly are devopsy's flags that need a target: devopsy @<target> <flag>.
 var RemoteOnly = []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--shell-host", "--vars", "--ssh-keys", "--destroy", "--sync", "--inherit", "--log", "--ssh-config"}
 
+// ServerScope are the target's flags that need only its server: they take
+// @<server> or @<server>: as well as any target (remote.ServerTarget).
+var ServerScope = []string{"--shell-host", "--ssh-config", "--ssh-keys", "--environments", "--upgrade"}
+
 // ComposeCommands lists docker compose's commands, from its own completion
 // (cobra's protocol: "name<TAB>description" lines, then ":<directive>").
 // Compose has no plugins for its commands, so the installed compose is the

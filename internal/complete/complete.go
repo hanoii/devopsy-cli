@@ -35,8 +35,8 @@ const (
 type Candidate struct {
 	Value, Description string
 	// Group tells candidates apart, for shells that can show it:
-	// GroupTarget, GroupUserTarget, GroupProject, GroupDevopsy,
-	// GroupCompose. Plain values,
+	// GroupTarget, GroupUserTarget, GroupServer, GroupProject,
+	// GroupDevopsy, GroupCompose. Plain values,
 	// like shell names, have none.
 	Group string
 }
@@ -46,7 +46,9 @@ const (
 	GroupTarget = "target"
 	// GroupUserTarget is a target from the user-level config.yaml.
 	GroupUserTarget = "user-target"
-	GroupProject    = "project"
+	// GroupServer is a host from ~/.ssh/config, as @<host>:.
+	GroupServer  = "server"
+	GroupProject = "project"
 	GroupDevopsy    = "devopsy"
 	// GroupCompose marks the delegate's candidates.
 	GroupCompose = "compose"
@@ -108,6 +110,8 @@ var remoteCommands = []Candidate{
 	{"--ssh-config", "suggested ~/.ssh/config settings for its host", GroupDevopsy},
 	{"--vars", "the server's variables (shared/.env)", GroupDevopsy},
 	{"--ssh-keys", "who may log in as the deploy user on the server", GroupDevopsy},
+	{"--environments", "the project's environments on the server", GroupDevopsy},
+	{"--upgrade", "replace the server's devopsy", GroupDevopsy},
 	{"--status", "the release there, its containers, the project's own status", GroupDevopsy},
 	{"--env", "the variables devopsy loads and computes there", GroupDevopsy},
 	{"--debug", "what devopsy sees there: the release and the host", GroupDevopsy},
@@ -150,6 +154,13 @@ func Complete(cwd string, words []string, environ []string) Result {
 				}
 				r.Candidates = append(r.Candidates, Candidate{"@" + t.Name, targetDescription(t), group})
 			}
+			// Then servers, once an @ is typed: @<host>: starts any
+			// address, and is a server alone for server commands.
+			if cur != "" {
+				for _, h := range sshHosts() {
+					r.Candidates = append(r.Candidates, Candidate{"@" + h + ":", "server, ~/.ssh/config", GroupServer})
+				}
+			}
 		}
 		r.Candidates = append(r.Candidates, projectCommands(projectDir)...)
 		if strings.HasPrefix(cur, "-") {
@@ -160,6 +171,10 @@ func Complete(cwd string, words []string, environ []string) Result {
 			r.Delegate = composeDelegate(cwd, projectDir, words, environ)
 		}
 		r.Directive = DirectiveNoFileComp
+		// Only servers left: the environment follows the :, no space.
+		if len(r.Candidates) > 0 && !slices.ContainsFunc(r.Candidates, func(c Candidate) bool { return !strings.HasSuffix(c.Value, ":") }) {
+			r.Directive |= DirectiveNoSpace
+		}
 		return r
 	}
 
@@ -369,7 +384,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(r, cur)
 		}
 		return none
-	case "--shell-host", "--ssh-config", "--log", "--releases", "--env", "--help", "-h":
+	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--releases", "--env", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}

@@ -99,11 +99,8 @@ func debugSummary(st style, projectDir string) {
 			field("name on servers", st.warn("none: set project: in "+remote.ConfigFile))
 		default:
 			v := p.Name
-			switch p.Instances {
-			case remote.InstancesRequired:
-				v += " (instances required: @[<server>:]<instance>/<environment>)"
-			case remote.InstancesNone:
-				v += " (no instances)"
+			if p.Instances {
+				v += " (instances: @[<server>:]<instance>/<environment>)"
 			}
 			field("name on servers", v)
 		}

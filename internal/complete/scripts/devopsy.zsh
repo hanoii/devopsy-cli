@@ -5,13 +5,13 @@
 #
 # or save it as _devopsy in a directory of $fpath. It asks devopsy itself
 # (devopsy --complete <words>) for targets, commands, flags and, through
-# docker compose, services. Environments, aliases,
-# project commands, devopsy's own commands and docker compose's are listed
+# docker compose, services. Environments, aliases, servers (from
+# ~/.ssh/config), project commands, devopsy's own commands and docker compose's are listed
 # in their own groups, in that order.
 
 _devopsy() {
     local out directive line value rest desc group item ret=1
-    local -a lines opts targets usertargets project builtin compose plain
+    local -a lines opts targets usertargets servers project builtin compose plain
     out=$(devopsy --complete "${(@)words[2,CURRENT]}" 2>/dev/null) || return 1
     lines=("${(@f)out}")
     directive=${lines[-1]#:}
@@ -26,6 +26,7 @@ _devopsy() {
         case $group in
             target) targets+=("$item") ;;
             user-target) usertargets+=("$item") ;;
+            server) servers+=("$item") ;;
             project) project+=("$item") ;;
             devopsy) builtin+=("$item") ;;
             compose) compose+=("$item") ;;
@@ -40,6 +41,7 @@ _devopsy() {
         zstyle ":completion:*:*:devopsy:*:descriptions" format '%B%d%b'
     (( ${#targets} )) && _describe -t devopsy-targets target targets $opts && ret=0
     (( ${#usertargets} )) && _describe -t devopsy-user-targets alias usertargets $opts && ret=0
+    (( ${#servers} )) && _describe -t devopsy-servers server servers $opts && ret=0
     (( ${#project} )) && _describe -t project-commands 'project command' project $opts && ret=0
     (( ${#builtin} )) && _describe -t devopsy-commands devopsy builtin $opts && ret=0
     (( ${#compose} )) && _describe -t compose 'docker compose' compose $opts && ret=0

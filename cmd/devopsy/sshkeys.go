@@ -258,8 +258,12 @@ func runSSHKeysGenerate(args []string, color bool) int {
 // targetRef is how the user named the target: its alias, else its
 // environment, for usage lines.
 func targetRef(t *remote.Target) string {
-	if t.Alias != "" {
+	switch {
+	case t.Alias != "":
 		return t.Alias
+	case t.Name == "":
+		// A server named alone.
+		return t.Host
 	}
 	return t.Name
 }

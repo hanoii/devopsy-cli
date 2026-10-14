@@ -308,7 +308,7 @@ func lockWait(fd int, shared bool, what string) string {
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
-// target's directory: its path, relative to $root unless absolute. The
+// target's directory: its path under $root. The
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
 	return `settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
@@ -322,8 +322,7 @@ with_tty() {
 root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
-path=` + Quote(t.Path) + `
-case $path in /*) base=$path ;; *) base=$root/$path ;; esac
+base="$root"/` + Quote(t.Path) + `
 `
 }
 
@@ -453,9 +452,10 @@ done
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
-		// A network the project names that another project owns already:
-		// they would share it (cli.NetworkConflicts).
-		s += "(cd \"$rel\" && " + devopsyCall(projectName, []string{"--check-networks"}, false) + ") || not_live 1\n"
+		// Another environment's compose project of the same name, or a
+		// network the project names that another project owns already:
+		// they would share it (cli.ProjectConflict, cli.NetworkConflicts).
+		s += "(cd \"$rel\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
 	for _, args := range p.Prepare {
 		s += step("prepare", `"$rel"`, args, "not_live $?")
@@ -585,6 +585,20 @@ func RunScript(t *Target, projectName string, args []string) string {
 // release, or the path itself for a plain directory.
 func ShellScript(t *Target) string {
 	return "set -eu\n" + enter(t) + `exec "${SHELL:-/bin/sh}" -l` + "\n"
+}
+
+// RootShellScript opens the user's login shell in the server's release
+// root: --shell-host on a server named alone.
+func RootShellScript(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `cd "$root"
+exec "${SHELL:-/bin/sh}" -l
+`
+}
+
+// UpgradeScript replaces the server's devopsy, as the deploy user, who owns
+// it (devopsy-server installs it so): devopsy --upgrade [version].
+func UpgradeScript(args []string) string {
+	return "set -eu\nexec " + devopsyCall("", append([]string{"--upgrade"}, args...), false) + "\n"
 }
 
 // ReleasesScript prints one line per release: id, current flag, failed flag
@@ -837,23 +851,18 @@ echo "devopsy: removed $base" >&2
 }
 
 // EnvironmentsScript prints the project's environments on the server, one
-// per line, as addresses: <environment> or <instance>/<environment>
-// (directories with releases). Environments with an explicit path live
-// elsewhere and are not listed.
+// per line, as addresses: <environment>, or <instance>/<environment> for a
+// project with instances (directories with releases).
 func EnvironmentsScript(t *Target) string {
+	glob := `"$dir"/*/releases`
+	if t.Project.Instances {
+		glob = `"$dir"/*/*/releases`
+	}
 	return "set -eu\n" + basePrelude(t) + `dir="$root"/` + Quote(t.Project.Name) + `
-[ -d "$dir" ] || exit 0
-for d in "$dir"/*/; do
-  d=${d%/}
-  [ -d "$d" ] || continue
-  if [ -d "$d/releases" ]; then
-    printf '%s\n' "${d##*/}"
-    continue
-  fi
-  for e in "$d"/*/; do
-    e=${e%/}
-    if [ -d "$e/releases" ]; then printf '%s/%s\n' "${d##*/}" "${e##*/}"; fi
-  done
+for r in ` + glob + `; do
+  [ -d "$r" ] || continue
+  d=${r%/releases}
+  printf '%s\n' "${d#"$dir"/}"
 done
 `
 }

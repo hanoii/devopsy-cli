@@ -13,11 +13,11 @@ const ProjectSchema = `# .devopsy/config.yaml: a project's devopsy config. Commi
 # and host names). Lowercase letters, digits and -.
 project: shop
 
-# Optional. required: every target names an instance (one install of the
-# project among several on a server, like one site of a multi-site
-# codebase). none: instances are refused. Unset: optional. Instances are
-# never listed here: the target or DEVOPSY_INSTANCE names them.
-instances: required
+# Optional. true: the project has instances (installs of the project side
+# by side on a server, like the sites of a multi-site codebase), and every
+# target names one. false, the default: targets name none. Instances are
+# never listed here: the target, DEVOPSY_INSTANCE or an alias names them.
+instances: true
 
 # Optional. How many releases each environment keeps on a server (default:
 # the server's keep, else 5), never more than the server's max_keep.
@@ -82,19 +82,15 @@ environments:
     # first release copies prod's data (shared/mnt) once current, before
     # its run step; devopsy @staging --sync copies it again. Resolved at
     # the child's instance, on the server DEVOPSY_SERVER_PROD names, else
-    # the child's. In defaults too: the parent itself then has none, and
+    # DEVOPSY_SERVER, never the child's. In defaults too: the parent itself then has none, and
     # parent: ~ removes it from another.
     parent: prod
   "pr-*":
     releases:
       keep: 1
-  legacy:
-    # Moves the directory on the server (relative to its release root, or
-    # absolute); never the compose name. Takes no instance.
-    path: /srv/legacy-shop
 
 # Targets: devopsy @[<server>:][<instance>/]<environment> ...
-#   @vm1:prod  @vm1:confcatsdemo/prod  @vm1:/prod (no instance)  @prod
+#   @vm1:prod  @vm1:confcatsdemo/prod  @prod
 # What the target leaves out comes from variables, in the environment or
 # .devopsy/.env: the server from DEVOPSY_SERVER_<ENVIRONMENT> (upper case,
 # others as _), the pattern's (pr-*: DEVOPSY_SERVER_PR), then DEVOPSY_SERVER;

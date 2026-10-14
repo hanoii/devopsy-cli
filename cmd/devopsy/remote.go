@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -64,12 +65,26 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	// @[<server>:][<instance>/]<environment>, or an alias. Help needs no
 	// server: it only explains.
 	addr := strings.TrimPrefix(args[0], "@")
+	help := len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h"))
 	load := remote.LoadTarget
-	if len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h")) {
+	switch {
+	case len(args) > 1 && slices.Contains(cli.ServerScope, args[1]):
+		// Only its server: @<server> works too.
+		load = remote.ServerTarget
+	case help:
 		load = remote.DescribeTarget
+	case len(args) > 1 && strings.HasSuffix(addr, ":"):
+		return fail(fmt.Sprintf("%s needs an environment: devopsy @%s<environment> %s", args[1], addr, args[1]))
 	}
 	t, err := load(projectDir, addr, projectEnv)
 	if err != nil {
+		if help && len(args) > 2 {
+			// Help only explains: it never needs the target.
+			if h, ok := cli.RemoteCommandHelp[args[1]]; ok {
+				fmt.Print(styleFor(os.Stdout).help(h))
+				return 0
+			}
+		}
 		return fail(err.Error())
 	}
 	args = args[1:]
@@ -111,7 +126,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	projectName := ""
 	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
 		projectName = v
-	} else if t.Project != nil {
+	} else if t.Project != nil && t.Name != "" {
 		projectName = t.ComposeName()
 	}
 
@@ -129,7 +144,25 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if len(args) > 1 {
 			return fail("--shell-host takes no arguments: for one command, use 'devopsy @" + targetRef(t) + " <command>'")
 		}
+		if t.Name == "" {
+			return ssh(remote.RootShellScript(t), nil, tty)
+		}
 		return ssh(remote.ShellScript(t), nil, tty)
+
+	case "--environments":
+		if len(args) > 1 {
+			return fail("usage: devopsy @<server> --environments")
+		}
+		if t.Project == nil {
+			return fail("--environments lists a project's environments: run it in its checkout, or through an alias")
+		}
+		return listEnvironments(t.Project, []string{t.Host}, color)
+
+	case "--upgrade":
+		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
+			return fail("usage: devopsy @<server> --upgrade [vX.Y.Z]")
+		}
+		return ssh(remote.UpgradeScript(args[1:]), nil, tty)
 
 	case "--ssh-config":
 		if len(args) > 1 {

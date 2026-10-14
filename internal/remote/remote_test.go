@@ -151,7 +151,7 @@ func TestQuote(t *testing.T) {
 }
 
 func TestScriptsParse(t *testing.T) {
-	tg := &Target{Name: "prod", Host: "h", Path: "/srv/it's app", Mode: ModeImage}
+	tg := &Target{Name: "prod", Host: "h", Path: "it's app/prod", Mode: ModeImage}
 	scripts := map[string]string{
 		"upload":         UploadScript(tg, "20261005120000"),
 		"activate":       ActivateScript(tg, "20261005120000", false, "", Phases{}, nil),
@@ -171,8 +171,11 @@ func TestScriptsParse(t *testing.T) {
 		"keys add":       KeysAddScript(),
 		"keys remove":    KeysRemoveScript(),
 		"destroy":        DestroyScript(tg, "app", []string{"destroy"}),
-		"environments":   EnvironmentsScript(&Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}}),
+		"environments":   EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app"}}),
+		"environments+i": EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app", Instances: true}}),
 		"role holders":   RoleHoldersScript(tg, "proxy"),
+		"root shell":     RootShellScript(&Target{Host: "h"}),
+		"upgrade":        UpgradeScript([]string{"v1.2.3"}),
 		"activate+sync":  ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}, Restart: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
 		"sync only":      ActivateScript(tg, "20261005120000", false, "app", Phases{}, &SyncOptions{From: "vm1:prod"}),
 		"holder":         HolderScript(tg, "app-dev", "vm1:prod", []string{"-v"}, []string{"deploy"}),
@@ -216,18 +219,22 @@ func fakeDevopsy(t *testing.T) string {
 
 func TestPlainDirectories(t *testing.T) {
 	path := fakeDevopsy(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := func(script string) (string, error) {
 		cmd := exec.Command("sh", "-c", script)
-		cmd.Env = []string{path}
+		cmd.Env = []string{path, "FAKE_ROOT=" + root}
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
 
-	plain := t.TempDir()
+	plain := filepath.Join(root, "traefik", "main")
 	if err := os.MkdirAll(filepath.Join(plain, ".devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tg := &Target{Name: "vm1-traefik", Host: "h", Path: plain}
+	tg := &Target{Name: "vm1-traefik", Host: "h", Path: "traefik/main"}
 	if out, err := run(RunScript(tg, "", []string{"proxies"})); err != nil || !strings.Contains(out, "ran in "+plain+": proxies") {
 		t.Fatalf("plain run: %v\n%s", err, out)
 	}
@@ -245,11 +252,11 @@ func TestPlainDirectories(t *testing.T) {
 		t.Error("refusing must not create releases/")
 	}
 
-	released := t.TempDir()
+	released := filepath.Join(root, "app", "prod")
 	if err := os.MkdirAll(filepath.Join(released, "current"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tr := &Target{Name: "prod", Host: "h", Path: released}
+	tr := &Target{Name: "prod", Host: "h", Path: "app/prod"}
 	if out, err := run(RunScript(tr, "", []string{"ps"})); err != nil || !strings.Contains(out, "ran in "+released+"/current: ps") {
 		t.Fatalf("release run: %v\n%s", err, out)
 	}
@@ -265,7 +272,10 @@ func TestPlainDirectories(t *testing.T) {
 		}
 	}
 
-	empty := &Target{Name: "new", Host: "h", Path: t.TempDir()}
+	if err := os.MkdirAll(filepath.Join(root, "app", "new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	empty := &Target{Name: "new", Host: "h", Path: "app/new"}
 	if out, err := run(RunScript(empty, "", []string{"ps"})); err == nil || !strings.Contains(out, "no release and no .devopsy/") {
 		t.Fatalf("empty: %v\n%s", err, out)
 	}
@@ -439,7 +449,7 @@ exit 0
 	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	if got := calls(root); got != "--check-networks from= args=\n--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
+	if got := calls(root); got != "--check-names "+base+" from= args=\n--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
