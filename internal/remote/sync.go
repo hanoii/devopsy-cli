@@ -196,7 +196,7 @@ fi
 sync_finish go || exit "$?"
 ` + syncRestorePipe
 	if len(run) > 0 {
-		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + devopsyCall(projectName, run, false) + "\n"
+		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
 	}
 	return s
 }
