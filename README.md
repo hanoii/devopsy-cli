@@ -177,10 +177,10 @@ To run a checkout's code instead, symlink `scripts/devopsy` into your `PATH`
 
 ### Compose's commands and flags
 
-Bare `devopsy` lists the project's commands, then compose's with their
-descriptions and compose's own flags, which go before the command
-(`devopsy --profile tools run --rm jq`). `devopsy <command> --help` is
-compose's help for it, as devopsy's.
+Bare `devopsy` lists the project's commands, then compose's own help as
+devopsy's: its flags, which go before the command (`devopsy --profile
+tools run --rm jq`), and its commands. `devopsy <command> --help` is
+compose's help for that command, the same way.
 
 ### Shell completion
 
