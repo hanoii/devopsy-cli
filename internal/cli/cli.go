@@ -754,22 +754,9 @@ Tools:
 			fmt.Fprintf(&b, "  %-*s  %s\n", width, c, desc)
 		}
 		b.WriteString("\n")
-		if list, err := ComposeCommandsDescribed(os.Environ()); err == nil && len(list) > 0 {
-			b.WriteString("Compose commands, with the project's files (devopsy up -d, devopsy logs -f <service>;\ndevopsy <command> --help for each):\n")
-			width := 0
-			for _, c := range list {
-				width = max(width, len(c[0]))
-			}
-			for _, c := range list {
-				fmt.Fprintf(&b, "  %-*s  %s\n", width, c[0], c[1])
-			}
-			if flags := ComposeFlags(os.Environ()); len(flags) > 0 {
-				b.WriteString("\nCompose flags, before the command (devopsy --profile tools run ...):\n")
-				for _, f := range flags {
-					b.WriteString(f + "\n")
-				}
-			}
-			b.WriteString("\nA word that is neither: anything else is an error.\n\n")
+		if help := ComposeHelp(os.Environ()); help != "" {
+			b.WriteString("Any other word is docker compose's, with the project's files, as its own help says\n(devopsy up -d, devopsy logs -f <service>; the flags go before the command); anything else is an error.\n\n")
+			b.WriteString(help + "\n")
 		} else {
 			b.WriteString(`Other words are docker compose's commands, with the project's files
 (devopsy up -d, devopsy logs -f <service>...); anything else is an error.

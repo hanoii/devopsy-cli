@@ -50,13 +50,11 @@ repositories fit together and the open ideas.
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
   a word is a project command, else a compose command (`ComposeCommands`:
   compose's own completion, cached, refreshed when a word is missing), else
-  an error. The bare help lists compose's commands with their descriptions
-  from that completion (`ComposeCommandsDescribed`) and compose's flags as
-  its `--help` prints them (`ComposeFlags`: the lines after `Options:` up
-  to the first empty one, verbatim, nothing parsed, so a compose change
-  cannot break it, only leave it out). `devopsy <command> --help` is
-  compose's help for it with `docker compose` read as `devopsy`, captured,
-  not exec'd, no notice. Arguments starting with a flag go to compose unchecked; `--` is
+  an error. The bare help ends with compose's own help (`ComposeHelp`:
+  `docker compose --help` from its `Usage:` line on, verbatim, `docker
+  compose` read as `devopsy`, nothing parsed, so a compose change cannot
+  break it). `devopsy <command> --help` is compose's help for it the same
+  way, captured, not exec'd, no notice. Arguments starting with a flag go to compose unchecked; `--` is
   the escape hatch. Flags that need a target say so without one.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand), and resolves the
