@@ -265,6 +265,9 @@ func problems(r Report, ip string) []string {
 	}
 	switch {
 	case len(r.IPs) == 0:
+	case r.CDN == "Cloudflare" && r.Status == 0 && strings.Contains(r.HTTPError, "handshake failure"):
+		// Its free edge certificate covers the zone and one level below.
+		out = append(out, "https: Cloudflare's edge has no certificate for this name: its free one covers one level below the zone (*.example.com), not deeper names. Set the DNS record to DNS only (grey cloud), or get an edge certificate for it (Advanced Certificate Manager)")
 	case r.Status == 0:
 		out = append(out, "https: no answer: "+r.HTTPError)
 	case r.CDN != "" && (r.Status == 521 || r.Status == 522 || r.Status == 523):

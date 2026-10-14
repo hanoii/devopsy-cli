@@ -875,7 +875,9 @@ devopsy --probe [--ip <server ip>] <host>...
 
 DNS through 1.1.1.1 (does it point at `--ip`, or at Cloudflare?), the
 certificate the server presents, verified like a browser, and an HTTPS
-request as visitors make it, with Cloudflare's 52x errors explained. Exits
+request as visitors make it, with Cloudflare's 52x errors explained, and
+its edge having no certificate for a name (a proxied second-level
+subdomain, beyond its free certificate). Exits
 1 on a problem, so it doubles as a smoke test. A proxy's own commands print
 the line to run, like the Traefik template's `domains`.
 
