@@ -31,6 +31,9 @@ func fake(dns map[string][]string, certs map[string]CertInfo, status map[string]
 			return ""
 		},
 		Get: func(_ context.Context, ip, host string) (int, error) {
+			if strings.HasPrefix(host, "deep.") {
+				return 0, errors.New("remote error: tls: handshake failure")
+			}
 			if s, ok := status[ip+" "+host]; ok {
 				return s, nil
 			}
@@ -47,12 +50,14 @@ func TestHost(t *testing.T) {
 		"proxied.org":   {"104.16.1.1"},
 		"down.org":      {"104.16.1.1"},
 		"nocert.org":    {"10.0.0.5"},
+		"deep.vm1.org":  {"104.16.1.1"},
 	}, map[string]CertInfo{
 		"10.0.0.5 live.org":      valid,
 		"10.0.0.5 proxied.org":   valid,
 		"10.0.0.5 down.org":      valid,
 		"10.0.0.5 nocert.org":    {Issuer: "TRAEFIK DEFAULT CERT", Problem: "x509: not valid"},
 		"10.9.9.9 elsewhere.org": valid,
+		"10.0.0.5 deep.vm1.org":  valid,
 	}, map[string]int{
 		"10.0.0.5 live.org":      200,
 		"104.16.1.1 proxied.org": 302,
@@ -69,6 +74,7 @@ func TestHost(t *testing.T) {
 		"elsewhere.org": {"points elsewhere, not at 10.0.0.5"},
 		"new.org":       {"DNS: point it at 10.0.0.5", "no TLS connection"},
 		"*.vm1.org":     {"name a host it covers"},
+		"deep.vm1.org":  {"Cloudflare's edge has no certificate for this name"},
 	} {
 		r := Host(ctx, c, "10.0.0.5", host)
 		if len(want) == 0 && !r.OK() {
