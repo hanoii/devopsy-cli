@@ -685,7 +685,9 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 	// own writer (parsed output) and the log get them as they are.
 	var colored []*ColorWriter
 	term := func(f *os.File) io.Writer {
-		if !Color {
+		// Never a tty session: the user types there, and a held prompt
+		// (no newline yet) would lag; the server's tty colors it anyway.
+		if !Color || tty {
 			return f
 		}
 		c := Colorize(f)
