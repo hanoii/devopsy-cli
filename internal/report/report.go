@@ -36,22 +36,30 @@ func Details(err error) []string {
 }
 
 const (
-	red   = "\033[0;31m"
-	reset = "\033[0m"
+	red    = "\033[0;31m"
+	yellow = "\033[0;33m"
+	reset  = "\033[0m"
 )
 
-// Fail writes err as devopsy reports a failure: "devopsy: [error] <err>",
-// the tag red when color is on, then err's details and more, each
-// indented on its own line.
+// Fail writes err as devopsy reports a failure: "[error] <err>", red
+// when color is on, then err's details and more, one per line, plain.
+// Lines are never wrapped: a detail is one logical line (a command to
+// copy); the terminal wraps it on screen.
 func Fail(w io.Writer, color bool, err error, more ...string) {
-	tag := "[error]"
+	write(w, color, red, "[error] "+err.Error(), append(Details(err), more...))
+}
+
+// Warn writes a warning the same way: "[warning] <msg>", yellow.
+func Warn(w io.Writer, color bool, msg string, details ...string) {
+	write(w, color, yellow, "[warning] "+msg, details)
+}
+
+func write(w io.Writer, color bool, code, line string, details []string) {
 	if color {
-		tag = red + tag + reset
+		line = code + line + reset
 	}
-	fmt.Fprintf(w, "devopsy: %s %s\n", tag, err.Error())
-	for _, d := range append(Details(err), more...) {
-		for _, line := range strings.Split(strings.TrimRight(d, "\n"), "\n") {
-			fmt.Fprintf(w, "  %s\n", line)
-		}
+	fmt.Fprintln(w, line)
+	for _, d := range details {
+		fmt.Fprintln(w, strings.TrimRight(d, "\n"))
 	}
 }
