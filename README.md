@@ -221,7 +221,10 @@ devopsy -v deploy      # what devopsy found and runs (-vv: more)
 
 A word is a project command if `.devopsy/commands/` has it, else a compose
 command (devopsy asks compose which exist), else an error. Arguments starting
-with a flag go to compose unchecked.
+with a flag go to compose unchecked (`devopsy --profile x up`), except a
+flag alone: compose's flags never stand alone, so one devopsy does not know
+is an error, with the nearest flag of its own (`devopsy --ssh-host`: did
+you mean `--shell-host`?), locally and with a target.
 
 **Project commands:** any executable in `.devopsy/commands/`, run with the
 project's `.env` loaded, `DEVOPSY_PROJECT_DIR` (the `.devopsy/` path) and

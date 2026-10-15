@@ -1047,9 +1047,13 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 
 	// A word is a project command, else a docker compose command, else a
 	// mistake: say so, rather than compose's usage. Flags first (compose's
-	// global ones, like --profile) go to compose unchecked.
+	// global ones, like --profile) go to compose unchecked, except a flag
+	// alone: compose's never stand alone, so it is devopsy's or a typo.
 	if !strings.HasPrefix(args[0], "-") && !isComposeCommand(args[0], env.Environ()) {
 		return nil, &ExitError{Code: 1, Msg: unknownWord(args[0], projectDir)}
+	}
+	if msg := LoneUnknownFlag(args); msg != "" {
+		return nil, &ExitError{Code: 1, Msg: msg}
 	}
 
 	plan := p.compose(args)

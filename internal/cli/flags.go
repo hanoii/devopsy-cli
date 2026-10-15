@@ -139,6 +139,71 @@ var RemoteOnly = func() []string {
 	return out
 }()
 
+// LoneUnknownFlag says why args, one argument starting with - that is no
+// flag of devopsy's, cannot run: compose's flags never stand alone (a
+// flag followed by anything passes through to compose), so a lone flag
+// devopsy does not know is a typo. Empty otherwise. The nearest flag of
+// devopsy's is suggested when it is a couple of letters off, or two more
+// when the two share a part (--ssh-host and --shell-host).
+func LoneUnknownFlag(args []string) string {
+	if len(args) != 1 || !strings.HasPrefix(args[0], "-") || args[0] == "--" {
+		return ""
+	}
+	word := args[0]
+	var nearest string
+	best := 5
+	for _, f := range flagsWhere(func(Scope) bool { return true }) {
+		if f.Name == word {
+			return ""
+		}
+		d := editDistance(f.Name, word)
+		if d > 2 && !sharePart(f.Name, word) {
+			continue
+		}
+		if d < best {
+			best, nearest = d, f.Name
+		}
+	}
+	why := fmt.Sprintf("%s is not a devopsy flag", word)
+	if nearest != "" {
+		why += fmt.Sprintf(" (did you mean %s?)", nearest)
+	}
+	return why + "; devopsy --help lists them"
+}
+
+// sharePart reports whether two flags have a hyphen-separated part in
+// common (--ssh-host and --shell-host: host).
+func sharePart(a, b string) bool {
+	parts := strings.Split(strings.TrimLeft(b, "-"), "-")
+	for _, p := range strings.Split(strings.TrimLeft(a, "-"), "-") {
+		if p != "" && slices.Contains(parts, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// editDistance is the Levenshtein distance between two words.
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
+}
+
 // ServerScope are the flags that need only a server: they take @<server>
 // or @<server>: as well as any target (remote.ServerTarget).
 var ServerScope = names(flagsWhere(func(s Scope) bool { return s == Server || s == LocalOrServer }))
