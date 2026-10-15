@@ -231,11 +231,14 @@ repositories fit together and the open ideas.
   images (`fetchImages`, by mode: build `pull --ignore-buildable` then
   `build --pull`, image `pull`, which pulls buildable services with an
   `image:` too and fails on a missing tag; through `devopsy --`, past
-  project commands, under `with_tty`); switch
+  project commands, under `with_tty`), bookmarked (`releaseImages`:
+  `compose config --images` into `$rel/.devopsy-images`, each tagged
+  `devopsy-<compose name>-<id>`, digests skipped; a rollback or restart
+  restores those, all or nothing, else fetches; a fetch failure restores
+  `$prev`'s; pruning untags); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`Phases.Restart`: the rollback's, else the
-  release's), its images fetched again first (build mode's names are the
-  compose project's, which the new release's build took over); prune to
+  release's), its own images back first (`get_images`); prune to
   `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.

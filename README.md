@@ -522,7 +522,15 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   release there. Only the services Compose starts by default: other
   profiles get theirs when used. The run step's `up` then finds them all;
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
-  `current` as it was.
+  `current` as it was, its images included.
+- **Each release keeps its images:** once fetched, every image the release
+  runs gets a second tag, `devopsy-<compose name>-<release id>`, without
+  changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`). A
+  rollback, or the restart after a failed `run`, points those names back
+  at that release's tags: exactly the images it ran, floating tags
+  included, without building or pulling. A release without them (pruned
+  images, a release older than this) builds or pulls again. Pruning a
+  release removes its tags, and with the last one its image.
 - **The names check:** containers of the release's compose project from
   another environment's directory fail the release before it goes live.
   Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
@@ -536,8 +544,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   another project, join its network as `external`.
 - **When `run` fails,** `current` goes back to the previous release, which is
   restarted with its own run step (the rollback's, else the release's),
-  after getting its images again (in build mode the new release's took
-  their names), so its containers are the previous release's again. Data changes, like
+  with its own images back, so its containers are the previous release's
+  again. Data changes, like
   database updates, are the project's to undo.
 - **One SSH session:** the remote steps share it, under the release lock.
   Hence local before steps first and local after steps last. Remote before

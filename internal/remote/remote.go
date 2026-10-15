@@ -438,9 +438,10 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 // the .env levels linked into the new one (for a rollback, the release
 // before current); its role and imports (releases only); prepare steps;
 // devopsy --missing-vars, so a variable compose requires is never found
-// missing once live; its images, built or pulled (fetchImages); the
-// switch; the run step, going back to the previous release when it fails
-// and restarting that one, its images first; pruning; remote after steps.
+// missing once live; its images, built or pulled and bookmarked
+// (releaseImages), or a rollback's restored; the switch; the run step,
+// going back to the previous release when it fails and restarting that
+// one, its images first; pruning; remote after steps.
 // Nothing before the switch changes what is live.
 //
 // With sync, a release syncs its parent's data once current, before
@@ -504,19 +505,23 @@ done
 		s += step("prepare", `"$rel"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$rel\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
-	fetch := fetchImages(projectName, t.Mode)
-	if fetch != "" {
-		s += fetch + "fetch_images \"$rel\" || not_live $?\n"
+	images := releaseImages(projectName, t, t.Mode)
+	if images != "" {
+		// A failure may have moved names the live release runs: its own
+		// back first.
+		s += images + `get_images "$rel" || { s=$?; [ -z "$prev" ] || restore_images "$base/$prev" || true; not_live "$s"; }
+`
 	}
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
 	restart := ""
 	if len(p.Restart) > 0 {
-		// The new release's images replaced the previous one's tags (build
-		// mode names them after the compose project): get its own back.
-		if fetch != "" {
-			restart = `    fetch_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+		// The new release's images took the names the previous one runs
+		// (build mode's are the compose project's, a floating tag's the
+		// registry's): its own back.
+		if images != "" {
+			restart = `    get_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
 		}
 		restart += fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
@@ -569,13 +574,99 @@ if [ "$k" -gt "$max_keep" ]; then
   k=$max_keep
 fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | while read -r r; do
-  [ "releases/$r" = "$(readlink "$base/current")" ] || rm -rf "$base/releases/$r"
+  [ "releases/$r" = "$(readlink "$base/current")" ] || { %srm -rf "$base/releases/$r"; }
 done
-`, t.Keep)
+`, t.Keep, dropImages(images))
 	for _, args := range p.After {
 		s += step("after", `"$base/current"`, args, `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`)
 	}
 	return s
+}
+
+// dropImages is the pruning's call to drop_images, when images defines it.
+func dropImages(images string) string {
+	if images == "" {
+		return ""
+	}
+	return `drop_images "$base/releases/$r"; `
+}
+
+// releaseImages defines the shell functions that give each release its own
+// images, for mode (empty for any other): fetch_images (fetchImages) and
+//
+//   - bookmark_images <dir>: once fetched, every image the release runs
+//     (compose config --images, recorded in .devopsy-images) gets a second
+//     tag of its own, devopsy-<compose name>-<release id>. Compose keeps
+//     running the names the files give (drupal11-prod-app, mariadb:11);
+//     the bookmark keeps that release's image when a later build or pull
+//     moves them. References by digest are exact already. Never fails.
+//   - restore_images <dir>: points the names back at the release's
+//     bookmarks, all or nothing: a rollback or a restart runs exactly the
+//     images that release ran, without building or pulling. Fails when the
+//     release has no record or a bookmark is gone.
+//   - get_images <dir>: restore_images, else fetch_images and
+//     bookmark_images. A new release has no record yet, so it fetches.
+//   - drop_images <dir>: removes a pruned release's bookmarks. docker
+//     image rm only untags an image another tag still names, and refuses
+//     one a container uses.
+func releaseImages(projectName string, t *Target, mode string) string {
+	fetch := fetchImages(projectName, mode)
+	if fetch == "" {
+		return ""
+	}
+	name := t.ComposeName()
+	if name == "" {
+		name = projectName
+	}
+	prefix := "devopsy-"
+	if name != "" {
+		prefix += name + "-"
+	}
+	return fetch + `image_repo() {
+  case ${1##*/} in
+    *:*) echo "${1%:*}" ;;
+    *) echo "$1" ;;
+  esac
+}
+release_id() { (cd "$1" && pwd -P) | sed 's|.*/||'; }
+bookmark_images() {
+  bm_id=$(release_id "$1")
+  if ! (cd "$1" && ` + devopsyCall(projectName, []string{"--", "config", "--images"}, false) + `) >"$1/.devopsy-images" 2>/dev/null; then
+    rm -f "$1/.devopsy-images"
+    echo "devopsy: could not list the images of $bm_id: a rollback to it builds or pulls them again" >&2
+    return 0
+  fi
+  while read -r ref; do
+    case $ref in '' | *@*) continue ;; esac
+    docker tag "$ref" "$(image_repo "$ref"):` + prefix + `$bm_id" 2>/dev/null || true
+  done <"$1/.devopsy-images"
+  return 0
+}
+restore_images() {
+  [ -s "$1/.devopsy-images" ] || return 1
+  ri_id=$(release_id "$1")
+  while read -r ref; do
+    case $ref in '' | *@*) continue ;; esac
+    docker image inspect "$(image_repo "$ref"):` + prefix + `$ri_id" >/dev/null 2>&1 || return 1
+  done <"$1/.devopsy-images"
+  while read -r ref; do
+    case $ref in '' | *@*) continue ;; esac
+    docker tag "$(image_repo "$ref"):` + prefix + `$ri_id" "$ref" || return 1
+  done <"$1/.devopsy-images"
+  echo "devopsy: images of $ri_id restored" >&2
+}
+get_images() {
+  restore_images "$1" || { fetch_images "$1" && bookmark_images "$1"; }
+}
+drop_images() {
+  [ -s "$1/.devopsy-images" ] || return 0
+  di_id=$(release_id "$1")
+  while read -r ref; do
+    case $ref in '' | *@*) continue ;; esac
+    docker image rm "$(image_repo "$ref"):` + prefix + `$di_id" >/dev/null 2>&1 || true
+  done <"$1/.devopsy-images"
+}
+`
 }
 
 // fetchImages defines fetch_images <dir>, which gets a release's images
