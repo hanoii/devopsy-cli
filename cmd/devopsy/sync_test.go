@@ -340,7 +340,7 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--yes]") {
+	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--from @<target>] [--yes]") {
 		t.Errorf("--release --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from @<target>]") {
@@ -394,6 +394,47 @@ func TestReleaseFirstSync(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "stop db") {
 		t.Errorf("--release-no-sync stopped:\n%s", docker)
+	}
+}
+
+// --from on a release: the parent's address when only the address names
+// its server, as --sync --from; only on a child's release that syncs.
+func TestReleaseFrom(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.dot, ".env"), "", 0o644) // prod's server from no variable
+
+	out, code := s.run(nil, "@devopsy@one:dev", "--release")
+	for _, want := range []string{
+		"[error] dev's parent, prod, has no server\n",
+		"To fix it, do one of these:\n1. Set prod's server in .devopsy/.env",
+		"\n2. Name prod's address for this release:\ndevopsy @devopsy@one:dev --release --from @devopsy@one:prod\n",
+		"\n3. Release without prod's data for now, and sync it whenever you are ready:\ndevopsy @devopsy@one:dev --release-no-sync\ndevopsy @devopsy@one:dev --sync --from @devopsy@one:prod\n",
+	} {
+		if code == 0 || !strings.Contains(out, want) || s.current("dev") != "" {
+			t.Fatalf("no parent server, missing %q (%d):\n%s", want, code, out)
+		}
+	}
+	s.logs()
+
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release", "--from", "@devopsy@one:prod"); code != 0 || !strings.Contains(out, "deploy in shop-dev") || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("--release --from (%d):\n%s", code, out)
+	}
+	s.logs()
+	// Released: a plain release no longer syncs, so --from has no use there.
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release", "--from", "devopsy@one:prod"); code == 0 || !strings.Contains(out, "--release-sync --from @devopsy@one:prod syncs on any release") {
+		t.Fatalf("--from on a released child (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "newer\n", 0o644)
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release-sync", "--from", "devopsy@one:prod", "--yes"); code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "newer\n" {
+		t.Fatalf("--release-sync --from (%d):\n%s", code, out)
+	}
+	s.logs()
+	if out, code := s.run(nil, "@devopsy@one:solo", "--release", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: @solo is not a child") {
+		t.Fatalf("--from without a parent (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
+		t.Fatalf("--release-no-sync --from (%d):\n%s", code, out)
 	}
 }
 

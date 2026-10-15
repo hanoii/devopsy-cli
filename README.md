@@ -431,7 +431,9 @@ on the server its variables name
 (`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
 child's: a guess could copy the wrong data, so a sync without one fails
 and says which variable to set. `@vm2:develop` with
-`DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Parents can chain
+`DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Without the variable,
+an address does it for one command: `devopsy @vm2:develop --release
+--from @vm1:prod`, or `--release-sync --from`, `--sync --from`. Parents can chain
 (`pr-*` from `staging` from `prod`), never in a cycle: two environments
 that are each other's parent could never be released, since a child's
 first release syncs from a released parent. `devopsy --debug
@@ -524,6 +526,9 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   asking for the environment's name first when it already has one, as
   `--sync` does (`--yes` skips it); `--release-no-sync` never syncs, a
   child's first release included (see Parent environments and syncs).
+  `--from @<address>` syncs such a release from another environment of
+  the project instead of the parent; a child's only, and only on a
+  release that syncs.
 - **Logs:** each release and rollback is recorded and saved on the server,
   in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
