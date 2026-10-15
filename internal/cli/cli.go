@@ -461,8 +461,8 @@ file; its server's instance and project .env come below it.
     dev:
       parent: prod
 `,
-	"--release": `Usage: devopsy @<target> --release [--yes]
-       devopsy @<target> --release-sync [--yes]
+	"--release": `Usage: devopsy @<target> --release [--from @<target>] [--yes]
+       devopsy @<target> --release-sync [--from @<target>] [--yes]
        devopsy @<target> --release-no-sync
 
 Uploads the project to the target as a new release, makes it current and
@@ -524,6 +524,9 @@ that data and no empty site is served; a failed copy does not go live.
 name when it already has a current release (--yes skips it): new code
 and fresh data with one run step. --release-no-sync never syncs, a
 child's first release included (devopsy @<target> --sync --help).
+--from @<target> copies from another environment of the project instead
+of the parent, as --sync --from does: for a parent whose server only the
+address names. Only on a release that syncs.
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 

@@ -244,17 +244,32 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if rollback {
 			kind = "rollback"
 		}
-		yes := false
-		for _, a := range args[1:] {
-			switch {
+		yes, from := false, ""
+		for i := 1; i < len(args); i++ {
+			switch a := args[i]; {
 			case !rollback && (a == "--yes" || a == "-y"):
 				yes = true
+			case !rollback && a == "--from":
+				// Where a syncing release copies from, instead of the
+				// parent: an address, its @ optional.
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", t.Address, args[0]))
+				}
+				from = strings.TrimPrefix(args[i+1], "@")
+				i++
 			default:
 				return fail(fmt.Sprintf("%s takes no command: what it runs is the environment's %s: steps in %s", args[0], kind, t.File))
 			}
 		}
-		if syncFlag && t.Parent == "" {
-			return fail(fmt.Sprintf("--release-sync: @%s is not a child: environment %s has no parent: in %s", t.Name, t.Name, cmp.Or(t.File, "the project's config")))
+		if noSync && from != "" {
+			return fail("--from: --release-no-sync never syncs: devopsy @" + t.Address + " --release-sync --from @" + from + " syncs from it")
+		}
+		if (syncFlag || from != "") && t.Parent == "" {
+			flag := args[0]
+			if from != "" {
+				flag = "--from"
+			}
+			return fail(fmt.Sprintf("%s: @%s is not a child: environment %s has no parent: in %s", flag, t.Name, t.Name, cmp.Or(t.File, "the project's config")))
 		}
 		steps := t.Release
 		if rollback {
@@ -408,11 +423,19 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return code
 			}
 			first := strings.TrimSpace(out.String()) == "none"
+			if from != "" && !syncFlag && !first {
+				return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, t.Address, from))
+			}
 			if syncFlag || first {
-				if t.ParentErr != nil {
-					return failParent(t, color)
+				p := t.ParentTarget
+				if from != "" {
+					if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
+						return fail("--from: " + err.Error())
+					}
+				} else if t.ParentErr != nil {
+					return failParent(t, color, args[0])
 				}
-				if job, err = syncPreflight(t, t.ParentTarget, projectName, nil); err != nil {
+				if job, err = syncPreflight(t, p, projectName, nil); err != nil {
 					return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
 				}
 				job.first = first
@@ -533,9 +556,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 // failParent reports a child whose parent could not be resolved
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
-func failParent(t *remote.Target, color bool) int {
+func failParent(t *remote.Target, color bool, flag string) int {
 	report.Fail(os.Stderr, color, t.ParentErr,
-		"Release "+t.Name+" without "+t.Parent+"'s data, then sync it from an address:\ndevopsy @"+t.Address+" --release-no-sync\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
+		"Name "+t.Parent+"'s address for this release:\ndevopsy @"+t.Address+" "+flag+" --from "+parentGuess(t),
+		"Release without "+t.Parent+"'s data for now, and sync it whenever you are ready:\ndevopsy @"+t.Address+" --release-no-sync\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
 	return 1
 }
 

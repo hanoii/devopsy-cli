@@ -283,10 +283,32 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	switch words[0] {
 	case "--release", "--release-sync":
 		// It takes no command: its steps are in config.yaml.
-		return flags([]Candidate{
+		if len(words) > 2 && words[len(words)-2] == "--from" {
+			return fromAddresses(projectDir, cur, user)
+		}
+		given := words[1 : len(words)-1]
+		for i := 0; i < len(given); i++ {
+			switch given[i] {
+			case "--from":
+				i++ // its address
+			case "--yes", "-y":
+			default:
+				return none
+			}
+		}
+		var r Result
+		for _, c := range []Candidate{
+			{"--from", "sync from another environment than its parent", GroupDevopsy},
 			{"--yes", "create a new instance, or replace a child's data, without asking", GroupDevopsy},
 			help,
-		})
+		} {
+			if !slices.Contains(given, c.Value) && (c.Value != "--help" || len(given) == 0) {
+				r.Candidates = append(r.Candidates, c)
+			}
+		}
+		r = filter(r, cur)
+		r.Directive = DirectiveNoFileComp
+		return r
 	case "--release-no-sync", "--rollback", "--inherit", "--status":
 		return flags([]Candidate{help})
 	case "--ssh-keys":
@@ -302,15 +324,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return Result{Directive: DirectiveNoFileComp}
 	case "--sync":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
-			// An address, offered as the first word's are, aliases aside:
-			// another environment of this project.
-			r := Result{Directive: DirectiveNoFileComp}
-			if !user {
-				r.Candidates = addresses(projectDir, cur, false)
-			}
-			r = filter(r, cur)
-			r.Directive |= serversOnly(r)
-			return r
+			return fromAddresses(projectDir, cur, user)
 		}
 		// After --, rsync's (or the sync capability's) arguments.
 		given := words[1 : len(words)-1]
@@ -503,4 +517,17 @@ func serversOnly(r Result) int {
 		return DirectiveNoSpace
 	}
 	return 0
+}
+
+// fromAddresses completes --from's address: as the first word's, aliases
+// aside, another environment of this project; none for a user-level
+// target, another project.
+func fromAddresses(projectDir, cur string, user bool) Result {
+	r := Result{Directive: DirectiveNoFileComp}
+	if !user {
+		r.Candidates = addresses(projectDir, cur, false)
+	}
+	r = filter(r, cur)
+	r.Directive |= serversOnly(r)
+	return r
 }

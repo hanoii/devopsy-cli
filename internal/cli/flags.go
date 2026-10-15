@@ -54,8 +54,8 @@ type FlagGroup struct {
 // once for each. A new flag goes here.
 var Flags = []FlagGroup{
 	{"Releases", []Flag{
-		{Name: "--release", Args: "[--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
-		{Name: "--release-sync", Args: "[--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
+		{Name: "--release", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
+		{Name: "--release-sync", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
 		{Name: "--release-no-sync", Args: "[--yes]", Scope: Target, Desc: "the same, never syncing"},
 		{Name: "--rollback", Scope: Target, Desc: "back to the previous release"},
 		{Name: "--releases", Scope: Target, Desc: "the releases there"},

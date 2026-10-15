@@ -306,6 +306,13 @@ repositories fit together and the open ideas.
   or `none`, exit 0; one extra session on every release of a child),
   `--release-sync` (any release), never `--release-no-sync`, and `@<child>
   --sync`, which asks for the name like `--destroy` and reruns `run`.
+  `--from <address>` (`@` optional) on `--release`, `--release-sync` and
+  `--sync` copies from that address instead of `ParentTarget`, `ParentErr`
+  ignored: a child's only (`parent:` required), and on `--release` only a
+  first one (a released child says to use `--release-sync`);
+  `--release-no-sync --from` is an error. `failParent` lists the fixes:
+  the variable, the same release with `--from`, and a release without the
+  data then `--sync --from`.
   Everything that can fail (`syncPreflight`: a run step, the parent
   released, across servers a local agent and a child reachable without
   `ProxyCommand`/`ProxyJump`) is checked before the upload or the holder.
