@@ -206,6 +206,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--inherit":
 		return runInherit(t, projectName, args[1:], color)
 
+	case cli.ExportFlag:
+		return runRemoteExport(t, projectName, args[1:], color)
+
+	case cli.ImportFlag:
+		return runRemoteImport(t, projectName, args[1:], color)
+
 	case "--ssh-keys":
 		return runSSHKeys(t, args[1:], color)
 

@@ -46,7 +46,9 @@ func excluded(rel string) bool {
 		rel == ".devopsy/"+TargetEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",
-		rel == ".devopsy/mnt" || strings.HasPrefix(rel, ".devopsy/mnt/"):
+		rel == ".devopsy/mnt" || strings.HasPrefix(rel, ".devopsy/mnt/"),
+		// --import's spool: data, maybe secret, never part of a release.
+		strings.HasPrefix(rel, ".devopsy/"+StreamSpoolPrefix):
 		return true
 	}
 	return false
@@ -437,7 +439,7 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 // steps. Nothing before the switch changes what is live.
 //
 // With sync, a release syncs its parent's data once current, before
-// the run step (SyncOptions): it pauses and stops the release's services,
+// the run step (SyncOptions): it stops the release's services labeled to,
 // prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
@@ -510,7 +512,7 @@ echo "devopsy: current is now $id" >&2
 		s += "status=0\nfailed=run\n"
 	}
 	if sync != nil {
-		s += sync.exports() + `cd "$base/current"
+		s += sync.exports(t) + `cd "$base/current"
 ` + syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
 ` + syncWait("the release does not go live") + `  if [ "$reply" != go ]; then
     sync_finish abort || true

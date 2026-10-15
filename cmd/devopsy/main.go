@@ -126,8 +126,6 @@ func run() int {
 	switch args[0] {
 	case cli.SyncPushFlag:
 		return runSyncPush(cwd, color)
-	case cli.SyncRsyncFlag:
-		return runSyncRsync(cwd, args[1:], color)
 	case cli.SyncExecFlag:
 		return runSyncExec(args[1:], color)
 	case cli.SyncServicesFlag:
@@ -140,6 +138,12 @@ func run() int {
 
 	if args[0] == "--status" {
 		return runStatus(cwd, args[1:], color)
+	}
+	switch args[0] {
+	case cli.ExportFlag:
+		return runExport(cwd, args[1:], color)
+	case cli.ImportFlag:
+		return runImport(cwd, args[1:], color)
 	}
 
 	// devopsy's flags for servers, used without a target.

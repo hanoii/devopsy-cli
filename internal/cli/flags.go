@@ -65,6 +65,8 @@ var Flags = []FlagGroup{
 	{"Data", []Flag{
 		{Name: "--sync", Args: "[--from <target>] [--yes]", Scope: Target, Desc: "a child's data from its parent, then run"},
 		{Name: "--inherit", Scope: Target, Desc: "the parent's inherit: variables again"},
+		{Name: "--export", Args: "<service>", Scope: LocalOrTarget, Desc: "a service's data, to stdout"},
+		{Name: "--import", Args: "<service> [--yes]", Scope: LocalOrTarget, Desc: "a service's data, from stdin"},
 	}},
 	{"Variables", []Flag{
 		{Name: "--env", Scope: LocalOrTarget, Desc: "what devopsy loads and computes (.env)"},

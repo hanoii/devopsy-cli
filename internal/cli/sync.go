@@ -10,49 +10,59 @@ import (
 	"strings"
 )
 
-// SyncLabel tunes how a sync treats a service (SyncLive and so on).
+// SyncLabel says how a sync, --export and --import move a service's data
+// (SyncRsync, SyncStream). Without it the service is SyncSkip.
 const SyncLabel = "devopsy.sync"
 
-// SyncExcludeLabel names entries of mnt a service mounts that a sync
-// leaves out anyway (comma or space separated): an access log next to
-// the files, say. The service is still paused or stopped as its
-// SyncLabel says; only those entries are not copied through it.
-const SyncExcludeLabel = "devopsy.sync.exclude"
+// SyncStopLabel, true or false (the default), says whether the service is
+// stopped meanwhile: on both sides for a whole sync, around --export and
+// --import.
+const SyncStopLabel = "devopsy.sync.stop"
 
-// Sync policies, SyncLabel's values. A service opts in: without the
-// label it is SyncSkip.
+// SyncExcludeLabel names entries of mnt an rsync service mounts that its
+// copy leaves out anyway (comma or space separated): an access log next
+// to the files, say. Ignored on a stream service, so a project can flip
+// SyncLabel through a variable and keep it.
+const SyncExcludeLabel = "devopsy.sync.rsync.exclude"
+
+// How a service's data moves, SyncLabel's values. A service opts in:
+// without the label it is SyncSkip.
 const (
-	// SyncSkip (the default): the service is neither copied nor touched.
+	// SyncSkip (no label): the service is neither copied nor touched.
 	SyncSkip = "skip"
-	// SyncLive: nothing happens to the service; its binds under mnt are
-	// copied (after the flush hook).
-	SyncLive = "live"
-	// SyncCustom: devopsy copies nothing and touches nothing; the sync
-	// capability's push, required then, copies it after the rest.
-	SyncCustom = "custom"
-	// SyncStop: stopped for the copy, a clean shutdown (a database's raw
-	// files).
-	SyncStop = "stop"
-	// SyncPause: frozen for the copy, so its router stays and requests
-	// wait (the routed app). Holding, not integrity: never a database.
-	SyncPause = "pause"
+	// SyncRsync: devopsy rsyncs the entries of mnt it bind-mounts (a tar of
+	// them for --export and --import).
+	SyncRsync = "rsync"
+	// SyncStream: the sync capability's export, on the parent, writes the
+	// data to stdout, and its import, on the child, reads it from stdin.
+	SyncStream = "stream"
 )
 
 // The hidden flags of a sync, run on servers.
 const (
 	SyncPushFlag     = "--sync-push"
-	SyncRsyncFlag    = "--sync-rsync"
 	SyncExecFlag     = "--sync-exec"
 	SyncServicesFlag = "--sync-services"
 )
 
-// SyncService is a service of the project as a sync sees it: its policy
-// and the entries of mnt its binds hold ("." for mnt itself). Labeled is
-// whether it has SyncLabel.
+// --export and --import move one service's data, the way its SyncLabel
+// says, locally or with @<target> on a server.
+const (
+	ExportFlag = "--export"
+	ImportFlag = "--import"
+)
+
+// SyncService is a service of the project as a sync sees it: how its data
+// moves (Transfer), whether it is stopped meanwhile, the entries of mnt
+// its binds hold ("." for mnt itself; an rsync service's without its
+// excluded ones, named in Excluded) and the services it depends on.
+// Labeled is whether it has a non-empty SyncLabel.
 type SyncService struct {
-	Name, Policy string
-	Dirs         []string
-	Labeled      bool
+	Name, Transfer string
+	Stop           bool
+	Dirs, Excluded []string
+	Labeled        bool
+	DependsOn      []string
 }
 
 // ComposeConfig prints the project's compose configuration as JSON, every
@@ -75,7 +85,7 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 }
 
 // SyncServices lists the services of the project at cwd, sorted, with
-// their policy (SyncLabel, default SyncSkip) and the entries of
+// their transfer (SyncLabel, default SyncSkip) and the entries of
 // .devopsy/mnt their bind mounts hold. projectDir is the project's
 // .devopsy/.
 func SyncServices(cwd string, environ []string) (projectDir string, services []SyncService, err error) {
@@ -94,12 +104,13 @@ func SyncServices(cwd string, environ []string) (projectDir string, services []S
 // parseSyncServices reads compose's JSON configuration. Bind sources are
 // absolute there, under the compose file's directory as written (on
 // servers .devopsy/mnt is a link to shared/mnt, which compose may have
-// resolved): both count.
+// resolved): both count. depends_on is a map keyed by service.
 func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	var config struct {
 		Services map[string]struct {
-			Labels  map[string]string `json:"labels"`
-			Volumes []struct {
+			Labels    map[string]string          `json:"labels"`
+			DependsOn map[string]json.RawMessage `json:"depends_on"`
+			Volumes   []struct {
 				Type   string `json:"type"`
 				Source string `json:"source"`
 			} `json:"volumes"`
@@ -114,30 +125,52 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	}
 	var services []SyncService
 	for name, s := range config.Services {
-		policy, labeled := s.Labels[SyncLabel]
-		switch policy {
+		cs := SyncService{Name: name, Transfer: s.Labels[SyncLabel]}
+		// An empty value is no label: a variable can turn a service off.
+		switch cs.Transfer {
 		case "":
-			policy = SyncSkip
-		case SyncLive, SyncSkip, SyncStop, SyncPause, SyncCustom:
+			cs.Transfer = SyncSkip
+		case SyncRsync, SyncStream:
+			cs.Labeled = true
 		default:
-			return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s, %s or %s", name, SyncLabel, policy, SyncSkip, SyncLive, SyncCustom, SyncStop, SyncPause)
+			return nil, fmt.Errorf("service %s: %s=%s: %s or %s (no label: neither copied nor touched)", name, SyncLabel, cs.Transfer, SyncRsync, SyncStream)
 		}
-		cs := SyncService{Name: name, Policy: policy, Labeled: labeled}
-		exclude := strings.FieldsFunc(s.Labels[SyncExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
-		for _, e := range exclude {
-			if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
-				return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, SyncExcludeLabel, s.Labels[SyncExcludeLabel])
+		switch v := s.Labels[SyncStopLabel]; v {
+		case "", "false":
+		case "true":
+			// Only a labeled service is touched.
+			cs.Stop = cs.Labeled
+		default:
+			return nil, fmt.Errorf("service %s: %s=%s: true or false", name, SyncStopLabel, v)
+		}
+		var exclude []string
+		if cs.Transfer == SyncRsync {
+			exclude = strings.FieldsFunc(s.Labels[SyncExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
+			for _, e := range exclude {
+				if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
+					return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, SyncExcludeLabel, s.Labels[SyncExcludeLabel])
+				}
 			}
 		}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" {
 				continue
 			}
-			if d := mntEntry(filepath.Clean(v.Source), mnts); d != "" && !slices.Contains(cs.Dirs, d) && !slices.Contains(exclude, d) {
+			d := mntEntry(filepath.Clean(v.Source), mnts)
+			switch {
+			case d == "" || slices.Contains(cs.Dirs, d) || slices.Contains(cs.Excluded, d):
+			case slices.Contains(exclude, d):
+				cs.Excluded = append(cs.Excluded, d)
+			default:
 				cs.Dirs = append(cs.Dirs, d)
 			}
 		}
 		sort.Strings(cs.Dirs)
+		sort.Strings(cs.Excluded)
+		for dep := range s.DependsOn {
+			cs.DependsOn = append(cs.DependsOn, dep)
+		}
+		sort.Strings(cs.DependsOn)
 		services = append(services, cs)
 	}
 	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
@@ -160,12 +193,12 @@ func mntEntry(source string, mnts []string) string {
 	return ""
 }
 
-// SyncDirs are the entries of mnt a sync copies: those of the services
-// labeled live, pause or stop, sorted; "." (all of mnt) subsumes the rest.
+// SyncDirs are the entries of mnt a sync rsyncs: those of the services
+// labeled rsync, sorted; "." (all of mnt) subsumes the rest.
 func SyncDirs(services []SyncService) []string {
 	var dirs []string
 	for _, s := range services {
-		if s.Policy == SyncSkip || s.Policy == SyncCustom {
+		if s.Transfer != SyncRsync {
 			continue
 		}
 		for _, d := range s.Dirs {
@@ -182,9 +215,9 @@ func SyncDirs(services []SyncService) []string {
 }
 
 // SyncWholeNotice is a notice for a copy of mnt itself (an entry "."):
-// it includes the entries of the services labeled skip or custom too,
-// which their labels say not to copy, or to copy another way. Empty
-// when nothing is copied against a label.
+// it includes the entries of the services without a label or labeled
+// stream too, which their labels say not to copy, or to copy another
+// way. Empty when nothing is copied against a label.
 func SyncWholeNotice(services []SyncService) string {
 	dirs := SyncDirs(services)
 	if len(dirs) != 1 || dirs[0] != "." {
@@ -193,12 +226,12 @@ func SyncWholeNotice(services []SyncService) string {
 	var whole, included, exclude []string
 	for _, s := range services {
 		switch {
-		case s.Policy != SyncSkip && s.Policy != SyncCustom:
+		case s.Transfer == SyncRsync:
 			if slices.Contains(s.Dirs, ".") {
 				whole = append(whole, s.Name)
 			}
 		case len(s.Dirs) > 0:
-			included = append(included, s.Name+" ("+s.Policy+": "+strings.Join(s.Dirs, ", ")+")")
+			included = append(included, s.Name+" ("+s.Transfer+": "+strings.Join(s.Dirs, ", ")+")")
 			for _, d := range s.Dirs {
 				if d != "." && !slices.Contains(exclude, d) {
 					exclude = append(exclude, d)
@@ -216,13 +249,102 @@ func SyncWholeNotice(services []SyncService) string {
 	return msg
 }
 
-// SyncPolicy lists the names of services with policy.
-func SyncPolicy(services []SyncService, policy string) []string {
+// SyncFind is the service named name.
+func SyncFind(services []SyncService, name string) (SyncService, bool) {
+	for _, s := range services {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return SyncService{}, false
+}
+
+// SyncRsyncServices names the services labeled rsync.
+func SyncRsyncServices(services []SyncService) []string {
 	var names []string
 	for _, s := range services {
-		if s.Policy == policy {
+		if s.Transfer == SyncRsync {
 			names = append(names, s.Name)
 		}
 	}
 	return names
+}
+
+// SyncStopped names the services labeled devopsy.sync.stop=true.
+func SyncStopped(services []SyncService) []string {
+	var names []string
+	for _, s := range services {
+		if s.Stop {
+			names = append(names, s.Name)
+		}
+	}
+	return names
+}
+
+// SyncStreamServices names the services labeled stream in compose's
+// depends_on order, dependencies first, ties alphabetical: a database
+// imported before what reads it. The order is over every service, so a
+// dependency through an unlabeled one counts too; a cycle (compose
+// refuses one already) is an error.
+func SyncStreamServices(services []SyncService) ([]string, error) {
+	known := map[string]bool{}
+	for _, s := range services {
+		known[s.Name] = true
+	}
+	deps := map[string][]string{}
+	for _, s := range services {
+		for _, d := range s.DependsOn {
+			if known[d] && d != s.Name {
+				deps[s.Name] = append(deps[s.Name], d)
+			}
+		}
+	}
+	done := map[string]bool{}
+	var order []string
+	for len(order) < len(services) {
+		// services is sorted: the first ready one is the alphabetical tie.
+		progressed := false
+		for _, s := range services {
+			if done[s.Name] || slices.ContainsFunc(deps[s.Name], func(d string) bool { return !done[d] }) {
+				continue
+			}
+			done[s.Name] = true
+			order = append(order, s.Name)
+			progressed = true
+			break
+		}
+		if !progressed {
+			var left []string
+			for _, s := range services {
+				if !done[s.Name] {
+					left = append(left, s.Name)
+				}
+			}
+			return nil, fmt.Errorf("depends_on has a cycle among %s", strings.Join(left, ", "))
+		}
+	}
+	var names []string
+	for _, n := range order {
+		if s, _ := SyncFind(services, n); s.Transfer == SyncStream {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
+// SyncLists are the values of DEVOPSY_SYNC_RSYNC, DEVOPSY_SYNC_STREAM and
+// DEVOPSY_SYNC_STOP for the sync capability: this side's services by
+// label, space-separated (stream in depends_on order when it has one). A
+// stopped stream service is in both stream and stop, so a script knows
+// to run --rm rather than exec.
+func SyncLists(services []SyncService) (rsync, stream, stop string) {
+	streams, err := SyncStreamServices(services)
+	if err != nil {
+		for _, s := range services {
+			if s.Transfer == SyncStream {
+				streams = append(streams, s.Name)
+			}
+		}
+	}
+	return strings.Join(SyncRsyncServices(services), " "), strings.Join(streams, " "), strings.Join(SyncStopped(services), " ")
 }

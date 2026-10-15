@@ -693,7 +693,7 @@ func TestDebugTargets(t *testing.T) {
 		t.Errorf("--yaml (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
-	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") || !strings.Contains(out, "finish go|abort") {
+	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") || !strings.Contains(out, "finish parent|child go|abort") || !strings.Contains(out, "environment:\n    every action gets DEVOPSY_SYNC_RSYNC") {
 		t.Errorf("capabilities (%d):\n%s", code, out)
 	}
 }
@@ -785,7 +785,7 @@ esac
 		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "labels")
-	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.sync=skip|live|pause|stop|custom") {
+	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.sync=rsync|stream") || !strings.Contains(out, "devopsy.sync.stop=true|false") || !strings.Contains(out, "devopsy.sync.rsync.exclude=<entry>") {
 		t.Errorf("--debug labels (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "imports")

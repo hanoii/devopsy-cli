@@ -175,6 +175,8 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return filter(r, cur)
 	case first == "--env":
 		return showFlag(words, cur)
+	case first == "--export" || first == "--import":
+		return dataFlags(words, cur)
 	case first == "--completion":
 		if len(words) == 2 {
 			var r Result
@@ -194,6 +196,24 @@ func Complete(cwd string, words []string, environ []string) Result {
 		return Result{Directive: DirectiveNoFileComp}
 	}
 	return completeCommand(cwd, projectDir, words, environ)
+}
+
+// dataFlags completes --export and --import: a service, which
+// completion leaves to the user (its label may come from a variable only
+// compose resolves), then --yes for --import, and --help first.
+func dataFlags(words []string, cur string) Result {
+	given := words[1 : len(words)-1]
+	list := []Candidate{{"--help", "what it moves, and how", GroupDevopsy}}
+	if words[0] == "--import" {
+		list = append(list, Candidate{"--yes", "on a target, do not ask for the environment's name", GroupDevopsy})
+	}
+	r := Result{Directive: DirectiveNoFileComp}
+	for _, c := range list {
+		if !slices.Contains(given, c.Value) && (c.Value != "--help" || len(given) == 0) {
+			r.Candidates = append(r.Candidates, c)
+		}
+	}
+	return filter(r, cur)
 }
 
 // showFlag completes --env's one option.
@@ -374,6 +394,8 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return none
 	case "--env":
 		return showFlag(words, cur)
+	case "--export", "--import":
+		return dataFlags(words, cur)
 	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--releases", "--help", "-h":
 		return none
 	case "--":

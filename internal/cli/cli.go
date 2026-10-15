@@ -321,12 +321,12 @@ func commandHeader(path, key string) string {
 var RemoteCommandHelp = map[string]string{
 	"--sync": `Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]
 
-Replaces a child environment's data (shared/mnt) with its parent's, then
-runs its release's run step. A child is an environment with parent: in
-config.yaml; its first release syncs on its own, between switching current
-and the run step (--release-no-sync skips that), so --sync is for
-resyncing later. Nothing goes through this machine: the parent's server
-copies into the child's.
+Replaces a child environment's data (shared/mnt, and what its services
+hold) with its parent's, then runs its release's run step. A child is an
+environment with parent: in config.yaml; its first release syncs on its
+own, between switching current and the run step (--release-no-sync skips
+that), so --sync is for resyncing later. Nothing goes through this
+machine: the parent's server copies into the child's.
 
   environments:
     prod:
@@ -338,37 +338,37 @@ copies into the child's.
                     (@vm1:prod, a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
   -- args...        DEVOPSY_SYNC_ARGS: rsync's arguments (--exclude=cache),
-                    or the sync capability's to use
+                    and the sync capability's to read
+
+Services opt in, with labels on compose services, read by each side from
+its own release:
+
+  devopsy.sync=rsync   its entries of .devopsy/mnt rsynced (rsync -a
+                       --delete --numeric-ids, as root in devopsy's own
+                       image, devopsy-rsync, built on each server)
+  devopsy.sync=stream  the parent's sync capability's export writes it to
+                       stdout, into a file on the child's side; once the
+                       export succeeded, the child's import reads it (a
+                       database dumped and loaded)
+  (no label)           neither copied nor touched
+  devopsy.sync.stop=true
+                       stopped on both sides for the whole sync, a clean
+                       shutdown (a database's files); default false: a
+                       running service is copied as it is
+  devopsy.sync.rsync.exclude=<entry>[,<entry>...]
+                       entries of mnt an rsync service mounts that are not
+                       copied through it anyway (an access log)
 
 What runs where:
-  - the child's server, under its release lock: the prepare hook, then
-    its services labeled devopsy.sync=live or pause are flushed (the
-    flush hook), those labeled pause paused, those labeled stop stopped,
-    then it waits for the copy; after it, stopped ones start (and become
-    healthy), paused ones resume, the finish hook runs, then the run step.
-    A failed copy restores the services and skips the run step.
+  - the child's server, under its release lock: the prepare child hook,
+    its stop=true services stopped, then it waits for the copy; after
+    it, they start (and become healthy), the finish child hook runs,
+    then the run step. A failed copy restores them and skips the run
+    step.
   - the parent's server, under a shared hold of its lock (its releases
-    wait): the same for its own labeled services, the copy, the restart,
-    then the push capability for the services labeled custom.
-
-Services opt in. The copy is rsync -a --delete --numeric-ids, as root in
-devopsy's own image (devopsy-rsync, built on each server when missing), of
-each entry of .devopsy/mnt a service labeled live, pause or stop
-bind-mounts. Labels, on compose services:
-
-  devopsy.sync=skip    (default) neither copied nor touched
-  devopsy.sync=live    untouched; flushed, its mounts copied
-  devopsy.sync=pause   flushed, then frozen for the copy, its requests held
-                        (the routed app); its mounts copied. Holding, not
-                        consistency: never a database
-  devopsy.sync=stop    stopped for the copy: a clean shutdown (a database's
-                        files); its mounts copied
-  devopsy.sync=custom  devopsy copies and touches nothing: the parent's
-                        push capability (required then) copies it, after the
-                        rest (a database it dumps)
-  devopsy.sync.exclude=<entry>[,<entry>...]
-                        entries of mnt this service mounts that are not
-                        copied through it anyway (an access log)
+    wait): prepare parent, its stop=true services stopped, the rsync,
+    each stream (export, then the child's import: its service brought
+    up first unless stopped), its services started, finish parent.
 
 Without any labeled service there is nothing to sync; the run step still
 runs.
@@ -386,10 +386,64 @@ copying, the variables the parent's inherit: names are copied from its
 server's .env files into the child's, at the same level (shared/.env, the
 instance's or the project's .env); names are printed, never values.
 
-The sync capability (capabilities/sync) adds hooks, each run only where
-its file is: flush on both servers, prepare and finish on the child's, push
-on the parent's for the custom services (devopsy --debug capabilities). Asks for the environment's name, unless --yes. The
-log goes with the current release: devopsy @<target> --log.
+The sync capability (capabilities/sync): prepare and finish on both
+sides, export on the parent's and import on the child's for the stream
+services (devopsy --debug capabilities). Asks for the environment's name,
+unless --yes. The log goes with the current release: devopsy @<target>
+--log. One service alone, from anywhere to anywhere: --export, --import.
+`,
+	"--export": `Usage: devopsy [@<target>] --export <service>
+
+Writes a service's data to stdout, the way its devopsy.sync label says;
+everything devopsy says goes to stderr. With a target, in its current
+release on the server, under a shared hold of its release lock (a
+release waits) and its sync lock (a sync from it waits), the data coming
+through SSH.
+
+  devopsy.sync=stream   the sync capability's export <service> (a dump)
+  devopsy.sync=rsync    a tar of the entries of .devopsy/mnt it mounts
+                        (devopsy.sync.rsync.exclude honored), made as root
+                        in devopsy-rsync with numeric owners and modes. A
+                        service mounting ./mnt itself exports all of it,
+                        other services' and excluded entries included
+                        (devopsy says which)
+  devopsy.sync.stop=true  stopped around it, started again afterwards
+
+A service without the label is refused. --import reads what --export
+writes, so data goes from one environment to another without a project
+command:
+
+  devopsy @prod --export database | devopsy --import database
+  devopsy @prod --export storage > storage.tar
+  devopsy --export database > database.sql
+`,
+	"--import": `Usage: devopsy [@<target>] --import <service> [--yes]
+
+Replaces a service's data with stdin, what --export wrote, the way its
+devopsy.sync label says. stdin goes to a file first (under .devopsy/
+locally, next to the environment on a server); only once it is all there
+does anything change, and the file is removed afterwards.
+
+  devopsy.sync=stream   the sync capability's import <service> reads it,
+                        with the service brought up first unless stopped
+                        (and down again after it if it was down)
+  devopsy.sync=rsync    a tar: each entry of mnt it carries is emptied,
+                        then extracted as root in devopsy-rsync, owners and
+                        modes as they were; the service may run meanwhile.
+                        A truncated tar, or one carrying entries the
+                        service does not mount, changes nothing; one of
+                        ./mnt itself replaces all of mnt (devopsy says so)
+  devopsy.sync.stop=true  stopped around it, started again afterwards
+
+With a target, asks for the environment's name on the terminal first
+(--yes skips it, and is required without a terminal), then imports under
+its release lock; a session cut halfway imports nothing. A pipe cannot
+tell an export that failed halfway from one that ended, so a stream
+imports what it got (a tar is checked): when the export can fail, export
+to a file, check its exit code, then import that.
+
+  devopsy @prod --export database | devopsy --import database
+  devopsy @staging --import database --yes < database.sql
 `,
 	"--inherit": `Usage: devopsy @<target> --inherit
 

@@ -1,46 +1,63 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/cli"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
 // $DOCKER_LOG, answers compose config and ps for a project whose app is
-// labeled pause and db stop (FAKE_APP and FAKE_DB change them, none for no
-// label; $DOCKER_LOG.<compose project> sets them for one side, past the
-// clean environment), with each container in the state its label gives
-// it (paused, exited, else running), and copies what the rsync containers
-// would: within one host, or from the daemon's mount (remembered) across
-// hosts.
+// labeled rsync (devopsy.sync=rsync) and db rsync and stopped
+// (devopsy.sync.stop=true), app depending on db (FAKE_APP and FAKE_DB
+// change them: rsync, stream, each with +stop, or none for no label;
+// $DOCKER_LOG.<compose project> sets them for one side, past the clean
+// environment), each container exited when its label stops it, else
+// running, and copies what the rsync containers would: within one host,
+// or from the daemon's mount (remembered) across hosts. The tar
+// containers of --export and --import run tar here.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
-# FAKE_ABSENT names services without a container (a first release).
-absent() { case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1; }
+# FAKE_ABSENT names services without a container (a first release),
+# until an up creates them.
+absent() {
+  ! grep -qx "$1" "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" 2>/dev/null || return 1
+  case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1
+}
+lab() {
+  case $1 in none) echo '{}' ;; *+stop) echo "{\"devopsy.sync\":\"${1%+stop}\",\"devopsy.sync.stop\":\"true\"}" ;; *) echo "{\"devopsy.sync\":\"$1\"}" ;; esac
+}
+st() { case $1 in *+stop) echo exited ;; *) echo running ;; esac; }
 case "$*" in
   *" config --format json")
-    lab() { if [ "$1" = none ]; then echo '{}'; else echo "{\"devopsy.sync\":\"$1\"}"; fi; }
-    printf '{"name":"%s","services":{"app":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-pause}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-stop}")" "$dir" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-rsync}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-rsync+stop}")" "$dir" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" ps --services --status running") absent app || echo app; absent db || [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
-  *" ps --services --status paused") absent app || echo app ;;
   *" ps --services --status restarting") [ -z "${FAKE_DB_RESTARTING:-}" ] || echo db ;;
-  *" ps --services --all --status exited") absent db || echo db ;;
-  *" ps --all --format json db") echo '{"Service":"db","State":"running","Health":"healthy"}' ;;
+  *" ps --services --all --status exited") absent db || echo db; absent app || echo app ;;
+  *" ps --all --format json "*) printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$last" ;;
   *" ps --all --format json")
-    st() { case $1 in pause) echo paused ;; stop) echo exited ;; *) echo running ;; esac; }
-    absent app || printf '{"Service":"app","State":"%s"}\n' "$(st "${FAKE_APP:-pause}")"
-    absent db || printf '{"Service":"db","State":"%s"}\n' "$(st "${FAKE_DB:-stop}")" ;;
+    absent app || printf '{"Service":"app","State":"%s"}\n' "$(st "${FAKE_APP:-rsync}")"
+    if [ -n "${FAKE_DB_DOWN:-}" ]; then dbst=exited; else dbst=$(st "${FAKE_DB:-rsync+stop}"); fi
+    absent db || printf '{"Service":"db","State":"%s"}\n' "$dbst" ;;
+  *" up -d --wait "*)
+    [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
+    up=0; for a; do [ "$up" = 1 ] && echo "$a" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; [ "$a" = --wait ] && up=1; done ;;
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
@@ -59,6 +76,16 @@ case "$*" in
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
+  "run --rm --name devopsy-export-"*)
+    [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; --numeric-owner) shift; break ;; esac; shift; done
+    exec tar -C "$src" -cf - "$@" ;;
+  "run --rm -i --name devopsy-import-"*-list" "*) exec tar -tf - ;;
+  "run --rm --name devopsy-import-"*)
+    [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
+    for e; do if [ "$e" = . ]; then d=$dst; else d=$dst/$e; fi; [ ! -d "$d" ] || find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; done
+    exec tar -C "$dst" -xf - ;;
 esac
 exit 0
 `
@@ -83,6 +110,8 @@ case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 # stdin is /dev/null before its own redirections apply (dash), hence fd 3.
 exec 3<&0
 case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
+# FAKE_IMPORT_DETACH: the same for a stream's import session.
+case "$s" in *sync-services*import*) if [ -n "${FAKE_IMPORT_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
 # FAKE_HOLDER_DIE: the holder's session dies once the copy started (the
 # file named exists), as a dropped connection would end it.
 case "$s" in *"ready for sync in"*) if [ -n "${FAKE_HOLDER_DIE:-}" ]; then
@@ -152,6 +181,20 @@ func (s *syncSetup) logs() (docker, ssh string) {
 	return string(d), string(h)
 }
 
+// labels sets FAKE_APP and FAKE_DB (vars, lines of sh) for both sides,
+// through the fake docker's files: the child's devopsy on the same server
+// gets a clean environment. Empty removes them.
+func (s *syncSetup) labels(vars string) {
+	s.t.Helper()
+	for _, p := range []string{"shop-dev", "shop-prod"} {
+		if vars == "" {
+			os.Remove(s.log + "." + p)
+			continue
+		}
+		write(s.t, s.log+"."+p, vars+"\n", 0o644)
+	}
+}
+
 func (s *syncSetup) current(env string) string {
 	l, _ := os.Readlink(filepath.Join(s.root, "shop", env, "current"))
 	return l
@@ -178,9 +221,9 @@ func readString(path string) string {
 
 func next() { time.Sleep(1100 * time.Millisecond) } // release ids are per second
 
-// A child's first release syncs its parent on the same server: services
-// paused and stopped on both sides, one container copying, then deploy on
-// the parent's data. Later releases do not, unless --sync; --sync
+// A child's first release syncs its parent on the same server: the
+// services labeled devopsy.sync.stop=true stopped on both sides, one
+// container copying, then deploy on the parent's data. Later releases do not, unless --sync; --sync
 // resyncs.
 func TestSyncSameHost(t *testing.T) {
 	s := newSyncSetup(t)
@@ -197,12 +240,13 @@ func TestSyncSameHost(t *testing.T) {
 	if got := readString(filepath.Join(s.mnt("dev"), "db", "ibdata")); got != "rows\n" {
 		t.Errorf("db not copied: %q", got)
 	}
-	// Order on each side: pause, stop, copy, start (healthy), unpause; the
-	// child's around the parent's; one container copies, no daemon.
-	order := []string{"shop-dev compose", "pause app", "shop-dev compose", "stop db", "shop-prod compose", "pause app", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
-		"shop-prod compose", "start db", "unpause app", "shop-dev compose", "start db", "unpause app"}
+	// Order on each side: stop, copy, start (healthy); the child's around
+	// the parent's; one container copies, no daemon. app, labeled rsync
+	// alone, keeps running.
+	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:2 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:2 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
+		"shop-prod compose", "start db", "shop-dev compose", "start db"}
 	rest := docker
 	for _, want := range order {
 		i := strings.Index(rest, want)
@@ -211,7 +255,7 @@ func TestSyncSameHost(t *testing.T) {
 		}
 		rest = rest[i+len(want):]
 	}
-	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent") {
+	if strings.Contains(docker, "run --rm -d") || strings.Contains(ssh, "ForwardAgent") || strings.Contains(docker, "stop app") {
 		t.Errorf("same host used a daemon or the agent:\n%s\n%s", docker, ssh)
 	}
 	// The push holds the parent's release lock shared and its sync lock
@@ -237,7 +281,7 @@ func TestSyncSameHost(t *testing.T) {
 	next()
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || strings.Contains(out, "Syncing") || strings.Contains(docker, "pause") {
+	if code != 0 || strings.Contains(out, "Syncing") || strings.Contains(docker, "stop db") {
 		t.Fatalf("second release (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -276,7 +320,7 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback", "--yes"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
 		t.Errorf("--rollback --sync (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=pause") {
+	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--yes]") {
@@ -298,13 +342,13 @@ func TestReleaseFirstSync(t *testing.T) {
 	s.releaseProd(nil)
 
 	// Nothing of the child exists on its first release: finish creates
-	// the labeled services before its hook, where a re-sync restores
-	// them, and the run step's up finds them running.
+	// every labeled service before its hook, where a re-sync restores
+	// the stopped ones, and the run step's up finds them running.
 	write(t, s.log+".shop-dev", "FAKE_ABSENT='app db'\n", 0o644)
 	out, code := s.run(nil, "@dev", "--release")
 	docker, _ := s.logs()
 	os.Remove(s.log + ".shop-dev")
-	if code != 0 || !strings.Contains(out, "devopsy: creating app db") || strings.Count(out, "devopsy: pausing app") != 1 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait app db") || strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" up -d") {
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || strings.Count(out, "devopsy: stopping db") != 1 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait app db\n") || strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" up -d") {
 		t.Fatalf("first release with no containers (%d):\n%s\n%s", code, out, docker)
 	}
 	os.RemoveAll(filepath.Join(s.root, "shop", "dev"))
@@ -323,7 +367,7 @@ func TestReleaseFirstSync(t *testing.T) {
 		t.Errorf("not marked failed: %v", err)
 	}
 	// The parent's services come back too.
-	if !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" unpause app") {
+	if !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db") {
 		t.Errorf("parent not restored:\n%s", docker)
 	}
 
@@ -331,8 +375,8 @@ func TestReleaseFirstSync(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Syncing") || s.current("dev") == "" {
 		t.Fatalf("--release-no-sync (%d):\n%s", code, out)
 	}
-	if docker, _ := s.logs(); strings.Contains(docker, "pause") {
-		t.Errorf("--release-no-sync paused:\n%s", docker)
+	if docker, _ := s.logs(); strings.Contains(docker, "stop db") {
+		t.Errorf("--release-no-sync stopped:\n%s", docker)
 	}
 }
 
@@ -345,7 +389,7 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy-rsync:1 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy-rsync:2 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -427,7 +471,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
 	}
-	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:2 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -452,7 +496,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	// the child's services come back.
 	out, code = s.run(append(agent, "FAKE_RESTRICT=1"), "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded to") || !strings.Contains(out, "restrict,agent-forwarding") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
+	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded to") || !strings.Contains(out, "restrict,agent-forwarding") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
 		t.Fatalf("restricted key (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -480,7 +524,7 @@ func TestSyncAbort(t *testing.T) {
 		t.Fatalf("abort (%d):\n%s", code, out)
 	}
 	rest := docker
-	for _, want := range []string{"shop-dev compose", "pause app", "shop-prod compose", "unpause app", "shop-dev compose", "start db", "unpause app"} {
+	for _, want := range []string{"shop-dev compose", "stop db", "shop-prod compose", "start db", "shop-dev compose", "start db"} {
 		i := strings.Index(rest, want)
 		if i < 0 {
 			t.Fatalf("missing %q in order:\n%s", want, docker)
@@ -491,14 +535,14 @@ func TestSyncAbort(t *testing.T) {
 		t.Error("an aborted sync changed current")
 	}
 
-	// The parent's stop fails: what it paused or stopped comes back.
+	// The parent's stop fails: what it stopped comes back.
 	out, code = s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	if code != 1 || !strings.Contains(out, "aborting the sync") {
 		t.Fatalf("parent's stop fails (%d):\n%s", code, out)
 	}
 	rest = docker
-	for _, want := range []string{"shop-prod compose", "stop db", "shop-prod compose", "start db", "shop-prod compose", "unpause app"} {
+	for _, want := range []string{"shop-prod compose", "stop db", "shop-prod compose", "start db", "shop-dev compose", "start db"} {
 		i := strings.Index(rest, want)
 		if i < 0 {
 			t.Fatalf("parent not restored, missing %q in order:\n%s", want, docker)
@@ -507,84 +551,171 @@ func TestSyncAbort(t *testing.T) {
 	}
 }
 
-// The sync capability replaces the generic path: prepare and finish on
-// the child, push on the parent with the helpers; the child's commands run
-// as the child, without the parent's environment.
+// Stream services: the parent's export spooled into the child's
+// directory, the child's import reading it once the export exited 0, in
+// depends_on order; the hooks on both sides with their side and lists;
+// the child's commands run as the child, without the parent's environment.
 func TestSyncCapability(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "sync")
-	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare in $COMPOSE_PROJECT_NAME from $DEVOPSY_SYNC_FROM_TARGET\"\n", 0o755)
-	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
-	write(t, filepath.Join(caps, "push"), "#!/bin/sh\nset -e\necho \"push from $COMPOSE_PROJECT_NAME to $DEVOPSY_SYNC_TO_PROJECT custom=$DEVOPSY_SYNC_CUSTOM args=$DEVOPSY_SYNC_ARGS\"\ndevopsy --sync-rsync storage -- --checksum\necho \"dump of $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\" | devopsy --sync-exec show\n", 0o755)
+	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_SYNC_RSYNC stream=$DEVOPSY_SYNC_STREAM stop=$DEVOPSY_SYNC_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET args=$DEVOPSY_SYNC_ARGS\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
+	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\"\nif [ \"${FAIL_EXPORT:-}\" = \"$1\" ]; then exit 3; fi\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1 into $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD from=$DEVOPSY_SYNC_FROM_TARGET args=$DEVOPSY_SYNC_ARGS: $(cat)\"\n", 0o755)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
+	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")
+	inOrder := func(name, out string, code int, want ...string) {
+		t.Helper()
+		rest := out
+		for _, w := range want {
+			i := strings.Index(rest, w)
+			if i < 0 {
+				t.Fatalf("%s: missing %q in order (%d):\n%s", name, w, code, out)
+			}
+			rest = rest[i+len(w):]
+		}
+	}
 
 	out, code := s.run(nil, "@dev", "--release", "--", "x")
 	if code == 0 {
 		t.Fatalf("--release with arguments (%d):\n%s", code, out)
 	}
-	// db is custom: devopsy copies the rest first, then the push copies it.
-	// The prepare and finish hooks run with the generic handling, around
-	// it.
-	custom := []string{"FAKE_DB=custom"}
-	out, code = s.run(custom, "@dev", "--release")
+	// db is a stream: rsync for app's storage, then db exported into the
+	// child's spool and imported there, with each side's own secrets; the
+	// child's db brought up before its import. Hooks on both sides.
+	s.labels("FAKE_DB=stream")
+	out, code = s.run(nil, "@dev", "--release")
 	docker, _ := s.logs()
-	rest := out
-	for _, want := range []string{"prepare in shop-dev from devopsy@one:prod", "devopsy: pausing app", "Copying", "devopsy: pausing app", "rsync mnt/storage", "devopsy: unpausing app", "push from shop-prod to shop-dev custom=db args=", "show project=shop-dev pw=child-secret", "dump of shop-prod pw=parent-secret", "devopsy: unpausing app", "finish go in shop-dev", "deploy in shop-dev"} {
-		i := strings.Index(rest, want)
-		if code != 0 || i < 0 {
-			t.Fatalf("missing %q in order (%d):\n%s", want, code, out)
-		}
-		rest = rest[i+len(want):]
+	if code != 0 {
+		t.Fatalf("stream (%d):\n%s", code, out)
 	}
-	if strings.Contains(docker, "stop db") || !strings.Contains(docker, "--numeric-ids /src/storage/ /dst/storage/") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/ /dst/storage/") || strings.Contains(docker, "/src/db/") {
-		t.Errorf("docker:\n%s", docker)
+	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=", "Copying",
+		"prepare parent in shop-prod rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "rsync mnt/storage", "devopsy: exporting db",
+		"import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
+	if strings.Contains(docker, "stop db") || strings.Contains(docker, "/src/db/") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait db") {
+		t.Errorf("stream docker:\n%s", docker)
 	}
-	// --sync's arguments are the push's: --sync-rsync only takes its own.
-	out, code = s.run(custom, "@dev", "--sync", "--yes", "--", "--exclude=css")
-	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "args=--exclude=css") || strings.Contains(docker, "--checksum --exclude=css") || !strings.Contains(docker, "--numeric-ids --checksum /src/storage/") {
-		t.Errorf("--sync -- args (%d):\n%s\n%s", code, out, docker)
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("the spool stays")
 	}
-	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
-		t.Errorf("not copied: %q", got)
+	// --sync's arguments reach the hooks and the import.
+	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
+	s.logs()
+	if code != 0 || !strings.Contains(out, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=--exclude=css") || !strings.Contains(out, "args=--exclude=css: dump of db") {
+		t.Errorf("--sync -- args (%d):\n%s", code, out)
 	}
 
-	// A push without a custom service is not run; a custom service
-	// without a push fails the sync.
+	// Two streams, one stopped: in depends_on order (app depends on db),
+	// the stopped one never brought up for its import.
+	s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop")
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
-	if code != 0 || !strings.Contains(out, "capabilities/sync/push present but no service labeled devopsy.sync=custom: not run") || strings.Contains(out, "push from") {
-		t.Errorf("push without custom (%d):\n%s", code, out)
+	docker, _ = s.logs()
+	if code != 0 {
+		t.Fatalf("two streams (%d):\n%s", code, out)
 	}
+	inOrder("two streams", out, code, "prepare child in shop-dev rsync= stream=db app stop=db", "devopsy: stopping db", "Copying", "devopsy: stopping db", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev")
+	if strings.Contains(docker, "up -d --wait db") || !strings.Contains(docker, "up -d --wait app") || strings.Contains(out, "rsync mnt/") {
+		t.Errorf("two streams docker:\n%s", docker)
+	}
+
+	// An export that fails is never imported: the sync aborts, the
+	// spool goes, both sides finish abort.
+	s.labels("FAKE_DB=stream")
+	out, code = s.run([]string{"FAIL_EXPORT=db"}, "@dev", "--sync", "--yes")
 	s.logs()
-	if err := os.Remove(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "push")); err != nil {
+	if code == 0 || !strings.Contains(out, "export db: exit status 3: nothing imported") || strings.Contains(out, "import db into") || strings.Contains(out, "deploy in shop-dev") ||
+		!strings.Contains(out, "finish parent abort in shop-prod") || !strings.Contains(out, "finish child abort in shop-dev") {
+		t.Errorf("failing export (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("the spool of a failed export stays")
+	}
+
+	// A failing prepare aborts before anything stops on its side: on the
+	// child, before the parent starts; on the parent, before its own.
+	s.labels("")
+	out, code = s.run([]string{"FAIL_PREPARE=child"}, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || strings.Contains(out, "Copying") || strings.Contains(docker, "stop db") || !strings.Contains(out, "finish child abort in shop-dev") || strings.Contains(out, "deploy in shop-dev") {
+		t.Errorf("failing prepare child (%d):\n%s\n%s", code, out, docker)
+	}
+	out, code = s.run([]string{"FAIL_PREPARE=parent"}, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop db") || !strings.Contains(out, "finish parent abort in shop-prod") ||
+		!strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
+		t.Errorf("failing prepare parent (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// Across servers the export goes into the child's spool through an
+	// SSH session of the parent's (cat), then the import there.
+	s.labels("FAKE_DB=stream")
+	across := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
+	_, ssh := s.logs()
+	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret") {
+		t.Fatalf("stream across servers (%d):\n%s", code, out)
+	}
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -p 22 devopsy@two") != 3 {
+		t.Errorf("the child's list, the spool's cat and the import, each a session:\n%s", ssh)
+	}
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("the spool stays across servers")
+	}
+	out, code = s.run(append(across, "FAIL_EXPORT=db"), "@devopsy@two:dev", "--sync", "--yes")
+	s.logs()
+	if code == 0 || strings.Contains(out, "import db into") || !strings.Contains(out, "finish child abort") {
+		t.Errorf("failing export across servers (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("the spool of a failed export stays across servers: the child's abort removes it")
+	}
+
+	// A stream needs an import on the child, checked before anything
+	// stops anywhere, and an export on the parent, before anything stops
+	// there.
+	childImport := filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "capabilities", "sync", "import")
+	if err := os.Rename(childImport, childImport+".off"); err != nil {
 		t.Fatal(err)
 	}
-	out, code = s.run(custom, "@dev", "--sync", "--yes")
-	if code == 0 || !strings.Contains(out, "db labeled devopsy.sync=custom: the parent's release needs an executable .devopsy/capabilities/sync/push") || !strings.Contains(out, "aborting the sync") {
-		t.Errorf("custom without push (%d):\n%s", code, out)
+	s.labels("FAKE_DB=stream+stop")
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "db labeled devopsy.sync=stream: the child's release needs an executable .devopsy/capabilities/sync/import") || strings.Contains(docker, "stop db") || strings.Contains(out, "Copying") || strings.Contains(out, "prepare child") {
+		t.Errorf("no import on the child (%d):\n%s\n%s", code, out, docker)
 	}
-	s.logs()
+	if err := os.Rename(childImport+".off", childImport); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "export")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "db labeled devopsy.sync=stream: the parent's release needs an executable .devopsy/capabilities/sync/export") || !strings.Contains(out, "aborting the sync") ||
+		strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(out, "prepare parent") {
+		t.Errorf("no export on the parent (%d):\n%s\n%s", code, out, docker)
+	}
 
-	// The helpers only run inside a push, on entries of mnt.
+	// The hidden flags only run inside a push.
+	s.labels("")
 	prod := filepath.Join(s.root, "shop", "prod", "current")
-	inPush := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(s.root, "shop", "dev", "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev"}
-	for _, args := range [][]string{{"--sync-rsync", "../x"}, {"--sync-rsync", "a/b"}, {"--sync-rsync", "missing"}} {
-		cmd := exec.Command(binary, args...)
-		cmd.Dir = prod
-		cmd.Env = append(append([]string{}, s.env...), inPush...)
-		if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "--sync-rsync") {
-			t.Errorf("%v: %v\n%s", args, err, out)
-		}
-	}
-	for _, flag := range []string{"--sync-exec", "--sync-rsync", "--sync-push"} {
+	for _, flag := range []string{"--sync-exec", "--sync-push"} {
 		cmd := exec.Command(binary, flag, "ps")
 		cmd.Dir = prod
 		cmd.Env = s.env
 		if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "only runs in a sync's push") {
 			t.Errorf("%s outside a push: %v\n%s", flag, err, out)
 		}
+	}
+	// An import into a service the child does not label stream refuses.
+	cmd := exec.Command(binary, "--sync-services", "import", "app")
+	cmd.Dir = prod
+	cmd.Env = append(append([]string{}, s.env...), "PWD="+prod)
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "the child's app is not labeled devopsy.sync=stream") {
+		t.Errorf("import of an rsync service: %v\n%s", err, out)
 	}
 }
 
@@ -756,26 +887,30 @@ func TestSyncInherit(t *testing.T) {
 	}
 }
 
-// Interrupted during the copy, devopsy ends the push session first, then
-// aborts: the child's services come back and its run step does not run.
+// Interrupted during an export, devopsy ends the push session first, then
+// aborts: the export is ended, its spool removed, both sides' stopped
+// services come back, nothing is imported and the run step does not run.
 func TestSyncInterrupt(t *testing.T) {
 	s := newSyncSetup(t)
 	started := filepath.Join(t.TempDir(), "started")
-	write(t, filepath.Join(s.dot, "capabilities", "sync", "push"), "#!/bin/sh\ntouch \"$FAKE_STARTED\"\nexec sleep 20\n", 0o755)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho partial\ntouch \"$FAKE_STARTED\"\nexec sleep 20\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"IMPORT RAN $(cat)\"\n", 0o755)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
+	s.labels("FAKE_DB=stream+stop")
 
-	// Output to a file: the push's sleep, orphaned, keeps a pipe open.
+	// Output to a file: the export's sleep, orphaned, keeps a pipe open.
 	outFile, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(binary, "@dev", "--sync", "--yes")
 	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started, "FAKE_DB=custom")
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started)
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = outFile, outFile
 	if err := cmd.Start(); err != nil {
@@ -787,7 +922,7 @@ func TestSyncInterrupt(t *testing.T) {
 		}
 		if i > 200 {
 			_ = cmd.Process.Kill()
-			t.Fatal("the push never started")
+			t.Fatalf("the export never started:\n%s", readString(outFile.Name()))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -795,21 +930,28 @@ func TestSyncInterrupt(t *testing.T) {
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
 	out := readString(outFile.Name())
-	docker, _ := s.logs()
-	if cmd.ProcessState.ExitCode() == 0 || time.Since(start) > 15*time.Second || !strings.Contains(out, "stopping the copy from @devopsy@one:prod, then aborting") || strings.Contains(out, "deploy in shop-dev") {
+	if cmd.ProcessState.ExitCode() == 0 || time.Since(start) > 15*time.Second || !strings.Contains(out, "stopping the copy from @devopsy@one:prod, then aborting") || strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "IMPORT RAN") || !strings.Contains(out, "export db: interrupted: nothing imported") {
 		t.Fatalf("interrupt (%d, %s):\n%s", cmd.ProcessState.ExitCode(), time.Since(start), out)
 	}
-	if !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
-		t.Errorf("child not restored:\n%s", docker)
+	for _, side := range []string{"dev", "prod"} {
+		restored := "shop-" + side + " compose -f " + filepath.Join(s.root, "shop", side, "current", ".devopsy", "compose.yaml") + " start db"
+		for !strings.Contains(readString(s.log), restored) {
+			if time.Since(start) > 10*time.Second {
+				t.Fatalf("%s not restored:\n%s", side, readString(s.log))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")); err == nil {
+		t.Errorf("the spool of an interrupted export stays")
 	}
 }
 
-// Labels opt in: without any, nothing is copied or touched; the flush hook
-// runs for each live and pause service, on both sides, before it is
-// paused or copied, never for stop; a failing flush aborts.
+// Labels opt in: without any, nothing is copied or touched; only the
+// services labeled devopsy.sync.stop=true are stopped, and restored from
+// what was stopped.
 func TestSyncLabels(t *testing.T) {
 	s := newSyncSetup(t)
-	write(t, filepath.Join(s.dot, "capabilities", "sync", "flush"), "#!/bin/sh\necho \"flush $1 in $COMPOSE_PROJECT_NAME\"\n[ \"${FAIL_FLUSH:-}\" != \"$COMPOSE_PROJECT_NAME\" ]\n", 0o755)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
@@ -818,35 +960,36 @@ func TestSyncLabels(t *testing.T) {
 
 	out, code := s.run([]string{"FAKE_APP=none", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "nothing to sync: no service labeled devopsy.sync") || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "flush") ||
-		strings.Contains(docker, "pause") || strings.Contains(docker, "rsync") {
+	if code != 0 || !strings.Contains(out, "nothing to sync: no service labeled devopsy.sync") || !strings.Contains(out, "deploy in shop-dev") ||
+		strings.Contains(docker, " stop ") || strings.Contains(docker, "rsync") {
 		t.Fatalf("no labels (%d):\n%s\n%s", code, out, docker)
 	}
 
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
-	s.logs()
+	docker, _ = s.logs()
 	rest := out
-	for _, want := range []string{"flush app in shop-dev", "devopsy: pausing app", "devopsy: stopping db", "Copying", "flush app in shop-prod", "devopsy: pausing app", "rsync mnt/db", "deploy in shop-dev"} {
+	for _, want := range []string{"devopsy: stopping db", "Copying", "devopsy: stopping db", "rsync mnt/db", "rsync mnt/storage", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev"} {
 		i := strings.Index(rest, want)
 		if code != 0 || i < 0 {
 			t.Fatalf("missing %q in order (%d):\n%s", want, code, out)
 		}
 		rest = rest[i+len(want):]
 	}
-	if strings.Contains(out, "flush db") {
-		t.Errorf("flush for a stop service:\n%s", out)
+	if strings.Contains(docker, "stop app") || strings.Contains(docker, "pause") {
+		t.Errorf("app, rsync without stop, touched:\n%s", docker)
 	}
-	out, code = s.run([]string{"FAKE_DB=live"}, "@dev", "--sync", "--yes")
-	s.logs()
-	if code != 0 || strings.Count(out, "flush db in") != 2 || strings.Count(out, "flush app in") != 2 {
-		t.Errorf("flush for live services (%d):\n%s", code, out)
+	// Both stopped: one compose stop, Compose orders them.
+	out, code = s.run([]string{"FAKE_APP=rsync+stop"}, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Count(out, "devopsy: stopping app db") != 2 || strings.Count(docker, " stop app db\n") != 2 {
+		t.Errorf("both stopped (%d):\n%s\n%s", code, out, docker)
 	}
 
-	// A db down before the sync (a maintenance stop) stays down: finish
-	// restores what prepare recorded, and the record goes afterwards.
+	// A db down before the sync (a maintenance stop) stays down: restoring
+	// brings back what was recorded, and the record goes afterwards.
 	out, code = s.run([]string{"FAKE_DB_DOWN=1"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || strings.Contains(out, "stopping db") || strings.Contains(out, "starting db") || strings.Contains(docker, "start db") || strings.Count(out, "unpausing app") != 2 {
+	if code != 0 || strings.Contains(out, "stopping db") || strings.Contains(out, "starting db") || strings.Contains(docker, "start db") {
 		t.Errorf("db down before the sync (%d):\n%s\n%s", code, out, docker)
 	}
 	// A db in a restart loop (an aborted copy left its datadir half
@@ -862,16 +1005,16 @@ func TestSyncLabels(t *testing.T) {
 			t.Errorf("%s: the record of services to restore stays", env)
 		}
 	}
-	// finish alone, in the parent's current release: with a record it
-	// restores what the record says; without one (an older prepare, a
-	// lost file) every labeled service, as before.
-	record := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")
-	finish := func() (string, string) {
+	// finish alone, in a current release: with a record it restores what
+	// the record says; without one (a lost file) every service labeled
+	// devopsy.sync.stop=true. On abort, the streams' spools go.
+	record := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")
+	finish := func(answer string) (string, string) {
 		t.Helper()
-		cmd := exec.Command(binary, "--sync-services", "finish")
-		cmd.Dir = filepath.Join(s.root, "shop", "prod", "current")
+		cmd := exec.Command(binary, "--sync-services", "finish", answer)
+		cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
 		// PWD as a shell's cd leaves it: the record lives next to current.
-		cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-prod", "PWD="+cmd.Dir)
+		cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("finish: %v\n%s", err, out)
@@ -879,91 +1022,150 @@ func TestSyncLabels(t *testing.T) {
 		docker, _ := s.logs()
 		return string(out), docker
 	}
-	write(t, record, "pause app\n", 0o644)
-	if out, docker := finish(); strings.Contains(docker, "start db") || !strings.Contains(docker, "unpause app") {
+	write(t, record, "stop other\n", 0o644)
+	if out, docker := finish("go"); strings.Contains(docker, "start db") {
 		t.Errorf("finish with a record:\n%s\n%s", out, docker)
 	}
 	if _, err := os.Stat(record); err == nil {
 		t.Errorf("the record stays after finish")
 	}
-	if out, docker := finish(); !strings.Contains(docker, "start db") || !strings.Contains(docker, "unpause app") {
+	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")
+	write(t, spool, "partial\n", 0o600)
+	if out, docker := finish("go"); !strings.Contains(docker, "start db") {
 		t.Errorf("finish without a record:\n%s\n%s", out, docker)
 	}
+	if _, err := os.Stat(spool); err != nil {
+		t.Errorf("finish go removed a spool: %v", err)
+	}
+	finish("abort")
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("finish abort left a spool")
+	}
+	cmd := exec.Command(binary, "--sync-services", "finish")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = s.env
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "usage: devopsy --sync-services prepare | finish go|abort") {
+		t.Errorf("finish without an answer: %v\n%s", err, out)
+	}
 
-	// An app mounting mnt whole copies the skipped db's entry too: a notice.
+	// An app mounting mnt whole copies the unlabeled db's entry too: a
+	// notice.
 	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: devopsy.sync.exclude=db on app leaves them out") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
+	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: devopsy.sync.rsync.exclude=db on app leaves them out") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
 		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
 	}
 	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--sync", "--yes")
 	s.logs()
 	if code != 0 || strings.Contains(out, "copies mnt whole") {
-		t.Errorf("notice for a stop db under mnt whole (%d):\n%s", code, out)
+		t.Errorf("notice for an rsync db under mnt whole (%d):\n%s", code, out)
 	}
-
-	// A failing flush aborts like a failing prepare: on the child before
-	// the copy, on the parent through the push.
-	for _, side := range []string{"shop-dev", "shop-prod"} {
-		out, code = s.run([]string{"FAIL_FLUSH=" + side}, "@dev", "--sync", "--yes")
-		docker, _ = s.logs()
-		if code == 0 || !strings.Contains(out, "flush app in "+side) || strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
-			t.Errorf("failing flush on %s (%d):\n%s\n%s", side, code, out, docker)
-		}
+	// An old label is an error, before anything stops.
+	out, code = s.run([]string{"FAKE_APP=pause"}, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=pause: rsync or stream") || strings.Contains(docker, " stop ") {
+		t.Errorf("old label (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
-// A service the parent copies that the child leaves running (custom or no
-// label there) fails the push before the parent pauses anything: the
-// child restores its services; live on the child says running is fine.
+// A service the parent rsyncs that the child leaves running (stream or no
+// label there) fails the push before the parent stops anything: the child
+// restores its services; rsync on the child says running is fine.
 func TestSyncMismatch(t *testing.T) {
 	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
-	for _, label := range []string{"custom", "none"} {
-		write(t, s.log+".shop-dev", "FAKE_DB="+label+"\n", 0o644)
+	for _, label := range []string{"stream", "none"} {
+		write(t, s.log+".shop-dev", "FAKE_DB="+label+"\nFAKE_APP=rsync+stop\n", 0o644)
 		out, code := s.run(nil, "@dev", "--sync", "--yes")
 		docker, _ := s.logs()
-		want := "labeled devopsy.sync=custom"
+		want := "labeled devopsy.sync=stream"
 		if label == "none" {
 			want = "without a devopsy.sync label"
 		}
-		if code == 0 || !strings.Contains(out, "the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.sync=stop)") ||
+		if code == 0 || !strings.Contains(out, "the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.sync=rsync)") ||
 			strings.Contains(out, "deploy in shop-dev") || strings.Count(docker, "shop-prod compose") != 1 || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
-			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" unpause app") {
+			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start app") {
 			t.Errorf("child db %s (%d):\n%s\n%s", label, code, out, docker)
 		}
 	}
-	write(t, s.log+".shop-dev", "FAKE_DB=live\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_DB=rsync\n", 0o644)
 	out, code := s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ := s.logs()
 	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "/src/db/ /dst/db/") {
-		t.Errorf("child db live (%d):\n%s\n%s", code, out, docker)
+		t.Errorf("child db rsync (%d):\n%s\n%s", code, out, docker)
 	}
-	// The other way round, the child stops what the parent leaves to its
-	// push: nothing to refuse.
-	os.Remove(s.log + ".shop-dev")
-	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "push"), "#!/bin/sh\necho push\n", 0o755)
-	out, code = s.run([]string{"FAKE_DB=custom"}, "@dev", "--sync", "--yes")
-	s.logs()
-	if code != 0 || !strings.Contains(out, "deploy in shop-dev") {
-		t.Errorf("parent custom (%d):\n%s", code, out)
+	// A stream on one side only is refused before the parent stops
+	// anything, either way round, with the way out: an inherited label
+	// needs --inherit before the sync, which only writes it after the copy.
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "export"), "#!/bin/sh\necho dump\n", 0o755)
+	inherit := "run 'devopsy @devopsy@one:dev --inherit' first, then --sync again; otherwise change the child's own label"
+	for _, c := range []struct{ prod, dev, want string }{
+		{"FAKE_DB=stream", "FAKE_DB=rsync+stop", "the parent streams db (devopsy.sync=stream) and the child labels it devopsy.sync=rsync: its import would refuse it."},
+		{"FAKE_DB=rsync+stop", "FAKE_DB=stream+stop", "the child streams db (devopsy.sync=stream) and the parent rsyncs it (devopsy.sync=rsync): its import would never run."},
+	} {
+		write(t, s.log+".shop-prod", c.prod+"\n", 0o644)
+		write(t, s.log+".shop-dev", c.dev+"\n", 0o644)
+		out, code = s.run(nil, "@dev", "--sync", "--yes")
+		docker, _ = s.logs()
+		if code == 0 || !strings.Contains(out, c.want) || !strings.Contains(out, inherit) || strings.Contains(out, "deploy in shop-dev") ||
+			strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(docker, "rsync -a") ||
+			!strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
+			t.Errorf("prod %s, dev %s (%d):\n%s\n%s", c.prod, c.dev, code, out, docker)
+		}
 	}
-	os.Remove(s.log + ".shop-dev")
+	s.labels("")
+}
+
+// The child's list, from this devopsy (name, label with +stop, state,
+// entries) or an older one (name, policy, entries, or with a state), and
+// the guard on it: only a running service not labeled rsync conflicts.
+func TestChildServicesParse(t *testing.T) {
+	got := parseChildServices("app\trsync+stop\texited\tstorage\ndb\tstream\trunning\tdb\nold\tlive\tdb\nolder\tstop\texited\tdb\nlive4\tlive\trunning\tdb\nbad\n")
+	want := []childService{
+		{Name: "app", Transfer: "rsync", Stop: true, State: "exited", Dirs: []string{"storage"}},
+		{Name: "db", Transfer: "stream", State: "running", Dirs: []string{"db"}},
+		{Name: "old", Transfer: "live", Dirs: []string{"db"}},
+		{Name: "older", Transfer: "stop", State: "exited", Dirs: []string{"db"}},
+		{Name: "live4", Transfer: "live", State: "running", Dirs: []string{"db"}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parsed: %+v", got)
+	}
+	for i := range want {
+		if got[i].Name != want[i].Name || got[i].Transfer != want[i].Transfer || got[i].Stop != want[i].Stop || got[i].State != want[i].State || strings.Join(got[i].Dirs, " ") != strings.Join(want[i].Dirs, " ") {
+			t.Errorf("%d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	parent := []cli.SyncService{{Name: "db", Transfer: cli.SyncRsync, Dirs: []string{"db"}, Labeled: true}}
+	conflicts := syncConflicts(parent, got)
+	// db (stream, running) and live4 (an old label, running) conflict; the
+	// stopped ones and the stateless old line do not.
+	if len(conflicts) != 2 || !strings.Contains(conflicts[0], "the child's db is running, labeled devopsy.sync=stream") || !strings.Contains(conflicts[1], "the child's live4 is running, labeled devopsy.sync=live") {
+		t.Errorf("conflicts: %q", conflicts)
+	}
+	if m := streamMismatches(parent, nil, got); len(m) != 1 || !strings.Contains(m[0], "the child streams db") {
+		t.Errorf("mismatches: %q", m)
+	}
+	if m := streamMismatches([]cli.SyncService{{Name: "db", Transfer: cli.SyncStream}}, []string{"db", "gone"}, got); len(m) != 1 || !strings.Contains(m[0], "the child has no service gone") {
+		t.Errorf("stream mismatches: %q", m)
+	}
 }
 
 // Interrupted during the copy, the parent's push stops at once, though
 // its session outlives devopsy's ssh: the closed stdin tells it. It
 // removes the rsync container, restores its services, and never runs the
-// capability's push for the custom services.
+// export of the stream services.
 func TestSyncInterruptCopy(t *testing.T) {
 	s := newSyncSetup(t)
 	tmp := t.TempDir()
 	started, pushed := filepath.Join(tmp, "started"), filepath.Join(tmp, "pushed")
-	write(t, filepath.Join(s.dot, "capabilities", "sync", "push"), "#!/bin/sh\ntouch \"$FAKE_PUSHED\"\n", 0o755)
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "export"), "#!/bin/sh\ntouch \"$FAKE_PUSHED\"\n", 0o755)
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
@@ -976,7 +1178,8 @@ func TestSyncInterruptCopy(t *testing.T) {
 	}
 	cmd := exec.Command(binary, "@dev", "--sync", "--yes")
 	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_RSYNC="+started, "FAKE_PUSHED="+pushed, "FAKE_DB=custom", "FAKE_SSH_DETACH=1")
+	s.labels("FAKE_APP=rsync+stop\nFAKE_DB=stream")
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_RSYNC="+started, "FAKE_PUSHED="+pushed, "FAKE_SSH_DETACH=1")
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = outFile, outFile
 	if err := cmd.Start(); err != nil {
@@ -998,7 +1201,7 @@ func TestSyncInterruptCopy(t *testing.T) {
 	if cmd.ProcessState.ExitCode() == 0 {
 		t.Fatalf("interrupted sync succeeded:\n%s", readString(outFile.Name()))
 	}
-	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " unpause app"
+	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " start app"
 	for !strings.Contains(readString(s.log), restored) {
 		if time.Since(start) > 10*time.Second {
 			t.Fatalf("the parent did not restore in time:\n%s\n%s", readString(s.log), readString(outFile.Name()))
@@ -1010,14 +1213,14 @@ func TestSyncInterruptCopy(t *testing.T) {
 		t.Errorf("the rsync container was not removed:\n%s", readString(s.log))
 	}
 	if _, err := os.Stat(pushed); err == nil {
-		t.Errorf("the capability's push ran after the interrupt")
+		t.Errorf("the capability's export ran after the interrupt")
 	}
 	// Said where the parent's words go once its session is cut: its log.
 	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")); !strings.Contains(log, "devopsy: mnt/storage is half copied: a database copied raw cannot start on it until the next sync completes it") {
 		t.Errorf("no word on the entry cut:\n%s", log)
 	}
 	// What the parent did once nobody read its session is in its log.
-	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")); !strings.Contains(log, ": the sync's session is gone: restoring what was paused or stopped") || !strings.Contains(log, "devopsy: unpausing app") {
+	if log := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.log")); !strings.Contains(log, ": the sync's session is gone: restoring what was stopped") || !strings.Contains(log, "devopsy: starting app") {
 		t.Errorf("the parent's sync log:\n%s", log)
 	}
 }
@@ -1039,7 +1242,7 @@ func TestSyncHolderGone(t *testing.T) {
 	}
 	// The push outlives devopsy's session: its restore may still be
 	// under way when devopsy has exited.
-	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " unpause app"
+	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " start db"
 	for start := time.Now(); !strings.Contains(docker, restored); docker += readString(s.log) {
 		if time.Since(start) > 10*time.Second {
 			t.Fatalf("the parent was not restored:\n%s", docker)
@@ -1108,5 +1311,395 @@ func TestReleaseNetworkOwned(t *testing.T) {
 	}
 	if out, code := s.run([]string{"FAKE_NETWORK_OWNER=shop-prod"}, "@prod", "--release"); code != 0 || s.current("prod") == "" {
 		t.Errorf("own network (%d):\n%s", code, out)
+	}
+}
+
+// runIO runs devopsy with stdin, stdout and stderr apart.
+func (s *syncSetup) runIO(extra []string, stdin []byte, args ...string) (stdout []byte, stderr string, code int) {
+	s.t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), extra...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	var o, e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &e
+	// Its own session: no terminal to ask on, whatever runs the tests.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	_ = cmd.Run()
+	return o.Bytes(), e.String(), cmd.ProcessState.ExitCode()
+}
+
+// tarOf is a tar of files (path: content), directories implied.
+func tarOf(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	var names []string
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: n, Mode: 0o644, Size: int64(len(files[n])), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(files[n])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// --export and --import, locally and on a target: a stream through the
+// sync capability's scripts, an rsync service as a tar of its entries,
+// a stopped service stopped around it; stdin spooled first, and nothing
+// changed unless it is complete.
+func TestExportImport(t *testing.T) {
+	s := newSyncSetup(t)
+	imported := filepath.Join(t.TempDir(), "imported")
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME stream=$DEVOPSY_SYNC_STREAM stop=$DEVOPSY_SYNC_STOP\"\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
+	env := []string{"FAKE_IMPORTED=" + imported}
+	spools := func(dir string) []string {
+		m, _ := filepath.Glob(filepath.Join(dir, ".devopsy-stream.*"))
+		return m
+	}
+
+	// A stream, stopped: stopped around the export, its stdout the data.
+	stopped := append(env, "FAKE_DB=stream+stop")
+	out, errs, code := s.runIO(stopped, nil, "--export", "db")
+	docker, _ := s.logs()
+	if code != 0 || string(out) != "dump of db from shop stream=db stop=db\n" || !strings.Contains(errs, "devopsy: stopping db") || !strings.Contains(errs, "devopsy: starting db") {
+		t.Fatalf("--export stream (%d): %q\n%s", code, out, errs)
+	}
+	if i, j := strings.Index(docker, " stop db"), strings.Index(docker, " start db"); i < 0 || j < i {
+		t.Errorf("stopped around the export:\n%s", docker)
+	}
+	// Into a stream: spooled, then the import with it as stdin; a stopped
+	// service is never brought up, a running one is.
+	if _, errs, code := s.runIO(stopped, []byte("rows\n"), "--import", "db"); code != 0 || readString(imported) != "import db into shop\nrows\n" {
+		t.Fatalf("--import stream (%d): %q\n%s", code, readString(imported), errs)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "up -d --wait db") || !strings.Contains(docker, " stop db") {
+		t.Errorf("stopped stream import:\n%s", docker)
+	}
+	if m := spools(s.dot); len(m) > 0 {
+		t.Errorf("spools left: %v", m)
+	}
+	os.Remove(imported)
+	if _, errs, code := s.runIO(append(env, "FAKE_DB=stream"), []byte("rows\n"), "--import", "db", "--yes"); code != 0 || !strings.Contains(readString(imported), "rows") {
+		t.Fatalf("--import running stream (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "up -d --wait db") || strings.Contains(docker, " stop db") {
+		t.Errorf("running stream import:\n%s", docker)
+	}
+	// Nothing on stdin imports nothing.
+	os.Remove(imported)
+	if _, errs, code := s.runIO(stopped, nil, "--import", "db"); code == 0 || !strings.Contains(errs, "nothing on stdin: nothing imported") || readString(imported) != "" {
+		t.Errorf("empty stdin (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, " stop db") {
+		t.Errorf("empty stdin stopped db:\n%s", docker)
+	}
+
+	// rsync: a tar of the service's entries of mnt, made in the image.
+	write(t, filepath.Join(s.dot, "mnt", "storage", "old.txt"), "local\n", 0o644)
+	out, errs, code = s.runIO(nil, nil, "--export", "app")
+	docker, _ = s.logs()
+	mnt := filepath.Join(s.dot, "mnt")
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-rsync:2 tar -C /mnt -cf - --numeric-owner storage\n") {
+		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
+	}
+	var names []string
+	for tr := tar.NewReader(bytes.NewReader(out)); ; {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		names = append(names, strings.TrimSuffix(h.Name, "/"))
+	}
+	if !slices.Contains(names, "storage/old.txt") {
+		t.Errorf("tar members: %v", names)
+	}
+	// Its import empties the entries the tar carries, then extracts.
+	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Fatalf("--import rsync (%d):\n%s", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
+		t.Errorf("the entry was not emptied first")
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-rsync:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") {
+		t.Errorf("rsync import:\n%s", docker)
+	}
+	// A truncated tar, or one carrying what the service does not mount,
+	// changes nothing.
+	whole := tarOf(t, map[string]string{"storage/other.txt": strings.Repeat("x", 2000)})
+	if _, errs, code := s.runIO(nil, whole[:700], "--import", "app"); code == 0 || !strings.Contains(errs, "stdin is not a complete tar") || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Errorf("truncated tar (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/db, which app does not bind-mount (storage): nothing imported") {
+		t.Errorf("foreign entry (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-import-") && strings.Contains(docker, "sh -c") {
+		t.Errorf("extracted a refused tar:\n%s", docker)
+	}
+	if m := spools(s.dot); len(m) > 0 {
+		t.Errorf("spools left: %v", m)
+	}
+	// Unlabeled, unknown: refused.
+	if _, errs, code := s.runIO([]string{"FAKE_APP=none"}, nil, "--export", "app"); code == 0 || !strings.Contains(errs, "app has no devopsy.sync label") {
+		t.Errorf("unlabeled (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, nil, "--export", "nope"); code == 0 || !strings.Contains(errs, "no service nope in the project (labeled devopsy.sync: app, db)") {
+		t.Errorf("unknown (%d):\n%s", code, errs)
+	}
+	if out, _, code := s.runIO(nil, nil, "--export", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --export <service>") {
+		t.Errorf("--export --help (%d):\n%s", code, out)
+	}
+	if out, _, code := s.runIO(nil, nil, "@prod", "--import", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --import <service> [--yes]") {
+		t.Errorf("@prod --import --help (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	// An export interrupted: its process group ended, the service back.
+	exportStarted, exportStopped := filepath.Join(t.TempDir(), "started"), filepath.Join(t.TempDir(), "stopped")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\ntrap 'touch \"$FAKE_STOPPED\"; exit 1' TERM\necho partial\ntouch \"$FAKE_STARTED\"\nsleep 20 &\nwait\n", 0o755)
+	cmd := exec.Command(binary, "--export", "db")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_DB=stream+stop", "FAKE_STARTED="+exportStarted, "FAKE_STOPPED="+exportStopped)
+	var eout, eerr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &eout, &eerr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, exportStarted, "the export", func() string { return eerr.String() })
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	waitFile(t, exportStopped, "the export's end", func() string { return eerr.String() })
+	if docker, _ := s.logs(); cmd.ProcessState.ExitCode() == 0 || !strings.Contains(eerr.String(), "export db: interrupted: what was written is incomplete") || !strings.Contains(docker, " start db") {
+		t.Errorf("interrupted export (%d):\n%s\n%s", cmd.ProcessState.ExitCode(), eerr.String(), docker)
+	}
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME stream=$DEVOPSY_SYNC_STREAM stop=$DEVOPSY_SYNC_STOP\"\n", 0o755)
+
+	// A failing import: the service back, the spool gone.
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ -z \"${FAKE_FAIL_IMPORT:-}\" ] || exit 4\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
+	if _, errs, code := s.runIO(append(stopped, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "--import", "db"); code == 0 || !strings.Contains(errs, "import db: exit status 4") {
+		t.Errorf("failing import (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, " stop db") || !strings.Contains(docker, " start db") {
+		t.Errorf("failing import, db not restored:\n%s", docker)
+	}
+	if m := spools(s.dot); len(m) > 0 {
+		t.Errorf("spools left after a failing import: %v", m)
+	}
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
+
+	// A stream down before its import is stopped again after it.
+	if _, errs, code := s.runIO(append(env, "FAKE_DB=stream", "FAKE_DB_DOWN=1"), []byte("rows\n"), "--import", "db"); code != 0 || !strings.Contains(errs, "devopsy: stopping db again: it was down before") {
+		t.Errorf("import of a stream that was down (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "up -d --wait db") || strings.Index(docker, " stop db") < strings.Index(docker, "up -d --wait db") {
+		t.Errorf("down stream import:\n%s", docker)
+	}
+
+	// A tar cut right after a member lists fine, but has no end blocks:
+	// refused, nothing emptied.
+	two := tarOf(t, map[string]string{"storage/a.txt": "aaaa", "storage/b.txt": "bbbb"})
+	if _, errs, code := s.runIO(nil, two[:1024], "--import", "app"); code == 0 || !strings.Contains(errs, "no end-of-archive blocks") || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Errorf("tar cut at a member (%d):\n%s", code, errs)
+	}
+	s.logs()
+
+	// On a target: the same, in its current release, under its release
+	// lock, shared for an export, its own for an import.
+	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\n", 0o644)
+	out, errs, code = s.runIO(env, nil, "@prod", "--export", "db")
+	docker, _ = s.logs()
+	if code != 0 || string(out) != "dump of db from shop-prod stream=db stop=\n" || !strings.Contains(docker, "flock -n -s 9\nflock -n 8\n") {
+		t.Fatalf("@prod --export (%d): %q\n%s\n%s", code, out, errs, docker)
+	}
+	// An import asks for the environment's name, on the terminal: without
+	// one, --yes.
+	os.Remove(imported)
+	if _, errs, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db"); code == 0 || !strings.Contains(errs, "--import replaces db's data on devopsy@one:shop/prod: add --yes when not at a terminal") || !strings.Contains(errs, "Nothing imported.") || readString(imported) != "" {
+		t.Errorf("@prod --import without --yes (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || readString(imported) != "import db into shop-prod\nrows\n" {
+		t.Fatalf("@prod --import (%d): %q\n%s", code, readString(imported), errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "flock -n 9\n") || strings.Contains(docker, "flock -n -s 9") {
+		t.Errorf("@prod --import lock:\n%s", docker)
+	}
+	if m := spools(filepath.Join(s.root, "shop", "prod")); len(m) > 0 {
+		t.Errorf("spools left on the server: %v", m)
+	}
+	// The server's side only imports what ends with the end line: a cut
+	// session reaches it as a plain EOF.
+	os.Remove(imported)
+	prod := filepath.Join(s.root, "shop", "prod", "current")
+	for stdin, want := range map[string]string{"rows\n": "the data stopped before its end", "rows\nEND": "", "END": "nothing on stdin"} {
+		cmd := exec.Command(binary, "--import", "db", "--yes")
+		cmd.Dir = prod
+		cmd.Env = append(append([]string{}, s.env...), append(env, "PWD="+prod, "DEVOPSY_INTERNAL_IMPORT_END=END")...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		if want == "" {
+			if err != nil || readString(imported) != "import db into shop-prod\nrows\n" {
+				t.Errorf("complete, end line taken off: %v %q\n%s", err, readString(imported), out)
+			}
+		} else if err == nil || !strings.Contains(string(out), want) {
+			t.Errorf("%q: %v\n%s", stdin, err, out)
+		}
+	}
+	s.logs()
+	// The laptop case: prod's files into the local project.
+	out, errs, code = s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, out, "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("prod's storage locally (%d):\n%s", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(mnt, "storage", "new.txt")); err == nil {
+		t.Errorf("the local entry was not replaced")
+	}
+	os.Remove(s.log + ".shop-prod")
+}
+
+// waitFile waits for a file to exist, up to 10 seconds.
+func waitFile(t *testing.T, path, what string, out func() string) {
+	t.Helper()
+	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("%s never happened:\n%s", what, out())
+		}
+	}
+}
+
+// A prepare that fails before anything stops restores nothing: a db down
+// before the sync stays down, whether the hook fails or the import check
+// does; and a stop=true service without a container is only created on a
+// first release (no containers at all), never in a project that has
+// others.
+func TestSyncPrepareFailsKeepsDown(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "prepare"), "#!/bin/sh\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	dev := "shop-dev compose -f " + filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")
+	for _, c := range []struct{ name, labels string }{{"prepare hook", ""}, {"no import", "FAKE_DB=stream+stop"}} {
+		s.labels(c.labels)
+		out, code := s.run([]string{"FAIL_PREPARE=child", "FAKE_DB_DOWN=1"}, "@dev", "--sync", "--yes")
+		docker, _ := s.logs()
+		if code == 0 || strings.Contains(docker, dev+" start db") || strings.Contains(docker, dev+" stop") {
+			t.Errorf("%s (%d):\n%s\n%s", c.name, code, out, docker)
+		}
+	}
+	s.labels("")
+	// finish with a record, db without a container, app with one: db is
+	// not created.
+	write(t, filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services"), "", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "go")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir, "FAKE_ABSENT=db")
+	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(string(out), "creating") {
+		t.Errorf("finish, db absent among others: %v\n%s", err, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "up -d --wait db") {
+		t.Errorf("a removed db created:\n%s", docker)
+	}
+}
+
+// Across servers, a sync cancelled during a stream's import stops the
+// import on the child, though its session outlives devopsy's ssh: the
+// pipe the push keeps open as its stdin closes, and the import ends its
+// hook and removes the spool.
+func TestSyncImportCancelled(t *testing.T) {
+	s := newSyncSetup(t)
+	tmp := t.TempDir()
+	started, stopped := filepath.Join(tmp, "started"), filepath.Join(tmp, "stopped")
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ntrap 'touch \"$FAKE_STOPPED\"; exit 1' TERM\ntouch \"$FAKE_STARTED\"\nsleep 20 &\nwait\n", 0o755)
+	s.releaseProd(nil)
+	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(env, "@devopsy@two:dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	s.labels("FAKE_DB=stream")
+	defer s.labels("")
+
+	outFile, err := os.CreateTemp(tmp, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@devopsy@two:dev", "--sync", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append(append([]string{}, s.env...), env...), "FAKE_STARTED="+started, "FAKE_STOPPED="+stopped, "FAKE_SSH_DETACH=1", "FAKE_IMPORT_DETACH=1")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	out := func() string { return readString(outFile.Name()) + readString(s.log) }
+	waitFile(t, started, "the import", out)
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	waitFile(t, stopped, "the import's end", out)
+	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")); err != nil {
+			break
+		}
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the spool stays:\n%s", out())
+		}
+	}
+}
+
+// A child's first release with a stream and an rsync service left
+// running: the stream's import keeps its new container up, and finish
+// creates every labeled service before its hook, which sanitizes through
+// them; the record of the first release goes afterwards.
+func TestSyncFirstReleaseCreates(t *testing.T) {
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2: $(devopsy ps --services --status running | tr '\\n' ' ')\"\n", 0o755)
+	s.releaseProd(nil)
+	s.labels("FAKE_DB=stream")
+	defer s.labels("")
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_ABSENT='app db'\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release")
+	docker, _ := s.logs()
+	dev := "shop-dev compose -f " + filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")
+	if code != 0 {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	rest := docker
+	for _, want := range []string{dev + " up -d --wait db\n", dev + " up -d --wait app db\n", dev + " ps --services --status running"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s\n%s", want, out, docker)
+		}
+		rest = rest[i+len(want):]
+	}
+	if strings.Contains(docker, dev+" stop") || !strings.Contains(out, "devopsy: creating app db") || strings.Index(out, "devopsy: creating app db") > strings.Index(out, "finish child go") {
+		t.Errorf("first release:\n%s\n%s", out, docker)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")); err == nil {
+		t.Errorf("the record stays")
 	}
 }

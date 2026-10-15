@@ -187,7 +187,9 @@ func TestScriptsParse(t *testing.T) {
 		"current":        CurrentExistsScript(tg),
 		"receive":        SyncReceiveScript("/srv/it's/current/.devopsy", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}),
 		"receive bare":   SyncReceiveScript("/srv/app/current/.devopsy", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil),
-		"exec":           SyncExecScript("/srv/it's/current/.devopsy", "app-dev", []string{"exec", "-T", "db", "sh", "-c", "mariadb x"}),
+		"exec":           SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncArgsEnv: "--x 'y'", SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
+		"export":         ExportScript(tg, "app-prod", "it's db"),
+		"import":         ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n"),
 	}
 	for name, s := range scripts {
 		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
@@ -407,7 +409,7 @@ func TestActivateSync(t *testing.T) {
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
-echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}" >> "$FAKE_ROOT/calls"
+echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}" >> "$FAKE_ROOT/calls"
 if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
   while [ ! -e "$FAKE_ROOT/closed" ]; do sleep 0.05; done
@@ -423,7 +425,7 @@ exit 0
 			t.Fatal(err)
 		}
 	}
-	tg := &Target{Name: "dev", Path: "app/dev"}
+	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
 	phases := Phases{Run: []string{"deploy"}, Restart: []string{"deploy", "--back"}}
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
@@ -453,7 +455,8 @@ exit 0
 	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	if got := calls(root); got != "--check-names "+base+" from= args=\n--missing-vars from= args=\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\ndeploy from=vm1:prod args=-v\n" {
+	// The capability's hooks run from --sync-services, never the script.
+	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v\ndeploy from=vm1:prod to=vm2:dev args=-v\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -465,7 +468,7 @@ exit 0
 	if _, err := os.Stat(filepath.Join(base, "releases", "2", ".devopsy-failed")); err != nil {
 		t.Errorf("not marked failed: %v", err)
 	}
-	if got := calls(root); !strings.Contains(got, "--sync-services finish") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
+	if got := calls(root); !strings.Contains(got, "--sync-services finish abort") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
 		t.Errorf("abort calls:\n%s", got)
 	}
 
@@ -492,25 +495,7 @@ exit 0
 		t.Errorf("failing prepare calls:\n%s", got)
 	}
 
-	// The sync capability's prepare and finish hooks.
-	root = t.TempDir()
-	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", "prepare"), "")
-	write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", "finish"), "")
-	for _, a := range []string{"prepare", "finish"} {
-		if err := os.Chmod(filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "capabilities", "sync", a), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, errOut, err := run(root, "1", "go\n"); err != nil {
-		t.Fatalf("capability (%v):\n%s", err, errOut)
-	}
-	// The hooks run besides the generic handling: prepare before it,
-	// finish after it.
-	if got := calls(root); !strings.Contains(got, "--capability sync prepare from=vm1:prod args=-v\n--sync-services prepare from=vm1:prod args=-v\n--sync-services finish from=vm1:prod args=-v\n--capability sync finish go from") {
-		t.Errorf("capability calls:\n%s", got)
-	}
-
-	// devopsy goes away while the services are being paused (its session
+	// devopsy goes away while the services are being stopped (its session
 	// closed: writes to it fail): they are restored all the same, prepare
 	// failing or not, in a release and in --sync.
 	hangup := func(root, script string, extra ...string) {

@@ -22,6 +22,8 @@ type Capability struct {
 	// Who implements it, and what in devopsy calls it.
 	Who, CalledBy string
 	Actions       []CapabilityAction
+	// Env is what every action gets in its environment, when it says.
+	Env string
 }
 
 // CapabilityAction is one executable of a capability.
@@ -75,31 +77,32 @@ var Capabilities = []Capability{
 	},
 	{
 		Name:     "sync",
-		What:     "hooks into a sync (a child environment's data from its parent's, devopsy @<child> --sync and a child's first release); each action runs only when its file is there, besides devopsy's handling of the devopsy.sync labels (skip by default; live, pause and stop rsynced; custom left to push)",
-		Who:      "projects whose data a plain copy of .devopsy/mnt cannot sync, like a database to dump, or that flush caches before a copy",
-		CalledBy: "devopsy @<child> --sync, and a child's first release or --release-sync",
+		What:     "hooks into a sync (a child environment's data from its parent's, devopsy @<child> --sync and a child's first release), and the transport of the services labeled devopsy.sync=stream, there and in --export and --import; each hook runs only when its file is there, besides devopsy's handling of the labels (rsync: its mounts rsynced; stream: export and import; devopsy.sync.stop=true: stopped meanwhile)",
+		Who:      "projects whose data a copy of .devopsy/mnt cannot move, like a database to dump, or that ready or sanitize an environment around a sync",
+		CalledBy: "devopsy @<child> --sync, a child's first release or --release-sync, and devopsy [@<target>] --export|--import <service> (export and import only)",
 		Actions: []CapabilityAction{
 			{
-				Name:  "flush",
-				Usage: "flush <service>",
-				Does:  "on each side, once per running service labeled devopsy.sync=live or pause, before it is paused or copied (the child's before its services are paused, the parent's before its own are paused and copied); never for stop, skip or custom. A failure aborts the sync",
-			},
-			{
 				Name:  "prepare",
-				Usage: "prepare",
-				Does:  "on the child's server, in its current release under its release lock, before the copy: readies it to be written, before devopsy flushes, pauses and stops its labeled services. Gets DEVOPSY_SYNC_FROM_TARGET (the parent's address) and DEVOPSY_SYNC_ARGS (--sync's arguments after --). A failure aborts the sync; finish abort runs",
+				Usage: "prepare parent|child",
+				Does:  "on each side, in its current release, before anything is stopped there: the child's under its release lock before the parent's push starts, the parent's under a shared hold of its lock. A failure aborts the sync before anything stops on that side (finish abort runs)",
 			},
 			{
-				Name:  "push",
-				Usage: "push",
-				Does:  "on the parent's server, in its current release under a shared hold of its lock, after devopsy has copied the services labeled live, pause and stop: copies those labeled custom (required when any is, not run when none is). Gets DEVOPSY_SYNC_CUSTOM (those services, space separated), DEVOPSY_SYNC_TO (user@host of the child's server, empty on the same one), DEVOPSY_SYNC_SSH_PORT, DEVOPSY_SYNC_TO_BASE and DEVOPSY_SYNC_TO_DIR (the child's directory and its current .devopsy/), DEVOPSY_SYNC_TO_PROJECT, DEVOPSY_SYNC_TO_TARGET, DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_ARGS, its own to use; stdin is empty. Helpers: devopsy --sync-rsync <entry of mnt>... [-- rsync args] copies those entries as the generic path does; devopsy --sync-exec <devopsy args> runs devopsy in the child's current release as its project, with a clean environment, stdin and stdout through: devopsy exec -T db mariadb-dump app | devopsy --sync-exec exec -T db mariadb app. Exit 0 lets the child go on",
+				Name:  "export",
+				Usage: "export <service>",
+				Does:  "writes a stream service's data to stdout: on the parent's server in a sync, once its stop=true services are stopped and the rsync is done, once per stream service in depends_on order; and devopsy --export. Required when a service is labeled stream (checked before anything stops). devopsy spools the output and only imports it once this exited 0. stdin is empty; when the service is in DEVOPSY_SYNC_STOP it is stopped: use devopsy run --rm --no-deps -T <service> rather than exec",
+			},
+			{
+				Name:  "import",
+				Usage: "import <service>",
+				Does:  "reads a stream service's data from stdin, what export wrote, complete: on the child's server in a sync, its service brought up first (up -d --wait) unless stopped; and devopsy --import. Required on the child when a service is labeled stream there (checked before anything stops anywhere)",
 			},
 			{
 				Name:  "finish",
-				Usage: "finish go|abort",
-				Does:  "on the child's server, after the copy (go) or a failure (abort), once devopsy has started the stopped labeled services, waited for them to be healthy and unpaused the paused: restores what prepare changed, and after go sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs. Same variables as prepare",
+				Usage: "finish parent|child go|abort",
+				Does:  "on each side after the copy (go) or a failure (abort), once devopsy has started its stopped services and waited for them to be healthy. On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
 			},
 		},
+		Env: "every action gets DEVOPSY_SYNC_RSYNC, DEVOPSY_SYNC_STREAM and DEVOPSY_SYNC_STOP, its side's services labeled devopsy.sync=rsync, devopsy.sync=stream (depends_on order) and devopsy.sync.stop=true, space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses) and DEVOPSY_SYNC_ARGS (--sync's arguments after --)",
 	},
 }
 
