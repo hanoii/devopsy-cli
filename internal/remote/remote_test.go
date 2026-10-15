@@ -731,3 +731,42 @@ esac
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// Pruning counts only releases that went live: a failed one between those
+// kept stays, with its log, and older ones go.
+func TestActivatePruneFailed(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
+	for _, f := range []string{"devopsy", "flock", "mv"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Keep: 3}
+	base := filepath.Join(root, tg.Path)
+	for _, id := range []string{"1", "2", "3", "4", "5", "6"} {
+		write(t, filepath.Join(base, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+	}
+	for _, id := range []string{"2", "4"} {
+		write(t, filepath.Join(base, "releases", id, ".devopsy-failed"), "")
+	}
+	if err := os.Symlink("releases/5", filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", ActivateScript(tg, "6", false, "", Phases{}, nil))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("release (%v):\n%s", err, out)
+	}
+	entries, _ := os.ReadDir(filepath.Join(base, "releases"))
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if got := strings.Join(left, " "); got != "3 4 5 6" {
+		t.Errorf("releases left: %s, want 3 4 5 6", got)
+	}
+}

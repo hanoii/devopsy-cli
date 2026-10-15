@@ -514,7 +514,9 @@ The release links the server's shared/ (.env, mnt/...) and writes
 DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. It lands in
 <project>[/<instance>]/<environment> under the server's release root (its
 user-level config's releases: root, else the deploy user's home). It keeps the target's or project's releases: keep,
-else the server's, at most the server's max_keep (all default 5).
+else the server's, at most the server's max_keep (all default 5),
+counting only releases that went live: failed ones newer than the oldest
+kept stay, with their logs.
 
 Before anything runs, every variable the compose files use or the target's
 env sets that is named like a secret (PASSWORD, TOKEN, KEY...) must be in

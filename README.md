@@ -376,7 +376,7 @@ touches an existing file); `devopsy --debug schema` documents every key.
 ```yaml
 project: shop                   # its name on servers: required
 instances: true                 # optional: every target names an instance; default false: none does
-releases: {keep: 5}             # optional: releases kept per environment
+releases: {keep: 5}             # optional: releases kept per environment (live ones)
 secrets: [DB_PASSWORD, "*_TOKEN"]  # optional: variables whose values devopsy masks
 public: [SORT_KEY]              # optional: named like secrets, but not
 defaults:                       # what every environment takes unless it sets its own

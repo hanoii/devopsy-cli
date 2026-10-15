@@ -566,14 +566,21 @@ fi
 `
 	}
 	// keep: the target's or project's, else the server's, at most its
-	// max_keep.
+	// max_keep. Only releases that went live count: failed ones never
+	// ran, and a rollback skips them. A failed one newer than the oldest
+	// release kept stays, with its log; older ones go.
 	s += fmt.Sprintf(`k=%d
 [ "$k" -gt 0 ] || k=$keep
 if [ "$k" -gt "$max_keep" ]; then
   echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k" >&2
   k=$max_keep
 fi
-ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | tail -n +$((k + 1)) | while read -r r; do
+# The k-th live release, newest first: none while fewer went live, and
+# nothing goes.
+oldest=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
+  [ -e "$base/releases/$r/.devopsy-failed" ] || echo "$r"
+done | sed -n "${k}p")
+ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | awk -v o="$oldest" 'past { print } $0 == o { past = 1 }' | while read -r r; do
   [ "releases/$r" = "$(readlink "$base/current")" ] || { %srm -rf "$base/releases/$r"; }
 done
 `, t.Keep, dropImages(images))

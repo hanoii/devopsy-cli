@@ -189,7 +189,9 @@ repositories fit together and the open ideas.
   (`ReleasesHere`, symlinks resolved): anywhere else a release would upload
   whatever project devopsy runs in.
 - **Release settings belong to the server:** its deploy user's `releases:`
-  (`root`, default home; `keep`, `max_keep`, default 5), read by the hidden
+  (`root`, default home; `keep`, `max_keep`, default 5; `keep` counts
+  releases that went live, failed ones only go once older than the oldest
+  kept), read by the hidden
   `--release-settings` that every script asks first (`basePrelude`), so a
   laptop and CI resolve the same paths. A project's `keep` is capped by
   `max_keep`; `root` and `max_keep` in a project are errors.
