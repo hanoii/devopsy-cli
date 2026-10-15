@@ -27,11 +27,14 @@ repositories fit together and the open ideas.
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
 - `internal/report/`: how devopsy reports a failure or a warning
   (`report.Fail`: `[error] <message>` in red, `report.Warn`: `[warning]
-  <message>` in yellow, then the details one per line, plain, never
-  wrapped or indented: a detail is one logical line, a command to copy;
-  `report.Error` carries details through wrapping). New so far only for a
-  parent without a server; the other messages move over as they are
-  touched.
+  <message>` in yellow, then the details, why it happens, one per line,
+  then the fixes: "To fix it:" and the one, or "To fix it, do one of
+  these:" and each numbered, a fix's commands on their own lines; plain,
+  never wrapped or indented: a line is one logical line, a command to
+  copy). `report.Error` carries details and fixes through wrapping; a
+  command adds the fixes only it knows. The message reads as a sentence
+  ("dev's parent, prod, has no server"). New so far only for a parent
+  without a server; the other messages move over as they are touched.
 - `install.sh` (POSIX `sh`, dash and busybox ash), `scripts/devopsy` (runs
   the checkout's code), `.goreleaser.yaml`, `.github/workflows/`.
 
@@ -56,8 +59,9 @@ repositories fit together and the open ideas.
   and an argument of several lines in the "Running" notice (`Plan.running`),
   which otherwise only counts its lines. Failures with something to add
   (why, what to do) go through `internal/report`: one `[error]` or
-  `[warning]` line, details on their own lines, never packed into the
-  message.
+  `[warning]` line, then why and the ways to fix it on their own lines,
+  never packed into the message. Hints with an address use the resolved
+  one (`t.Address`), so the command works when copied.
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
   a word is a project command, else a compose command (`ComposeCommands`:
   compose's own completion, cached, refreshed when a word is missing), else
@@ -621,7 +625,9 @@ repositories fit together and the open ideas.
   servers; after `@` it offers `~/.ssh/config`'s hosts as `@<host>:`
   (`sshHosts`: `Host` lines and `Include`s, patterns skipped, read in Go
   like the shells' own ssh completion, not delegated to them, so every
-  shell gets the same), with no space when only those are left. New flags go in `cli.Flags`, subcommands in its lists. `TestCompletionShells`
+  shell gets the same), with no space when only those are left. `--from` offers the same
+  addresses (`addresses`), aliases aside, always with their `@`; devopsy
+  takes one without it too. New flags go in `cli.Flags`, subcommands in its lists. `TestCompletionShells`
   runs the scripts in every installed shell (bash, macOS's bash 3.2, zsh
   with `_describe` stubbed, fish); CI installs zsh and fish. bash splits
   words at `:`, so its script rebuilds them from `COMP_LINE`.

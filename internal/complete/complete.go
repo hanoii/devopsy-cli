@@ -107,31 +107,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 	if len(words) == 1 {
 		// Targets first, then project commands, devopsy's flags and, from
 		// the delegate, compose's.
-		var r Result
-		if i := strings.LastIndexAny(cur, ":/"); strings.HasPrefix(cur, "@") && i >= 0 {
-			// Past a server or instance: the environments, after them.
-			for _, t := range remote.Targets(projectDir) {
-				if !t.User {
-					r.Candidates = append(r.Candidates, Candidate{cur[:i+1] + t.Name, targetDescription(t), GroupTarget})
-				}
-			}
-		} else if cur == "" || strings.HasPrefix(cur, "@") {
-			// Environments before aliases (Targets' order).
-			for _, t := range remote.Targets(projectDir) {
-				group := GroupTarget
-				if t.User {
-					group = GroupUserTarget
-				}
-				r.Candidates = append(r.Candidates, Candidate{"@" + t.Name, targetDescription(t), group})
-			}
-			// Then servers, once an @ is typed: @<host>: starts any
-			// address, and is a server alone for server commands.
-			if cur != "" {
-				for _, h := range sshHosts() {
-					r.Candidates = append(r.Candidates, Candidate{"@" + h + ":", "server, ~/.ssh/config", GroupServer})
-				}
-			}
-		}
+		r := Result{Candidates: addresses(projectDir, cur, true)}
 		r.Candidates = append(r.Candidates, projectCommands(projectDir, false)...)
 		if strings.HasPrefix(cur, "-") {
 			r.Candidates = append(r.Candidates, builtins...)
@@ -140,11 +116,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 		if !strings.HasPrefix(cur, "@") {
 			r.Delegate = composeDelegate(cwd, projectDir, words, environ)
 		}
-		r.Directive = DirectiveNoFileComp
-		// Only servers left: the environment follows the :, no space.
-		if len(r.Candidates) > 0 && !slices.ContainsFunc(r.Candidates, func(c Candidate) bool { return !strings.HasSuffix(c.Value, ":") }) {
-			r.Directive |= DirectiveNoSpace
-		}
+		r.Directive = DirectiveNoFileComp | serversOnly(r)
 		return r
 	}
 
@@ -330,16 +302,15 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return Result{Directive: DirectiveNoFileComp}
 	case "--sync":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
-			// Another environment of this project, as for targets.
+			// An address, offered as the first word's are, aliases aside:
+			// another environment of this project.
 			r := Result{Directive: DirectiveNoFileComp}
 			if !user {
-				for _, t := range remote.Targets(projectDir) {
-					if !t.User {
-						r.Candidates = append(r.Candidates, Candidate{t.Name, targetDescription(t), GroupTarget})
-					}
-				}
+				r.Candidates = addresses(projectDir, cur, false)
 			}
-			return filter(r, cur)
+			r = filter(r, cur)
+			r.Directive |= serversOnly(r)
+			return r
 		}
 		// After --, rsync's (or the sync capability's) arguments.
 		given := words[1 : len(words)-1]
@@ -486,4 +457,50 @@ func filter(r Result, prefix string) Result {
 	}
 	r.Candidates = out
 	return r
+}
+
+// addresses offers addresses for cur, always with their @ (devopsy also
+// takes one without it where an address is a flag's value): the project's
+// environments, the user's aliases when aliases is set, and once an @ is
+// typed the servers in ~/.ssh/config as @<host>:, which starts any
+// address. Past a server or an instance, the environments after it.
+func addresses(projectDir, cur string, aliases bool) []Candidate {
+	var out []Candidate
+	if i := strings.LastIndexAny(cur, ":/"); strings.HasPrefix(cur, "@") && i >= 0 {
+		for _, t := range remote.Targets(projectDir) {
+			if !t.User {
+				out = append(out, Candidate{cur[:i+1] + t.Name, targetDescription(t), GroupTarget})
+			}
+		}
+		return out
+	}
+	if cur != "" && !strings.HasPrefix(cur, "@") {
+		return nil
+	}
+	// Environments before aliases (Targets' order).
+	for _, t := range remote.Targets(projectDir) {
+		group := GroupTarget
+		if t.User {
+			if !aliases {
+				continue
+			}
+			group = GroupUserTarget
+		}
+		out = append(out, Candidate{"@" + t.Name, targetDescription(t), group})
+	}
+	if cur != "" {
+		for _, h := range sshHosts() {
+			out = append(out, Candidate{"@" + h + ":", "server, ~/.ssh/config", GroupServer})
+		}
+	}
+	return out
+}
+
+// serversOnly is DirectiveNoSpace when every candidate left is a server
+// (@<host>:), which an environment follows without a space.
+func serversOnly(r Result) int {
+	if len(r.Candidates) > 0 && !slices.ContainsFunc(r.Candidates, func(c Candidate) bool { return !strings.HasSuffix(c.Value, ":") }) {
+		return DirectiveNoSpace
+	}
+	return 0
 }

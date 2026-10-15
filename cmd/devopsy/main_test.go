@@ -697,6 +697,12 @@ func TestDebugTargets(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "parent    prod no server yet") {
 		t.Errorf("parent without a server (%d):\n%s", code, out)
 	}
+	// --sync fails before any connection, with why and the two fixes.
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env[:1], "@h:dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "[error] dev's parent, prod, has no server\ndevopsy reads a parent's server from variables only.") ||
+		!strings.Contains(out, "To fix it, do one of these:\n1. Set prod's server in .devopsy/.env, as the templates do: DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER for every environment)\n2. Sync from an address instead:\ndevopsy @h:dev --sync --from @h:prod\n") {
+		t.Errorf("--sync without a parent's server (%d):\n%s", code, out)
+	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug")
 	if code != 0 || !regexp.MustCompile(`(?m)^environments +dev, prod$`).MatchString(out) || !strings.Contains(out, "web: devopsy.shell=true") {
 		t.Errorf("summary (%d):\n%s", code, out)

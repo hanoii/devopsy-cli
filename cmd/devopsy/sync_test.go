@@ -337,13 +337,13 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback", "--yes"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
 		t.Errorf("--rollback --sync (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=stream") {
+	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--yes]") {
 		t.Errorf("--release --help (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from <target>]") {
+	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from @<target>]") {
 		t.Errorf("@dev help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "--sync"); code == 0 || !strings.Contains(out, "--sync needs a target") {

@@ -1215,6 +1215,10 @@ func loadTarget(projectDir, addr string, projectEnv func(string) (string, bool),
 		p, err := resolveTarget(project, envs, pa, pa.instance+"/"+pa.env, alias, aliasName, projectEnv, strict, true)
 		if err != nil && strict {
 			t.ParentErr = fmt.Errorf("environment %s: parent %s: %w", t.Name, t.Parent, err)
+			if re := (*report.Error)(nil); errors.As(err, &re) {
+				// Reported as a sentence: "dev's parent, prod, has no server".
+				t.ParentErr = &report.Error{Msg: fmt.Sprintf("%s's parent, %s, %s", t.Name, t.Parent, re.Msg), Details: re.Details, Fixes: re.Fixes}
+			}
 		}
 		t.ParentTarget = p
 	}
@@ -1309,9 +1313,11 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	if strict && t.Host == "" {
 		if parent {
 			// Never the child's server: a guess could sync the wrong data.
-			return nil, report.Errorf([]string{
-				"the parent's server never comes from the child's address: set " + EnvironmentVar(a.env) + " or " + ServerVar + ", in .devopsy/.env as the templates do",
-			}, "no server")
+			return nil, &report.Error{
+				Msg:     "has no server",
+				Details: []string{"devopsy reads a parent's server from variables only. It never takes it from the child's address, because the parent can live on another server."},
+				Fixes:   []string{"Set " + a.env + "'s server in .devopsy/.env, as the templates do: " + EnvironmentVar(a.env) + "=<server> (or " + ServerVar + " for every environment)"},
+			}
 		}
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
 	}
