@@ -491,9 +491,12 @@ fails the release before it goes live, listing what to set (--vars set).
 Then devopsy gets the images, before the release goes live: in build mode
 it pulls the services without a build and builds the others (--pull), in
 image mode it pulls them all, so a tag missing from the registry fails
-there. The run step only starts them. When run fails, current goes back
-to the previous release, which gets its images again and is restarted
-with its own run step (the rollback's, else the release's).
+there. The run step only starts them. Each release
+keeps its images under a tag of its own (devopsy-<compose name>-<id>), so
+a rollback runs exactly what that release ran, without building or
+pulling. When run fails, current goes back to the previous release, which
+gets its own images back and is restarted with its own run step (the
+rollback's, else the release's).
 
 Each step is a devopsy command line, split on spaces. The remote steps
 share one SSH session, under the release lock: hence local before steps

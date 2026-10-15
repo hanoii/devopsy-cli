@@ -589,33 +589,52 @@ func readFile(path string) string {
 	return string(data)
 }
 
-// A release gets its images by mode before it goes live: a failure there
-// leaves current alone, and a failed run step gets the previous release's
-// images again before restarting it.
+// A release gets its images by mode before it goes live and bookmarks
+// them: a failure there puts the live release's names back, a failed run
+// step and a rollback restore a release's own images without building or
+// pulling, and pruning drops a release's bookmarks.
 func TestActivateImages(t *testing.T) {
 	bin := t.TempDir()
-	// The fake devopsy logs its calls (cwd basename and arguments), and fails
-	// the build or the run step when told.
+	// The fake devopsy logs its calls (cwd basename and arguments); its
+	// pull and build put the release's id in the image store, and fail
+	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
 echo "${PWD##*/}: $*" >> "$FAKE_ROOT/calls"
-[ "$*" = "-- build --pull" ] && exit ${FAIL_BUILD:-0}
-[ "$*" = "deploy" ] && exit ${FAIL_RUN:-0}
+id=$(pwd -P); id=${id##*/}
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
+  "-- pull --ignore-buildable" | "-- pull") echo "$id" > "$FAKE_ROOT/images/mariadb_11" ;;
+  "-- build --pull") [ -z "${FAIL_BUILD:-}" ] || exit "$FAIL_BUILD"; echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
+  deploy) exit ${FAIL_RUN:-0} ;;
+esac
 exit 0
 `
+	docker := `#!/bin/sh
+f() { echo "$FAKE_ROOT/images/$(echo "$1" | tr '/:' '__')"; }
+case "$1 $2" in
+  "image inspect") [ -f "$(f "$3")" ] ;;
+  "image rm") rm -f "$(f "$3")" ;;
+  *) [ "$1" = tag ] && [ -f "$(f "$2")" ] && cp "$(f "$2")" "$(f "$3")" ;;
+esac
+`
 	write(t, filepath.Join(bin, "devopsy"), fake)
+	write(t, filepath.Join(bin, "docker"), docker)
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "flock", "mv"} {
+	for _, f := range []string{"devopsy", "docker", "flock", "mv"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	phases := Phases{Run: []string{"deploy"}, Restart: []string{"deploy", "--back"}}
-	run := func(tg *Target, root, id string, extra ...string) (string, error) {
+	script := func(tg *Target, id string, rollback bool) string {
+		return ActivateScript(tg, id, rollback, "app-prod", phases, nil)
+	}
+	run := func(root, script string, extra ...string) (string, error) {
 		t.Helper()
-		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
-		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", phases, nil))
+		cmd := exec.Command("sh", "-c", script)
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, extra...)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
@@ -625,44 +644,90 @@ exit 0
 		os.Remove(filepath.Join(root, "calls"))
 		return string(data)
 	}
-	current := func(tg *Target, root string) string {
-		l, _ := os.Readlink(filepath.Join(root, tg.Path, "current"))
-		return l
+	// image is what a tag holds: the id of the release that built or
+	// pulled it, "" without the tag.
+	image := func(root, tag string) string {
+		data, _ := os.ReadFile(filepath.Join(root, "images", strings.NewReplacer("/", "_", ":", "_").Replace(tag)))
+		return strings.TrimSpace(string(data))
 	}
 
 	build := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
 	root := t.TempDir()
-	if out, err := run(build, root, "1"); err != nil || current(build, root) != "releases/1" {
-		t.Fatalf("build (%v):\n%s", err, out)
-	}
 	base := filepath.Join(root, build.Path)
-	if got, want := calls(root), "1: --check-names "+base+"\n1: --missing-vars\n1: -- pull --ignore-buildable\n1: -- build --pull\ncurrent: deploy\n"; got != want {
-		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
+	current := func() string {
+		l, _ := os.Readlink(filepath.Join(base, "current"))
+		return l
+	}
+	release := func(id string, extra ...string) (string, error) {
+		t.Helper()
+		write(t, filepath.Join(base, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		return run(root, script(build, id, false), extra...)
 	}
 
-	// A failed build: not live, no run step.
-	if out, err := run(build, root, "2", "FAIL_BUILD=3"); err == nil || current(build, root) != "releases/1" || !strings.Contains(out, "release 2 not made current") {
-		t.Fatalf("failed build (%v), current %q:\n%s", err, current(build, root), out)
+	if out, err := release("1"); err != nil || current() != "releases/1" {
+		t.Fatalf("build (%v):\n%s", err, out)
+	}
+	if got, want := calls(root), "1: --check-names "+base+"\n1: --missing-vars\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
+		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
+	}
+	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
+		t.Errorf("release 1 not bookmarked")
+	}
+
+	// A failed build: not live, no run step, and the pull it made before
+	// failing is undone: mariadb:11 is release 1's again.
+	if out, err := release("2", "FAIL_BUILD=3"); err == nil || current() != "releases/1" || !strings.Contains(out, "release 2 not made current") {
+		t.Fatalf("failed build (%v), current %q:\n%s", err, current(), out)
 	}
 	if got := calls(root); strings.Contains(got, "deploy") {
 		t.Errorf("failed build ran the run step:\n%s", got)
 	}
-
-	// A failed run step: the previous release's images, then its restart.
-	if out, err := run(build, root, "3", "FAIL_RUN=4"); err == nil || current(build, root) != "releases/1" {
-		t.Fatalf("failed run (%v), current %q:\n%s", err, current(build, root), out)
+	if got := image(root, "mariadb:11"); got != "1" {
+		t.Errorf("after a failed build mariadb:11 is %q's, want 1's", got)
 	}
-	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\ncurrent: deploy\ncurrent: -- pull --ignore-buildable\ncurrent: -- build --pull\ncurrent: deploy --back\n"; got != want {
+
+	// A failed run step: release 1's images restored, nothing built or
+	// pulled for it, then its restart.
+	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1" || !strings.Contains(out, "images of 1 restored") {
+		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
+	}
+	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: deploy\ncurrent: deploy --back\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
+	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "1" {
+		t.Errorf("after a failed run the images are not release 1's: %q %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
+	}
 
-	image := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
+	// A rollback from 4 to 1 (2 and 3 failed) restores 1's images.
+	if out, err := release("4"); err != nil || image(root, "app-prod-app") != "4" {
+		t.Fatalf("release 4 (%v):\n%s", err, out)
+	}
+	calls(root)
+	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1" || image(root, "app-prod-app") != "1" {
+		t.Fatalf("rollback (%v), current %q, app %q:\n%s", err, current(), image(root, "app-prod-app"), out)
+	}
+	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
+		t.Errorf("rollback fetched images:\n%s", got)
+	}
+
+	// Pruning drops the bookmarks of the releases it removes.
+	keep1 := *build
+	keep1.Keep = 1
+	write(t, filepath.Join(base, "releases", "5", ".devopsy", "compose.yaml"), "services: {}\n")
+	if out, err := run(root, script(&keep1, "5", false)); err != nil {
+		t.Fatalf("release 5 (%v):\n%s", err, out)
+	}
+	if image(root, "app-prod-app:devopsy-app-prod-1") != "" || image(root, "app-prod-app:devopsy-app-prod-4") != "" || image(root, "app-prod-app:devopsy-app-prod-5") != "5" {
+		t.Errorf("pruning kept bookmarks of pruned releases, or dropped 5's")
+	}
+
+	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
 	root = t.TempDir()
-	if out, err := run(image, root, "1"); err != nil {
+	write(t, filepath.Join(root, image2.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
+	if out, err := run(root, script(image2, "1", false)); err != nil {
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
-	base = filepath.Join(root, image.Path)
-	if got, want := calls(root), "1: --check-names "+base+"\n1: --missing-vars\n1: -- pull\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --missing-vars\n1: -- pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 }
