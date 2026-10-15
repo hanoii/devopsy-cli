@@ -227,11 +227,16 @@ repositories fit together and the open ideas.
   release, since Compose would just share it; external ones are how a
   project joins another's; an unreadable config is skipped, the up will
   say); `prepare` steps in the release; `--missing-vars` (`cli.MissingVars`:
-  compose's `${VAR:?}`/`${VAR?}` left unset, env capability included); switch
+  compose's `${VAR:?}`/`${VAR?}` left unset, env capability included); the
+  images (`fetchImages`, by mode: build `pull --ignore-buildable` then
+  `build --pull`, image `pull`, which pulls buildable services with an
+  `image:` too and fails on a missing tag; through `devopsy --`, past
+  project commands, under `with_tty`); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`Phases.Restart`: the rollback's, else the
-  release's); prune to `keep`; remote after steps. A failure before the
-  switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
+  release's), its images fetched again first (build mode's names are the
+  compose project's, which the new release's build took over); prune to
+  `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
@@ -259,7 +264,16 @@ repositories fit together and the open ideas.
 - A nested devopsy (`DEVOPSY_PROJECT_DIR` set) ignores the inherited
   `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
 - `mode:` defaults to `build`: it works for every project, where a wrong
-  `image` fails the release.
+  `image` fails the release. devopsy fetches the images itself, before the
+  switch, so the run step only starts them: a build or pull there would
+  run after the switch, and in a sync after the copy, where nothing had
+  a terminal for it (the first release's `up` in `restoreServices` built
+  the app in plain progress, then `deploy` built it again).
+- `--release` without a target (`runLocalRelease`, its own `cli.Flags`
+  entry with `Local` scope) is a release in place: `Config.Defaults`'
+  release steps (no environment is local), prepare, `--missing-vars`, the
+  images always as build mode, run; no before or after steps, no switch.
+  The other release flags stay target only.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
