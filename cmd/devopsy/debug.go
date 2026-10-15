@@ -434,6 +434,9 @@ func debugCapabilities(st style, projectDir string) {
 				}
 			}
 		}
+		if c.Env != "" {
+			fmt.Printf("  %s\n    %s\n", st.head("environment:"), wrap(c.Env, 74, "    "))
+		}
 	}
 }
 
@@ -473,7 +476,9 @@ func debugLabels(st style, projectDir string, color bool) int {
 		{cli.RoleLabel + "=<name>", "a role only one compose project per host holds, checked at --release"},
 		{cli.ExportPrefix + "<KEY>=<value>", "a fact for other projects, read from running containers"},
 		{cli.ImportPrefix + "<VAR>=<role or project>/<KEY>[?]", "at --release, into target.env unless the target sets VAR; ? if optional"},
-		{cli.SyncLabel + "=skip|live|pause|stop|custom", "in a sync: neither copied nor touched (skip, default); its mounts under mnt copied (live), with it paused (pause, never a database) or stopped (stop); left to the sync capability's push (custom)"},
+		{cli.SyncLabel + "=rsync|stream", "in a sync, --export and --import: its mounts under mnt rsynced, a tar of them for --export (rsync), or the sync capability's export and import (stream); without it, neither copied nor touched"},
+		{cli.SyncStopLabel + "=true|false", "stopped for the whole sync on both sides, and around --export and --import (default false)"},
+		{cli.SyncExcludeLabel + "=<entry>[,<entry>...]", "entries of mnt an rsync service mounts that its copy leaves out"},
 	} {
 		fmt.Printf("  %s\n      %s\n", st.name(l[0]), l[1])
 	}

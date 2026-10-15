@@ -444,6 +444,8 @@ devopsy @vm1:prod --log          # what the last release or rollback printed (or
 devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
+devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.sync label says
+devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
 devopsy @vm1:prod --status       # the release there, its containers, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
@@ -585,92 +587,111 @@ dumps).
 is a clone of its parent: its first release syncs the parent's data, and
 `devopsy @<child> --sync` does it again later, then reruns the child's
 `run` step. devopsy knows nothing of what the data is: services opt in
-with a label, `devopsy.sync`, and devopsy copies the entries of
-`.devopsy/mnt` those services bind-mount (`./mnt/files` gives `files`;
-a file, `./mnt/app.ini`, itself, written in place so the container
-mounting it sees the new content; `./mnt` itself, all of it), from the
-parent's `shared/mnt` into the child's, with `rsync -a --delete
---numeric-ids`: the child's copy equals the parent's, owners and modes
-included. Files a running service removes
-during the copy (rsync's "vanished", its exit 24) are a notice, not a
-failure: the rest is copied. `shared/.env` is never copied: the child
-keeps its own secrets.
+with a label, `devopsy.sync`, which says how their data moves:
 
-The label's values, on both sides:
+- `devopsy.sync=rsync`: devopsy copies the entries of `.devopsy/mnt` the
+  service bind-mounts (`./mnt/files` gives `files`; a file,
+  `./mnt/app.ini`, itself, written in place so the container mounting it
+  sees the new content; `./mnt` itself, all of it), from the parent's
+  `shared/mnt` into the child's, with `rsync -a --delete --numeric-ids`:
+  the child's copy equals the parent's, owners and modes included. Files
+  a running service removes during the copy (rsync's "vanished", its exit
+  24) are a notice, not a failure: the rest is copied.
+- `devopsy.sync=stream`: the parent's sync capability `export <service>`
+  writes the service's data to stdout (a database dump), devopsy spools
+  it into a file in the child's directory (`.devopsy-stream.<service>`),
+  and only once the export exited 0 does the child's `import <service>`
+  read it from stdin (a load into the child's database), the child's
+  service brought up first; the file goes afterwards. A cut export never
+  reaches the import. One service after the other, in compose's
+  `depends_on` order (dependencies first). `--export` and `--import`
+  (below) use the same scripts, but through a pipe
+  (`devopsy @a --export db | devopsy @b --import db`) a failed export
+  looks like a short one and its import gets what came: when the export
+  can fail, go through a file and check its exit code first. Both sides
+  must label the service `stream`, or the parent refuses before anything
+  stops; when the label comes from an inherited variable
+  (`devopsy.sync=${SYNC_DATABASE:-rsync}`, `inherit: [SYNC_DATABASE]`),
+  change it on the parent, `devopsy @<child> --inherit`, then `--sync`:
+  a re-sync only writes inherited variables after its copy.
+- no label: the service is neither copied nor touched. Any other value
+  is an error.
 
-| `devopsy.sync` | flush hook | rsync of its mounts | push capability |
-| --------------- | ---------- | ------------------- | --------------- |
-| `skip` (no label) | no | no | no |
-| `live` | yes | yes | no |
-| `pause` | yes | yes | no |
-| `stop` | no | yes | no |
-| `custom` | no | no | yes |
+A second label says what happens to the service meanwhile:
+`devopsy.sync.stop=true` stops it on both sides for the whole sync (one
+`docker compose stop`, so Compose orders them by `depends_on`, dependents
+first; one `start` afterwards, waited for until healthy), for a clean
+shutdown: a database's raw files rsynced, an app that must not run on a
+half-imported database. The default, `false`, leaves it running: an
+`rsync` service's files are copied as they are, which is the project's
+call (fine for uploaded files, not for a running database's datadir); a
+`stream` service is what its export and import talk to. Nothing is paused:
+Traefik drops a paused container's router, and `docker pause` flushes
+nothing.
 
-- `skip`, the default: the service is neither copied nor touched.
-- `live`: nothing happens to the service; its mounts are copied.
-- `pause`: frozen for the copy (the routed app): requests wait in its
-  socket until it resumes, as long as nothing else happens on the host
-  meanwhile (Traefik drops a paused container's router the next time a
-  container starts, stops or reports its health, and a sync stops
-  things: see devopsy-template-traefik's AGENTS.md). A service of the
-  project's own on a lower-priority router answers meanwhile and waits
-  for the app (devopsy-template-drupal11's `alwaysup`).
-  That is holding, not consistency: `docker pause` flushes nothing, so
-  never pause a database; stop it, or dump it.
-- `stop`: stopped for the copy, a clean shutdown (a database's raw files);
-  started again and waited for until healthy.
-- `custom`: devopsy copies nothing and touches nothing; the parent's
-  `push` capability copies it, after devopsy has copied the rest (a
-  database to dump). It is required then.
+| labels | copied | meanwhile |
+| ------ | ------ | --------- |
+| (none) | no | untouched |
+| `devopsy.sync=rsync` | its `mnt` entries, rsynced | runs |
+| `devopsy.sync=rsync` + `devopsy.sync.stop=true` | its `mnt` entries, rsynced | stopped |
+| `devopsy.sync=stream` | the capability's `export` and `import` | runs |
+| `devopsy.sync=stream` + `devopsy.sync.stop=true` | the same, the scripts using `run --rm` | stopped |
 
-`devopsy.sync.exclude=<entry>[,<entry>...]` on a service names entries of
-`mnt` it mounts that are not copied through it anyway: an access log
-next to the site's files (`./mnt/logs`), which a child does not want.
-Another service mounting the same entry without excluding it still gets
-it copied. A service mounting `./mnt` itself copies everything, the
-entries of `skip` and `custom` services included, against their labels:
-the parent says so before the copy, with the exclude label to write.
-Mounting entries, one per concern, says who owns what.
+`devopsy.sync.rsync.exclude=<entry>[,<entry>...]` on an `rsync` service
+names entries of `mnt` it mounts that are not copied through it anyway:
+an access log next to the site's files (`./mnt/logs`), which a child does
+not want. On a `stream` service it is ignored, so a variable can flip a
+service between `rsync` and `stream` and keep it. Another service
+mounting the same entry without excluding it still gets it copied. A
+service mounting `./mnt` itself copies everything, the entries of
+unlabeled and `stream` services included, against their labels: the
+parent says so before the copy, with the exclude label to write.
+Mounting entries, one per concern, says who owns what. `shared/.env` is
+never copied: the child keeps its own secrets.
 
 A project without any labeled service syncs nothing ("nothing to
 sync"), and the child's `run` step still runs.
 
 Each side reads the labels from its own release, so they can differ: a
-variable in the label (`devopsy.sync=${SYNC_DATABASE:-stop}`) that the
-parent inherits to its children keeps them alike. What the parent copies
-must not change under a running service of the child: before pausing
-anything of its own, the parent looks at the child's services and refuses
-when one that mounts a copied entry is still running there, labeled
-`custom` or not at all (`pause` and `stop` have already paused or stopped
-it; `live` on the child says a running copy is wanted). The child
-restores its services, nothing was copied.
+variable in the label (`devopsy.sync=${SYNC_DATABASE:-rsync}`) that the
+parent inherits to its children keeps them alike. What the parent rsyncs
+must not change under a running service of the child: before changing
+anything of its own, the parent looks at the child's services and
+refuses when one that mounts a copied entry is still running there,
+labeled `stream` or not at all (`devopsy.sync.stop=true` has already
+stopped it; `rsync` on the child says a running copy is wanted). The
+child restores its services, nothing was copied. A service streamed on
+one side and not the other is refused the same way, with the
+`--inherit` to run when the label comes from an inherited variable.
 
-Order on each side: flush, pause, stop, copy, start (healthy), resume,
-then the parent's `push` for the `custom` services. The `stop` services
-go to one `docker compose stop`, and later one `start`, so Compose
-orders them by `depends_on`: an app that depends on its database stops
-first and starts last, its requests in flight finished before the
-database goes (each service's `stop_grace_period`). The
-child's services are paused and stopped before the parent's and resumed
-after them. The child's side holds its release lock for the whole sync;
-the parent's holds a shared one, so a release of the parent waits for the
-copy, and a sync lock of its own, so syncs from one parent run one at
-a time (each pauses and restores the parent's services). A lock held by
-something else is announced ("waiting for the release running on
-..."), then waited for up to 10 minutes, like every release lock.
+Order on the child's server, under its release lock for the whole sync:
+the capability's `prepare child`, its `stop=true` services stopped; then
+it waits for the parent. On the parent's, under a shared hold of its
+release lock (a release of the parent waits for the copy) and a sync
+lock of its own (syncs from one parent run one at a time): `prepare
+parent`, its `stop=true` services stopped, the rsync, each stream
+(export, then the child's import), its services started, `finish parent
+go|abort`. Then the child's: its services started, `finish child
+go|abort`, and after `go` its `run` step. The child's stopped services
+stay down through the imports, so an app never runs on a half-imported
+database. A lock held by something else is announced ("waiting for the
+release running on ..."), then waited for up to 10 minutes, like every
+release lock.
 
-The copy runs as root in `devopsy-rsync`, devopsy's own image (alpine
-with rsync), built on each server the first time, so ownership and the
-deploy user's permissions do not matter. **On one server**, one container
-copies between the two directories, without SSH. **Across servers**, the
+The rsync runs as root in `devopsy-rsync`, devopsy's own image (alpine
+with rsync and tar), built on each server the first time, so ownership
+and the deploy user's permissions do not matter. **On one server**, one
+container copies between the two directories, without SSH, and a stream
+is written into the child's directory directly. **Across servers**, the
 parent's server starts an rsync daemon (read-only, serving only the
-entries being copied, no published port) and
-reaches the child's over SSH, through a reverse forward, with your SSH
-agent forwarded for that session only, and never on to the child; data
-goes server to server, never through your machine. The sync's SSH
-sessions send keepalives every 30 seconds, so a firewall does not drop a
-quiet copy, and the parent gives up on a child it cannot reach, or that
-refuses its key, in seconds rather than pausing its services for minutes.
+entries being copied, no published port) and reaches the child's over
+SSH, through a reverse forward, with your SSH agent forwarded for that
+session only, and never on to the child; a stream goes to the child's
+file through an SSH session of the parent's too. Data goes server to
+server, never through your machine. The sync's SSH sessions send
+keepalives every 30 seconds, so a firewall does not drop a quiet copy,
+and the parent gives up on a child it cannot reach, or that refuses its
+key, in seconds rather than keeping its services stopped for minutes.
 So, across servers:
 
 - an agent must be running where devopsy runs, with keys both servers
@@ -711,8 +732,8 @@ devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
 and so does `--release-sync` on a child already released; `--yes`
 skips it. First-release syncs never ask. `--from` copies from another
 environment of the project instead of the parent. What follows
-`--` goes to rsync (as `DEVOPSY_SYNC_ARGS`; a sync capability's `push`
-uses it as it sees fit).
+`--` goes to rsync, and to the sync capability's actions as
+`DEVOPSY_SYNC_ARGS`.
 
 **Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
 `defaults:`) names variables its children get, whatever the labels say
@@ -732,39 +753,72 @@ Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 
 **The sync capability** (`.devopsy/capabilities/sync/`, see
-Capabilities) adds to this, each action only where its file is: `flush`
-on both sides, `prepare` and `finish` on the child's, around devopsy's own
-handling, and `push` on the parent's for the `custom` services, like a
-database to dump. A `push` alone, with no `custom` service, is not run
-(devopsy says so). With its database labeled `custom`, a project's `push`
-pipes a dump into the child's database, in short:
+Capabilities) adds to this: `prepare` and `finish` on both sides, each
+only where its file is, around devopsy's own handling, and `export` and
+`import` for the `stream` services, required then. A database labeled
+`stream`, in short:
 
 ```sh
-devopsy exec -T database sh -c 'mariadb-dump --single-transaction ...' </dev/null |
-  devopsy --sync-exec exec -T database sh -c 'mariadb ...'
+# capabilities/sync/export, on the parent: $1 is the service
+exec devopsy exec -T "$1" sh -c 'mariadb-dump --single-transaction ...' </dev/null
+# capabilities/sync/import, on the child: the dump on stdin, complete
+exec devopsy exec -T "$1" sh -c 'mariadb ...'
 ```
 
 Each side's database credentials stay its own: the dump runs with the
-parent's, the import with the child's.
+parent's, the import with the child's. Whether the export exited 0 is
+devopsy's to check, not the scripts'.
+
+**One service's data, anywhere:** `devopsy [@<target>] --export
+<service>` writes a labeled service's data to stdout, and `devopsy
+[@<target>] --import <service>` replaces it with stdin, the way its label
+says: a `stream` through the capability's `export` and `import`, an
+`rsync` service as a tar of its entries of `mnt` (made and extracted as
+root in `devopsy-rsync`, numeric owners and modes kept; an import empties
+each entry the tar carries first, as a sync's `--delete` does, and leaves
+the service running unless it is stopped), `devopsy.sync.stop=true`
+stopping it around either. A `stream` service that is not stopped is
+brought up for its import, and down again after it if it was down. Production's database and files on a laptop,
+with no project command:
+
+```sh
+devopsy @prod --export database | devopsy --import database
+devopsy @prod --export storage | devopsy --import storage
+devopsy @prod --export database > database.sql     # a backup
+devopsy @staging --import database < database.sql   # asks for staging's name (--yes in CI)
+```
+
+`--import` spools stdin to a file first (`.devopsy-stream.<service>`,
+under `.devopsy/` locally, which releases never upload; next to the
+environment on a server) and changes nothing until it is all there; a
+truncated tar (`tar -t` fails, or the end-of-archive blocks are missing),
+or one carrying entries the service does not mount or excludes, is
+refused. A service mounting `./mnt` itself exports, and imports, all of
+`mnt`: devopsy names what else that includes. On a target, `--export`
+holds the release lock shared and the environment's sync lock (a sync
+from it waits), `--import` the release lock, and asks for the environment's name on the terminal unless
+`--yes` (stdin is the data); a session cut halfway imports nothing. A
+pipe cannot tell an export that failed halfway from one that ended, so
+for what matters, go through a file and check the export's exit code.
 
 **Logs and failures:** a sync's output goes into the log of the release
 it syncd into (`--log`), after the release's own. A failed copy restores
-the paused and stopped services on both sides and skips the child's `run`
-step; on a first release, the release is marked failed and nothing is
-current, and the next release syncs again. The child's `mnt` may be
-partly copied then; rsync picks up from there, and a database copied raw
-is unusable until it does (devopsy says which entry was cut; its
-container restarts in a loop, and the next sync stops it like a
-running one). Interrupted (Ctrl-C) during the
-copy, devopsy ends its session to the parent's server, which stops the
-copy and restores its own services, then tells the child's to restore
-its services. Once the copy is in and the run step runs, a Ctrl-C only
-says so: the step is the server's, and cutting the session would fail it
-and bring the previous release back, which a second Ctrl-C does. If
-devopsy itself goes away
+the stopped services on both sides and skips the child's `run` step; on
+a first release, the release is marked failed and nothing is current,
+and the next release syncs again. The child's `mnt` may be partly copied
+then; rsync picks up from there, and a database copied raw is unusable
+until it does (devopsy says which entry was cut; its container restarts
+in a loop, and the next sync stops it like a running one). A failed or
+interrupted export imports nothing, and its file goes. Interrupted
+(Ctrl-C) during the copy, devopsy ends its session to the parent's
+server, which stops the copy (an export too) and restores its own
+services, then tells the child's to restore its services. Once the copy
+is in and the run step runs, a Ctrl-C only says so: the step is the
+server's, and cutting the session would fail it and bring the previous
+release back, which a second Ctrl-C does. If devopsy itself goes away
 mid-sync (killed, connection lost), each side restores its own
 services and writes what happened to `<environment>/.devopsy-sync.log`
-on its server. Restoring means what the sync paused or stopped
+on its server. Restoring means what the sync stopped
 (`<environment>/.devopsy-sync.services` meanwhile): a service that was
 down before it, stopped for maintenance, stays down.
 
@@ -925,46 +979,42 @@ lists them with their contracts):
   runs every time, so keep it fast; a devopsy it calls skips it. A failure stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
-- **sync:** hooks into a sync (Parent environments and syncs); each
-  action runs only when its file is there, besides devopsy's own handling
-  of the `devopsy.sync` labels.
-  - `flush <service>` runs on each side, once per running service labeled
-    `live` or `pause`, before it is paused or copied (child: before its
-    services are paused; parent: before its own are paused and copied).
-    Not for `stop`, `skip` or `custom`. A failure aborts the sync.
-  - `prepare` runs on the child's server, in its current release under its
-    release lock, before the copy, then devopsy flushes, pauses and stops
-    the child's labeled services. A failure aborts the sync (`finish
-    abort` runs).
-  - `push` runs on the parent's server, in its current release, after
-    devopsy has copied the services labeled `live`, `pause` and `stop`,
-    when any is labeled `custom` (then it is required; without one it is
-    not run). It gets `DEVOPSY_SYNC_CUSTOM` (those services, space
-    separated), `DEVOPSY_SYNC_TO` (the child's server as
-    `user@hostname`, empty on the same server), `DEVOPSY_SYNC_SSH_PORT`,
-    `DEVOPSY_SYNC_TO_BASE` and `DEVOPSY_SYNC_TO_DIR` (the child's
-    directory and its current `.devopsy/`), `DEVOPSY_SYNC_TO_PROJECT`,
-    `DEVOPSY_SYNC_TO_TARGET`, `DEVOPSY_SYNC_FROM_TARGET` and
-    `DEVOPSY_SYNC_ARGS` (what followed `--sync`'s `--`, its own to use).
-    Two helpers do the transport: `devopsy --sync-rsync <entry>... [--
-    <rsync args>]` copies entries of `mnt` as the generic path does, and
-    `devopsy --sync-exec <devopsy args>` runs devopsy in the child's
-    current release, as its project and with a clean environment (none of
-    the parent's variables), stdin and stdout passed through. Exit 0 lets
-    the child go on. On a child's first release none of its services has
-    run yet: a `push` that needs one starts it first (`devopsy
-    --sync-exec up -d --wait database`).
-  - `finish go|abort` runs on the child's server after the copy (`go`) or
-    a failure (`abort`), after devopsy has started, waited for and resumed
-    the labeled services it paused or stopped. After `go` it is where a
-    copy of production is sanitized (emails and passwords scrubbed, a
-    login set for a child that had none: devopsy-template-drupal11's);
-    then the release's `run` step runs. On a child's first release
-    nothing of it exists yet, so devopsy creates the labeled services
-    first (`up -d --wait`), as the run step's `up` would a moment later:
-    the hook finds them running either way.
-  - `flush` (on the child), `prepare` and `finish` get
-    `DEVOPSY_SYNC_FROM_TARGET` and `DEVOPSY_SYNC_ARGS`.
+- **sync:** hooks into a sync (Parent environments and syncs), and the
+  transport of the services labeled `devopsy.sync=stream`, there and in
+  `--export` and `--import`. `prepare` and `finish` run only when their
+  file is there, besides devopsy's own handling of the labels; `export`
+  and `import` are required on their side when a service is `stream`
+  there, checked before anything stops.
+  - `prepare parent|child` runs on each side, in its current release,
+    before anything is stopped there: the child's under its release lock,
+    before the parent's side starts; the parent's under a shared hold of
+    its lock. A failure aborts the sync (`finish abort` runs).
+  - `export <service>` writes a `stream` service's data to stdout: on the
+    parent's server, once its `stop=true` services are stopped and the
+    rsync is done, once per `stream` service in `depends_on` order; and
+    `devopsy --export`. stdin is empty. devopsy spools what it writes and
+    imports it only once it exited 0. A service in `DEVOPSY_SYNC_STOP` is
+    stopped: reach it with `devopsy run --rm --no-deps -T <service> ...`,
+    not `exec`.
+  - `import <service>` reads that data from stdin, complete: on the
+    child's server, its service brought up first (`up -d --wait`) unless
+    stopped; and `devopsy --import`.
+  - `finish parent|child go|abort` runs on each side after the copy
+    (`go`) or a failure (`abort`), once devopsy has started that side's
+    stopped services and waited for them to be healthy. On the child
+    after `go` it is where a copy of production is sanitized (emails and
+    passwords scrubbed, a login set for a child that had none:
+    devopsy-template-drupal11's); then the release's `run` step runs. On
+    a child's first release nothing of it existed, so devopsy creates
+    every labeled service first (`up -d --wait`), as the run step's `up`
+    would a moment later: the hook finds them running either way.
+  - Every action gets its side's services by label, space separated:
+    `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM` (in `depends_on` order)
+    and `DEVOPSY_SYNC_STOP` (a stopped `stream` service is in both); in a
+    sync also `DEVOPSY_SYNC_FROM_TARGET` and `DEVOPSY_SYNC_TO_TARGET`
+    (the parent's and the child's addresses) and `DEVOPSY_SYNC_ARGS`
+    (what followed `--sync`'s `--`). The other `DEVOPSY_SYNC_*` variables
+    a push sets are devopsy's own.
 
 ## License
 

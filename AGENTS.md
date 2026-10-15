@@ -20,6 +20,7 @@ repositories fit together and the open ideas.
   sync's sessions and scripts in `sync.go`.
 - `cmd/devopsy/sync.go`: syncs, the operator's side (`runSync`,
   `runSyncSession`, `inheritVars`) and the hidden flags servers run;
+  `cmd/devopsy/data.go`: `--export` and `--import`;
   `internal/cli/sync.go`: the `devopsy.sync` labels and `SyncServices`.
 - `internal/complete/`: completion candidates, and the bash, zsh and fish
   scripts (embedded).
@@ -302,7 +303,7 @@ repositories fit together and the open ideas.
   session would kill what restores the services) and restores. From
   prepare until the services are restored the holder ignores SIGPIPE
   (`trap '' PIPE`, reset before `run`) and restores before it reports, so
-  a session gone during prepare cannot leave them paused either.
+  a session gone during prepare cannot leave them stopped either.
 - **Interrupts** (SIGINT, SIGTERM in `runSyncSession`): before the marker
   devopsy just exits, and the holder restores on its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
@@ -315,69 +316,126 @@ repositories fit together and the open ideas.
   `/dev/null` would read as a session gone at once), so the parent's
   `--sync-push` sees EOF as soon as the session ends, not at its next
   write, which a silent copy may not make for minutes (seen on OrbStack:
-  the parent stayed paused, then ran the capability's push into the
+  the parent stayed paused, then ran the old push capability into the
   aborted child). EOF or a signal cancels it: the same-host rsync
   container is removed (`dockerRun`: killing the docker client leaves the
   container copying), the `-R` session ends (`SSHCommandContext`), the
-  parent's services are restored, and the capability's push is not
-  started, or, running in its own process group, gets SIGTERM, a
-  pipeline's commands included. From the cancellation on, `errOut` also
+  parent's services are restored, and no export starts; one running, in
+  its own process group (`runSyncHook`), gets SIGTERM, a pipeline's
+  commands included, its spool removed (same server) or left to the
+  child's abort, and the import, if running, gets SIGTERM and removes
+  its spool. From the cancellation on, `errOut` also
   appends to the parent's `$base/.devopsy-sync.log` (`quietWriter.keep`,
   the holder's file on the child's side), after a timestamped line. What runs inside a container on its own
   (an import already under way in `docker exec`) runs to its end. The
   holder ending first (its server's connection dropped) is a case of the
   same select: it restored the child on its way out, so the push is
   cancelled the same way, nothing is answered, and the sync fails.
-- **Labels opt in:** no `devopsy.sync` is `skip` (neither copied nor
-  touched); `live`, `pause`, `stop` are rsynced (`SyncDirs`); `custom`
-  is left to the parent's `push`. `devopsy.sync.exclude` (`SyncExcludeLabel`,
-  entries of `mnt`, comma or space separated) drops entries from a
-  service's `Dirs` at parse time, so every consumer (copy, guard, list)
-  agrees. A `.` entry (`./mnt` itself) subsumes the rest, the `skip` and
-  `custom` services' entries too: `--sync-push` says so
-  (`SyncWholeNotice`, in yellow when the operator's terminal takes
-  colors, `ColorEnv` passed with the push's variables), never excludes
-  by itself. No labeled service: "nothing to sync",
-  success, and the run step still runs. Each side reads its own labels;
-  before the generic path pauses anything, `--sync-push` asks the child
-  for `--sync-services list` (through `--sync-exec`, one more session
-  across servers) and refuses (`syncConflicts`) when a child service
-  mounting a copied entry is running and not `live` there: a `custom` or
-  unlabeled service the copy would change under. The list's third column
-  is the container's state (`none` without one); a child devopsy that
-  prints no state is not checked.
-- **Who pauses what:** the child's labeled services by the holder, for the
-  whole sync: the `prepare` hook, then `--sync-services prepare` (the
-  `flush` hook per running `live`/`pause` service, pause, stop; all the
-  `stop` services in one `compose stop`, later one `start`, so Compose
-  orders them by `depends_on`, dependents first: keep it one call); after the
-  copy `--sync-services finish`, then the `finish` hook (`sync_finish`
-  runs both whatever either did). The parent's inside `--sync-push`: the
-  generic path for `live`/`pause`/`stop` (flush, pause, stop, rsync,
-  finish), then the capability's `push` with `DEVOPSY_SYNC_CUSTOM` when a
-  service is `custom` (required then; present without one: a notice, not
-  run). Hooks only run where their file is, and never replace devopsy's
-  handling. A failing flush fails prepare. `--sync-services prepare`
-  records what it pauses and stops in `$base/.devopsy-sync.services`
-  (`syncState`, before the first pause) and `finish` restores those,
-  from container state (exited, paused), so it also recovers after an
-  interrupted sync, and a service down before the sync (a maintenance
-  stop) stays down; without a record it restores every labeled service.
-  A labeled service without a container (a first release) is created
-  (`up -d --wait`) before the finish hook, which expects them up.
-  A finish that restored everything removes the record. `--sync-push` cancels on SIGINT, SIGTERM, SIGHUP,
-  SIGPIPE and restores; servers' commands write to `errOut`, never an
-  `*os.File`, so a gone session cannot kill them with a broken pipe.
+- **Labels opt in:** `devopsy.sync=rsync|stream` (`cli.SyncLabel`), no
+  label or an empty value is `skip` (neither copied nor touched), any
+  other value an error (no migration: `live`, `pause`, `stop`, `custom`
+  went in October 2026 with the `push` and `flush` actions, and
+  `--sync-rsync`). `devopsy.sync.stop=true|false` (`SyncStopLabel`,
+  default false, ignored without `devopsy.sync`) stops the service on
+  both sides for the whole sync, a stream included. `pause` is gone for
+  good: Traefik drops a paused container's router, and `docker pause`
+  flushes nothing. `devopsy.sync.rsync.exclude` (`SyncExcludeLabel`,
+  entries of `mnt`, comma or space separated) drops entries from an
+  rsync service's `Dirs` at parse time, so every consumer (copy, guard,
+  list) agrees; on a `stream` service it is ignored, not validated, so a
+  variable can flip `rsync`/`stream` and keep it. A `.` entry (`./mnt`
+  itself) subsumes the rest, the unlabeled and `stream` services'
+  entries too: `--sync-push` says so (`SyncWholeNotice`, in yellow when
+  the operator's terminal takes colors, `ColorEnv` passed with the
+  push's variables), never excludes by itself. No labeled service:
+  "nothing to sync", success, and the run step still runs. Each side
+  reads its own labels; before the parent changes anything,
+  `--sync-push` always asks the child for `--sync-services list`
+  (through `--sync-exec`, one more session across servers) and refuses
+  (`syncConflicts`) when a child service mounting a copied entry is
+  running and not `rsync` there (a `stop=true` one is stopped already):
+  a `stream` or unlabeled service the copy would change under; and
+  (`streamMismatches`) when a parent `stream` service is not `stream` on
+  the child, whose import would refuse it after the rsync, or a child
+  `stream` service is `rsync` on the parent; the message names `devopsy
+  @<child> --inherit` (`DEVOPSY_SYNC_TO_TARGET`), since a label from an
+  inherited variable reaches the child only after a re-sync's copy. The
+  list's second column is the label, `rsync`, `stream` or `skip`, with
+  `+stop`; the third the container's state (`none` without one); a child
+  devopsy that prints no state is not checked.
+- **Streams:** per `stream` service, in `depends_on` order over every
+  service (`SyncStreamServices`: dependencies first, ties alphabetical,
+  a cycle an error), the parent runs the capability's `export <service>`
+  (`syncStream`) with stdout into the child's spool,
+  `$base/.devopsy-stream.<service>` (`remote.StreamSpool`): on the same
+  server the file opened under `DEVOPSY_SYNC_TO_BASE`, across servers
+  `cat >` in an SSH session to the child (`exportInto`: `ChildSSH`,
+  `KeepAlive`, `ClearAllForwardings`), and only once the export exited 0
+  (and the cat) `--sync-exec --sync-services import <service>`, which
+  brings the child's service up (`up -d --wait`, `upFor`) unless it is
+  `stop=true`, and down again afterwards if it was down (kept up on a
+  first release, no containers at all, for the finish hook), runs
+  `import <service>` with the spool as stdin, and removes the spool
+  whatever happens. The import's stdin is a pipe the push keeps open
+  until the import ends or the sync is cancelled, with `SyncWatchEnv`
+  (through `--sync-exec`: `cleanEnvKeys`, `syncExecEnv`), so the import
+  watches it (`watchSession`): across servers the session's end, which
+  a remote process never gets as a signal, cancels its hook's process
+  group and removes the spool; on the same server it also gets SIGTERM. Never a pipe into the import: a cut
+  export never reaches it, which every old `push` had to check itself.
+  A failed export's spool goes at once on the same server, by the
+  child's `finish abort` (`$base/.devopsy-stream.*`) across servers.
+- **Who stops what:** the child's `stop=true` services by the holder,
+  for the whole sync (`--sync-services prepare`: the import check, the
+  `prepare child` hook, then one `compose stop`, so Compose orders them
+  by `depends_on`, dependents first: keep it one call; `--sync-services
+  finish go|abort` starts them and waits until healthy, removes the
+  spools on abort, then runs `finish child go|abort`). The child's
+  stopped services stay down through the imports (no app on a
+  half-imported database). The parent's inside `--sync-push`
+  (`runSyncPush`): the checks (labels, the `export` script when a
+  service is `stream`, the child guard, the rsync image) before
+  anything, then `prepare parent`, stop, rsync, streams, start (healthy),
+  `finish parent go|abort`. Hooks run from Go (`runSyncHook`, `--capability
+  sync ...` in its own process group), only where their file is, with
+  `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM`, `DEVOPSY_SYNC_STOP`
+  (`cli.SyncLists`, that side's labels) plus the sync's
+  `DEVOPSY_SYNC_FROM_TARGET`, `DEVOPSY_SYNC_TO_TARGET` and
+  `DEVOPSY_SYNC_ARGS`; the holder's scripts (`syncPrepare`,
+  `syncFinish`) only call `--sync-services`. A failing prepare aborts
+  before its side stops anything; `finish abort` runs. Stopping records
+  what it stops in `$base/.devopsy-sync.services` (`syncState`, `stop
+  <name>` lines). The record exists before anything can fail
+  (`startSyncState`: the child's prepare creates it before the import
+  check and the hook, `stopServices` before its first `ps`), because no
+  record means restore every `stop=true` service, a service down on
+  purpose included; one left by an earlier sync that could not restore
+  is kept and added to. Restoring brings the recorded ones back, from
+  container state (exited), so it also recovers after an interrupted
+  sync, and a service down before the sync (a maintenance stop) stays
+  down. A child's first release (no container at all when prepare
+  started: a `first` line in the record, since a stream's import creates
+  its container before finish looks) gets every labeled service created
+  in one `up -d --wait` before the finish hook, which sanitizes through
+  them (drupal11's needs the app: without it, prod's passwords reached a
+  child), and a stream imported then stays up; never otherwise, since a
+  missing one was removed on purpose. A restore that brought everything
+  back removes the record.
+  `--sync-push` and an import cancel on SIGINT, SIGTERM, SIGHUP, SIGPIPE
+  and restore; servers' commands write to `errOut`, never an `*os.File`,
+  so a gone session cannot kill them with a broken pipe.
 - **Hidden flags** (dispatched in `main.go` before anything else):
-  `--sync-push`, `--sync-rsync <entry>... [-- rsync args]`,
-  `--sync-exec <devopsy args>`, `--sync-services prepare|finish|list`.
-  The first three need the push's `DEVOPSY_SYNC_TO_DIR` and
-  `DEVOPSY_SYNC_TO_PROJECT`. `DEVOPSY_SYNC_ARGS` (space-joined, split
-  like `StepArgs`) go to rsync in the generic path only: a capability's
-  push owns them, and `--sync-rsync` takes only what follows its `--`.
+  `--sync-push`, `--sync-exec <devopsy args>`, `--sync-services prepare |
+  finish go|abort | import <service> | list`. The first two need the
+  push's `DEVOPSY_SYNC_TO_DIR` and `DEVOPSY_SYNC_TO_PROJECT`.
+  `DEVOPSY_SYNC_ARGS` (space-joined, split like `StepArgs`) go to rsync,
+  and to the hooks to read.
 - **Clean environment:** on the same server the child's devopsy
-  (`--sync-exec`) runs with `cleanEnv`: the machine's variables and the
-  child's `COMPOSE_PROJECT_NAME` only. The caller's environment wins over
+  (`--sync-exec`) runs with `cleanEnv`: the machine's variables, the
+  sync's addresses and arguments (`DEVOPSY_SYNC_FROM_TARGET`,
+  `DEVOPSY_SYNC_TO_TARGET`, `DEVOPSY_SYNC_ARGS`, for the import; across
+  servers `SyncExecScript` exports them) and the child's
+  `COMPOSE_PROJECT_NAME` only. The caller's environment wins over
   a project's `.env`, so the parent's secrets and project name would leak
   into the child's commands. Over SSH the login environment is clean.
 - **SSH between servers:** through `DEVOPSY_SSH_COMMAND` too, with
@@ -388,14 +446,14 @@ repositories fit together and the open ideas.
   parent, which only the operator's agent limits: fewer keys, or
   `ssh-add -h` constraints, README), `BatchMode=yes` (a refused key fails
   instead of prompting), `ConnectTimeout=30` (an unreachable child fails
-  before the TCP timeout, with the parent's services paused meanwhile)
+  before the TCP timeout, with the parent's services stopped meanwhile)
   and `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the
   parent's daemon, `--network host` on the child) passes
   `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which clears
   command-line forwardings too (`ssh_config(5)`); a taken port retries
   another (3 tries, 20000-60000). `--sync-exec`'s session keeps
-  `ClearAllForwardings`. All four sync sessions (holder, push, `-R`,
-  `--sync-exec`) pass `KeepAlive` (`ServerAliveInterval=30`,
+  `ClearAllForwardings`, and so does a stream's `cat` session. All the
+  sync's sessions (holder, push, `-R`, `--sync-exec`, `cat`) pass `KeepAlive` (`ServerAliveInterval=30`,
   `ServerAliveCountMax=4`): the holder is quiet for the whole copy, and a
   dropped one aborts mid-copy. The preflight asks the local agent for its
   keys (`agentHasKeys`, `ssh-add -l`: `SSH_AUTH_SOCK` set is not an
@@ -405,15 +463,17 @@ repositories fit together and the open ideas.
   the `-R` (`port-forwarding`), which sshd reports like a taken port: after
   the last try, say both.
 - **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
-  on each host from `RsyncDockerfile` when missing), as root with
+  on each host from `RsyncDockerfile` when missing; tar for `--export` and
+  `--import` too, GNU's), as root with
   `--numeric-ids`: owners and modes survive, the deploy user's permissions
   do not matter. Across servers the parent's daemon serves one module per
   entry being copied (`rsyncdConf`, `RsyncModule`: the entry's name, `mnt`
   for `.`), so nothing else under `mnt` can be asked for. rsync's exit 24 (files vanished during the copy, a
-  `live` service's temporary files) is a notice on both paths
-  (`RsyncVanished`), any other failure aborts. Bump the tag whenever the Dockerfile changes (the alpine
-  version included): hosts never rebuild an image they have. Entries are
-  the top-level entries of `mnt` that `live`, `pause` and `stop` services bind-mount
+  running service's temporary files) is a notice on both paths
+  (`RsyncVanished`), any other failure aborts. Bump the tag whenever the
+  Dockerfile changes (the alpine version or a package included: `:2`
+  added tar): hosts never rebuild an image they have. Entries are
+  the top-level entries of `mnt` that `rsync` services bind-mount
   (`docker compose --profile '*' config`, lexical and resolved paths;
   `.` subsumes the rest). An entry that is a file on the parent is copied
   as one (`files` in `syncRsync`: no trailing slash, into `mnt`,
@@ -437,6 +497,46 @@ repositories fit together and the open ideas.
   --sync` of a released child) in `runSyncSession` after the push
   succeeded and before `go`, so a failed copy writes nothing; an inherit
   failure there aborts. Notices name keys, never values.
+
+### --export and --import
+
+- `--export <service>` and `--import <service> [--yes]` (`cmd/devopsy/data.go`,
+  scope `[@t]`) move one labeled service's data the way its label says;
+  an unlabeled service is refused. `stream`: the capability's `export`
+  and `import` (`runSyncHook`, the lists in their environment). `rsync`:
+  a tar of the service's entries of `mnt` (exclude honored, file entries
+  included) made in `RsyncImage` as root with `--numeric-owner`, and on
+  import listed first (`tarEntries`: a truncated tar fails `tar -t`
+  before anything changes, and entries the service does not mount are
+  refused, an excluded one by its label; and the spool must end with two
+  zero blocks, which every tar writer adds and `tar -t` does not
+  require, so a tar cut at a member boundary is refused too), then each
+  carried entry emptied, never removed (a running
+  container bind-mounts its inode), and extracted with `--overwrite`
+  (files in place). `stop=true` stops the service around either and
+  restores it (`stopFor`), interrupts included: the label is the
+  contract, every caller obeys it. A `stream` import of a service not
+  stopped brings it up and down again if it was down (`upFor`). A
+  service mounting `./mnt` itself carries all of `mnt`: a notice names
+  the other services' and excluded entries (`wholeMntNotice`).
+- stdout is the data, so `--export` refuses a terminal and says
+  everything on stderr; `--import` refuses a terminal as stdin and spools
+  it whole first (`importSpool`: in a release `$base/.devopsy-stream.<service>`,
+  the sync's file; locally a temporary `.devopsy/.devopsy-stream.*`,
+  which `excluded` keeps out of releases), refuses an empty one, and only
+  then stops anything. The spool always goes.
+- On a target the server runs the same code: `ExportScript` (shared
+  release lock and exclusive `.sync-lock`, like the push: both stop and
+  restore the same services, `devopsy --export` in `current`, stdout
+  through as it is: never `Colorize`d) and `ImportScript` (exclusive
+  lock, `devopsy --import <service> --yes`). The local side asks for the
+  environment's name on `/dev/tty` (`confirmImport`: stdin is the data;
+  no terminal and no `--yes` fails), then sends stdin and, only after a
+  clean EOF, an end line with a random nonce (`ImportEndEnv`,
+  `DEVOPSY_INTERNAL_IMPORT_END`): a session cut halfway reaches the
+  server as a plain EOF, so the server's `--import` requires the line at
+  the end and takes it off. A pipe from a failed export still looks
+  complete: README says to go through a file for what matters.
 
 ## Roles, exports and imports
 
@@ -507,7 +607,7 @@ repositories fit together and the open ideas.
   `DEVOPSY_INTERNAL_ENV_COMPUTE` keeps a devopsy it calls from running it
   again.
 - **`DEVOPSY_INTERNAL_*`** are devopsy talking to devopsy (`COLOR`, `TTY`,
-  `ENV_COMPUTE`, `SYNC_WATCH`, `COMMAND_TARGET`): never documented as settings, free to
+  `ENV_COMPUTE`, `SYNC_WATCH`, `COMMAND_TARGET`, `IMPORT_END`): never documented as settings, free to
   change in any release. Settings people set and the contract projects
   read keep plain `DEVOPSY_*` names.
 - **`--probe`** is a tool with plain arguments, not a contract: it knows no
@@ -542,8 +642,8 @@ repositories fit together and the open ideas.
 - Go's HTTPS to github.com is slow (about 1.5 s), hence the detached check.
 - Traefik picks up a new container a few seconds after `up` returns.
 - `docker pause` flushes nothing: rsync sees what the kernel has, not what
-  sits in a paused process's buffers. `pause` holds requests, `stop` (or a
-  dump) gives consistency; never `pause` a database.
+  sits in a paused process's buffers. Hence no `pause` label any more:
+  `devopsy.sync.stop=true` (or a stream's dump) gives consistency.
 - A stopped routed container loses its Traefik router (404); a paused one
   keeps it only until Traefik reads the containers again (any start, die
   or health event on the host): Traefik 3.7 filters paused containers as

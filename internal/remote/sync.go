@@ -12,11 +12,12 @@ import (
 // A sync copies a parent environment's data (shared/mnt) into a child's,
 // host to host: devopsy @<child> --sync, and a child's first release.
 // devopsy opens two sessions: the holder, on the child's server, which takes
-// the child's release lock, pauses and stops its services and prints
-// SyncMarker; then the push, on the parent's server, which copies (devopsy
-// --sync-push). The push's result goes back to the holder on its stdin, go
-// or abort, and the holder restarts the services and runs the release's run
-// step.
+// the child's release lock, stops its services labeled
+// devopsy.sync.stop=true and prints SyncMarker; then the push, on the
+// parent's server, which copies (devopsy --sync-push): rsync, then each
+// stream through a spool file in the child's directory (StreamSpool). The
+// push's result goes back to the holder on its stdin, go or abort, and the
+// holder restarts the services and runs the release's run step.
 
 // HalfCopiedNotice follows "mnt/<entry>" when a copy was cut: what a
 // service that reads the entry raw is left with.
@@ -44,19 +45,34 @@ var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCount
 // ssh config would send it), a key the child refuses fails at once
 // instead of waiting for a password nobody can type, and a child the
 // parent cannot reach fails in seconds, not after the TCP timeout, with
-// its services paused meanwhile.
+// its services stopped meanwhile.
 var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=accept-new"}
 
-// RsyncImage is devopsy's rsync image, built on a server from
-// RsyncDockerfile when missing. Its tag changes with the Dockerfile.
-const RsyncImage = "devopsy-rsync:1"
+// RsyncImage is devopsy's rsync image, built on a host from
+// RsyncDockerfile when missing: syncs' rsync, and the tar of --export and
+// --import. Its tag changes with the Dockerfile: hosts never rebuild an
+// image they have.
+const RsyncImage = "devopsy-rsync:2"
 
-// RsyncDockerfile is RsyncImage's Dockerfile, one line per element.
-var RsyncDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync"}
+// RsyncDockerfile is RsyncImage's Dockerfile, one line per element. GNU
+// tar, not busybox's: --numeric-owner and --overwrite as documented.
+var RsyncDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar"}
 
-// Variables of a sync, set for the parent's --sync-push and what it runs
-// (the sync capability's push), and DEVOPSY_SYNC_FROM_TARGET and
-// DEVOPSY_SYNC_ARGS for the child's prepare and finish.
+// StreamSpoolPrefix starts the name of a stream's spool file in an
+// environment's directory ($base): what an export wrote, read by the
+// import once complete. Locally, --import's temporary file under
+// .devopsy/ starts with it too.
+const StreamSpoolPrefix = ".devopsy-stream."
+
+// StreamSpool is service's spool file in the environment directory base.
+func StreamSpool(base, service string) string {
+	return path.Join(base, StreamSpoolPrefix+service)
+}
+
+// Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
+// --sync-push's own, set for it by the push session; the sync capability
+// gets SyncFromTargetEnv, SyncToTargetEnv, SyncArgsEnv and its side's
+// lists (SyncRsyncEnv, SyncStreamEnv, SyncStopEnv).
 const (
 	// SyncToEnv is the child's server, user@hostname as the parent's
 	// server reaches it; empty when both are the same host.
@@ -72,14 +88,17 @@ const (
 	SyncToProjectEnv = "DEVOPSY_SYNC_TO_PROJECT"
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
 	// SyncArgsEnv are the arguments after --sync's --, space-joined: for
-	// rsync in the generic path; a sync capability's push owns them (its
-	// own switches, or passed to --sync-rsync after --).
+	// rsync, and for the sync capability's scripts to read.
 	SyncArgsEnv = "DEVOPSY_SYNC_ARGS"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
-	// SyncCustomEnv names the parent's services labeled
-	// devopsy.sync=custom, space-separated, for the sync capability's push.
-	SyncCustomEnv = "DEVOPSY_SYNC_CUSTOM"
+	// SyncRsyncEnv, SyncStreamEnv and SyncStopEnv name a side's services
+	// labeled devopsy.sync=rsync, devopsy.sync=stream (depends_on order)
+	// and devopsy.sync.stop=true, space-separated, for the sync
+	// capability's actions (cli.SyncLists).
+	SyncRsyncEnv  = "DEVOPSY_SYNC_RSYNC"
+	SyncStreamEnv = "DEVOPSY_SYNC_STREAM"
+	SyncStopEnv   = "DEVOPSY_SYNC_STOP"
 	// SyncWatchEnv tells --sync-push that its stdin stays open for as
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
@@ -98,9 +117,9 @@ type SyncOptions struct {
 	Args []string
 }
 
-// exports sets the child side's sync variables.
-func (o *SyncOptions) exports() string {
-	return fmt.Sprintf("export %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
+// exports sets the child side's sync variables; t is the child.
+func (o *SyncOptions) exports(t *Target) string {
+	return fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
 }
 
 // syncStdin keeps devopsy's go or abort on fd 3 and gives every command
@@ -109,40 +128,28 @@ func (o *SyncOptions) exports() string {
 const syncStdin = "exec 3<&0 </dev/null\n"
 
 // syncFinish defines sync_finish go|abort, in the child's current
-// release: --sync-services finish (start what was stopped, wait for it to
-// be healthy, unpause), then the sync capability's finish hook when the
-// project has one. Both run whatever the other did; it fails if either
-// did.
+// release: --sync-services finish go|abort, which starts what was
+// stopped and waits for it to be healthy, removes the stream spools on
+// abort, then runs the sync capability's finish child go|abort.
 func syncFinish(projectName string) string {
 	return `sync_finish() {
-  finished=0
-  ` + devopsyCall(projectName, []string{"--sync-services", "finish"}, false) + ` || finished=$?
-  if [ -x .devopsy/capabilities/sync/finish ]; then
-    echo "devopsy: running 'devopsy --capability sync finish $1'" >&2
-    ` + devopsyCall(projectName, []string{"--capability", "sync", "finish"}, false) + ` "$1" || finished=$?
-  fi
-  return "$finished"
+  ` + devopsyCall(projectName, []string{"--sync-services", "finish"}, false) + ` "$1"
 }
 `
 }
 
-// syncPrepare readies the child's current release to be written: the
-// sync capability's prepare hook when the project has one, then
-// --sync-services prepare (flush, pause, stop). A failure sets $status
-// and restores what they changed.
+// syncPrepare readies the child's current release to be written:
+// --sync-services prepare checks the stream services have an import,
+// runs the sync capability's prepare child and stops the services labeled
+// devopsy.sync.stop=true. A failure sets $status and restores what it
+// changed.
 //
 // From here until the services are restored, SIGPIPE is ignored
 // (syncRestorePipe ends that): if devopsy goes away, a write to this
 // session fails instead of killing what restores them.
 func syncPrepare(projectName string) string {
 	return `trap '' PIPE
-if [ -x .devopsy/capabilities/sync/prepare ]; then
-  echo "devopsy: running 'devopsy --capability sync prepare'" >&2
-  ` + devopsyCall(projectName, []string{"--capability", "sync", "prepare"}, false) + ` || status=$?
-fi
-if [ "$status" = 0 ]; then
-  ` + devopsyCall(projectName, []string{"--sync-services", "prepare"}, false) + ` || status=$?
-fi
+` + devopsyCall(projectName, []string{"--sync-services", "prepare"}, false) + ` || status=$?
 if [ "$status" != 0 ]; then
   sync_finish abort || true
   echo "devopsy: preparing the sync failed ($status)" >&2 || true
@@ -164,7 +171,7 @@ func syncWait(failed string) string {
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
     exec >>"$base/.devopsy-sync.log" 2>&1
-    echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy: restoring what was paused or stopped" >&2
+    echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy: restoring what was stopped" >&2
   fi
   if [ "$reply" != go ]; then
     echo "devopsy: the copy from the parent failed: ` + failed + `" >&2
@@ -186,10 +193,10 @@ fi
 ` + lockWait(9, false, "the release running on $base") + `
 id=$(readlink "$base/current"); id=${id#releases/}
 echo "devopsy: syncing into $id" >&2
-` + (&SyncOptions{From: fromTarget, Args: args}).exports() + `cd "$base/current"
+` + (&SyncOptions{From: fromTarget, Args: args}).exports(t) + `cd "$base/current"
 status=0
 ` + syncFinish(projectName) + syncPrepare(projectName) + `[ "$status" = 0 ] || exit "$status"
-` + syncWait("restoring what was paused or stopped") + `if [ "$reply" != go ]; then
+` + syncWait("restoring what was stopped") + `if [ "$reply" != go ]; then
   sync_finish abort || true
   exit 1
 fi
@@ -203,9 +210,9 @@ sync_finish go || exit "$?"
 
 // PushScript is the parent's side of a sync: under a shared hold of the
 // parent's release lock (a release of the parent waits) and an exclusive
-// one on its sync lock (other syncs from it wait: each push pauses,
-// stops and restores the parent's services from their state, so two at
-// once would restore them under the other's copy), devopsy --sync-push
+// one on its sync lock (other syncs from it wait: each push stops and
+// restores the parent's services from their state, so two at once would
+// restore them under the other's copy), devopsy --sync-push
 // in its current release, with env (the DEVOPSY_SYNC_* variables).
 func PushScript(p *Target, projectName string, env map[string]string) string {
 	keys := make([]string, 0, len(env))
@@ -224,6 +231,39 @@ exec 8>"$base/.sync-lock"
 ` + lockWait(8, false, "another sync from $base") + `
 cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, true) + "\n"
+}
+
+// ExportScript writes service's data to stdout (devopsy --export), in the
+// target's current release under a shared hold of its release lock (a
+// release waits, as for a sync's push) and an exclusive one on its sync
+// lock: a push from this environment stops and restores the same
+// services a stop=true export does.
+func ExportScript(t *Target, projectName, service string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: nothing to export" >&2; exit 1; }
+exec 9>"$base/.lock"
+` + lockWait(9, true, "the release running on $base") + `
+exec 8>"$base/.sync-lock"
+` + lockWait(8, false, "a sync from $base") + `
+cd "$base/current"
+` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
+}
+
+// ImportEndEnv carries the line devopsy @<target> --import appends to the
+// data once its own stdin ended cleanly: the server's devopsy --import
+// requires it at the end of what it read, and takes it off. A session cut
+// halfway reaches the server as a plain EOF, which alone would pass for
+// complete data.
+const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
+
+// ImportScript replaces service's data with stdin (devopsy --import), in
+// the target's current release under its release lock, as a sync holds it.
+// end is what the data must end with (ImportEndEnv).
+func ImportScript(t *Target, projectName, service, end string) string {
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first" >&2; exit 1; }
+`, t.Name) + `exec 9>"$base/.lock"
+` + lockWait(9, false, "the release running on $base") + `
+cd "$base/current"
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
 
 // CurrentExistsScript prints "current" when the target has a current
@@ -284,9 +324,20 @@ func SyncReceiveScript(toDir, port string, dirs, files, args []string) string {
 }
 
 // SyncExecScript runs devopsy args in the child's current release (toDir
-// is its .devopsy/), as its compose project: --sync-exec across servers.
-func SyncExecScript(toDir, toProject string, args []string) string {
-	return "set -eu\ncd " + Quote(path.Dir(toDir)) + "\n" + devopsyCall(toProject, args, true) + "\n"
+// is its .devopsy/), as its compose project, with env exported (the sync's
+// addresses and arguments, for the child's import): --sync-exec across
+// servers.
+func SyncExecScript(toDir, toProject string, env map[string]string, args []string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	exports := ""
+	for _, k := range keys {
+		exports += "export " + k + "=" + Quote(env[k]) + "\n"
+	}
+	return "set -eu\ncd " + Quote(path.Dir(toDir)) + "\n" + exports + devopsyCall(toProject, args, true) + "\n"
 }
 
 // BuildRsyncImageArgs are docker's arguments to build RsyncImage from its
