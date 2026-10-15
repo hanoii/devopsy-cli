@@ -20,6 +20,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runRemote handles `devopsy @target ...`.
@@ -409,7 +410,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			first := strings.TrimSpace(out.String()) == "none"
 			if syncFlag || first {
 				if t.ParentErr != nil {
-					return fail(t.ParentErr.Error())
+					return failParent(t, color)
 				}
 				if job, err = syncPreflight(t, t.ParentTarget, projectName, nil); err != nil {
 					return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
@@ -529,6 +530,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 // needsServer reports whether name is a local project command that needs
 // only a server: its address resolves as a server's.
+// failParent reports a child whose parent could not be resolved
+// (ParentErr), with the way around it: a release without the parent's
+// data, then a sync from an address.
+func failParent(t *remote.Target, color bool) int {
+	ref := targetRef(t)
+	report.Fail(os.Stderr, color, t.ParentErr,
+		"or release without the parent's data and sync from an address: devopsy @"+ref+" --release-no-sync, then devopsy @"+ref+" --sync --from @"+t.Host+":"+t.Parent)
+	return 1
+}
+
 func needsServer(projectDir, name string) bool {
 	if projectDir == "" || !slices.Contains(cli.CustomCommands(projectDir), name) {
 		return false

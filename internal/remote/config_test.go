@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -452,7 +453,7 @@ environments:
 	}
 	// The parent's server is never the child's: without a variable it
 	// has none, which only a sync minds.
-	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "environment dev: parent prod: no server: set DEVOPSY_SERVER_PROD (or DEVOPSY_SERVER)" || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "environment dev: parent prod: no server" || len(report.Details(tg.ParentErr)) != 1 || !strings.Contains(report.Details(tg.ParentErr)[0], "set DEVOPSY_SERVER_PROD or DEVOPSY_SERVER") || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
 		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
 	}
 	t.Setenv("DEVOPSY_SERVER", "vm1")

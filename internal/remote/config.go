@@ -3,6 +3,7 @@ package remote
 import (
 	"errors"
 	"fmt"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1307,7 +1308,10 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	}
 	if strict && t.Host == "" {
 		if parent {
-			return nil, fmt.Errorf("no server: set %s (or %s)", EnvironmentVar(a.env), ServerVar)
+			// Never the child's server: a guess could sync the wrong data.
+			return nil, report.Errorf([]string{
+				"the parent's server never comes from the child's address: set " + EnvironmentVar(a.env) + " or " + ServerVar + ", in .devopsy/.env as the templates do",
+			}, "no server")
 		}
 		return nil, fmt.Errorf("no server for @%s: devopsy @<server>:%s, or %s (or %s)", addr, addr, ServerVar, EnvironmentVar(a.env))
 	}

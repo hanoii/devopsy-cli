@@ -25,6 +25,11 @@ repositories fit together and the open ideas.
 - `internal/complete/`: completion candidates, and the bash, zsh and fish
   scripts (embedded).
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
+- `internal/report/`: how devopsy reports a failure (`report.Fail`:
+  `devopsy: [error] <message>`, the tag red, details indented under it;
+  `report.Error` carries details through wrapping). New so far only for a
+  parent without a server; the other messages move over as they are
+  touched.
 - `install.sh` (POSIX `sh`, dash and busybox ash), `scripts/devopsy` (runs
   the checkout's code), `.goreleaser.yaml`, `.github/workflows/`.
 
@@ -47,7 +52,10 @@ repositories fit together and the open ideas.
   can contain arguments or scripts goes through `cli.Secrets` (values from
   `secrets:`). Scripts are for `-vv`: an SSH session's,
   and an argument of several lines in the "Running" notice (`Plan.running`),
-  which otherwise only counts its lines.
+  which otherwise only counts its lines. Failures with something to add
+  (why, what to do) go through `internal/report`: one line with the
+  `[error]` tag, details on their own lines, never packed into the
+  message.
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
   a word is a project command, else a compose command (`ComposeCommands`:
   compose's own completion, cached, refreshed when a word is missing), else
