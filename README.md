@@ -212,12 +212,25 @@ my-project/.devopsy/
 ```sh
 devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f ...override.yaml] up -d
 devopsy deploy         # .devopsy/commands/deploy
+devopsy --release      # a release in place: defaults:' prepare, images, run
 devopsy                # help: devopsy's own, the project's commands, the rest
 devopsy --env          # the variables devopsy loads and computes, secrets masked (--show)
 devopsy --shell [service] [-- command]   # a shell, or a command, in a container
 devopsy -- <args>      # docker compose <args>, even if a project command has that name
 devopsy -v deploy      # what devopsy found and runs (-vv: more)
 ```
+
+**`devopsy --release`** without a target is a release in place, in the
+local project, as a server runs one: the release steps under `defaults:`
+in `config.yaml` (an error without them), `prepare`, the variables check,
+the images (always as build mode: services with a `build:` are built with
+`--pull`, the others pulled, since a local image-mode project has no tag
+of its own in a registry), then `run`. No upload and no switch, so
+nothing to go back to: a failure stops there. No `before` or `after`
+steps: those are the operator's side of a deploy (pushing an image,
+announcing it). A step whose command only runs on a target
+(`## Run: target`) refuses before anything runs. So the project's
+`deploy` only starts what is there, on a server and locally alike.
 
 A word is a project command if `.devopsy/commands/` has it, else a compose
 command (devopsy asks compose which exist), else an error. Arguments starting
@@ -500,6 +513,16 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
   check finds them, and name them in `secrets:`.
+- **Images:** after the checks, devopsy gets the release's images, by
+  `mode:`, on the server and before it goes live: in build mode `docker
+  compose pull --ignore-buildable` (services without a `build:`) then
+  `docker compose build --pull` (the rest, base images refreshed); in
+  image mode `docker compose pull`, every service with an `image:`,
+  buildable ones included, so a tag missing from the registry fails the
+  release there. Only the services Compose starts by default: other
+  profiles get theirs when used. The run step's `up` then finds them all;
+  a `deploy` needs no `build` or `pull` of its own. A failure leaves
+  `current` as it was.
 - **The names check:** containers of the release's compose project from
   another environment's directory fail the release before it goes live.
   Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
@@ -512,8 +535,9 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
   another project, join its network as `external`.
 - **When `run` fails,** `current` goes back to the previous release, which is
-  restarted with its own run step (the rollback's, else the release's), so
-  its containers are the previous release's again. Data changes, like
+  restarted with its own run step (the rollback's, else the release's),
+  after getting its images again (in build mode the new release's took
+  their names), so its containers are the previous release's again. Data changes, like
   database updates, are the project's to undo.
 - **One SSH session:** the remote steps share it, under the release lock.
   Hence local before steps first and local after steps last. Remote before
@@ -549,10 +573,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Without steps, devopsy prints a starting point.
 
 - **build** mode (default) uploads the project as git sees it, uncommitted
-  changes included, and builds on the server.
+  changes included, and builds on the server, before the release goes
+  live.
 - **image** mode uploads `.devopsy/` only; images come from a registry. Tag
   them with the commit, `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`,
-  so rollbacks run their own image.
+  so rollbacks run their own image. devopsy pulls them before the release
+  goes live: build and push them first, like a local before step.
 
 A release says how much it uploads, shows the upload's progress on one
 line while it runs (on a terminal only: CI gets none), then its size and

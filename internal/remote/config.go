@@ -657,6 +657,9 @@ type Config struct {
 	Project *Project
 	// Environments by key, names and patterns, defaults applied.
 	Environments map[string]*Target
+	// Defaults is defaults:, merged over the files; nil without one. A
+	// local --release runs its release steps.
+	Defaults *Target
 	// Aliases are the user-level config's.
 	Aliases map[string]Alias
 	// Files are the files read.
@@ -717,6 +720,7 @@ func LoadConfig(projectDir string) (*Config, error) {
 			c.Environments[n] = t
 		}
 	}
+	c.Defaults = defaults
 	if defaults != nil {
 		for n, t := range c.Environments {
 			c.Environments[n] = mergeDefaults(defaults, t, t.nulls)

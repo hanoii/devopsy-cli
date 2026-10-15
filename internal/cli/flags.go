@@ -57,6 +57,7 @@ var Flags = []FlagGroup{
 		{Name: "--release", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
 		{Name: "--release-sync", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
 		{Name: "--release-no-sync", Args: "[--yes]", Scope: Target, Desc: "the same, never syncing"},
+		{Name: "--release", Scope: Local, Desc: "locally, in place: prepare, images, run\n(defaults: release steps)"},
 		{Name: "--rollback", Scope: Target, Desc: "back to the previous release"},
 		{Name: "--releases", Scope: Target, Desc: "the releases there"},
 		{Name: "--log", Args: "[<id>]", Scope: Target, Desc: "what the last release (or <id>) printed"},

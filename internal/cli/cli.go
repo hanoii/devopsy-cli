@@ -464,6 +464,7 @@ file; its server's instance and project .env come below it.
 	"--release": `Usage: devopsy @<target> --release [--from @<target>] [--yes]
        devopsy @<target> --release-sync [--from @<target>] [--yes]
        devopsy @<target> --release-no-sync
+       devopsy --release
 
 Uploads the project to the target as a new release, makes it current and
 runs the target's release steps from .devopsy/config.yaml (required), in
@@ -487,8 +488,12 @@ phases:
 After prepare, devopsy checks that every variable compose requires
 (${VAR:?message}) is set, with the env capability included; a missing one
 fails the release before it goes live, listing what to set (--vars set).
-When run fails, current goes back to the previous release, which is then
-restarted with its own run step (the rollback's, else the release's).
+Then devopsy gets the images, before the release goes live: in build mode
+it pulls the services without a build and builds the others (--pull), in
+image mode it pulls them all, so a tag missing from the registry fails
+there. The run step only starts them. When run fails, current goes back
+to the previous release, which gets its images again and is restarted
+with its own run step (the rollback's, else the release's).
 
 Each step is a devopsy command line, split on spaces. The remote steps
 share one SSH session, under the release lock: hence local before steps
@@ -527,6 +532,12 @@ child's first release included (devopsy @<target> --sync --help).
 --from @<target> copies from another environment of the project instead
 of the parent, as --sync --from does: for a parent whose server only the
 address names. Only on a release that syncs.
+
+Without a target, --release runs in place, in the local project: the
+release steps under defaults: in config.yaml, prepare, the variables
+check, the images (always as build mode: what has a build is built, the
+rest pulled), then run. No upload, no switch and nothing to go back to;
+no before or after steps, which are the operator's side of a deploy.
 `,
 	"--rollback": `Usage: devopsy @<target> --rollback
 

@@ -247,8 +247,14 @@ func TestUserTargets(t *testing.T) {
 	}
 
 	// devopsy's flags for servers, without a target, say so.
+	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--rollback")
+	if code == 0 || !strings.Contains(out, "--rollback needs a target: devopsy @<target> --rollback (targets: main, vm1-traefik)") {
+		t.Errorf("--rollback without a target (%d):\n%s", code, out)
+	}
+	// --release without one runs in place, from defaults:, which this
+	// project has none of.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--release")
-	if code == 0 || !strings.Contains(out, "--release needs a target: devopsy @<target> --release (targets: main, vm1-traefik)") {
+	if code == 0 || !strings.Contains(out, "[error] the project has no release steps under defaults:") || !strings.Contains(out, "devopsy @<target> --release") {
 		t.Errorf("--release without a target (%d):\n%s", code, out)
 	}
 
@@ -1145,4 +1151,42 @@ func run2(t *testing.T, run func(string, ...string) (string, int), args ...strin
 	t.Helper()
 	out, _ := run("", args...)
 	return out
+}
+
+// --release without a target runs defaults:' release steps in place:
+// prepare, the variables check, the images as build mode gets them, run.
+// A step that only runs on a target refuses before anything runs.
+func TestLocalRelease(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(tmp, ".devopsy")
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults:\n  mode: image\n  release: {before: [local: push], prepare: secrets, run: deploy}\nenvironments: {prod: {}}\n", 0o644)
+	write(t, filepath.Join(dir, "commands", "secrets"), "#!/bin/sh\n## Description: s\necho SECRETS in $PWD\n", 0o755)
+	write(t, filepath.Join(dir, "commands", "deploy"), "#!/bin/sh\n## Description: d\necho DEPLOY\n", 0o755)
+	write(t, filepath.Join(dir, "commands", "push"), "#!/bin/sh\n## Description: p\necho PUSH\n", 0o755)
+	out, code := runDevopsy(t, tmp, nil, "--release")
+	if code != 0 {
+		t.Fatalf("--release (%d):\n%s", code, out)
+	}
+	order := []string{"SECRETS in " + tmp, "[compose]", "[pull][--ignore-buildable]", "[build][--pull]", "DEPLOY"}
+	at := 0
+	for _, want := range order {
+		i := strings.Index(out[at:], want)
+		if i < 0 {
+			t.Fatalf("--release: %q missing or out of order:\n%s", want, out)
+		}
+		at += i + len(want)
+	}
+	if strings.Contains(out, "PUSH") {
+		t.Errorf("--release ran a before step:\n%s", out)
+	}
+
+	write(t, filepath.Join(dir, "commands", "deploy"), "#!/bin/sh\n## Description: d\n## Run: target\necho DEPLOY\n", 0o755)
+	out, code = runDevopsy(t, tmp, nil, "--release")
+	if code == 0 || strings.Contains(out, "SECRETS") || !strings.Contains(out, "a release step: deploy runs only on a target") {
+		t.Errorf("--release with a target-only step (%d):\n%s", code, out)
+	}
 }

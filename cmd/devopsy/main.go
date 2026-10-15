@@ -140,6 +140,8 @@ func run() int {
 		return runStatus(cwd, args[1:], color)
 	}
 	switch args[0] {
+	case "--release":
+		return runLocalRelease(cwd, args[1:], color)
 	case cli.ExportFlag:
 		return runExport(cwd, args[1:], color)
 	case cli.ImportFlag:

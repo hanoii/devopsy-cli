@@ -438,9 +438,10 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 // the .env levels linked into the new one (for a rollback, the release
 // before current); its role and imports (releases only); prepare steps;
 // devopsy --missing-vars, so a variable compose requires is never found
-// missing once live; the switch; the run step, going back to the previous
-// release when it fails and restarting that one; pruning; remote after
-// steps. Nothing before the switch changes what is live.
+// missing once live; its images, built or pulled (fetchImages); the
+// switch; the run step, going back to the previous release when it fails
+// and restarting that one, its images first; pruning; remote after steps.
+// Nothing before the switch changes what is live.
 //
 // With sync, a release syncs its parent's data once current, before
 // the run step (SyncOptions): it stops the release's services labeled to,
@@ -503,12 +504,22 @@ done
 		s += step("prepare", `"$rel"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$rel\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
+	fetch := fetchImages(projectName, t.Mode)
+	if fetch != "" {
+		s += fetch + "fetch_images \"$rel\" || not_live $?\n"
+	}
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
 	restart := ""
 	if len(p.Restart) > 0 {
-		restart = fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
+		// The new release's images replaced the previous one's tags (build
+		// mode names them after the compose project): get its own back.
+		if fetch != "" {
+			restart = `    fetch_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+`
+		}
+		restart += fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
     (cd "$base/current" && %s) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
 	}
@@ -565,6 +576,33 @@ done
 		s += step("after", `"$base/current"`, args, `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`)
 	}
 	return s
+}
+
+// fetchImages defines fetch_images <dir>, which gets a release's images
+// before it goes live, by mode: build pulls the services without a build
+// and builds the others, refreshing their base images; image pulls every
+// service with an image, buildable ones included, so a tag missing from
+// the registry fails there. Through `devopsy --`, past project commands
+// named pull or build, on a pseudo-terminal (with_tty) for BuildKit's live
+// progress. Empty for any other mode.
+func fetchImages(projectName, mode string) string {
+	var what, cmd string
+	switch mode {
+	case ModeBuild:
+		what = "pulling and building images (build mode)"
+		cmd = devopsyCall(projectName, []string{"--", "pull", "--ignore-buildable"}, false) +
+			" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
+	case ModeImage:
+		what = "pulling images (image mode)"
+		cmd = devopsyCall(projectName, []string{"--", "pull"}, false)
+	default:
+		return ""
+	}
+	return `fetch_images() {
+  echo "devopsy: ` + what + `" >&2
+  (cd "$1" && with_tty ` + Quote(cmd) + `)
+}
+`
 }
 
 // NotLive is not_live, for a new release that does not go live: marked
