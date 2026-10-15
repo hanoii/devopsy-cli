@@ -383,9 +383,13 @@ lock() {
 `
 }
 
-// UploadScript extracts a release from stdin.
+// UploadScript extracts a release from stdin. An id taken already (a
+// second release of the target within the same second) is refused: mv
+// would put the new tree inside the existing release and the old one
+// would run again.
 func UploadScript(t *Target, id string) string {
 	return prelude(t) + fmt.Sprintf(`rel="$base/releases/"%s
+[ ! -e "$rel" ] || { echo "devopsy: release $(basename "$rel") exists already on $base (another release in the same second?): try again" >&2; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use

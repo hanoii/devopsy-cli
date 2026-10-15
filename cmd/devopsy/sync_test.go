@@ -131,6 +131,7 @@ type syncSetup struct {
 	root, project    string
 	dot, sshLog, log string
 	env              []string
+	released         map[string]int64
 }
 
 func newSyncSetup(t *testing.T) *syncSetup {
@@ -164,12 +165,28 @@ func newSyncSetup(t *testing.T) *syncSetup {
 
 func (s *syncSetup) run(extra []string, args ...string) (string, int) {
 	s.t.Helper()
+	s.spaceReleases(args)
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = s.project
 	cmd.Env = append(append([]string{}, s.env...), extra...)
 	cmd.Stdin = strings.NewReader("")
 	out, _ := cmd.CombinedOutput()
 	return string(out), cmd.ProcessState.ExitCode()
+}
+
+// spaceReleases waits for a new second before a second release of the
+// same target: release ids are seconds, and a taken one is refused.
+func (s *syncSetup) spaceReleases(args []string) {
+	if len(args) < 2 || !strings.HasPrefix(args[1], "--release") {
+		return
+	}
+	if s.released == nil {
+		s.released = map[string]int64{}
+	}
+	for s.released[args[0]] == time.Now().Unix() {
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.released[args[0]] = time.Now().Unix()
 }
 
 // logs returns and empties the docker and ssh logs.
