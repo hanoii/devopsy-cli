@@ -63,7 +63,9 @@ repositories fit together and the open ideas.
   bare name that is no environment (exact or pattern) or alias, or any
   target leniently (no instance needed, a server is). A server named
   alone has no `Name`. Every other flag needs an environment, and
-  `@<server>:` with one says so.
+  `@<server>:` with one says so; a `-` word devopsy does not know fails
+  there as "not a devopsy flag" (`unknownFlag`, with the nearest flag),
+  since nothing of compose's can run on a server alone.
 - **`cli.Flags` is every flag of devopsy's,** by task group, each with its
   scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
   list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and

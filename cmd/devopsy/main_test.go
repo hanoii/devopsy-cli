@@ -186,6 +186,14 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--releases"); code == 0 || !strings.Contains(out, "--releases needs an environment: devopsy @vm1:<environment> --releases") {
 		t.Errorf("@vm1: --releases (%d):\n%s", code, out)
 	}
+	// A flag devopsy does not know is a typo, not a missing environment:
+	// nothing of compose's runs on a server alone.
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
+		t.Errorf("@vm1: --ssh-host (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--frobnicate"); code == 0 || !strings.Contains(out, "--frobnicate is not a devopsy flag\n") {
+		t.Errorf("@vm1: --frobnicate (%d):\n%s", code, out)
+	}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
 	if code != 0 || !strings.Contains(out, "<flag> --help") {
 		t.Errorf("@prod --help (%d):\n%s", code, out)
@@ -844,6 +852,9 @@ func TestInstancesEndToEnd(t *testing.T) {
 	}
 	if out, code := run(nil, "@devopsy@server", "--vars-instance"); code == 0 || !strings.Contains(out, "(for a server: --vars-instance needs an environment, devopsy @devopsy@server:<environment> --vars-instance)") {
 		t.Fatalf("@server --vars-instance (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
+		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `New instance: devopsy@server has no "b" instance of shop yet.`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
