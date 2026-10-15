@@ -186,13 +186,19 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--releases"); code == 0 || !strings.Contains(out, "--releases needs an environment: devopsy @vm1:<environment> --releases") {
 		t.Errorf("@vm1: --releases (%d):\n%s", code, out)
 	}
-	// A flag devopsy does not know is a typo, not a missing environment:
-	// nothing of compose's runs on a server alone.
-	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
-		t.Errorf("@vm1: --ssh-host (%d):\n%s", code, out)
+	// A lone flag devopsy does not know is a typo, whatever the address
+	// (compose's flags never stand alone); with anything after it, it is
+	// compose's.
+	for _, addr := range []string{"@vm1:", "@prod", "@vm1:prod"} {
+		if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, addr, "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
+			t.Errorf("%s --ssh-host (%d):\n%s", addr, code, out)
+		}
 	}
-	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--frobnicate"); code == 0 || !strings.Contains(out, "--frobnicate is not a devopsy flag\n") {
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@vm1:", "--frobnicate"); code == 0 || !strings.Contains(out, "--frobnicate is not a devopsy flag;") {
 		t.Errorf("@vm1: --frobnicate (%d):\n%s", code, out)
+	}
+	if out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") {
+		t.Errorf("local --ssh-host (%d):\n%s", code, out)
 	}
 	out, code := runDevopsy(t, filepath.Join(tmp, "app"), nil, "@prod", "--help")
 	if code != 0 || !strings.Contains(out, "<flag> --help") {

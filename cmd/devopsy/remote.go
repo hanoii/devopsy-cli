@@ -62,6 +62,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	// server: it only explains.
 	addr := strings.TrimPrefix(args[0], "@")
 	help := len(args) == 1 || args[1] == "--help" || args[1] == "-h" || (len(args) > 2 && (args[2] == "--help" || args[2] == "-h"))
+	// A lone flag devopsy does not know is a typo, whatever the address:
+	// compose's flags never stand alone. Before any connection.
+	if msg := cli.LoneUnknownFlag(args[1:]); msg != "" {
+		return fail(msg)
+	}
 	load := remote.LoadTarget
 	switch {
 	case len(args) > 1 && (slices.Contains(cli.ServerScope, args[1]) || needsServer(projectDir, args[1])):
@@ -70,12 +75,6 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case help:
 		load = remote.DescribeTarget
 	case len(args) > 1 && strings.HasSuffix(addr, ":"):
-		// Nothing runs on a server alone: a flag devopsy does not know
-		// cannot be compose's either, so it is a typo, not a missing
-		// environment.
-		if why := unknownFlag(args[1]); why != "" {
-			return fail(why)
-		}
 		return fail(fmt.Sprintf("%s needs an environment: devopsy @%s<environment> %s", args[1], addr, args[1]))
 	}
 	t, err := load(projectDir, addr, projectEnv)
@@ -83,9 +82,6 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Maybe a server named alone, for a command that needs an
 		// environment: the error stays, a typo in a name being as likely.
 		if st, serr := remote.ServerTarget(projectDir, addr, projectEnv); serr == nil && st.Name == "" {
-			if why := unknownFlag(args[1]); why != "" {
-				return fail(why)
-			}
 			err = fmt.Errorf("%w\n(for a server: %s needs an environment, devopsy @%s:<environment> %s)", err, args[1], st.Host, args[1])
 		}
 	}
@@ -533,68 +529,6 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 // needsServer reports whether name is a local project command that needs
 // only a server: its address resolves as a server's.
-// unknownFlag says why a word starting with - cannot run on a server
-// named alone: devopsy has no such flag, and compose's flags need an
-// environment to run in. Empty for a flag devopsy knows, or a word.
-func unknownFlag(word string) string {
-	if !strings.HasPrefix(word, "-") {
-		return ""
-	}
-	// The nearest flag: a couple of letters off, or two more when the
-	// two share a part (--ssh-host and --shell-host).
-	var nearest string
-	best := 5
-	for _, f := range cli.RemoteFlags() {
-		if f.Name == word {
-			return ""
-		}
-		d := editDistance(f.Name, word)
-		if d > 2 && !sharePart(f.Name, word) {
-			continue
-		}
-		if d < best {
-			best, nearest = d, f.Name
-		}
-	}
-	why := fmt.Sprintf("%s is not a devopsy flag", word)
-	if nearest != "" {
-		why += fmt.Sprintf(" (did you mean %s?)", nearest)
-	}
-	return why
-}
-
-// sharePart reports whether two flags have a hyphen-separated part in
-// common (--ssh-host and --shell-host: host).
-func sharePart(a, b string) bool {
-	for _, p := range strings.Split(strings.TrimLeft(a, "-"), "-") {
-		if p != "" && slices.Contains(strings.Split(strings.TrimLeft(b, "-"), "-"), p) {
-			return true
-		}
-	}
-	return false
-}
-
-// editDistance is the Levenshtein distance between two words.
-func editDistance(a, b string) int {
-	prev := make([]int, len(b)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(a); i++ {
-		cur := make([]int, len(b)+1)
-		cur[0] = i
-		for j := 1; j <= len(b); j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
-		}
-		prev = cur
-	}
-	return prev[len(b)]
-}
-
 func needsServer(projectDir, name string) bool {
 	if projectDir == "" || !slices.Contains(cli.CustomCommands(projectDir), name) {
 		return false

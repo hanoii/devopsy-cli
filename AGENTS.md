@@ -54,8 +54,12 @@ repositories fit together and the open ideas.
   an error. The bare help says so in a line and stays devopsy's own:
   compose's help is `devopsy -- --help` and `devopsy <command> --help`,
   compose's output with `docker compose` read as `devopsy`, captured, not
-  exec'd, no notice. Arguments starting with a flag go to compose unchecked; `--` is
-  the escape hatch. Flags that need a target say so without one.
+  exec'd, no notice. Arguments starting with a flag go to compose unchecked
+  (`--profile x up`), except a flag alone: compose's flags never stand
+  alone, so a lone flag devopsy does not know is an error with the nearest
+  flag as a hint (`cli.LoneUnknownFlag`, in `Build` and in `runRemote`
+  before any connection, whatever the address); `--` is the escape hatch.
+  Flags that need a target say so without one.
 - **Two scopes:** a flag in `cli.ServerScope` (`--shell-host`,
   `--ssh-keys`, `--ssh-config`, `--environments`, `--vars-project`,
   `--upgrade`) needs only
@@ -63,9 +67,7 @@ repositories fit together and the open ideas.
   bare name that is no environment (exact or pattern) or alias, or any
   target leniently (no instance needed, a server is). A server named
   alone has no `Name`. Every other flag needs an environment, and
-  `@<server>:` with one says so; a `-` word devopsy does not know fails
-  there as "not a devopsy flag" (`unknownFlag`, with the nearest flag),
-  since nothing of compose's can run on a server alone.
+  `@<server>:` with one says so.
 - **`cli.Flags` is every flag of devopsy's,** by task group, each with its
   scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the help's
   list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and

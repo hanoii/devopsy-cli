@@ -43,6 +43,12 @@ func TestUnknownWord(t *testing.T) {
 	if _, err := build(root, []string{"--profile", "x", "up"}, nil); err != nil {
 		t.Fatalf("compose flags first pass unchecked: %v", err)
 	}
+	if _, err := build(root, []string{"--profile"}, nil); err == nil || !strings.Contains(err.Error(), "--profile is not a devopsy flag") {
+		t.Fatalf("a lone unknown flag: %v", err)
+	}
+	if _, err := build(root, []string{"--"}, nil); err != nil {
+		t.Fatalf("-- alone passes: %v", err)
+	}
 	if _, err := build(root, []string{"help"}, nil); err != nil {
 		t.Fatalf("help: %v", err)
 	}
