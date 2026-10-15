@@ -712,6 +712,17 @@ go vet ./... && go test -count=1 ./...
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
 
+Before tagging, run the tests on Linux too: CI does, and macOS hides
+differences that matter there (dash as `sh`, which never execs the last
+command of `sh -c`; timing, like two releases in the same second). The
+caches keep reruns fast:
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
+  -v devopsy-gocache:/root/.cache -v devopsy-gomod:/go/pkg/mod \
+  golang:1.26-trixie go test -count=1 ./...
+```
+
 End to end: an OrbStack Debian 13 machine (`orb create debian:trixie
 devopsy-test`) set up with devopsy-server, a linux/arm64 build installed in
 it, and targets like `@devopsy@devopsy-test@orb:prod` (OrbStack's SSH needs
