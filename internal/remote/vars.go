@@ -142,20 +142,22 @@ const InheritFile = "inherit.env"
 // InheritWriteScript writes the KEY=value lines on stdin as the target's
 // InheritFile, under its release lock, and prints the names among the
 // keys given that the child's own shared/.env also sets: those win over
-// what was just written. With locked, the caller's holder session holds
-// that lock for the sync, and taking it here would wait for it forever.
-func InheritWriteScript(t *Target, keys []string, locked bool) string {
-	lock := `exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + "\n"
-	if locked {
-		lock = ""
+// what was just written. With pending, a re-sync's: into
+// SyncInheritPending instead, which the sync reads and moves into place
+// on go.
+func InheritWriteScript(t *Target, keys []string, pending bool) string {
+	file := `"$base/shared/` + InheritFile + `"`
+	if pending {
+		file = `"$base/` + SyncInheritPending + `"`
 	}
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain directory: nothing inherits into it" >&2
   exit 1
 fi
 mkdir -p "$base/shared"
-` + lock + `file="$base/shared/` + InheritFile + `"
+exec 9>"$base/.lock"
+` + lockWait(9, false, "the release running on $base") + `
+file=` + file + `
 cat > "$file.tmp"
 chmod 600 "$file.tmp"
 mv -f "$file.tmp" "$file"

@@ -433,11 +433,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if code := local("before", remote.Commands(steps.Before, false), commit); code != 0 {
 			return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Address))
 		}
-		// What a first release inherits, after the local before steps and
-		// before the upload, so the variables check finds it; a re-sync
-		// inherits once the copy is in (runSyncSession).
-		if job != nil && job.first {
-			if err := inheritVars(context.Background(), job, rlog, color, false); err != nil {
+		// What a sync inherits, after the local before steps and before
+		// the upload: a first release's into shared/inherit.env, so the
+		// variables check finds it; a later one's into the pending file
+		// the sync reads, moved into place once the copy is in.
+		if job != nil {
+			if err := inheritVars(context.Background(), job, rlog, color, !job.first); err != nil {
 				return stop("inherit: " + err.Error() + "\nNothing released.")
 			}
 		}
@@ -494,7 +495,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			say(cyan, fmt.Sprintf("Syncing @%s's data into it before its run step (--release-no-sync skips it)...", job.parent.Address))
-			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address})
+			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0})
 			if code := runSyncSession(job, script, rlog, color); code != 0 {
 				return save(record.ID, code)
 			}

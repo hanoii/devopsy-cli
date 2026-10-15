@@ -357,9 +357,9 @@ repositories fit together and the open ideas.
   a `stream` or unlabeled service the copy would change under; and
   (`streamMismatches`) when a parent `stream` service is not `stream` on
   the child, whose import would refuse it after the rsync, or a child
-  `stream` service is `rsync` on the parent; the message names `devopsy
-  @<child> --inherit` (`DEVOPSY_SYNC_TO_TARGET`), since a label from an
-  inherited variable reaches the child only after a re-sync's copy. The
+  `stream` service is `rsync` on the parent (a label from an inherited
+  variable cannot lag: the child reads the pending file, see inherit;
+  one in the child's own `shared/.env` can still differ). The
   list's second column is the label, `rsync`, `stream` or `skip`, with
   `+stop`; the third the container's state (`none` without one); a child
   devopsy that prints no state is not checked.
@@ -367,7 +367,8 @@ repositories fit together and the open ideas.
   service (`SyncStreamServices`: dependencies first, ties alphabetical,
   a cycle an error), the parent runs the capability's `export <service>`
   (`syncStream`) with stdout into the child's spool,
-  `$base/.devopsy-stream.<service>` (`remote.StreamSpool`): on the same
+  `$base/.devopsy-sync.stream.<service>` (`remote.StreamSpool`; every
+  file a sync leaves in `$base` starts with `.devopsy-sync.`): on the same
   server the file opened under `DEVOPSY_SYNC_TO_BASE`, across servers
   `cat >` in an SSH session to the child (`exportInto`: `ChildSSH`,
   `KeepAlive`, `ClearAllForwardings`), and only once the export exited 0
@@ -384,7 +385,7 @@ repositories fit together and the open ideas.
   group and removes the spool; on the same server it also gets SIGTERM. Never a pipe into the import: a cut
   export never reaches it, which every old `push` had to check itself.
   A failed export's spool goes at once on the same server, by the
-  child's `finish abort` (`$base/.devopsy-stream.*`) across servers.
+  child's `finish abort` (`$base/.devopsy-sync.stream.*`) across servers.
 - **Who stops what:** the child's `stop=true` services by the holder,
   for the whole sync (`--sync-services prepare`: the import check, the
   `prepare child` hook, then one `compose stop`, so Compose orders them
@@ -485,18 +486,30 @@ repositories fit together and the open ideas.
   them all as the child's `shared/inherit.env` (`InheritWriteScript`,
   values on stdin, under the child's lock, the whole file: a resync
   replaces it), which `shared/*` linking puts in every release and the
-  loader reads below `.env`. On a re-sync the holder holds that lock,
-  so the write takes none (`locked`: taking it waited for the holder,
-  which waited for the answer), and both sessions run under the sync's
-  context, so an interrupt during them aborts instead of waiting. The script prints the keys the child's own
+  loader reads below `.env`. The script prints the keys the child's own
   `shared/.env` also sets, for the notice. `--inherit` (`runInherit`)
-  runs it alone, both sides released. On a
-  first release (`syncJob.first`) after local before steps and before
-  the upload, so `--missing-vars` sees them, and kept on failure (the
-  next release is first again); on a re-sync (`--sync`, `--release
-  --sync` of a released child) in `runSyncSession` after the push
-  succeeded and before `go`, so a failed copy writes nothing; an inherit
-  failure there aborts. Notices name keys, never values.
+  runs it alone, both sides released. A sync inherits before its holder
+  starts (`runSync`; for releases after local before steps and before
+  the upload): a first release (`syncJob.first`) into
+  `shared/inherit.env`, so `--missing-vars` sees them, kept on failure
+  (the next release is first again); a re-sync (`--sync`,
+  `--release-sync` of a released child) into the pending
+  `$base/.devopsy-sync.inherit.env` (`remote.SyncInheritPending`,
+  `InheritWriteScript`'s `pending`). The holder exports
+  `DEVOPSY_INTERNAL_INHERIT_FILE` (`remote.InheritPendingEnv`) naming it
+  for everything it runs, and `--sync-exec` sets it for the child's
+  devopsy from `DEVOPSY_SYNC_TO_BASE` (`childInheritEnv`; never for the
+  parent's own reads); the loader reads that file in place of the
+  release's `inherit.env`, same precedence, when it exists. So the
+  child's labels follow an inherited variable in the same sync, where
+  writing after the copy made them lag one sync. `sync_finish go` moves
+  it over `shared/inherit.env` (`mv -Tf`, linked into the release if the
+  link was missing) before restoring services, `finish child go` and the
+  run step; `sync_finish abort` removes it, so a failed copy writes
+  nothing. A holder told the operator wrote none
+  (`SyncOptions.Inherit` false: no `inherit:` on the parent, a first
+  release) removes a stale one, left by a holder that died, before
+  reading anything. Notices name keys, never values.
 
 ### --export and --import
 
@@ -521,8 +534,8 @@ repositories fit together and the open ideas.
   the other services' and excluded entries (`wholeMntNotice`).
 - stdout is the data, so `--export` refuses a terminal and says
   everything on stderr; `--import` refuses a terminal as stdin and spools
-  it whole first (`importSpool`: in a release `$base/.devopsy-stream.<service>`,
-  the sync's file; locally a temporary `.devopsy/.devopsy-stream.*`,
+  it whole first (`importSpool`: in a release `$base/.devopsy-sync.stream.<service>`,
+  the sync's file; locally a temporary `.devopsy/.devopsy-sync.stream.*`,
   which `excluded` keeps out of releases), refuses an empty one, and only
   then stops anything. The spool always goes.
 - On a target the server runs the same code: `ExportScript` (shared
@@ -607,7 +620,8 @@ repositories fit together and the open ideas.
   `DEVOPSY_INTERNAL_ENV_COMPUTE` keeps a devopsy it calls from running it
   again.
 - **`DEVOPSY_INTERNAL_*`** are devopsy talking to devopsy (`COLOR`, `TTY`,
-  `ENV_COMPUTE`, `SYNC_WATCH`, `COMMAND_TARGET`, `IMPORT_END`): never documented as settings, free to
+  `ENV_COMPUTE`, `SYNC_WATCH`, `COMMAND_TARGET`, `IMPORT_END`,
+  `INHERIT_FILE`): never documented as settings, free to
   change in any release. Settings people set and the contract projects
   read keep plain `DEVOPSY_*` names.
 - **`--probe`** is a tool with plain arguments, not a contract: it knows no

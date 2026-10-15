@@ -384,7 +384,9 @@ The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), else the child's server. Before
 copying, the variables the parent's inherit: names are copied from its
 server's .env files into the child's, at the same level (shared/.env, the
-instance's or the project's .env); names are printed, never values.
+instance's or the project's .env); names are printed, never values. On a
+re-sync they go to a pending file the sync reads (labels from them follow
+the parent's at once) and replace shared/inherit.env once the copy is in.
 
 The sync capability (capabilities/sync): prepare and finish on both
 sides, export on the parent's and import on the child's for the stream
@@ -864,8 +866,17 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	// On servers, a child's inherited variables (shared/inherit.env, below
 	// its own .env), then the instance's and the project's .env, shared by
 	// their environments: links releases get, nearest first.
-	for _, shared := range []string{"inherit.env", "instance.env", "project.env"} {
-		if err := load(filepath.Join(projectDir, shared)); err != nil {
+	for _, shared := range []string{remote.InheritFile, "instance.env", "project.env"} {
+		file := filepath.Join(projectDir, shared)
+		// During a re-sync on the child, its pending inherited variables
+		// stand in for inherit.env (the labels the sync reads come from
+		// them), when the sync wrote any.
+		if p, _ := env.Lookup(remote.InheritPendingEnv); shared == remote.InheritFile && p != "" {
+			if _, err := os.Stat(p); err == nil {
+				file = p
+			}
+		}
+		if err := load(file); err != nil {
 			return nil, err
 		}
 	}
