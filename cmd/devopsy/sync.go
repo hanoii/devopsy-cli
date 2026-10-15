@@ -26,6 +26,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // A sync, operator side: devopsy @<child> --sync, and the first release
@@ -483,7 +484,8 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		return fail(fmt.Sprintf("@%s is not a child: no parent: in its config", t.Address))
 	}
 	if t.ParentErr != nil {
-		return fail(t.ParentErr.Error())
+		report.Fail(os.Stderr, color, t.ParentErr)
+		return 1
 	}
 	p := t.ParentTarget
 	if len(p.Inherit) == 0 {
@@ -540,7 +542,8 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		return fail(t.ParentErr.Error())
+		report.Fail(os.Stderr, color, t.ParentErr, "or sync from an address: devopsy @"+targetRef(t)+" --sync --from @"+t.Host+":"+t.Parent)
+		return 1
 	}
 	if from != "" {
 		var err error
