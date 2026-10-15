@@ -112,10 +112,42 @@ func Files(projectRoot, mode string) ([]string, error) {
 	return out, nil
 }
 
+// Size is the bytes of files' (from Files) regular files: what Pack reports
+// to its progress function in all.
+func Size(projectRoot string, files []string) (int64, error) {
+	var n int64
+	for _, rel := range files {
+		fi, err := os.Lstat(filepath.Join(projectRoot, rel))
+		if err != nil {
+			return 0, err
+		}
+		if fi.Mode().IsRegular() {
+			n += fi.Size()
+		}
+	}
+	return n, nil
+}
+
+// progressReader calls progress with every read's byte count.
+type progressReader struct {
+	r        io.Reader
+	progress func(int64)
+}
+
+func (p progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.progress(int64(n))
+	}
+	return n, err
+}
+
 // Pack writes files (from Files) as a gzipped tar to w, keeping modes and
 // symlinks.
 // extra are generated files, path: content, added after the project's.
-func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]byte) error {
+// progress, when set, gets the bytes of the project's files as they are
+// read: through a pipe, what the reader at its end has taken, up to Size.
+func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]byte, progress func(int64)) error {
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	for _, rel := range files {
@@ -144,7 +176,11 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(tw, f)
+			var r io.Reader = f
+			if progress != nil {
+				r = progressReader{f, progress}
+			}
+			_, err = io.Copy(tw, r)
 			f.Close()
 			if err != nil {
 				return err
