@@ -97,8 +97,12 @@ func TestPack(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), ".devopsy/" + TargetEnvFile: []byte("A='1'\n")}
-	if err := Pack(&buf, root, files, extra); err != nil {
+	var read int64
+	if err := Pack(&buf, root, files, extra, func(n int64) { read += n }); err != nil {
 		t.Fatal(err)
+	}
+	if size, err := Size(root, files); err != nil || size == 0 || read != size {
+		t.Fatalf("progress counted %d bytes, Size %d (%v)", read, size, err)
 	}
 	gz, err := gzip.NewReader(&buf)
 	if err != nil {

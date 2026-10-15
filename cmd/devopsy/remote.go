@@ -442,21 +442,41 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				src += " with uncommitted changes"
 			}
 		}
-		say(cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s...",
-			record.ID, t.Address, t.Host, t.Path, len(files), src))
+		size, err := remote.Size(projectRoot, files)
+		if err != nil {
+			return stop(err.Error())
+		}
+		say(cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s, %s...",
+			record.ID, t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
 			say(yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
 				record.Commit[:min(10, len(record.Commit))]))
 		}
 
+		// The upload's progress, on a terminal only; the log gets its
+		// summary.
+		var progressOut io.Writer
+		if term.IsTerminal(int(os.Stderr.Fd())) {
+			progressOut = os.Stderr
+		}
+		progressColor := ""
+		if color {
+			progressColor = cyan
+		}
+		progress := newUploadProgress(progressOut, progressColor, size)
 		pr, pw := io.Pipe()
 		go func() {
 			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
 				remote.RecordFile:                  record.JSON(),
 				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
-			}))
+			}, progress.add))
 		}()
-		if code, err := remote.SSHLog(t, remote.UploadScript(t, record.ID), pr, nil, false, rlog); err != nil || code != 0 {
+		code, err := remote.SSHLog(t, remote.UploadScript(t, record.ID), pr, nil, false, rlog)
+		progress.clear()
+		if err == nil && code == 0 {
+			say(cyan, progress.done())
+		}
+		if err != nil || code != 0 {
 			if err != nil {
 				return stop(err.Error())
 			}

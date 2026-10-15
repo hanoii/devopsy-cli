@@ -241,7 +241,12 @@ repositories fit together and the open ideas.
   `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
 - `mode:` defaults to `build`: it works for every project, where a wrong
   `image` fails the release.
-- Releases are full tar streams (no rsync: macOS ships openrsync). Server
+- Releases are full tar streams (no rsync: macOS ships openrsync). The
+  upload's progress (`uploadProgress`) counts the project's bytes as
+  `Pack` reads them, out of `remote.Size`: through the pipe, what ssh
+  has taken, not the gzip's size, which is unknown until the end. One
+  line redrawn on stderr when it is a terminal, never logged; the log
+  and CI get the summary line. Server
   needs: `devopsy`, `tar`, `flock` and `script` (util-linux; without the last, no live build progress on syncing releases); locally only `ssh`.
 - `--vars`, `--vars-instance` and `--vars-project` (one file each, so
   flags, not options of `--vars`) send values over SSH's stdin, never as

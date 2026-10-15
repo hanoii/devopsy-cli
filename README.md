@@ -544,6 +544,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   them with the commit, `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`,
   so rollbacks run their own image.
 
+A release says how much it uploads, shows the upload's progress on one
+line while it runs (on a terminal only: CI gets none), then its size and
+time, which the release log keeps.
+
 On the server, an environment holds `releases/`, `current` and `shared/`.
 Everything in `shared/` is linked into each release's `.devopsy/`: `.env`
 for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
