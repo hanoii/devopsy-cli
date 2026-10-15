@@ -565,7 +565,7 @@ func TestSyncCapability(t *testing.T) {
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
-	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")
+	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")
 	inOrder := func(name, out string, code int, want ...string) {
 		t.Helper()
 		rest := out
@@ -860,8 +860,9 @@ func TestSyncInherit(t *testing.T) {
 		t.Errorf("--inherit on prod (%d):\n%s", code, out)
 	}
 
-	// Across servers a re-sync inherits once the copy is in, before the
-	// child's run step: a failed copy leaves the child's file as it was.
+	// Across servers a re-sync inherits before the holder, into the
+	// pending file the sync reads, moved into place once the copy is in:
+	// a failed copy leaves the child's file as it was.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s3\n", 0o600)
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	s.logs()
@@ -869,21 +870,27 @@ func TestSyncInherit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--sync (%d):\n%s", code, out)
 	}
-	if i, j, k := strings.Index(out, "Copying "), strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "deploy in shop-a-dev"); i < 0 || j < i || k < j {
-		t.Errorf("inherited before the copy or after the run step:\n%s", out)
+	if i, j := strings.Index(out, "Inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod for @devopsy@two:a/dev's sync (its shared/inherit.env once the copy is in)."), strings.Index(out, "syncing into"); i < 0 || j < i {
+		t.Errorf("not inherited before the holder:\n%s", out)
 	}
-	// The holder holds the child's lock while the write happens: the
-	// write takes none (it waited for the holder, which waited for it).
-	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 1 {
-		t.Errorf("the child's lock taken more than once during a re-sync:\n%s", docker)
+	// The write takes the child's lock before the holder does.
+	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 2 {
+		t.Errorf("the child's lock during a re-sync:\n%s", docker)
+	}
+	pending := filepath.Join(shop, "a", "dev", ".devopsy-sync.inherit.env")
+	if _, err := os.Stat(pending); err == nil {
+		t.Errorf("the pending file stays after a sync")
 	}
 	if got := readString(childInherit); got != "SHARED_KEY='s3'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
 		t.Errorf("child's inherit.env: %q", got)
 	}
 	write(t, filepath.Join(shop, "a", "prod", "shared", "mnt", "storage", "f"), "x\n", 0o644)
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s4\n", 0o600)
-	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--sync", "--yes"); code == 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s3'") {
+	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--sync", "--yes"); code == 0 || !strings.Contains(readString(childInherit), "SHARED_KEY='s3'") {
 		t.Errorf("failed re-sync (%d): %q\n%s", code, readString(childInherit), out)
+	}
+	if _, err := os.Stat(pending); err == nil {
+		t.Errorf("the pending file stays after a failed sync: its abort removes it")
 	}
 }
 
@@ -942,7 +949,7 @@ func TestSyncInterrupt(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")); err == nil {
 		t.Errorf("the spool of an interrupted export stays")
 	}
 }
@@ -1029,7 +1036,7 @@ func TestSyncLabels(t *testing.T) {
 	if _, err := os.Stat(record); err == nil {
 		t.Errorf("the record stays after finish")
 	}
-	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")
+	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")
 	write(t, spool, "partial\n", 0o600)
 	if out, docker := finish("go"); !strings.Contains(docker, "start db") {
 		t.Errorf("finish without a record:\n%s\n%s", out, docker)
@@ -1103,7 +1110,7 @@ func TestSyncMismatch(t *testing.T) {
 	// anything, either way round, with the way out: an inherited label
 	// needs --inherit before the sync, which only writes it after the copy.
 	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "export"), "#!/bin/sh\necho dump\n", 0o755)
-	inherit := "run 'devopsy @devopsy@one:dev --inherit' first, then --sync again; otherwise change the child's own label"
+	inherit := "Label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)."
 	for _, c := range []struct{ prod, dev, want string }{
 		{"FAKE_DB=stream", "FAKE_DB=rsync+stop", "the parent streams db (devopsy.sync=stream) and the child labels it devopsy.sync=rsync: its import would refuse it."},
 		{"FAKE_DB=rsync+stop", "FAKE_DB=stream+stop", "the child streams db (devopsy.sync=stream) and the parent rsyncs it (devopsy.sync=rsync): its import would never run."},
@@ -1365,7 +1372,7 @@ func TestExportImport(t *testing.T) {
 	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
 	env := []string{"FAKE_IMPORTED=" + imported}
 	spools := func(dir string) []string {
-		m, _ := filepath.Glob(filepath.Join(dir, ".devopsy-stream.*"))
+		m, _ := filepath.Glob(filepath.Join(dir, ".devopsy-sync.stream.*"))
 		return m
 	}
 
@@ -1659,7 +1666,7 @@ func TestSyncImportCancelled(t *testing.T) {
 	_ = cmd.Wait()
 	waitFile(t, stopped, "the import's end", out)
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-stream.db")); err != nil {
+		if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")); err != nil {
 			break
 		}
 		if time.Since(start) > 10*time.Second {
@@ -1701,5 +1708,71 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")); err == nil {
 		t.Errorf("the record stays")
+	}
+}
+
+// A label from an inherited variable follows the parent's in the same
+// sync: the re-sync writes the parent's variables into the child's
+// pending file before its holder reads the labels, and moves it into
+// shared/inherit.env on go. A failed copy leaves the child's file; a
+// stale pending file, from a sync that wrote none this time, goes.
+func TestSyncInheritedLabel(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [FAKE_DB]}\n  dev: {parent: prod}\n  solo: {}\n", 0o644)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1: $(cat)\"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	childInherit := filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")
+	pending := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.inherit.env")
+
+	// The parent flips its database to stream: one --sync, no --inherit.
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "FAKE_DB=stream\n", 0o600)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || !strings.Contains(out, "import db: dump") || readString(childInherit) != "FAKE_DB='stream'\n" {
+		t.Fatalf("flipped label (%d): %q\n%s", code, readString(childInherit), out)
+	}
+	if _, err := os.Stat(pending); err == nil {
+		t.Errorf("the pending file stays")
+	}
+
+	// Back to rsync, and the copy fails: the child keeps stream.
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "FAKE_DB=rsync+stop\n", 0o600)
+	if out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes"); code == 0 || readString(childInherit) != "FAKE_DB='stream'\n" {
+		t.Errorf("failed copy (%d): %q\n%s", code, readString(childInherit), out)
+	}
+
+	// From solo, which inherits nothing: a stale pending file goes before
+	// the child reads its labels (it would make db a stream here).
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "FAKE_DB=rsync+stop\n", 0o600)
+	write(t, pending, "FAKE_DB='garbage'\n", 0o600)
+	if out, code := s.run(nil, "@dev", "--sync", "--from", "solo", "--yes"); code != 0 || strings.Contains(out, "garbage") {
+		t.Errorf("stale pending (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(pending); err == nil {
+		t.Errorf("the stale pending file stays")
+	}
+
+	// --sync-exec gives the child's devopsy the pending file, on both
+	// topologies, from the child's directory the push knows.
+	show := filepath.Join(s.dot, "commands", "inheritfile")
+	write(t, show, "#!/bin/sh\necho \"file=$DEVOPSY_INTERNAL_INHERIT_FILE\"\n", 0o755)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev with the command (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "dev")
+	push := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(base, "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev", "DEVOPSY_SYNC_TO_BASE=" + base}
+	across := append([]string{"DEVOPSY_SYNC_TO=devopsy@two", "DEVOPSY_SYNC_SSH_PORT=22", "SSH_AUTH_SOCK=/tmp/agent.sock"}, push...)
+	for name, env := range map[string][]string{"same server": push, "across servers": across} {
+		if out, code := s.run(env, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+pending+"\n") {
+			t.Errorf("--sync-exec, %s (%d):\n%s", name, code, out)
+		}
 	}
 }

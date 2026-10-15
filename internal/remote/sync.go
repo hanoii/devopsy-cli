@@ -61,13 +61,31 @@ var RsyncDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
 // import once complete. Locally, --import's temporary file under
-// .devopsy/ starts with it too.
-const StreamSpoolPrefix = ".devopsy-stream."
+// .devopsy/ starts with it too. Every file a sync leaves in $base starts
+// with .devopsy-sync.
+const StreamSpoolPrefix = ".devopsy-sync.stream."
 
 // StreamSpool is service's spool file in the environment directory base.
 func StreamSpool(base, service string) string {
 	return path.Join(base, StreamSpoolPrefix+service)
 }
+
+// SyncInheritPending is a re-sync's inherited variables, in the child's
+// environment directory ($base): written before the holder prepares, read
+// in place of shared/inherit.env by everything the sync runs on the child
+// (InheritPendingEnv), moved over it on go and removed on abort, so a
+// failed copy leaves the child's variables as they were.
+const SyncInheritPending = ".devopsy-sync.inherit.env"
+
+// SyncInheritPath is SyncInheritPending in the environment directory base.
+func SyncInheritPath(base string) string {
+	return path.Join(base, SyncInheritPending)
+}
+
+// InheritPendingEnv names the file devopsy reads in place of the
+// release's inherit.env while a sync runs on the child (SyncInheritPath),
+// when it exists: devopsy talking to devopsy.
+const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
 // --sync-push's own, set for it by the push session; the sync capability
@@ -115,11 +133,21 @@ type SyncOptions struct {
 	From string
 	// Args go to rsync (DEVOPSY_SYNC_ARGS).
 	Args []string
+	// Inherit: the operator wrote this sync's inherited variables into
+	// SyncInheritPending. Without, one left by a holder that died is
+	// stale and goes.
+	Inherit bool
 }
 
-// exports sets the child side's sync variables; t is the child.
+// exports sets the child side's sync variables, the pending inherited
+// variables' file among them (removed when stale); t is the child.
 func (o *SyncOptions) exports(t *Target) string {
-	return fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
+	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
+	s += "export " + InheritPendingEnv + "=\"$base\"/" + SyncInheritPending + "\n"
+	if !o.Inherit {
+		s += "rm -f \"$" + InheritPendingEnv + "\"\n"
+	}
+	return s
 }
 
 // syncStdin keeps devopsy's go or abort on fd 3 and gives every command
@@ -128,11 +156,25 @@ func (o *SyncOptions) exports(t *Target) string {
 const syncStdin = "exec 3<&0 </dev/null\n"
 
 // syncFinish defines sync_finish go|abort, in the child's current
-// release: --sync-services finish go|abort, which starts what was
-// stopped and waits for it to be healthy, removes the stream spools on
-// abort, then runs the sync capability's finish child go|abort.
+// release: on go, the pending inherited variables move into
+// shared/inherit.env (linked into the release if it was not yet), so
+// what follows reads them there; on abort they go. Then --sync-services
+// finish go|abort, which starts what was stopped and waits for it to be
+// healthy, removes the stream spools on abort, then runs the sync
+// capability's finish child go|abort.
 func syncFinish(projectName string) string {
+	pending := `"$` + InheritPendingEnv + `"`
+	shared := `"$base/shared/` + InheritFile + `"`
+	link := `"$base/current/.devopsy/` + InheritFile + `"`
 	return `sync_finish() {
+  if [ "$1" = go ]; then
+    if [ -f ` + pending + ` ]; then
+      mv -Tf ` + pending + ` ` + shared + ` || return 1
+      [ -e ` + link + ` ] || [ -L ` + link + ` ] || ln -s ` + shared + ` ` + link + `
+    fi
+  else
+    rm -f ` + pending + `
+  fi
   ` + devopsyCall(projectName, []string{"--sync-services", "finish"}, false) + ` "$1"
 }
 `
@@ -181,9 +223,9 @@ func syncWait(failed string) string {
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for
-// go or abort, finishes and runs run (the release's run step). fromTarget is
-// the parent's address.
-func HolderScript(t *Target, projectName, fromTarget string, args, run []string) string {
+// go or abort, finishes and runs run (the release's run step). o says
+// where from (From, the parent's address).
+func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) string {
 	s := "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: nothing to sync into" >&2
   exit 1
@@ -193,7 +235,7 @@ fi
 ` + lockWait(9, false, "the release running on $base") + `
 id=$(readlink "$base/current"); id=${id#releases/}
 echo "devopsy: syncing into $id" >&2
-` + (&SyncOptions{From: fromTarget, Args: args}).exports(t) + `cd "$base/current"
+` + o.exports(t) + `cd "$base/current"
 status=0
 ` + syncFinish(projectName) + syncPrepare(projectName) + `[ "$status" = 0 ] || exit "$status"
 ` + syncWait("restoring what was stopped") + `if [ "$reply" != go ]; then

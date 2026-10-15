@@ -599,7 +599,7 @@ with a label, `devopsy.sync`, which says how their data moves:
   24) are a notice, not a failure: the rest is copied.
 - `devopsy.sync=stream`: the parent's sync capability `export <service>`
   writes the service's data to stdout (a database dump), devopsy spools
-  it into a file in the child's directory (`.devopsy-stream.<service>`),
+  it into a file in the child's directory (`.devopsy-sync.stream.<service>`),
   and only once the export exited 0 does the child's `import <service>`
   read it from stdin (a load into the child's database), the child's
   service brought up first; the file goes afterwards. A cut export never
@@ -610,10 +610,10 @@ with a label, `devopsy.sync`, which says how their data moves:
   looks like a short one and its import gets what came: when the export
   can fail, go through a file and check its exit code first. Both sides
   must label the service `stream`, or the parent refuses before anything
-  stops; when the label comes from an inherited variable
-  (`devopsy.sync=${SYNC_DATABASE:-rsync}`, `inherit: [SYNC_DATABASE]`),
-  change it on the parent, `devopsy @<child> --inherit`, then `--sync`:
-  a re-sync only writes inherited variables after its copy.
+  stops. A label from an inherited variable
+  (`devopsy.sync=${SYNC_DATABASE:-rsync}`, `inherit: [SYNC_DATABASE]`)
+  follows the parent's in the same sync: change it on the parent, then
+  `--sync`.
 - no label: the service is neither copied nor touched. Any other value
   is an error.
 
@@ -661,8 +661,8 @@ refuses when one that mounts a copied entry is still running there,
 labeled `stream` or not at all (`devopsy.sync.stop=true` has already
 stopped it; `rsync` on the child says a running copy is wanted). The
 child restores its services, nothing was copied. A service streamed on
-one side and not the other is refused the same way, with the
-`--inherit` to run when the label comes from an inherited variable.
+one side and not the other is refused the same way (a label the child
+sets in its own `shared/.env` can still differ).
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its `stop=true` services stopped; then
@@ -746,9 +746,15 @@ says so when one shadows an inherited key: `--vars unset` it to inherit),
 and no other environment on the child's server is touched. On a first
 release this happens before the upload, so the variables check finds
 them (they stay if the sync fails: the next release is a first one
-again); on `--sync` and a later `--release-sync`, once the copy is in
-and before the child's run step, so a failed copy leaves the child as it
-was; `devopsy @<child> --inherit` does it alone, no data, no run step.
+again). On `--sync` and a later `--release-sync` it happens before the
+copy too, into a pending file (`<environment>/.devopsy-sync.inherit.env`)
+that everything the sync runs on the child reads in place of
+`shared/inherit.env`, labels included, so a label from an inherited
+variable follows the parent's in the same sync; once the copy is in it
+moves into place, before the child's services restart and its run step,
+and a failed copy removes it, leaving the child's variables as they
+were. `devopsy @<child> --inherit` refreshes the variables alone, no
+data, no run step.
 Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
 
@@ -788,7 +794,7 @@ devopsy @prod --export database > database.sql     # a backup
 devopsy @staging --import database < database.sql   # asks for staging's name (--yes in CI)
 ```
 
-`--import` spools stdin to a file first (`.devopsy-stream.<service>`,
+`--import` spools stdin to a file first (`.devopsy-sync.stream.<service>`,
 under `.devopsy/` locally, which releases never upload; next to the
 environment on a server) and changes nothing until it is all there; a
 truncated tar (`tar -t` fails, or the end-of-archive blocks are missing),

@@ -47,8 +47,9 @@ type syncJob struct {
 	// first: the child's first release, with no data of its own yet. Its
 	// inherited variables are written before the upload, so the variables
 	// check sees them, and stay if the sync fails: the next release is a
-	// first one again. A re-sync inherits after the copy succeeded, so a
-	// failed one leaves the child's own values with its own data.
+	// first one again. A re-sync inherits before the holder too, into a
+	// pending file the sync reads and moves into place on go, so a failed
+	// one leaves the child's own values with its own data.
 	first bool
 }
 
@@ -283,25 +284,6 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		} else if code != 0 {
 			answer = "abort\n"
 			say(red, fmt.Sprintf("devopsy: the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
-		} else if !job.first {
-			// The copy is in: now the parent's variables, which the run
-			// step uses. A failure here aborts, and nothing was written.
-			// The holder holds the child's lock: the write takes none.
-			inherited := make(chan error, 1)
-			go func() { inherited <- inheritVars(ctx, job, rlog, color, true) }()
-			select {
-			case err := <-inherited:
-				if err != nil {
-					answer = "abort\n"
-					say(red, "devopsy: inherit: "+err.Error()+": aborting the sync")
-				}
-			case <-sigs:
-				interrupted = true
-				answer = "abort\n"
-				say(red, "devopsy: interrupted: aborting the sync")
-				cancel()
-				<-inherited
-			}
 		}
 		_, _ = w.WriteString(answer)
 		w.Close()
@@ -388,10 +370,14 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 // inheritVars writes the variables the parent's inherit: names, read from
 // its server's files (its shared/.env, then its instance's and project's
 // .env, nearest first), as the child's shared/inherit.env: the whole file,
-// so a resync replaces it. The child's own shared/.env wins over it, and
-// a key set there too is named. A key the parent does not set is reported,
-// never written. Values travel over SSH's stdin, and only names are printed.
-func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, locked bool) error {
+// so a resync replaces it. With pending (a re-sync), into the child's
+// remote.SyncInheritPending instead, before the holder prepares: the sync
+// reads its labels and everything else from it, and moves it into place
+// on go, so a failed copy changes nothing. The child's own shared/.env
+// wins over it, and a key set there too is named. A key the parent does
+// not set is reported, never written. Values travel over SSH's stdin, and
+// only names are printed.
+func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, pending bool) error {
 	c, p := job.child, job.parent
 	if len(p.Inherit) == 0 {
 		return nil
@@ -455,14 +441,17 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		}
 	}
 	var res bytes.Buffer
-	code, err = remote.SSHContext(ctx, c, nil, remote.InheritWriteScript(c, keys, locked), strings.NewReader(lines.String()), &res, false, nil)
+	code, err = remote.SSHContext(ctx, c, nil, remote.InheritWriteScript(c, keys, pending), strings.NewReader(lines.String()), &res, false, nil)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
 		return fmt.Errorf("could not write @%s's inherited variables (%d)", c.Address, code)
 	}
-	if len(keys) > 0 {
+	switch {
+	case len(keys) > 0 && pending:
+		say(cyan, fmt.Sprintf("Inherited %s from @%s for @%s's sync (its shared/%s once the copy is in).", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
+	case len(keys) > 0:
 		say(cyan, fmt.Sprintf("Inherited %s from @%s into @%s's shared/%s.", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
@@ -568,7 +557,13 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	msg := fmt.Sprintf("Syncing @%s into @%s (%s:%s)...", p.Address, t.Address, t.Host, t.Path)
 	cli.Fprint(os.Stderr, cyan, msg, color)
 	rlog.Line(msg)
-	code := runSyncSession(job, remote.HolderScript(t, projectName, p.Address, rsyncArgs, run), rlog, color)
+	// The parent's variables first, into the child's pending file: the
+	// holder reads its labels from them; on go they move into place.
+	if err := inheritVars(context.Background(), job, rlog, color, true); err != nil {
+		return fail("inherit: " + err.Error() + "\nNothing syncd.")
+	}
+	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0}
+	code := runSyncSession(job, remote.HolderScript(t, projectName, o, run), rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(fmt.Sprintf("devopsy: sync exited %d", code))
@@ -1088,8 +1083,7 @@ func parseChildServices(out string) []childService {
 // parent's inherit: names reaches the child with --inherit, which a
 // re-sync only runs after the copy.
 func streamMismatches(parent []cli.SyncService, streams []string, child []childService) []string {
-	to := cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")
-	wayOut := fmt.Sprintf(" Label it alike on both sides: when the label comes from a variable the parent's inherit: names, run 'devopsy @%s --inherit' first, then --sync again; otherwise change the child's own label.", to)
+	wayOut := " Label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)."
 	var out []string
 	for _, name := range streams {
 		i := slices.IndexFunc(child, func(c childService) bool { return c.Name == name })
@@ -1340,7 +1334,22 @@ func syncExecEnv() map[string]string {
 			env[k] = v
 		}
 	}
+	if k, v := childInheritEnv(); k != "" {
+		env[k] = v
+	}
 	return env
+}
+
+// childInheritEnv is the child's pending inherited variables' file
+// (remote.InheritPendingEnv), from the child's directory the push knows:
+// what the holder sets for everything it runs on the child, set for
+// --sync-exec too, never for the parent's own reads.
+func childInheritEnv() (key, value string) {
+	base := os.Getenv(remote.SyncToBaseEnv)
+	if base == "" {
+		return "", ""
+	}
+	return remote.InheritPendingEnv, remote.SyncInheritPath(base)
 }
 
 func cleanEnv(projectName string) []string {
@@ -1349,6 +1358,9 @@ func cleanEnv(projectName string) []string {
 		if cleanEnvKeys.MatchString(kv) {
 			env = append(env, kv)
 		}
+	}
+	if k, v := childInheritEnv(); k != "" {
+		env = append(env, k+"="+v)
 	}
 	return append(env, "COMPOSE_PROJECT_NAME="+projectName)
 }
