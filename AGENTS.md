@@ -244,6 +244,11 @@ repositories fit together and the open ideas.
   `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
 - `mode:` defaults to `build`: it works for every project, where a wrong
   `image` fails the release.
+- Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
+  id that exists on the target (two releases of one target in the same
+  second), since `mv` would put the new tree inside the old release and
+  the old one would run again. Tests that release a target twice wait
+  for a new second (`spaceReleases`).
 - Releases are full tar streams (no rsync: macOS ships openrsync). The
   upload's progress (`uploadProgress`) counts the project's bytes as
   `Pack` reads them, out of `remote.Size`: through the pipe, what ssh
@@ -319,7 +324,11 @@ repositories fit together and the open ideas.
   `--sync-push` sees EOF as soon as the session ends, not at its next
   write, which a silent copy may not make for minutes (seen on OrbStack:
   the parent stayed paused, then ran the old push capability into the
-  aborted child). EOF or a signal cancels it: the same-host rsync
+  aborted child); cancelling closes the pipe's write end at once, as
+  sshd closes the remote stdin when the connection goes (the tests' fake
+  ssh runs through dash on Linux, which never execs the last command of
+  `sh -c`, so a signal to it does not reach the push). EOF or a signal
+  cancels it: the same-host rsync
   container is removed (`dockerRun`: killing the docker client leaves the
   container copying), the `-R` session ends (`SSHCommandContext`), the
   parent's services are restored, and no export starts; one running, in

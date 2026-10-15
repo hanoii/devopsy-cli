@@ -868,7 +868,9 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if !strings.Contains(string(data), "COMPOSE_PROJECT_NAME='shop-b-prod'") || !strings.Contains(string(data), "DEVOPSY_TARGET='devopsy@server:b/prod'") {
 		t.Errorf("target.env:\n%s", data)
 	}
-	// Known now: no question.
+	// Known now: no question. In a new second: release ids are seconds,
+	// and a taken one is refused.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
 	if out, code := run(nil, "@b/prod", "--release"); code != 0 {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}

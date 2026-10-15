@@ -358,6 +358,12 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 	}
 	defer r.Close()
 	defer w.Close()
+	// Cancelled, the session's stdin closes at once, as sshd closes the
+	// remote command's when the connection goes: the push sees EOF
+	// whether or not the signal to ssh reached it (through a shell that
+	// did not exec, it does not).
+	stop := context.AfterFunc(ctx, func() { w.Close() })
+	defer stop()
 	code, err := remote.SSHContext(ctx, p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
