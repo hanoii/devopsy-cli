@@ -108,7 +108,13 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sy"}, []string{"--sync"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sync", ""}, []string{"--from", "--yes", "--help"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--sync", "--from", ""}, []string{"prod", "staging"}, nil, DirectiveNoFileComp},
+		// --from takes an address, offered as the first word's, aliases
+		// aside, and always with its @.
+		{[]string{"@prod", "--sync", "--from", ""}, []string{"@prod", "@staging"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--sync", "--from", "@"}, []string{"@prod", "@staging", "@vm1:", "@vm 2:", "@orb:", "@builder1:"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--sync", "--from", "@vm"}, []string{"@vm1:", "@vm 2:"}, nil, DirectiveNoFileComp | DirectiveNoSpace},
+		{[]string{"@prod", "--sync", "--from", "@vm1:st"}, []string{"@vm1:staging"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--sync", "--from", "st"}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sync", "--from", "staging", ""}, []string{"--yes"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sync", "--yes", "--", ""}, nil, nil, DirectiveNoFileComp},
 		// --export and --import: the service is the user's to type.

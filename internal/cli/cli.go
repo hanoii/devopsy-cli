@@ -319,7 +319,7 @@ func commandHeader(path, key string) string {
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"--sync": `Usage: devopsy @<target> --sync [--from <target>] [--yes] [-- args...]
+	"--sync": `Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]
 
 Replaces a child environment's data (shared/mnt, and what its services
 hold) with its parent's, then runs its release's run step. A child is an
@@ -334,8 +334,8 @@ machine: the parent's server copies into the child's.
     dev:
       parent: prod
 
-  --from <target>   copy from another environment of the project instead
-                    (@vm1:prod, a/prod...), with its inherit:
+  --from @<target>  copy from another environment of the project instead
+                    (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
   -- args...        DEVOPSY_SYNC_ARGS: rsync's arguments (--exclude=cache),
                     and the sync capability's to read

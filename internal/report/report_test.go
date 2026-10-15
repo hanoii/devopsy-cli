@@ -7,14 +7,19 @@ import (
 )
 
 func TestFail(t *testing.T) {
-	err := fmt.Errorf("environment dev: parent prod: %w", Errorf([]string{"set DEVOPSY_SERVER_PROD"}, "no server"))
+	err := fmt.Errorf("environment dev: parent prod: %w", &Error{Msg: "no server", Details: []string{"why"}, Fixes: []string{"set DEVOPSY_SERVER_PROD"}})
 	if err.Error() != "environment dev: parent prod: no server" {
 		t.Fatalf("message: %q", err.Error())
 	}
 	var out bytes.Buffer
-	Fail(&out, false, err, "or sync later")
-	if out.String() != "[error] environment dev: parent prod: no server\nset DEVOPSY_SERVER_PROD\nor sync later\n" {
-		t.Fatalf("plain:\n%s", out.String())
+	Fail(&out, false, err)
+	if out.String() != "[error] environment dev: parent prod: no server\nwhy\nTo fix it:\nset DEVOPSY_SERVER_PROD\n" {
+		t.Fatalf("one fix:\n%s", out.String())
+	}
+	out.Reset()
+	Fail(&out, false, err, "sync later:\ndevopsy @dev --sync")
+	if out.String() != "[error] environment dev: parent prod: no server\nwhy\nTo fix it, do one of these:\n1. set DEVOPSY_SERVER_PROD\n2. sync later:\ndevopsy @dev --sync\n" {
+		t.Fatalf("fixes:\n%s", out.String())
 	}
 	out.Reset()
 	Fail(&out, true, fmt.Errorf("plain"))

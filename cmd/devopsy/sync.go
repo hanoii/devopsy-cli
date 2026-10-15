@@ -512,7 +512,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 	return 0
 }
 
-// runSync implements devopsy @<child> --sync [--from <address>] [--yes]
+// runSync implements devopsy @<child> --sync [--from @<address>] [--yes]
 // [-- args...]: the parent's data into the child's current release, then
 // its run step.
 func runSync(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string, color bool) int {
@@ -520,7 +520,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		cli.Fprint(os.Stderr, red, msg, color)
 		return 1
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " --sync [--from <address>] [--yes] [-- <rsync args>...]"
+	usage := "usage: devopsy @" + targetRef(t) + " --sync [--from @<address>] [--yes] [-- <rsync args>...]"
 	yes, from := false, ""
 	var rsyncArgs []string
 	for i := 0; i < len(args); i++ {
@@ -542,7 +542,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		report.Fail(os.Stderr, color, t.ParentErr, "or sync from an address: devopsy @"+targetRef(t)+" --sync --from @"+t.Host+":"+t.Parent)
+		report.Fail(os.Stderr, color, t.ParentErr, "Sync from an address instead:\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
 		return 1
 	}
 	if from != "" {

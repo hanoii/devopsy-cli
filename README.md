@@ -727,14 +727,15 @@ So, across servers:
 ```sh
 devopsy @develop --sync                         # asks for the environment's name
 devopsy @develop --sync --yes                   # CI
-devopsy @develop --sync --from b/prod           # another environment of the project
+devopsy @develop --sync --from @b/prod          # another environment of the project
 devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
 ```
 
 `--sync` asks you to type the environment's name, as `--destroy` does,
 and so does `--release-sync` on a child already released; `--yes`
 skips it. First-release syncs never ask. `--from` copies from another
-environment of the project instead of the parent. What follows
+environment of the project instead of the parent: an address, as after
+`devopsy`, with its `@` (devopsy takes it without one too). What follows
 `--` goes to rsync, and to the sync capability's actions as
 `DEVOPSY_SYNC_ARGS`.
 

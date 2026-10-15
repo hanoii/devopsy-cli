@@ -534,10 +534,18 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool) int {
-	ref := targetRef(t)
 	report.Fail(os.Stderr, color, t.ParentErr,
-		"or release without the parent's data and sync from an address: devopsy @"+ref+" --release-no-sync, then devopsy @"+ref+" --sync --from @"+t.Host+":"+t.Parent)
+		"Release "+t.Name+" without "+t.Parent+"'s data, then sync it from an address:\ndevopsy @"+t.Address+" --release-no-sync\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
 	return 1
+}
+
+// parentGuess is the parent's address on the child's server, for a hint
+// to copy: often right, and the user's to change.
+func parentGuess(t *remote.Target) string {
+	if t.Instance != "" {
+		return "@" + t.Host + ":" + t.Instance + "/" + t.Parent
+	}
+	return "@" + t.Host + ":" + t.Parent
 }
 
 func needsServer(projectDir, name string) bool {

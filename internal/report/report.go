@@ -1,7 +1,8 @@
 // Package report formats what devopsy says about failures: one line
-// naming the error, then its details, each on its own line. Errors built
-// here carry their details through wrapping (errors.As), so a command
-// prints them without knowing where they came from.
+// naming the error, then its details (why), each on its own line, then
+// the ways to fix it. Errors built here carry their details and fixes
+// through wrapping (errors.As), so a command prints them without knowing
+// where they came from, and adds the fixes only it knows.
 package report
 
 import (
@@ -11,12 +12,13 @@ import (
 	"strings"
 )
 
-// Error is a failure with details: what to do about it, or why. Error()
-// is the message alone, so wrapping keeps the usual "context: message"
-// shape; Fail prints the details under it.
+// Error is a failure with details (why it happens) and fixes (what to
+// do about it). Error() is the message alone, so wrapping keeps the usual
+// "context: message" shape; Fail prints the rest under it.
 type Error struct {
 	Msg     string
 	Details []string
+	Fixes   []string
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -35,6 +37,15 @@ func Details(err error) []string {
 	return nil
 }
 
+// Fixes are err's, when an Error is in its chain.
+func Fixes(err error) []string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Fixes
+	}
+	return nil
+}
+
 const (
 	red    = "\033[0;31m"
 	yellow = "\033[0;33m"
@@ -42,11 +53,24 @@ const (
 )
 
 // Fail writes err as devopsy reports a failure: "[error] <err>", red
-// when color is on, then err's details and more, one per line, plain.
-// Lines are never wrapped: a detail is one logical line (a command to
-// copy); the terminal wraps it on screen.
+// when color is on, then err's details, one per line, plain, then its
+// fixes and more: "To fix it:" and the one fix, or "To fix it, do one
+// of these:" and each numbered. A fix's own lines (commands to copy)
+// follow it as they are. Lines are never wrapped or indented: a detail
+// is one logical line; the terminal wraps it on screen.
 func Fail(w io.Writer, color bool, err error, more ...string) {
-	write(w, color, red, "[error] "+err.Error(), append(Details(err), more...))
+	lines := Details(err)
+	switch fixes := append(Fixes(err), more...); len(fixes) {
+	case 0:
+	case 1:
+		lines = append(lines, "To fix it:", fixes[0])
+	default:
+		lines = append(lines, "To fix it, do one of these:")
+		for i, f := range fixes {
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, f))
+		}
+	}
+	write(w, color, red, "[error] "+err.Error(), lines)
 }
 
 // Warn writes a warning the same way: "[warning] <msg>", yellow.
