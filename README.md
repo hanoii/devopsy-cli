@@ -535,9 +535,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   `current` as it was, its images included.
 - **Each release keeps its images:** once fetched, every image the release
   runs gets a second tag, `devopsy-<compose name>-<release id>`, without
-  changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`).
-  Docker's tags end at 128 characters: a compose name longer than 105 is
-  cut to 96, followed by 8 characters of its hash. A
+  changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`),
+  images pulled by digest included. A release naming one repository
+  twice (`postgres:15` and `postgres:16`) gets a tag per name, ending in
+  a checksum of it. Docker's tags end at 128 characters: a compose name
+  longer than 94 is cut to 85, followed by 8 characters of its hash. A
   rollback, or the restart after a failed `run`, points those names back
   at that release's tags: exactly the images it ran, floating tags
   included, without building or pulling. A release without them (pruned
