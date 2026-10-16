@@ -549,9 +549,10 @@ no before or after steps, which are the operator's side of a deploy.
 Makes the release before the current one current again (skipping failed
 ones) and runs its rollback steps, from the restored release's own
 config.yaml on the server, not the checkout's (required there; the
-checkout's local before and after steps run locally), in release's phases: before, prepare and the variables check in the restored
-release (a failure changes nothing), run once it is current (a failure goes
-back again), after. No upload, and no new imports: the restored release
+checkout's local before and after steps run locally), in release's
+phases: before, prepare and the variables check in the restored release
+(a failure changes nothing), run once it is current (a failure goes back
+again), after. No upload, and no new imports: the restored release
 keeps what it had. Usually the same run step as release:
 
   environments:
