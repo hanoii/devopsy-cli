@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -654,8 +655,11 @@ case "$1 $2" in
 esac
 `)
 	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
-case " $* " in *" -s "* | *[!8]" ") exit 0 ;; esac
-[ -z "${FAKE_LOCKED:-}" ]
+case " $* " in *[!8]" ") exit 0 ;; esac
+case " $* " in
+  *" -s "*) [ "${FAKE_LOCKED:-}" != all ] ;;
+  *) [ -z "${FAKE_LOCKED:-}" ] ;;
+esac
 `)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
 	for _, f := range []string{"devopsy", "docker", "flock", "mv"} {
@@ -808,6 +812,15 @@ exit 0
 	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FailedFile)); err == nil || statErr != nil || image(r, "mariadb:devopsy-app-prod-1") != "1" || !strings.Contains(out, "keeping "+filepath.Join(r, build.Path)) {
 		t.Errorf("failed first release, image lock busy (%v):\n%s", err, out)
 	}
+	// Never got the lock to fetch: nothing to undo, so no second wait.
+	r, out, err = first("FAKE_LOCKED=all")
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 75 || strings.Count(out, "waiting for the server's images") != 1 || strings.Contains(out, "-- pull") {
+		t.Errorf("release with the image lock taken (%v):\n%s", err, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FetchingFile)); statErr == nil {
+		t.Errorf("a release that never fetched kept its marker")
+	}
 
 	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
 	root = t.TempDir()
@@ -938,7 +951,12 @@ exit 0
 			t.Errorf("remove %v (%v):\n%s", ids, err, out)
 		}
 	}
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"})); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") {
+	// A bookmark Docker refuses to remove (the image's last name, a
+	// stopped container using it) says so: nothing lists it again.
+	write(t, filepath.Join(root, "app/a/prod/releases/1", ImagesFile), "mariadb:10\n")
+	write(t, filepath.Join(root, "images", "mariadb:10"), "W\n")
+	write(t, filepath.Join(root, "images", "mariadb:devopsy-app-a-prod-1"), "W\n")
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") {
 		t.Errorf("remove 1 (%v):\n%s", err, out)
 	}
 
@@ -1092,7 +1110,7 @@ exit 0
 	// A rollback to 1 (2 and 4 failed) whose bookmarks are gone fetches
 	// again; interrupted, nothing changes: 3 stays current with its
 	// images, and 1 is neither marked fetching nor failed, so a later
-	// rollback still finds it.
+	// rollback still finds it, nor bookmarked from the names.
 	for _, ref := range []string{"app-prod-app", "mariadb"} {
 		os.Remove(filepath.Join(root, "images", ref+":devopsy-app-prod-1"))
 	}
@@ -1115,8 +1133,12 @@ exit 0
 	if fakeImage(root, "mariadb:11") != "3" || fakeImage(root, "app-prod-app") != "3" {
 		t.Errorf("3's images not back after the rollback: mariadb:11 %q, app-prod-app %q", fakeImage(root, "mariadb:11"), fakeImage(root, "app-prod-app"))
 	}
-	if fakeImage(root, "mariadb:devopsy-app-prod-1") != "1" {
-		t.Errorf("the rollback's pull is not bookmarked as release 1's")
+	// 1 keeps the bookmarks it had: what the names held when interrupted
+	// (3's app, not built again yet) is not what 1 ran.
+	for _, ref := range []string{"app-prod-app", "mariadb"} {
+		if img := fakeImage(root, ref+":devopsy-app-prod-1"); img != "" {
+			t.Errorf("the interrupted rollback bookmarked %s as release 1's: %q", ref, img)
+		}
 	}
 }
 

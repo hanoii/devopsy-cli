@@ -250,9 +250,12 @@ repositories fit together and the open ideas.
   release names a repository twice: a bookmark per repository
   overwrote one), digests included (`prune -f` deletes an image pulled
   by digest only, unused) but never restored; a rollback or restart
-  restores those, all or nothing, else fetches; a fetch failure
-  bookmarks what it got, so it goes with the release, and restores
-  `$prev`'s; pruning removes them, `remove_images`); switch
+  restores those, all or nothing, else fetches; a release's fetch
+  failure bookmarks what it got, so it goes with the release, and
+  restores `$prev`'s (`fetch_undo`; a rollback's only restores: the
+  names may hold the live release's images, which would become the
+  target's bookmarks); a failed listing keeps the previous
+  `devopsy-images`; pruning removes them, `remove_images`); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
   rollback:, else release:), its own images back first (`get_images`);
@@ -265,7 +268,8 @@ repositories fit together and the open ideas.
   bookmarks; an image left with no `devopsy-` tag (any release, any
   environment or project) loses the refs that release listed that still
   point to it (`docker image rm`, never `-f`: a container's image stays,
-  with Docker's reason); a ref that moved on stays. Two passes over
+  with Docker's reason, a bookmark too when it is the image's last name,
+  a stopped container's included: nothing lists it again); a ref that moved on stays. Two passes over
   `devopsy-images`, no directory scanning. `prune_images` (`docker image
   prune -f`) once after a caller's removals. All under the server's image
   lock (`ImagesLock` in the release root, fd 8, after the release lock on
@@ -285,8 +289,12 @@ repositories fit together and the open ideas.
 - **An interrupted fetch** (`ActivateScript`): `fetch_interrupted`, trapped
   on INT, TERM and HUP around `get_images` (sh runs it once the fetch's
   child exits; it sets `set +e` and ignores PIPE, so writes to a gone
-  session cannot stop it), bookmarks what was fetched, restores
-  `$prev`'s names and calls `not_live 130`. A `-T` session that drops
+  session cannot stop it), undoes the fetch as a failure does and calls
+  `not_live 130`. `fetch_undo` does nothing when `get_images` never got
+  the lock (Ctrl-C while waiting: no second wait), keeps the lock it
+  holds mid-fetch (`il_held`: reopening fd 8 would let a removal in),
+  and, when it cannot take the lock (`now` in the trap), leaves the
+  marker for `recover_fetching`. A `-T` session that drops
   sends no signal: the fetch runs to its end, and the script dies at its
   next write. Hence `FetchingFile`, written before a new release's fetch
   and removed after: `recover_fetching` (caller holds the image lock)

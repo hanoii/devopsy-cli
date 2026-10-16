@@ -578,16 +578,38 @@ done
 		// A session that drops without a signal leaves FetchingFile for
 		// recover_fetching; a rollback writes none, which would mark a good
 		// release failed.
-		s += `fetch_interrupted() {
+		// fetch_undo [now]: nothing to undo when get_images never took the
+		// lock (it waited, or was interrupted waiting); the lock still held
+		// when interrupted mid-fetch, never taken again (reopening fd 8
+		// would let a removal in). A rollback's release keeps its
+		// bookmarks: they are what it ran, and the names may hold the live
+		// release's images. When the lock cannot be had, a new release
+		// keeps FetchingFile for recover_fetching.
+		undo := `    bookmark_images "$rel"
+`
+		left := `the next release, --releases remove or --destroy finishes it`
+		if rollback {
+			undo = ""
+			left = `the names of ${prev#releases/}'s images may still be $id's until its next release`
+		}
+		s += `fetch_undo() {
+  if [ -z "${gi_locked:-}" ]; then
+    rm -f "$rel/` + FetchingFile + `"
+    return 0
+  fi
+  if [ -n "${il_held:-}" ] || image_lock shared restoring "${1:-}"; then
+` + undo + `    [ -z "$prev" ] || restore_images "$base/$prev" || true
+    image_unlock
+    rm -f "$rel/` + FetchingFile + `"
+  else
+    echo "devopsy: the server's images are in use by $(image_holders): ` + left + `" >&2
+  fi
+}
+fetch_interrupted() {
   trap '' INT TERM HUP PIPE
   set +e
   echo "devopsy: the images' fetch was interrupted" >&2
-  if image_lock shared restoring; then
-    bookmark_images "$rel"
-    [ -z "$prev" ] || restore_images "$base/$prev"
-    image_unlock
-  fi
-  rm -f "$rel/` + FetchingFile + `"
+  fetch_undo now
   not_live 130
 }
 `
@@ -599,12 +621,7 @@ done
 get_images "$rel" || {
   s=$?
   trap - INT TERM HUP
-  if image_lock shared restoring; then
-    bookmark_images "$rel"
-    [ -z "$prev" ] || restore_images "$base/$prev" || true
-    image_unlock
-  fi
-  rm -f "$rel/` + FetchingFile + `"
+  fetch_undo
   not_live "$s"
 }
 trap - INT TERM HUP
@@ -839,26 +856,34 @@ image_lock() {
       return 75
     fi
     echo "devopsy: waiting for the server's images, held by $(image_holders), up to 10 minutes" >&2
-    if ! flock -w 600 $il_opt 8; then
-      echo "devopsy: the server's images are still held by $(image_holders) after 10 minutes" >&2
+    il_s=0
+    flock -w 600 $il_opt 8 || il_s=$?
+    if [ "$il_s" -ne 0 ]; then
+      # Above 128, a signal ended the wait (Ctrl-C), not the 10 minutes.
+      [ "$il_s" -gt 128 ] || echo "devopsy: the server's images are still held by $(image_holders) after 10 minutes" >&2
       exec 8>&-
       return 75
     fi
   fi
+  il_held=1
   mkdir -p "$root/` + ImagesHolders + `"
   printf '%s %s %s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$2" >"$root/` + ImagesHolders + `/$$"
 }
 image_unlock() {
   rm -f "$root/` + ImagesHolders + `/$$"
+  il_held=
   exec 8>&-
 }
 bookmark_images() {
   bm_id=$(release_id "$1")
-  if ! (cd "$1/` + CodeDir + `" && ` + devopsyCall(projectName, []string{"--", "config", "--images"}, false) + `) >"$1/` + ImagesFile + `" 2>/dev/null; then
-    rm -f "$1/` + ImagesFile + `"
+  # A listing that fails keeps the previous one: its bookmarks stay
+  # found, so they still go with the release.
+  if ! (cd "$1/` + CodeDir + `" && ` + devopsyCall(projectName, []string{"--", "config", "--images"}, false) + `) >"$1/` + ImagesFile + `.tmp" 2>/dev/null; then
+    rm -f "$1/` + ImagesFile + `.tmp"
     echo "devopsy: could not list the images of $bm_id: a rollback to it builds or pulls them again" >&2
     return 0
   fi
+  mv -f "$1/` + ImagesFile + `.tmp" "$1/` + ImagesFile + `"
   while read -r ref; do
     [ -n "$ref" ] || continue
     docker tag "$ref" "$(bookmark "$ref" "$1")" 2>/dev/null || true
@@ -880,6 +905,7 @@ restore_images() {
 }
 get_images() {
   image_lock shared fetching || return $?
+  gi_locked=1
   gi=0
   restore_images "$1" || { fetch_images "$1" && bookmark_images "$1"; } || gi=$?
   image_unlock
@@ -893,7 +919,9 @@ remove_images() {
     [ -n "$ref" ] || continue
     rm_bm=$(bookmark "$ref" "$1")
     rm_img=$(docker image inspect --format '{{.Id}}' "$rm_bm" 2>/dev/null) || continue
-    docker image rm "$rm_bm" >/dev/null 2>&1 || true
+    # Refused when it is the image's last name and a container, even a
+    # stopped one, uses it: say so, nothing will list it again.
+    rm_err=$(docker image rm "$rm_bm" 2>&1 >/dev/null) || echo "devopsy: $rm_bm stays: $rm_err" >&2
     rm_held=
     for rm_tag in $(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$rm_img" 2>/dev/null); do
       case ${rm_tag##*:} in devopsy-*) rm_held=1 ;; esac
@@ -1189,10 +1217,12 @@ recover_fetching
 for id in ` + quoteAll(ids) + `; do
   if [ ! -d "$base/releases/$id" ]; then
     echo "devopsy: release $id is gone: nothing removed" >&2
+    image_unlock
     exit 1
   fi
   if [ "releases/$id" = "$prev" ]; then
     echo "devopsy: release $id is current: nothing removed" >&2
+    image_unlock
     exit 1
   fi
 done
@@ -1395,7 +1425,7 @@ else
   [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
 else
   echo "devopsy: no release: nothing to take down" >&2
 fi
