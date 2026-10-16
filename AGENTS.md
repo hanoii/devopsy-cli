@@ -247,10 +247,15 @@ repositories fit together and the open ideas.
   `<repo>:devopsy-<compose name>-<id>` (`bookmark`, `BookmarkPrefix`:
   past 94 characters of name, cut to 85 plus 8 hex of its sha256, so a
   tag fits Docker's 128 with `-<cksum of the ref>`, added when the
-  release names a repository twice: a bookmark per repository
+  release names a repository twice, compared as Docker resolves them,
+  `repo_key`: `library/nginx` is `nginx`; a bookmark per repository
   overwrote one), digests included (`prune -f` deletes an image pulled
   by digest only, unused) but never restored; a rollback or restart
-  restores those, all or nothing, else fetches; a release's fetch
+  restores those, all or nothing, else fetches (a name whose current
+  image another compose project's container uses, `image_users`, from
+  `docker ps -a --filter ancestor=`, stays: a rollback must not change
+  other environments; a release fetched again untags the bookmarks its
+  new listing no longer makes); a release's fetch
   failure bookmarks what it got, so it goes with the release, and
   restores `$prev`'s (`fetch_undo`; a rollback's only restores: the
   names may hold the live release's images, which would become the
@@ -273,11 +278,16 @@ repositories fit together and the open ideas.
   (`left_add`) in the project's `ImagesLeftFile` (`<release
   root>/<project>/.devopsy-images-left`: time, compose name, release,
   ref, image id, reason), which `--releases` lists (`ParseLeft`) and
-  `prune_images` retries first (`retry_left`, any environment's, under
-  the exclusive lock), dropping a line once its ref is gone, moved on,
+  `prune_images` retries first (`retry_left`, every project's record on
+  the server, under the exclusive lock), dropping a line once its ref is gone, moved on,
   held by a release again or removed; `LeftoverScript` treats it like
   the project's `.env`, and `--purge` says what it forgets; a ref that moved on stays. Two passes over
-  `devopsy-images`, no directory scanning. `prune_images` (`docker image
+  `devopsy-images`, no directory scanning; what the first freed is kept
+  in `devopsy-images-free` until the directory goes, so a removal cut
+  off between them is finished by the next (the bookmarks are gone by
+  then). Nothing freed is said too ("the images of <id> stay"). Holder
+  files are for messages only: failing to write one never fails the
+  lock. `prune_images` (`docker image
   prune -f`) once after a caller's removals. All under the server's image
   lock (`ImagesLock` in the release root, fd 8, after the release lock on
   fd 9, never the other way): shared in `get_images` (fetch and bookmark,

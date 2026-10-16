@@ -550,7 +550,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   rollback, or the restart after a failed `run`, points those names back
   at that release's tags: exactly the images it ran, floating tags
   included, without building or pulling. A release without them (pruned
-  images, a release older than this) builds or pulls again.
+  images, a release older than this) builds or pulls again. One
+  exception: a shared name (`mariadb:11`) whose newer image another
+  compose project on the server runs, any environment, instance or
+  project, or a container outside Compose, stays on it, and the release
+  says so: rolling back one environment never changes another. Pin such
+  images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
+  bookmark is what the name held when the release fetched: two releases
+  pulling `mariadb:11` at the same moment may each bookmark the other's.
 - **Images go with their releases:** pruning a release removes its tags.
   An image no other release still tags, of any environment, instance or
   project on the server, also loses the names that release ran that still
