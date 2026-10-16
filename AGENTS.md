@@ -250,7 +250,8 @@ repositories fit together and the open ideas.
   release names a repository twice: a bookmark per repository
   overwrote one), digests included (`prune -f` deletes an image pulled
   by digest only, unused) but never restored; a rollback or restart
-  restores those, all or nothing, else fetches; a fetch failure restores
+  restores those, all or nothing, else fetches; a fetch failure
+  bookmarks what it got, so it goes with the release, and restores
   `$prev`'s; pruning removes them, `remove_images`); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
@@ -295,7 +296,10 @@ repositories fit together and the open ideas.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
   `--yes`). A first release that fails before going live, with nothing in
-  `shared/` yet, removes its directory.
+  `shared/` yet, removes its directory, its releases' images first (the
+  directory is their only record: `not_live` takes the image lock with
+  `now`, and keeps the directory, the release marked failed, when it is
+  busy). The image functions are defined before `not_live` can run.
 - `devopsy-target.env` is written into each release (environment `env`,
   `COMPOSE_PROJECT_NAME`, overriding compose's `name:`, `DEVOPSY_PROJECT`,
   `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`,

@@ -532,7 +532,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   release there. Only the services Compose starts by default: other
   profiles get theirs when used. The run step's `up` then finds them all;
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
-  `current` as it was, its images included.
+  `current` as it was, its images included; what the failed release got
+  is tagged as its own, so it goes with it.
 - **Each release keeps its images:** once fetched, every image the release
   runs gets a second tag, `devopsy-<compose name>-<release id>`, without
   changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`),
@@ -644,7 +645,9 @@ Everything in `shared/` is linked into each release's `.devopsy/`: `.env`
 for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
 anything else (a `compose.override.yaml`). Local `.env`, `mnt/` and override
 files are never uploaded. Each release records its commit, branch and who
-made it. A first release that fails before going live leaves nothing behind.
+made it. A first release that fails before going live leaves nothing
+behind, the images it got included (while another release is using the
+server's images, it stays, marked failed).
 One that fails in its `run` step leaves what the step started: a container
 left restarting recreates its bind mounts under `current` as a directory
 (Docker does, as root), and the next release refuses until it is taken

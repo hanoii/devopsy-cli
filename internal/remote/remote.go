@@ -480,6 +480,13 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	if sync != nil {
 		s += syncStdin
 	}
+	// Defined first: not_live removes a first release's images.
+	images := releaseImages(projectName, t, t.Mode)
+	if images != "" {
+		s += images
+	} else {
+		s += noImages
+	}
 	s += "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
@@ -548,21 +555,20 @@ done
 		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
-	images := releaseImages(projectName, t, t.Mode)
 	if images != "" {
-		// A failure may have moved names the live release runs: its own
-		// back first.
-		s += images + `get_images "$rel" || {
+		// A failure may have moved names the live release runs: what it
+		// got is bookmarked, so it goes with the release, and the live
+		// release's own come back.
+		s += `get_images "$rel" || {
   s=$?
-  if [ -n "$prev" ] && image_lock shared restoring; then
-    restore_images "$base/$prev" || true
+  if image_lock shared restoring; then
+    bookmark_images "$rel"
+    [ -z "$prev" ] || restore_images "$base/$prev" || true
     image_unlock
   fi
   not_live "$s"
 }
 `
-	} else {
-		s += noImages
 	}
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
@@ -915,9 +921,28 @@ func fetchImages(projectName, mode string) string {
 
 // NotLive is not_live, for a new release that does not go live: marked
 // failed, so rollbacks skip it, or, for a first release with nothing in
-// shared/ yet, no directory left at all. $base, $prev, $rel and $id are set.
+// shared/ yet, no directory left at all, its releases' images removed
+// first (the directory is their only record), unless the server's image
+// lock is busy: then it is marked failed too. $base, $prev, $rel and $id
+// are set, and releaseImages' functions (or noImages) defined.
 const NotLive = `not_live() {
+  nl_gone=
   if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
+    nl_gone=1
+    if ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
+      if image_lock exclusive removing now; then
+        for r in "$base"/releases/*; do
+          remove_images "$r"
+        done
+        prune_images
+        image_unlock
+      else
+        echo "devopsy: keeping $base: the server's images are in use by $(image_holders), and the images its releases got go with it ('--releases remove failed' removes them)" >&2
+        nl_gone=
+      fi
+    fi
+  fi
+  if [ -n "$nl_gone" ]; then
     # A first release that never went live, with nothing set yet: leave
     # no directory behind (an instance's, when it is empty, neither).
     rm -rf "$base"
