@@ -385,7 +385,10 @@ func lockWait(fd int, shared bool, what string) string {
 // target's directory: its path under $root. The
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
-	return `settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
+	// The detached update check would inherit the scripts' locks (fds 8
+	// and 9) and hold them while it asks GitHub.
+	return `export DEVOPSY_NO_UPDATE_CHECK=1
+settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
 with_tty() {
   if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
     script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
@@ -603,7 +606,7 @@ done
     image_unlock
     rm -f "$rel/` + FetchingFile + `"
   else
-    echo "devopsy: the server's images are in use by $(image_holders): ` + left + `" >&2
+    echo "devopsy: $il_busy: ` + left + `" >&2
   fi
 }
 fetch_interrupted() {
@@ -719,7 +722,7 @@ if [ -n "$pruned" ]; then
     prune_images
     image_unlock
   else
-    echo "devopsy: pruning skipped: the server's images are in use by $(image_holders); the next release prunes" >&2
+    echo "devopsy: pruning skipped: $il_busy; the next release prunes" >&2
   fi
 fi
 `, t.Keep)
@@ -871,6 +874,7 @@ image_lock() {
   exec 8>"$root/` + ImagesLock + `"
   if ! flock -n $il_opt 8; then
     if [ "${3:-}" = now ]; then
+      il_busy="the server's images are in use by $(image_holders)"
       exec 8>&-
       return 75
     fi
@@ -878,11 +882,20 @@ image_lock() {
     il_s=0
     flock -w 600 $il_opt 8 || il_s=$?
     if [ "$il_s" -ne 0 ]; then
+      il_busy="the server's images are still held by $(image_holders)"
       # Above 128, a signal ended the wait (Ctrl-C), not the 10 minutes.
-      [ "$il_s" -gt 128 ] || echo "devopsy: the server's images are still held by $(image_holders) after 10 minutes" >&2
+      [ "$il_s" -gt 128 ] || echo "devopsy: $il_busy after 10 minutes" >&2
       exec 8>&-
       return 75
     fi
+  fi
+  # A removal needs answers: with Docker down, every inspect fails, and
+  # the releases would go without their images.
+  if [ "$1" = exclusive ] && ! docker version >/dev/null 2>&1; then
+    il_busy="Docker is not answering"
+    [ "${3:-}" = now ] || echo "devopsy: $il_busy" >&2
+    exec 8>&-
+    return 75
   fi
   il_held=1
   mkdir -p "$root/` + ImagesHolders + `"
@@ -984,10 +997,19 @@ left_add() {
 retry_left() {
   [ -s "$left" ] || return 0
   : >"$left.tmp"
-  while IFS="$tab" read -r rl_t rl_name rl_rel rl_ref rl_img rl_why; do
+  # A last line without its newline (a write cut short) counts too.
+  while rl_ref=; IFS="$tab" read -r rl_t rl_name rl_rel rl_ref rl_img rl_why || [ -n "$rl_ref" ]; do
     [ -n "$rl_ref" ] || continue
-    # Gone, or the name moved on: nothing left to do.
-    [ "$(docker image inspect --format '{{.Id}}' "$rl_ref" 2>/dev/null)" = "$rl_img" ] || continue
+    # Gone, or the name moved on: nothing left to do. Any other error
+    # keeps the line.
+    if ! rl_id=$(docker image inspect --format '{{.Id}}' "$rl_ref" 2>&1); then
+      case $rl_id in
+        *"No such image"*) ;;
+        *) printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$left.tmp" ;;
+      esac
+      continue
+    fi
+    [ "$rl_id" = "$rl_img" ] || continue
     case ${rl_ref##*:} in
       devopsy-*) ;;
       *)
@@ -1074,7 +1096,11 @@ const NotLive = `not_live() {
   nl_gone=
   if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
     nl_gone=1
-    if ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
+    if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1; then
+      # fetch_undo could not take the lock: recover_fetching finds what
+      # the fetch got through the marker, so the directory stays.
+      nl_gone=
+    elif ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
       if image_lock exclusive removing now; then
         for r in "$base"/releases/*; do
           remove_images "$r"
@@ -1082,7 +1108,7 @@ const NotLive = `not_live() {
         prune_images
         image_unlock
       else
-        echo "devopsy: keeping $base: the server's images are in use by $(image_holders), and the images its releases got go with it ('--releases remove failed' removes them)" >&2
+        echo "devopsy: keeping $base: $il_busy, and the images its releases got go with it ('--releases remove failed' removes them)" >&2
         nl_gone=
       fi
     fi
@@ -1580,7 +1606,7 @@ rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + 
 	for i := len(t.Levels) - 1; i >= 0; i-- {
 		s += `d="$root"/` + Quote(t.Levels[i].Dir) + `
 [ -d "$d" ] || exit 0
-[ -z "$(ls -A "$d" | grep -vxF -e .env -e .lock -e ` + ImagesLeftFile + ` -e "$child" || true)" ] || exit 0
+[ -z "$(ls -A "$d" | grep -vxF -e .env -e .lock -e ` + ImagesLeftFile + ` -e ` + ImagesLeftFile + `.tmp -e "$child" || true)" ] || exit 0
 ` + act + `
 child=${d##*/}
 `
