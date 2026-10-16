@@ -996,11 +996,11 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/1", ImagesFile), "mariadb:10\n")
 	write(t, filepath.Join(root, "images", "mariadb:10"), "W\n")
 	write(t, filepath.Join(root, "images", "mariadb:devopsy-app-a-prod-1"), "W\n")
-	// Another project's record is retried too.
+	// Another project's record is its own: left alone.
 	write(t, filepath.Join(root, "other", ImagesLeftFile), "1\tother-prod\t9\tother:1\tV\tconflict\n")
 	write(t, filepath.Join(root, "images", "other:1"), "V\n")
 	// The recorded registry/app:def is retried: no container uses it now.
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") || !strings.Contains(out, "removed other:1, left by release 9 of other-prod") || exists(filepath.Join("other", ImagesLeftFile)) {
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") || strings.Contains(out, "other:1") || !exists(filepath.Join("other", ImagesLeftFile)) {
 		t.Errorf("remove 1 (%v):\n%s", err, out)
 	}
 	if got := readFile(left); strings.Contains(got, "registry/app:def") || strings.Count(got, "\n") != 1 || !strings.Contains(got, "\tapp-a-prod\t1\tmariadb:devopsy-app-a-prod-1\tW\t") {
