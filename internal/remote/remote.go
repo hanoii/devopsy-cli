@@ -16,6 +16,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -677,10 +679,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	if name == "" {
 		name = projectName
 	}
-	prefix := "devopsy-"
-	if name != "" {
-		prefix += name + "-"
-	}
+	prefix := BookmarkPrefix(name)
 	return fetch + `image_repo() {
   case ${1##*/} in
     *:*) echo "${1%:*}" ;;
@@ -726,6 +725,22 @@ drop_images() {
   done <"$1/` + ImagesFile + `"
 }
 `
+}
+
+// BookmarkPrefix is the start of a release's image bookmarks, the release
+// id following it: devopsy-<compose name>-. Docker's tags end at 128
+// characters, so a name over 105 (8 + name + 1 + a 14-digit id) is cut to
+// 96 and followed by the first 8 hex digits of its sha256, which keeps
+// names that differ only past the cut apart.
+func BookmarkPrefix(composeName string) string {
+	if composeName == "" {
+		return "devopsy-"
+	}
+	if len(composeName) > 105 {
+		sum := sha256.Sum256([]byte(composeName))
+		composeName = composeName[:96] + "-" + hex.EncodeToString(sum[:4])
+	}
+	return "devopsy-" + composeName + "-"
 }
 
 // fetchImages defines fetch_images <dir>, which gets a release's images

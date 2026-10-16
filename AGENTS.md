@@ -244,7 +244,9 @@ repositories fit together and the open ideas.
   `image:` too and fails on a missing tag; through `devopsy --`, past
   project commands, under `with_tty`), bookmarked (`releaseImages`:
   `compose config --images` into `$rel/devopsy-images`, each tagged
-  `devopsy-<compose name>-<id>`, digests skipped; a rollback or restart
+  `devopsy-<compose name>-<id>` (`BookmarkPrefix`: past 105 characters
+  of name, cut to 96 plus 8 hex of its sha256, so a tag fits Docker's
+  128), digests skipped; a rollback or restart
   restores those, all or nothing, else fetches; a fetch failure restores
   `$prev`'s; pruning untags); switch
   `current`; `run`; on failure switch back and restart the previous release
