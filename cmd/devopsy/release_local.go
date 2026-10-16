@@ -106,11 +106,11 @@ func runInPlace(root, phase string, a []string) int {
 	return 0
 }
 
-// runLocalDestroy is --destroy without a target: defaults:' destroy step,
-// in place, after asking for the project's name (--yes skips it). devopsy
-// removes nothing itself: on a server it then removes the environment's
-// directory, which locally is the checkout. Taking containers, volumes
-// and mnt's data away is the step's.
+// runLocalDestroy is --destroy without a target, in place, after asking
+// for the project's name (--yes skips it): defaults:' destroy step, when
+// there is one, then what runDestroyData takes down. Nothing else: on a
+// server devopsy then removes the environment's directory, which locally
+// is the checkout.
 func runLocalDestroy(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(os.Stderr, red, "devopsy: "+msg, color)
@@ -141,16 +141,10 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 	if c.Defaults != nil {
 		step = remote.StepArgs(c.Defaults.Destroy)
 	}
-	if len(step) == 0 {
-		report.Fail(os.Stderr, color, report.Errorf([]string{
-			"Without a target, --destroy runs the destroy step under defaults: in .devopsy/config.yaml, in place.",
-		}, "the project has no destroy step under defaults:"),
-			"Add it to .devopsy/config.yaml, like:\ndefaults:\n  destroy: destroy",
-			"Destroy a target's environment instead:\ndevopsy @<target> --destroy")
-		return 1
-	}
-	if _, err := cli.CheckCommand(projectDir, step[0], cli.Bare); err != nil {
-		return fail("the destroy step: " + err.Error())
+	if len(step) > 0 {
+		if _, err := cli.CheckCommand(projectDir, step[0], cli.Bare); err != nil {
+			return fail("the destroy step: " + err.Error())
+		}
 	}
 	root := filepath.Dir(projectDir)
 	name := filepath.Base(root)
@@ -159,14 +153,64 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 	}
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return fail("--destroy removes the local project's data: add --yes when not at a terminal")
+			return fail("--destroy removes the local project's containers, volumes and data in .devopsy/mnt: add --yes when not at a terminal")
 		}
-		fmt.Fprintf(os.Stderr, "This runs 'devopsy %s' in %s: the project's containers and data, as the step removes them. Type %s to go on: ", strings.Join(step, " "), root, name)
+		what := ""
+		if len(step) > 0 {
+			what = "runs 'devopsy " + strings.Join(step, " ") + "', then "
+		}
+		fmt.Fprintf(os.Stderr, "This %stakes %s's containers, volumes and built images down and empties %s. Type %s to go on: ", what, name, filepath.Join(projectDir, "mnt"), name)
 		line, _ := stdinReader.ReadString('\n')
 		if strings.TrimSpace(line) != name {
 			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
 			return 1
 		}
 	}
-	return runInPlace(root, "destroy", step)
+	return runDestroyData(root, step, color)
+}
+
+// runDestroyData is --destroy where the project is (DestroyDataFlag, its
+// arguments the destroy step, maybe none): the step, while everything
+// runs (a last dump, an outside record); then docker compose down with
+// the volumes and the images built without an image: name (--rmi local),
+// every profile's; then mnt emptied as root in UtilImage, since container
+// users own its files. A failed step changes nothing.
+func runDestroyData(cwd string, step []string, color bool) int {
+	fail := func(msg string) int {
+		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		return 1
+	}
+	projectDir, err := cli.FindProjectDir(cwd)
+	if err != nil {
+		return fail(err.Error())
+	}
+	root := filepath.Dir(projectDir)
+	if len(step) > 0 {
+		if code := runInPlace(root, "destroy", step); code != 0 {
+			fail(fmt.Sprintf("the destroy step failed (%d): nothing removed", code))
+			return code
+		}
+	}
+	ctx, stop := interruptible()
+	defer stop()
+	sayErr("devopsy: taking the containers, volumes and built images down")
+	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
+		return fail("docker compose down: " + err.Error())
+	}
+	mnt := filepath.Join(projectDir, "mnt")
+	if entries, err := os.ReadDir(mnt); err != nil || len(entries) == 0 {
+		return 0
+	}
+	real, err := filepath.EvalSymlinks(mnt)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if err := ensureUtilImage(ctx); err != nil {
+		return fail(err.Error())
+	}
+	sayErr("devopsy: emptying " + mnt)
+	if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
+		return fail("emptying mnt: " + err.Error())
+	}
+	return 0
 }

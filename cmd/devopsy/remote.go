@@ -719,19 +719,6 @@ and after steps can go around it. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 
-func missingDestroy(t *remote.Target) string {
-	return fmt.Sprintf(`environment %s has no destroy step: define it in %s, for example:
-
-  environments:
-    %s:
-      destroy: destroy
-
-One devopsy command on the server, in the current release, before devopsy
-removes the directory: usually a project command that runs down --volumes
-and removes what its containers own in shared/mnt. See 'devopsy @%s
---destroy --help'.`, t.Name, cmp.Or(t.File, "the project's config"), cmp.Or(t.Pattern, t.Name), t.Name)
-}
-
 // targetEnv renders a target's env as the release's .devopsy/target.env.
 // commit is the release's git commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
@@ -802,17 +789,17 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		}
 	}
 	steps := remote.StepArgs(t.Destroy)
-	if len(steps) == 0 {
-		cli.Fprint(os.Stderr, red, missingDestroy(t), color)
-		return 1
-	}
 	where := t.Host + ":" + t.Path
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "This runs 'devopsy %s' in %s, then removes it: its releases and shared/ (data, .env). Type %s to go on: ", strings.Join(steps, " "), where, t.Name)
+		what := ""
+		if len(steps) > 0 {
+			what = "runs 'devopsy " + strings.Join(steps, " ") + "' in " + where + ", then "
+		}
+		fmt.Fprintf(os.Stderr, "This %stakes %s's containers, volumes and images down and removes %s: its releases and shared/ (data, .env). Type %s to go on: ", what, t.Name, where, t.Name)
 		line, _ := stdinReader.ReadString('\n')
 		if strings.TrimSpace(line) != t.Name {
 			cli.Fprint(os.Stderr, red, "Nothing removed.", color)

@@ -278,9 +278,9 @@ repositories fit together and the open ideas.
   entry with `Local` scope) is a release in place: `Config.Defaults`'
   release steps (no environment is local), prepare, `--missing-vars`, the
   images always as build mode, run; no before or after steps, no switch.
-  `--destroy` likewise (`runLocalDestroy`): `defaults:`' destroy step
-  after the project's name, never removing anything itself. The other
-  release flags stay target only.
+  `--destroy` likewise (`runLocalDestroy`): after the project's name,
+  `runDestroyData` in place, `defaults:`' destroy step if any; never the
+  checkout. The other release flags stay target only.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
@@ -297,16 +297,22 @@ repositories fit together and the open ideas.
   flags, not options of `--vars`) send values over SSH's stdin, never as
   arguments; edits replace
   keys in place, under the release lock (deploy commands write secrets too).
-- `--destroy`: the environment's `destroy:` step (one command, required)
-  in the current release under the lock, then `rm -rf` of the directory;
-  asks for the target's name unless `--yes`. devopsy knows nothing of
-  containers, volumes or `shared/mnt`: taking them down, and removing files
-  container users own, is the project's step. A failed step removes nothing.
+- `--destroy` (`DestroyScript`, under the lock; asks for the target's
+  name unless `--yes`): the hidden `--destroy-data [step]`
+  (`runDestroyData`) in `current`, else the newest release: the
+  environment's `destroy:` step if it has one (optional: a hook, run
+  while everything is up), then `compose --profile '*' down --volumes
+  --remove-orphans --rmi local` and `mnt` emptied as root in `UtilImage`
+  (`find -delete`, a plain `docker run`: `compose run` would bring the
+  network back); then every release's image bookmarks (`drop_images`);
+  then `rm -rf`. A failure before the removal removes nothing. Until
+  October 2026 the step was required and did all of it, which is why the
+  templates had `destroy` commands: devopsy had no root container then.
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
   mounts"): never uploaded, `shared/mnt` created by the upload and linked
   like every `shared/` entry. Its contents and their ownership are the
-  project's; devopsy only checks whether it is empty (`NotLive`), never
-  removes anything in it.
+  project's; devopsy checks whether it is empty (`NotLive`), and only
+  `--destroy` and an `--import` (its entries) remove anything in it.
 - An environment's directory with `.devopsy/` and no `current` is a plain directory:
   commands run there, releases refuse before creating anything.
 
@@ -450,7 +456,7 @@ repositories fit together and the open ideas.
   stopped services stay down through the imports (no app on a
   half-imported database). The parent's inside `--sync-push`
   (`runSyncPush`): the checks (labels, the `export` script when a
-  service is `stream`, the child guard, the rsync image) before
+  service is `stream`, the child guard, the util image) before
   anything, then `prepare parent`, stop, rsync, streams, start (healthy),
   `finish parent go|abort`. Hooks run from Go (`runSyncHook`, `--capability
   sync ...` in its own process group), only where their file is, with
@@ -518,8 +524,9 @@ repositories fit together and the open ideas.
   sshd's `AllowAgentForwarding no`: say so. A `restrict`ed key also refuses
   the `-R` (`port-forwarding`), which sshd reports like a taken port: after
   the last try, say both.
-- **Transport:** rsync always in `devopsy-rsync:<n>` (`RsyncImage`, built
-  on each host from `RsyncDockerfile` when missing; tar for `--export` and
+- **Transport:** rsync always in `devopsy-util:<n>` (`UtilImage`, which was
+  `devopsy-rsync` until October 2026; built
+  on each host from `UtilDockerfile` when missing; tar for `--export` and
   `--import` too, GNU's), as root with
   `--numeric-ids`: owners and modes survive, the deploy user's permissions
   do not matter. Across servers the parent's daemon serves one module per
@@ -573,7 +580,7 @@ repositories fit together and the open ideas.
   an unlabeled service is refused. `stream`: the capability's `export`
   and `import` (`runSyncHook`, the lists in their environment). `rsync`:
   a tar of the service's entries of `mnt` (exclude honored, file entries
-  included) made in `RsyncImage` as root with `--numeric-owner`, and on
+  included) made in `UtilImage` as root with `--numeric-owner`, and on
   import listed first (`tarEntries`: a truncated tar fails `tar -t`
   before anything changes, and entries the service does not mount are
   refused, an excluded one by its label; and the spool must end with two

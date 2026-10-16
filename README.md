@@ -213,7 +213,7 @@ my-project/.devopsy/
 devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f ...override.yaml] up -d
 devopsy deploy         # .devopsy/commands/deploy
 devopsy --release      # a release in place: defaults:' prepare, images, run
-devopsy --destroy      # defaults:' destroy step, in place, after asking
+devopsy --destroy      # containers, volumes, built images and mnt's data, after asking
 devopsy                # help: devopsy's own, the project's commands, the rest
 devopsy --env          # the variables devopsy loads and computes, secrets masked (--show)
 devopsy --shell [service] [-- command]   # a shell, or a command, in a container
@@ -233,10 +233,11 @@ announcing it). A step whose command only runs on a target
 (`## Run: target`) refuses before anything runs. So the project's
 `deploy` only starts what is there, on a server and locally alike.
 
-**`devopsy --destroy`** without a target runs the `destroy:` step under
-`defaults:` the same way, after asking for the project's name (`--yes`
-skips it). devopsy removes nothing itself, the checkout least of all:
-what goes is what the step removes.
+**`devopsy --destroy`** without a target starts over, after asking for
+the project's name (`--yes` skips it): the `destroy:` step under
+`defaults:` if there is one, then the containers, volumes and built
+images down and `.devopsy/mnt` emptied, as a server's `--destroy` does.
+The checkout stays.
 
 A word is a project command if `.devopsy/commands/` has it, else a compose
 command (devopsy asks compose which exist), else an error. Arguments starting
@@ -389,7 +390,7 @@ defaults:                       # what every environment takes unless it sets it
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs: required for it
-  destroy: destroy              # what --destroy runs: required for it
+  destroy: backup               # optional: what --destroy runs first, while everything is up
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
 environments:
   prod:
@@ -465,7 +466,7 @@ devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps
 devopsy @vm1:prod --releases     # list them, * marks the current one
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
-devopsy @vm1:pr-12 --destroy     # run the destroy step, then remove the environment
+devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.sync label says
@@ -574,13 +575,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   printed, each line after its time in UTC (`2026-10-09 15:24:32`),
   progress displays reduced to their final state. `--log` shows the most recent, `--log <id>` one release's. Local steps'
   own output stays on your screen only, keeping their terminal.
-- **Destroying:** `--destroy` runs the environment's `destroy:` step, one
-  devopsy command, in the current release under the lock, then removes the
-  directory (releases, `shared/` with its data and `.env`). The step is the
-  project's: devopsy knows nothing of what it runs. Usually a command that
-  runs `docker compose down --volumes` and removes what its containers own
-  in `shared/mnt`, which the deploy user cannot. A failed step removes
-  nothing; files left that the deploy user cannot remove fail the removal.
+- **Destroying:** `--destroy`, under the lock, in the current release:
+  the environment's `destroy:` step if it has one (optional, one devopsy
+  command, while everything still runs: a last dump), then `docker compose
+  down --volumes --remove-orphans --rmi local` (every profile; the images
+  built without an `image:` name go too), then `shared/mnt` emptied as
+  root in `devopsy-util`, since its files belong to container users; then
+  each release's image tags; then the directory (releases, `shared/` with
+  its data and `.env`). A failure before the removal removes nothing.
 - **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
   resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
@@ -626,9 +628,8 @@ local copy is uploaded with each release. The alternatives:
 creates a missing bind-mount directory as root. A container running as
 non-root from the start cannot write there, and the deploy user cannot give
 it away: start as root and fix ownership in the entrypoint, or give the
-directory away in a one-shot `init` service running as root. For the same
-reason the environment's `destroy` step, not devopsy, removes what
-containers own there. Back up `shared/.env` and `shared/mnt` (databases as
+directory away in a one-shot `init` service running as root. `--destroy`
+empties it as root in `devopsy-util`. Back up `shared/.env` and `shared/mnt` (databases as
 dumps).
 
 **Parent environments and syncs.** A child (`develop: {parent: prod}`)
@@ -726,7 +727,9 @@ database. A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
-The rsync runs as root in `devopsy-rsync`, devopsy's own image (alpine
+The rsync runs as root in `devopsy-util` (until October 2026
+`devopsy-rsync`: remove that one by hand, `docker image rm
+devopsy-rsync:2`), devopsy's own image (alpine
 with rsync and tar), built on each server the first time, so ownership
 and the deploy user's permissions do not matter. **On one server**, one
 container copies between the two directories, without SSH, and a stream
@@ -829,7 +832,7 @@ devopsy's to check, not the scripts'.
 [@<target>] --import <service>` replaces it with stdin, the way its label
 says: a `stream` through the capability's `export` and `import`, an
 `rsync` service as a tar of its entries of `mnt` (made and extracted as
-root in `devopsy-rsync`, numeric owners and modes kept; an import empties
+root in `devopsy-util`, numeric owners and modes kept; an import empties
 each entry the tar carries first, as a sync's `--delete` does, and leaves
 the service running unless it is stopped), `devopsy.sync.stop=true`
 stopping it around either. A `stream` service that is not stopped is

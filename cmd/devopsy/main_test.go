@@ -915,12 +915,6 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "@prod", "--ssh-config"); code != 0 || !strings.Contains(out, "Host server") {
 		t.Fatalf("@prod --ssh-config (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@c/pr-12", "--destroy", "--yes"); code == 0 || !strings.Contains(out, "has no destroy step") || !strings.Contains(out, "pr-*:") {
-		t.Fatalf("--destroy without a destroy step (%d):\n%s", code, out)
-	}
-	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12", "current")); err != nil {
-		t.Fatalf("removed without a destroy step: %v", err)
-	}
 	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: true\ndefaults:\n  mode: image\n  release: deploy\n  destroy: destroy\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n", 0o644)
 	if out, code := run(nil, "@c/pr-12", "--destroy"); code == 0 || !strings.Contains(out, "add --yes") {
 		t.Fatalf("--destroy without a terminal (%d):\n%s", code, out)
@@ -931,7 +925,9 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("--destroy with a failing step (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(root, "shop", "c", "pr-12", "current", ".devopsy", "commands", "destroy"), "#!/bin/sh\necho \"destroy env=$DEVOPSY_ENVIRONMENT\"\n", 0o755)
-	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes"); code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "removed") {
+	write(t, filepath.Join(root, "shop", "c", "pr-12", "shared", "mnt", "db", "data"), "x", 0o644)
+	out, code = run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes")
+	if code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "[down][--volumes][--remove-orphans][--rmi][local]") || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") || !strings.Contains(out, "removed") {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12")); !os.IsNotExist(err) {
@@ -1202,9 +1198,10 @@ func TestLocalDestroy(t *testing.T) {
 	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
 	write(t, filepath.Join(dir, "config.yaml"), "project: app\nenvironments: {prod: {}}\n", 0o644)
 	write(t, filepath.Join(dir, "commands", "destroy"), "#!/bin/sh\n## Description: d\necho DESTROYED in $PWD\n", 0o755)
+	// Without a step: devopsy's part alone, mnt left alone when empty.
 	out, code := runDevopsy(t, tmp, nil, "--destroy", "--yes")
-	if code == 0 || !strings.Contains(out, "[error] the project has no destroy step under defaults:") {
-		t.Errorf("--destroy without defaults (%d):\n%s", code, out)
+	if code != 0 || strings.Contains(out, "DESTROYED") || !strings.Contains(out, "[down][--volumes][--remove-orphans][--rmi][local]") || strings.Contains(out, "[find]") {
+		t.Errorf("--destroy without a step (%d):\n%s", code, out)
 	}
 
 	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {destroy: destroy}\nenvironments: {prod: {}}\n", 0o644)
@@ -1212,9 +1209,15 @@ func TestLocalDestroy(t *testing.T) {
 	if code == 0 || strings.Contains(out, "DESTROYED") || !strings.Contains(out, "add --yes when not at a terminal") {
 		t.Errorf("--destroy without --yes or a terminal (%d):\n%s", code, out)
 	}
+	write(t, filepath.Join(dir, "mnt", "db", "data"), "x", 0o644)
 	out, code = runDevopsy(t, tmp, nil, "--destroy", "--yes")
-	if code != 0 || !strings.Contains(out, "DESTROYED in "+tmp) {
+	if code != 0 || !strings.Contains(out, "DESTROYED in "+tmp) || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") {
 		t.Errorf("--destroy --yes (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(dir, "commands", "destroy"), "#!/bin/sh\n## Description: d\nexit 3\n", 0o755)
+	out, code = runDevopsy(t, tmp, nil, "--destroy", "--yes")
+	if code != 3 || strings.Contains(out, "[down]") || !strings.Contains(out, "nothing removed") {
+		t.Errorf("--destroy with a failing step (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Errorf("--destroy removed the project: %v", err)

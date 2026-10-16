@@ -45,6 +45,10 @@ const (
 	SyncServicesFlag = "--sync-services"
 )
 
+// DestroyDataFlag is --destroy's part where the project is, hidden: run in
+// a server's release by DestroyScript, and locally by --destroy itself.
+const DestroyDataFlag = "--destroy-data"
+
 // --export and --import move one service's data, the way its SyncLabel
 // says, locally or with @<target> on a server.
 const (

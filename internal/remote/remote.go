@@ -993,13 +993,23 @@ cat "$f"
 `
 }
 
-// DestroyScript removes the target's environment under the release lock:
-// the destroy command (args) in the current release, which takes the
-// project's containers, volumes and data down, then the directory. devopsy
-// knows nothing of what the project runs or owns: whatever the command
-// leaves that the deploy user cannot remove fails the removal.
+// DestroyScript removes an environment, under its release lock: devopsy
+// --destroy-data in its current release, else its newest one (a first
+// release whose run step failed left shared/mnt without current): args,
+// the destroy step, maybe none, then compose down with volumes and built
+// images, and shared/mnt emptied as root; then every release's image
+// bookmarks (releaseImages' drop_images); then the directory. A failure
+// before the removal removes nothing.
 func DestroyScript(t *Target, projectName string, args []string) string {
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ ! -d "$base" ]; then
+	images := releaseImages(projectName, t, t.Mode)
+	drop := ""
+	if images != "" {
+		drop = images + `for r in "$base"/releases/*; do
+  [ -d "$r" ] && drop_images "$r"
+done
+`
+	}
+	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base" ]; then
   echo "devopsy: nothing at $base" >&2
   exit 0
 fi
@@ -1012,20 +1022,26 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   exit 1
 fi
 exec 9>"$base/.lock"
-`+lockWait(9, false, "the release running on $base")+`
+` + lockWait(9, false, "the release running on $base") + `
+dir=
 if [ -d "$base/current" ]; then
-  echo "devopsy: running 'devopsy %s' (destroy)" >&2
-  (cd "$base/current" && %s) || { s=$?; echo "devopsy: the destroy step failed ($s): nothing removed" >&2; exit "$s"; }
+  dir="$base/current"
 else
-  echo "devopsy: no current release: destroy step skipped" >&2
+  last=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | sort -r | head -n 1)
+  [ -z "$last" ] || dir="$base/releases/$last"
 fi
-cd /
+if [ -n "$dir" ]; then
+  (cd "$dir" && ` + devopsyCall(projectName, append([]string{"--destroy-data"}, args...), false) + `) || { s=$?; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
+else
+  echo "devopsy: no release: nothing to take down" >&2
+fi
+` + drop + `cd /
 rm -rf "$base" || {
-  echo "devopsy: could not remove everything in $base: the destroy step must remove what containers own (shared/mnt...)" >&2
+  echo "devopsy: could not remove everything in $base" >&2
   exit 1
 }
 echo "devopsy: removed $base" >&2
-`, strings.Join(args, " "), devopsyCall(projectName, args, false))
+`
 }
 
 // EnvironmentsScript prints the project's environments on the server, one

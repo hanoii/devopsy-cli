@@ -345,7 +345,7 @@ its own release:
 
   devopsy.sync=rsync   its entries of .devopsy/mnt rsynced (rsync -a
                        --delete --numeric-ids, as root in devopsy's own
-                       image, devopsy-rsync, built on each server)
+                       image, devopsy-util, built on each server)
   devopsy.sync=stream  the parent's sync capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
@@ -405,7 +405,7 @@ through SSH.
   devopsy.sync=stream   the sync capability's export <service> (a dump)
   devopsy.sync=rsync    a tar of the entries of .devopsy/mnt it mounts
                         (devopsy.sync.rsync.exclude honored), made as root
-                        in devopsy-rsync with numeric owners and modes. A
+                        in devopsy-util with numeric owners and modes. A
                         service mounting ./mnt itself exports all of it,
                         other services' and excluded entries included
                         (devopsy says which)
@@ -430,7 +430,7 @@ does anything change, and the file is removed afterwards.
                         with the service brought up first unless stopped
                         (and down again after it if it was down)
   devopsy.sync=rsync    a tar: each entry of mnt it carries is emptied,
-                        then extracted as root in devopsy-rsync, owners and
+                        then extracted as root in devopsy-util, owners and
                         modes as they were; the service may run meanwhile.
                         A truncated tar, or one carrying entries the
                         service does not mount, changes nothing; one of
@@ -619,19 +619,21 @@ shell, directly as docker compose exec runs it: devopsy @<target> --shell
 	"--destroy": `Usage: devopsy @<target> --destroy [--yes]
        devopsy --destroy [--yes]
 
-Removes the environment from the server, under the release lock: runs the
-environment's destroy step (destroy: in config.yaml, required) in its
-current release, then removes its directory (releases, shared/ with its
-data and .env). The step is the project's: usually a command that runs
-docker compose down --volumes and removes what its containers own in
-shared/mnt, which the deploy user cannot. A failed step removes nothing.
-Asks for the target's name, unless --yes (CI, like when a pull request
+Removes the environment from the server, under the release lock, in its
+current release: the environment's destroy step if it has one (destroy:
+in config.yaml, optional: one devopsy command, while everything runs),
+then docker compose down with volumes and the images built without an
+image: name, then shared/mnt emptied as root in devopsy-util; then each
+release's image tags, then its directory (releases, shared/ with its data
+and .env). A failure before the removal removes nothing. Asks for the
+target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
 .env stay.
 
-Without a target, --destroy runs the destroy step under defaults: in
-config.yaml, in place, asking for the project's name unless --yes. devopsy
-removes nothing itself: what goes is what the step removes.
+Without a target, --destroy does the same in place, with the destroy
+step under defaults:, asking for the project's name unless --yes:
+containers, volumes, built images and .devopsy/mnt's data. The checkout
+stays.
 `,
 	"--shell-host": `Usage: devopsy @<server> --shell-host
        devopsy @<target> --shell-host

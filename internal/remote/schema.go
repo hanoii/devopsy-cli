@@ -66,11 +66,12 @@ defaults:
   # What --rollback runs (required for it): the same phases, in the release
   # before current (no upload, imports kept). A plain command is run alone.
   rollback: deploy
-  # What --destroy runs (required for it): one devopsy command in the
-  # current release, under the lock. It takes the project's containers,
-  # volumes and data down (shared/mnt holds files containers own); devopsy
-  # then removes the directory. A failure removes nothing.
-  destroy: destroy
+  # What --destroy runs first (optional): one devopsy command in the
+  # current release, under the lock, while everything still runs (a last
+  # dump). devopsy then takes the containers, volumes and built images
+  # down, empties shared/mnt and removes the directory. A failure removes
+  # nothing.
+  destroy: backup
   # Per-environment settings, written into each release's .devopsy/target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:

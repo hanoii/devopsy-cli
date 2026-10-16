@@ -730,17 +730,17 @@ func dockerOut(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// ensureRsyncImage builds devopsy's rsync image on this host when missing.
-func ensureRsyncImage(ctx context.Context) error {
-	if exec.CommandContext(ctx, "docker", "image", "inspect", remote.RsyncImage).Run() == nil {
+// ensureUtilImage builds devopsy's util image on this host when missing.
+func ensureUtilImage(ctx context.Context) error {
+	if exec.CommandContext(ctx, "docker", "image", "inspect", remote.UtilImage).Run() == nil {
 		return nil
 	}
-	sayErr("devopsy: building " + remote.RsyncImage)
-	cmd := exec.CommandContext(ctx, "docker", remote.BuildRsyncImageArgs()...)
-	cmd.Stdin = strings.NewReader(strings.Join(remote.RsyncDockerfile, "\n") + "\n")
+	sayErr("devopsy: building " + remote.UtilImage)
+	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs()...)
+	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
 	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("building %s: %w", remote.RsyncImage, err)
+		return fmt.Errorf("building %s: %w", remote.UtilImage, err)
 	}
 	return nil
 }
@@ -830,7 +830,7 @@ func runSyncPush(cwd string, color bool) int {
 		return fail(strings.Join(conflicts, "\ndevopsy: "))
 	}
 	if len(dirs) > 0 {
-		if err := ensureRsyncImage(ctx); err != nil {
+		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -1199,7 +1199,7 @@ func rsyncdConf(entries, files []string) string {
 }
 
 // syncRsync copies dirs (entries of the parent's mnt) into the child's,
-// replacing what is there (--delete), as root in devopsy's rsync image.
+// replacing what is there (--delete), as root in devopsy's util image.
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
@@ -1239,7 +1239,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 		}
 		for i, d := range present {
 			sayErr("devopsy: rsync mnt/" + d)
-			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.RsyncImage}, rsync...), args...)
+			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
 			name := fmt.Sprintf("devopsy-sync-%d-%d", os.Getpid(), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
 			if slices.Contains(files, d) {
@@ -1264,7 +1264,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 		return nil
 	}
 
-	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.RsyncImage,
+	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.UtilImage,
 		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
