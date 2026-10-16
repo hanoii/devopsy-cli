@@ -917,7 +917,7 @@ exit 0
 	}
 
 	// a's next release prunes a's first: b's bookmark holds X.
-	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "the images of 1 stay: other releases hold them") {
+	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "the images of 1 that other releases hold stay: registry/app:abc, mariadb:11") {
 		t.Errorf("pruning a release whose images others hold says nothing:\n%s", out)
 	}
 	if exists("app/a/prod/releases/1") || fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "" {
