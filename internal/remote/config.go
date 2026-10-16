@@ -1365,3 +1365,39 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 	t.Address += t.Name
 	return &t, nil
 }
+
+// ReleaseEnvironment is the environment a release was made for, as the
+// release's own config defines it: the name in its target.env, its
+// config.yaml, defaults applied. --rollback, the restart after a failed
+// run step and --destroy run its steps, never the checkout's, which may
+// have changed since or be another branch's.
+func ReleaseEnvironment(projectDir string) (*Target, error) {
+	file := filepath.Join(projectDir, TargetEnvFile)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	name := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(line, "DEVOPSY_ENVIRONMENT="); ok {
+			name = strings.Trim(v, `'"`)
+		}
+	}
+	if name == "" {
+		return nil, fmt.Errorf("%s names no environment (DEVOPSY_ENVIRONMENT)", file)
+	}
+	c, err := LoadConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	t, _, err := match(c.Environments, name)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, fmt.Errorf("the release's config has no environment %s", name)
+	}
+	named := *t
+	named.Name = name
+	return &named, nil
+}

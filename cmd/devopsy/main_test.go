@@ -623,32 +623,39 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("--log <id> (%d):\n%s", code, out)
 	}
 
-	// A failing run goes back to the previous release, restarts it with its
-	// rollback's run step, and skips after. Remote before steps ran in it.
+	// A failing run goes back to the previous release and restarts it with
+	// its own run step, from its own config: the first release has no
+	// rollback:, so its release: one, whatever the checkout says now. After
+	// steps are skipped; remote before steps ran in it.
 	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
 	next()
 	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "--release")
-	if code != 4 || !strings.Contains(out, "mark before") || !strings.Contains(out, "current is back to") || !strings.Contains(out, "deploy --back in") || strings.Contains(out, "after ran") || current() != first {
+	if code != 4 || !strings.Contains(out, "mark before") || !strings.Contains(out, "current is back to") || !strings.Contains(out, "with its own run step") || strings.Contains(out, "deploy --back in") || strings.Count(out, "deploy --fast in") < 2 || strings.Contains(out, "after ran") || current() != first {
 		t.Fatalf("run failure (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
 
-	// rollback: back to the first release, running its run step.
+	// rollback: back to the release before, running its own rollback:.
 	next()
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "--rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != first {
-		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), first, out)
+	second := current()
+	next()
+	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == second {
+		t.Fatalf("third release (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != second {
+		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), second, out)
 	}
 	// The rollback's log is appended to the restored release's.
-	if data, err := os.ReadFile(filepath.Join(server, first, ".devopsy-log")); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {
+	if data, err := os.ReadFile(filepath.Join(server, second, ".devopsy-log")); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {
 		t.Fatalf("rollback log: %v\n%s", err, data)
 	}
 
-	// rollback needs its own steps.
-	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
-	if out, code := run(nil, "@prod", "--rollback"); code == 0 || !strings.Contains(out, "environment prod has no rollback steps") || !strings.Contains(out, "rollback: up -d --wait") {
-		t.Fatalf("rollback without steps (%d):\n%s", code, out)
+	// The release rolled back to needs rollback: steps of its own: the
+	// first has none, whatever the checkout has. Nothing changes.
+	if out, code := run(nil, "@prod", "--rollback"); code == 0 || !strings.Contains(out, "gives environment prod no rollback run step") || current() != second {
+		t.Fatalf("rollback without steps (%d), current %s:\n%s", code, current(), out)
 	}
 
 	// Unknown keys are refused, not ignored.
@@ -915,7 +922,10 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "@prod", "--ssh-config"); code != 0 || !strings.Contains(out, "Host server") {
 		t.Fatalf("@prod --ssh-config (%d):\n%s", code, out)
 	}
-	write(t, filepath.Join(dot, "config.yaml"), "project: shop\ninstances: true\ndefaults:\n  mode: image\n  release: deploy\n  destroy: destroy\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n", 0o644)
+	// The step is the release's own, from its config on the server: the
+	// checkout's is not what runs.
+	withStep := "project: shop\ninstances: true\ndefaults:\n  mode: image\n  release: deploy\n  destroy: destroy\nenvironments:\n  prod: {}\n  \"pr-*\": {}\n"
+	write(t, filepath.Join(root, "shop", "c", "pr-12", "current", ".devopsy", "config.yaml"), withStep, 0o644)
 	if out, code := run(nil, "@c/pr-12", "--destroy"); code == 0 || !strings.Contains(out, "add --yes") {
 		t.Fatalf("--destroy without a terminal (%d):\n%s", code, out)
 	}

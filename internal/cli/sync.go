@@ -49,6 +49,10 @@ const (
 // a server's release by DestroyScript, and locally by --destroy itself.
 const DestroyDataFlag = "--destroy-data"
 
+// ReleaseStepsFlag runs a rollback's or a restart's steps on a server from
+// the release's own config, hidden: run by ActivateScript.
+const ReleaseStepsFlag = "--release-steps"
+
 // --export and --import move one service's data, the way its SyncLabel
 // says, locally or with @<target> on a server.
 const (

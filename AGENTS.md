@@ -206,6 +206,14 @@ repositories fit together and the open ideas.
   compose stores bind-mount paths in containers, and pruned releases would
   break them. The exception is `prepare`, in the new release before it is
   current: it must not start services.
+- **Steps of what is deployed come from the server:** a rollback's
+  (`--release-steps rollback <phase> [<release>]`, hidden,
+  `runReleaseSteps`), the restart after a failed run and `--destroy`'s
+  step (`destroyStep`) are read from the release's own `config.yaml`, its
+  environment from `target.env` (`ReleaseEnvironment`), never the
+  checkout's, which may have changed or be another branch. A release's
+  come from the checkout: it is what is uploaded. A rollback's local
+  before and after steps stay the checkout's.
 - `--release` and `--rollback` take no command: the environment's
   `release:`/`rollback:` (`remote.Steps`: before, prepare, run, after; a
   plain string is run alone) are required. Phases, not a free list, so the
@@ -239,8 +247,9 @@ repositories fit together and the open ideas.
   restores those, all or nothing, else fetches; a fetch failure restores
   `$prev`'s; pruning untags); switch
   `current`; `run`; on failure switch back and restart the previous release
-  with its own run step (`Phases.Restart`: the rollback's, else the
-  release's), its own images back first (`get_images`); prune to
+  with its own run step (`--release-steps restart run`: its own config's
+  rollback:, else release:), its own images back first (`get_images`);
+  prune to
   `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.

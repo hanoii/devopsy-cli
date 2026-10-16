@@ -495,8 +495,8 @@ there. The run step only starts them. Each release
 keeps its images under a tag of its own (devopsy-<compose name>-<id>), so
 a rollback runs exactly what that release ran, without building or
 pulling. When run fails, current goes back to the previous release, which
-gets its own images back and is restarted with its own run step (the
-rollback's, else the release's).
+gets its own images back and is restarted with its own run step, from
+its own config on the server (its rollback:, else its release:).
 
 Each step is a devopsy command line, split on spaces. The remote steps
 share one SSH session, under the release lock: hence local before steps
@@ -547,8 +547,9 @@ no before or after steps, which are the operator's side of a deploy.
 	"--rollback": `Usage: devopsy @<target> --rollback
 
 Makes the release before the current one current again (skipping failed
-ones) and runs the target's rollback steps from config.yaml (required), in
-release's phases: before, prepare and the variables check in the restored
+ones) and runs its rollback steps, from the restored release's own
+config.yaml on the server, not the checkout's (required there; the
+checkout's local before and after steps run locally), in release's phases: before, prepare and the variables check in the restored
 release (a failure changes nothing), run once it is current (a failure goes
 back again), after. No upload, and no new imports: the restored release
 keeps what it had. Usually the same run step as release:
@@ -557,7 +558,8 @@ keeps what it had. Usually the same run step as release:
     prod:
       rollback: deploy
 
-The run step runs in the restored release, so it must exist there.
+The steps and their commands are the restored release's, so they must
+exist there.
 Rolling back restores that release's files and target env, not data.
 `,
 	"--releases": `Usage: devopsy @<target> --releases

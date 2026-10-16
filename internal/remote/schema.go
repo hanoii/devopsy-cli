@@ -64,7 +64,8 @@ defaults:
       - remote: maintenance off
       - local: notify
   # What --rollback runs (required for it): the same phases, in the release
-  # before current (no upload, imports kept). A plain command is run alone.
+  # before current (no upload, imports kept), as that release's own config
+  # says. A plain command is run alone.
   rollback: deploy
   # What --destroy runs first (optional): one devopsy command in the
   # current release, under the lock, while everything still runs (a last
