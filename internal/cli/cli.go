@@ -544,7 +544,7 @@ check, the images (always as build mode: what has a build is built, the
 rest pulled), then run. No upload, no switch and nothing to go back to;
 no before or after steps, which are the operator's side of a deploy.
 `,
-	"--rollback": `Usage: devopsy @<target> --rollback
+	"--rollback": `Usage: devopsy @<target> --rollback [--yes]
 
 Makes the release before the current one current again (skipping failed
 ones) and runs its rollback steps, from the restored release's own
@@ -561,7 +561,8 @@ keeps what it had. Usually the same run step as release:
 
 The steps and their commands are the restored release's, so they must
 exist there.
-Rolling back restores that release's files and target env, not data.
+Rolling back restores that release's files and target env, not data. It
+never asks: --yes is accepted, and changes nothing.
 `,
 	"--releases": `Usage: devopsy @<target> --releases
 

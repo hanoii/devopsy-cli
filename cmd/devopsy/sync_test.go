@@ -336,8 +336,9 @@ func TestSyncSameHost(t *testing.T) {
 		t.Fatalf("--release-sync --yes (%d):\n%s", code, out)
 	}
 	s.logs()
-	if out, code := s.run(nil, "@dev", "--rollback", "--yes"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
-		t.Errorf("--rollback --sync (%d):\n%s", code, out)
+	// A rollback copies nothing: --from is refused (--yes is accepted).
+	if out, code := s.run(nil, "@dev", "--rollback", "--from", "@prod"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
+		t.Errorf("--rollback --from (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.sync=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)

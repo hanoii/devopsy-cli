@@ -247,7 +247,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		yes, from := false, ""
 		for i := 1; i < len(args); i++ {
 			switch a := args[i]; {
-			case !rollback && (a == "--yes" || a == "-y"):
+			// A rollback never asks: --yes is accepted, for scripts that
+			// pass it to every command.
+			case a == "--yes" || a == "-y":
 				yes = true
 			case !rollback && a == "--from":
 				// Where a syncing release copies from, instead of the
