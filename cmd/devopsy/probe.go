@@ -88,13 +88,13 @@ func runPrepareRelease(cwd string, color bool) int {
 
 // runReleaseSettings implements the hidden --release-settings, run by the
 // release scripts on a server: the machine's releases: settings, as
-// key=value lines.
+// key=value lines, and the scripts' protocol it speaks (remote.Protocol).
 func runReleaseSettings(color bool) int {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
 		cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
 		return 1
 	}
-	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\n", r.Root, r.Keep, r.MaxKeep)
+	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nprotocol=%d\n", r.Root, r.Keep, r.MaxKeep, remote.Protocol)
 	return 0
 }

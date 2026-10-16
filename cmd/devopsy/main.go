@@ -76,6 +76,8 @@ func run() int {
 			}
 		case "--release-settings":
 			return runReleaseSettings(color)
+		case imagesFlag:
+			return runImages(args[1:], color)
 		}
 	}
 
