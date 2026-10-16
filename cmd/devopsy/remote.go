@@ -777,23 +777,28 @@ func parentEnv(t *remote.Target) [][2]string {
 	return env
 }
 
-// runDestroy implements `devopsy @target --destroy [--yes]`: the
+// runDestroy implements `devopsy @target --destroy [--yes] [--purge]`: the
 // environment's destroy step, then its directory on the server. It asks for
-// the target's name unless --yes.
+// the target's name unless --yes. Then the project's and instance's .env
+// with their directories, when no environment is left in them: removed
+// with --purge, asked at a terminal, else a warning saying how.
 func runDestroy(t *remote.Target, projectName string, args []string, color bool) int {
-	yes := false
+	yes, purge := false, false
 	for _, a := range args {
 		switch a {
 		case "--yes", "-y":
 			yes = true
+		case "--purge":
+			purge = true
 		default:
-			cli.Fprint(os.Stderr, red, "usage: devopsy @"+t.Name+" --destroy [--yes]", color)
+			cli.Fprint(os.Stderr, red, "usage: devopsy @"+t.Name+" --destroy [--yes] [--purge]", color)
 			return 1
 		}
 	}
 	where := t.Host + ":" + t.Path
+	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
+		if !terminal {
 			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
 			return 1
 		}
@@ -805,6 +810,40 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		}
 	}
 	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
+	if err != nil {
+		cli.Fprint(os.Stderr, red, err.Error(), color)
+		return 1
+	}
+	if code != 0 {
+		return code
+	}
+	return purgeLeftovers(t, purge, terminal, color)
+}
+
+// purgeLeftovers deals with the project's and instance's .env and their
+// directories once --destroy left no environment in them: removed with
+// --purge or a yes at the terminal, else a warning saying how.
+func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
+	var out bytes.Buffer
+	if code, err := remote.SSH(t, remote.LeftoverScript(t, false), bytes.NewReader(nil), &out, false); err != nil || code != 0 {
+		return 0 // the environment is gone: what is left only waits
+	}
+	dirs := strings.Fields(out.String())
+	if len(dirs) == 0 {
+		return 0
+	}
+	if !purge && terminal {
+		fmt.Fprintf(os.Stderr, "No environment is left in %s: remove it and its .env, shared by its environments, too? [y/N] ", strings.Join(dirs, " and "))
+		line, _ := stdinReader.ReadString('\n')
+		purge = strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
+	}
+	if !purge {
+		details := []string{"No environment is left there. Its .env stays, with what --vars-project or --vars-instance set, for the next environment released there."}
+		details = append(details, "To remove them:", "devopsy @"+t.Address+" --destroy --yes --purge")
+		report.Warn(os.Stderr, color, t.Host+" keeps "+strings.Join(dirs, " and "), details...)
+		return 0
+	}
+	code, err := remote.SSH(t, remote.LeftoverScript(t, true), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1
