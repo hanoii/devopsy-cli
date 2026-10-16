@@ -996,12 +996,11 @@ remove_images() {
   rm_freef="$1/` + ImagesFile + `-free"
   rm_free=
   [ ! -f "$rm_freef" ] || rm_free=" $(tr '\n' ' ' <"$rm_freef")"
-  rm_some=
+  rm_stay=
   while read -r ref; do
     [ -n "$ref" ] || continue
     rm_bm=$(bookmark "$ref" "$1")
     rm_img=$(docker image inspect --format '{{.Id}}' "$rm_bm" 2>/dev/null) || continue
-    rm_some=1
     # Refused when it is the image's last name and a container, even a
     # stopped one, uses it: say so, nothing will list it again.
     rm_err=$(docker image rm "$rm_bm" 2>&1 >/dev/null) || left_add "$rm_bm" "$rm_img" "$rm_err"
@@ -1012,12 +1011,12 @@ remove_images() {
     if [ -z "$rm_held" ]; then
       rm_free="$rm_free $rm_img"
       echo "$rm_img" 2>/dev/null >>"$rm_freef" || true
+    else
+      case ", $rm_stay, " in *", $ref, "*) ;; *) rm_stay="${rm_stay:+$rm_stay, }$ref" ;; esac
     fi
   done <"$1/` + ImagesFile + `"
-  if [ -z "${rm_free# }" ]; then
-    [ -z "$rm_some" ] || echo "devopsy: the images of $rm_id stay: other releases hold them" >&2
-    return 0
-  fi
+  [ -z "$rm_stay" ] || echo "devopsy: the images of $rm_id that other releases hold stay: $rm_stay" >&2
+  [ -n "${rm_free# }" ] || return 0
   rm_gone=
   while read -r ref; do
     [ -n "$ref" ] || continue

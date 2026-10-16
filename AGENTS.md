@@ -285,7 +285,8 @@ repositories fit together and the open ideas.
   `devopsy-images`, no directory scanning; what the first freed is kept
   in `devopsy-images-free` until the directory goes, so a removal cut
   off between them is finished by the next (the bookmarks are gone by
-  then). Nothing freed is said too ("the images of <id> stay"). Holder
+  then). What other releases hold is said too ("the images of <id> that other
+  releases hold stay: <names>"). Holder
   files are for messages only: failing to write one never fails the
   lock. `prune_images` (`docker image
   prune -f`) once after a caller's removals. All under the server's image
