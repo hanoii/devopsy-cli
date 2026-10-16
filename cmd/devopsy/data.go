@@ -86,7 +86,7 @@ func stopFor(cwd string, s cli.SyncService) (restore func() error, err error) {
 }
 
 // dataMnt is the project's mnt, its link resolved (on servers it is
-// shared/mnt): what the rsync image mounts.
+// shared/mnt): what the util image mounts.
 func dataMnt(projectDir string) (string, error) {
 	mnt := filepath.Join(projectDir, "mnt")
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
@@ -172,7 +172,7 @@ func runExport(cwd string, args []string, color bool) int {
 		if len(entries) == 0 {
 			return fail("nothing to export: " + name + " bind-mounts nothing that exists under .devopsy/mnt")
 		}
-		if err := ensureRsyncImage(ctx); err != nil {
+		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -191,7 +191,7 @@ func runExport(cwd string, args []string, color bool) int {
 		err = runSyncHook(ctx, cwd, projectDir, syncHookEnv(services), nil, os.Stdout, "export", name)
 	} else {
 		sayErr("devopsy: exporting " + name + ": a tar of mnt/" + strings.Join(entries, ", mnt/"))
-		run := append([]string{"-v", mnt + ":/mnt:ro", remote.RsyncImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
+		run := append([]string{"-v", mnt + ":/mnt:ro", remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
 		err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 	}
 	if err != nil {
@@ -277,7 +277,7 @@ func importSpool(projectDir, name string) (*os.File, error) {
 }
 
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
-// "." for mnt itself, as tar reads it in the rsync image: a truncated
+// "." for mnt itself, as tar reads it in the util image: a truncated
 // archive fails here, before anything is emptied.
 func tarEntries(ctx context.Context, spool string) ([]string, error) {
 	f, err := os.Open(spool)
@@ -286,7 +286,7 @@ func tarEntries(ctx context.Context, spool string) ([]string, error) {
 	}
 	defer f.Close()
 	name := fmt.Sprintf("devopsy-import-%d-list", os.Getpid())
-	full := []string{"run", "--rm", "-i", "--name", name, remote.RsyncImage, "tar", "-tf", "-"}
+	full := []string{"run", "--rm", "-i", "--name", name, remote.UtilImage, "tar", "-tf", "-"}
 	trace(append([]string{"docker"}, full...))
 	cmd := exec.CommandContext(ctx, "docker", full...)
 	cmd.Stdin, cmd.Stderr = f, errOut
@@ -426,7 +426,7 @@ func runImport(cwd string, args []string, color bool) int {
 		if !spoolEndsWithZeros(spool, 1024) {
 			return fail("stdin is not a complete tar (no end-of-archive blocks: cut short?): nothing imported")
 		}
-		if err := ensureRsyncImage(ctx); err != nil {
+		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
 		if entries, err = tarEntries(ctx, spool); err != nil {
@@ -482,7 +482,7 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		} else {
 			sayErr("devopsy: importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
-			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.RsyncImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
+			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-import-%d", os.Getpid()), in, nil, run...)
 		}
 	}

@@ -130,6 +130,8 @@ func run() int {
 		return runSyncExec(args[1:], color)
 	case cli.SyncServicesFlag:
 		return runSyncServices(cwd, args[1:], color)
+	case cli.DestroyDataFlag:
+		return runDestroyData(cwd, args[1:], color)
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {

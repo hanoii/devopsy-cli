@@ -261,8 +261,8 @@ func TestSyncSameHost(t *testing.T) {
 	// the parent's; one container copies, no daemon. app, labeled rsync
 	// alone, keeps running.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:2 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-rsync:2 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "shop-dev compose", "start db"}
 	rest := docker
 	for _, want := range order {
@@ -447,7 +447,7 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy-rsync:2 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy-util:1 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -529,7 +529,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
 	}
-	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-rsync:2 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -1476,7 +1476,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-rsync:2 tar -C /mnt -cf - --numeric-owner storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:1 tar -C /mnt -cf - --numeric-owner storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -1497,7 +1497,7 @@ func TestExportImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-rsync:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-util:1 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,

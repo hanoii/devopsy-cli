@@ -48,15 +48,16 @@ var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCount
 // its services stopped meanwhile.
 var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=accept-new"}
 
-// RsyncImage is devopsy's rsync image, built on a host from
-// RsyncDockerfile when missing: syncs' rsync, and the tar of --export and
-// --import. Its tag changes with the Dockerfile: hosts never rebuild an
-// image they have.
-const RsyncImage = "devopsy-rsync:2"
+// UtilImage is devopsy's own image for what needs root on a host's files,
+// built there from UtilDockerfile when missing: syncs' rsync, the tar of
+// --export and --import, emptying mnt on --destroy. Its tag changes with
+// the Dockerfile: hosts never rebuild an image they have. It was
+// devopsy-rsync until October 2026: hosts keep that one until removed.
+const UtilImage = "devopsy-util:1"
 
-// RsyncDockerfile is RsyncImage's Dockerfile, one line per element. GNU
+// UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
 // tar, not busybox's: --numeric-owner and --overwrite as documented.
-var RsyncDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar"}
+var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
@@ -316,9 +317,9 @@ func CurrentExistsScript(t *Target) string {
 `
 }
 
-// buildRsyncImage builds RsyncImage when the host lacks it.
-func buildRsyncImage() string {
-	return "docker image inspect " + Quote(RsyncImage) + " >/dev/null 2>&1 || { echo \"devopsy: building " + RsyncImage + "\" >&2; printf '%s\\n' " + quoteAll(RsyncDockerfile) + " | docker build -q -t " + Quote(RsyncImage) + " - >/dev/null; }\n"
+// buildUtilImage builds UtilImage when the host lacks it.
+func buildUtilImage() string {
+	return "docker image inspect " + Quote(UtilImage) + " >/dev/null 2>&1 || { echo \"devopsy: building " + UtilImage + "\" >&2; printf '%s\\n' " + quoteAll(UtilDockerfile) + " | docker build -q -t " + Quote(UtilImage) + " - >/dev/null; }\n"
 }
 
 // RsyncVanished is rsync's exit code when files vanished between its scan
@@ -341,13 +342,13 @@ func RsyncModule(entry string) string {
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/), from the
-// daemon's module of that name (RsyncModule), as root in RsyncImage, on
+// daemon's module of that name (RsyncModule), as root in UtilImage, on
 // the host's network to reach the forward.
 func SyncReceiveScript(toDir, port string, dirs, files, args []string) string {
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildRsyncImage() +
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() +
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(RsyncImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { echo "devopsy: mnt/$1 ` + HalfCopiedNotice + `" >&2; exit 1; }
     echo "devopsy: rsync mnt/$1: ` + RsyncVanishedNotice + `" >&2
   }
@@ -382,8 +383,8 @@ func SyncExecScript(toDir, toProject string, env map[string]string, args []strin
 	return "set -eu\ncd " + Quote(path.Dir(toDir)) + "\n" + exports + devopsyCall(toProject, args, true) + "\n"
 }
 
-// BuildRsyncImageArgs are docker's arguments to build RsyncImage from its
+// BuildUtilImageArgs are docker's arguments to build UtilImage from its
 // Dockerfile on stdin.
-func BuildRsyncImageArgs() []string {
-	return []string{"build", "-q", "-t", RsyncImage, "-"}
+func BuildUtilImageArgs() []string {
+	return []string{"build", "-q", "-t", UtilImage, "-"}
 }
