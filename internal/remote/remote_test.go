@@ -588,6 +588,37 @@ func readFile(path string) string {
 	return string(data)
 }
 
+// Bookmarks fit Docker's 128-character tags: readable up to 105
+// characters of name, cut and hashed past that, and two long names that
+// differ only past the cut stay apart.
+func TestBookmarkPrefix(t *testing.T) {
+	const id = "20261016120000"
+	if got := BookmarkPrefix("drupal11-prod"); got != "devopsy-drupal11-prod-" {
+		t.Errorf("short name: %q", got)
+	}
+	if got := BookmarkPrefix(""); got != "devopsy-" {
+		t.Errorf("no name: %q", got)
+	}
+	at := strings.Repeat("a", 105)
+	if got := BookmarkPrefix(at); got != "devopsy-"+at+"-" || len(got+id) != 128 {
+		t.Errorf("105 characters: %q (%d)", got, len(got+id))
+	}
+	long1 := strings.Repeat("a", 110) + "-one"
+	long2 := strings.Repeat("a", 110) + "-two"
+	p1, p2 := BookmarkPrefix(long1), BookmarkPrefix(long2)
+	if p1 == p2 {
+		t.Errorf("long names share %q", p1)
+	}
+	for _, p := range []string{p1, p2} {
+		if len(p+id) != 128 || !strings.HasPrefix(p, "devopsy-"+strings.Repeat("a", 96)+"-") {
+			t.Errorf("long name: %q (%d)", p, len(p+id))
+		}
+	}
+	if BookmarkPrefix(long1) != p1 {
+		t.Errorf("not stable")
+	}
+}
+
 // A release gets its images by mode before it goes live and bookmarks
 // them: a failure there puts the live release's names back, a failed run
 // step and a rollback restore a release's own images without building or
