@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -914,9 +915,17 @@ exit 0
 	write(t, filepath.Join(root, "app/b/prod/releases/3", ImagesFile), "registry/app:def\n")
 	write(t, filepath.Join(root, "images", "registry_app:devopsy-app-b-prod-3"), "Z\n")
 	write(t, filepath.Join(root, "images", "registry_app:def"), "Z\n")
-	out, err := run(DestroyScript(target("b"), ""), "FAKE_IN_USE=registry/app:def")
+	// A release whose fetch was cut off is recovered first, so what it
+	// got goes too.
+	write(t, filepath.Join(root, "app/b/prod/releases/4", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(root, "app/b/prod/releases/4", FetchingFile), "")
+	out, err := run(DestroyScript(target("b"), ""), "FAKE_IN_USE=registry/app:def", "TAG=ghi")
 	if err != nil || !strings.Contains(out, "registry/app:def stays: conflict: a container uses registry/app:def") || exists("app/b/prod") {
 		t.Errorf("destroy b (%v):\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "fetch of release 4 was interrupted") {
+		t.Errorf("destroy did not recover release 4:\n%s", out)
 	}
 
 	// --destroy with the lock taken: nothing removed.
@@ -976,6 +985,91 @@ exit 0
 	if fakeImage(root, "postgres:15") != "A1" || fakeImage(root, "postgres:16") != "B1" {
 		t.Errorf("rollback: postgres:15 is %q, postgres:16 %q", fakeImage(root, "postgres:15"), fakeImage(root, "postgres:16"))
 	}
+}
+
+// An interrupted fetch leaves no stray images: a signal runs the trap
+// (what was fetched bookmarked, the live release's names back, the release
+// marked failed, 130), and a fetch whose session dropped without one leaves
+// its marker, which the next release recovers the same way.
+func TestFetchInterrupted(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+id=$(pwd -P); id=${id%/code}; id=${id##*/}
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --images") printf 'app-prod-app\nmariadb:11\n' ;;
+  "-- pull --ignore-buildable") echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
+  "-- build --pull")
+    if [ -n "${FAKE_HANG:-}" ]; then touch "$FAKE_ROOT/building"; sleep 30; exit 1; fi
+    echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
+	base := filepath.Join(root, tg.Path)
+	command := func(id string, env ...string) *exec.Cmd {
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		return cmd
+	}
+	exists := func(path string) bool {
+		_, err := os.Stat(filepath.Join(base, path))
+		return err == nil
+	}
+	if out, err := command("1").CombinedOutput(); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+
+	// Release 2's session dropped mid-fetch: its marker stays and the
+	// names point at what it got.
+	write(t, filepath.Join(base, "releases", "2", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(base, "releases", "2", FetchingFile), "")
+	write(t, filepath.Join(root, "images", "app-prod-app"), "2\n")
+	write(t, filepath.Join(root, "images", "mariadb:11"), "2\n")
+	out, err := command("3").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "the images' fetch of release 2 was interrupted") {
+		t.Fatalf("release 3 (%v):\n%s", err, out)
+	}
+	if !exists("releases/2/"+FailedFile) || exists("releases/2/"+FetchingFile) || fakeImage(root, "app-prod-app:devopsy-app-prod-2") != "2" {
+		t.Errorf("release 2 not recovered:\n%s", out)
+	}
+	if exists("releases/3/" + FetchingFile) {
+		t.Errorf("release 3 kept its marker")
+	}
+
+	// Release 4 gets SIGTERM while it builds, after pulling mariadb:11.
+	cmd := command("4", "FAKE_HANG=1")
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err = cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code != 130 || !strings.Contains(buf.String(), "the images' fetch was interrupted") || !strings.Contains(buf.String(), "release 4 not made current") {
+		t.Fatalf("interrupted release 4 (%v, exit %d):\n%s", err, code, buf.String())
+	}
+	if !exists("releases/4/"+FailedFile) || exists("releases/4/"+FetchingFile) {
+		t.Errorf("release 4 not marked failed, or kept its marker")
+	}
+	if fakeImage(root, "mariadb:devopsy-app-prod-4") != "4" || fakeImage(root, "mariadb:11") != "3" {
+		t.Errorf("release 4's pull not bookmarked, or mariadb:11 not 3's again: %q", fakeImage(root, "mariadb:11"))
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Pruning counts only releases that went live: a failed one between those

@@ -282,6 +282,19 @@ repositories fit together and the open ideas.
   with its processes; a fetch's children keep it, as they keep the
   release lock, so a session that dropped mid-fetch still holds it until
   the fetch ends. Without a mode, `noImages` stubs the functions.
+- **An interrupted fetch** (`ActivateScript`): `fetch_interrupted`, trapped
+  on INT, TERM and HUP around `get_images` (sh runs it once the fetch's
+  child exits; it sets `set +e` and ignores PIPE, so writes to a gone
+  session cannot stop it), bookmarks what was fetched, restores
+  `$prev`'s names and calls `not_live 130`. A `-T` session that drops
+  sends no signal: the fetch runs to its end, and the script dies at its
+  next write. Hence `FetchingFile`, written before a new release's fetch
+  and removed after: `recover_fetching` (caller holds the image lock)
+  marks such a release failed, bookmarks and restores current's names,
+  run after the lock by every activation, `--destroy` and `--releases
+  remove`. The release lock is inherited by the fetch, so recovery never
+  races one still running. Rollbacks get the trap, never the marker,
+  which would mark a good release failed.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
   (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
