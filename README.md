@@ -533,7 +533,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   profiles get theirs when used. The run step's `up` then finds them all;
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
   `current` as it was, its images included; what the failed release got
-  is tagged as its own, so it goes with it.
+  is tagged as its own, so it goes with it. So does an interrupted one
+  (Ctrl-C, a lost connection): the release is marked failed once the
+  build or pull stops. A CI session that drops gets no signal, so the
+  build runs to its end; the next release, `--destroy` or `--releases
+  remove` then finds it marked as fetching and does the same.
 - **Each release keeps its images:** once fetched, every image the release
   runs gets a second tag, `devopsy-<compose name>-<release id>`, without
   changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`),
@@ -636,8 +640,8 @@ uploaded in `code/`, where `current` points and commands run, and
 devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
-(its images), `devopsy-log`, and `devopsy-failed` when it never went live
-or its run failed. Releases from before October 2026 kept these inside the
+(its images), `devopsy-log`, `devopsy-failed` when it never went live
+or its run failed, and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
 tree: rollbacks cannot go back to them, and their image tags stay until
 removed by hand (`docker image rm`).
 

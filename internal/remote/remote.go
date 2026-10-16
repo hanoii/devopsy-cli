@@ -49,6 +49,10 @@ const (
 	ImagesFile = "devopsy-images"
 	// FailedFile marks a release that never went live or whose run failed.
 	FailedFile = "devopsy-failed"
+	// FetchingFile marks a new release while it fetches its images: one
+	// left behind was interrupted without a signal (a CI session that
+	// dropped), and recover_fetching finishes what its trap would have.
+	FetchingFile = "devopsy-fetching"
 )
 
 // ReleaseFile is name, one of a release's devopsy files, for the project
@@ -491,6 +495,15 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 `
+	if images != "" {
+		// The release lock is held until a dropped session's fetch ends, so
+		// none is still running.
+		s += `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+  recover_fetching
+  image_unlock
+fi
+`
+	}
 	if rollback {
 		s += `id=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   [ -e "$base/releases/$r/` + FailedFile + `" ] && continue
@@ -559,15 +572,43 @@ done
 		// A failure may have moved names the live release runs: what it
 		// got is bookmarked, so it goes with the release, and the live
 		// release's own come back.
-		s += `get_images "$rel" || {
+		// Interrupted (Ctrl-C, a lost terminal, SIGTERM), the same: the
+		// trap runs once the fetch has ended, with set +e and SIGPIPE
+		// ignored, so a write to a gone session cannot stop it.
+		// A session that drops without a signal leaves FetchingFile for
+		// recover_fetching; a rollback writes none, which would mark a good
+		// release failed.
+		s += `fetch_interrupted() {
+  trap '' INT TERM HUP PIPE
+  set +e
+  echo "devopsy: the images' fetch was interrupted" >&2
+  if image_lock shared restoring; then
+    bookmark_images "$rel"
+    [ -z "$prev" ] || restore_images "$base/$prev"
+    image_unlock
+  fi
+  rm -f "$rel/` + FetchingFile + `"
+  not_live 130
+}
+`
+		if !rollback {
+			s += `: >"$rel/` + FetchingFile + `"
+`
+		}
+		s += `trap fetch_interrupted INT TERM HUP
+get_images "$rel" || {
   s=$?
+  trap - INT TERM HUP
   if image_lock shared restoring; then
     bookmark_images "$rel"
     [ -z "$prev" ] || restore_images "$base/$prev" || true
     image_unlock
   fi
+  rm -f "$rel/` + FetchingFile + `"
   not_live "$s"
 }
+trap - INT TERM HUP
+rm -f "$rel/` + FetchingFile + `"
 `
 	}
 	s += `make_current "releases/$id"
@@ -689,6 +730,9 @@ const ImagesHolders = ".devopsy-images.holders"
 // there is no mode, so scripts call them either way.
 const noImages = `image_lock() { :; }
 image_unlock() { :; }
+bookmark_images() { :; }
+restore_images() { return 1; }
+recover_fetching() { :; }
 image_holders() { echo "another release"; }
 remove_images() { :; }
 prune_images() { :; }
@@ -723,6 +767,10 @@ prune_images() { :; }
 //     exclusive lock; never fails.
 //   - prune_images: docker image prune -f, once after removals, for what
 //     they left dangling.
+//   - recover_fetching: a release left with FetchingFile (its session
+//     dropped mid-fetch, no signal) is marked failed, what it got
+//     bookmarked, and current's names ($prev, when set) restored. The
+//     caller holds the image lock.
 //   - image_lock shared|exclusive <doing> [now] and image_unlock: the
 //     server's image lock (ImagesLock) on fd 8, always taken after the
 //     release lock (fd 9). With now it never waits; otherwise up to 10
@@ -866,6 +914,17 @@ remove_images() {
   done <"$1/` + ImagesFile + `"
   [ -z "$rm_gone" ] || echo "devopsy: removed $rm_gone, which only $rm_id held" >&2
   return 0
+}
+recover_fetching() {
+  for rf in "$base"/releases/*/` + FetchingFile + `; do
+    [ -e "$rf" ] || continue
+    rf_rel=${rf%/*}
+    echo "devopsy: the images' fetch of release ${rf_rel##*/} was interrupted: marking it failed, its images bookmarked" >&2
+    bookmark_images "$rf_rel"
+    [ -z "${prev:-}" ] || restore_images "$base/$prev" || true
+    touch "$rf_rel/` + FailedFile + `"
+    rm -f "$rf"
+  done
 }
 prune_images() {
   pi=$(docker image prune -f 2>/dev/null | sed -n 's/^Total reclaimed space: //p') || true
@@ -1252,6 +1311,7 @@ fi
 exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + `
 ` + images + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
+recover_fetching
 dir=
 if [ -d "$base/current" ]; then
   dir="$base/current"
