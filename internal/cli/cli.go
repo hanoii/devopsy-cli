@@ -574,7 +574,9 @@ Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
 releases that never went live or whose run step failed. * marks the
 current one. Under each, the images it runs: what a rollback to it
-restores, and what removing it may free.
+restores, and what removing it may free. Then the images the project's
+removals left, because a container (even a stopped one) uses them: each
+pruning on the server retries them.
 
 remove takes releases away, each with its images, as pruning does: its
 tags, and the images no other release on the server still tags (any

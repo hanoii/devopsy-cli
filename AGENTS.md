@@ -269,7 +269,14 @@ repositories fit together and the open ideas.
   environment or project) loses the refs that release listed that still
   point to it (`docker image rm`, never `-f`: a container's image stays,
   with Docker's reason, a bookmark too when it is the image's last name,
-  a stopped container's included: nothing lists it again); a ref that moved on stays. Two passes over
+  a stopped container's included); a refused one is recorded
+  (`left_add`) in the project's `ImagesLeftFile` (`<release
+  root>/<project>/.devopsy-images-left`: time, compose name, release,
+  ref, image id, reason), which `--releases` lists (`ParseLeft`) and
+  `prune_images` retries first (`retry_left`, any environment's, under
+  the exclusive lock), dropping a line once its ref is gone, moved on,
+  held by a release again or removed; `LeftoverScript` treats it like
+  the project's `.env`, and `--purge` says what it forgets; a ref that moved on stays. Two passes over
   `devopsy-images`, no directory scanning. `prune_images` (`docker image
   prune -f`) once after a caller's removals. All under the server's image
   lock (`ImagesLock` in the release root, fd 8, after the release lock on

@@ -558,7 +558,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   dangling (server-wide: an untagged image built by hand goes too). Kept
   releases, the ones a rollback goes to, keep theirs, and a name that
   moved on to a newer image stays. Docker refuses a name a container
-  uses, even a stopped one: it stays, and the release says so. A name
+  uses, even a stopped one (a `run` without `--rm`, a service dropped
+  from the compose file): it stays, recorded in the project's directory
+  (`.devopsy-images-left`), which `--releases` lists, and every later
+  pruning, `--releases remove` or `--destroy` on the server retries it,
+  so it goes once its container does. A name
   another project on the server runs by the same name, with no release
   of its own holding it, goes too; that project pulls it again. Images
   are the server's, so removing them takes the server's image lock
