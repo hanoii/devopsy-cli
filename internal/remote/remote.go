@@ -1051,13 +1051,10 @@ left_add() {
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$rm_id" "$1" "$2" "$(printf '%s' "$3" | tr '\t\n' '  ')" >>"$left"
 }
-# retry_left: every project's record on the server, under the exclusive
-# lock: a project with no environment left is retried by the others.
+# retry_left: this project's record, under the exclusive lock.
 retry_left() {
-  for rl_file in "$root"/*/` + ImagesLeftFile + `; do
-    [ -s "$rl_file" ] || continue
-    retry_file "$rl_file"
-  done
+  [ -s "$left" ] || return 0
+  retry_file "$left"
 }
 retry_file() {
   : >"$1.tmp"

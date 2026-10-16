@@ -278,8 +278,8 @@ repositories fit together and the open ideas.
   (`left_add`) in the project's `ImagesLeftFile` (`<release
   root>/<project>/.devopsy-images-left`: time, compose name, release,
   ref, image id, reason), which `--releases` lists (`ParseLeft`) and
-  `prune_images` retries first (`retry_left`, every project's record on
-  the server, under the exclusive lock), dropping a line once its ref is gone, moved on,
+  `prune_images` retries first (`retry_left`, this project's record only,
+  under the exclusive lock), dropping a line once its ref is gone, moved on,
   held by a release again or removed; `LeftoverScript` treats it like
   the project's `.env`, and `--purge` says what it forgets; a ref that moved on stays. Two passes over
   `devopsy-images`, no directory scanning; what the first freed is kept

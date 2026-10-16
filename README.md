@@ -569,8 +569,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   uses, even a stopped one (a `run` without `--rm`, a service dropped
   from the compose file): it stays, recorded in the project's directory
   (`.devopsy-images-left`), which `--releases` lists, and every later
-  pruning, `--releases remove` or `--destroy` on the server retries it,
-  so it goes once its container does. A name
+  pruning, `--releases remove` or `--destroy` of the same project
+  retries it, so it goes once its container does. A name
   another project on the server runs by the same name, with no release
   of its own holding it, goes too; that project pulls it again. Images
   are the server's, so removing them takes the server's image lock
