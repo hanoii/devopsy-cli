@@ -9,14 +9,25 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// project creates dir/<name>/.devopsy with the given files (path: content).
-// Paths ending in "*" are written executable, without the star.
+// project creates dir/<name>/.devopsy with the given files (path: content)
+// and returns dir/<name>. Paths ending in "*" are written executable,
+// without the star. A "target.env" makes it a release: the root is then
+// dir/<name>/code, the file its devopsy-target.env beside it.
 func project(t *testing.T, name string, files map[string]string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), name)
+	if env, ok := files["target.env"]; ok {
+		root = filepath.Join(root, remote.CodeDir)
+		write(t, releaseTargetEnv(root), env)
+	}
 	for path, content := range files {
+		if path == "target.env" {
+			continue
+		}
 		mode := os.FileMode(0o644)
 		if strings.HasSuffix(path, "*") {
 			path = strings.TrimSuffix(path, "*")
@@ -31,6 +42,22 @@ func project(t *testing.T, name string, files map[string]string) string {
 		}
 	}
 	return root
+}
+
+// releaseTargetEnv is the target env file of the release whose code/ is
+// root.
+func releaseTargetEnv(root string) string {
+	return filepath.Join(filepath.Dir(root), remote.TargetEnvFile)
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func envValue(t *testing.T, env []string, key string) (string, bool) {
@@ -204,7 +231,7 @@ func TestBuildCustomCommand(t *testing.T) {
 // release, target only there, and a local one that needs an address gets
 // it from the devopsy that read it, in DEVOPSY_COMMAND_TARGET.
 func TestBuildCommandRun(t *testing.T) {
-	root := project(t, "app", map[string]string{
+	root := project(t, remote.CodeDir, map[string]string{
 		"compose.yaml":     minimalCompose,
 		"commands/image*":  "#!/bin/sh\n## Run: local\n",
 		"commands/deploy*": "#!/bin/sh\n## Run: Target\n",
@@ -214,7 +241,7 @@ func TestBuildCommandRun(t *testing.T) {
 		"commands/typo*":   "#!/bin/sh\n## Run: server\n",
 		"commands/odd*":    "#!/bin/sh\n## Needs: server\n",
 	})
-	release := filepath.Join(root, ProjectDirName, "target.env")
+	release := releaseTargetEnv(root)
 	addressed := []string{commandTargetInternal + "=vm1:prod", CommandTargetEnv + "=stale"}
 	for _, c := range []struct {
 		release bool

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // syncFakeDocker logs every call, with its compose project, to
@@ -212,9 +213,10 @@ func (s *syncSetup) labels(vars string) {
 	}
 }
 
+// current is the release env's current points at: releases/<id>.
 func (s *syncSetup) current(env string) string {
 	l, _ := os.Readlink(filepath.Join(s.root, "shop", env, "current"))
-	return l
+	return strings.TrimSuffix(l, "/"+remote.CodeDir)
 }
 
 func (s *syncSetup) mnt(env string) string {
@@ -289,7 +291,7 @@ func TestSyncSameHost(t *testing.T) {
 	if code != 0 || strings.Count(out, "some files vanished during the copy") != 2 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "/src/storage/ /dst/storage/") {
 		t.Errorf("vanished files (%d):\n%s\n%s", code, out, docker)
 	}
-	data := readString(filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "target.env"))
+	data := readString(releaseFile(t, filepath.Join(s.root, "shop", "dev", "current"), remote.TargetEnvFile))
 	if !strings.Contains(data, "DEVOPSY_PARENT='prod'\n") || !strings.Contains(data, "DEVOPSY_PARENT_TARGET='devopsy@one:prod'\n") {
 		t.Errorf("target.env:\n%s", data)
 	}
@@ -377,10 +379,10 @@ func TestReleaseFirstSync(t *testing.T) {
 		t.Fatalf("failed sync (%d), current %q:\n%s", code, s.current("dev"), out)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if len(entries) != 1 || readString(filepath.Join(s.root, "shop", "dev", "releases", entries[0].Name(), ".devopsy-failed")) != "" {
+	if len(entries) != 1 || readString(filepath.Join(s.root, "shop", "dev", "releases", entries[0].Name(), remote.FailedFile)) != "" {
 		t.Fatalf("releases: %v", entries)
 	}
-	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", "releases", entries[0].Name(), ".devopsy-failed")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", "releases", entries[0].Name(), remote.FailedFile)); err != nil {
 		t.Errorf("not marked failed: %v", err)
 	}
 	// The parent's services come back too.
@@ -886,7 +888,7 @@ func TestSyncInherit(t *testing.T) {
 	if got := readString(childEnv); got != "OWN=1\nPROJ_KEY=child\n" {
 		t.Errorf("child's shared/.env changed: %q", got)
 	}
-	if strings.Contains(out, "s1") || strings.Contains(readString(filepath.Join(s.root, "shop", "a", "dev", "current", ".devopsy-log")), "s1") {
+	if strings.Contains(out, "s1") || strings.Contains(readString(releaseFile(t, filepath.Join(s.root, "shop", "a", "dev", "current"), remote.LogFile)), "s1") {
 		t.Errorf("a value was printed:\n%s", out)
 	}
 	// The release links it, and devopsy loads it below the child's own

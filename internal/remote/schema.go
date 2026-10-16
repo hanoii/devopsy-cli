@@ -73,7 +73,7 @@ defaults:
   # down, empties shared/mnt and removes the directory. A failure removes
   # nothing.
   destroy: backup
-  # Per-environment settings, written into each release's .devopsy/target.env.
+  # Per-environment settings, written into each release's devopsy-target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:
     CERTRESOLVER: letsencrypt1
@@ -113,7 +113,7 @@ environments:
 # On a server, an environment lives in <project>/[<instance>/]<environment>
 # under the release root, named <project>[-<instance>]-<environment>.
 # Variables there, nearest first: shared/.env, the instance's .env, the
-# project's .env, then target.env. devopsy --debug environments shows any
+# project's .env, then devopsy-target.env. devopsy --debug environments shows any
 # target as resolved.
 `
 

@@ -93,8 +93,9 @@ repositories fit together and the open ideas.
   `Scope`), completion's filter (`CommandOffered`), and `CheckCommand` in
   `Build`, in `runRemote` before connecting (an older server's devopsy
   would run a local one) and on release steps (`checkStepScopes`). Where a
-  command runs is decided by the directory, `cli.InRelease` (`target.env`
-  present), never by a variable: a shell on the server or a plain `ssh`
+  command runs is decided by the directory, `cli.InRelease`
+  (`devopsy-target.env` beside its `code/`, `remote.ReleaseFile`), never
+  by a variable: a shell on the server or a plain `ssh`
   has none, and a variable would reach every child. `Needs:` takes
   `Run: local` (a server alone has no release to take a command from):
   `runRemote` resolves the address (`needsServer`: as a server's), then
@@ -210,7 +211,7 @@ repositories fit together and the open ideas.
   (`--release-steps rollback <phase> [<release>]`, hidden,
   `runReleaseSteps`), the restart after a failed run and `--destroy`'s
   step (`destroyStep`) are read from the release's own `config.yaml`, its
-  environment from `target.env` (`ReleaseEnvironment`), never the
+  environment from `devopsy-target.env` (`ReleaseEnvironment`), never the
   checkout's, which may have changed or be another branch. A release's
   come from the checkout: it is what is uploaded. A rollback's local
   before and after steps stay the checkout's.
@@ -242,7 +243,7 @@ repositories fit together and the open ideas.
   `build --pull`, image `pull`, which pulls buildable services with an
   `image:` too and fails on a missing tag; through `devopsy --`, past
   project commands, under `with_tty`), bookmarked (`releaseImages`:
-  `compose config --images` into `$rel/.devopsy-images`, each tagged
+  `compose config --images` into `$rel/devopsy-images`, each tagged
   `devopsy-<compose name>-<id>`, digests skipped; a rollback or restart
   restores those, all or nothing, else fetches; a fetch failure restores
   `$prev`'s; pruning untags); switch
@@ -259,7 +260,7 @@ repositories fit together and the open ideas.
   15:04:05`), without terminal codes, progress frames (a `cursorUp` code
   supersedes the n lines before it: BuildKit on a pseudo-terminal redraws
   its block every tick, only the last frame stays) or empty lines, saved by
-  `LogSaveScript` in `releases/<id>/.devopsy-log` once the server was
+  `LogSaveScript` in `releases/<id>/devopsy-log` once the server was
   reached; a rollback's is appended to the restored release's, found from
   its script's "rolling back to <id>" line. Pruned with their releases.
   `--log` reads them (`LogReadScript`). Local
@@ -268,13 +269,13 @@ repositories fit together and the open ideas.
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
   `--yes`). A first release that fails before going live, with nothing in
   `shared/` yet, removes its directory.
-- `target.env` is written into each release (environment `env`,
+- `devopsy-target.env` is written into each release (environment `env`,
   `COMPOSE_PROJECT_NAME`, overriding compose's `name:`, `DEVOPSY_PROJECT`,
   `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`,
   `DEVOPSY_RELEASE_COMMIT`), so it applies however devopsy runs on the
   server and rollbacks restore it. Precedence there: caller, `shared/.env`,
   `inherit.env` (a child's, from its parent's `inherit:`), `instance.env`,
-  `project.env`, `target.env`.
+  `project.env`, `devopsy-target.env`.
 - A nested devopsy (`DEVOPSY_PROJECT_DIR` set) ignores the inherited
   `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
 - `mode:` defaults to `build`: it works for every project, where a wrong
@@ -290,6 +291,16 @@ repositories fit together and the open ideas.
   `--destroy` likewise (`runLocalDestroy`): after the project's name,
   `runDestroyData` in place, `defaults:`' destroy step if any; never the
   checkout. The other release flags stay target only.
+- **Layout:** `releases/<id>/code/` is the project as uploaded (`Pack`
+  prefixes it), `current` points there (`make_current releases/<id>`), and
+  devopsy's files sit beside it (`remote.CodeDir`, `RecordFile`,
+  `TargetEnvFile`, `LogFile`, `ImagesFile`, `FailedFile`), so nothing
+  devopsy writes per release is in a build context or an image (October
+  2026: they were in the tree, and `COPY . .` missed the cache every
+  release). Scripts keep `$rel` the release's directory and `$code` its
+  tree; `prev` is `releases/<id>`, `current`'s target without `/code`.
+  Go finds them from a project directory with `remote.ReleaseFile`
+  (symlinks resolved). No migration: older releases are not rolled back to.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
@@ -336,7 +347,7 @@ repositories fit together and the open ideas.
   records an unresolvable parent in `ParentErr` (`ParentTarget` nil)
   instead of failing: only `--sync` and a `--release` that syncs fail
   with it, so every other command works on the child. `DescribeTarget`
-  resolves it leniently, maybe without a server. `target.env` and local steps get
+  resolves it leniently, maybe without a server. `devopsy-target.env` and local steps get
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`.
 - **When:** a child's first release (`CurrentExistsScript` prints `current`
   or `none`, exit 0; one extra session on every release of a child),
@@ -630,13 +641,13 @@ repositories fit together and the open ideas.
   or key names; `proxy` and `WILDCARD_DOMAIN` are the Traefik template's
   convention. devopsy's core defines no proxy contract.
 - `--prepare-release` checks the role and writes imports into the new
-  release's `target.env` (after `cli.ImportedMarker`) before it goes live;
+  release's `devopsy-target.env` (after `cli.ImportedMarker`) before it goes live;
   an import never overrides what the environment sets (even empty); an
   empty export is a value; rollbacks never check. Exports are read from
   running containers (`Running`: one snapshot per lookup), waiting up to
   `WaitForExporters` for required sources.
 - `--debug imports` compares every running project's imports with its
-  release's `target.env` (found through compose's working_dir label).
+  release's `devopsy-target.env` (found through compose's working_dir label).
 - Roles are advisory: anyone in the docker group is root-equivalent.
 
 ## Other features
@@ -764,7 +775,7 @@ End to end: an OrbStack Debian 13 machine (`orb create debian:trixie
 devopsy-test`) set up with devopsy-server, a linux/arm64 build installed in
 it, and targets like `@devopsy@devopsy-test@orb:prod` (OrbStack's SSH needs
 no keys). Release the Traefik template there, then a template importing
-from it, and check `target.env`, `--debug imports`, the Traefik `domains`
+from it, and check `devopsy-target.env`, `--debug imports`, the Traefik `domains`
 command, an instance, a pattern environment and `--destroy`, a rollback,
 and a release with Traefik stopped. Delete the machine afterwards.
 

@@ -85,10 +85,13 @@ func debugSummary(st style, projectDir string) {
 		field("project", st.warn("none (no .devopsy/ in this directory or above)"))
 	} else {
 		files := []string{"compose.yaml"}
-		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "instance.env", "project.env", "target.env", remote.ConfigFile, remote.LocalConfigFile} {
+		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "instance.env", "project.env", remote.ConfigFile, remote.LocalConfigFile} {
 			if _, err := os.Stat(filepath.Join(projectDir, f)); err == nil {
 				files = append(files, f)
 			}
+		}
+		if cli.InRelease(projectDir) {
+			files = append(files, "../../"+remote.TargetEnvFile)
 		}
 		field("project", tilde(projectDir)+" "+st.dim("("+strings.Join(files, ", ")+")"))
 		field("commands", orNone(cli.CustomCommands(projectDir)))
@@ -365,6 +368,14 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		name := path
 		if rel, err := filepath.Rel(projectDir, path); err == nil && !strings.HasPrefix(rel, "..") {
 			name = rel
+		} else if filepath.Base(path) == remote.TargetEnvFile {
+			// Beside the release's code/, not in .devopsy/.
+			name = remote.TargetEnvFile
+		}
+		// Only a link is shown with its target: the directories above it
+		// may be links too (current, on servers).
+		if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return name
 		}
 		if real, err := filepath.EvalSymlinks(path); err == nil && real != path {
 			name += " " + st.dim("(-> "+tilde(real)+")")
@@ -384,7 +395,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		}
 		return file(d.Source)
 	}
-	fmt.Println(st.dim("First wins: the caller's environment, .env, instance.env, project.env, target.env, the env capability."))
+	fmt.Println(st.dim("First wins: the caller's environment, .env, instance.env, project.env, devopsy-target.env, the env capability."))
 	for _, v := range vars {
 		if len(v.Defs) == 0 {
 			fmt.Printf("%s %s\n", st.name(v.Name), st.warn("not set"))

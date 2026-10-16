@@ -81,7 +81,7 @@ func TestPrepareRelease(t *testing.T) {
 		return project(t, "1", files)
 	}
 	targetEnv := func(root string) string {
-		data, _ := os.ReadFile(filepath.Join(root, ProjectDirName, "target.env"))
+		data, _ := os.ReadFile(releaseTargetEnv(root))
 		return string(data)
 	}
 	proxy := container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=vm1.example.com")

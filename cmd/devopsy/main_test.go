@@ -46,6 +46,16 @@ func fakeBin(t *testing.T) string {
 	return bin
 }
 
+// releaseFile is name beside the code/ that current points at.
+func releaseFile(t *testing.T, current, name string) string {
+	t.Helper()
+	code, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(filepath.Dir(code), name)
+}
+
 func runDevopsy(t *testing.T, dir string, env []string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(binary, args...)
@@ -648,7 +658,7 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), second, out)
 	}
 	// The rollback's log is appended to the restored release's.
-	if data, err := os.ReadFile(filepath.Join(server, second, ".devopsy-log")); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {
+	if data, err := os.ReadFile(filepath.Join(server, filepath.Dir(second), remote.LogFile)); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {
 		t.Fatalf("rollback log: %v\n%s", err, data)
 	}
 
@@ -737,6 +747,14 @@ func TestDebugEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A release: its code/ through current, its target env beside it.
+	rel := filepath.Join(tmp, "releases", "1")
+	if err := os.MkdirAll(filepath.Join(rel, remote.CodeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("releases", "1", remote.CodeDir), filepath.Join(tmp, "current")); err != nil {
+		t.Fatal(err)
+	}
 	dot := filepath.Join(tmp, "current", ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
 	write(t, filepath.Join(dot, "config.yaml"), "project: shop\nsecrets: [DB_PASS*]\n", 0o644)
@@ -745,15 +763,16 @@ func TestDebugEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(dot, "project.env"), "LEVEL=project\nDB_PASSWORD=oldoldoldold\n", 0o644)
-	write(t, filepath.Join(dot, "target.env"), "COMPOSE_PROJECT_NAME='shop-prod'\nLEVEL=target\n"+cli.ImportedMarker+"\nDEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", 0o644)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='shop-prod'\nLEVEL=target\n"+cli.ImportedMarker+"\nDEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n", 0o644)
 	write(t, filepath.Join(dot, "capabilities", "env", "compute"), "#!/bin/sh\necho \"SITE_URL='https://$COMPOSE_PROJECT_NAME.$DEVOPSY_WILDCARD_DOMAIN'\"\necho LEVEL=computed\n", 0o755)
 	dir := filepath.Join(tmp, "current")
-	out, code := runDevopsy(t, dir, []string{"CALLED=caller"}, "--debug", "env")
+	// PWD as a shell sets it: commands run through current.
+	out, code := runDevopsy(t, dir, []string{"CALLED=caller", "PWD=" + dir}, "--debug", "env")
 	for _, want := range []string{
-		"COMPOSE_PROJECT_NAME='shop-prod'\n  set by      target.env\n",
-		"DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n  set by      target.env, imported at release\n",
+		"COMPOSE_PROJECT_NAME='shop-prod'\n  set by      devopsy-target.env\n",
+		"DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n  set by      devopsy-target.env, imported at release\n",
 		"SITE_URL='https://shop-prod.vm1.example.com'\n  set by      capabilities/env/compute, computed\n",
-		"LEVEL='shared'\n  set by      .env (-> " + filepath.Join(tmp, "shared", ".env") + ")\n  overridden  project.env: 'project'\n  overridden  target.env: 'target'\n  overridden  capabilities/env/compute, computed: 'computed'\n",
+		"LEVEL='shared'\n  set by      .env (-> " + filepath.Join(tmp, "shared", ".env") + ")\n  overridden  project.env: 'project'\n  overridden  devopsy-target.env: 'target'\n  overridden  capabilities/env/compute, computed: 'computed'\n",
 		"CALLED='caller'\n  set by      the caller's environment\n  overridden  .env (",
 		"DB_PASSWORD='***'\n",
 		"overridden  project.env: '***'\n",
@@ -795,10 +814,12 @@ func TestRolesEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel := filepath.Join(tmp, "releases", "1")
+	release := filepath.Join(tmp, "releases", "1")
+	rel := filepath.Join(release, remote.CodeDir)
 	dot := filepath.Join(rel, ".devopsy")
+	targetEnv := filepath.Join(release, remote.TargetEnvFile)
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels: [devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN]\n", 0o644)
-	write(t, filepath.Join(dot, "target.env"), "COMPOSE_PROJECT_NAME='shop'\n", 0o644)
+	write(t, targetEnv, "COMPOSE_PROJECT_NAME='shop'\n", 0o644)
 	bin := t.TempDir()
 	docker := `#!/bin/sh
 case "$1" in
@@ -813,7 +834,7 @@ esac
 	env := []string{"PATH=" + bin + ":/usr/bin:/bin"}
 
 	out, code := runDevopsy(t, rel, env, "--prepare-release")
-	data, _ := os.ReadFile(filepath.Join(dot, "target.env"))
+	data, _ := os.ReadFile(targetEnv)
 	if code != 0 || !strings.Contains(out, "DEVOPSY_WILDCARD_DOMAIN=vm1.example.com, from proxy (traefik-main)") || !strings.HasSuffix(string(data), "DEVOPSY_WILDCARD_DOMAIN='vm1.example.com'\n") {
 		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
 	}
@@ -889,7 +910,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "to devopsy@server:b/prod") || !strings.Contains(out, "deploy shared=yes project=shop instance=b env=prod") {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	data, _ := os.ReadFile(filepath.Join(root, "shop", "b", "prod", "current", ".devopsy", "target.env"))
+	data, _ := os.ReadFile(releaseFile(t, filepath.Join(root, "shop", "b", "prod", "current"), remote.TargetEnvFile))
 	if !strings.Contains(string(data), "COMPOSE_PROJECT_NAME='shop-b-prod'") || !strings.Contains(string(data), "DEVOPSY_TARGET='devopsy@server:b/prod'") {
 		t.Errorf("target.env:\n%s", data)
 	}

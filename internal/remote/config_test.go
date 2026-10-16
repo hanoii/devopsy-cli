@@ -361,7 +361,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	}
 	run := func(tg *Target, id string) string {
 		t.Helper()
-		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{}, nil))
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root}
 		out, err := cmd.CombinedOutput()
@@ -382,7 +382,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	if n := count(tg); n != 2 {
 		t.Errorf("server's keep: %d releases", n)
 	}
-	if link, err := os.Readlink(filepath.Join(root, "app/prod/releases/4/.devopsy/project.env")); err != nil || link != filepath.Join(root, "app", ".env") {
+	if link, err := os.Readlink(filepath.Join(root, "app/prod/releases/4/code/.devopsy/project.env")); err != nil || link != filepath.Join(root, "app", ".env") {
 		t.Errorf("project.env: %q %v", link, err)
 	}
 

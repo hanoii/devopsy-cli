@@ -504,8 +504,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		pr, pw := io.Pipe()
 		go func() {
 			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
-				remote.RecordFile:                  record.JSON(),
-				".devopsy/" + remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
+				remote.RecordFile:    record.JSON(),
+				remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
 			}, progress.add))
 		}()
 		code, err := remote.SSHLog(t, remote.UploadScript(t, record.ID), pr, nil, false, rlog)

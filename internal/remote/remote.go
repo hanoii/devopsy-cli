@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -29,8 +30,40 @@ import (
 	"time"
 )
 
-// TargetEnvFile is written into each release from the target's env.
-const TargetEnvFile = "target.env"
+// A release's directory, releases/<id>, holds the project as uploaded in
+// CodeDir, where current points and the commands run, and devopsy's own
+// files beside it, never in the project's tree: a build context sees only
+// the project.
+const (
+	// CodeDir is the project's tree in a release's directory.
+	CodeDir = "code"
+	// TargetEnvFile is the release's environment, from the target's env.
+	TargetEnvFile = "devopsy-target.env"
+	// RecordFile describes the release: id, commit, branch, who, mode.
+	RecordFile = "devopsy-release.json"
+	// LogFile is what its release printed, then each rollback to it.
+	LogFile = "devopsy-log"
+	// ImagesFile lists the images it runs, for its own tags (releaseImages).
+	ImagesFile = "devopsy-images"
+	// FailedFile marks a release that never went live or whose run failed.
+	FailedFile = "devopsy-failed"
+)
+
+// ReleaseFile is name, one of a release's devopsy files, for the project
+// at projectDir (its .devopsy/, through current or not): beside the
+// release's code/. "" when projectDir is not under a code/ directory; the
+// file may still not exist (a local project in a folder named code).
+func ReleaseFile(projectDir, name string) string {
+	real, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		return ""
+	}
+	code := filepath.Dir(real)
+	if filepath.Base(code) != CodeDir {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(code), name)
+}
 
 // excluded reports whether a path, relative to the project root, stays out of
 // a release: server-side state that lives in shared/ instead.
@@ -43,7 +76,6 @@ func excluded(rel string) bool {
 		rel == ".devopsy/"+LocalConfigFile,
 		rel == ".devopsy/project.env", rel == ".devopsy/instance.env",
 		rel == ".devopsy/"+InheritFile,
-		rel == ".devopsy/"+TargetEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",
 		rel == ".devopsy/mnt" || strings.HasPrefix(rel, ".devopsy/mnt/"),
@@ -168,7 +200,7 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 		if err != nil {
 			return err
 		}
-		hdr.Name = filepath.ToSlash(rel)
+		hdr.Name = path.Join(CodeDir, filepath.ToSlash(rel))
 		hdr.Uname, hdr.Gname, hdr.Uid, hdr.Gid = "", "", 0, 0
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
@@ -209,9 +241,6 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 	}
 	return gz.Close()
 }
-
-// RecordFile describes a release, at the root of each release.
-const RecordFile = ".devopsy-release.json"
 
 // Record is what a release remembers about where it came from.
 type Record struct {
@@ -375,7 +404,8 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   exit 1
 fi
 mkdir -p "$base/releases" "$base/shared/mnt"
-make_current() { ln -sfn "$1" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
+# make_current releases/<id>: current points at its code.
+make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 lock() {
   exec 9>"$base/.lock"
   ` + lockWait(9, false, "the release running on $base") + `
@@ -450,10 +480,11 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	}
 	s += "lock\n"
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
+prev=${prev%/` + CodeDir + `}
 `
 	if rollback {
 		s += `id=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
-  [ -e "$base/releases/$r/.devopsy-failed" ] && continue
+  [ -e "$base/releases/$r/` + FailedFile + `" ] && continue
   if [ -n "${found:-}" ]; then echo "$r"; break; fi
   [ "releases/$r" = "$prev" ] && found=1
 done)
@@ -468,6 +499,7 @@ echo "devopsy: rolling back to $id" >&2
 			strings.Join(args, " "), phase, dir, devopsyCall(projectName, args, false), onFail)
 	}
 	s += `rel="$base/releases/$id"
+code="$rel/` + CodeDir + `"
 `
 	// A rollback's steps are the restored release's, read from its own
 	// config on the server (ReleaseStepsFlag): the checkout's may have
@@ -477,7 +509,7 @@ echo "devopsy: rolling back to $id" >&2
 		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
 	}
 	if rollback {
-		s += `(cd "$base/current" && ` + steps("before") + ` "$rel") || not_live $?
+		s += `(cd "$base/current" && ` + steps("before") + ` "$rel/` + CodeDir + `") || not_live $?
 `
 	} else if len(p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
@@ -490,30 +522,30 @@ echo "devopsy: rolling back to $id" >&2
 touch "$base/shared/.env"
 for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
-  rm -rf "$rel/.devopsy/${f##*/}"
-  ln -s "$f" "$rel/.devopsy/${f##*/}"
+  rm -rf "$code/.devopsy/${f##*/}"
+  ln -s "$f" "$code/.devopsy/${f##*/}"
 done
 `
 	// The project's and the instance's .env, shared by their environments:
 	// linked even when missing, so one created later applies too.
 	for _, l := range t.Levels {
-		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$rel/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
+		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 		// Another environment's compose project of the same name, or a
 		// network the project names that another project owns already:
 		// they would share it (cli.ProjectConflict, cli.NetworkConflicts).
-		s += "(cd \"$rel\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
 	if rollback {
-		s += `(cd "$rel" && ` + steps("prepare") + `) || not_live $?
+		s += `(cd "$code" && ` + steps("prepare") + `) || not_live $?
 `
 	}
 	for _, args := range p.Prepare {
-		s += step("prepare", `"$rel"`, args, "not_live $?")
+		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
-	s += fmt.Sprintf("(cd \"$rel\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
+	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
 	images := releaseImages(projectName, t, t.Mode)
 	if images != "" {
 		// A failure may have moved names the live release runs: its own
@@ -533,7 +565,7 @@ echo "devopsy: current is now $id" >&2
 		// The new release's images took the names the previous one runs
 		// (build mode's are the compose project's, a floating tag's the
 		// registry's): its own back.
-		restart = `    get_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+		restart = `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
 	}
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
@@ -569,7 +601,7 @@ fi
 	}
 	if sync != nil || hasRun {
 		s += `if [ "$status" != 0 ]; then
-  touch "$rel/.devopsy-failed"
+  touch "$rel/` + FailedFile + `"
   if [ -n "$prev" ]; then
     make_current "$prev"
     echo "devopsy: $failed failed ($status), current is back to ${prev#releases/}" >&2
@@ -594,10 +626,10 @@ fi
 # The k-th live release, newest first: none while fewer went live, and
 # nothing goes.
 oldest=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
-  [ -e "$base/releases/$r/.devopsy-failed" ] || echo "$r"
+  [ -e "$base/releases/$r/`+FailedFile+`" ] || echo "$r"
 done | sed -n "${k}p")
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | awk -v o="$oldest" 'past { print } $0 == o { past = 1 }' | while read -r r; do
-  [ "releases/$r" = "$(readlink "$base/current")" ] || { %srm -rf "$base/releases/$r"; }
+  [ "releases/$r/`+CodeDir+`" = "$(readlink "$base/current")" ] || { %srm -rf "$base/releases/$r"; }
 done
 `, t.Keep, dropImages(images))
 	afterFail := `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`
@@ -622,7 +654,7 @@ func dropImages(images string) string {
 // images, for mode (empty for any other): fetch_images (fetchImages) and
 //
 //   - bookmark_images <dir>: once fetched, every image the release runs
-//     (compose config --images, recorded in .devopsy-images) gets a second
+//     (compose config --images, recorded in ImagesFile) gets a second
 //     tag of its own, devopsy-<compose name>-<release id>. Compose keeps
 //     running the names the files give (drupal11-prod-app, mariadb:11);
 //     the bookmark keeps that release's image when a later build or pull
@@ -655,43 +687,43 @@ func releaseImages(projectName string, t *Target, mode string) string {
     *) echo "$1" ;;
   esac
 }
-release_id() { (cd "$1" && pwd -P) | sed 's|.*/||'; }
+release_id() { echo "${1##*/}"; }
 bookmark_images() {
   bm_id=$(release_id "$1")
-  if ! (cd "$1" && ` + devopsyCall(projectName, []string{"--", "config", "--images"}, false) + `) >"$1/.devopsy-images" 2>/dev/null; then
-    rm -f "$1/.devopsy-images"
+  if ! (cd "$1/` + CodeDir + `" && ` + devopsyCall(projectName, []string{"--", "config", "--images"}, false) + `) >"$1/` + ImagesFile + `" 2>/dev/null; then
+    rm -f "$1/` + ImagesFile + `"
     echo "devopsy: could not list the images of $bm_id: a rollback to it builds or pulls them again" >&2
     return 0
   fi
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
     docker tag "$ref" "$(image_repo "$ref"):` + prefix + `$bm_id" 2>/dev/null || true
-  done <"$1/.devopsy-images"
+  done <"$1/` + ImagesFile + `"
   return 0
 }
 restore_images() {
-  [ -s "$1/.devopsy-images" ] || return 1
+  [ -s "$1/` + ImagesFile + `" ] || return 1
   ri_id=$(release_id "$1")
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
     docker image inspect "$(image_repo "$ref"):` + prefix + `$ri_id" >/dev/null 2>&1 || return 1
-  done <"$1/.devopsy-images"
+  done <"$1/` + ImagesFile + `"
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
     docker tag "$(image_repo "$ref"):` + prefix + `$ri_id" "$ref" || return 1
-  done <"$1/.devopsy-images"
+  done <"$1/` + ImagesFile + `"
   echo "devopsy: images of $ri_id restored" >&2
 }
 get_images() {
   restore_images "$1" || { fetch_images "$1" && bookmark_images "$1"; }
 }
 drop_images() {
-  [ -s "$1/.devopsy-images" ] || return 0
+  [ -s "$1/` + ImagesFile + `" ] || return 0
   di_id=$(release_id "$1")
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
     docker image rm "$(image_repo "$ref"):` + prefix + `$di_id" >/dev/null 2>&1 || true
-  done <"$1/.devopsy-images"
+  done <"$1/` + ImagesFile + `"
 }
 `
 }
@@ -718,7 +750,7 @@ func fetchImages(projectName, mode string) string {
 	}
 	return `fetch_images() {
   echo "devopsy: ` + what + `" >&2
-  (cd "$1" && with_tty ` + Quote(cmd) + `)
+  (cd "$1/` + CodeDir + `" && with_tty ` + Quote(cmd) + `)
 }
 `
 }
@@ -734,7 +766,7 @@ const NotLive = `not_live() {
     rmdir "$(dirname "$base")" 2>/dev/null || true
     echo "devopsy: removed $base: its first release did not go live" >&2
   else
-    touch "$rel/.devopsy-failed"
+    touch "$rel/` + FailedFile + `"
     echo "devopsy: release $id not made current" >&2
   fi
   exit "$1"
@@ -755,8 +787,8 @@ const RollbackNotLive = `not_live() {
 // its devopsy.import labels into the release's target.env, so rollbacks
 // keep what each release had. Only for projects with those labels (outside
 // comments).
-const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$rel"/.devopsy/compose.yaml "$rel"/.devopsy/compose.override.y*ml; then
-  (cd "$rel" && %s) || not_live 1
+const PrepareScript = `if grep -qsE '^[^#]*devopsy\.(role|import\.)' "$code"/.devopsy/compose.yaml "$code"/.devopsy/compose.override.y*ml; then
+  (cd "$code" && %s) || not_live 1
 fi
 `
 
@@ -809,8 +841,8 @@ fi
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
-  c=-; [ "releases/$r" = "$cur" ] && c=current
-  f=-; [ -e "$base/releases/$r/.devopsy-failed" ] && f=failed
+  c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
+  f=-; [ -e "$base/releases/$r/`+FailedFile+`" ] && f=failed
   printf '%%s\t%%s\t%%s\t' "$r" "$c" "$f"
   tr -d '\n' < "$base/releases/$r/%s" 2>/dev/null || true
   echo
@@ -974,10 +1006,6 @@ func SSHCommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// LogFile is a release's log, in its directory: what its release printed,
-// then what each rollback to it printed.
-const LogFile = ".devopsy-log"
-
 // LogSaveScript saves stdin as release id's log, or appends it (a
 // rollback's). Nothing when the release is gone (a first release that did
 // not go live).
@@ -1048,7 +1076,7 @@ if [ -d "$base/current" ]; then
   dir="$base/current"
 else
   last=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | sort -r | head -n 1)
-  [ -z "$last" ] || dir="$base/releases/$last"
+  [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
   (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; echo "devopsy: $base stays as it was" >&2; exit "$s"; }

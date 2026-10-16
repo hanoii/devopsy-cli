@@ -41,7 +41,6 @@ func gitProject(t *testing.T) string {
 	write(t, filepath.Join(root, ".devopsy", "compose.override.yaml"), "services: {}\n")
 	write(t, filepath.Join(root, ".devopsy", "mnt", "data", "db"), "data\n")
 	write(t, filepath.Join(root, ".devopsy", LocalConfigFile), "targets: {mine: {}}\n")
-	write(t, filepath.Join(root, ".devopsy", TargetEnvFile), "STRAY=1\n")
 	if err := os.Symlink("app.php", filepath.Join(root, "link.php")); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func TestPack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), ".devopsy/" + TargetEnvFile: []byte("A='1'\n")}
+	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), TargetEnvFile: []byte("A='1'\n")}
 	var read int64
 	if err := Pack(&buf, root, files, extra, func(n int64) { read += n }); err != nil {
 		t.Fatal(err)
@@ -126,10 +125,10 @@ func TestPack(t *testing.T) {
 	if len(entries) != len(files)+2 {
 		t.Fatalf("%d entries for %d files", len(entries), len(files))
 	}
-	if h := entries["link.php"]; h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "app.php" {
+	if h := entries["code/link.php"]; h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "app.php" {
 		t.Fatalf("symlink not kept: %+v", h)
 	}
-	if contents[RecordFile] != `{"id":"x"}` || contents[".devopsy/target.env"] != "A='1'\n" || contents["app.php"] != "<?php\n" {
+	if contents[RecordFile] != `{"id":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
 		t.Fatalf("contents: %q", contents)
 	}
 }
@@ -345,21 +344,21 @@ func TestPrepareScript(t *testing.T) {
 	} {
 		base := t.TempDir()
 		rel := filepath.Join(base, "releases", "1")
-		write(t, filepath.Join(rel, ".devopsy", "compose.yaml"), c.compose)
+		write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.yaml"), c.compose)
 		if c.override != "" {
-			write(t, filepath.Join(rel, ".devopsy", "compose.override.yaml"), c.override)
+			write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.override.yaml"), c.override)
 		}
 		if c.fail {
-			write(t, filepath.Join(rel, ".devopsy", "FAIL"), "")
+			write(t, filepath.Join(rel, CodeDir, ".devopsy", "FAIL"), "")
 		}
-		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=releases/0\nrel="+Quote(rel)+"\n"+script+"echo after\n")
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=releases/0\nrel="+Quote(rel)+"\ncode="+Quote(filepath.Join(rel, CodeDir))+"\n"+script+"echo after\n")
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
-		_, ranErr := os.Stat(filepath.Join(rel, "ran"))
+		_, ranErr := os.Stat(filepath.Join(rel, CodeDir, "ran"))
 		if (ranErr == nil) != c.runs {
 			t.Errorf("%s: ran %v, want %v", name, ranErr == nil, c.runs)
 		}
-		_, failedErr := os.Stat(filepath.Join(rel, ".devopsy-failed"))
+		_, failedErr := os.Stat(filepath.Join(rel, FailedFile))
 		if c.fail != (err != nil) || c.fail != (failedErr == nil) || c.fail == strings.Contains(string(out), "after") {
 			t.Errorf("%s: err %v, marked failed %v:\n%s", name, err, failedErr == nil, out)
 		}
@@ -379,12 +378,12 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 		root := t.TempDir()
 		base := filepath.Join(root, "shop", "b", "prod")
 		rel := filepath.Join(base, "releases", "1")
-		write(t, filepath.Join(rel, ".devopsy", "compose.yaml"), "services:\n  a:\n    labels: [devopsy.role=proxy]\n")
+		write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.yaml"), "services:\n  a:\n    labels: [devopsy.role=proxy]\n")
 		write(t, filepath.Join(base, "shared", ".env"), "")
 		if secrets {
 			write(t, filepath.Join(base, "shared", ".env"), "TOKEN=x\n")
 		}
-		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=\nrel="+Quote(rel)+"\n"+script)
+		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=\nrel="+Quote(rel)+"\ncode="+Quote(filepath.Join(rel, CodeDir))+"\n"+script)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
 		out, err := cmd.CombinedOutput()
 		if err == nil {
@@ -431,7 +430,7 @@ exit 0
 	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
-		write(t, filepath.Join(root, tg.Path, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-dev", phases, opts))
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, extra...)
 		cmd.Stdin = strings.NewReader(stdin)
@@ -454,7 +453,7 @@ exit 0
 	root := t.TempDir()
 	out, errOut, err := run(root, "1", "go\n")
 	base := filepath.Join(root, tg.Path)
-	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1" {
+	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1/code" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
 	// The capability's hooks run from --sync-services, never the script.
@@ -465,10 +464,10 @@ exit 0
 
 	// abort, on a later release: back to the previous one, restarted.
 	_, errOut, err = run(root, "2", "abort\n")
-	if err == nil || current(root) != "releases/1" || !strings.Contains(errOut, "sync failed (1), current is back to 1") {
+	if err == nil || current(root) != "releases/1/code" || !strings.Contains(errOut, "sync failed (1), current is back to 1") {
 		t.Fatalf("abort (%v), current %q:\n%s", err, current(root), errOut)
 	}
-	if _, err := os.Stat(filepath.Join(base, "releases", "2", ".devopsy-failed")); err != nil {
+	if _, err := os.Stat(filepath.Join(base, "releases", "2", FailedFile)); err != nil {
 		t.Errorf("not marked failed: %v", err)
 	}
 	if got := calls(root); !strings.Contains(got, "--sync-services finish abort") || !strings.Contains(got, "--release-steps restart run") || strings.Contains(got, "deploy from") {
@@ -567,14 +566,14 @@ exit 0
 	}
 	for _, fail := range []string{"0", "3"} {
 		root := t.TempDir()
-		write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
+		write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("release, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
 		root = t.TempDir()
-		write(t, filepath.Join(root, tg.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
-		if err := os.Symlink("releases/1", filepath.Join(root, tg.Path, "current")); err != nil {
+		write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 			t.Fatal(err)
 		}
 		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}), "FAIL_PREPARE="+fail)
@@ -600,8 +599,9 @@ func TestActivateImages(t *testing.T) {
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
-echo "${PWD##*/}: $*" >> "$FAKE_ROOT/calls"
-id=$(pwd -P); id=${id##*/}
+id=$(pwd -P); id=${id%/code}; id=${id##*/}
+case $PWD in */current) at=current ;; *) at=$id ;; esac
+echo "$at: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
@@ -660,11 +660,11 @@ esac
 	}
 	release := func(id string, extra ...string) (string, error) {
 		t.Helper()
-		write(t, filepath.Join(base, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 		return run(root, script(build, id, false), extra...)
 	}
 
-	if out, err := release("1"); err != nil || current() != "releases/1" {
+	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
 	if got, want := calls(root), "1: --check-names "+base+"\n1: --missing-vars\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
@@ -676,7 +676,7 @@ esac
 
 	// A failed build: not live, no run step, and the pull it made before
 	// failing is undone: mariadb:11 is release 1's again.
-	if out, err := release("2", "FAIL_BUILD=3"); err == nil || current() != "releases/1" || !strings.Contains(out, "release 2 not made current") {
+	if out, err := release("2", "FAIL_BUILD=3"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "release 2 not made current") {
 		t.Fatalf("failed build (%v), current %q:\n%s", err, current(), out)
 	}
 	if got := calls(root); strings.Contains(got, "deploy") {
@@ -688,7 +688,7 @@ esac
 
 	// A failed run step: release 1's images restored, nothing built or
 	// pulled for it, then its restart.
-	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1" || !strings.Contains(out, "images of 1 restored") {
+	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
 	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: deploy\ncurrent: --release-steps restart run\n"; got != want {
@@ -703,7 +703,7 @@ esac
 		t.Fatalf("release 4 (%v):\n%s", err, out)
 	}
 	calls(root)
-	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1" || image(root, "app-prod-app") != "1" {
+	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1/code" || image(root, "app-prod-app") != "1" {
 		t.Fatalf("rollback (%v), current %q, app %q:\n%s", err, current(), image(root, "app-prod-app"), out)
 	}
 	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
@@ -713,7 +713,7 @@ esac
 	// Pruning drops the bookmarks of the releases it removes.
 	keep1 := *build
 	keep1.Keep = 1
-	write(t, filepath.Join(base, "releases", "5", ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(base, "releases", "5", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	if out, err := run(root, script(&keep1, "5", false)); err != nil {
 		t.Fatalf("release 5 (%v):\n%s", err, out)
 	}
@@ -723,7 +723,7 @@ esac
 
 	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
 	root = t.TempDir()
-	write(t, filepath.Join(root, image2.Path, "releases", "1", ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(root, image2.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	if out, err := run(root, script(image2, "1", false)); err != nil {
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
@@ -748,12 +748,12 @@ func TestActivatePruneFailed(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Keep: 3}
 	base := filepath.Join(root, tg.Path)
 	for _, id := range []string{"1", "2", "3", "4", "5", "6"} {
-		write(t, filepath.Join(base, "releases", id, ".devopsy", "compose.yaml"), "services: {}\n")
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	}
 	for _, id := range []string{"2", "4"} {
-		write(t, filepath.Join(base, "releases", id, ".devopsy-failed"), "")
+		write(t, filepath.Join(base, "releases", id, FailedFile), "")
 	}
-	if err := os.Symlink("releases/5", filepath.Join(base, "current")); err != nil {
+	if err := os.Symlink("releases/5/code", filepath.Join(base, "current")); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", ActivateScript(tg, "6", false, "", Phases{}, nil))

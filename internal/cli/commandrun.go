@@ -131,7 +131,11 @@ func CommandOffered(projectDir, name string, addressed bool) bool {
 // InRelease reports whether projectDir is a release's .devopsy/, on a
 // server: every release has target.env, a checkout never does.
 func InRelease(projectDir string) bool {
-	_, err := os.Stat(filepath.Join(projectDir, remote.TargetEnvFile))
+	f := remote.ReleaseFile(projectDir, remote.TargetEnvFile)
+	if f == "" {
+		return false
+	}
+	_, err := os.Stat(f)
 	return err == nil
 }
 
