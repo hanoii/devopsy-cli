@@ -377,6 +377,17 @@ repositories fit together and the open ideas.
   or a yes at a terminal, else a `report.Warn` with the command. Until
   October 2026 the step was required and did all of it, which is why the
   templates had `destroy` commands: devopsy had no root container then.
+- `--releases remove <id|failed>... [--yes]` (`runReleases`,
+  `cmd/devopsy/releases.go`): lists first (`ReleasesScript`,
+  `ParseReleases`), resolves every word (`chooseReleases`: exact id,
+  else a unique prefix, like `--log`; `failed` is every failed release)
+  and refuses all of them when one names nothing, several or the
+  current release, then asks `[y/N]` (only rollback targets are lost),
+  `--yes` without a terminal. `ReleasesRemoveScript`: release lock,
+  image lock exclusive (10 minutes, then 75), `recover_fetching`, the
+  same checks again, then `remove_images` and `rm -rf` per release and
+  `prune_images` once. Completion offers `remove`, `failed` and `--yes`,
+  never ids (the server's).
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
   mounts"): never uploaded, `shared/mnt` created by the upload and linked
   like every `shared/` entry. Its contents and their ownership are the

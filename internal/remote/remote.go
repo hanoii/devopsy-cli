@@ -1092,43 +1092,106 @@ done
 `, RecordFile)
 }
 
-// FormatReleases turns ReleasesScript output into a table.
-func FormatReleases(out string) string {
-	var b strings.Builder
+// Release is one line of ReleasesScript's output.
+type Release struct {
+	ID              string
+	Current, Failed bool
+	Record          Record
+}
+
+// ParseReleases reads ReleasesScript's output, newest first.
+func ParseReleases(out string) []Release {
+	var rs []Release
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 4)
 		if len(parts) < 3 {
 			continue
 		}
-		var r Record
+		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed"}
 		if len(parts) == 4 {
-			_ = json.Unmarshal([]byte(parts[3]), &r)
+			_ = json.Unmarshal([]byte(parts[3]), &r.Record)
 		}
-		mark := " "
-		if parts[1] == "current" {
-			mark = "*"
+		rs = append(rs, r)
+	}
+	return rs
+}
+
+// Line is the release as --releases lists it: * for the current one, id,
+// who, mode, branch@commit, FAILED.
+func (r Release) Line() string {
+	mark := " "
+	if r.Current {
+		mark = "*"
+	}
+	src := r.Record.Mode
+	if r.Record.Commit != "" {
+		short := r.Record.Commit
+		if len(short) > 10 {
+			short = short[:10]
 		}
-		src := r.Mode
-		if r.Commit != "" {
-			short := r.Commit
-			if len(short) > 10 {
-				short = short[:10]
-			}
-			src += " " + r.Branch + "@" + short
-			if r.Dirty {
-				src += "+dirty"
-			}
+		src += " " + r.Record.Branch + "@" + short
+		if r.Record.Dirty {
+			src += "+dirty"
 		}
-		status := ""
-		if parts[2] == "failed" {
-			status = "  FAILED"
-		}
-		fmt.Fprintf(&b, "%s %s  %-24s  %s%s\n", mark, parts[0], r.By, src, status)
+	}
+	status := ""
+	if r.Failed {
+		status = "  FAILED"
+	}
+	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
+}
+
+// FormatReleases turns ReleasesScript output into a table.
+func FormatReleases(out string) string {
+	var b strings.Builder
+	for _, r := range ParseReleases(out) {
+		b.WriteString(r.Line() + "\n")
 	}
 	if b.Len() == 0 {
 		return "No releases yet.\n"
 	}
 	return b.String()
+}
+
+// ReleasesRemoveScript removes releases by id, under the release lock and
+// the server's image lock (exclusive, waiting up to 10 minutes): a
+// fetch cut off is recovered first (recover_fetching), then every id is
+// checked again, refusing them all when one is gone or current, then each
+// release's images (remove_images) and directory go, and prune_images
+// runs once.
+func ReleasesRemoveScript(t *Target, projectName string, ids []string) string {
+	images := releaseImages(projectName, t, t.Mode)
+	if images == "" {
+		images = noImages
+	}
+	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base/releases" ]; then
+  echo "devopsy: $base has no releases" >&2
+  exit 1
+fi
+exec 9>"$base/.lock"
+` + lockWait(9, false, "the release running on $base") + `
+` + images + `prev=$(readlink "$base/current" 2>/dev/null || true)
+prev=${prev%/` + CodeDir + `}
+image_lock exclusive removing || { echo "devopsy: nothing removed" >&2; exit 75; }
+recover_fetching
+for id in ` + quoteAll(ids) + `; do
+  if [ ! -d "$base/releases/$id" ]; then
+    echo "devopsy: release $id is gone: nothing removed" >&2
+    exit 1
+  fi
+  if [ "releases/$id" = "$prev" ]; then
+    echo "devopsy: release $id is current: nothing removed" >&2
+    exit 1
+  fi
+done
+for id in ` + quoteAll(ids) + `; do
+  remove_images "$base/releases/$id"
+  rm -rf "$base/releases/$id"
+  echo "devopsy: removed release $id" >&2
+done
+prune_images
+image_unlock
+`
 }
 
 // SSH runs a script on the target's host with `sh -c`. DEVOPSY_SSH_COMMAND

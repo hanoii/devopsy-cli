@@ -1269,3 +1269,85 @@ func TestLocalDestroy(t *testing.T) {
 		t.Errorf("--destroy removed the project: %v", err)
 	}
 }
+
+// --releases remove takes releases away by id, a unique prefix or failed,
+// after resolving every word: the current release, or a word naming none,
+// refuses them all; without a terminal it needs --yes.
+func TestReleasesRemove(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n", 0o755)
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n", 0o755)
+	server := filepath.Join(tmp, "app", "prod")
+	project := filepath.Join(tmp, "src", "app")
+	dot := filepath.Join(project, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n prod:\n  mode: image\n  release: deploy\n", 0o644)
+	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
+	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Run: target\nexit ${FAIL_REMOTE:-0}\n", 0o755)
+	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
+	run := func(extra []string, args ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = append(append([]string{"DEVOPSY_HOME=" + t.TempDir()}, env...), extra...)
+		out, _ := cmd.CombinedOutput()
+		return string(out), cmd.ProcessState.ExitCode()
+	}
+	releases := func() []string {
+		entries, _ := os.ReadDir(filepath.Join(server, "releases"))
+		var ids []string
+		for _, e := range entries {
+			ids = append(ids, e.Name())
+		}
+		return ids
+	}
+	for i, extra := range [][]string{nil, {"FAIL_REMOTE=1"}, nil, {"FAIL_REMOTE=1"}, nil} {
+		if i > 0 {
+			time.Sleep(1100 * time.Millisecond) // release ids are per second
+		}
+		if out, code := run(extra, "@prod", "--release"); (code == 0) != (extra == nil) {
+			t.Fatalf("release %d (%d):\n%s", i+1, code, out)
+		}
+	}
+	ids := releases()
+	if len(ids) != 5 {
+		t.Fatalf("releases: %v", ids)
+	}
+	first, failed1, current := ids[0], ids[1], ids[4]
+
+	if out, code := run(nil, "@prod", "--releases", "remove", first); code == 0 || !strings.Contains(out, "add --yes") && !strings.Contains(out, "Add --yes") {
+		t.Errorf("without a terminal or --yes (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--releases", "remove", first, current, "--yes"); code == 0 || !strings.Contains(out, "release "+current+" is the current one of devopsy@server:prod: nothing removed") {
+		t.Errorf("the current one (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--releases", "remove", "1999", "--yes"); code == 0 || !strings.Contains(out, "devopsy@server:prod has no release 1999: nothing removed") {
+		t.Errorf("an unknown id (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @prod --releases [remove <id|failed>... [--yes]]") {
+		t.Errorf("another word (%d):\n%s", code, out)
+	}
+	if got := releases(); len(got) != 5 {
+		t.Fatalf("a refused remove removed something: %v", got)
+	}
+
+	// failed and an id together, the id by its full name.
+	out, code := run(nil, "@prod", "--releases", "remove", "failed", first, "--yes")
+	if code != 0 || !strings.Contains(out, "removed release "+failed1) {
+		t.Fatalf("remove failed and %s (%d):\n%s", first, code, out)
+	}
+	if got := strings.Join(releases(), " "); got != ids[2]+" "+ids[4] {
+		t.Errorf("left %s, want %s %s", got, ids[2], ids[4])
+	}
+	if out, code := run(nil, "@prod", "--releases", "remove", "failed", "--yes"); code != 0 || !strings.Contains(out, "No failed releases") {
+		t.Errorf("no failed releases left (%d):\n%s", code, out)
+	}
+	if out, code := run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, "* "+current) || strings.Count(out, "\n") != 2 {
+		t.Errorf("listing (%d):\n%s", code, out)
+	}
+}

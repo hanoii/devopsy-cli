@@ -192,16 +192,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return runVars(t, args[0], args[1:], lookup, color)
 
 	case "--releases":
-		var out bytes.Buffer
-		code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)
-		if err != nil {
-			return fail(err.Error())
-		}
-		if code != 0 {
-			return code
-		}
-		fmt.Print(remote.FormatReleases(out.String()))
-		return 0
+		return runReleases(t, projectName, args[1:], color)
 
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)

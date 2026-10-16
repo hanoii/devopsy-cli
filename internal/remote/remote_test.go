@@ -164,6 +164,7 @@ func TestScriptsParse(t *testing.T) {
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
 		"run":             RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":        ReleasesScript(tg),
+		"releases remove": ReleasesRemoveScript(tg, "app", []string{"1", "2"}),
 		"shell":           ShellScript(tg),
 		"vars":            VarsReadScript(tg, nil),
 		"vars set":        VarsSetScript(tg, nil),
@@ -926,6 +927,19 @@ exit 0
 
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {
 		t.Errorf("destroy did not recover release 4:\n%s", out)
+	}
+
+	// --releases remove checks again under the lock: the current release,
+	// or one gone meanwhile, refuses them all.
+	write(t, filepath.Join(root, "app/a/prod/releases/1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	for _, ids := range [][]string{{"1", "2"}, {"1", "9"}} {
+		out, err := run(ReleasesRemoveScript(target("a"), "", ids))
+		if err == nil || !strings.Contains(out, "nothing removed") || !exists("app/a/prod/releases/1") {
+			t.Errorf("remove %v (%v):\n%s", ids, err, out)
+		}
+	}
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"})); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") {
+		t.Errorf("remove 1 (%v):\n%s", err, out)
 	}
 
 	// --destroy with the lock taken: nothing removed.
