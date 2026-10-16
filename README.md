@@ -467,7 +467,7 @@ environments` shows it resolved.
 ```sh
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps
-devopsy @vm1:prod --releases     # list them, * marks the current one
+devopsy @vm1:prod --releases     # list them and their images, * marks the current one
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
