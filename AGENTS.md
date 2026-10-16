@@ -25,6 +25,9 @@ repositories fit together and the open ideas.
 - `internal/complete/`: completion candidates, and the bash, zsh and fish
   scripts (embedded).
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
+- `internal/images/`: the rules for releases' images on a server
+  (bookmarks, restores, removals, the record), behind a `Docker`
+  interface, run there as the hidden `--images`.
 - `internal/report/`: how devopsy reports a failure or a warning
   (`report.Fail`: `[error] <message>` in red, `report.Warn`: `[warning]
   <message>` in yellow, then the details, why it happens, one per line,
@@ -242,25 +245,10 @@ repositories fit together and the open ideas.
   images (`fetchImages`, by mode: build `pull --ignore-buildable` then
   `build --pull`, image `pull`, which pulls buildable services with an
   `image:` too and fails on a missing tag; through `devopsy --`, past
-  project commands, under `with_tty`), bookmarked (`releaseImages`:
-  `compose config --images` into `$rel/devopsy-images`, each tagged
-  `<repo>:devopsy-<compose name>-<id>` (`bookmark`, `BookmarkPrefix`:
-  past 94 characters of name, cut to 85 plus 8 hex of its sha256, so a
-  tag fits Docker's 128 with `-<cksum of the ref>`, added when the
-  release names a repository twice, compared as Docker resolves them,
-  `repo_key`: `library/nginx` is `nginx`; a bookmark per repository
-  overwrote one), digests included (`prune -f` deletes an image pulled
-  by digest only, unused) but never restored; a rollback or restart
-  restores those, all or nothing, else fetches (a name whose current
-  image another compose project's container uses, `image_users`, from
-  `docker ps -a --filter ancestor=`, stays: a rollback must not change
-  other environments; a release fetched again untags the bookmarks its
-  new listing no longer makes); a release's fetch
-  failure bookmarks what it got, so it goes with the release, and
-  restores `$prev`'s (`fetch_undo`; a rollback's only restores: the
-  names may hold the live release's images, which would become the
-  target's bookmarks); a failed listing keeps the previous
-  `devopsy-images`; pruning removes them, `remove_images`); switch
+  project commands, under `with_tty`), bookmarked (`img bookmark`, below); a
+  rollback or restart restores those (`img restore`), else fetches; a
+  failure or a signal undoes the fetch before the lock goes
+  (`fetch_release`, `img undo`); pruning removes them (`img remove`); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
   rollback:, else release:), its own images back first (`get_images`);
@@ -268,62 +256,95 @@ repositories fit together and the open ideas.
   `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.
-- **Images go with their releases** (`releaseImages`): the bookmarks are
-  the reference count. `remove_images` untags a going release's
-  bookmarks; an image left with no `devopsy-` tag (any release, any
-  environment or project) loses the refs that release listed that still
-  point to it (`docker image rm`, never `-f`: a container's image stays,
-  with Docker's reason, a bookmark too when it is the image's last name,
-  a stopped container's included); a refused one is recorded
-  (`left_add`) in the project's `ImagesLeftFile` (`<release
-  root>/<project>/.devopsy-images-left`: time, compose name, release,
-  ref, image id, reason), which `--releases` lists (`ParseLeft`) and
-  `prune_images` retries first (`retry_left`, this project's record only,
-  under the exclusive lock), dropping a line once its ref is gone, moved on,
-  held by a release again or removed; `LeftoverScript` treats it like
-  the project's `.env`, and `--purge` says what it forgets; a ref that moved on stays. Two passes over
-  `devopsy-images`, no directory scanning; what the first freed is kept
-  in `devopsy-images-free` until the directory goes, so a removal cut
-  off between them is finished by the next (the bookmarks are gone by
-  then). What other releases hold is said too ("the images of <id> that other
-  releases hold stay: <names>"). Holder
-  files are for messages only: failing to write one never fails the
-  lock. `prune_images` (`docker image
-  prune -f`) once after a caller's removals. All under the server's image
-  lock (`ImagesLock` in the release root, fd 8, after the release lock on
-  fd 9, never the other way): shared in `get_images` (fetch and bookmark,
-  or restore) and around a failed fetch's restore, exclusive for
-  removals, which also need Docker to answer (`docker version`: with
-  the daemon down every inspect fails, and releases would go without
-  their images), else they count as busy (`il_busy` says which).
-  Pruning takes it with `now` and skips on a busy lock,
-  directories included (one gone without its images leaves tags nothing
-  finds), the release live and successful; `--destroy` waits (10
-  minutes, then 75, nothing removed). Holders write
-  `ImagesHolders/<pid>` (start, compose name, what), removed on unlock,
-  stale when the pid is gone, so waiting and skipping name who holds it
-  and for how long. Linux's `flock` lets new shared holders past a queued
-  exclusive one: a waiting removal never delays fetches. A flock ends
-  with its processes; a fetch's children keep it, as they keep the
-  release lock, so a session that dropped mid-fetch still holds it until
-  the fetch ends. Without a mode, `noImages` stubs the functions.
-- **An interrupted fetch** (`ActivateScript`): `fetch_interrupted`, trapped
-  on INT, TERM and HUP around `get_images` (sh runs it once the fetch's
-  child exits; it sets `set +e` and ignores PIPE, so writes to a gone
-  session cannot stop it), undoes the fetch as a failure does and calls
-  `not_live 130`. `fetch_undo` does nothing when `get_images` never got
-  the lock (Ctrl-C while waiting: no second wait), keeps the lock it
-  holds mid-fetch (`il_held`: reopening fd 8 would let a removal in),
-  and, when it cannot take the lock (`now` in the trap), leaves the
-  marker for `recover_fetching`. A `-T` session that drops
-  sends no signal: the fetch runs to its end, and the script dies at its
-  next write. Hence `FetchingFile`, written before a new release's fetch
-  and removed after: `recover_fetching` (caller holds the image lock)
-  marks such a release failed, bookmarks and restores current's names,
-  run after the lock by every activation, `--destroy` and `--releases
-  remove`. The release lock is inherited by the fetch, so recovery never
-  races one still running. Rollbacks get the trap, never the marker,
-  which would mark a good release failed.
+- **Images go with their releases.** The rules live in Go,
+  `internal/images`, run on the server as the hidden `devopsy --images
+  --name <compose name> --left <record> <action>` (`runImages`,
+  cmd/devopsy/images.go; `img` in the scripts): the server's devopsy
+  applies them, whichever laptop or CI generated the script, since the
+  state is the whole server's. The scripts keep what needs the shell
+  (`releaseImages`): the locks, which a fetch's children inherit, and
+  fetching on a terminal (`fetch_images`, `with_tty`). `Protocol`, which
+  `--release-settings` reports, makes a script refuse an older server
+  devopsy before anything changes ("upgrade it").
+  - **Bookmarks** are the reference count: `<repo>:devopsy-<compose
+    name>-<id>` (`images.BookmarkPrefix`: past 94 characters of name,
+    cut to 85 plus 8 hex of its sha256, so a tag fits Docker's 128 with
+    `-<cksum of the ref>`, POSIX cksum as the shell computed it, added
+    when the release names a repository twice, compared as Docker
+    resolves them, `library/nginx` is `nginx`), digests included (`prune
+    -f` deletes an image pulled by digest only, unused) but never
+    restored. `devopsy-images` lists `ref<tab>image id` (older files
+    the ref alone): what a removal decides from even after a bookmark
+    went.
+  - **Bookmark** (`img bookmark`): lists through `devopsy -- config
+    --images` in the release's code, records, tags. A release listed
+    before (fetched again) untags the bookmarks its new listing no
+    longer makes, and records the names it dropped for the next
+    pruning: it runs under the shared lock, beside other fetches, so it
+    never removes names. A failed listing keeps the previous one.
+  - **Restore** (`img restore`, exit 1 when it cannot: no listing, a
+    bookmark gone): names back on the bookmarks, except a name whose
+    current image another environment uses (`others`: a container of
+    another compose project, from `docker ps -a --filter ancestor=`,
+    checked on Docker 29's containerd store, or a bookmark none of this
+    environment's releases made, exact names, so `app-prod` never
+    matches `app-prod-eu`): a rollback must not change another
+    environment, so that name stays on the newer image, said.
+  - **Remove** (`img remove`): untags the going release's bookmarks,
+    then per image it ran, from Docker's state: held by another
+    bookmark, it stays (said, with its names); else its listed names
+    and its other names in the same repositories go (`mariadb:11` and
+    `mariadb:11.4`: whichever release goes last takes both); a name
+    that moved on stays. Never `-f`: a refusal (a container, even a
+    stopped one) is recorded. Idempotent: a removal cut off anywhere is
+    finished by the next, nothing kept between passes.
+  - **The record** (`images.LeftFile`, `<release
+    root>/<project>/.devopsy-images-left`: time, compose name, release,
+    ref, image id, reason): `--releases` lists it (`ParseLeft`), `img
+    prune` retries it first, this project's only (decided), dropping a
+    line once its name is gone, moved on or removed, keeping it while a
+    release holds the image or on any error but a missing image;
+    `LeftoverScript` treats it like the project's `.env`, and `--purge`
+    says what it forgets.
+  - **Undo** (`img undo [--rollback] <release> [<current>]`): a new
+    release's fetch bookmarked (it goes with the release), a rollback's
+    target left alone (the names may hold the live release's images),
+    then the current release restored.
+  - **The lock** (`ImagesLock` in the release root, fd 8, after the
+    release lock on fd 9, never the other way): shared in `get_images`
+    and `fetch_release`, exclusive for removals, which also need Docker
+    to answer (`docker version`), else they count as busy (`il_busy`
+    says which). Pruning takes it with `now` and skips on a busy lock,
+    directories included, the release live and successful; `--destroy`
+    and `--releases remove` wait (10 minutes, then 75, nothing removed).
+    The restart after a failed run waits too (its images first; a
+    restart on the new release's images would run them under old code).
+    Holders write `ImagesHolders/<pid>` (start, compose name, what), for
+    messages only. Linux's `flock` lets new shared holders past a queued
+    exclusive one. A flock ends with its processes; a fetch's children
+    keep it, as they keep the release lock.
+  - **Tests**: `images_test.go`'s in-memory Docker (names, images,
+    containers; untag versus delete, refusals) and `TestRandomHistory`,
+    200 random histories of two environments sharing `mariadb:11` and
+    its alias, checking that kept releases keep their bookmarks, a
+    removal never takes a name another release holds, a restore never
+    moves a name another environment uses, and nothing is left once all
+    goes. Script tests call the real `--images` (`realDevopsy`, built by
+    `TestMain`) behind a fake devopsy and a file-per-tag docker.
+- **An interrupted fetch** (`ActivateScript`, `fetch_release`): a signal
+  only sets `fetch_sig` (INT, TERM, HUP); the fetch's child gets it too
+  and fails, and the same path undoes it under the lock, with signals
+  and PIPE ignored from there on, so a second Ctrl-C or a gone session
+  cannot stop it; exit 130. A `-T` session that drops sends no signal:
+  the fetch runs to its end and the script dies at its next write. Hence
+  `FetchingFile`, written before a new release's fetch and removed
+  after: `img recover` (caller holds the image lock) marks such a
+  release failed, bookmarks it and restores current's names, run after
+  the lock by every activation, `--destroy` and `--releases remove`.
+  Until then it counts as failed: never a rollback target, never kept by
+  `keep`, `failed` in `--releases`. The release lock is inherited by the
+  fetch, so recovery never races one still running. Rollbacks never
+  write the marker, which would mark a good release failed.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
   (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
@@ -341,7 +362,7 @@ repositories fit together and the open ideas.
   `shared/` yet, removes its directory, its releases' images first (the
   directory is their only record: `not_live` takes the image lock with
   `now`, and keeps the directory, the release marked failed, when it is
-  busy, or when a `FetchingFile` waits for `recover_fetching`). The image
+  busy, or when a `FetchingFile` waits for `img recover`). The image
   functions are defined before `not_live` can run.
 - `basePrelude` exports `DEVOPSY_NO_UPDATE_CHECK=1`: the detached
   `--upgrade-check` would inherit the scripts' locks (fds 8 and 9, not
@@ -402,7 +423,7 @@ repositories fit together and the open ideas.
   while everything is up), then `compose --profile '*' down --volumes
   --remove-orphans --rmi local` and `mnt` emptied as root in `UtilImage`
   (`find -delete`, a plain `docker run`: `compose run` would bring the
-  network back); then every release's images (`remove_images`, the image
+  network back); then every release's images (`img remove`, the image
   lock taken right after the release lock, before the data: compose's
   `--rmi local` removes images too); then `rm -rf`. A failure before the
   removal removes nothing. Then
@@ -418,9 +439,9 @@ repositories fit together and the open ideas.
   and refuses all of them when one names nothing, several or the
   current release, then asks `[y/N]` (only rollback targets are lost),
   `--yes` without a terminal. `ReleasesRemoveScript`: release lock,
-  image lock exclusive (10 minutes, then 75), `recover_fetching`, the
-  same checks again, then `remove_images` and `rm -rf` per release and
-  `prune_images` once. Completion offers `remove`, `failed` and `--yes`,
+  image lock exclusive (10 minutes, then 75), `img recover`, the
+  same checks again, then `img remove` and `rm -rf` per release and
+  `img prune` once. Completion offers `remove`, `failed` and `--yes`,
   never ids (the server's).
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
   mounts"): never uploaded, `shared/mnt` created by the upload and linked

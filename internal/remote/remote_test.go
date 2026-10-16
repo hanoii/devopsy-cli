@@ -220,7 +220,7 @@ func TestFormatReleases(t *testing.T) {
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	fake := "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	fake := "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestActivateSync(t *testing.T) {
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
 if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
@@ -592,37 +592,6 @@ func readFile(path string) string {
 	return string(data)
 }
 
-// Bookmarks fit Docker's 128-character tags, a ref's cksum included:
-// readable up to 94 characters of name, cut and hashed past that, and two
-// long names that differ only past the cut stay apart.
-func TestBookmarkPrefix(t *testing.T) {
-	const id = "20261016120000-4294967295"
-	if got := BookmarkPrefix("drupal11-prod"); got != "devopsy-drupal11-prod-" {
-		t.Errorf("short name: %q", got)
-	}
-	if got := BookmarkPrefix(""); got != "devopsy-" {
-		t.Errorf("no name: %q", got)
-	}
-	at := strings.Repeat("a", 94)
-	if got := BookmarkPrefix(at); got != "devopsy-"+at+"-" || len(got+id) != 128 {
-		t.Errorf("94 characters: %q (%d)", got, len(got+id))
-	}
-	long1 := strings.Repeat("a", 110) + "-one"
-	long2 := strings.Repeat("a", 110) + "-two"
-	p1, p2 := BookmarkPrefix(long1), BookmarkPrefix(long2)
-	if p1 == p2 {
-		t.Errorf("long names share %q", p1)
-	}
-	for _, p := range []string{p1, p2} {
-		if len(p+id) != 128 || !strings.HasPrefix(p, "devopsy-"+strings.Repeat("a", 85)+"-") {
-			t.Errorf("long name: %q (%d)", p, len(p+id))
-		}
-	}
-	if BookmarkPrefix(long1) != p1 {
-		t.Errorf("not stable")
-	}
-}
-
 // fakeImageTools writes into bin a docker whose image store is a file per
 // tag under $FAKE_ROOT/images, holding the image's id (the id of the
 // release that built or pulled it): tag, inspect (with the Id and RepoTags
@@ -643,7 +612,7 @@ if [ -n "${FAKE_DOCKER_DOWN:-}" ]; then
 fi
 [ "$1" = version ] && exit 0
 case "$1 $2" in
-  "ps -a") cat "$FAKE_ROOT/users/${4#ancestor=}" 2>/dev/null; exit 0 ;;
+  "ps -a") sed 's/^/c /' "$FAKE_ROOT/users/${4#ancestor=}" 2>/dev/null; exit 0 ;;
   "image inspect")
     if [ "$3" != --format ]; then
       [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
@@ -652,13 +621,16 @@ case "$1 $2" in
       cat "$(f "$5")"
     else
       for t in "$FAKE_ROOT"/images/*; do
-        [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] && echo "${t##*/}"
+        [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] || continue
+        n=${t##*/}
+        echo "$(echo "${n%:*}" | tr '_' '/'):${n##*:}"
       done
       exit 0
     fi ;;
   "image rm")
     case " ${FAKE_IN_USE:-} " in *" $3 "*) echo "conflict: a container uses $3" >&2; exit 1 ;; esac
-    [ -f "$(f "$3")" ] && rm -f "$(f "$3")" ;;
+    [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
+    rm -f "$(f "$3")" ;;
   "image prune") echo prune >>"$FAKE_ROOT/pruned"; echo "Total reclaimed space: 1MB" ;;
   *) [ "$1" = tag ] && [ -f "$(f "$2")" ] && cp "$(f "$2")" "$(f "$3")" ;;
 esac
@@ -672,7 +644,13 @@ case " $* " in
 esac
 `)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "docker", "flock", "mv"} {
+	// The rules are devopsy's own: --images goes to the real one, built
+	// for the tests, the rest to the test's fake.
+	if err := os.Rename(filepath.Join(bin, "devopsy"), filepath.Join(bin, "devopsy.fake")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --images ]; then exec "+Quote(realDevopsy)+" \"$@\"; fi\nexec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
+	for _, f := range []string{"devopsy", "devopsy.fake", "docker", "flock", "mv"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -696,7 +674,7 @@ func TestActivateImages(t *testing.T) {
 	// pull and build put the release's id in the image store, and fail
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
@@ -791,7 +769,7 @@ exit 0
 	// Another failed run, while another compose project runs the
 	// mariadb:11 it pulled: that name stays on it, the rest go back.
 	write(t, filepath.Join(root, "users", "35m"), "stage-prod\napp-prod\n")
-	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb:11 stays on its newer image, which stage-prod run: 1 runs it too") {
+	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb:11 stays on its newer image, which other environments use (stage-prod): 1 runs it too") {
 		t.Fatalf("failed run with mariadb:11 shared (%v):\n%s", err, out)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "35m" {
@@ -847,10 +825,12 @@ exit 0
 	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FetchingFile)); statErr == nil {
 		t.Errorf("a release that never fetched kept its marker")
 	}
-	// The fetch failed, and the lock was taken before it could undo: the
-	// directory stays with its marker, for recover_fetching.
+	// The fetch failed and another release takes the lock as soon as it
+	// goes: the undo ran before (the fetch's pull bookmarked, no marker
+	// left), and the directory stays, failed, for a later removal.
 	r, out, err = first("LOCK_AFTER=1")
-	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FetchingFile)); err == nil || statErr != nil || !strings.Contains(out, "the next release, --releases remove or --destroy finishes it") {
+	rel1 := filepath.Join(r, build.Path, "releases", "1")
+	if err == nil || !fileExists(filepath.Join(rel1, FailedFile)) || fileExists(filepath.Join(rel1, FetchingFile)) || image(r, "mariadb:devopsy-app-prod-1") != "1" || !strings.Contains(out, "keeping "+filepath.Join(r, build.Path)) {
 		t.Errorf("failed first release, lock taken after the fetch (%v):\n%s", err, out)
 	}
 
@@ -874,7 +854,7 @@ exit 0
 func TestImagesRemoved(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
 echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1030,11 +1010,10 @@ exit 0
 		t.Errorf("destroy took data down without the image lock")
 	}
 
-	// A removal cut off between its passes is finished by the next one:
-	// the bookmark went, the image it freed is kept in the release.
+	// A removal cut off after untagging is finished by the next one: the
+	// bookmark went, the listing keeps the image's id.
 	write(t, filepath.Join(root, "app/a/prod/releases/7", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\n")
-	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile+"-free"), "O\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\tO\n")
 	write(t, filepath.Join(root, "images", "old:1"), "O\n")
 	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"7"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || fakeImage(root, "old:1") != "" || exists("app/a/prod/releases/7") {
 		t.Errorf("remove 7, cut off before (%v):\n%s", err, out)
@@ -1069,7 +1048,7 @@ exit 0
 func TestBookmarksPerRef(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
@@ -1118,7 +1097,7 @@ exit 0
 func TestFetchInterrupted(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1243,7 +1222,7 @@ func fileExists(path string) bool {
 // kept stays, with its log, and older ones go.
 func TestActivatePruneFailed(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
 	for _, f := range []string{"devopsy", "flock", "mv"} {
@@ -1282,7 +1261,7 @@ func TestActivatePruneFailed(t *testing.T) {
 // removals left is a leftover too; removing it says what is forgotten.
 func TestLeftoverImagesRecord(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1324,7 +1303,7 @@ func TestRebookmark(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	run := func(listing string) {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`bookmark_images "$REL"`)
+		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`img bookmark "$REL"`)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "REL=" + rel, "LISTING=" + listing}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v:\n%s", err, out)
