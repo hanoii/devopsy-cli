@@ -62,6 +62,7 @@ var Flags = []FlagGroup{
 		{Name: "--releases", Scope: Target, Desc: "the releases there"},
 		{Name: "--log", Args: "[<id>]", Scope: Target, Desc: "what the last release (or <id>) printed"},
 		{Name: "--destroy", Args: "[--yes]", Scope: Target, Desc: "remove the environment, data included"},
+		{Name: "--destroy", Args: "[--yes]", Scope: Local, Desc: "locally, in place: the destroy step\n(defaults: destroy)"},
 	}},
 	{"Data", []Flag{
 		{Name: "--sync", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "a child's data from its parent, then run"},
