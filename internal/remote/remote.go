@@ -1123,3 +1123,26 @@ func RoleHoldersScript(t *Target, role string) string {
 	return "set -eu\ndocker ps --filter " + Quote("label=devopsy.role="+role) + ` --format '{{.Label "com.docker.compose.project"}}' | sort -u
 `
 }
+
+// LeftoverScript lists, deepest first, the directories of t's levels (its
+// instance's, then its project's) that hold nothing but their .env (and
+// the lock --vars-project and --vars-instance take) once no environment
+// is left in them: what --destroy leaves, since the .env is shared by
+// every environment of that level. With remove, it removes them instead,
+// checking again under the same rules: --destroy --purge.
+func LeftoverScript(t *Target, remove bool) string {
+	act := `echo "$d"`
+	if remove {
+		act = `rm -f "$d/.env" "$d/.lock" && rmdir "$d" && echo "devopsy: removed $d" >&2`
+	}
+	s := "set -eu\n" + basePrelude(t) + "child=.env\n"
+	for i := len(t.Levels) - 1; i >= 0; i-- {
+		s += `d="$root"/` + Quote(t.Levels[i].Dir) + `
+[ -d "$d" ] || exit 0
+[ -z "$(ls -A "$d" | grep -vxF -e .env -e .lock -e "$child" || true)" ] || exit 0
+` + act + `
+child=${d##*/}
+`
+	}
+	return s
+}

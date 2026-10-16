@@ -964,6 +964,21 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "shop", "c", "pr-12")); !os.IsNotExist(err) {
 		t.Fatalf("still there: %v", err)
 	}
+	// Instance c has no environment left: kept, with a warning saying
+	// how; --purge removes it, also once the environment is gone. The
+	// project's stays: b is still there.
+	if !strings.Contains(out, "[warning] devopsy@server keeps "+filepath.Join(root, "shop", "c")) || !strings.Contains(out, "devopsy @devopsy@server:c/pr-12 --destroy --yes --purge") {
+		t.Errorf("no warning about what is left:\n%s", out)
+	}
+	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes", "--purge"); code != 0 || !strings.Contains(out, "removed "+filepath.Join(root, "shop", "c")) {
+		t.Fatalf("--destroy --purge (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", "c")); !os.IsNotExist(err) {
+		t.Fatalf("instance still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "shop", ".env")); err != nil {
+		t.Fatalf("--purge removed the project's .env: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(root, "shop", "b", "prod", "current")); err != nil {
 		t.Fatalf("destroy touched another environment: %v", err)
 	}

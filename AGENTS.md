@@ -325,7 +325,10 @@ repositories fit together and the open ideas.
   --remove-orphans --rmi local` and `mnt` emptied as root in `UtilImage`
   (`find -delete`, a plain `docker run`: `compose run` would bring the
   network back); then every release's image bookmarks (`drop_images`);
-  then `rm -rf`. A failure before the removal removes nothing. Until
+  then `rm -rf`. A failure before the removal removes nothing. Then
+  `purgeLeftovers`: the levels' directories left with only their `.env`
+  (and `.lock`), deepest first (`LeftoverScript`), removed with `--purge`
+  or a yes at a terminal, else a `report.Warn` with the command. Until
   October 2026 the step was required and did all of it, which is why the
   templates had `destroy` commands: devopsy had no root container then.
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and

@@ -586,6 +586,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   root in `devopsy-util`, since its files belong to container users; then
   each release's image tags; then the directory (releases, `shared/` with
   its data and `.env`). A failure before the removal removes nothing.
+  The project's and the instance's `.env` stay, shared by their
+  environments; when none is left in their directory, `--purge` removes
+  them with it (at a terminal devopsy asks; otherwise a warning says how),
+  also after the environment is gone.
 - **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
   resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.

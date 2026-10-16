@@ -620,7 +620,7 @@ compose exec, like --user root. After --, a command runs instead of the
 shell, directly as docker compose exec runs it: devopsy @<target> --shell
 -- drush status.
 `,
-	"--destroy": `Usage: devopsy @<target> --destroy [--yes]
+	"--destroy": `Usage: devopsy @<target> --destroy [--yes] [--purge]
        devopsy --destroy [--yes]
 
 Removes the environment from the server, under the release lock, in its
@@ -632,7 +632,9 @@ release's image tags, then its directory (releases, shared/ with its data
 and .env). A failure before the removal removes nothing. Asks for the
 target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
-.env stay.
+.env stay: other environments share them. When none is left in their
+directory, --purge removes them with it; at a terminal devopsy asks, and
+otherwise warns how. --purge works after the environment is gone too.
 
 Without a target, --destroy does the same in place, with the destroy
 step under defaults:, asking for the project's name unless --yes:
