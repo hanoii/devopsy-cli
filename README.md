@@ -84,7 +84,10 @@ To get there it makes choices for you:
   `shared/` keeps data and secrets across them. A release never changes a
   live tree in place.
 - **Steps are explicit.** `--release` and `--rollback` refuse without the
-  steps the environment names.
+  steps the environment names. A release's steps come from the checkout,
+  which is what it uploads; a rollback's, the restart after a failed `run`
+  and `--destroy`'s step come from the release they act on, its own
+  `config.yaml` on the server.
 - **Project behavior lives in the project,** as commands in
   `.devopsy/commands/`, not as devopsy features.
 - **Capabilities for common needs.** Some conveniences are useful to most
@@ -389,7 +392,7 @@ public: [SORT_KEY]              # optional: named like secrets, but not
 defaults:                       # what every environment takes unless it sets its own
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
-  rollback: deploy              # what --rollback runs: required for it
+  rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
 environments:
@@ -550,8 +553,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
   another project, join its network as `external`.
 - **When `run` fails,** `current` goes back to the previous release, which is
-  restarted with its own run step (the rollback's, else the release's),
-  with its own images back, so its containers are the previous release's
+  restarted with its own run step, from its own config (its `rollback:`
+  run step, else its `release:` one), with its own images back, so its containers are the previous release's
   again. Data changes, like
   database updates, are the project's to undo.
 - **One SSH session:** the remote steps share it, under the release lock.

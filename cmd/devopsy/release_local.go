@@ -137,9 +137,9 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	var step []string
-	if c.Defaults != nil {
-		step = remote.StepArgs(c.Defaults.Destroy)
+	step, err := destroyStep(projectDir)
+	if err != nil {
+		return fail(err.Error())
 	}
 	if len(step) > 0 {
 		if _, err := cli.CheckCommand(projectDir, step[0], cli.Bare); err != nil {
@@ -166,16 +166,122 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 			return 1
 		}
 	}
-	return runDestroyData(root, step, color)
+	return destroyData(root, step, color)
 }
 
-// runDestroyData is --destroy where the project is (DestroyDataFlag, its
-// arguments the destroy step, maybe none): the step, while everything
+// destroyStep is what --destroy runs first in projectDir: in a release
+// (a server's), the destroy: step of the environment it was made for, as
+// its own config says; locally defaults:' destroy:. Maybe none.
+func destroyStep(projectDir string) ([]string, error) {
+	if cli.InRelease(projectDir) {
+		t, err := remote.ReleaseEnvironment(projectDir)
+		if err != nil {
+			return nil, err
+		}
+		return remote.StepArgs(t.Destroy), nil
+	}
+	c, err := remote.LoadConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	if c.Defaults == nil {
+		return nil, nil
+	}
+	return remote.StepArgs(c.Defaults.Destroy), nil
+}
+
+// runDestroyData is the hidden DestroyDataFlag, run by DestroyScript in a
+// server's release: destroyData with the release's own destroy step.
+func runDestroyData(cwd string, args []string, color bool) int {
+	if len(args) > 0 {
+		cli.Fprint(errOut, red, "devopsy: "+cli.DestroyDataFlag+" takes nothing", color)
+		return 2
+	}
+	projectDir, err := cli.FindProjectDir(cwd)
+	if err != nil {
+		cli.Fprint(errOut, red, "devopsy: "+err.Error(), color)
+		return 1
+	}
+	step, err := destroyStep(projectDir)
+	if err != nil {
+		cli.Fprint(errOut, red, "devopsy: the release's destroy step: "+err.Error(), color)
+		return 1
+	}
+	return destroyData(filepath.Dir(projectDir), step, color)
+}
+
+// runReleaseSteps is the hidden ReleaseStepsFlag: <rollback|restart>
+// <phase> [<release>], run by ActivateScript where the phase runs. It
+// runs the phase's steps from the config of the release given (default
+// the one here), for the environment it was made for: a rollback's are
+// the restored release's rollback:, a restart's the previous release's
+// rollback: run step, else its release: one. Before and after are the
+// remote ones. The first failure ends it, with its code.
+func runReleaseSteps(cwd string, args []string, color bool) int {
+	fail := func(msg string) int {
+		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		return 1
+	}
+	if len(args) < 2 || len(args) > 3 {
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart before|prepare|run|after [<release>]")
+	}
+	kind, phase := args[0], args[1]
+	projectDir, err := cli.FindProjectDir(cwd)
+	if err != nil {
+		return fail(err.Error())
+	}
+	from := projectDir
+	if len(args) == 3 {
+		from = filepath.Join(args[2], ".devopsy")
+	}
+	t, err := remote.ReleaseEnvironment(from)
+	if err != nil {
+		return fail("the release's steps: " + err.Error())
+	}
+	var steps *remote.Steps
+	switch kind {
+	case "rollback":
+		steps = t.Rollback
+	case "restart":
+		steps = t.Rollback
+		if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
+			steps = t.Release
+		}
+	default:
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart ...")
+	}
+	if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
+		return fail(fmt.Sprintf("the release's config gives environment %s no %s run step", t.Name, kind))
+	}
+	var list []string
+	switch phase {
+	case "before":
+		list = remote.Commands(steps.Before, true)
+	case "prepare":
+		list = steps.Prepare
+	case "run":
+		list = []string{steps.Run}
+	case "after":
+		list = remote.Commands(steps.After, true)
+	default:
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart before|prepare|run|after [<release>]")
+	}
+	root := filepath.Dir(projectDir)
+	for _, step := range list {
+		if code := runInPlace(root, phase, remote.StepArgs(step)); code != 0 {
+			return code
+		}
+	}
+	return 0
+}
+
+// destroyData is --destroy where the project is, root its directory, with
+// step, maybe none: the step, while everything
 // runs (a last dump, an outside record); then docker compose down with
 // the volumes and the images built without an image: name (--rmi local),
 // every profile's; then mnt emptied as root in UtilImage, since container
 // users own its files. A failed step changes nothing.
-func runDestroyData(cwd string, step []string, color bool) int {
+func destroyData(cwd string, step []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(errOut, red, "devopsy: "+msg, color)
 		return 1

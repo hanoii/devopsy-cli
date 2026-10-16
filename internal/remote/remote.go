@@ -406,17 +406,15 @@ type Phases struct {
 	Before [][]string
 	// Prepare runs in the new (or restored) release before it goes live.
 	Prepare [][]string
-	// Run runs once it is current. Restart runs in the previous release
-	// when Run fails and current goes back to it.
-	Run, Restart []string
+	// Run runs once it is current. When it fails, current goes back to
+	// the previous release, restarted with its own steps (ReleaseStepsFlag).
+	Run []string
 	// After runs in the current release once it is live.
 	After [][]string
 }
 
-// RemotePhases are the remote phases of steps. restart is the previous
-// release's own run step, for when Run fails: the rollback's, else the
-// release's.
-func RemotePhases(steps *Steps, restart *Steps) Phases {
+// RemotePhases are the remote phases of steps.
+func RemotePhases(steps *Steps) Phases {
 	p := Phases{Run: StepArgs(steps.Run)}
 	for _, c := range Commands(steps.Before, true) {
 		p.Before = append(p.Before, StepArgs(c))
@@ -426,9 +424,6 @@ func RemotePhases(steps *Steps, restart *Steps) Phases {
 	}
 	for _, c := range Commands(steps.After, true) {
 		p.After = append(p.After, StepArgs(c))
-	}
-	if restart != nil {
-		p.Restart = StepArgs(restart.Run)
 	}
 	return p
 }
@@ -474,7 +469,17 @@ echo "devopsy: rolling back to $id" >&2
 	}
 	s += `rel="$base/releases/$id"
 `
-	if len(p.Before) > 0 {
+	// A rollback's steps are the restored release's, read from its own
+	// config on the server (ReleaseStepsFlag): the checkout's may have
+	// changed since. Its before steps run in the current release, as a
+	// release's do.
+	steps := func(phase string) string {
+		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
+	}
+	if rollback {
+		s += `(cd "$base/current" && ` + steps("before") + ` "$rel") || not_live $?
+`
+	} else if len(p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
 		for _, args := range p.Before {
 			s += step("before", `"$base/current"`, args, "not_live $?")
@@ -501,6 +506,10 @@ done
 		// they would share it (cli.ProjectConflict, cli.NetworkConflicts).
 		s += "(cd \"$rel\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
+	if rollback {
+		s += `(cd "$rel" && ` + steps("prepare") + `) || not_live $?
+`
+	}
 	for _, args := range p.Prepare {
 		s += step("prepare", `"$rel"`, args, "not_live $?")
 	}
@@ -515,20 +524,22 @@ done
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
+	hasRun := rollback || len(p.Run) > 0
+	// The previous release, back after a failed run, restarts with its own
+	// images and its own run step: its config's rollback:, else its
+	// release: (ReleaseStepsFlag).
 	restart := ""
-	if len(p.Restart) > 0 {
+	if images != "" {
 		// The new release's images took the names the previous one runs
 		// (build mode's are the compose project's, a floating tag's the
 		// registry's): its own back.
-		if images != "" {
-			restart = `    get_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+		restart = `    get_images "$base/current" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
-		}
-		restart += fmt.Sprintf(`    echo "devopsy: restarting ${prev#releases/}: 'devopsy %s'" >&2
-    (cd "$base/current" && %s) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
-`, strings.Join(p.Restart, " "), devopsyCall(projectName, p.Restart, false))
 	}
-	if sync != nil || len(p.Run) > 0 {
+	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
+`
+	if sync != nil || hasRun {
 		s += "status=0\nfailed=run\n"
 	}
 	if sync != nil {
@@ -545,13 +556,18 @@ cd "$base"
 [ "$status" = 0 ] || failed=sync
 ` + syncRestorePipe
 	}
-	if len(p.Run) > 0 {
+	if rollback {
+		s += `if [ "$status" = 0 ]; then
+  (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
+fi
+`
+	} else if len(p.Run) > 0 {
 		s += `if [ "$status" = 0 ]; then
 ` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
 fi
 `
 	}
-	if sync != nil || len(p.Run) > 0 {
+	if sync != nil || hasRun {
 		s += `if [ "$status" != 0 ]; then
   touch "$rel/.devopsy-failed"
   if [ -n "$prev" ]; then
@@ -584,8 +600,12 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | awk -v o="$oldest" 'past {
   [ "releases/$r" = "$(readlink "$base/current")" ] || { %srm -rf "$base/releases/$r"; }
 done
 `, t.Keep, dropImages(images))
+	afterFail := `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`
+	if rollback {
+		s += `(cd "$base/current" && ` + steps("after") + `) || ` + afterFail + "\n"
+	}
 	for _, args := range p.After {
-		s += step("after", `"$base/current"`, args, `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`)
+		s += step("after", `"$base/current"`, args, afterFail)
 	}
 	return s
 }
@@ -995,12 +1015,12 @@ cat "$f"
 
 // DestroyScript removes an environment, under its release lock: devopsy
 // --destroy-data in its current release, else its newest one (a first
-// release whose run step failed left shared/mnt without current): args,
-// the destroy step, maybe none, then compose down with volumes and built
+// release whose run step failed left shared/mnt without current): the
+// release's own destroy step, maybe none, then compose down with volumes and built
 // images, and shared/mnt emptied as root; then every release's image
 // bookmarks (releaseImages' drop_images); then the directory. A failure
 // before the removal removes nothing.
-func DestroyScript(t *Target, projectName string, args []string) string {
+func DestroyScript(t *Target, projectName string) string {
 	images := releaseImages(projectName, t, t.Mode)
 	drop := ""
 	if images != "" {
@@ -1031,7 +1051,7 @@ else
   [ -z "$last" ] || dir="$base/releases/$last"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, append([]string{"--destroy-data"}, args...), false) + `) || { s=$?; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
 else
   echo "devopsy: no release: nothing to take down" >&2
 fi

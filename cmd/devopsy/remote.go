@@ -273,22 +273,23 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		steps := t.Release
 		if rollback {
+			// What the server runs is the restored release's rollback:,
+			// read there (ActivateScript); the checkout's gives only its
+			// local before and after steps, which run here.
 			steps = t.Rollback
-		}
-		if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
+			if steps == nil {
+				steps = &remote.Steps{}
+			}
+		} else if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 			return fail(missingSteps(t, kind))
 		}
-		// When run fails, current goes back to the previous release, and its
-		// own run step brings its containers back: the rollback's, else the
-		// release's.
-		restart := t.Rollback
-		if restart == nil || len(remote.StepArgs(restart.Run)) == 0 {
-			restart = t.Release
-		}
-		if err := checkStepScopes(projectDir, steps, restart); err != nil {
+		if err := checkStepScopes(projectDir, steps); err != nil {
 			return fail(err.Error())
 		}
-		phases := remote.RemotePhases(steps, restart)
+		phases := remote.RemotePhases(steps)
+		if rollback {
+			phases = remote.Phases{}
+		}
 
 		// The whole run is recorded and saved on the server once it has
 		// been touched: devopsy @<target> --log.
@@ -788,25 +789,20 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 			return 1
 		}
 	}
-	steps := remote.StepArgs(t.Destroy)
 	where := t.Host + ":" + t.Path
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
 			return 1
 		}
-		what := ""
-		if len(steps) > 0 {
-			what = "runs 'devopsy " + strings.Join(steps, " ") + "' in " + where + ", then "
-		}
-		fmt.Fprintf(os.Stderr, "This %stakes %s's containers, volumes and images down and removes %s: its releases and shared/ (data, .env). Type %s to go on: ", what, t.Name, where, t.Name)
+		fmt.Fprintf(os.Stderr, "This runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env). Type %s to go on: ", t.Name, where, t.Name)
 		line, _ := stdinReader.ReadString('\n')
 		if strings.TrimSpace(line) != t.Name {
 			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
 			return 1
 		}
 	}
-	code, err := remote.SSH(t, remote.DestroyScript(t, projectName, steps), bytes.NewReader(nil), nil, false)
+	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1

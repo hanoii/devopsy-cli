@@ -159,7 +159,7 @@ func TestScriptsParse(t *testing.T) {
 	scripts := map[string]string{
 		"upload":          UploadScript(tg, "20261005120000"),
 		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{}, nil),
-		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, Restart: []string{"deploy"}, After: [][]string{{"warm"}}}, nil),
+		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, After: [][]string{{"warm"}}}, nil),
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
 		"run":             RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":        ReleasesScript(tg),
@@ -174,13 +174,13 @@ func TestScriptsParse(t *testing.T) {
 		"status":          StatusScript(tg),
 		"keys add":        KeysAddScript(),
 		"keys remove":     KeysRemoveScript(),
-		"destroy":         DestroyScript(tg, "app", []string{"destroy"}),
+		"destroy":         DestroyScript(tg, "app"),
 		"environments":    EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app"}}),
 		"environments+i":  EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app", Instances: true}}),
 		"role holders":    RoleHoldersScript(tg, "proxy"),
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
-		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}, Restart: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
+		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{}, &SyncOptions{From: "vm1:prod"}),
 		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, []string{"deploy"}),
 		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}),
@@ -427,7 +427,7 @@ exit 0
 		}
 	}
 	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
-	phases := Phases{Run: []string{"deploy"}, Restart: []string{"deploy", "--back"}}
+	phases := Phases{Run: []string{"deploy"}}
 	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
@@ -471,7 +471,7 @@ exit 0
 	if _, err := os.Stat(filepath.Join(base, "releases", "2", ".devopsy-failed")); err != nil {
 		t.Errorf("not marked failed: %v", err)
 	}
-	if got := calls(root); !strings.Contains(got, "--sync-services finish abort") || !strings.Contains(got, "deploy --back") || strings.Contains(got, "deploy from") {
+	if got := calls(root); !strings.Contains(got, "--sync-services finish abort") || !strings.Contains(got, "--release-steps restart run") || strings.Contains(got, "deploy from") {
 		t.Errorf("abort calls:\n%s", got)
 	}
 
@@ -628,7 +628,7 @@ esac
 			t.Fatal(err)
 		}
 	}
-	phases := Phases{Run: []string{"deploy"}, Restart: []string{"deploy", "--back"}}
+	phases := Phases{Run: []string{"deploy"}}
 	script := func(tg *Target, id string, rollback bool) string {
 		return ActivateScript(tg, id, rollback, "app-prod", phases, nil)
 	}
@@ -691,7 +691,7 @@ esac
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: deploy\ncurrent: deploy --back\n"; got != want {
+	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: deploy\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "1" {
