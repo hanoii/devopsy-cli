@@ -202,10 +202,10 @@ func TestScriptsParse(t *testing.T) {
 }
 
 func TestFormatReleases(t *testing.T) {
-	out := "20261005120000\tcurrent\t-\t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
-		"20261004120000\t-\tfailed\t\n"
+	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
+		"20261004120000\t-\tfailed\t\t\n"
 	got := FormatReleases(out)
-	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "20261004120000", "FAILED"} {
+	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11\n  20261004120000", "FAILED"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}

@@ -1073,8 +1073,9 @@ func UpgradeScript(args []string) string {
 	return "set -eu\nexec " + devopsyCall("", append([]string{"--upgrade"}, args...), false) + "\n"
 }
 
-// ReleasesScript prints one line per release: id, current flag, failed flag
-// and the record JSON, tab separated.
+// ReleasesScript prints one line per release: id, current flag, failed flag,
+// its images (ImagesFile, space separated) and the record JSON, tab
+// separated.
 func ReleasesScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, without releases" >&2
@@ -1085,31 +1086,38 @@ cur=$(readlink "$base/current" 2>/dev/null || true)
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   f=-; [ -e "$base/releases/$r/`+FailedFile+`" ] && f=failed
-  printf '%%s\t%%s\t%%s\t' "$r" "$c" "$f"
+  i=$(tr '\n' ' ' < "$base/releases/$r/%s" 2>/dev/null || true)
+  printf '%%s\t%%s\t%%s\t%%s\t' "$r" "$c" "$f" "$i"
   tr -d '\n' < "$base/releases/$r/%s" 2>/dev/null || true
   echo
 done
-`, RecordFile)
+`, ImagesFile, RecordFile)
 }
 
 // Release is one line of ReleasesScript's output.
 type Release struct {
 	ID              string
 	Current, Failed bool
-	Record          Record
+	// Images are the names it runs (ImagesFile): what a rollback to it
+	// restores, and what removing it may free.
+	Images []string
+	Record Record
 }
 
 // ParseReleases reads ReleasesScript's output, newest first.
 func ParseReleases(out string) []Release {
 	var rs []Release
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 4)
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 5)
 		if len(parts) < 3 {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed"}
-		if len(parts) == 4 {
-			_ = json.Unmarshal([]byte(parts[3]), &r.Record)
+		if len(parts) > 3 {
+			r.Images = strings.Fields(parts[3])
+		}
+		if len(parts) == 5 {
+			_ = json.Unmarshal([]byte(parts[4]), &r.Record)
 		}
 		rs = append(rs, r)
 	}
@@ -1141,11 +1149,15 @@ func (r Release) Line() string {
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
 
-// FormatReleases turns ReleasesScript output into a table.
+// FormatReleases turns ReleasesScript output into a table, each release's
+// images on the line under it.
 func FormatReleases(out string) string {
 	var b strings.Builder
 	for _, r := range ParseReleases(out) {
 		b.WriteString(r.Line() + "\n")
+		if len(r.Images) > 0 {
+			b.WriteString("    " + strings.Join(r.Images, " ") + "\n")
+		}
 	}
 	if b.Len() == 0 {
 		return "No releases yet.\n"

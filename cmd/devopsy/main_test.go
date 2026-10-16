@@ -1347,7 +1347,8 @@ func TestReleasesRemove(t *testing.T) {
 	if out, code := run(nil, "@prod", "--releases", "remove", "failed", "--yes"); code != 0 || !strings.Contains(out, "No failed releases") {
 		t.Errorf("no failed releases left (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, "* "+current) || strings.Count(out, "\n") != 2 {
+	// Each release's line, then its images (the fake docker's output).
+	if out, code := run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, "* "+current) || strings.Count(out, "\n    ") != 2 || strings.Count(out, "\n") != 4 {
 		t.Errorf("listing (%d):\n%s", code, out)
 	}
 }
