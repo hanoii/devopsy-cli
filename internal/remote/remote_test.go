@@ -589,20 +589,20 @@ func readFile(path string) string {
 	return string(data)
 }
 
-// Bookmarks fit Docker's 128-character tags: readable up to 105
-// characters of name, cut and hashed past that, and two long names that
-// differ only past the cut stay apart.
+// Bookmarks fit Docker's 128-character tags, a ref's cksum included:
+// readable up to 94 characters of name, cut and hashed past that, and two
+// long names that differ only past the cut stay apart.
 func TestBookmarkPrefix(t *testing.T) {
-	const id = "20261016120000"
+	const id = "20261016120000-4294967295"
 	if got := BookmarkPrefix("drupal11-prod"); got != "devopsy-drupal11-prod-" {
 		t.Errorf("short name: %q", got)
 	}
 	if got := BookmarkPrefix(""); got != "devopsy-" {
 		t.Errorf("no name: %q", got)
 	}
-	at := strings.Repeat("a", 105)
+	at := strings.Repeat("a", 94)
 	if got := BookmarkPrefix(at); got != "devopsy-"+at+"-" || len(got+id) != 128 {
-		t.Errorf("105 characters: %q (%d)", got, len(got+id))
+		t.Errorf("94 characters: %q (%d)", got, len(got+id))
 	}
 	long1 := strings.Repeat("a", 110) + "-one"
 	long2 := strings.Repeat("a", 110) + "-two"
@@ -611,7 +611,7 @@ func TestBookmarkPrefix(t *testing.T) {
 		t.Errorf("long names share %q", p1)
 	}
 	for _, p := range []string{p1, p2} {
-		if len(p+id) != 128 || !strings.HasPrefix(p, "devopsy-"+strings.Repeat("a", 96)+"-") {
+		if len(p+id) != 128 || !strings.HasPrefix(p, "devopsy-"+strings.Repeat("a", 85)+"-") {
 			t.Errorf("long name: %q (%d)", p, len(p+id))
 		}
 	}
@@ -905,6 +905,54 @@ exit 0
 	}
 	if strings.Contains(readFile(filepath.Join(root, "calls")), "--destroy-data") {
 		t.Errorf("destroy took data down without the image lock")
+	}
+}
+
+// Two tags of one repository in a release get a bookmark each, so a
+// rollback puts each back on its own image, and a ref by digest gets one
+// too, so docker image prune -f leaves a rollback's image alone.
+func TestBookmarksPerRef(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
+  "-- pull") echo "A$IMG" >"$FAKE_ROOT/images/postgres:15"; echo "B$IMG" >"$FAKE_ROOT/images/postgres:16"; echo "D$IMG" >"$FAKE_ROOT/images/x@sha256:abc" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
+	run := func(script string, env ...string) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+	}
+	for _, id := range []string{"1", "2"} {
+		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		run(ActivateScript(tg, id, false, "", Phases{Run: []string{"deploy"}}, nil), "IMG="+id)
+	}
+	cksum := func(ref string) string {
+		out, err := exec.Command("sh", "-c", "printf '%s' \"$0\" | cksum | cut -d ' ' -f 1", ref).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if fakeImage(root, "postgres:devopsy-app-prod-1-"+cksum("postgres:15")) != "A1" || fakeImage(root, "postgres:devopsy-app-prod-1-"+cksum("postgres:16")) != "B1" {
+		t.Errorf("postgres:15 and postgres:16 do not have a bookmark each")
+	}
+	if fakeImage(root, "x:devopsy-app-prod-1") != "D1" {
+		t.Errorf("the ref by digest has no bookmark")
+	}
+	run(ActivateScript(tg, "", true, "", Phases{}, nil))
+	if fakeImage(root, "postgres:15") != "A1" || fakeImage(root, "postgres:16") != "B1" {
+		t.Errorf("rollback: postgres:15 is %q, postgres:16 %q", fakeImage(root, "postgres:15"), fakeImage(root, "postgres:16"))
 	}
 }
 

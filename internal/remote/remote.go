@@ -693,15 +693,19 @@ prune_images() { :; }
 //
 //   - bookmark_images <dir>: once fetched, every image the release runs
 //     (compose config --images, recorded in ImagesFile) gets a second
-//     tag of its own, devopsy-<compose name>-<release id> (BookmarkPrefix).
-//     Compose keeps running the names the files give (drupal11-prod-app,
-//     mariadb:11); the bookmark keeps that release's image when a later
-//     build or pull moves them. References by digest are exact already.
-//     Never fails.
+//     tag of its own, <repository>:devopsy-<compose name>-<release id>
+//     (bookmark, BookmarkPrefix), plus -<cksum of the ref> when the
+//     release names the repository more than once (postgres:15 and
+//     postgres:16), so no bookmark overwrites another. Compose keeps
+//     running the names the files give (drupal11-prod-app, mariadb:11);
+//     the bookmark keeps that release's image when a later build or pull
+//     moves them. References by digest get one too, though they are
+//     exact: docker image prune -f deletes an image pulled by digest only
+//     once no container uses it. Never fails.
 //   - restore_images <dir>: points the names back at the release's
-//     bookmarks, all or nothing: a rollback or a restart runs exactly the
-//     images that release ran, without building or pulling. Fails when the
-//     release has no record or a bookmark is gone.
+//     bookmarks, all or nothing, digests aside: a rollback or a restart
+//     runs exactly the images that release ran, without building or
+//     pulling. Fails when the release has no record or a bookmark is gone.
 //   - get_images <dir>: restore_images, else fetch_images and
 //     bookmark_images, under the shared image lock. A new release has no
 //     record yet, so it fetches.
@@ -735,12 +739,26 @@ func releaseImages(projectName string, t *Target, mode string) string {
 		holder = "a release"
 	}
 	return fetch + `image_repo() {
-  case ${1##*/} in
-    *:*) echo "${1%:*}" ;;
-    *) echo "$1" ;;
+  ir=${1%%@*}
+  case ${ir##*/} in
+    *:*) echo "${ir%:*}" ;;
+    *) echo "$ir" ;;
   esac
 }
 release_id() { echo "${1##*/}"; }
+bookmark() {
+  bk_repo=$(image_repo "$1")
+  bk_n=0
+  while read -r bk_ref; do
+    [ -n "$bk_ref" ] || continue
+    if [ "$(image_repo "$bk_ref")" = "$bk_repo" ]; then bk_n=$((bk_n + 1)); fi
+  done <"$2/` + ImagesFile + `"
+  if [ "$bk_n" -gt 1 ]; then
+    echo "$bk_repo:` + prefix + `$(release_id "$2")-$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)"
+  else
+    echo "$bk_repo:` + prefix + `$(release_id "$2")"
+  fi
+}
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -788,8 +806,8 @@ bookmark_images() {
     return 0
   fi
   while read -r ref; do
-    case $ref in '' | *@*) continue ;; esac
-    docker tag "$ref" "$(image_repo "$ref"):` + prefix + `$bm_id" 2>/dev/null || true
+    [ -n "$ref" ] || continue
+    docker tag "$ref" "$(bookmark "$ref" "$1")" 2>/dev/null || true
   done <"$1/` + ImagesFile + `"
   return 0
 }
@@ -798,11 +816,11 @@ restore_images() {
   ri_id=$(release_id "$1")
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
-    docker image inspect "$(image_repo "$ref"):` + prefix + `$ri_id" >/dev/null 2>&1 || return 1
+    docker image inspect "$(bookmark "$ref" "$1")" >/dev/null 2>&1 || return 1
   done <"$1/` + ImagesFile + `"
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
-    docker tag "$(image_repo "$ref"):` + prefix + `$ri_id" "$ref" || return 1
+    docker tag "$(bookmark "$ref" "$1")" "$ref" || return 1
   done <"$1/` + ImagesFile + `"
   echo "devopsy: images of $ri_id restored" >&2
 }
@@ -818,8 +836,8 @@ remove_images() {
   rm_id=$(release_id "$1")
   rm_free=
   while read -r ref; do
-    case $ref in '' | *@*) continue ;; esac
-    rm_bm="$(image_repo "$ref"):` + prefix + `$rm_id"
+    [ -n "$ref" ] || continue
+    rm_bm=$(bookmark "$ref" "$1")
     rm_img=$(docker image inspect --format '{{.Id}}' "$rm_bm" 2>/dev/null) || continue
     docker image rm "$rm_bm" >/dev/null 2>&1 || true
     rm_held=
@@ -831,7 +849,7 @@ remove_images() {
   [ -n "$rm_free" ] || return 0
   rm_gone=
   while read -r ref; do
-    case $ref in '' | *@*) continue ;; esac
+    [ -n "$ref" ] || continue
     rm_img=$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null) || continue
     case " $rm_free " in *" $rm_img "*) ;; *) continue ;; esac
     if rm_err=$(docker image rm "$ref" 2>&1 >/dev/null); then
@@ -852,17 +870,18 @@ prune_images() {
 }
 
 // BookmarkPrefix is the start of a release's image bookmarks, the release
-// id following it: devopsy-<compose name>-. Docker's tags end at 128
-// characters, so a name over 105 (8 + name + 1 + a 14-digit id) is cut to
-// 96 and followed by the first 8 hex digits of its sha256, which keeps
-// names that differ only past the cut apart.
+// id following it: devopsy-<compose name>-, then the 14-digit id, then,
+// when the release names a repository more than once, - and the ref's
+// cksum (up to 10 digits). Docker's tags end at 128 characters, so a
+// name over 94 is cut to 85 and followed by the first 8 hex digits of its
+// sha256, which keeps names that differ only past the cut apart.
 func BookmarkPrefix(composeName string) string {
 	if composeName == "" {
 		return "devopsy-"
 	}
-	if len(composeName) > 105 {
+	if len(composeName) > 94 {
 		sum := sha256.Sum256([]byte(composeName))
-		composeName = composeName[:96] + "-" + hex.EncodeToString(sum[:4])
+		composeName = composeName[:85] + "-" + hex.EncodeToString(sum[:4])
 	}
 	return "devopsy-" + composeName + "-"
 }
