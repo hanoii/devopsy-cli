@@ -941,6 +941,12 @@ exit 0
 	if !strings.Contains(out, "fetch of release 4 was interrupted") {
 		t.Errorf("destroy did not recover release 4:\n%s", out)
 	}
+	// What Docker refused is recorded in the project's directory, which
+	// outlives the environment.
+	left := filepath.Join(root, "app", ImagesLeftFile)
+	if got := readFile(left); !strings.Contains(got, "\tapp-b-prod\t3\tregistry/app:def\tZ\tconflict: a container uses registry/app:def\n") {
+		t.Errorf("registry/app:def not recorded: %q", got)
+	}
 
 	// --releases remove checks again under the lock: the current release,
 	// or one gone meanwhile, refuses them all.
@@ -956,8 +962,25 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/1", ImagesFile), "mariadb:10\n")
 	write(t, filepath.Join(root, "images", "mariadb:10"), "W\n")
 	write(t, filepath.Join(root, "images", "mariadb:devopsy-app-a-prod-1"), "W\n")
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") {
+	// The recorded registry/app:def is retried: no container uses it now.
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") {
 		t.Errorf("remove 1 (%v):\n%s", err, out)
+	}
+	if got := readFile(left); strings.Contains(got, "registry/app:def") || strings.Count(got, "\n") != 1 || !strings.Contains(got, "\tapp-a-prod\t1\tmariadb:devopsy-app-a-prod-1\tW\t") {
+		t.Errorf("record after the retry: %q", got)
+	}
+	out, err = run(ReleasesScript(target("a")))
+	if err != nil {
+		t.Fatalf("releases (%v):\n%s", err, out)
+	}
+	if l := ParseLeft(out); len(l) != 1 || l[0].Ref != "mariadb:devopsy-app-a-prod-1" || l[0].Name != "app-a-prod" || l[0].Release != "1" || !strings.HasPrefix(l[0].Why, "conflict") {
+		t.Errorf("left parsed: %+v\n%s", l, out)
+	}
+	if rs := ParseReleases(out); len(rs) != 1 || rs[0].ID != "2" {
+		t.Errorf("releases parsed: %+v", rs)
+	}
+	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
+		t.Errorf("formatted:\n%s", f)
 	}
 
 	// --destroy with the lock taken: nothing removed.
@@ -968,6 +991,13 @@ exit 0
 	}
 	if strings.Contains(readFile(filepath.Join(root, "calls")), "--destroy-data") {
 		t.Errorf("destroy took data down without the image lock")
+	}
+
+	// Once its container is gone, the next removal removes what was left,
+	// and the record goes with its last line.
+	out, err = run(DestroyScript(target("a"), ""))
+	if err != nil || !strings.Contains(out, "removed mariadb:devopsy-app-a-prod-1, left by release 1 of app-a-prod") || exists(filepath.Join("app", ImagesLeftFile)) {
+		t.Errorf("destroy a (%v):\n%s", err, out)
 	}
 }
 
@@ -1183,5 +1213,35 @@ func TestActivatePruneFailed(t *testing.T) {
 	}
 	if got := strings.Join(left, " "); got != "3 4 5 6" {
 		t.Errorf("releases left: %s, want 3 4 5 6", got)
+	}
+}
+
+// A project's directory left with its .env and the record of images its
+// removals left is a leftover too; removing it says what is forgotten.
+func TestLeftoverImagesRecord(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\n' \"$FAKE_ROOT\"\n")
+	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "app", ".env"), "")
+	write(t, filepath.Join(root, "app", ImagesLeftFile), "1\tapp-prod\t1\tmariadb:devopsy-app-prod-1\tW\tconflict\n")
+	tg := &Target{Name: "prod", Path: "app/prod", Project: &Project{Name: "app"}, Levels: []Level{{Name: "project", Dir: "app", Link: "project.env"}}}
+	run := func(script string) string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		return string(out)
+	}
+	if out := run(LeftoverScript(tg, false)); strings.TrimSpace(out) != filepath.Join(root, "app") {
+		t.Errorf("leftovers: %q", out)
+	}
+	if out := run(LeftoverScript(tg, true)); !strings.Contains(out, "forgetting the images "+filepath.Join(root, "app")+"'s removals left: mariadb:devopsy-app-prod-1") || fileExists(filepath.Join(root, "app")) {
+		t.Errorf("purge:\n%s", out)
 	}
 }

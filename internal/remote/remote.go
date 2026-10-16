@@ -27,6 +27,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -743,6 +744,19 @@ const ImagesLock = ".devopsy-images.lock"
 // does), so whoever waits can say who holds it and for how long.
 const ImagesHolders = ".devopsy-images.holders"
 
+// ImagesLeftFile, in a project's directory, records the images a removal
+// could not remove (Docker refused: a container, even a stopped one, uses
+// it), one tab-separated line each: time, compose name, release id, ref,
+// image id, Docker's reason. Every pruning, --releases remove and
+// --destroy retries them (retry_left), and --releases lists them.
+const ImagesLeftFile = ".devopsy-images-left"
+
+// leftPath is ImagesLeftFile's path in a script, in t's project's directory
+// under the release root.
+func leftPath(t *Target) string {
+	return `"$root"/` + Quote(strings.SplitN(t.Path, "/", 2)[0]) + `/` + ImagesLeftFile
+}
+
 // noImages stands in for releaseImages' lock and removal functions when
 // there is no mode, so scripts call them either way.
 const noImages = `image_lock() { :; }
@@ -782,8 +796,11 @@ prune_images() { :; }
 //     still point to it, so Docker deletes it. A name that moved on stays,
 //     and Docker refuses one a container uses (never -f). Under the
 //     exclusive lock; never fails.
-//   - prune_images: docker image prune -f, once after removals, for what
-//     they left dangling.
+//   - prune_images: retry_left, then docker image prune -f, once after
+//     removals, for what they left dangling. A name Docker refused to
+//     remove is recorded in the project's ImagesLeftFile (left_add) and
+//     retried by retry_left, under the same exclusive lock: dropped once
+//     removed, gone, moved on, or held by a release again.
 //   - recover_fetching: a release left with FetchingFile (its session
 //     dropped mid-fetch, no signal) is marked failed, what it got
 //     bookmarked, and current's names ($prev, when set) restored. The
@@ -809,7 +826,9 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	if holder == "" {
 		holder = "a release"
 	}
-	return fetch + `image_repo() {
+	return fetch + `left=` + leftPath(t) + `
+tab=$(printf '\t')
+image_repo() {
   ir=${1%%@*}
   case ${ir##*/} in
     *:*) echo "${ir%:*}" ;;
@@ -921,7 +940,7 @@ remove_images() {
     rm_img=$(docker image inspect --format '{{.Id}}' "$rm_bm" 2>/dev/null) || continue
     # Refused when it is the image's last name and a container, even a
     # stopped one, uses it: say so, nothing will list it again.
-    rm_err=$(docker image rm "$rm_bm" 2>&1 >/dev/null) || echo "devopsy: $rm_bm stays: $rm_err" >&2
+    rm_err=$(docker image rm "$rm_bm" 2>&1 >/dev/null) || left_add "$rm_bm" "$rm_img" "$rm_err"
     rm_held=
     for rm_tag in $(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$rm_img" 2>/dev/null); do
       case ${rm_tag##*:} in devopsy-*) rm_held=1 ;; esac
@@ -937,7 +956,7 @@ remove_images() {
     if rm_err=$(docker image rm "$ref" 2>&1 >/dev/null); then
       rm_gone="${rm_gone:+$rm_gone, }$ref"
     else
-      echo "devopsy: $ref stays: $rm_err" >&2
+      left_add "$ref" "$rm_img" "$rm_err"
     fi
   done <"$1/` + ImagesFile + `"
   [ -z "$rm_gone" ] || echo "devopsy: removed $rm_gone, which only $rm_id held" >&2
@@ -954,7 +973,46 @@ recover_fetching() {
     rm -f "$rf"
   done
 }
+left_add() {
+  echo "devopsy: $1 stays: $3 (recorded: --releases lists it, the next pruning retries)" >&2
+  mkdir -p "${left%/*}"
+  if [ -f "$left" ] && awk -F "$tab" -v r="$1" -v i="$2" '$4 == r && $5 == i { f = 1 } END { exit !f }' "$left"; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$rm_id" "$1" "$2" "$(printf '%s' "$3" | tr '\t\n' '  ')" >>"$left"
+}
+retry_left() {
+  [ -s "$left" ] || return 0
+  : >"$left.tmp"
+  while IFS="$tab" read -r rl_t rl_name rl_rel rl_ref rl_img rl_why; do
+    [ -n "$rl_ref" ] || continue
+    # Gone, or the name moved on: nothing left to do.
+    [ "$(docker image inspect --format '{{.Id}}' "$rl_ref" 2>/dev/null)" = "$rl_img" ] || continue
+    case ${rl_ref##*:} in
+      devopsy-*) ;;
+      *)
+        # A release holds it again: its own removal decides.
+        rl_held=
+        for rl_tag in $(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$rl_img" 2>/dev/null); do
+          case ${rl_tag##*:} in devopsy-*) rl_held=1 ;; esac
+        done
+        [ -z "$rl_held" ] || continue
+        ;;
+    esac
+    if docker image rm "$rl_ref" >/dev/null 2>&1; then
+      echo "devopsy: removed $rl_ref, left by release $rl_rel of $rl_name" >&2
+    else
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$left.tmp"
+    fi
+  done <"$left"
+  if [ -s "$left.tmp" ]; then
+    mv -f "$left.tmp" "$left"
+  else
+    rm -f "$left" "$left.tmp"
+  fi
+}
 prune_images() {
+  retry_left
   pi=$(docker image prune -f 2>/dev/null | sed -n 's/^Total reclaimed space: //p') || true
   case $pi in '' | 0B) ;; *) echo "devopsy: dangling images pruned, $pi freed" >&2 ;; esac
   return 0
@@ -1103,12 +1161,14 @@ func UpgradeScript(args []string) string {
 
 // ReleasesScript prints one line per release: id, current flag, failed flag,
 // its images (ImagesFile, space separated) and the record JSON, tab
-// separated.
+// separated. First, the project's ImagesLeftFile, each line after left.
 func ReleasesScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, without releases" >&2
   exit 1
 fi
+left=`+leftPath(t)+`
+[ ! -s "$left" ] || sed "s/^/left$(printf '\t')/" "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
@@ -1137,7 +1197,7 @@ func ParseReleases(out string) []Release {
 	var rs []Release
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 5)
-		if len(parts) < 3 {
+		if len(parts) < 3 || parts[0] == "left" {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed"}
@@ -1177,8 +1237,29 @@ func (r Release) Line() string {
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
 
+// Left is an image a removal could not remove, from ImagesLeftFile.
+type Left struct {
+	Time            time.Time
+	Name, Release   string // the compose name and release that listed it
+	Ref, Image, Why string
+}
+
+// ParseLeft reads ReleasesScript's left lines.
+func ParseLeft(out string) []Left {
+	var ls []Left
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 7)
+		if len(parts) != 7 || parts[0] != "left" {
+			continue
+		}
+		sec, _ := strconv.ParseInt(parts[1], 10, 64)
+		ls = append(ls, Left{Time: time.Unix(sec, 0).UTC(), Name: parts[2], Release: parts[3], Ref: parts[4], Image: parts[5], Why: parts[6]})
+	}
+	return ls
+}
+
 // FormatReleases turns ReleasesScript output into a table, each release's
-// images on the line under it.
+// images on the line under it, then the project's images left behind.
 func FormatReleases(out string) string {
 	var b strings.Builder
 	for _, r := range ParseReleases(out) {
@@ -1188,7 +1269,13 @@ func FormatReleases(out string) string {
 		}
 	}
 	if b.Len() == 0 {
-		return "No releases yet.\n"
+		b.WriteString("No releases yet.\n")
+	}
+	if left := ParseLeft(out); len(left) > 0 {
+		b.WriteString("\nImages the project's removals left (Docker refused; each pruning retries):\n")
+		for _, l := range left {
+			fmt.Fprintf(&b, "  %s  %s, release %s, %s\n    %s\n", l.Ref, l.Name, l.Release, l.Time.Format("2006-01-02 15:04"), l.Why)
+		}
 	}
 	return b.String()
 }
@@ -1484,13 +1571,16 @@ func RoleHoldersScript(t *Target, role string) string {
 func LeftoverScript(t *Target, remove bool) string {
 	act := `echo "$d"`
 	if remove {
-		act = `rm -f "$d/.env" "$d/.lock" && rmdir "$d" && echo "devopsy: removed $d" >&2`
+		act = `if [ -s "$d/` + ImagesLeftFile + `" ]; then
+  echo "devopsy: forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')" >&2
+fi
+rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" && echo "devopsy: removed $d" >&2`
 	}
 	s := "set -eu\n" + basePrelude(t) + "child=.env\n"
 	for i := len(t.Levels) - 1; i >= 0; i-- {
 		s += `d="$root"/` + Quote(t.Levels[i].Dir) + `
 [ -d "$d" ] || exit 0
-[ -z "$(ls -A "$d" | grep -vxF -e .env -e .lock -e "$child" || true)" ] || exit 0
+[ -z "$(ls -A "$d" | grep -vxF -e .env -e .lock -e ` + ImagesLeftFile + ` -e "$child" || true)" ] || exit 0
 ` + act + `
 child=${d##*/}
 `
