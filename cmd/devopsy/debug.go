@@ -395,7 +395,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		}
 		return file(d.Source)
 	}
-	fmt.Println(st.dim("First wins: the caller's environment, .env, instance.env, project.env, devopsy-target.env, the env capability."))
+	fmt.Println(st.dim("First wins: the caller's environment, .env, inherit.env, instance.env, project.env, devopsy-target.env, the env capability."))
 	for _, v := range vars {
 		if len(v.Defs) == 0 {
 			fmt.Printf("%s %s\n", st.name(v.Name), st.warn("not set"))
