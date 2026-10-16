@@ -1055,29 +1055,68 @@ exit 0
 		t.Errorf("release 3 kept its marker")
 	}
 
+	// interrupt runs cmd until its build hangs, checks what it can only
+	// see then, and sends SIGTERM to its process group.
+	interrupt := func(cmd *exec.Cmd, during func()) (string, int) {
+		t.Helper()
+		os.Remove(filepath.Join(root, "building"))
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+			time.Sleep(50 * time.Millisecond)
+		}
+		during()
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		return buf.String(), cmd.ProcessState.ExitCode()
+	}
+
 	// Release 4 gets SIGTERM while it builds, after pulling mariadb:11.
-	cmd := command("4", "FAKE_HANG=1")
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.Wait()
-	if code := cmd.ProcessState.ExitCode(); code != 130 || !strings.Contains(buf.String(), "the images' fetch was interrupted") || !strings.Contains(buf.String(), "release 4 not made current") {
-		t.Fatalf("interrupted release 4 (%v, exit %d):\n%s", err, code, buf.String())
+	out4, code := interrupt(command("4", "FAKE_HANG=1"), func() {})
+	if code != 130 || !strings.Contains(out4, "the images' fetch was interrupted") || !strings.Contains(out4, "release 4 not made current") {
+		t.Fatalf("interrupted release 4 (exit %d):\n%s", code, out4)
 	}
 	if !exists("releases/4/"+FailedFile) || exists("releases/4/"+FetchingFile) {
 		t.Errorf("release 4 not marked failed, or kept its marker")
 	}
 	if fakeImage(root, "mariadb:devopsy-app-prod-4") != "4" || fakeImage(root, "mariadb:11") != "3" {
 		t.Errorf("release 4's pull not bookmarked, or mariadb:11 not 3's again: %q", fakeImage(root, "mariadb:11"))
+	}
+
+	// A rollback to 1 (2 and 4 failed) whose bookmarks are gone fetches
+	// again; interrupted, nothing changes: 3 stays current with its
+	// images, and 1 is neither marked fetching nor failed, so a later
+	// rollback still finds it.
+	for _, ref := range []string{"app-prod-app", "mariadb"} {
+		os.Remove(filepath.Join(root, "images", ref+":devopsy-app-prod-1"))
+	}
+	rollback := exec.Command("sh", "-c", ActivateScript(tg, "", true, "app-prod", Phases{}, nil))
+	rollback.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "FAKE_HANG=1"}
+	outR, code := interrupt(rollback, func() {
+		if exists("releases/1/" + FetchingFile) {
+			t.Errorf("the rollback marked release 1 as fetching")
+		}
+	})
+	if code != 130 || !strings.Contains(outR, "rolling back to 1") || !strings.Contains(outR, "the images' fetch was interrupted") || !strings.Contains(outR, "nothing changed: current is still 3") {
+		t.Fatalf("interrupted rollback (exit %d):\n%s", code, outR)
+	}
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/3/code" {
+		t.Errorf("current is %q after an interrupted rollback", l)
+	}
+	if exists("releases/1/"+FailedFile) || exists("releases/1/"+FetchingFile) {
+		t.Errorf("release 1 marked failed or fetching by an interrupted rollback")
+	}
+	if fakeImage(root, "mariadb:11") != "3" || fakeImage(root, "app-prod-app") != "3" {
+		t.Errorf("3's images not back after the rollback: mariadb:11 %q, app-prod-app %q", fakeImage(root, "mariadb:11"), fakeImage(root, "app-prod-app"))
+	}
+	if fakeImage(root, "mariadb:devopsy-app-prod-1") != "1" {
+		t.Errorf("the rollback's pull is not bookmarked as release 1's")
 	}
 }
 
