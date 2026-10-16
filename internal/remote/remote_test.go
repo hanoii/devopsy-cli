@@ -627,7 +627,8 @@ func TestBookmarkPrefix(t *testing.T) {
 // tag under $FAKE_ROOT/images, holding the image's id (the id of the
 // release that built or pulled it): tag, inspect (with the Id and RepoTags
 // formats), rm (refused for the tags in $FAKE_IN_USE, as for a container's
-// image) and image prune (logged in $FAKE_ROOT/pruned), every command
+// image), image prune (logged in $FAKE_ROOT/pruned) and ps -a --filter
+// ancestor=<id> (the compose projects in $FAKE_ROOT/users/<id>), every command
 // failing as with the daemon down when $FAKE_DOCKER_DOWN is set; plus a
 // flock that takes every lock, unless $FAKE_LOCKED fails the image lock's
 // (fd 8) exclusive ones (all: shared ones too) or $FAKE_ROOT/locked
@@ -642,6 +643,7 @@ if [ -n "${FAKE_DOCKER_DOWN:-}" ]; then
 fi
 [ "$1" = version ] && exit 0
 case "$1 $2" in
+  "ps -a") cat "$FAKE_ROOT/users/${4#ancestor=}" 2>/dev/null; exit 0 ;;
   "image inspect")
     if [ "$3" != --format ]; then
       [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
@@ -701,7 +703,7 @@ echo "$at: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
-  "-- pull --ignore-buildable" | "-- pull") echo "$id" > "$FAKE_ROOT/images/mariadb:11" ;;
+  "-- pull --ignore-buildable" | "-- pull") echo "$id${PULLED:-}" > "$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull")
     if [ -n "${FAIL_BUILD:-}" ]; then
       # Another release takes the image lock meanwhile.
@@ -786,7 +788,17 @@ exit 0
 		t.Errorf("after a failed run the images are not release 1's: %q %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
 	}
 
-	// A rollback from 4 to 1 (2 and 3 failed) restores 1's images.
+	// Another failed run, while another compose project runs the
+	// mariadb:11 it pulled: that name stays on it, the rest go back.
+	write(t, filepath.Join(root, "users", "35m"), "stage-prod\napp-prod\n")
+	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb:11 stays on its newer image, which stage-prod run: 1 runs it too") {
+		t.Fatalf("failed run with mariadb:11 shared (%v):\n%s", err, out)
+	}
+	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "35m" {
+		t.Errorf("after a failed run with a shared name: app-prod-app %q, mariadb:11 %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
+	}
+
+	// A rollback from 4 to 1 (2, 3 and 35 failed) restores 1's images.
 	if out, err := release("4"); err != nil || image(root, "app-prod-app") != "4" {
 		t.Fatalf("release 4 (%v):\n%s", err, out)
 	}
@@ -905,7 +917,9 @@ exit 0
 	}
 
 	// a's next release prunes a's first: b's bookmark holds X.
-	release("a", "2", "def", "Y")
+	if out := release("a", "2", "def", "Y"); !strings.Contains(out, "the images of 1 stay: other releases hold them") {
+		t.Errorf("pruning a release whose images others hold says nothing:\n%s", out)
+	}
 	if exists("app/a/prod/releases/1") || fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "" {
 		t.Errorf("a's release 1 not pruned")
 	}
@@ -982,8 +996,11 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/1", ImagesFile), "mariadb:10\n")
 	write(t, filepath.Join(root, "images", "mariadb:10"), "W\n")
 	write(t, filepath.Join(root, "images", "mariadb:devopsy-app-a-prod-1"), "W\n")
+	// Another project's record is retried too.
+	write(t, filepath.Join(root, "other", ImagesLeftFile), "1\tother-prod\t9\tother:1\tV\tconflict\n")
+	write(t, filepath.Join(root, "images", "other:1"), "V\n")
 	// The recorded registry/app:def is retried: no container uses it now.
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") {
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") || !strings.Contains(out, "removed other:1, left by release 9 of other-prod") || exists(filepath.Join("other", ImagesLeftFile)) {
 		t.Errorf("remove 1 (%v):\n%s", err, out)
 	}
 	if got := readFile(left); strings.Contains(got, "registry/app:def") || strings.Count(got, "\n") != 1 || !strings.Contains(got, "\tapp-a-prod\t1\tmariadb:devopsy-app-a-prod-1\tW\t") {
@@ -1013,6 +1030,16 @@ exit 0
 		t.Errorf("destroy took data down without the image lock")
 	}
 
+	// A removal cut off between its passes is finished by the next one:
+	// the bookmark went, the image it freed is kept in the release.
+	write(t, filepath.Join(root, "app/a/prod/releases/7", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile+"-free"), "O\n")
+	write(t, filepath.Join(root, "images", "old:1"), "O\n")
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"7"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || fakeImage(root, "old:1") != "" || exists("app/a/prod/releases/7") {
+		t.Errorf("remove 7, cut off before (%v):\n%s", err, out)
+	}
+
 	// With Docker not answering, nothing is removed, the record included.
 	out, err = run(DestroyScript(target("a"), ""), "FAKE_DOCKER_DOWN=1")
 	if err == nil || !strings.Contains(out, "Docker is not answering") || !exists("app/a/prod/releases/2") || !exists(filepath.Join("app", ImagesLeftFile)) {
@@ -1023,6 +1050,13 @@ exit 0
 	// and the record goes with its last line, even one cut short of its
 	// newline.
 	write(t, left, strings.TrimSuffix(readFile(left), "\n"))
+	if out, err := run(ReleasesScript(target("a"))); err != nil || len(ParseReleases(out)) != 1 || len(ParseLeft(out)) != 1 {
+		t.Errorf("releases with a record cut short (%v):\n%s", err, out)
+	}
+	// Holder files are for messages only: one that cannot be written
+	// (a full disk) does not stop the removal.
+	os.RemoveAll(filepath.Join(root, ImagesHolders))
+	write(t, filepath.Join(root, ImagesHolders), "")
 	out, err = run(DestroyScript(target("a"), ""))
 	if err != nil || !strings.Contains(out, "removed mariadb:devopsy-app-a-prod-1, left by release 1 of app-a-prod") || exists(filepath.Join("app", ImagesLeftFile)) {
 		t.Errorf("destroy a (%v):\n%s", err, out)
@@ -1271,5 +1305,53 @@ func TestLeftoverImagesRecord(t *testing.T) {
 	}
 	if out := run(LeftoverScript(tg, true)); !strings.Contains(out, "forgetting the images "+filepath.Join(root, "app")+"'s removals left: mariadb:devopsy-app-prod-1") || fileExists(filepath.Join(root, "app")) {
 		t.Errorf("purge:\n%s", out)
+	}
+}
+
+// A release fetched again whose listing changed loses the bookmarks the
+// new one no longer makes, and one repository written two ways counts
+// as one: each name gets its own bookmark.
+func TestRebookmark(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n[ \"$*\" = \"-- config --images\" ] && printf \"$LISTING\"\nexit 0\n")
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	rel := filepath.Join(root, "app", "prod", "releases", "1")
+	write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	for tag, id := range map[string]string{"ghcr.io_x_app:1": "X", "library_nginx:1": "N1", "nginx:2": "N2", "ghcr.io_y_app:1": "Y"} {
+		write(t, filepath.Join(root, "images", tag), id+"\n")
+	}
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
+	run := func(listing string) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`bookmark_images "$REL"`)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "REL=" + rel, "LISTING=" + listing}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+	}
+	bookmarks := func() []string {
+		var bs []string
+		entries, _ := os.ReadDir(filepath.Join(root, "images"))
+		for _, e := range entries {
+			if strings.Contains(e.Name(), ":devopsy-") {
+				bs = append(bs, e.Name())
+			}
+		}
+		return bs
+	}
+	run(`ghcr.io/x/app:1\nlibrary/nginx:1\nnginx:2\n`)
+	bs := bookmarks()
+	if len(bs) != 3 || !slices.Contains(bs, "ghcr.io_x_app:devopsy-app-prod-1") {
+		t.Fatalf("bookmarks: %v", bs)
+	}
+	for _, b := range bs {
+		if strings.Contains(b, "nginx") && !strings.HasPrefix(strings.TrimPrefix(strings.TrimPrefix(b, "library_"), "nginx:"), "devopsy-app-prod-1-") {
+			t.Errorf("%s has no suffix: library/nginx and nginx are one repository", b)
+		}
+	}
+	run(`ghcr.io/y/app:1\n`)
+	if bs := bookmarks(); len(bs) != 1 || bs[0] != "ghcr.io_y_app:devopsy-app-prod-1" {
+		t.Errorf("bookmarks after the listing changed: %v", bs)
 	}
 }

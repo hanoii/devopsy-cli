@@ -831,6 +831,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 tab=$(printf '\t')
+il_busy=
 image_repo() {
   ir=${1%%@*}
   case ${ir##*/} in
@@ -838,13 +839,22 @@ image_repo() {
     *) echo "$ir" ;;
   esac
 }
+# The repository as Docker resolves it: library/nginx and docker.io/nginx
+# are nginx, so they share bookmarks and count as one.
+repo_key() {
+  rk=$(image_repo "$1")
+  rk=${rk#index.docker.io/}
+  rk=${rk#docker.io/}
+  echo "${rk#library/}"
+}
 release_id() { echo "${1##*/}"; }
 bookmark() {
   bk_repo=$(image_repo "$1")
+  bk_key=$(repo_key "$1")
   bk_n=0
   while read -r bk_ref; do
     [ -n "$bk_ref" ] || continue
-    if [ "$(image_repo "$bk_ref")" = "$bk_repo" ]; then bk_n=$((bk_n + 1)); fi
+    if [ "$(repo_key "$bk_ref")" = "$bk_key" ]; then bk_n=$((bk_n + 1)); fi
   done <"$2/` + ImagesFile + `"
   if [ "$bk_n" -gt 1 ]; then
     echo "$bk_repo:` + prefix + `$(release_id "$2")-$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)"
@@ -867,6 +877,12 @@ image_holders() {
     ih="${ih:+$ih, }$ih_who ($ih_what, $ih_t)"
   done
   echo "${ih:-another release}"
+}
+# image_users <image id>: the compose projects, this one aside, with a
+# container (even a stopped one) of that image or one built on it.
+image_users() {
+  docker ps -a --filter "ancestor=$1" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | sort -u |
+    awk -v p=` + Quote(name) + ` '$0 != p { printf "%s%s", (n++ ? ", " : ""), ($0 == "" ? "a container outside Compose" : $0) }'
 }
 image_lock() {
   il_opt=
@@ -898,11 +914,12 @@ image_lock() {
     return 75
   fi
   il_held=1
-  mkdir -p "$root/` + ImagesHolders + `"
-  printf '%s %s %s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$2" >"$root/` + ImagesHolders + `/$$"
+  # Only for messages: a full disk must not fail the lock.
+  mkdir -p "$root/` + ImagesHolders + `" 2>/dev/null || true
+  printf '%s %s %s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$2" 2>/dev/null >"$root/` + ImagesHolders + `/$$" || true
 }
 image_unlock() {
-  rm -f "$root/` + ImagesHolders + `/$$"
+  rm -f "$root/` + ImagesHolders + `/$$" 2>/dev/null || true
   il_held=
   exec 8>&-
 }
@@ -915,11 +932,26 @@ bookmark_images() {
     echo "devopsy: could not list the images of $bm_id: a rollback to it builds or pulls them again" >&2
     return 0
   fi
+  bm_old=
+  if [ -s "$1/` + ImagesFile + `" ]; then
+    bm_old=$(while read -r ref; do [ -z "$ref" ] || bookmark "$ref" "$1"; done <"$1/` + ImagesFile + `")
+  fi
   mv -f "$1/` + ImagesFile + `.tmp" "$1/` + ImagesFile + `"
+  bm_new=
   while read -r ref; do
     [ -n "$ref" ] || continue
-    docker tag "$ref" "$(bookmark "$ref" "$1")" 2>/dev/null || true
+    bm=$(bookmark "$ref" "$1")
+    bm_new="$bm_new$bm
+"
+    docker tag "$ref" "$bm" 2>/dev/null || true
   done <"$1/` + ImagesFile + `"
+  # A release fetched again (a rollback or restart whose bookmarks were
+  # gone) may list other names: the old bookmarks nothing lists would
+  # hold their images forever.
+  printf '%s\n' "$bm_old" | while read -r bm; do
+    [ -n "$bm" ] || continue
+    printf '%s' "$bm_new" | grep -qxF -e "$bm" || docker image rm "$bm" >/dev/null 2>&1 || true
+  done
   return 0
 }
 restore_images() {
@@ -931,7 +963,19 @@ restore_images() {
   done <"$1/` + ImagesFile + `"
   while read -r ref; do
     case $ref in '' | *@*) continue ;; esac
-    docker tag "$(bookmark "$ref" "$1")" "$ref" || return 1
+    ri_bm=$(bookmark "$ref" "$1")
+    # A shared name (mariadb:11) another compose project runs stays on
+    # its newer image: moving it back would change that project at its
+    # next recreate.
+    ri_cur=$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)
+    if [ -n "$ri_cur" ] && [ "$ri_cur" != "$(docker image inspect --format '{{.Id}}' "$ri_bm" 2>/dev/null || true)" ]; then
+      ri_users=$(image_users "$ri_cur")
+      if [ -n "$ri_users" ]; then
+        echo "devopsy: $ref stays on its newer image, which $ri_users run: $ri_id runs it too" >&2
+        continue
+      fi
+    fi
+    docker tag "$ri_bm" "$ref" || return 1
   done <"$1/` + ImagesFile + `"
   echo "devopsy: images of $ri_id restored" >&2
 }
@@ -946,11 +990,18 @@ get_images() {
 remove_images() {
   [ -s "$1/` + ImagesFile + `" ] || return 0
   rm_id=$(release_id "$1")
+  # What the first pass freed is kept in the release until it goes, so a
+  # removal cut off between the passes (Ctrl-C, a dropped session) is
+  # finished by the next one: the bookmarks are gone by then.
+  rm_freef="$1/` + ImagesFile + `-free"
   rm_free=
+  [ ! -f "$rm_freef" ] || rm_free=" $(tr '\n' ' ' <"$rm_freef")"
+  rm_some=
   while read -r ref; do
     [ -n "$ref" ] || continue
     rm_bm=$(bookmark "$ref" "$1")
     rm_img=$(docker image inspect --format '{{.Id}}' "$rm_bm" 2>/dev/null) || continue
+    rm_some=1
     # Refused when it is the image's last name and a container, even a
     # stopped one, uses it: say so, nothing will list it again.
     rm_err=$(docker image rm "$rm_bm" 2>&1 >/dev/null) || left_add "$rm_bm" "$rm_img" "$rm_err"
@@ -958,9 +1009,15 @@ remove_images() {
     for rm_tag in $(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' "$rm_img" 2>/dev/null); do
       case ${rm_tag##*:} in devopsy-*) rm_held=1 ;; esac
     done
-    [ -n "$rm_held" ] || rm_free="$rm_free $rm_img"
+    if [ -z "$rm_held" ]; then
+      rm_free="$rm_free $rm_img"
+      echo "$rm_img" 2>/dev/null >>"$rm_freef" || true
+    fi
   done <"$1/` + ImagesFile + `"
-  [ -n "$rm_free" ] || return 0
+  if [ -z "${rm_free# }" ]; then
+    [ -z "$rm_some" ] || echo "devopsy: the images of $rm_id stay: other releases hold them" >&2
+    return 0
+  fi
   rm_gone=
   while read -r ref; do
     [ -n "$ref" ] || continue
@@ -994,18 +1051,25 @@ left_add() {
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" ` + Quote(strings.ReplaceAll(holder, " ", "_")) + ` "$rm_id" "$1" "$2" "$(printf '%s' "$3" | tr '\t\n' '  ')" >>"$left"
 }
+# retry_left: every project's record on the server, under the exclusive
+# lock: a project with no environment left is retried by the others.
 retry_left() {
-  [ -s "$left" ] || return 0
-  : >"$left.tmp"
+  for rl_file in "$root"/*/` + ImagesLeftFile + `; do
+    [ -s "$rl_file" ] || continue
+    retry_file "$rl_file"
+  done
+}
+retry_file() {
+  : >"$1.tmp"
   # A last line without its newline (a write cut short) counts too.
   while rl_ref=; IFS="$tab" read -r rl_t rl_name rl_rel rl_ref rl_img rl_why || [ -n "$rl_ref" ]; do
     [ -n "$rl_ref" ] || continue
     # Gone, or the name moved on: nothing left to do. Any other error
     # keeps the line.
-    if ! rl_id=$(docker image inspect --format '{{.Id}}' "$rl_ref" 2>&1); then
-      case $rl_id in
+    if ! rl_id=$(docker image inspect --format '{{.Id}}' "$rl_ref" 2>/dev/null); then
+      case $(docker image inspect "$rl_ref" 2>&1 >/dev/null || true) in
         *"No such image"*) ;;
-        *) printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$left.tmp" ;;
+        *) printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$1.tmp" ;;
       esac
       continue
     fi
@@ -1024,13 +1088,13 @@ retry_left() {
     if docker image rm "$rl_ref" >/dev/null 2>&1; then
       echo "devopsy: removed $rl_ref, left by release $rl_rel of $rl_name" >&2
     else
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$left.tmp"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rl_t" "$rl_name" "$rl_rel" "$rl_ref" "$rl_img" "$rl_why" >>"$1.tmp"
     fi
-  done <"$left"
-  if [ -s "$left.tmp" ]; then
-    mv -f "$left.tmp" "$left"
+  done <"$1"
+  if [ -s "$1.tmp" ]; then
+    mv -f "$1.tmp" "$1"
   else
-    rm -f "$left" "$left.tmp"
+    rm -f "$1" "$1.tmp"
   fi
 }
 prune_images() {
@@ -1194,7 +1258,9 @@ func ReleasesScript(t *Target) string {
   exit 1
 fi
 left=`+leftPath(t)+`
-[ ! -s "$left" ] || sed "s/^/left$(printf '\t')/" "$left"
+# awk ends every line: a last one cut short of its newline would take
+# the first release's.
+[ ! -s "$left" ] || awk -v t="$(printf '\t')" '{ print "left" t $0 }' "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
