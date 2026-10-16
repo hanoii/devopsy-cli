@@ -175,7 +175,8 @@ binary (with `sudo` when its directory is not yours; on servers set up
 with devopsy-server it is the deploy user's, so `devopsy @<server>
 --upgrade` upgrades a server from your machine). At a terminal it
 checks for a new release once a day in the background and says so; never in
-CI, and `DEVOPSY_NO_UPDATE_CHECK=1` turns it off.
+CI or in what devopsy runs on servers, and `DEVOPSY_NO_UPDATE_CHECK=1` turns
+it off.
 
 To run a checkout's code instead, symlink `scripts/devopsy` into your `PATH`
 (it rebuilds on every run, instantly when nothing changed; needs Go).

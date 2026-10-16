@@ -627,20 +627,27 @@ func TestBookmarkPrefix(t *testing.T) {
 // tag under $FAKE_ROOT/images, holding the image's id (the id of the
 // release that built or pulled it): tag, inspect (with the Id and RepoTags
 // formats), rm (refused for the tags in $FAKE_IN_USE, as for a container's
-// image) and image prune (logged in $FAKE_ROOT/pruned); plus a flock that
-// takes every lock, unless $FAKE_LOCKED fails the image lock's (fd 8)
-// exclusive ones, and the
-// mv -T the scripts need.
+// image) and image prune (logged in $FAKE_ROOT/pruned), every command
+// failing as with the daemon down when $FAKE_DOCKER_DOWN is set; plus a
+// flock that takes every lock, unless $FAKE_LOCKED fails the image lock's
+// (fd 8) exclusive ones (all: shared ones too) or $FAKE_ROOT/locked
+// exists (every image lock), and the mv -T the scripts need.
 func fakeImageTools(t *testing.T, bin string) {
 	t.Helper()
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 f() { echo "$FAKE_ROOT/images/$(echo "$1" | tr '/' '_')"; }
+if [ -n "${FAKE_DOCKER_DOWN:-}" ]; then
+  echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+  exit 1
+fi
+[ "$1" = version ] && exit 0
 case "$1 $2" in
   "image inspect")
     if [ "$3" != --format ]; then
-      [ -f "$(f "$3")" ]
+      [ -f "$(f "$3")" ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }
     elif [ "$4" = '{{.Id}}' ]; then
-      [ -f "$(f "$5")" ] && cat "$(f "$5")"
+      [ -f "$(f "$5")" ] || { echo "Error response from daemon: No such image: $5" >&2; exit 1; }
+      cat "$(f "$5")"
     else
       for t in "$FAKE_ROOT"/images/*; do
         [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] && echo "${t##*/}"
@@ -656,6 +663,7 @@ esac
 `)
 	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
 case " $* " in *[!8]" ") exit 0 ;; esac
+[ ! -e "$FAKE_ROOT/locked" ] || exit 1
 case " $* " in
   *" -s "*) [ "${FAKE_LOCKED:-}" != all ] ;;
   *) [ -z "${FAKE_LOCKED:-}" ] ;;
@@ -694,7 +702,13 @@ mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
   "-- pull --ignore-buildable" | "-- pull") echo "$id" > "$FAKE_ROOT/images/mariadb:11" ;;
-  "-- build --pull") [ -z "${FAIL_BUILD:-}" ] || exit "$FAIL_BUILD"; echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
+  "-- build --pull")
+    if [ -n "${FAIL_BUILD:-}" ]; then
+      # Another release takes the image lock meanwhile.
+      [ -z "${LOCK_AFTER:-}" ] || : >"$FAKE_ROOT/locked"
+      exit "$FAIL_BUILD"
+    fi
+    echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
 esac
 exit 0
@@ -820,6 +834,12 @@ exit 0
 	}
 	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FetchingFile)); statErr == nil {
 		t.Errorf("a release that never fetched kept its marker")
+	}
+	// The fetch failed, and the lock was taken before it could undo: the
+	// directory stays with its marker, for recover_fetching.
+	r, out, err = first("LOCK_AFTER=1")
+	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FetchingFile)); err == nil || statErr != nil || !strings.Contains(out, "the next release, --releases remove or --destroy finishes it") {
+		t.Errorf("failed first release, lock taken after the fetch (%v):\n%s", err, out)
 	}
 
 	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
@@ -993,8 +1013,16 @@ exit 0
 		t.Errorf("destroy took data down without the image lock")
 	}
 
+	// With Docker not answering, nothing is removed, the record included.
+	out, err = run(DestroyScript(target("a"), ""), "FAKE_DOCKER_DOWN=1")
+	if err == nil || !strings.Contains(out, "Docker is not answering") || !exists("app/a/prod/releases/2") || !exists(filepath.Join("app", ImagesLeftFile)) {
+		t.Errorf("destroy with Docker down (%v):\n%s", err, out)
+	}
+
 	// Once its container is gone, the next removal removes what was left,
-	// and the record goes with its last line.
+	// and the record goes with its last line, even one cut short of its
+	// newline.
+	write(t, left, strings.TrimSuffix(readFile(left), "\n"))
 	out, err = run(DestroyScript(target("a"), ""))
 	if err != nil || !strings.Contains(out, "removed mariadb:devopsy-app-a-prod-1, left by release 1 of app-a-prod") || exists(filepath.Join("app", ImagesLeftFile)) {
 		t.Errorf("destroy a (%v):\n%s", err, out)

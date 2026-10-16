@@ -282,7 +282,10 @@ repositories fit together and the open ideas.
   lock (`ImagesLock` in the release root, fd 8, after the release lock on
   fd 9, never the other way): shared in `get_images` (fetch and bookmark,
   or restore) and around a failed fetch's restore, exclusive for
-  removals. Pruning takes it with `now` and skips on a busy lock,
+  removals, which also need Docker to answer (`docker version`: with
+  the daemon down every inspect fails, and releases would go without
+  their images), else they count as busy (`il_busy` says which).
+  Pruning takes it with `now` and skips on a busy lock,
   directories included (one gone without its images leaves tags nothing
   finds), the release live and successful; `--destroy` waits (10
   minutes, then 75, nothing removed). Holders write
@@ -327,7 +330,12 @@ repositories fit together and the open ideas.
   `shared/` yet, removes its directory, its releases' images first (the
   directory is their only record: `not_live` takes the image lock with
   `now`, and keeps the directory, the release marked failed, when it is
-  busy). The image functions are defined before `not_live` can run.
+  busy, or when a `FetchingFile` waits for `recover_fetching`). The image
+  functions are defined before `not_live` can run.
+- `basePrelude` exports `DEVOPSY_NO_UPDATE_CHECK=1`: the detached
+  `--upgrade-check` would inherit the scripts' locks (fds 8 and 9, not
+  close-on-exec: compose has to keep them) and hold them while it asks
+  GitHub, up to 30 seconds.
 - `devopsy-target.env` is written into each release (environment `env`,
   `COMPOSE_PROJECT_NAME`, overriding compose's `name:`, `DEVOPSY_PROJECT`,
   `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`,
