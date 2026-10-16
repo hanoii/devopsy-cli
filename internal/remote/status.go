@@ -18,12 +18,13 @@ if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
   echo none
   exit 0
 fi
+cur=${cur%%/`+CodeDir+`}
 printf 'release\t%%s\t' "${cur#releases/}"
 tr -d '\n' < "$base/$cur/%s" 2>/dev/null || true
 echo
 printf 'kept\t%%s\n' "$(ls -1 "$base/releases" | grep -v '\.tmp$' | grep -c . || true)"
 # The last sync: a --sync's log header, or a release that synced.
-printf 'synced\t%%s\n' "$(cat "$base"/releases/*/.devopsy-log 2>/dev/null | grep -E '^[0-9-]+ [0-9:]+ (devopsy [^:]*: sync of |Syncing @)' | cut -c1-19 | sort | tail -n 1)"
+printf 'synced\t%%s\n' "$(cat "$base"/releases/*/`+LogFile+` 2>/dev/null | grep -E '^[0-9-]+ [0-9:]+ (devopsy [^:]*: sync of |Syncing @)' | cut -c1-19 | sort | tail -n 1)"
 echo ---
 cd "$base/current" && exec devopsy --status
 `, RecordFile)

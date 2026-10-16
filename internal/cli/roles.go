@@ -14,6 +14,8 @@ import (
 	"unicode"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // Labels for sharing facts between projects on a host, read like
@@ -303,7 +305,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetEnv := filepath.Join(p.dir, "target.env")
+	targetEnv := remote.ReleaseFile(p.dir, remote.TargetEnvFile)
 	if _, err := os.Stat(targetEnv); err != nil {
 		return nil, fmt.Errorf("%s only runs in a release (no %s)", PrepareReleaseFlag, targetEnv)
 	}
@@ -468,7 +470,7 @@ func (h Host) ImportStates() []ImportState {
 // whether it is a release at all.
 func ReleaseEnv(dir string) (set, imported map[string]string, released bool) {
 	set, imported = map[string]string{}, map[string]string{}
-	data, err := os.ReadFile(filepath.Join(dir, "target.env"))
+	data, err := os.ReadFile(remote.ReleaseFile(dir, remote.TargetEnvFile))
 	if dir == "" || err != nil {
 		return set, imported, false
 	}

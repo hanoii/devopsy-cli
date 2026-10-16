@@ -202,7 +202,7 @@ func LoadDotenv(env *Env, file string) error {
 	if err != nil {
 		return &ExitError{Code: 1, Msg: fmt.Sprintf("%s: %v", file, err)}
 	}
-	// A release's target.env ends with what it imported.
+	// A release's devopsy-target.env ends with what it imported.
 	imported := map[string]string{}
 	if filepath.Base(file) == remote.TargetEnvFile {
 		if data, err := os.ReadFile(file); err == nil {
@@ -510,7 +510,7 @@ none run on a first release.
   - image mode: uploads .devopsy/; images come from a registry.
 
 The release links the server's shared/ (.env, mnt/...) and writes
-.devopsy/target.env from the target's env in config.yaml, plus
+devopsy-target.env from the target's env in config.yaml, plus
 DEVOPSY_RELEASE_COMMIT, the commit released, for image tags. It lands in
 <project>[/<instance>]/<environment> under the server's release root (its
 user-level config's releases: root, else the deploy user's home). It keeps the target's or project's releases: keep,
@@ -573,7 +573,7 @@ releases whose command failed. * marks the current one.
 
 The variables devopsy loads and computes in the current release, as
 devopsy --env prints them there: shared/.env, the instance's and project's
-.env, target.env and the project's env capability (capabilities/env/compute,
+.env, devopsy-target.env and the project's env capability (capabilities/env/compute,
 from the release on the server, not your checkout). The values of the
 variables the release's config.yaml names in secrets: print as ***, unless
 --show.
@@ -583,7 +583,7 @@ variables the release's config.yaml names in secrets: print as ***, unless
 devopsy --debug, run in the current release on the server: without a topic,
 the server's devopsy and docker versions and the project; env, where each
 variable of --env comes from there (shared/.env, the instance's and
-project's .env, target.env and what it imported, the env capability) and
+project's .env, devopsy-target.env and what it imported, the env capability) and
 what each of those overrides, secrets masked unless --show; capabilities, the
 release's capabilities and their contracts; labels, the devopsy labels in
 its compose files; imports, the imports of every project running on that
@@ -594,7 +594,7 @@ target.
 	"--log": `Usage: devopsy @<target> --log [<release id>]
 
 Every release and rollback is recorded as it runs and saved on the server
-in the release's directory (releases/<id>/.devopsy-log): devopsy's
+in the release's directory (releases/<id>/devopsy-log): devopsy's
 messages, the local steps run and how they ended, and everything the server
 printed (steps, compose, the variables check). A rollback's is appended to
 the log of the release it restores. Saved even when it fails, once the
@@ -675,7 +675,7 @@ sessions instead of a handshake each) and keepalives. It never connects.
 The target's variables on the server: shared/.env for an environment with
 releases (it can be set before the first release), or .devopsy/.env for a
 plain directory. These are its secrets and overrides, linked into every
-release; config.yaml's env goes to target.env instead.
+release; config.yaml's env goes to devopsy-target.env instead.
 
   --vars-instance     the instance's .env instead, shared by its
                       environments (<root>/<project>/<instance>/.env)
@@ -685,7 +685,7 @@ release; config.yaml's env goes to target.env instead.
                       alone does (@vm1)
 
 Nearest wins: the caller, the environment's, the instance's, the project's,
-then target.env.
+then devopsy-target.env.
 
   --vars [--show]     every variable, secrets (config.yaml's secrets:,
                       the release's or your checkout's) as *** unless
@@ -911,12 +911,12 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	// Per-target settings, written into each release by `devopsy @target
 	// --release` from config.yaml. Below .env, so a server can override them.
-	targetEnv := filepath.Join(projectDir, "target.env")
+	targetEnv := remote.ReleaseFile(projectDir, remote.TargetEnvFile)
 	if err := load(targetEnv); err != nil {
 		return nil, err
 	}
 	// COMPOSE_PROJECT_NAME is always set, so commands and compose agree on
-	// it: releases write it into target.env (<project>[-<instance>]-<environment>);
+	// it: releases write it into devopsy-target.env (<project>[-<instance>]-<environment>);
 	// locally it is the config's project, else compose's name:, else the
 	// directory containing .devopsy (compose would take .devopsy itself).
 	project, err := remote.LoadProject(projectDir)

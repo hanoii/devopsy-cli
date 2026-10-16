@@ -234,7 +234,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --no-sync releases without the data and --sync later fills it" >&2; exit 1; }
 `, t.Name) + syncStdin + `exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + `
-id=$(readlink "$base/current"); id=${id#releases/}
+id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"
 status=0

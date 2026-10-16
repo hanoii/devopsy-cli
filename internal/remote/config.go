@@ -1372,7 +1372,10 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 // run step and --destroy run its steps, never the checkout's, which may
 // have changed since or be another branch's.
 func ReleaseEnvironment(projectDir string) (*Target, error) {
-	file := filepath.Join(projectDir, TargetEnvFile)
+	file := ReleaseFile(projectDir, TargetEnvFile)
+	if file == "" {
+		return nil, fmt.Errorf("%s is not a release's", projectDir)
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err

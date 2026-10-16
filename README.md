@@ -269,7 +269,7 @@ Help shows them like a flag's scope (`(runs locally)` after a local
 command that takes an address), completion offers each command where it runs, and
 a release refuses steps that name one in the wrong place (`local:` steps
 run locally, the rest on the server) before anything changes. devopsy tells a
-server from your machine by the release's `target.env`, so `target`
+server from your machine by the release's `devopsy-target.env`, so `target`
 commands do not run in plain directories.
 
 ```sh
@@ -360,7 +360,7 @@ devopsy @vm1:prod --debug env         # the release's variables, traced there
 `--debug env` traces the variables of `--env`, or the ones named: the
 definition in use first, then every overridden one with its value, by
 precedence. It tells the caller's environment, each `.env` file (on servers
-with what it links to, like `shared/.env`), `target.env` and what the
+with what it links to, like `shared/.env`), `devopsy-target.env` and what the
 release imported into it, what devopsy sets itself and what the `env`
 capability computed. Secrets are masked as above, unless `--show`. For a
 target, the caller's environment is the server's SSH session plus the
@@ -572,7 +572,7 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   the project instead of the parent; a child's only, and only on a
   release that syncs.
 - **Logs:** each release and rollback is recorded and saved on the server,
-  in the release's directory (`releases/<id>/.devopsy-log`; a rollback's
+  in the release's directory (`releases/<id>/devopsy-log`; a rollback's
   appended to the restored release's), failed ones included once the server
   was reached: devopsy's messages, the local steps run, and all the server
   printed, each line after its time in UTC (`2026-10-09 15:24:32`),
@@ -604,6 +604,16 @@ line while it runs (on a terminal only: CI gets none), then its size and
 time, which the release log keeps.
 
 On the server, an environment holds `releases/`, `current` and `shared/`.
+Each release is a directory, `releases/<id>/`, with the project as
+uploaded in `code/`, where `current` points and commands run, and
+devopsy's own files beside it, never in the project's tree, so a build
+context only ever sees the project: `devopsy-release.json` (commit,
+branch, who), `devopsy-target.env` (its environment), `devopsy-images`
+(its images), `devopsy-log`, and `devopsy-failed` when it never went live
+or its run failed. Releases from before October 2026 kept these inside the
+tree: rollbacks cannot go back to them, and their image tags stay until
+removed by hand (`docker image rm`).
+
 Everything in `shared/` is linked into each release's `.devopsy/`: `.env`
 for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
 anything else (a `compose.override.yaml`). Local `.env`, `mnt/` and override
@@ -886,11 +896,11 @@ down before it, stopped for maintenance, stays down.
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
 the instance's `.env` (`<project>/<instance>/.env`), the project's
-(`<project>/.env`), then the release's `target.env`, written from the
+(`<project>/.env`), then the release's `devopsy-target.env`, written from the
 config with `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
 `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT` (and a
 child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
-Rollbacks bring back their release's `target.env`.
+Rollbacks bring back their release's `devopsy-target.env`.
 
 ```sh
 devopsy @vm1:prod --vars                       # KEY=value, secrets as *** (--show: all)
@@ -994,7 +1004,7 @@ template's:
 - `devopsy.export.<KEY>=<value>`: a fact on the running containers (visible
   to anyone with Docker access: never secrets).
 - `devopsy.import.<VAR>=<role or project>/<KEY>[?]`: at each release, before
-  it goes live, the value is copied into its `target.env`, unless the
+  it goes live, the value is copied into its `devopsy-target.env`, unless the
   environment already sets `<VAR>` (even empty, which opts out). A source
   not running is waited for 30 seconds; then the release fails, unless the
   import ends in `?`. An empty export is a value.
