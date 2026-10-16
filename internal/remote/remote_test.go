@@ -749,6 +749,10 @@ exit 0
 	if got := image(root, "mariadb:11"); got != "1" {
 		t.Errorf("after a failed build mariadb:11 is %q's, want 1's", got)
 	}
+	// What it got is bookmarked, so it goes with the release.
+	if image(root, "mariadb:devopsy-app-prod-2") != "2" {
+		t.Errorf("the failed build's pull is not bookmarked")
+	}
 
 	// A failed run step: release 1's images restored, nothing built or
 	// pulled for it, then its restart.
@@ -783,6 +787,24 @@ exit 0
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "" || image(root, "app-prod-app:devopsy-app-prod-4") != "" || image(root, "app-prod-app:devopsy-app-prod-5") != "5" {
 		t.Errorf("pruning kept bookmarks of pruned releases, or dropped 5's")
+	}
+
+	// A first release whose build fails leaves no directory, and the
+	// images it got go first: the directory was their only record. With
+	// the server's image lock busy, it stays, marked failed.
+	first := func(env ...string) (string, string, error) {
+		root := t.TempDir()
+		write(t, filepath.Join(root, build.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		out, err := run(root, script(build, "1", false), append([]string{"FAIL_BUILD=3"}, env...)...)
+		return root, out, err
+	}
+	r, out, err := first()
+	if _, statErr := os.Stat(filepath.Join(r, build.Path)); err == nil || statErr == nil || image(r, "mariadb:devopsy-app-prod-1") != "" || image(r, "mariadb:11") != "" {
+		t.Errorf("failed first release (%v):\n%s", err, out)
+	}
+	r, out, err = first("FAKE_LOCKED=1")
+	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FailedFile)); err == nil || statErr != nil || image(r, "mariadb:devopsy-app-prod-1") != "1" || !strings.Contains(out, "keeping "+filepath.Join(r, build.Path)) {
+		t.Errorf("failed first release, image lock busy (%v):\n%s", err, out)
 	}
 
 	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
