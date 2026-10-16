@@ -232,6 +232,7 @@ steps: those are the operator's side of a deploy (pushing an image,
 announcing it). A step whose command only runs on a target
 (`## Run: target`) refuses before anything runs. So the project's
 `deploy` only starts what is there, on a server and locally alike.
+
 **`devopsy --destroy`** without a target runs the `destroy:` step under
 `defaults:` the same way, after asking for the project's name (`--yes`
 skips it). devopsy removes nothing itself, the checkout least of all:
