@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -619,6 +620,56 @@ func TestBookmarkPrefix(t *testing.T) {
 	}
 }
 
+// fakeImageTools writes into bin a docker whose image store is a file per
+// tag under $FAKE_ROOT/images, holding the image's id (the id of the
+// release that built or pulled it): tag, inspect (with the Id and RepoTags
+// formats), rm (refused for the tags in $FAKE_IN_USE, as for a container's
+// image) and image prune (logged in $FAKE_ROOT/pruned); plus a flock that
+// takes every lock, unless $FAKE_LOCKED fails the image lock's (fd 8)
+// exclusive ones, and the
+// mv -T the scripts need.
+func fakeImageTools(t *testing.T, bin string) {
+	t.Helper()
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+f() { echo "$FAKE_ROOT/images/$(echo "$1" | tr '/' '_')"; }
+case "$1 $2" in
+  "image inspect")
+    if [ "$3" != --format ]; then
+      [ -f "$(f "$3")" ]
+    elif [ "$4" = '{{.Id}}' ]; then
+      [ -f "$(f "$5")" ] && cat "$(f "$5")"
+    else
+      for t in "$FAKE_ROOT"/images/*; do
+        [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] && echo "${t##*/}"
+      done
+      exit 0
+    fi ;;
+  "image rm")
+    case " ${FAKE_IN_USE:-} " in *" $3 "*) echo "conflict: a container uses $3" >&2; exit 1 ;; esac
+    [ -f "$(f "$3")" ] && rm -f "$(f "$3")" ;;
+  "image prune") echo prune >>"$FAKE_ROOT/pruned"; echo "Total reclaimed space: 1MB" ;;
+  *) [ "$1" = tag ] && [ -f "$(f "$2")" ] && cp "$(f "$2")" "$(f "$3")" ;;
+esac
+`)
+	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
+case " $* " in *" -s "* | *[!8]" ") exit 0 ;; esac
+[ -z "${FAKE_LOCKED:-}" ]
+`)
+	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
+	for _, f := range []string{"devopsy", "docker", "flock", "mv"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// fakeImage is the id a tag holds in fakeImageTools' store, "" without
+// the tag.
+func fakeImage(root, tag string) string {
+	data, _ := os.ReadFile(filepath.Join(root, "images", strings.ReplaceAll(tag, "/", "_")))
+	return strings.TrimSpace(string(data))
+}
+
 // A release gets its images by mode before it goes live and bookmarks
 // them: a failure there puts the live release's names back, a failed run
 // step and a rollback restore a release's own images without building or
@@ -636,29 +687,14 @@ echo "$at: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
-  "-- pull --ignore-buildable" | "-- pull") echo "$id" > "$FAKE_ROOT/images/mariadb_11" ;;
+  "-- pull --ignore-buildable" | "-- pull") echo "$id" > "$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull") [ -z "${FAIL_BUILD:-}" ] || exit "$FAIL_BUILD"; echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
 esac
 exit 0
 `
-	docker := `#!/bin/sh
-f() { echo "$FAKE_ROOT/images/$(echo "$1" | tr '/:' '__')"; }
-case "$1 $2" in
-  "image inspect") [ -f "$(f "$3")" ] ;;
-  "image rm") rm -f "$(f "$3")" ;;
-  *) [ "$1" = tag ] && [ -f "$(f "$2")" ] && cp "$(f "$2")" "$(f "$3")" ;;
-esac
-`
 	write(t, filepath.Join(bin, "devopsy"), fake)
-	write(t, filepath.Join(bin, "docker"), docker)
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "docker", "flock", "mv"} {
-		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	fakeImageTools(t, bin)
 	phases := Phases{Run: []string{"deploy"}}
 	script := func(tg *Target, id string, rollback bool) string {
 		return ActivateScript(tg, id, rollback, "app-prod", phases, nil)
@@ -677,10 +713,7 @@ esac
 	}
 	// image is what a tag holds: the id of the release that built or
 	// pulled it, "" without the tag.
-	image := func(root, tag string) string {
-		data, _ := os.ReadFile(filepath.Join(root, "images", strings.NewReplacer("/", "_", ":", "_").Replace(tag)))
-		return strings.TrimSpace(string(data))
-	}
+	image := func(root, tag string) string { return fakeImage(root, tag) }
 
 	build := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
 	root := t.TempDir()
@@ -760,6 +793,118 @@ esac
 	}
 	if got, want := calls(root), "1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --missing-vars\n1: -- pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Images go with the last release that holds them: two instances share
+// an image, and pruning one's release only removes its bookmark; the
+// other's pruning removes the names it listed that still point to the
+// image, never one that moved on, and never one a container uses.
+// Pruning skips while the server's image lock is taken, naming who holds
+// it; --destroy then fails having removed nothing.
+func TestImagesRemoved(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\n' "$FAKE_ROOT"; exit; fi
+echo "$*" >>"$FAKE_ROOT/calls"
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --images") printf 'registry/app:%s\nmariadb:11\n' "$TAG" ;;
+  "-- pull") echo "$IMG" >"$FAKE_ROOT/images/registry_app:$TAG"; echo "$IMG" >"$FAKE_ROOT/images/mariadb:11" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	target := func(instance string) *Target {
+		return &Target{Name: "prod", Instance: instance, Path: "app/" + instance + "/prod", Mode: ModeImage, Project: &Project{Name: "app", Instances: true}}
+	}
+	run := func(script string, env ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	release := func(instance, id, tag, img string, env ...string) string {
+		t.Helper()
+		tg := target(instance)
+		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		out, err := run(ActivateScript(tg, id, false, "", Phases{Run: []string{"deploy"}}, nil), append([]string{"TAG=" + tag, "IMG=" + img}, env...)...)
+		if err != nil {
+			t.Fatalf("release %s of %s (%v):\n%s", id, instance, err, out)
+		}
+		return out
+	}
+	exists := func(path string) bool {
+		_, err := os.Stat(filepath.Join(root, path))
+		return err == nil
+	}
+
+	release("a", "1", "abc", "X")
+	release("b", "1", "abc", "X")
+	if fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "X" || fakeImage(root, "registry/app:devopsy-app-b-prod-1") != "X" {
+		t.Fatalf("instances not bookmarked")
+	}
+
+	// a's next release prunes a's first: b's bookmark holds X.
+	release("a", "2", "def", "Y")
+	if exists("app/a/prod/releases/1") || fakeImage(root, "registry/app:devopsy-app-a-prod-1") != "" {
+		t.Errorf("a's release 1 not pruned")
+	}
+	if fakeImage(root, "registry/app:abc") != "X" {
+		t.Errorf("registry/app:abc went while b's release held it")
+	}
+
+	// The server's image lock taken: pruning skips, naming the holder.
+	holders := filepath.Join(root, ImagesHolders)
+	write(t, filepath.Join(holders, strconv.Itoa(os.Getpid())), fmt.Sprintf("%d other-prod fetching\n", time.Now().Unix()-75))
+	write(t, filepath.Join(holders, "999999"), fmt.Sprintf("%d gone-prod fetching\n", time.Now().Unix()))
+	out := release("b", "2", "def", "Y", "FAKE_LOCKED=1")
+	if !strings.Contains(out, "pruning skipped: the server's images are in use by other-prod (fetching, 1m1") || !strings.Contains(out, "the next release prunes") || !exists("app/b/prod/releases/1") {
+		t.Errorf("pruning with the lock taken:\n%s", out)
+	}
+	if exists(filepath.Join(ImagesHolders, "999999")) {
+		t.Errorf("a gone holder's file stays")
+	}
+	os.RemoveAll(holders)
+
+	// b's next release prunes both of b's earlier ones: X loses its last
+	// bookmark, so registry/app:abc goes; mariadb:11 moved on to Y and
+	// stays, and Y is held by a's and b's live releases.
+	out = release("b", "3", "def", "Y")
+	if exists("app/b/prod/releases/1") || exists("app/b/prod/releases/2") {
+		t.Errorf("b's releases 1 and 2 not pruned:\n%s", out)
+	}
+	if fakeImage(root, "registry/app:abc") != "" || !strings.Contains(out, "removed registry/app:abc, which only 1 held") {
+		t.Errorf("registry/app:abc stays with no release holding it:\n%s", out)
+	}
+	if fakeImage(root, "mariadb:11") != "Y" || fakeImage(root, "registry/app:def") != "Y" {
+		t.Errorf("names of the live releases went")
+	}
+	// Once per pruning that removed releases: a's and this one.
+	if got := readFile(filepath.Join(root, "pruned")); got != "prune\nprune\n" {
+		t.Errorf("image prune ran %q", got)
+	}
+
+	// --destroy removes every release's images; a name a container uses
+	// stays, with Docker's reason. b's release 3 runs Z alone here.
+	write(t, filepath.Join(root, "app/b/prod/releases/3", ImagesFile), "registry/app:def\n")
+	write(t, filepath.Join(root, "images", "registry_app:devopsy-app-b-prod-3"), "Z\n")
+	write(t, filepath.Join(root, "images", "registry_app:def"), "Z\n")
+	out, err := run(DestroyScript(target("b"), ""), "FAKE_IN_USE=registry/app:def")
+	if err != nil || !strings.Contains(out, "registry/app:def stays: conflict: a container uses registry/app:def") || exists("app/b/prod") {
+		t.Errorf("destroy b (%v):\n%s", err, out)
+	}
+
+	// --destroy with the lock taken: nothing removed.
+	os.Remove(filepath.Join(root, "calls"))
+	out, err = run(DestroyScript(target("a"), ""), "FAKE_LOCKED=1")
+	if err == nil || !strings.Contains(out, "stays as it was") || !exists("app/a/prod/releases/2") || fakeImage(root, "registry/app:devopsy-app-a-prod-2") != "Y" {
+		t.Errorf("destroy with the image lock taken (%v):\n%s", err, out)
+	}
+	if strings.Contains(readFile(filepath.Join(root, "calls")), "--destroy-data") {
+		t.Errorf("destroy took data down without the image lock")
 	}
 }
 
