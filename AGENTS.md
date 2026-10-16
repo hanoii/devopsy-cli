@@ -248,7 +248,7 @@ repositories fit together and the open ideas.
   of name, cut to 96 plus 8 hex of its sha256, so a tag fits Docker's
   128), digests skipped; a rollback or restart
   restores those, all or nothing, else fetches; a fetch failure restores
-  `$prev`'s; pruning untags); switch
+  `$prev`'s; pruning removes them, `remove_images`); switch
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
   rollback:, else release:), its own images back first (`get_images`);
@@ -256,6 +256,28 @@ repositories fit together and the open ideas.
   `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.
+- **Images go with their releases** (`releaseImages`): the bookmarks are
+  the reference count. `remove_images` untags a going release's
+  bookmarks; an image left with no `devopsy-` tag (any release, any
+  environment or project) loses the refs that release listed that still
+  point to it (`docker image rm`, never `-f`: a container's image stays,
+  with Docker's reason); a ref that moved on stays. Two passes over
+  `devopsy-images`, no directory scanning. `prune_images` (`docker image
+  prune -f`) once after a caller's removals. All under the server's image
+  lock (`ImagesLock` in the release root, fd 8, after the release lock on
+  fd 9, never the other way): shared in `get_images` (fetch and bookmark,
+  or restore) and around a failed fetch's restore, exclusive for
+  removals. Pruning takes it with `now` and skips on a busy lock,
+  directories included (one gone without its images leaves tags nothing
+  finds), the release live and successful; `--destroy` waits (10
+  minutes, then 75, nothing removed). Holders write
+  `ImagesHolders/<pid>` (start, compose name, what), removed on unlock,
+  stale when the pid is gone, so waiting and skipping name who holds it
+  and for how long. Linux's `flock` lets new shared holders past a queued
+  exclusive one: a waiting removal never delays fetches. A flock ends
+  with its processes; a fetch's children keep it, as they keep the
+  release lock, so a session that dropped mid-fetch still holds it until
+  the fetch ends. Without a mode, `noImages` stubs the functions.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
   (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
@@ -326,8 +348,10 @@ repositories fit together and the open ideas.
   while everything is up), then `compose --profile '*' down --volumes
   --remove-orphans --rmi local` and `mnt` emptied as root in `UtilImage`
   (`find -delete`, a plain `docker run`: `compose run` would bring the
-  network back); then every release's image bookmarks (`drop_images`);
-  then `rm -rf`. A failure before the removal removes nothing. Then
+  network back); then every release's images (`remove_images`, the image
+  lock taken right after the release lock, before the data: compose's
+  `--rmi local` removes images too); then `rm -rf`. A failure before the
+  removal removes nothing. Then
   `purgeLeftovers`: the levels' directories left with only their `.env`
   (and `.lock`), deepest first (`LeftoverScript`), removed with `--purge`
   or a yes at a terminal, else a `report.Warn` with the command. Until

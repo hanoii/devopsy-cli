@@ -541,8 +541,23 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   rollback, or the restart after a failed `run`, points those names back
   at that release's tags: exactly the images it ran, floating tags
   included, without building or pulling. A release without them (pruned
-  images, a release older than this) builds or pulls again. Pruning a
-  release removes its tags, and with the last one its image.
+  images, a release older than this) builds or pulls again.
+- **Images go with their releases:** pruning a release removes its tags.
+  An image no other release still tags, of any environment, instance or
+  project on the server, also loses the names that release ran that still
+  point to it (`mariadb:11.8.9`, `registry/app:<commit>`), so Docker
+  deletes it; then `docker image prune -f` removes what that left
+  dangling (server-wide: an untagged image built by hand goes too). Kept
+  releases, the ones a rollback goes to, keep theirs, and a name that
+  moved on to a newer image stays. Docker refuses a name a container
+  uses, even a stopped one: it stays, and the release says so. A name
+  another project on the server runs by the same name, with no release
+  of its own holding it, goes too; that project pulls it again. Images
+  are the server's, so removing them takes the server's image lock
+  (`.devopsy-images.lock` in the release root) alone, while fetching
+  shares it: pruning never waits for it, and when another release holds
+  it (naming who and for how long), skips this time, releases and
+  images, and the next release prunes them.
 - **The names check:** containers of the release's compose project from
   another environment's directory fail the release before it goes live.
   Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
@@ -586,8 +601,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   down --volumes --remove-orphans --rmi local` (every profile; the images
   built without an `image:` name go too), then `shared/mnt` emptied as
   root in `devopsy-util`, since its files belong to container users; then
-  each release's image tags; then the directory (releases, `shared/` with
-  its data and `.env`). A failure before the removal removes nothing.
+  each release's images, as pruning removes them; then the directory
+  (releases, `shared/` with its data and `.env`). It takes the server's
+  image lock before anything goes, waiting up to 10 minutes for releases
+  fetching images, and fetches wait while it runs. A failure before the
+  removal removes nothing.
   The project's and the instance's `.env` stay, shared by their
   environments; when none is left in their directory, `--purge` removes
   them with it (at a terminal devopsy asks; otherwise a warning says how),

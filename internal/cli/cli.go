@@ -494,7 +494,10 @@ image mode it pulls them all, so a tag missing from the registry fails
 there. The run step only starts them. Each release
 keeps its images under a tag of its own (devopsy-<compose name>-<id>), so
 a rollback runs exactly what that release ran, without building or
-pulling. When run fails, current goes back to the previous release, which
+pulling. Pruning a release removes its tags, and the images no other
+release on the server still tags (docker image prune -f after); when
+another release is using the server's images it skips, and the next
+release prunes. When run fails, current goes back to the previous release, which
 gets its own images back and is restarted with its own run step, from
 its own config on the server (its rollback:, else its release:).
 
@@ -628,7 +631,7 @@ current release: the environment's destroy step if it has one (destroy:
 in config.yaml, optional: one devopsy command, while everything runs),
 then docker compose down with volumes and the images built without an
 image: name, then shared/mnt emptied as root in devopsy-util; then each
-release's image tags, then its directory (releases, shared/ with its data
+release's images, as pruning removes them, then its directory (releases, shared/ with its data
 and .env). A failure before the removal removes nothing. Asks for the
 target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
