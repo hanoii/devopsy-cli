@@ -322,6 +322,15 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(Result{Candidates: []Candidate{{"--restricted", "a machine's key: commands only, forwardings for syncs", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
+	case "--releases":
+		// Ids are the server's: never offered.
+		if len(words) == 2 {
+			return filter(Result{Candidates: []Candidate{{"remove", "remove releases and the images only they hold", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		}
+		if words[1] == "remove" {
+			return filter(Result{Candidates: []Candidate{{"failed", "every failed release", GroupDevopsy}, {"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		}
+		return Result{Directive: DirectiveNoFileComp}
 	case "--sync":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)
@@ -381,7 +390,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return showFlag(words, cur)
 	case "--export", "--import":
 		return dataFlags(words, cur)
-	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--releases", "--help", "-h":
+	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}

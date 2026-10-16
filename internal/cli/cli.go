@@ -568,10 +568,23 @@ Rolling back restores that release's files and target env, not data. It
 never asks: --yes is accepted, and changes nothing.
 `,
 	"--releases": `Usage: devopsy @<target> --releases
+       devopsy @<target> --releases remove <id|failed>... [--yes]
 
 Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), and FAILED for
-releases whose command failed. * marks the current one.
+releases that never went live or whose run step failed. * marks the
+current one.
+
+remove takes releases away, each with its images, as pruning does: its
+tags, and the images no other release on the server still tags (any
+environment or project), then docker image prune -f. An id can be its
+start, when only one release starts so; failed is every failed release,
+and can go with ids. The current release is refused, and so is an id
+that names none or several: nothing is removed then. Rollbacks cannot
+go back to a removed release; data in shared/ is never touched. Asks
+first at a terminal; --yes for scripts and CI. It waits for the
+release lock, and up to 10 minutes for releases using the server's
+images.
 `,
 	"--env": `Usage: devopsy @<target> --env [--show]
 
