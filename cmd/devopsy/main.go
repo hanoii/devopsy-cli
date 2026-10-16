@@ -142,6 +142,8 @@ func run() int {
 	switch args[0] {
 	case "--release":
 		return runLocalRelease(cwd, args[1:], color)
+	case "--destroy":
+		return runLocalDestroy(cwd, args[1:], color)
 	case cli.ExportFlag:
 		return runExport(cwd, args[1:], color)
 	case cli.ImportFlag:

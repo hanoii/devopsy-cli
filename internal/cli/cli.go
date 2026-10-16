@@ -617,6 +617,7 @@ shell, directly as docker compose exec runs it: devopsy @<target> --shell
 -- drush status.
 `,
 	"--destroy": `Usage: devopsy @<target> --destroy [--yes]
+       devopsy --destroy [--yes]
 
 Removes the environment from the server, under the release lock: runs the
 environment's destroy step (destroy: in config.yaml, required) in its
@@ -627,6 +628,10 @@ shared/mnt, which the deploy user cannot. A failed step removes nothing.
 Asks for the target's name, unless --yes (CI, like when a pull request
 closes: devopsy @pr-123 --destroy --yes). The project's and the instance's
 .env stay.
+
+Without a target, --destroy runs the destroy step under defaults: in
+config.yaml, in place, asking for the project's name unless --yes. devopsy
+removes nothing itself: what goes is what the step removes.
 `,
 	"--shell-host": `Usage: devopsy @<server> --shell-host
        devopsy @<target> --shell-host

@@ -213,6 +213,7 @@ my-project/.devopsy/
 devopsy up -d          # docker compose -f .devopsy/compose.yaml [-f ...override.yaml] up -d
 devopsy deploy         # .devopsy/commands/deploy
 devopsy --release      # a release in place: defaults:' prepare, images, run
+devopsy --destroy      # defaults:' destroy step, in place, after asking
 devopsy                # help: devopsy's own, the project's commands, the rest
 devopsy --env          # the variables devopsy loads and computes, secrets masked (--show)
 devopsy --shell [service] [-- command]   # a shell, or a command, in a container
@@ -231,6 +232,10 @@ steps: those are the operator's side of a deploy (pushing an image,
 announcing it). A step whose command only runs on a target
 (`## Run: target`) refuses before anything runs. So the project's
 `deploy` only starts what is there, on a server and locally alike.
+**`devopsy --destroy`** without a target runs the `destroy:` step under
+`defaults:` the same way, after asking for the project's name (`--yes`
+skips it). devopsy removes nothing itself, the checkout least of all:
+what goes is what the step removes.
 
 A word is a project command if `.devopsy/commands/` has it, else a compose
 command (devopsy asks compose which exist), else an error. Arguments starting

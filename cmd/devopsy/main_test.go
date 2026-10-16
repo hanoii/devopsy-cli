@@ -1190,3 +1190,33 @@ func TestLocalRelease(t *testing.T) {
 		t.Errorf("--release with a target-only step (%d):\n%s", code, out)
 	}
 }
+
+// --destroy without a target runs defaults:' destroy step in place: with
+// --yes, or after the project's name at a terminal; never without either.
+func TestLocalDestroy(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(tmp, ".devopsy")
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\nenvironments: {prod: {}}\n", 0o644)
+	write(t, filepath.Join(dir, "commands", "destroy"), "#!/bin/sh\n## Description: d\necho DESTROYED in $PWD\n", 0o755)
+	out, code := runDevopsy(t, tmp, nil, "--destroy", "--yes")
+	if code == 0 || !strings.Contains(out, "[error] the project has no destroy step under defaults:") {
+		t.Errorf("--destroy without defaults (%d):\n%s", code, out)
+	}
+
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {destroy: destroy}\nenvironments: {prod: {}}\n", 0o644)
+	out, code = runDevopsy(t, tmp, nil, "--destroy")
+	if code == 0 || strings.Contains(out, "DESTROYED") || !strings.Contains(out, "add --yes when not at a terminal") {
+		t.Errorf("--destroy without --yes or a terminal (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, tmp, nil, "--destroy", "--yes")
+	if code != 0 || !strings.Contains(out, "DESTROYED in "+tmp) {
+		t.Errorf("--destroy --yes (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("--destroy removed the project: %v", err)
+	}
+}

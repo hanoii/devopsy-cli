@@ -278,7 +278,9 @@ repositories fit together and the open ideas.
   entry with `Local` scope) is a release in place: `Config.Defaults`'
   release steps (no environment is local), prepare, `--missing-vars`, the
   images always as build mode, run; no before or after steps, no switch.
-  The other release flags stay target only.
+  `--destroy` likewise (`runLocalDestroy`): `defaults:`' destroy step
+  after the project's name, never removing anything itself. The other
+  release flags stay target only.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
