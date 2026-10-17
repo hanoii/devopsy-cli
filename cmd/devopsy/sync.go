@@ -147,10 +147,9 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	defer r.Close()
 	defer w.Close()
-	// The marker is taken out before the lines are colored for the
-	// terminal (the holder's streams are read here, not in SSHContext),
-	// from either: once the holder follows its output from a file
-	// (remote's followOutput), everything comes on stderr.
+	// The marker is taken out of stderr (holders print on one stream)
+	// before the lines are colored for the terminal: the holder's
+	// streams are read here, not in SSHContext.
 	var out, errOut io.Writer = os.Stdout, os.Stderr
 	var colored []*remote.ColorWriter
 	if color {
@@ -410,7 +409,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		say(cyan, fmt.Sprintf("Inherited %s from @%s into @%s's shared/%s.", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
-		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), c.Address))
+		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), targetRef(c)))
 	}
 	if len(missing) > 0 {
 		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
@@ -490,7 +489,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		report.Fail(os.Stderr, color, t.ParentErr, "Sync from an address instead:\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
+		report.Fail(os.Stderr, color, t.ParentErr, "Sync from an address instead:\ndevopsy @"+targetRef(t)+" --sync --from "+parentGuess(t))
 		return 1
 	}
 	if from != "" {

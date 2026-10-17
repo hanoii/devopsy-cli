@@ -615,10 +615,11 @@ target.
 
 Every release, rollback and sync is recorded on the server in the
 release's directory, in two logs that --log shows joined: what your
-session said and saw up to the switch (devopsy-log-session: devopsy's
-messages, the local steps run and how they ended, the server's lines),
-and what the server printed from there on (devopsy-log-server), written
-whatever happens to your connection. A rollback's goes with the release
+session said and saw up to the switch, or to the run step after a sync
+(devopsy-log-session: devopsy's messages, the local steps run and how
+they ended, the server's lines, the copy's), and what the server printed
+from there on (devopsy-log-server), written whatever happens to your
+connection. A rollback's goes with the release
 it restores. Kept even when it fails, once the server was reached;
 terminal colors and progress redraws are dropped. Logs go with their
 releases when they are pruned.

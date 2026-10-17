@@ -452,9 +452,12 @@ base="$root"/` + Quote(t.Path) + `
 }
 
 // hintAddress is the address a hint in a script names: the alias as
-// typed (with source:, releases only from its checkout), else the
-// resolved one, else the server.
+// typed when it has source: (it releases only from its checkout; one
+// without cannot release), else the resolved one, else the server.
 func hintAddress(t *Target) string {
+	if t.Source == "" {
+		return cmp.Or(t.Address, t.Host)
+	}
 	return cmp.Or(t.Alias, t.Address, t.Host)
 }
 
@@ -673,17 +676,19 @@ fetch_release "$rel" || fr=$?
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 [ -z "${watch_pid:-}" ] || : >"$ws_until"
-# A session gone (or Ctrl-C) after the fetch and before the watcher went.
-[ -z "$fetch_sig" ] || not_live 130
+# A session gone (or Ctrl-C) after fetch_release's own check and before
+# the watcher was disarmed: undone the same way, under the lock.
+if [ -n "$fetch_sig" ]; then
+  trap '' INT TERM HUP PIPE
+  set +e
+  if image_lock shared undoing; then
+    ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
+    image_unlock
+  fi
+  not_live 130
+fi
 out="$rel/` + ServerLogFile + `"
 `
-	// A sync between the switch and the run step has its own way
-	// through a dropped session (syncWait), and its copy's lines reach
-	// the session's log from the push: the server's log starts after it,
-	// so --log shows the copy in its place.
-	if sync == nil {
-		s += followOutput
-	}
 	s += switchTraps
 	if !rollback {
 		s += `rm -f "$rel/` + FailedFile + `"
@@ -712,9 +717,15 @@ echo "devopsy: current is now $id" >&2 || true
 		s += sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live") + `cd "$base"
 [ "$status" = 0 ] || failed=sync
-trap '' PIPE
-` + followOutput
+`
 	}
+	// The server's log starts here, after the switch (switchTraps hold
+	// from before it, and its one write tolerates a gone session) and
+	// after a sync, which has its own way through a dropped session
+	// (syncWait) and whose copy's lines reach the session's log from the
+	// push, so --log shows them in their place. PIPE is ignored again: a
+	// sync's end restores it.
+	s += "trap '' PIPE\n" + followOutput
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
@@ -797,8 +808,10 @@ fi
 // devopsy stops logging at SwitchMarker, which is written even with the
 // session gone: PIPE is ignored by then), both streams in their order,
 // and a tail copies it to the session's stderr: only the tail dies with
-// it.
-// The tail ends half a second after
+// it. A tag (time and pid) on the LogSection line and the marker ties
+// this part to the session log's anchor. No tail once a sync found
+// devopsy gone (sync_gone: stderr is .devopsy-sync.log by then). The
+// tail ends half a second after
 // the shell (the EXIT trap, which keeps the exit status: on a -t session
 // the pty hangs up as soon as the shell exits, which cut the last lines,
 // and inotify has the tail copy a line in milliseconds), or a second
@@ -808,16 +821,19 @@ fi
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
-  echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S')" >>"$out"
-  fo_off=$(wc -c <"$out")
-  tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
-  fo_tp=$!
-  ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
-    sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
-  fo_hp=$!
-  echo "` + SwitchMarker + `" >&2 || true
+  fo_tag="$(date -u '+%Y%m%d%H%M%S').$$"
+  echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out"
+  if [ -z "${sync_gone:-}" ]; then
+    fo_off=$(wc -c <"$out")
+    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
+    fo_tp=$!
+    ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
+      sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
+    fo_hp=$!
+    echo "` + SwitchMarker + ` $fo_tag" >&2 || true
+    trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
+  fi
   exec >>"$out" 2>&1
-  trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
 fi
 `
 
@@ -852,17 +868,26 @@ func watchSession(answer, armed bool) string {
 rm -f "$ws_until"
 `
 	if answer {
+		// Both ends open before the watcher starts, the read end on fd 3,
+		// the write end (5, read-write: it never waits) handed to the
+		// watcher and closed here: the watcher is the only writer, so its
+		// end is EOF, and no open ever waits for the other side.
 		s += `ws_fifo="$base/.devopsy-sync.answer.$$"
-rm -f "$ws_fifo" "$ws_fifo.ready"
+rm -f "$ws_fifo"
 mkfifo "$ws_fifo"
+exec 5<>"$ws_fifo" 3<"$ws_fifo"
+rm -f "$ws_fifo"
 `
-		args += ` --answer "$ws_fifo"`
+		args += ` --answer-fd 5`
 	}
 	start := `exec 4<&0 </dev/null
 devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
 watch_pid=$!
 exec 4<&-
 `
+	if answer {
+		start += "exec 5>&-\n"
+	}
 	cancel := ` --cancel-until "$ws_until"`
 	switch {
 	case armed && answer:
@@ -873,14 +898,6 @@ exec 4<&-
 `
 	default:
 		s += fmt.Sprintf(start, "")
-	}
-	if answer {
-		// The watcher's end first, or no answer at all if it is gone:
-		// an open of the fifo alone would wait forever, the lock held.
-		s += `while [ ! -e "$ws_fifo.ready" ] && kill -0 "$watch_pid" 2>/dev/null; do sleep 0.1; done
-if [ -e "$ws_fifo.ready" ]; then exec 3<"$ws_fifo"; else exec 3</dev/null; fi
-rm -f "$ws_fifo" "$ws_fifo.ready"
-`
 	}
 	return s
 }
@@ -896,9 +913,10 @@ const LogSection = "devopsy-log-section "
 // server's log has.
 const SwitchMarker = "devopsy-internal-switch"
 
-// LogAnchor is the session's log's line where it stops at SwitchMarker:
-// --log puts the server's part of that activation after it, in order, so
-// two machines' clocks never decide where it goes.
+// LogAnchor is the session's log's line where it stops at SwitchMarker,
+// followed by the marker's tag: --log puts the server's part with that
+// tag (its LogSection line's) after it, so neither two machines' clocks
+// nor a part whose session log was never saved decide where one goes.
 const LogAnchor = "devopsy: from here, the server's own log (" + ServerLogFile + "):"
 
 // LogServerPart separates LogReadScript's two logs.
@@ -1423,8 +1441,8 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	var flush []*MarkerWriter
 	if log != nil {
 		shown := &LineMarker{Prefix: SwitchMarker}
-		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(string) {
-			_, _ = log.Write([]byte(LogAnchor + "\n"))
+		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(tag string) {
+			_, _ = log.Write([]byte(LogAnchor + tag + "\n"))
 		}}
 		flush = []*MarkerWriter{shown.Writer(cmd.Stdout), shown.Writer(cmd.Stderr), logged.Writer(log), logged.Writer(log)}
 		cmd.Stdout = io.MultiWriter(flush[0], flush[2])

@@ -114,7 +114,8 @@ func TestSSHSwitchMarker(t *testing.T) {
 	}
 	t.Setenv("DEVOPSY_SSH_COMMAND", filepath.Join(bin, "fakessh"))
 	tg := &Target{Host: "h"}
-	script := "echo before >&2; echo " + SwitchMarker + " >&2; echo after >&2; echo out"
+	// One stream, as activations print: on two, the order is a race.
+	script := "exec 1>&2; echo before; echo " + SwitchMarker + " t1; echo after"
 	var out, log bytes.Buffer
 	if _, err := SSHStreams(context.Background(), tg, nil, script, strings.NewReader(""), &out, &out, false, nil); err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ func TestSSHSwitchMarker(t *testing.T) {
 	if strings.Contains(out.String(), SwitchMarker) || !strings.Contains(out.String(), "after") {
 		t.Errorf("logged session's output: %q", out.String())
 	}
-	if l := log.String(); !strings.Contains(l, "before\n"+LogAnchor+"\n") || strings.Contains(l, "after") {
+	if l := log.String(); !strings.Contains(l, "before\n"+LogAnchor+" t1\n") || strings.Contains(l, "after") {
 		t.Errorf("logged session's log: %q", l)
 	}
 }

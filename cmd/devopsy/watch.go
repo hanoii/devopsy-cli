@@ -10,12 +10,12 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// runWatchSession is the hidden --watch-session <pid> [--answer <fifo>]
+// runWatchSession is the hidden --watch-session <pid> [--answer-fd <fd>]
 // [--cancel-until <file>], which a script on a server starts in the
 // background with the session's stdin (remote.WatchSessionFlag). It
-// passes what comes in on to the fifo (a sync's go or abort, read on the
-// script's fd 3) and, when stdin ends, the session gone, closes it: no
-// answer. With --cancel-until, unless the file exists by then (the
+// passes what comes in on to the fd, the only write end of a fifo whose
+// read end is the script's fd 3 (a sync's go or abort), and, when stdin
+// ends, the session gone, closes it: no answer. With --cancel-until, unless the file exists by then (the
 // script writes it right before its switch), it sends SIGTERM to the
 // script, pid, and everything it runs: its process group when the script
 // leads one, as under sshd, else the script alone, which cancels a
@@ -25,7 +25,7 @@ import (
 // is no longer its child).
 func runWatchSession(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer <fifo>] [--armed]")
+		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--cancel-until <file>]")
 		return 2
 	}
 	pid, err := strconv.Atoi(args[0])
@@ -33,14 +33,18 @@ func runWatchSession(args []string) int {
 		fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not a pid: "+args[0])
 		return 2
 	}
-	var answer, until string
+	var answer = -1
+	var until string
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "--cancel-until" && i+1 < len(args):
 			until = args[i+1]
 			i++
-		case args[i] == "--answer" && i+1 < len(args):
-			answer = args[i+1]
+		case args[i] == "--answer-fd" && i+1 < len(args):
+			if answer, err = strconv.Atoi(args[i+1]); err != nil || answer < 3 {
+				fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not an fd: "+args[i+1])
+				return 2
+			}
 			i++
 		default:
 			fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": unknown argument "+args[i])
@@ -51,19 +55,9 @@ func runWatchSession(args []string) int {
 	// session never matters here.
 	signal.Ignore(syscall.SIGINT, syscall.SIGHUP, syscall.SIGPIPE)
 
-	// Opened first, read-write so it never waits for the script's end
-	// (Linux and macOS allow it), then <fifo>.ready says so: the script
-	// opens its end only then, or gives up once this process is gone.
 	var out *os.File
-	if answer != "" {
-		if out, err = os.OpenFile(answer, os.O_RDWR, 0); err != nil {
-			fmt.Fprintln(os.Stderr, "devopsy: "+err.Error())
-			return 1
-		}
-		if err := os.WriteFile(answer+".ready", nil, 0o600); err != nil {
-			fmt.Fprintln(os.Stderr, "devopsy: "+err.Error())
-			return 1
-		}
+	if answer >= 0 {
+		out = os.NewFile(uintptr(answer), "answer")
 	}
 	buf := make([]byte, 4096)
 	for {

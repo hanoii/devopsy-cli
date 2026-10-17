@@ -249,7 +249,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				// Where a syncing release copies from, instead of the
 				// parent: an address, its @ optional.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", t.Address, args[0]))
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", releaseRef(t), args[0]))
 				}
 				from = strings.TrimPrefix(args[i+1], "@")
 				i++
@@ -258,7 +258,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 		if noSync && from != "" {
-			return fail("--from: --release-no-sync never syncs: devopsy @" + t.Address + " --release-sync --from @" + from + " syncs from it")
+			return fail("--from: --release-no-sync never syncs: devopsy @" + releaseRef(t) + " --release-sync --from @" + from + " syncs from it")
 		}
 		if (syncFlag || from != "") && t.Parent == "" {
 			flag := args[0]
@@ -409,7 +409,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				q := fmt.Sprintf("New instance: %s has no %q instance of %s yet.\nThis release creates it: %s, compose project %s, its own data and URL.",
 					t.Host, t.Instance, t.Project.Name, t.Path, t.ComposeName())
 				if !term.IsTerminal(int(os.Stdin.Fd())) {
-					return fail(q + "\nAdd --yes when not at a terminal: devopsy @" + t.Address + " --release --yes")
+					return fail(q + "\nAdd --yes when not at a terminal: devopsy @" + releaseRef(t) + " --release --yes")
 				}
 				fmt.Fprintf(os.Stderr, "%s\nCreate it? [y/N] ", q)
 				line, _ := stdinReader.ReadString('\n')
@@ -436,7 +436,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			first := strings.TrimSpace(out.String()) == "none"
 			if from != "" && !syncFlag && !first {
-				return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, t.Address, from))
+				return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, releaseRef(t), from))
 			}
 			if syncFlag || first {
 				p := t.ParentTarget
@@ -570,8 +570,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool, flag string) int {
 	report.Fail(os.Stderr, color, t.ParentErr,
-		"Name "+t.Parent+"'s address for this release:\ndevopsy @"+t.Address+" "+flag+" --from "+parentGuess(t),
-		"Release without "+t.Parent+"'s data for now, and sync it whenever you are ready:\ndevopsy @"+t.Address+" --release-no-sync\ndevopsy @"+t.Address+" --sync --from "+parentGuess(t))
+		"Name "+t.Parent+"'s address for this release:\ndevopsy @"+releaseRef(t)+" "+flag+" --from "+parentGuess(t),
+		"Release without "+t.Parent+"'s data for now, and sync it whenever you are ready:\ndevopsy @"+releaseRef(t)+" --release-no-sync\ndevopsy @"+releaseRef(t)+" --sync --from "+parentGuess(t))
 	return 1
 }
 
@@ -843,7 +843,7 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 	}
 	if !purge {
 		details := []string{"No environment is left there. Its .env stays, with what --vars-project or --vars-instance set, for the next environment released there."}
-		details = append(details, "To remove them:", "devopsy @"+t.Address+" --destroy --yes --purge")
+		details = append(details, "To remove them:", "devopsy @"+targetRef(t)+" --destroy --yes --purge")
 		report.Warn(os.Stderr, color, t.Host+" keeps "+strings.Join(dirs, " and "), details...)
 		return 0
 	}

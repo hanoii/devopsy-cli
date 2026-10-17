@@ -73,7 +73,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			report.Fail(os.Stderr, color, &report.Error{
 				Msg:   "--releases remove asks first, and there is no terminal to ask at",
-				Fixes: []string{"Add --yes:\ndevopsy @" + t.Address + " --releases " + strings.Join(args, " ") + " --yes"},
+				Fixes: []string{"Add --yes:\ndevopsy @" + targetRef(t) + " --releases " + strings.Join(args, " ") + " --yes"},
 			})
 			return 1
 		}
@@ -154,8 +154,8 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 				Msg:     fmt.Sprintf("release %s is the current one of %s: nothing removed", match[0].ID, t.Address),
 				Details: []string{"The release running there stays."},
 				Fixes: []string{
-					"Release again, then remove it:\ndevopsy @" + t.Address + " --release",
-					"Roll back, then remove it:\ndevopsy @" + t.Address + " --rollback",
+					"Release again, then remove it:\ndevopsy @" + releaseRef(t) + " --release",
+					"Roll back, then remove it:\ndevopsy @" + releaseRef(t) + " --rollback",
 				},
 			}
 		}

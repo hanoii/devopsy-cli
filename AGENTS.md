@@ -403,11 +403,13 @@ repositories fit together and the open ideas.
   fetch on (dash writes "Terminated" to the dead session). The script
   writes `$ws_until` right before the switch, which disarms it (a file:
   a signal sent before the watcher could handle it would kill it), and
-  checks `fetch_sig` once more (a drop in between). A sync's answer
-  goes through the same watcher (`--answer`: a fifo in `$base`, the
-  script's fd 3; the watcher opens it read-write, never waiting, and
-  says so in `<fifo>.ready`, which the script waits for unless the
-  watcher is gone, then reads no answer): so a release that syncs is
+  checks `fetch_sig` once more (a drop in between: undone like one
+  during the fetch, under the shared image lock). A sync's answer
+  goes through the same watcher (`--answer-fd`: a fifo whose ends the
+  script opens before starting it, the read end on fd 3, the write end
+  read-write so the open never waits, handed to the watcher and closed
+  in the script: the watcher is the only writer, its end is EOF, and
+  no open ever waits on a watcher that came and went): so a release that syncs is
   armed too, always (its stdin is the answer's pipe), and a sync's
   holder never (a SIGTERM would stop it halfway through restoring).
   `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and does
@@ -461,15 +463,18 @@ repositories fit together and the open ideas.
   the server was reached; a rollback's is appended to the restored
   release's, found from its script's "rolling back to <id>" line, a
   sync's to the current one's ("syncing into"). The server's
-  (`ServerLogFile`), raw, from each switch on. They never overlap, and
+  (`ServerLogFile`), raw, from each switch on (after the sync and at a
+  holder's run step, where a sync runs). They never overlap, and
   neither is rewritten: `--log` (`LogReadScript` prints both,
   `LogServerPart` between) joins them for display (`joinLogs`): each
-  server part after the session's next `LogAnchor`, in order, cleaned
-  the same way and indented; never by time (two machines' clocks, and
-  lines of the same second). Parts no anchor claims (an operator gone
-  before saving, as when CI is killed) follow at the end under their
-  `LogSection` time. A sync's push lines, logged after the holder's
-  anchor, show after its part. Pruned with their releases. Local steps'
+  server part after the session's anchor with its tag (`LogAnchor` plus
+  the tag `followOutput` puts on its `LogSection` line and the marker),
+  cleaned the same way and indented; never by time (two machines'
+  clocks, and lines of the same second). Parts no anchor claims (an
+  operator gone before saving, as when CI is killed) follow at the end
+  under their `LogSection` time, never under a later anchor. A sync's
+  copy shows in its place: the push's lines reach the session's log
+  before the anchor. Pruned with their releases. Local steps'
   output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
@@ -634,7 +639,9 @@ repositories fit together and the open ideas.
   (`trap '' PIPE`, reset before `run`) and restores before it reports, so
   a session gone during prepare cannot leave them stopped either.
 - **Interrupts** (SIGINT, SIGTERM in `runSyncSession`): before the marker
-  devopsy just exits, and the holder restores on its own. After it, the
+  devopsy ends the holder's session (`endHolder`) and waits for it: a
+  release that syncs is cancelled by its watcher, a holder restores on
+  its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
   `abort`, and devopsy exits 130. After `go`, during the run step, the

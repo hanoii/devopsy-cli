@@ -45,26 +45,28 @@ func TestReleaseLogFrames(t *testing.T) {
 }
 
 // --log joins the session's log and the server's: each server part right
-// after the line where the session's stopped (remote.LogAnchor), cleaned
-// and indented, whatever the times say; parts no anchor claims at the end.
+// after the anchor with its tag (shown without it), cleaned and
+// indented, whatever the times say; a part no anchor claims (its
+// operator gone before saving) at the end, never under a later anchor.
 func TestJoinLogs(t *testing.T) {
 	anchor := remote.LogAnchor
 	session := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
 		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +
-		"2026-10-17 10:00:05 " + anchor + "\n" +
+		"2026-10-17 10:00:05 " + anchor + " a1\n" +
 		"2026-10-17 10:00:05 devopsy: release exited 0\n" +
 		"2026-10-17 11:00:00 devopsy rollback: rollback of @prod\n" +
-		"2026-10-17 11:00:02 " + anchor + "\n" +
+		"2026-10-17 11:00:02 " + anchor + " c3\n" +
 		"2026-10-17 11:00:03 devopsy: rollback exited 0\n"
-	// The server's clock behind the operator's: places nothing.
-	server := remote.LogSection + "2026-10-17 09:59:58\n" +
+	// The server's clock behind the operator's: places nothing. b2's
+	// session log was never saved.
+	server := remote.LogSection + "2026-10-17 09:59:58 a1\n" +
 		"devopsy: current is now 1\n" +
 		"\x1b[32mdeployed\x1b[0m\n" +
 		"\n" +
-		remote.LogSection + "2026-10-17 10:59:58\n" +
-		"devopsy: current is now 0\n" +
-		remote.LogSection + "2026-10-17 12:00:00\n" +
-		"devopsy: syncing\n"
+		remote.LogSection + "2026-10-17 10:30:00 b2\n" +
+		"devopsy: orphan run\n" +
+		remote.LogSection + "2026-10-17 10:59:58 c3\n" +
+		"devopsy: current is now 0\n"
 	got := string(joinLogs([]byte(session + remote.LogServerPart + "\n" + server)))
 	pad := strings.Repeat(" ", 20)
 	want := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
@@ -77,8 +79,8 @@ func TestJoinLogs(t *testing.T) {
 		"2026-10-17 11:00:02 " + anchor + "\n" +
 		pad + "devopsy: current is now 0\n" +
 		"2026-10-17 11:00:03 devopsy: rollback exited 0\n" +
-		"2026-10-17 12:00:00 " + anchor + "\n" +
-		pad + "devopsy: syncing\n"
+		"2026-10-17 10:30:00 " + anchor + "\n" +
+		pad + "devopsy: orphan run\n"
 	if got != want {
 		t.Errorf("joined:\n%s\nwant:\n%s", got, want)
 	}

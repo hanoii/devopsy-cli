@@ -629,10 +629,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   release's directory (a rollback's and a sync's added to the release
   they go to), failed ones included once the server was reached, in two
   logs: `devopsy-log-session`, what your session said and saw up to the
-  switch (devopsy's messages, the local steps run, the server's lines),
-  each line after its time in UTC (`2026-10-09 15:24:32`), and
-  `devopsy-log-server`, what the server printed from the switch on,
-  written there whatever happens to your connection. `--log` shows the
+  switch, or to the run step after a sync (devopsy's messages, the local
+  steps run, the server's lines, the copy's), each line after its time
+  in UTC (`2026-10-09 15:24:32`), and `devopsy-log-server`, what the
+  server printed from there on, written there whatever happens to your
+  connection. `--log` shows the
   two joined, progress displays reduced to their final state: the most
   recent, or `--log <id>` one release's. Local steps' own output stays
   on your screen only, keeping their terminal.

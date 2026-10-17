@@ -260,6 +260,16 @@ func runSSHKeysGenerate(args []string, color bool) int {
 
 // targetRef is how the user named the target: its alias, else its
 // environment, for usage lines.
+// releaseRef is the address a hint to release or roll back names: an
+// alias only with source:, where it releases from its checkout (one
+// without cannot release at all).
+func releaseRef(t *remote.Target) string {
+	if t.Alias != "" && t.Source == "" {
+		return cmp.Or(t.Address, t.Name)
+	}
+	return targetRef(t)
+}
+
 func targetRef(t *remote.Target) string {
 	switch {
 	case t.Alias != "":
