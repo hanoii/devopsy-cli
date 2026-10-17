@@ -603,15 +603,6 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 // Without a terminal it fails: --yes is the way there.
 func confirmImport(t *remote.Target, name string) error {
 	where := t.Host + ":" + t.Path
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return errors.New(cli.ImportFlag + " replaces " + name + "'s data on " + where + ": add --yes when not at a terminal")
-	}
-	defer tty.Close()
-	fmt.Fprintf(tty, "This replaces %s's data on @%s (%s) with what stdin carries. Type %s to go on: ", name, t.Address, where, t.Name)
-	line, _ := bufio.NewReader(tty).ReadString('\n')
-	if strings.TrimSpace(line) != t.Name {
-		return errNotConfirmed
-	}
-	return nil
+	return typeToGoOn(fmt.Sprintf("This replaces %s's data on @%s (%s) with what stdin carries.", name, t.Address, where),
+		t.Name, cli.ImportFlag+" replaces "+name+"'s data on "+where+": add --yes when not at a terminal", true)
 }

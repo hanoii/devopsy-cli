@@ -786,14 +786,9 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		if !terminal {
-			cli.Fprint(os.Stderr, red, "--destroy removes "+where+" with its data: add --yes when not at a terminal", color)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "This runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env). Type %s to go on: ", t.Name, where, t.Name)
-		line, _ := stdinReader.ReadString('\n')
-		if strings.TrimSpace(line) != t.Name {
-			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
+		if err := typeToGoOn(fmt.Sprintf("This runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env).", t.Name, where),
+			t.Name, "--destroy removes "+where+" with its data: add --yes when not at a terminal", false); err != nil {
+			cli.Fprint(os.Stderr, red, syncRefused(err, "Nothing removed."), color)
 			return 1
 		}
 	}
