@@ -29,13 +29,10 @@ import (
 // Files in a release's directory, beside its code, and the project's
 // record.
 const (
-	// ListFile lists the names of the images a release runs, one per
-	// line (compose config --images).
+	// ListFile lists the images a release runs (compose config
+	// --images), one per line: the name, then a tab and the image it had
+	// when bookmarked, when Docker had it.
 	ListFile = "devopsy-images"
-	// IDFile keeps, per name of ListFile, the image it had when
-	// bookmarked: name, a tab, the id. A file of its own, so ListFile
-	// stays plain names, as --releases shows them.
-	IDFile = "devopsy-images-ids"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
 	// dropped), and Recover finishes what the release script would have.
@@ -96,8 +93,7 @@ type Set struct {
 // Entry is one image a release runs.
 type Entry struct {
 	Ref string
-	// ID is the image Ref had when bookmarked; "" for releases listed
-	// before ids were kept.
+	// ID is the image Ref had when bookmarked; "" when Docker had none.
 	ID string
 }
 
@@ -173,42 +169,32 @@ func bookmarks(entries []Entry, name, id string) []string {
 	return bs
 }
 
-// ReadList reads a release's images, with their ids where IDFile has
-// them: nil when it has no listing.
+// ReadList reads a release's ListFile: nil when it has none.
 func ReadList(rel string) []Entry {
 	data, err := os.ReadFile(filepath.Join(rel, ListFile))
 	if err != nil {
 		return nil
 	}
-	ids := map[string]string{}
-	if f, err := os.ReadFile(filepath.Join(rel, IDFile)); err == nil {
-		for _, line := range strings.Split(string(f), "\n") {
-			if ref, id, ok := strings.Cut(line, "\t"); ok {
-				ids[ref] = strings.TrimSpace(id)
-			}
-		}
-	}
 	var es []Entry
 	for _, line := range strings.Split(string(data), "\n") {
-		if ref := strings.TrimSpace(line); ref != "" {
-			es = append(es, Entry{Ref: ref, ID: ids[ref]})
+		ref, id, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if ref != "" {
+			es = append(es, Entry{Ref: ref, ID: id})
 		}
 	}
 	return es
 }
 
 func writeList(rel string, es []Entry) error {
-	var names, ids strings.Builder
+	var b strings.Builder
 	for _, e := range es {
-		names.WriteString(e.Ref + "\n")
+		b.WriteString(e.Ref)
 		if e.ID != "" {
-			ids.WriteString(e.Ref + "\t" + e.ID + "\n")
+			b.WriteString("\t" + e.ID)
 		}
+		b.WriteString("\n")
 	}
-	if err := writeFile(filepath.Join(rel, IDFile), ids.String()); err != nil {
-		return err
-	}
-	return writeFile(filepath.Join(rel, ListFile), names.String())
+	return writeFile(filepath.Join(rel, ListFile), b.String())
 }
 
 // writeFile replaces a file whole, so a reader never sees half of it.

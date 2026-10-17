@@ -1012,8 +1012,9 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A release cut off mid-fetch is failed too, recovered or not.
   f=-; { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
+  # Names only: the ids after a tab stay on the server.
   i=
-  [ ! -f "$base/releases/$r/%s" ] || i=$(tr '\n' ' ' < "$base/releases/$r/%s")
+  [ ! -f "$base/releases/$r/%s" ] || i=$(cut -f 1 < "$base/releases/$r/%s" | tr '\n' ' ')
   printf '%%s\t%%s\t%%s\t%%s\t' "$r" "$c" "$f" "$i"
   [ ! -f "$base/releases/$r/%s" ] || tr -d '\n' < "$base/releases/$r/%s"
   echo

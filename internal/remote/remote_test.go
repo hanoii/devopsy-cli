@@ -16,8 +16,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/hanoii/devopsy-cli/internal/images"
 )
 
 func write(t *testing.T, path, content string) {
@@ -952,8 +950,7 @@ exit 0
 
 	// --destroy removes every release's images; a name a container uses
 	// stays, with Docker's reason. b's release 3 runs Z alone here.
-	write(t, filepath.Join(root, "app/b/prod/releases/3", ImagesFile), "registry/app:def\n")
-	write(t, filepath.Join(root, "app/b/prod/releases/3", images.IDFile), "registry/app:def\tZ\n")
+	write(t, filepath.Join(root, "app/b/prod/releases/3", ImagesFile), "registry/app:def\tZ\n")
 	write(t, filepath.Join(root, "images", "registry_app:devopsy-app-b-prod-3"), "Z\n")
 	write(t, filepath.Join(root, "images", "registry_app:def"), "Z\n")
 	// A release whose fetch was cut off is recovered first, so what it
@@ -1026,8 +1023,7 @@ exit 0
 	// A removal cut off after untagging is finished by the next one: the
 	// bookmark went, the listing keeps the image's id.
 	write(t, filepath.Join(root, "app/a/prod/releases/7", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\n")
-	write(t, filepath.Join(root, "app/a/prod/releases/7", images.IDFile), "old:1\tO\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\tO\n")
 	write(t, filepath.Join(root, "images", "old:1"), "O\n")
 	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"7"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || fakeImage(root, "old:1") != "" || exists("app/a/prod/releases/7") {
 		t.Errorf("remove 7, cut off before (%v):\n%s", err, out)
