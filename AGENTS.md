@@ -254,7 +254,9 @@ repositories fit together and the open ideas.
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
   rollback:, else release:), its own images back first (`get_images`);
-  a rollback marks the release it left (`RolledBackFile`); prune to
+  a rollback marks the release it left (`RolledBackFile`), and one whose
+  run step fails marks the release it restored failed (decided: it did
+  not come back up, so it is no rollback target until released again); prune to
   `keep` (`img to-prune`, `img remove-releases`, `images.ToPrune`);
   remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
@@ -372,7 +374,9 @@ repositories fit together and the open ideas.
   and fails, and the same path undoes it under the lock, with signals
   and PIPE ignored from there on, so a second Ctrl-C or a gone session
   cannot stop it; exit 130. A `-T` session that drops sends no signal:
-  the fetch runs to its end and the script dies at its next write. Hence
+  the watcher (below) turns its end into one; without it (a watcher
+  never started, OrbStack's SSH) the fetch runs to its end and the
+  script dies at its next write. Hence
   `FetchingFile`, written before a new release's fetch and removed
   after a line saying the images are ready (`img bookmark` ignores
   SIGPIPE, so without that write the first one would come after the
@@ -411,10 +415,11 @@ repositories fit together and the open ideas.
   `.off`) right before the switch: one rename wins, so a SIGTERM never
   lands past a switch the script went on with, and a failed `mv` means
   one is coming (a file, not a signal: one sent before the watcher
-  could handle it would kill it). Then `fetch_sig` is checked once more
-  (a drop in between: undone like one during the fetch, under the
-  shared image lock; the fetching marker stays for `img recover` when
-  the lock cannot be had). `prelude` removes stale `.devopsy-watch.*`. A sync's answer
+  could handle it would kill it). The disarm is inside `fetch_release`,
+  under the image lock it already holds, before its last `fetch_sig`
+  check: a drop then is undone like one during the fetch. From there a
+  Ctrl-C counts as one in the run step (`switch_sig`). `prelude`
+  removes stale `.devopsy-watch.*`. A sync's answer
   goes through the same watcher (`--answer-fd`: a fifo whose ends the
   script opens before starting it, the read end on fd 3, the write end
   read-write so the open never waits, handed to the watcher and closed
@@ -425,10 +430,10 @@ repositories fit together and the open ideas.
   `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and does
   not make the shell a group leader: test the watcher through a real
   sshd (in the machine, to `localhost`). A connection that dies
-  silently (a laptop asleep) is seen only when the server writes or TCP
-  gives up: activations pass no keepalive, and devopsy-server never
-  sets sshd's `ClientAliveInterval`; activations and uploads pass
-  `KeepAlive`, so the operator's side notices one. Without a terminal
+  silently (a laptop asleep) is seen by the server only when it writes
+  or TCP gives up: devopsy-server never sets sshd's
+  `ClientAliveInterval`. The operator's side passes `KeepAlive` on
+  activations and uploads, so it notices one. Without a terminal
   (output piped, CI), devopsy takes Ctrl-C itself (`session` in
   runRemote; ssh ignores it): before the switch (no `LogAnchor` logged
   yet) it closes the pipe, which cancels the release through the

@@ -248,7 +248,9 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) s
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it" >&2; exit 1; }
-`, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
+`, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `# A child's first release failing while this waited takes current away.
+[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release any more: its release failed while this sync waited" >&2; exit 1; }
+id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"
@@ -261,7 +263,7 @@ status=0
 		s += `out="$base/releases/$id/` + ServerLogFile + `"
 trap '' PIPE
 ` + followOutput
-		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
+		s += runningLine(run, "run") + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
 	}
 	return s
 }

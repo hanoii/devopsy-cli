@@ -334,6 +334,18 @@ func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// say is a script's line that prints msg on stderr as it is: built in
+// Go, quoted, so nothing in it (a step's $VAR, a quote, $(...)) is ever
+// expanded or run on the server.
+func say(msg string) string {
+	return "echo " + Quote(msg) + " >&2\n"
+}
+
+// runningLine is the line before a step runs.
+func runningLine(args []string, phase string) string {
+	return say("devopsy: running 'devopsy " + strings.Join(args, " ") + "' (" + phase + ")")
+}
+
 func quoteAll(args []string) string {
 	q := make([]string, len(args))
 	for i, a := range args {
@@ -553,6 +565,10 @@ func RemotePhases(steps *Steps) Phases {
 // prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
+	if !rollback && len(p.Run) == 0 {
+		// runRemote refuses a release without one (remote.Steps).
+		panic("remote.ActivateScript: a release without a run step")
+	}
 	// One stream: nothing an activation prints is a result, and on two
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
@@ -579,8 +595,7 @@ echo "devopsy: rolling back to $id" >&2
 		s += "id=" + Quote(id) + "\n" + NotLive
 	}
 	step := func(phase, dir string, args []string, onFail string) string {
-		return fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (%s)\" >&2\n(cd %s && %s) || %s\n",
-			strings.Join(args, " "), phase, dir, devopsyCall(projectName, args, false), onFail)
+		return runningLine(args, phase) + fmt.Sprintf("(cd %s && %s) || %s\n", dir, devopsyCall(projectName, args, false), onFail)
 	}
 	s += `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
@@ -710,6 +725,9 @@ fetch_release "$rel" || fr=$?
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 out="$rel/` + ServerLogFile + `"
+# Made before the switch: a full disk or a bad mode fails here, the
+# release not live, rather than at the log's first write after it.
+(umask 077; : >>"$out") || not_live 1
 `
 	s += switchTraps
 	if !rollback {
@@ -720,7 +738,6 @@ exec 7<&-
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2 || true
 `
-	hasRun := rollback || len(p.Run) > 0
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
 	// release: (ReleaseStepsFlag).
@@ -733,9 +750,7 @@ echo "devopsy: current is now $id" >&2 || true
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `
-	if sync != nil || hasRun {
-		s += "status=0\nfailed=run\n"
-	}
+	s += "status=0\nfailed=run\n"
 	if sync != nil {
 		s += sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live") + `cd "$base"
@@ -754,14 +769,13 @@ echo "devopsy: current is now $id" >&2 || true
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
   ` + runSig + `fi
 `
-	} else if len(p.Run) > 0 {
+	} else {
 		s += `if [ "$status" = 0 ]; then
-` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
+` + runningLine(p.Run, "run") + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
   ` + runSig + `fi
 `
 	}
-	if sync != nil || hasRun {
-		s += `if [ "$status" != 0 ]; then
+	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
   if [ -n "$prev" ]; then
     make_current "$prev"
@@ -773,7 +787,6 @@ echo "devopsy: current is now $id" >&2 || true
   exit "$status"
 fi
 `
-	}
 	if rollback {
 		// The release it left: never counted toward keep, never rolled back
 		// to again, its log kept until pruning takes it.
@@ -845,7 +858,7 @@ fi
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
   fo_tag="$(date -u '+%Y%m%d%H%M%S').$$"
-  echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out"
+  echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out" || true
   if [ -z "${sync_gone:-}" ]; then
     fo_off=$(wc -c <"$out")
     tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &

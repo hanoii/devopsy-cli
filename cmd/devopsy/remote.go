@@ -360,7 +360,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					case <-time.After(5 * time.Second):
 						// The server takes the cancel once it holds the
 						// release lock, which another release may hold.
-						say(yellow, "devopsy: the server cancels it once it gets the release lock. Ctrl-C again leaves now")
+						say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
 						select {
 						case res = <-done:
 						case <-sigs:

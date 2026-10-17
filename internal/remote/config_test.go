@@ -356,7 +356,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	run := func(tg *Target, id string) string {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{}, nil))
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "", Phases{Run: []string{"deploy"}}, nil))
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
