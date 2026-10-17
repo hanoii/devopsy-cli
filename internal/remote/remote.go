@@ -425,7 +425,7 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
 // changes instead of failing halfway. 1: --images.
-const Protocol = 1
+const Protocol = 2
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -546,11 +546,7 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
 	s := prelude(t) + "exec 1>&2\n"
-	if sync != nil {
-		s += syncStdin
-	} else {
-		s += watchSession
-	}
+	s += watchSession(sync != nil, true)
 	// Defined first: not_live removes a first release's images.
 	s += releaseImages(projectName, t, t.Mode)
 	// The release lock is held until a dropped session's fetch ends, so
@@ -676,7 +672,7 @@ fetch_release "$rel" || fr=$?
 [ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
-[ -z "${watch_pid:-}" ] || kill "$watch_pid" 2>/dev/null || true
+[ -z "${watch_pid:-}" ] || : >"$ws_until"
 # A session gone (or Ctrl-C) after the fetch and before the watcher went.
 [ -z "$fetch_sig" ] || not_live 130
 out="$rel/` + ServerLogFile + `"
@@ -830,28 +826,64 @@ fi
 // session is gone: set on -T sessions, whose drop sends no signal.
 const WatchEnv = "DEVOPSY_INTERNAL_WATCH"
 
-// watchSession, before the switch, turns the session's end into a
-// SIGTERM for the script's process group (under ssh -T the shell leads
-// its own, checked: in a group of others', the shell alone gets it; a
-// shell gone, nothing):
-// before the fetch the script just ends (its release is marked
-// failed since the upload), during it fetch_sig's trap undoes the fetch.
-// Otherwise a dropped session only ended the script at its next write,
-// a build later. Stopped before the switch (watch_pid): from there on a
-// release finishes whatever happens to its session (followOutput). Not
-// with a sync, whose stdin is devopsy's answer (syncStdin). Only fd 4
-// reaches the watcher: a background job's stdin is /dev/null.
-const watchSession = `if [ -n "${` + WatchEnv + `:-}" ]; then
-  exec 4<&0 </dev/null
-  ( cat <&4 >/dev/null 2>&1
-    if read -r _ _ _ _ wg _ </proc/$$/stat 2>/dev/null; then
-      if [ "$wg" = $$ ]; then kill -TERM 0; else kill -TERM $$; fi
-    fi
-  ) 3<&- 8>&- 9>&- >/dev/null 2>&1 &
-  watch_pid=$!
-  exec 4<&-
-fi
+// WatchSessionFlag is the hidden devopsy flag that watches a session's
+// stdin on the server (watchSession).
+const WatchSessionFlag = "--watch-session"
+
+// watchSession starts devopsy --watch-session in the background on the
+// session's stdin (only fd 4 reaches it: a background job's stdin is
+// /dev/null), and gives every command after it /dev/null as stdin, so
+// none can eat or wait on what comes in. With answer (a sync), what
+// comes in reaches the script's fd 3 through a fifo: devopsy's go or
+// abort, EOF when the session is gone. Armed, the session's end before
+// the switch sends SIGTERM to the script's group (the shell leads one
+// under sshd; else the shell alone): before the fetch the script just
+// ends (its release is failed since the upload), during it fetch_sig's
+// trap undoes the fetch, at once rather than at the next write, a build
+// later. $ws_until, written right before the switch, disarms it: from
+// there on a release finishes whatever happens to its session
+// (followOutput). A plain release is armed when its stdin is the
+// operator's pipe (WatchEnv; on -t the pty's hangup does it), a syncing
+// one always (its stdin is the answer's pipe), a sync's holder never: a
+// SIGTERM would stop it halfway through restoring.
+func watchSession(answer, armed bool) string {
+	args := `"$$"`
+	s := `ws_until="$base/.devopsy-watch.$$"
+rm -f "$ws_until"
 `
+	if answer {
+		s += `ws_fifo="$base/.devopsy-sync.answer.$$"
+rm -f "$ws_fifo" "$ws_fifo.ready"
+mkfifo "$ws_fifo"
+`
+		args += ` --answer "$ws_fifo"`
+	}
+	start := `exec 4<&0 </dev/null
+devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
+watch_pid=$!
+exec 4<&-
+`
+	cancel := ` --cancel-until "$ws_until"`
+	switch {
+	case armed && answer:
+		s += fmt.Sprintf(start, cancel)
+	case armed:
+		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
+` + fmt.Sprintf(start, cancel) + `fi
+`
+	default:
+		s += fmt.Sprintf(start, "")
+	}
+	if answer {
+		// The watcher's end first, or no answer at all if it is gone:
+		// an open of the fifo alone would wait forever, the lock held.
+		s += `while [ ! -e "$ws_fifo.ready" ] && kill -0 "$watch_pid" 2>/dev/null; do sleep 0.1; done
+if [ -e "$ws_fifo.ready" ]; then exec 3<"$ws_fifo"; else exec 3</dev/null; fi
+rm -f "$ws_fifo" "$ws_fifo.ready"
+`
+	}
+	return s
+}
 
 // LogSection starts each activation's part of ServerLogFile, before its
 // time (UTC, logTime's layout), where --log puts it among the session's

@@ -391,23 +391,31 @@ repositories fit together and the open ideas.
   prepare step, its operator killed between sessions) is never rolled
   back to nor kept. `prelude` removes stale `releases/*.tmp` under the
   lock. On `-T` the activation's stdin is a pipe devopsy keeps open
-  (`WatchEnv`), and `watchSession` waits for its end: the server closes
-  it within milliseconds of the client's death, and the watcher sends
-  SIGTERM to the script's group (`kill -TERM 0`, only when the shell
-  leads its group, as under sshd: read from `/proc/$$/stat`, else the
-  shell alone, and nothing once the shell is gone), so the fetch is
-  undone at once through `fetch_sig` instead of at the next write, a
-  build later. PIPE is ignored from the fetch on (dash writes
-  "Terminated" to the dead session). Stopped before the switch, and
-  `fetch_sig` checked once more after that (a drop in between). Not
-  with a sync, whose stdin is the answer: there devopsy ends the
-  holder's session itself on a Ctrl-C before the marker and waits for
-  it. `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and
-  does not make the shell a group leader: test the watcher through a
-  real sshd (in the machine, to `localhost`). A connection that dies
+  (`WatchEnv`), and the server's devopsy watches it (`watchSession`,
+  the hidden `--watch-session <pid> [--answer <fifo>] [--cancel-until
+  <file>]`, cmd/devopsy/watch.go, in the background on fd 4: a
+  background job's stdin is /dev/null): the server closes it within
+  milliseconds of the client's death, and the watcher sends SIGTERM to
+  the script's group (when the shell leads one, as under sshd; else the
+  shell alone; nothing once the script is gone, the watcher no longer
+  its child), so the fetch is undone at once through `fetch_sig`
+  instead of at the next write, a build later. PIPE is ignored from the
+  fetch on (dash writes "Terminated" to the dead session). The script
+  writes `$ws_until` right before the switch, which disarms it (a file:
+  a signal sent before the watcher could handle it would kill it), and
+  checks `fetch_sig` once more (a drop in between). A sync's answer
+  goes through the same watcher (`--answer`: a fifo in `$base`, the
+  script's fd 3; the watcher opens it read-write, never waiting, and
+  says so in `<fifo>.ready`, which the script waits for unless the
+  watcher is gone, then reads no answer): so a release that syncs is
+  armed too, always (its stdin is the answer's pipe), and a sync's
+  holder never (a SIGTERM would stop it halfway through restoring).
+  `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and does
+  not make the shell a group leader: test the watcher through a real
+  sshd (in the machine, to `localhost`). A connection that dies
   silently (a laptop asleep) is seen only when the server writes or TCP
   gives up: activations pass no keepalive, and devopsy-server never
-  sets sshd's `ClientAliveInterval`.
+  sets sshd's `ClientAliveInterval`. Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: before
   `make_current` the output goes to `$rel/devopsy-log-server`
