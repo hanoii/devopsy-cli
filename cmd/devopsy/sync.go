@@ -227,6 +227,10 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			return cmp.Or(res.code, 1)
 		}
 		answer := "go\n"
+		if code == 0 && !interrupted {
+			// What --status counts as a sync (remote.SyncCopied).
+			rlog.Line(remote.SyncCopied + job.parent.Address)
+		}
 		if interrupted {
 			answer = "abort\n"
 		} else if code != 0 {

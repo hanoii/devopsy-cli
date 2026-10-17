@@ -432,9 +432,16 @@ repositories fit together and the open ideas.
   (output piped, CI), devopsy takes Ctrl-C itself (`session` in
   runRemote; ssh ignores it): before the switch (no `LogAnchor` logged
   yet) it closes the pipe, which cancels the release through the
-  watcher, and waits; after it, it says the run step goes on and only a
-  second one ends the session; the log is saved either way. Interrupted
-  during the upload, the progress line goes and nothing changed.
+  watcher, and waits (and says so after 5 seconds: the server takes the
+  cancel only once it holds the release lock); after it, it says the run
+  step goes on and only a second one ends the session; the log is saved
+  either way. "After the switch" is SSHStreams' flag on SwitchMarker
+  (`WithSwitched`), never the release log, which stops at its cap; a
+  switch already under way when the pipe closed goes on, and devopsy
+  says so. Interrupted during the upload (`signal.NotifyContext`), the
+  progress line goes and nothing changed. A Ctrl-C right after the
+  fetch counts as one in the run step: `fetch_release` sets
+  `switch_sig`'s trap once the fetch went through.
   Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after

@@ -23,6 +23,11 @@ import (
 // service that reads the entry raw is left with.
 const HalfCopiedNotice = "is half copied: a database copied raw cannot start on it until the next sync completes it"
 
+// SyncCopied starts the line a sync's log gets, followed by the
+// parent's address, once the copy went through, whatever the run step
+// does after it: --status's last sync.
+const SyncCopied = "devopsy: copied the data from @"
+
 // SyncMarker starts the line the holder prints (on stderr: holders print
 // on one stream), followed by the child's directory on its server
 // ($base), once the child is ready to be written.
