@@ -680,13 +680,21 @@ rm -f "$rel/` + FetchingFile + `"
 # A session gone (or Ctrl-C) after the fetch and before the watcher went.
 [ -z "$fetch_sig" ] || not_live 130
 out="$rel/` + ServerLogFile + `"
-` + followOutput + switchTraps
+`
+	// A sync between the switch and the run step has its own way
+	// through a dropped session (syncWait), and its copy's lines reach
+	// the session's log from the push: the server's log starts after it,
+	// so --log shows the copy in its place.
+	if sync == nil {
+		s += followOutput
+	}
+	s += switchTraps
 	if !rollback {
 		s += `rm -f "$rel/` + FailedFile + `"
 `
 	}
 	s += `make_current "releases/$id"
-echo "devopsy: current is now $id" >&2
+echo "devopsy: current is now $id" >&2 || true
 `
 	hasRun := rollback || len(p.Run) > 0
 	// The previous release, back after a failed run, restarts with its own
@@ -708,7 +716,8 @@ echo "devopsy: current is now $id" >&2
 		s += sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live") + `cd "$base"
 [ "$status" = 0 ] || failed=sync
-`
+trap '' PIPE
+` + followOutput
 	}
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
@@ -783,13 +792,16 @@ fi
 
 // followOutput runs where a script must go on whatever happens to its
 // session: before a release's switch, from where it goes live, or fails
-// and brings the previous release back, and around a sync's handover. A
-// session gone without a signal (CI's -T) kills whatever writes to it
-// next: the shell, compose, the switch back halfway. So the output goes
-// to a file ($out: ServerLogFile, appended after a LogSection line; the
-// operator's devopsy stops logging at SwitchMarker), both streams in their order (a sync's
-// marker among them: the operator looks for it on stderr too), and a
-// tail copies it to the session's stderr: only the tail dies with it.
+// and brings the previous release back (after the sync, in a release
+// that syncs: the sync has its own way through a drop, and its copy's
+// lines come through the push), and before a sync's run step. A session
+// gone without a signal (CI's -T) kills whatever writes to it next: the
+// shell, compose, the switch back halfway. So the output goes to a file
+// ($out: ServerLogFile, appended after a LogSection line; the operator's
+// devopsy stops logging at SwitchMarker, which is written even with the
+// session gone: PIPE is ignored by then), both streams in their order,
+// and a tail copies it to the session's stderr: only the tail dies with
+// it.
 // The tail ends half a second after
 // the shell (the EXIT trap, which keeps the exit status: on a -t session
 // the pty hangs up as soon as the shell exits, which cut the last lines,
@@ -807,7 +819,7 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
   ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
     sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
   fo_hp=$!
-  echo "` + SwitchMarker + `" >&2
+  echo "` + SwitchMarker + `" >&2 || true
   exec >>"$out" 2>&1
   trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
 fi

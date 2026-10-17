@@ -250,12 +250,16 @@ fi
 `, hintAddress(t)) + syncStdin + `` + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
 echo "devopsy: syncing into $id" >&2
-out="$base/releases/$id/` + ServerLogFile + `"
-` + followOutput + o.exports(t) + `cd "$base/current"
+` + o.exports(t) + `cd "$base/current"
 status=0
 ` + syncBlock(projectName, "restoring what was stopped") + `[ "$status" = 0 ] || exit "$status"
 `
 	if len(run) > 0 {
+		// The run step goes on whatever happens to the session, after
+		// the copy: --log shows the copy's lines in their place.
+		s += `out="$base/releases/$id/` + ServerLogFile + `"
+trap '' PIPE
+` + followOutput
 		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
 	}
 	return s
