@@ -246,10 +246,10 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) s
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: nothing to sync into" >&2
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --no-sync releases without the data and --sync later fills it" >&2; exit 1; }
-`, t.Name) + syncStdin + `` + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
+[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it" >&2; exit 1; }
+`, upgradeAddress(t)) + syncStdin + `` + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 echo "devopsy: syncing into $id" >&2
-out="$base/releases/$id/` + OutputFile + `"
+out="$base/releases/$id/` + ServerLogFile + `"
 ` + followOutput + o.exports(t) + `cd "$base/current"
 status=0
 ` + syncBlock(projectName, "restoring what was stopped") + `[ "$status" = 0 ] || exit "$status"
@@ -314,7 +314,7 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 // end is what the data must end with (ImportEndEnv).
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first" >&2; exit 1; }
-`, t.Name) + `` + releaseLock(false, false) + `cd "$base/current"
+`, upgradeAddress(t)) + `` + releaseLock(false, false) + `cd "$base/current"
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
 

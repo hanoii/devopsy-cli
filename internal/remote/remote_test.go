@@ -1250,6 +1250,40 @@ exit 0
 			t.Errorf("the interrupted rollback bookmarked %s as release 1's: %q", ref, img)
 		}
 	}
+
+	// Release 5's -T session drops while it builds (watchSession): its
+	// stdin ends, the script's group gets SIGTERM, and the fetch is
+	// undone at once, not a build later. Linux: the watcher reads /proc
+	// to check the shell leads its group, as under sshd (Setpgid here).
+	if runtime.GOOS != "linux" {
+		return
+	}
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	watched := command("5", "FAKE_HANG=1", WatchEnv+"=1")
+	watched.Stdin = r
+	var buf5 bytes.Buffer
+	watched.Stdout, watched.Stderr = &buf5, &buf5
+	watched.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	os.Remove(filepath.Join(root, "building"))
+	if err := watched.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	start := time.Now()
+	w.Close()
+	_ = watched.Wait()
+	if code := watched.ProcessState.ExitCode(); code != 130 || time.Since(start) > 10*time.Second || !exists("releases/5/"+FailedFile) || exists("releases/5/"+FetchingFile) {
+		t.Errorf("release 5 after its session ended: exit %d in %v, failed %v, fetching %v:\n%s", code, time.Since(start), exists("releases/5/"+FailedFile), exists("releases/5/"+FetchingFile), buf5.String())
+	}
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/3/code" || fakeImage(root, "mariadb:11") != "3" {
+		t.Errorf("after release 5's cancel: current %q, mariadb:11 %q", l, fakeImage(root, "mariadb:11"))
+	}
 }
 
 func fileExists(path string) bool {
@@ -1377,6 +1411,10 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
+	}
+	// A release is failed until its switch, and cut uploads go.
+	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+FailedFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+		t.Errorf("upload without its failed marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
 	if !strings.Contains(act, `ln -sfn "$base/shared/`+InheritFile+`" "$code/.devopsy/`+InheritFile+`"`) {
@@ -1541,7 +1579,7 @@ exit 0
 	if code := dropped.ProcessState.ExitCode(); code != 0 || current() != "releases/2/code" || fileExists(filepath.Join(base, "releases/2", FailedFile)) {
 		t.Errorf("release 2 after its session went: exit %d, current %q", code, current())
 	}
-	if o := readFile(filepath.Join(base, "releases/2", OutputFile)); !strings.Contains(o, "deployed") {
+	if o := readFile(filepath.Join(base, "releases/2", ServerLogFile)); !strings.Contains(o, "deployed") {
 		t.Errorf("release 2's output file: %q", o)
 	}
 
@@ -1568,7 +1606,7 @@ exit 0
 	// --log after the drop: no log saved, the output file instead.
 	logCmd := exec.Command("sh", "-c", LogReadScript(tg, "2"))
 	logCmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
-	if out, err := logCmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "after the session ended") || !strings.Contains(string(out), "deployed") {
+	if out, err := logCmd.CombinedOutput(); err != nil || !strings.Contains(string(out), LogServerPart+"\n"+LogSection) || !strings.Contains(string(out), "deployed") {
 		t.Errorf("--log of release 2 (%v):\n%s", err, out)
 	}
 
@@ -1587,10 +1625,11 @@ exit 0
 	// A rollback to 1 appends to 1's output, after its own.
 	rollback := exec.Command("sh", "-c", ActivateScript(tg, "", true, "app-prod", Phases{}, nil))
 	rollback.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
-	if out, err := rollback.CombinedOutput(); err != nil {
-		t.Fatalf("rollback (%v):\n%s", err, out)
+	rbOut, err := rollback.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rollback (%v):\n%s", err, rbOut)
 	}
-	if o := readFile(filepath.Join(base, "releases/1", OutputFile)); strings.Count(o, "devopsy: 20") != 2 || !strings.Contains(o, "deployed") {
-		t.Errorf("release 1's output after a rollback to it:\n%s", o)
+	if o := readFile(filepath.Join(base, "releases/1", ServerLogFile)); strings.Count(o, LogSection) != 2 || !strings.Contains(o, "deployed") {
+		t.Errorf("release 1's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
 	}
 }

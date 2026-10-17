@@ -61,7 +61,7 @@ type syncJob struct {
 // the parent's server can reach.
 func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syncJob, error) {
 	if c.Parent == "" {
-		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Name, c.Name, cmp.Or(c.File, "the project's config"))
+		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
 	if p == nil {
 		return nil, fmt.Errorf("environment %s: its parent %s is not resolved", c.Name, c.Parent)
@@ -129,73 +129,6 @@ func sameHost(a, b string) bool {
 	return ea["hostname"] != ""
 }
 
-// markerWriter passes a session's stdout through to w, but swallows the
-// line starting with remote.SyncMarker and hands over the directory it
-// names.
-type markerWriter struct {
-	w      io.Writer
-	marker chan string
-	mu     sync.Mutex
-	line   []byte
-	found  bool
-}
-
-func newMarkerWriter(w io.Writer) *markerWriter {
-	return &markerWriter{w: w, marker: make(chan string, 1)}
-}
-
-func (m *markerWriter) Write(p []byte) (int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.found {
-		return m.w.Write(p)
-	}
-	n := len(p)
-	for len(p) > 0 && !m.found {
-		i := bytes.IndexByte(p, '\n')
-		if i < 0 {
-			m.line = append(m.line, p...)
-			p = nil
-			break
-		}
-		line := append(m.line, p[:i]...)
-		m.line = nil
-		p = p[i+1:]
-		if base, ok := strings.CutPrefix(strings.TrimRight(string(line), "\r"), remote.SyncMarker); ok {
-			m.found = true
-			m.marker <- base
-			continue
-		}
-		if _, err := m.w.Write(append(line, '\n')); err != nil {
-			return n, err
-		}
-	}
-	// A partial line that cannot become the marker goes through now
-	// (progress output); the rest after the marker as it comes.
-	if len(m.line) > 0 && !strings.HasPrefix(remote.SyncMarker, string(m.line)) && !bytes.HasPrefix(m.line, []byte(remote.SyncMarker)) {
-		if _, err := m.w.Write(m.line); err != nil {
-			return n, err
-		}
-		m.line = nil
-	}
-	if m.found && len(p) > 0 {
-		if _, err := m.w.Write(p); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
-}
-
-// flush writes what is left of a last line without a newline.
-func (m *markerWriter) flush() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.line) > 0 {
-		_, _ = m.w.Write(m.line)
-		m.line = nil
-	}
-}
-
 // runSyncSession runs script, a holder (HolderScript, or ActivateScript
 // with a sync) on the child's server; once it prints the marker, the push
 // session on the parent's, then go or abort to the holder. The holder's
@@ -225,11 +158,12 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		colored = append(colored, o, e)
 		out, errOut = o, e
 	}
-	mw := newMarkerWriter(out)
-	mwErr := &markerWriter{w: errOut, marker: mw.marker}
+	marker := make(chan string, 1)
+	lm := &remote.LineMarker{Prefix: remote.SyncMarker, Found: func(base string) { marker <- base }}
+	mw, mwErr := lm.Writer(out), lm.Writer(errOut)
 	flush := func() {
-		mw.flush()
-		mwErr.flush()
+		mw.Flush()
+		mwErr.Flush()
 		for _, c := range colored {
 			c.Flush()
 		}
@@ -240,7 +174,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	done := make(chan result, 1)
 	go func() {
-		code, err := remote.SSHStreams(context.Background(), job.child, remote.KeepAlive, script, r, mw, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(context.Background()), job.child, remote.KeepAlive, script, r, mw, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy just exits: the holder gets
@@ -256,7 +190,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	case <-sigs:
 		say(red, "devopsy: interrupted: the child's server restores what it stopped")
 		return 130
-	case base := <-mw.marker:
+	case base := <-marker:
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		pushed := make(chan int, 1)
@@ -371,7 +305,7 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 	// did not exec, it does not).
 	stop := context.AfterFunc(ctx, func() { w.Close() })
 	defer stop()
-	code, err := remote.SSHContext(ctx, p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
+	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		rlog.Line(err.Error())
@@ -468,7 +402,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		say(cyan, fmt.Sprintf("Inherited %s from @%s into @%s's shared/%s.", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
-		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), c.Name))
+		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), c.Address))
 	}
 	if len(missing) > 0 {
 		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))

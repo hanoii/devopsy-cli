@@ -450,7 +450,7 @@ func TestReleaseFrom(t *testing.T) {
 		t.Fatalf("--release-sync --from (%d):\n%s", code, out)
 	}
 	s.logs()
-	if out, code := s.run(nil, "@devopsy@one:solo", "--release", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: @solo is not a child") {
+	if out, code := s.run(nil, "@devopsy@one:solo", "--release", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: @devopsy@one:solo is not a child") {
 		t.Fatalf("--from without a parent (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
@@ -817,10 +817,10 @@ func TestSyncGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.logs()
-	if out, code := s.run(nil, "@solo", "--sync", "--yes"); code == 0 || !strings.Contains(out, "@solo is not a child") {
+	if out, code := s.run(nil, "@solo", "--sync", "--yes"); code == 0 || !strings.Contains(out, "@devopsy@one:solo is not a child") {
 		t.Errorf("not a child (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@solo", "--release-sync"); code == 0 || !strings.Contains(out, "@solo is not a child") {
+	if out, code := s.run(nil, "@solo", "--release-sync"); code == 0 || !strings.Contains(out, "@devopsy@one:solo is not a child") {
 		t.Errorf("--release-sync, not a child (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "the parent @devopsy@one:prod (devopsy@one:shop/prod) has no current release") {
@@ -833,7 +833,7 @@ func TestSyncGuards(t *testing.T) {
 		t.Errorf("the child was touched: %v", err)
 	}
 	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release: run 'devopsy @dev --release' first") {
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "has no current release: run 'devopsy @devopsy@one:dev --release' first") {
 		t.Errorf("child not released (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--from", "dev", "--yes"); code == 0 || !strings.Contains(out, "and its parent are the same environment") {
@@ -842,7 +842,7 @@ func TestSyncGuards(t *testing.T) {
 	if out, code := s.run(nil, "@bare", "--sync", "--yes"); code == 0 || !strings.Contains(out, "environment bare has no release steps") {
 		t.Errorf("no run step (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--bogus"); code == 0 || !strings.Contains(out, "usage: devopsy @dev --sync") {
+	if out, code := s.run(nil, "@dev", "--sync", "--bogus"); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@one:dev --sync") {
 		t.Errorf("usage (%d):\n%s", code, out)
 	}
 	// --from another environment of the project works as the source.
@@ -900,7 +900,7 @@ func TestSyncInherit(t *testing.T) {
 	// The child's own shared/.env is untouched and wins; a key set there
 	// too is named.
 	write(t, childEnv, "OWN=1\nPROJ_KEY=child\n", 0o600)
-	if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @dev --vars unset to inherit it).") {
+	if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @devopsy@one:a/dev --vars unset to inherit it).") {
 		t.Errorf("shadowed key (%d):\n%s", code, out)
 	}
 	if got := readString(childEnv); got != "OWN=1\nPROJ_KEY=child\n" {
@@ -1366,7 +1366,7 @@ func TestStatus(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "containers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db ") || !strings.Contains(out, "exited") || !strings.Contains(out, "url https://shop.example\n") {
 		t.Fatalf("local status (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet") {
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	s.releaseProd(nil)

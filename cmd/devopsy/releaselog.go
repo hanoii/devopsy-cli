@@ -109,18 +109,25 @@ var cursorUp = regexp.MustCompile(`\x1b\[([0-9]*)A`)
 // rewrote, and without the empty lines its redraws leave.
 func (l *releaseLog) Text() []byte {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	lines := l.lines
 	if l.cur.Len() > 0 {
 		lines = append(lines[:len(lines):len(lines)], logLine{l.start, l.cur.String()})
 	}
+	l.mu.Unlock()
+	var b strings.Builder
+	for _, line := range cleanLines(lines) {
+		b.WriteString(line.at.UTC().Format(logTime) + " " + line.text + "\n")
+	}
+	return []byte(b.String())
+}
+
+// cleanLines are lines as a file shows them: without terminal codes, with
+// only the last state of lines a progress display rewrote, and without
+// the empty lines its redraws leave, nor a spinner's.
+func cleanLines(lines []logLine) []logLine {
 	// Frames: a line that moves the cursor up n lines redraws them, so
 	// those n go, empty ones included (hence they are dropped only below).
-	type kept struct {
-		at   time.Time
-		text string
-	}
-	var out []kept
+	var out []logLine
 	for _, line := range lines {
 		for _, m := range cursorUp.FindAllStringSubmatch(line.text, -1) {
 			n := 1
@@ -136,14 +143,57 @@ func (l *releaseLog) Text() []byte {
 		if j := strings.LastIndex(text, "\r"); j >= 0 {
 			text = text[j+1:]
 		}
-		out = append(out, kept{line.at, strings.TrimRight(text, " \t")})
+		out = append(out, logLine{line.at, strings.TrimRight(text, " \t")})
 	}
-	var b strings.Builder
+	kept := out[:0]
 	for _, line := range out {
-		if strings.TrimSpace(line.text) == "" || spinner.MatchString(line.text) {
+		if strings.TrimSpace(line.text) != "" && !spinner.MatchString(line.text) {
+			kept = append(kept, line)
+		}
+	}
+	return kept
+}
+
+// joinLogs is --log's view of what LogReadScript printed: the session's
+// log (remote.LogFile) with each part of the server's (remote.
+// ServerLogFile, from a switch on) among its lines at the time the part
+// started, cleaned like the session's and indented under a line that
+// says where it comes from. The two never overlap: the session's log
+// stops at the switch (remote.SwitchMarker).
+func joinLogs(out []byte) []byte {
+	session, server, _ := strings.Cut(string(out), remote.LogServerPart+"\n")
+	type part struct {
+		at    string
+		lines []logLine
+	}
+	var parts []part
+	for _, line := range strings.Split(strings.TrimSuffix(server, "\n"), "\n") {
+		if at, ok := strings.CutPrefix(line, remote.LogSection); ok {
+			parts = append(parts, part{at: at})
+		} else if len(parts) > 0 {
+			parts[len(parts)-1].lines = append(parts[len(parts)-1].lines, logLine{text: line})
+		}
+	}
+	indent := strings.Repeat(" ", len(logTime)+1)
+	var b strings.Builder
+	put := func(p part) {
+		b.WriteString(p.at + " devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n")
+		for _, line := range cleanLines(p.lines) {
+			b.WriteString(indent + line.text + "\n")
+		}
+	}
+	for _, line := range strings.SplitAfter(session, "\n") {
+		if line == "" {
 			continue
 		}
-		b.WriteString(line.at.UTC().Format(logTime) + " " + line.text + "\n")
+		for len(parts) > 0 && len(line) >= len(logTime) && line[:len(logTime)] > parts[0].at {
+			put(parts[0])
+			parts = parts[1:]
+		}
+		b.WriteString(line)
+	}
+	for _, p := range parts {
+		put(p)
 	}
 	return []byte(b.String())
 }

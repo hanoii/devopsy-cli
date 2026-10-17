@@ -382,39 +382,66 @@ repositories fit together and the open ideas.
   recovery (its images have no listing yet). The release lock is inherited by the
   fetch, so recovery never races one still running. Rollbacks never
   write the marker, which would mark a good release failed.
+- **Before the switch, a dropped session cancels.** A release is
+  failed from its upload (`UploadScript` writes `FailedFile` into the
+  `.tmp` before the `mv`) until its activation removes the mark right
+  before `make_current`: one cut off anywhere before (an upload, a
+  prepare step, its operator killed between sessions) is never rolled
+  back to nor kept. `prelude` removes stale `releases/*.tmp` under the
+  lock. On `-T` the activation's stdin is a pipe devopsy keeps open
+  (`WatchEnv`), and `watchSession` waits for its end: the server closes
+  it within milliseconds of the client's death, and the watcher sends
+  SIGTERM to the script's group (`kill -TERM 0`, only when the shell
+  leads its group, as under sshd: read from `/proc/$$/stat`, else the
+  shell alone), so the fetch is undone at once through `fetch_sig`
+  instead of at the next write, a build later. PIPE is ignored from
+  the fetch on (dash writes "Terminated" to the dead session). Stopped
+  before the switch. Not with a sync, whose stdin is the answer. `-t`
+  sessions get HUP.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: before
-  `make_current` the output goes to `$rel/devopsy-output` (`OutputFile`,
-  `followOutput`: both streams in one file, in their order, appended
-  after a time line, so rollbacks and syncs into a release keep what it
-  had) and a GNU `tail -f` copies it to the session's stderr, so a
+  `make_current` the output goes to `$rel/devopsy-log-server`
+  (`ServerLogFile`, `followOutput`: both streams in one file, in their
+  order, each activation's part after a `LogSection` line with its
+  time) and a GNU `tail -f` copies it to the session's stderr, so a
   session gone kills only the tail (it killed the shell at its next
   write, or compose mid-`up`, or the switch back before the restart).
-  The tail follows a helper as long as the shell lives, and an EXIT
-  trap (which keeps the exit status) waits for it: a `-t` session's
-  pty hangs up the moment the shell exits, which cut the last lines.
-  Neither holds the locks or fd 3. `switchTraps`: Ctrl-C still stops
-  the run step, and the shell marks the release failed and restarts the
-  previous one, under `trap '' INT TERM`; HUP and PIPE are ignored. The
-  trap records it (`runSig`): under `script` the `^C` reaches the inner
-  terminal, so the status is only `script`'s, which exits 0 when itself
-  signaled. A sync's holder follows its output the same way from its
-  start, so its marker can come on stderr: the operator looks on both
-  streams. After a drop, the file is the only record of the rest (the
-  log is saved by the operator): `--log` adds it when it is newer than
-  the log, or there is none. Without GNU's `tail` (macOS, in tests)
-  only the traps apply (`TestAfterSwitchSurvives` skips).
-- Release logs (`releaseLog`): devopsy's messages, local steps' command
-  lines and exit codes, and the upload and activation sessions' output
-  (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
-  15:04:05`), without terminal codes, progress frames (a `cursorUp` code
-  supersedes the n lines before it: BuildKit on a pseudo-terminal redraws
-  its block every tick, only the last frame stays) or empty lines, saved by
-  `LogSaveScript` in `releases/<id>/devopsy-log` once the server was
-  reached; a rollback's is appended to the restored release's, found from
-  its script's "rolling back to <id>" line. Pruned with their releases.
-  `--log` reads them (`LogReadScript`). Local
-  steps' output is not piped: it would lose its terminal.
+  `SwitchMarker`, printed just before, tells the operator's devopsy to
+  stop logging the session (`LineMarker` with `Cut` in `SSHStreams`;
+  never shown). The tail ends half a second after the shell (an EXIT
+  trap, which keeps the exit status: a `-t` session's pty hangs up the
+  moment the shell exits, which cut the last lines), or a second after
+  a helper finds the shell gone without its trap: never `tail --pid`,
+  which takes an unreaped zombie for alive. Neither holds the locks or
+  fd 3. `switchTraps`: Ctrl-C still stops the run step, and the shell
+  marks the release failed and restarts the previous one, with INT and
+  TERM ignored; HUP and PIPE are ignored. The trap records it
+  (`runSig`): under `script` the `^C` reaches the inner terminal, so
+  the status is only `script`'s, which exits 0 when itself signaled. A
+  sync's holder follows its output the same way from its start, so its
+  marker comes on stderr: the operator looks on both streams (one
+  `LineMarker`). Without GNU's `tail` (macOS, in tests) only the traps
+  apply, and the session's log has everything (`TestAfterSwitchSurvives`
+  skips).
+- **Release logs: two per release.** The session's (`LogFile`,
+  `devopsy-log-session`, `releaseLog`): devopsy's messages, local steps'
+  command lines and exit codes, and the sessions' output (`SSHLog`, both
+  streams) up to `SwitchMarker`, each line after its UTC time
+  (`2006-01-02 15:04:05`), without terminal codes, progress frames (a
+  `cursorUp` code supersedes the n lines before it: BuildKit on a
+  pseudo-terminal redraws its block every tick, only the last frame
+  stays) or empty lines (`cleanLines`), saved by `LogSaveScript` once
+  the server was reached; a rollback's is appended to the restored
+  release's, found from its script's "rolling back to <id>" line, a
+  sync's to the current one's ("syncing into"). The server's
+  (`ServerLogFile`), raw, from each switch on. They never overlap, and
+  neither is rewritten: `--log` (`LogReadScript` prints both,
+  `LogServerPart` between) joins them for display (`joinLogs`): each
+  server part among the session's lines at its time, cleaned the same
+  way and indented under a line saying where it comes from. A session
+  gone keeps the server's part whole; an operator gone (CI killed)
+  leaves the server's alone. Pruned with their releases. Local steps'
+  output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
   `--yes`). A first release that fails before going live, with nothing in
@@ -457,7 +484,7 @@ repositories fit together and the open ideas.
 - **Layout:** `releases/<id>/code/` is the project as uploaded (`Pack`
   prefixes it), `current` points there (`make_current releases/<id>`), and
   devopsy's files sit beside it (`remote.CodeDir`, `RecordFile`,
-  `TargetEnvFile`, `LogFile`, `ImagesFile`, `FailedFile`), so nothing
+  `TargetEnvFile`, `LogFile`, `ServerLogFile`, `ImagesFile`, `FailedFile`), so nothing
   devopsy writes per release is in a build context or an image (October
   2026: they were in the tree, and `COPY . .` missed the cache every
   release). Scripts keep `$rel` the release's directory and `$code` its
@@ -560,8 +587,11 @@ repositories fit together and the open ideas.
   `SyncOptions` between `make_current` and `run`) takes the release lock,
   runs prepare, and prints the marker with its directory
   (`SyncMarker` + `$base`: the operator does not know the release root),
-  swallowed by `markerWriter` (on stdout, or stderr once the holder
-  follows its output from a file, `followOutput`). Then the push on the parent's (`PushScript`:
+  taken out by a `LineMarker` on both streams (stderr once the holder
+  follows its output from a file, `followOutput`). The holder's and the
+  push's ssh ignore SIGINT (`remote.WithoutInterrupt`: a terminal's
+  Ctrl-C reaches the whole foreground group, and a `-T` ssh quits on
+  it), so devopsy alone ends them, in order. Then the push on the parent's (`PushScript`:
   shared `flock -s` on its release lock, exclusive on `.sync-lock` so
   syncs from one parent serialize, `devopsy --sync-push`), with
   `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
@@ -869,7 +899,8 @@ repositories fit together and the open ideas.
   fingerprint is computed from the blob, no ssh-keygen needed) and
   edited on the server under a lock next to the file, by blob, so a
   comment is never what identifies a key. `add` refuses a duplicate
-  (exit 3), `remove` the last key (exit 4). `--ssh-keys-generate` is local,
+  (exit 3), `remove` the last key (exit 4; commented-out keys are none, and
+  devopsy refuses locally first). `--ssh-keys-generate` is local,
   its own flag (it never takes a target): just
   `ssh-keygen` into `~/.ssh/<name>`, nothing sent; the `.pub` is added
   per server. `--restricted` on `add` is `RestrictedKeyOptions`, the one

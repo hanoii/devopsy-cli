@@ -44,8 +44,12 @@ const (
 	TargetEnvFile = "devopsy-target.env"
 	// RecordFile describes the release: id, commit, branch, who, mode.
 	RecordFile = "devopsy-release.json"
-	// LogFile is what its release printed, then each rollback to it.
-	LogFile = "devopsy-log"
+	// LogFile is the session's log of its release, then of each rollback
+	// to it and sync into it: what the operator's devopsy said and saw,
+	// the server's lines up to the switch, each after its time, saved by
+	// the operator (releaseLog). ServerLogFile has the rest; --log joins
+	// them.
+	LogFile = "devopsy-log-session"
 	// ImagesFile lists the images it runs, for its own tags (releaseImages).
 	ImagesFile = images.ListFile
 	// FailedFile marks a release that never went live or whose run failed.
@@ -56,10 +60,10 @@ const (
 	FetchingFile = images.FetchingFile
 	// RolledBackFile marks the release a rollback left.
 	RolledBackFile = images.RolledBackFile
-	// OutputFile is what an activation printed from the switch on, then
-	// each rollback to it and sync into it (followOutput): a session that
-	// went meanwhile left the rest there, which --log shows.
-	OutputFile = "devopsy-output"
+	// ServerLogFile is what the server printed from the switch on, as it
+	// printed it, a LogSection line before each activation's part
+	// (followOutput): written whatever happens to the session.
+	ServerLogFile = "devopsy-log-server"
 )
 
 // ReleaseFile is name, one of a release's devopsy files, for the project
@@ -468,6 +472,8 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   exit 1
 fi
 ` + releaseLock(false, true) + `mkdir -p "$base/releases" "$base/shared/mnt"
+# An upload cut off leaves its .tmp: none runs while the lock is held.
+rm -rf "$base"/releases/*.tmp
 # make_current releases/<id>: current points at its code.
 make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 `
@@ -485,6 +491,9 @@ mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
 # content, not times).
 tar -xzmf - -C "$rel.tmp"
+# Failed until its activation switches to it: one that never gets there
+# (cut, interrupted, its operator gone) is never rolled back to nor kept.
+: >"$rel.tmp/`+FailedFile+`"
 mv "$rel.tmp" "$rel"
 `, Quote(id))
 }
@@ -537,6 +546,8 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	s := prelude(t)
 	if sync != nil {
 		s += syncStdin
+	} else {
+		s += watchSession
 	}
 	// Defined first: not_live removes a first release's images.
 	s += releaseImages(projectName, t, t.Mode)
@@ -646,6 +657,7 @@ done
 }
 fetch_sig=
 trap 'fetch_sig=1' INT TERM HUP
+trap '' PIPE
 `
 	if !rollback {
 		s += `: >"$rel/` + FetchingFile + `"
@@ -654,14 +666,21 @@ trap 'fetch_sig=1' INT TERM HUP
 	s += `fr=0
 fetch_release "$rel" || fr=$?
 [ "$fr" -eq 0 ] || [ -z "$fetch_sig" ] || fr=130
-# A write before the marker goes: a -T session gone during the fetch (no
-# signal) dies here, the marker kept for img recover and current as it
-# was. img bookmark ignores SIGPIPE, so nothing died sooner.
+# A write before the marker goes: a session gone during the fetch that
+# watchSession did not see (none on -t, which gets HUP) fails here (PIPE
+# is ignored, so the write fails and set -e ends it), the marker kept for
+# img recover and current as it was. img bookmark ignores SIGPIPE, so
+# nothing died sooner.
 [ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
-out="$rel/` + OutputFile + `"
+[ -z "${watch_pid:-}" ] || kill "$watch_pid" 2>/dev/null || true
+out="$rel/` + ServerLogFile + `"
 ` + followOutput + switchTraps
+	if !rollback {
+		s += `rm -f "$rel/` + FailedFile + `"
+`
+	}
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
@@ -763,11 +782,11 @@ fi
 // and brings the previous release back, and around a sync's handover. A
 // session gone without a signal (CI's -T) kills whatever writes to it
 // next: the shell, compose, the switch back halfway. So the output goes
-// to a file ($out: OutputFile), both streams in their order (a sync's
+// to a file ($out: ServerLogFile, appended after a LogSection line; the
+// operator's devopsy stops logging at SwitchMarker), both streams in their order (a sync's
 // marker among them: the operator looks for it on stderr too), and a
 // tail copies it to the session's stderr: only the tail dies with it.
-// Appended after a header line: a rollback's and a sync's go into a
-// release that has its own already. The tail ends half a second after
+// The tail ends half a second after
 // the shell (the EXIT trap, which keeps the exit status: on a -t session
 // the pty hangs up as soon as the shell exits, which cut the last lines,
 // and inotify has the tail copy a line in milliseconds), or a second
@@ -776,17 +795,57 @@ fi
 // nothing may reap one. Neither holds the locks nor the sync's answer.
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
-  echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S')" >>"$out"
+  echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S')" >>"$out"
   fo_off=$(wc -c <"$out")
   tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
   fo_tp=$!
   ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
     sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
   fo_hp=$!
+  echo "` + SwitchMarker + `" >&2
   exec >>"$out" 2>&1
   trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
 fi
 `
+
+// WatchEnv tells an activation that its stdin stays open for as long as
+// the operator's devopsy runs (a pipe it keeps), so EOF there means the
+// session is gone: set on -T sessions, whose drop sends no signal.
+const WatchEnv = "DEVOPSY_INTERNAL_WATCH"
+
+// watchSession, before the switch, turns the session's end into a
+// SIGTERM for the script's process group (under ssh -T the shell leads
+// its own, checked: in a group of others', the shell alone gets it):
+// before the fetch the script just ends (its release is marked
+// failed since the upload), during it fetch_sig's trap undoes the fetch.
+// Otherwise a dropped session only ended the script at its next write,
+// a build later. Stopped before the switch (watch_pid): from there on a
+// release finishes whatever happens to its session (followOutput). Not
+// with a sync, whose stdin is devopsy's answer (syncStdin). Only fd 4
+// reaches the watcher: a background job's stdin is /dev/null.
+const watchSession = `if [ -n "${` + WatchEnv + `:-}" ]; then
+  exec 4<&0 </dev/null
+  ( cat <&4 >/dev/null 2>&1
+    if read -r _ _ _ _ wg _ </proc/$$/stat && [ "$wg" = $$ ]; then kill -TERM 0; else kill -TERM $$; fi
+  ) 3<&- 8>&- 9>&- >/dev/null 2>&1 &
+  watch_pid=$!
+  exec 4<&-
+fi
+`
+
+// LogSection starts each activation's part of ServerLogFile, before its
+// time (UTC, logTime's layout), where --log puts it among the session's
+// lines.
+const LogSection = "devopsy-log-section "
+
+// SwitchMarker is the line followOutput prints on the session before its
+// output goes to ServerLogFile: the operator's devopsy takes it out
+// (LineMarker) and records nothing of the session after it, which the
+// server's log has.
+const SwitchMarker = "devopsy-internal-switch"
+
+// LogServerPart separates LogReadScript's two logs.
+const LogServerPart = "devopsy-internal-server-log"
 
 // switchTraps follow followOutput in a release: Ctrl-C still stops the
 // step running and the shell carries on to its end, the release marked
@@ -1022,7 +1081,7 @@ else
   echo "devopsy: $base has no release and no .devopsy/ project: run 'devopsy @%s --release' first" >&2
   exit 1
 fi
-`, t.Name)
+`, upgradeAddress(t))
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -1266,6 +1325,14 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if ctx.Done() != nil {
 		cmd = SSHCommandContext(ctx, args...)
 	}
+	if ctx.Value(noInterruptKey{}) != nil {
+		// ssh keeps an inherited SIG_IGN for SIGINT: a terminal's Ctrl-C
+		// reaches devopsy alone, which ends the session in its order.
+		if sh, err := exec.LookPath("sh"); err == nil {
+			cmd.Args = append([]string{"sh", "-c", `trap '' INT; exec "$@"`, "sh"}, cmd.Args...)
+			cmd.Path = sh
+		}
+	}
 	cmd.Stdin = stdin
 	if stdin == nil {
 		cmd.Stdin = os.Stdin
@@ -1291,11 +1358,21 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if stderr == nil {
 		cmd.Stderr = term(os.Stderr)
 	}
+	// SwitchMarker never shows, and the log stops at it: the server's
+	// own log has the rest (followOutput).
+	shown := &LineMarker{Prefix: SwitchMarker}
+	logged := &LineMarker{Prefix: SwitchMarker, Cut: true}
+	flush := []*MarkerWriter{shown.Writer(cmd.Stdout), shown.Writer(cmd.Stderr)}
+	cmd.Stdout, cmd.Stderr = flush[0], flush[1]
 	if log != nil {
-		cmd.Stdout = io.MultiWriter(cmd.Stdout, log)
-		cmd.Stderr = io.MultiWriter(cmd.Stderr, log)
+		flush = append(flush, logged.Writer(log), logged.Writer(log))
+		cmd.Stdout = io.MultiWriter(cmd.Stdout, flush[2])
+		cmd.Stderr = io.MultiWriter(cmd.Stderr, flush[3])
 	}
 	err := cmd.Run()
+	for _, f := range flush {
+		f.Flush()
+	}
 	for _, c := range colored {
 		c.Flush()
 	}
@@ -1306,6 +1383,19 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		return 1, err
 	}
 	return 0, nil
+}
+
+type noInterruptKey struct{}
+
+// WithoutInterrupt is ctx for a session devopsy ends itself on Ctrl-C (a
+// sync's holder and push, which must end in order: the push, then abort
+// to the holder): its ssh ignores SIGINT, which a terminal sends to the
+// whole foreground group. Not a release's: Ctrl-C there ends the session,
+// which cancels the release before its switch. Never a new process group
+// instead: ssh asking at the terminal (a host key, a passphrase) would
+// stop on SIGTTIN.
+func WithoutInterrupt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noInterruptKey{}, true)
 }
 
 // SSHCommand is ssh with args, or DEVOPSY_SSH_COMMAND, which replaces
@@ -1347,12 +1437,14 @@ cat %s "$d/%s"
 `, Quote(id), redirect, LogFile)
 }
 
-// LogReadScript prints the log of the release whose id starts with prefix
-// (the newest such), or, without one, the most recently written log.
+// LogReadScript prints the logs of the release whose id starts with
+// prefix (the newest such), or, without one, of the one most recently
+// written: the session's (LogFile), then LogServerPart and the server's
+// (ServerLogFile), for the operator to join (joinLogs).
 func LogReadScript(t *Target, prefix string) string {
 	s := "set -eu\n" + basePrelude(t)
 	if prefix == "" {
-		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` "$base"/releases/*/` + OutputFile + ` 2>/dev/null | head -n 1) || true
+		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` "$base"/releases/*/` + ServerLogFile + ` 2>/dev/null | head -n 1) || true
 [ -n "$f" ] || { echo "devopsy: no release logs in $base/releases yet" >&2; exit 1; }
 d=$(dirname "$f")
 `
@@ -1361,19 +1453,12 @@ d=$(dirname "$f")
 [ -n "$r" ] || { echo "devopsy: no release starting with "%s" in $base/releases" >&2; exit 1; }
 d="$base/releases/$r"
 [ -f "$d/%s" ] || [ -f "$d/%s" ] || { echo "devopsy: release $r has no log" >&2; exit 1; }
-`, Quote(prefix), Quote(prefix), LogFile, OutputFile)
+`, Quote(prefix), Quote(prefix), LogFile, ServerLogFile)
 	}
-	// The server's own output from the switch on, when it is newer than
-	// the log: the session went before the release ended (the log, saved
-	// by the operator, stops there), or no log was saved at all.
-	return s + `if [ -f "$d/` + LogFile + `" ]; then
-  echo "devopsy: $d/` + LogFile + `" >&2
-  cat "$d/` + LogFile + `"
-fi
-if [ -f "$d/` + OutputFile + `" ] && { [ ! -f "$d/` + LogFile + `" ] || [ "$d/` + OutputFile + `" -nt "$d/` + LogFile + `" ]; }; then
-  echo "devopsy: $d/` + OutputFile + `: what the server printed from the switch on, after the session ended" >&2
-  cat "$d/` + OutputFile + `"
-fi
+	return s + `echo "devopsy: the logs in $d" >&2
+cat "$d/` + LogFile + `" 2>/dev/null || true
+echo "` + LogServerPart + `"
+cat "$d/` + ServerLogFile + `" 2>/dev/null || true
 `
 }
 
