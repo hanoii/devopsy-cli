@@ -172,9 +172,10 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n", 0o644)
 	s.dot = filepath.Join(s.project, ".devopsy")
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
-	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
-	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\n", 0o755)
+	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\nif [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n", 0o755)
+	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,
 		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log}
@@ -1875,5 +1876,56 @@ func TestSyncRecordStaleFirst(t *testing.T) {
 	rec, ok := readSyncRecord(cwd)
 	if !ok || rec.first || len(rec.stops) != 1 || rec.stops[0] != "db" {
 		t.Errorf("record: %+v %v", rec, ok)
+	}
+}
+
+// Without a terminal devopsy takes Ctrl-C (here SIGTERM) itself: before
+// the switch it ends the watched session, which cancels the release;
+// during the run step it says the step goes on, and the release finishes.
+func TestReleaseInterrupt(t *testing.T) {
+	s := newSyncSetup(t)
+	interrupt := func(env string, args ...string) (string, int, time.Duration) {
+		t.Helper()
+		started := filepath.Join(t.TempDir(), "started")
+		outFile, err := os.CreateTemp(t.TempDir(), "out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = s.project
+		cmd.Env = append(append([]string{}, s.env...), env+"="+started)
+		cmd.Stdin = strings.NewReader("")
+		cmd.Stdout, cmd.Stderr = outFile, outFile
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; ; i++ {
+			if _, err := os.Stat(started); err == nil {
+				break
+			}
+			if i > 300 {
+				_ = cmd.Process.Kill()
+				t.Fatalf("never started:\n%s", readString(outFile.Name()))
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		start := time.Now()
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+		return readString(outFile.Name()), cmd.ProcessState.ExitCode(), time.Since(start)
+	}
+	out, code, took := interrupt("FAKE_SLOW_PREPARE", "@slow", "--release", "--yes")
+	if code != 130 || took > 15*time.Second || !strings.Contains(out, "interrupted: cancelling the release on @devopsy@one:slow") || s.current("slow") != "" {
+		t.Errorf("before the switch (%d, %s), current %q:\n%s", code, took, s.current("slow"), out)
+	}
+	// The switch is known from the server's log marker, which needs GNU
+	// tail, as on every server (macOS here has none).
+	if exec.Command("/bin/sh", "-c", "PATH=/usr/bin:/bin tail --version").Run() != nil {
+		return
+	}
+	next()
+	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
+	if code != 0 || !strings.Contains(out, "the run step goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
+		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -395,8 +396,8 @@ func lockWait(fd int, shared bool, what string) string {
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
 // shared or exclusive), creating $base first with create; without it, a
-// $base gone meanwhile fails. A lock taken on a .lock that --destroy or a
-// failed first release removed while it waited is no lock (whoever opens
+// $base gone meanwhile fails. A lock taken on a .lock that --destroy
+// removed while it waited is no lock (whoever opens
 // the path next locks another file), so it opens the path again.
 func releaseLock(shared, create bool) string {
 	mk := `[ -d "$base" ] || { echo "devopsy: $base is gone" >&2; exit 1; }`
@@ -464,8 +465,7 @@ func hintAddress(t *Target) string {
 }
 
 // prelude adds, for release scripts, the checks, the release lock and
-// the helpers they share: a first release failing meanwhile removes
-// $base, and --destroy removes it whole.
+// the helpers they share: --destroy may remove $base meanwhile.
 //
 // Only the upload creates $base: an activation whose release went while
 // it waited (--destroy, a failed first release, --releases remove)
@@ -558,7 +558,7 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	// stderr and be cut from it.
 	s := prelude(t, false) + "exec 1>&2\n"
 	s += watchSession(sync != nil, true)
-	// Defined first: not_live removes a first release's images.
+	// Defined first: the fetch and not_live's callers use them.
 	s += releaseImages(projectName, t, t.Mode)
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
@@ -675,6 +675,12 @@ done
   fi
   [ -z "${watch_pid:-}" ] || rm -f "$ws_armed.off" "$ws_armed.fired"
   [ -z "$fetch_sig" ] || fr=130
+  # Past this point the release goes on: a Ctrl-C from here counts as
+  # one during the run step (switchTraps, runSig).
+  if [ "$fr" -eq 0 ]; then
+    switch_sig=
+    trap 'switch_sig=1' INT TERM
+  fi
   if [ "$fr" -ne 0 ]; then
     trap '' INT TERM HUP PIPE
     set +e
@@ -945,7 +951,7 @@ const LogServerPart = "devopsy-internal-server-log"
 // step running and the shell carries on to its end, the release marked
 // failed (runSig) and the previous one back, its restart with INT and
 // TERM ignored. HUP, the terminal gone, and PIPE reach nothing.
-const switchTraps = `switch_sig=
+const switchTraps = `switch_sig=${switch_sig:-}
 trap 'switch_sig=1' INT TERM
 trap '' HUP PIPE
 `
@@ -1196,7 +1202,7 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   f=-
   # Through a redirection: flock's own open of a path creates the file,
   # which could bring the marker back on a release going live meanwhile.
-  if [ -e "$p" ] && ! { flock -n -s 7; } 7<"$p" 2>/dev/null && [ -e "$p" ]; then
+  if [ -e "$p" ] && ! { flock -n -s 7; } 2>/dev/null 7<"$p" && [ -e "$p" ]; then
     f=in-progress
   else
     [ ! -e "$p" ] || f=incomplete
@@ -1453,6 +1459,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		shown := &LineMarker{Prefix: SwitchMarker}
 		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(tag string) {
 			_, _ = log.Write([]byte(LogAnchor + tag + "\n"))
+			if f, ok := ctx.Value(switchedKey{}).(*atomic.Bool); ok {
+				f.Store(true)
+			}
 		}}
 		flush = []*MarkerWriter{shown.Writer(cmd.Stdout), shown.Writer(cmd.Stderr), logged.Writer(log), logged.Writer(log)}
 		cmd.Stdout = io.MultiWriter(flush[0], flush[2])
@@ -1475,6 +1484,15 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 }
 
 type noInterruptKey struct{}
+
+type switchedKey struct{}
+
+// WithSwitched is ctx for a logged session that sets switched once the
+// script printed SwitchMarker: its release went live, whatever the
+// release log's cap kept.
+func WithSwitched(ctx context.Context, switched *atomic.Bool) context.Context {
+	return context.WithValue(ctx, switchedKey{}, switched)
+}
 
 // WithoutInterrupt is ctx for a session devopsy ends itself on Ctrl-C (a
 // sync's holder and push, which must end in order: the push, then abort

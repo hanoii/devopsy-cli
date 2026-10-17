@@ -379,24 +379,16 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := NotLive + fmt.Sprintf(PrepareScript, "devopsy --prepare-release")
-	for _, secrets := range []bool{false, true} {
-		root := t.TempDir()
-		base := filepath.Join(root, "shop", "b", "prod")
-		rel := filepath.Join(base, "releases", "1")
-		write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.yaml"), "services:\n  a:\n    labels: [devopsy.role=proxy]\n")
-		write(t, filepath.Join(base, "shared", ".env"), "")
-		if secrets {
-			write(t, filepath.Join(base, "shared", ".env"), "TOKEN=x\n")
-		}
-		cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=\nrel="+Quote(rel)+"\ncode="+Quote(filepath.Join(rel, CodeDir))+"\n"+script)
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			t.Fatalf("want a failure:\n%s", out)
-		}
-		if !fileExists(filepath.Join(rel, FailedFile)) || !strings.Contains(string(out), "release 1 not made current") {
-			t.Errorf("secrets %v: not marked failed, or removed:\n%s", secrets, out)
-		}
+	root := t.TempDir()
+	base := filepath.Join(root, "shop", "b", "prod")
+	rel := filepath.Join(base, "releases", "1")
+	write(t, filepath.Join(rel, CodeDir, ".devopsy", "compose.yaml"), "services:\n  a:\n    labels: [devopsy.role=proxy]\n")
+	write(t, filepath.Join(base, "shared", ".env"), "")
+	cmd := exec.Command("sh", "-c", "set -eu\nbase="+Quote(base)+"\nid=1\nprev=\nrel="+Quote(rel)+"\ncode="+Quote(filepath.Join(rel, CodeDir))+"\n"+script)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !fileExists(filepath.Join(rel, FailedFile)) || !strings.Contains(string(out), "release 1 not made current") {
+		t.Errorf("first release failing (%v):\n%s", err, out)
 	}
 }
 
@@ -1316,6 +1308,20 @@ exit 0
 		}
 	}
 
+	// Release 4b gets Ctrl-C right after its fetch (here as the fetching
+	// marker goes): it counts as one in the run step, the release fails
+	// and the previous one comes back.
+	write(t, filepath.Join(bin, "rm"), "#!/bin/sh\ncase \"$*\" in *"+FetchingFile+"*) [ -z \"${FAKE_INT_AT_RM:-}\" ] || kill -INT $PPID ;; esac\nexec /bin/rm \"$@\"\n")
+	if err := os.Chmod(filepath.Join(bin, "rm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	late := command("4b", "FAKE_INT_AT_RM=1")
+	outLate, errLate := late.CombinedOutput()
+	os.Remove(filepath.Join(bin, "rm"))
+	if l, _ := os.Readlink(filepath.Join(base, "current")); errLate == nil || l != "releases/3/code" || !exists("releases/4b/"+FailedFile) {
+		t.Errorf("Ctrl-C right after the fetch (%v): current %q:\n%s", errLate, l, outLate)
+	}
+
 	// Release 5's -T session drops while it builds (watchSession): its
 	// stdin ends, the script's group gets SIGTERM, and the fetch is
 	// undone at once, not a build later. Setpgid: the shell leads its
@@ -1465,8 +1471,8 @@ func TestRebookmark(t *testing.T) {
 	}
 }
 
-// The upload takes the release lock: a first release failing meanwhile
-// removes $base, --destroy all of it. Every release links inherit.env, so
+// The upload takes the release lock: --destroy removes $base meanwhile.
+// Every release links inherit.env, so
 // --inherit reaches one released before the parent had inherit:. A sync's
 // variables stop at its end.
 func TestScriptsLockAndLinks(t *testing.T) {
@@ -1755,8 +1761,8 @@ exit 0
 	}
 }
 
-// --status's last sync is the last one that went through: a failed one
-// after it, or a release whose sync failed, does not count.
+// --status's last sync is the last copy that went through (SyncCopied),
+// whatever its run step did: a failed copy after it does not count.
 func TestStatusLastSync(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
@@ -1772,21 +1778,19 @@ func TestStatusLastSync(t *testing.T) {
 	write(t, filepath.Join(base, "releases", "1", LogFile), ""+
 		"2026-10-01 10:00:00 devopsy release: release of @dev\n"+
 		"2026-10-01 10:00:01 Syncing @prod's data into it before its run step\n"+
+		"2026-10-01 10:00:05 "+SyncCopied+"prod\n"+
 		"2026-10-01 10:00:09 devopsy: release exited 0\n"+
 		"\n"+
 		"2026-10-02 10:00:00 devopsy dev: sync of @dev\n"+
-		"2026-10-02 10:00:05 devopsy: sync exited 0\n"+
+		"2026-10-02 10:00:03 "+SyncCopied+"prod\n"+
+		"2026-10-02 10:00:05 devopsy: sync exited 1\n"+
 		"\n"+
 		"2026-10-03 10:00:00 devopsy dev: sync of @dev\n"+
 		"2026-10-03 10:00:05 devopsy: sync exited 1\n")
-	write(t, filepath.Join(base, "releases", "2", LogFile), ""+
-		"2026-10-04 10:00:00 devopsy release: release of @dev\n"+
-		"2026-10-04 10:00:01 Syncing @prod's data into it before its run step\n"+
-		"2026-10-04 10:00:09 devopsy: release exited 1\n")
 	cmd := exec.Command("sh", "-c", StatusScript(tg))
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "synced\t2026-10-02 10:00:00\n") {
+	if err != nil || !strings.Contains(string(out), "synced\t2026-10-02 10:00:03\n") {
 		t.Errorf("last sync (%v):\n%s", err, out)
 	}
 }

@@ -334,15 +334,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				err  error
 			}
 			done := make(chan result, 1)
+			var switched atomic.Bool
 			go func() {
-				code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+script, r, nil, false, rlog)
+				code, err := remote.SSHContext(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+script, r, nil, false, rlog)
 				done <- result{code, err}
 			}()
 			var res result
 			select {
 			case res = <-done:
 			case <-sigs:
-				if rlog.has(remote.LogAnchor) {
+				if switched.Load() {
 					say(yellow, "devopsy: interrupted: the run step goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the step")
 					select {
 					case res = <-done:
@@ -355,10 +356,30 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
 					w.Close()
 					select {
-					case <-done:
+					case res = <-done:
+					case <-time.After(5 * time.Second):
+						// The server takes the cancel once it holds the
+						// release lock, which another release may hold.
+						say(yellow, "devopsy: the server cancels it once it gets the release lock. Ctrl-C again leaves now")
+						select {
+						case res = <-done:
+						case <-sigs:
+							cancel()
+							<-done
+							return 130
+						}
 					case <-sigs:
 						cancel()
 						<-done
+						return 130
+					}
+					// Its switch was under way: it went on.
+					if switched.Load() {
+						say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
+						if res.err != nil {
+							return stop(res.err.Error())
+						}
+						return res.code
 					}
 					return 130
 				}
@@ -578,28 +599,17 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			colored = remote.Colorize(os.Stderr)
 			errOut = colored
 		}
-		// Interrupted, the progress line goes and the session ends: what
-		// the upload left (its .tmp) goes with the next release.
-		upCtx, upCancel := context.WithCancel(context.Background())
-		upSigs := make(chan os.Signal, 1)
-		signal.Notify(upSigs, os.Interrupt, syscall.SIGTERM)
-		var upInterrupted atomic.Bool
-		go func() {
-			if _, ok := <-upSigs; ok {
-				upInterrupted.Store(true)
-				progress.clear()
-				upCancel()
-			}
-		}()
+		// Interrupted, the session ends: what the upload left (its .tmp)
+		// goes with the next release.
+		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
-		signal.Stop(upSigs)
-		close(upSigs)
-		upCancel()
+		upInterrupted := upCtx.Err() != nil
+		upStop()
 		if colored != nil {
 			colored.Flush()
 		}
 		progress.clear()
-		if upInterrupted.Load() {
+		if upInterrupted {
 			say(red, "devopsy: interrupted during the upload: nothing changed on @"+t.Address)
 			return 130
 		}
