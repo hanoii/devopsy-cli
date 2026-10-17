@@ -1112,6 +1112,10 @@ case "$*" in
   "-- pull --ignore-buildable") echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull")
     if [ -n "${FAKE_HANG:-}" ]; then touch "$FAKE_ROOT/building"; sleep 30; exit 1; fi
+    if [ -n "${FAKE_DROP:-}" ]; then
+      touch "$FAKE_ROOT/building"
+      while [ ! -e "$FAKE_ROOT/dropped" ]; do sleep 0.05; done
+    fi
     echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
 esac
 exit 0
@@ -1149,6 +1153,32 @@ exit 0
 	}
 	if exists("releases/3/" + FetchingFile) {
 		t.Errorf("release 3 kept its marker")
+	}
+
+	// Release 3a's session drops while it builds, with no signal (-T):
+	// the build ends well and img bookmark ignores SIGPIPE, so the shell
+	// must die at a write before the marker goes and current switches.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped := command("3a", "FAKE_DROP=1")
+	dropped.Stdout, dropped.Stderr = w, w
+	os.Remove(filepath.Join(root, "building"))
+	if err := dropped.Start(); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	r.Close()
+	write(t, filepath.Join(root, "dropped"), "")
+	if err := dropped.Wait(); err == nil {
+		t.Errorf("release 3a went on without its session")
+	}
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/3/code" || !exists("releases/3a/"+FetchingFile) || fakeImage(root, "app-prod-app:devopsy-app-prod-3a") != "3a" {
+		t.Errorf("dropped release 3a: current %q, marker %v, bookmark %q", l, exists("releases/3a/"+FetchingFile), fakeImage(root, "app-prod-app:devopsy-app-prod-3a"))
 	}
 
 	// interrupt runs cmd until its build hangs, checks what it can only
@@ -1384,5 +1414,51 @@ func TestReleaseLockReopens(t *testing.T) {
 	os.RemoveAll(base)
 	if out, err := run(false); err == nil || !strings.Contains(out, "is gone") {
 		t.Errorf("gone (%v):\n%s", err, out)
+	}
+
+	// removeBase moves $base aside before rm -rf runs, so a release
+	// arriving while rm -rf is under way creates and locks a fresh $base
+	// instead of putting files inside the directory rm -rf is emptying.
+	write(t, filepath.Join(base, "old"), "1")
+	concurrent := "set -eu\nbase=\"$BASE\"\n" + releaseLock(false, true) + ": >\"$base/new\"\n"
+	write(t, filepath.Join(bin, "rm"), "#!/bin/sh\nsh -c "+Quote(concurrent)+"\nexec /bin/rm \"$@\"\n")
+	if err := os.Chmod(filepath.Join(bin, "rm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", "set -eu\nbase=\"$BASE\"\n"+removeBase+"\n")
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ROOT=" + root, "BASE=" + base}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("removeBase (%v):\n%s", err, out)
+	}
+	if fileExists(filepath.Join(base, "old")) || !fileExists(filepath.Join(base, "new")) {
+		t.Errorf("after removeBase: old=%v, new=%v", fileExists(filepath.Join(base, "old")), fileExists(filepath.Join(base, "new")))
+	}
+
+	// What rm -rf could not remove goes back to $base, so running it
+	// again finds it, unless a new $base exists already.
+	moved := func() []string { m, _ := filepath.Glob(base + ".rm.*"); return m }
+	for _, concurrently := range []bool{false, true} {
+		os.RemoveAll(base)
+		for _, m := range moved() {
+			os.RemoveAll(m)
+		}
+		write(t, filepath.Join(base, "old"), "1")
+		fake := "#!/bin/sh\nexit 1\n"
+		if concurrently {
+			fake = "#!/bin/sh\nsh -c " + Quote(concurrent) + "\nexit 1\n"
+		}
+		write(t, filepath.Join(bin, "rm"), fake)
+		cmd := exec.Command("sh", "-c", "set -eu\nbase=\"$BASE\"\n"+removeBase+"\n")
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ROOT=" + root, "BASE=" + base}
+		if out, err := cmd.CombinedOutput(); err == nil {
+			t.Errorf("removeBase with rm failing (concurrently %v) succeeded:\n%s", concurrently, out)
+		}
+		if concurrently {
+			if !fileExists(filepath.Join(base, "new")) || fileExists(filepath.Join(base, "old")) || len(moved()) != 1 {
+				t.Errorf("rm failing beside a new $base: new %v, old %v, aside %v", fileExists(filepath.Join(base, "new")), fileExists(filepath.Join(base, "old")), moved())
+			}
+		} else if !fileExists(filepath.Join(base, "old")) || len(moved()) != 0 {
+			t.Errorf("rm failing: old back %v, aside %v", fileExists(filepath.Join(base, "old")), moved())
+		}
 	}
 }

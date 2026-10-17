@@ -372,7 +372,9 @@ repositories fit together and the open ideas.
   cannot stop it; exit 130. A `-T` session that drops sends no signal:
   the fetch runs to its end and the script dies at its next write. Hence
   `FetchingFile`, written before a new release's fetch and removed
-  after: `img recover` (caller holds the image lock) marks such a
+  after a line saying the images are ready (`img bookmark` ignores
+  SIGPIPE, so without that write the first one would come after the
+  switch, the marker gone): `img recover` (caller holds the image lock) marks such a
   release failed, bookmarks it and restores current's names, run after
   the lock by every activation, `--destroy` and `--releases remove`.
   Until then it counts as failed: never a rollback target, never kept by
@@ -448,7 +450,10 @@ repositories fit together and the open ideas.
   /dev/fd/9 -ef "$base/.lock" ]`, only where `/dev/fd` names the open
   file: Linux, not macOS, checked on the file just opened so the loop
   never spins), or two releases would each hold a lock on a different
-  file.
+  file. Removing `$base` (`removeBase`: `--destroy`, `not_live`) moves
+  it aside before `rm -rf`, so a session arriving meanwhile makes a new
+  `$base` instead of a lock file inside the one being emptied; what
+  `rm -rf` leaves goes back.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
