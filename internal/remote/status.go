@@ -24,8 +24,11 @@ tr -d '\n' < "$base/$cur/%s" 2>/dev/null || true
 echo
 kept=0; for r in "$base"/releases/*; do [ ! -d "$r" ] || { case "$r" in *.tmp) continue ;; esac; [ -e "$r/`+FailedFile+`" ] || [ -e "$r/`+FetchingFile+`" ] || [ -e "$r/`+PendingFile+`" ] || [ -e "$r/`+RolledBackFile+`" ] || kept=$((kept + 1)); }; done
 printf 'kept\t%%s\n' "$kept"
-# The last sync: a --sync's log header, or a release that synced.
-printf 'synced\t%%s\n' "$(cat "$base"/releases/*/`+LogFile+` 2>/dev/null | grep -E '^[0-9-]+ [0-9:]+ (devopsy [^:]*: sync of |Syncing @)' | cut -c1-19 | sort | tail -n 1)"
+# The last sync that went through: a --sync's log header, or a release
+# that synced, when its part of the log ends with exit 0.
+printf 'synced\t%%s\n' "$(awk 'FNR == 1 { t = "" }
+/^[0-9-]+ [0-9:]+ (devopsy [^:]*: sync of |Syncing @)/ { t = substr($0, 1, 19) }
+/^[0-9-]+ [0-9:]+ devopsy: [a-z]+ exited / { if ($NF == "0" && t != "") print t; t = "" }' "$base"/releases/*/`+LogFile+` 2>/dev/null | sort | tail -n 1)"
 echo ---
 cd "$base/current" && exec devopsy --status
 `, RecordFile)

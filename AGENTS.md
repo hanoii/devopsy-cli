@@ -427,7 +427,15 @@ repositories fit together and the open ideas.
   sshd (in the machine, to `localhost`). A connection that dies
   silently (a laptop asleep) is seen only when the server writes or TCP
   gives up: activations pass no keepalive, and devopsy-server never
-  sets sshd's `ClientAliveInterval`. Protocol 2.
+  sets sshd's `ClientAliveInterval`; activations and uploads pass
+  `KeepAlive`, so the operator's side notices one. Without a terminal
+  (output piped, CI), devopsy takes Ctrl-C itself (`session` in
+  runRemote; ssh ignores it): before the switch (no `LogAnchor` logged
+  yet) it closes the pipe, which cancels the release through the
+  watcher, and waits; after it, it says the run step goes on and only a
+  second one ends the session; the log is saved either way. Interrupted
+  during the upload, the progress line goes and nothing changed.
+  Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
   `make_current` (after the sync, in a release that syncs; switchTraps

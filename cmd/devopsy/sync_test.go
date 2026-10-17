@@ -542,12 +542,12 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
-	// Every session of the sync keeps itself alive: the holder, the push,
-	// the push's look at the child's services (--sync-exec) and the
-	// receive.
+	// Every session of the release keeps itself alive: the upload, the
+	// holder, the push, the push's look at the child's services
+	// (--sync-exec) and the receive.
 	keep := "-o ServerAliveInterval=30 -o ServerAliveCountMax=4"
-	if strings.Count(ssh, keep) != 4 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
-		t.Errorf("keepalive on holder, push, exec and receive:\n%s", ssh)
+	if strings.Count(ssh, keep) != 5 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+		t.Errorf("keepalive on upload, holder, push, exec and receive:\n%s", ssh)
 	}
 	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {

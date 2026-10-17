@@ -701,8 +701,8 @@ case "$1 $2" in
 esac
 `)
 	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
-# FAKE_RELEASE_BUSY: a pending release's lock, asked by its path, is held.
-[ -z "${FAKE_RELEASE_BUSY:-}" ] || case " $* " in *"/`+PendingFile+` "*) exit 1 ;; esac
+# FAKE_RELEASE_BUSY: a pending release's lock (fd 7) is held.
+[ -z "${FAKE_RELEASE_BUSY:-}" ] || case " $* " in *" 7 ") exit 1 ;; esac
 case " $* " in *[!8]" ") exit 0 ;; esac
 [ ! -e "$FAKE_ROOT/locked" ] || exit 1
 case " $* " in
@@ -1722,5 +1722,83 @@ exit 0
 	}
 	if o := readFile(filepath.Join(base, "releases/1", ServerLogFile)); strings.Count(o, LogSection) != 2 || !strings.Contains(o, "deployed") {
 		t.Errorf("release 1's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
+	}
+}
+
+// A failed first release leaves no directory, unless another release
+// was uploaded meanwhile (waiting for the lock); an activation whose
+// release went while it waited fails, and never makes $base again.
+func TestActivateGoneAndNeighbours(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
+case "$*" in
+  fail) exit 3 ;;
+  "-- config --images") printf 'app-prod-app\n' ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
+	base := filepath.Join(root, tg.Path)
+	run := func(id string) (string, error) {
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Prepare: [][]string{{"fail"}}, Run: []string{"deploy"}}, nil))
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for _, id := range []string{"1", "2"} {
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	}
+	if out, err := run("1"); err == nil || !fileExists(filepath.Join(base, "releases", "2", CodeDir)) || !fileExists(filepath.Join(base, "releases", "1", FailedFile)) {
+		t.Errorf("first release failing beside another (%v):\n%s", err, out)
+	}
+	os.RemoveAll(filepath.Join(base, "releases", "1"))
+	if out, err := run("2"); err == nil || fileExists(base) {
+		t.Errorf("first release failing alone (%v), base kept %v:\n%s", err, fileExists(base), out)
+	}
+	if out, err := run("3"); err == nil || !strings.Contains(out, "is gone") || fileExists(base) {
+		t.Errorf("activation of a gone environment (%v), base made again %v:\n%s", err, fileExists(base), out)
+	}
+	write(t, filepath.Join(base, "releases", "4", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if out, err := run("5"); err == nil || !strings.Contains(out, "release 5 is gone") {
+		t.Errorf("activation of a gone release (%v):\n%s", err, out)
+	}
+}
+
+// --status's last sync is the last one that went through: a failed one
+// after it, or a release whose sync failed, does not count.
+func TestStatusLastSync(t *testing.T) {
+	bin, root := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "dev", Path: "app/dev"}
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(base, "releases", "1", LogFile), ""+
+		"2026-10-01 10:00:00 devopsy release: release of @dev\n"+
+		"2026-10-01 10:00:01 Syncing @prod's data into it before its run step\n"+
+		"2026-10-01 10:00:09 devopsy: release exited 0\n"+
+		"\n"+
+		"2026-10-02 10:00:00 devopsy dev: sync of @dev\n"+
+		"2026-10-02 10:00:05 devopsy: sync exited 0\n"+
+		"\n"+
+		"2026-10-03 10:00:00 devopsy dev: sync of @dev\n"+
+		"2026-10-03 10:00:05 devopsy: sync exited 1\n")
+	write(t, filepath.Join(base, "releases", "2", LogFile), ""+
+		"2026-10-04 10:00:00 devopsy release: release of @dev\n"+
+		"2026-10-04 10:00:01 Syncing @prod's data into it before its run step\n"+
+		"2026-10-04 10:00:09 devopsy: release exited 1\n")
+	cmd := exec.Command("sh", "-c", StatusScript(tg))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "synced\t2026-10-02 10:00:00\n") {
+		t.Errorf("last sync (%v):\n%s", err, out)
 	}
 }
