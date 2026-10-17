@@ -1105,44 +1105,12 @@ func fetchImages(projectName, mode string) string {
 }
 
 // NotLive is not_live, for a new release that does not go live: marked
-// failed, so rollbacks skip it, or, for a first release with nothing in
-// shared/ yet, no directory left at all, its releases' images removed
-// first (the directory is their only record), unless the server's image
-// lock is busy: then it is marked failed too. $base, $prev, $rel and $id
-// are set, and releaseImages' functions defined.
+// failed, so rollbacks skip it and keep never counts it. A first one
+// leaves its environment's directory too: --destroy, or --releases
+// remove failed, takes it away. $rel and $id are set.
 const NotLive = `not_live() {
-  nl_gone=
-  # Never with another release there: one uploaded meanwhile waits for
-  # the lock.
-  if [ -z "$prev" ] && [ "$(ls -A "$base/releases")" = "$id" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
-    nl_gone=1
-    if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1; then
-      # A release cut off mid-fetch that recovery could not reach yet
-      # (the lock was busy): the marker is how it finds what the fetch
-      # got, so the directory stays.
-      nl_gone=
-    elif ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
-      if image_lock exclusive removing now; then
-        img remove "$base"/releases/* || nl_gone=
-        img prune
-        image_unlock
-        [ -n "$nl_gone" ] || echo "devopsy: keeping $base: its images are not all removed ('--releases remove failed' tries again)" >&2
-      else
-        echo "devopsy: keeping $base: $il_busy, and the images its releases got go with it ('--releases remove failed' removes them)" >&2
-        nl_gone=
-      fi
-    fi
-  fi
-  if [ -n "$nl_gone" ]; then
-    # A first release that never went live, with nothing set yet: leave
-    # no directory behind (an instance's, when it is empty, neither).
-    ` + removeBase + `
-    rmdir "$(dirname "$base")" 2>/dev/null || true
-    echo "devopsy: removed $base: its first release did not go live" >&2
-  else
-    touch "$rel/` + FailedFile + `"
-    echo "devopsy: release $id not made current" >&2
-  fi
+  touch "$rel/` + FailedFile + `"
+  echo "devopsy: release $id not made current" >&2
   exit "$1"
 }
 `
