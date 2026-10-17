@@ -500,7 +500,7 @@ func (s *Set) Remove(rel string) error {
 				stay = appendNew(stay, r)
 			}
 			for _, r := range rm {
-				if !repos[repoKey(r)] {
+				if !repos[repoKey(r)] || strings.Contains(r, "@") {
 					s.record(r, img, id, "another release holds its image under another name")
 				}
 			}

@@ -442,7 +442,13 @@ repositories fit together and the open ideas.
   (symlinks resolved). No migration: older releases are not rolled back to.
 - The upload (`UploadScript`) takes the release lock: a first release
   failing meanwhile removes `$base`, `--destroy` all of it; a second
-  release's upload waits for the first's activation.
+  release's upload waits for the first's activation. Every script takes
+  it through `releaseLock` (in `prelude` for the upload and activation):
+  a `.lock` removed while its lock was awaited is opened again (`[
+  /dev/fd/9 -ef "$base/.lock" ]`, only where `/dev/fd` names the open
+  file: Linux, not macOS, checked on the file just opened so the loop
+  never spins), or two releases would each hold a lock on a different
+  file.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
@@ -772,7 +778,8 @@ repositories fit together and the open ideas.
   refused, an excluded one by its label; and the spool must end with two
   zero blocks, which every tar writer adds and `tar -t` does not
   require, so a tar cut at a member boundary is refused too), then each
-  carried entry emptied, never removed (a running
+  carried entry emptied, never removed (for `.`, every entry's
+  contents and the files beside them, the directories kept: a running
   container bind-mounts its inode), and extracted with `--overwrite`
   (files in place). `stop=true` stops the service around either and
   restores it (`stopFor`), interrupts included: the label is the
@@ -821,7 +828,8 @@ repositories fit together and the open ideas.
 - **`--status`** (`cmd/devopsy/status.go`): locally, `docker compose ps
   --all --format json` as a table, then the `status` capability's `show`
   with stdout through. With a target, `StatusScript` prints header lines
-  (the release's record, releases kept, the last sync from the logs'
+  (the release's record, releases kept: live ones, as `keep` counts
+  them, the last sync from the logs'
   "sync of" and "Syncing @" lines), `---`, then `devopsy --status` in
   the current release; the operator formats the header (`ago`) and
   prints the rest as it came. A server's devopsy without `--status`

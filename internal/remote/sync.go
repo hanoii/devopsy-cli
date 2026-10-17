@@ -247,9 +247,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) s
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --no-sync releases without the data and --sync later fills it" >&2; exit 1; }
-`, t.Name) + syncStdin + `exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
+`, t.Name) + syncStdin + `` + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"
 status=0
@@ -278,9 +276,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
-exec 9>"$base/.lock"
-` + lockWait(9, true, "the release running on $base") + `
-exec 8>"$base/.sync-lock"
+` + releaseLock(true, false) + `exec 8>"$base/.sync-lock"
 ` + lockWait(8, false, "another sync from $base") + `
 cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, true) + "\n"
@@ -293,9 +289,7 @@ export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, tru
 // services a stop=true export does.
 func ExportScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: nothing to export" >&2; exit 1; }
-exec 9>"$base/.lock"
-` + lockWait(9, true, "the release running on $base") + `
-exec 8>"$base/.sync-lock"
+` + releaseLock(true, false) + `exec 8>"$base/.sync-lock"
 ` + lockWait(8, false, "a sync from $base") + `
 cd "$base/current"
 ` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
@@ -313,9 +307,7 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 // end is what the data must end with (ImportEndEnv).
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first" >&2; exit 1; }
-`, t.Name) + `exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-cd "$base/current"
+`, t.Name) + `` + releaseLock(false, false) + `cd "$base/current"
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
 

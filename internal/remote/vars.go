@@ -93,9 +93,7 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // never interleaves with a deploy writing its own secrets.
 var varsEdit = `if [ -z "$plain" ]; then
   mkdir -p "$(dirname "$file")"
-  exec 9>"$base/.lock"
-  ` + lockWait(9, false, "the release running on $base") + `
-fi
+  ` + releaseLock(false, true) + `fi
 umask 077
 [ -f "$file" ] || : > "$file"
 cat > "$file.vars"
@@ -155,9 +153,7 @@ func InheritWriteScript(t *Target, keys []string, pending bool) string {
   exit 1
 fi
 mkdir -p "$base/shared"
-exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-file=` + file + `
+` + releaseLock(false, false) + `file=` + file + `
 cat > "$file.tmp"
 chmod 600 "$file.tmp"
 mv -f "$file.tmp" "$file"

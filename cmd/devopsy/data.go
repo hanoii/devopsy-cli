@@ -329,8 +329,12 @@ func tarEntries(ctx context.Context, spool string) ([]string, error) {
 // container bind-mounts their inodes.
 const emptyAndExtract = `set -eu
 for e; do
-  if [ "$e" = . ]; then d=/mnt; else d="/mnt/$e"; fi
-  if [ -d "$d" ] && [ ! -L "$d" ]; then find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
+  if [ "$e" = . ]; then
+    find /mnt -mindepth 2 -maxdepth 2 -exec rm -rf {} +
+    find /mnt -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +
+  elif [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
+    find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  fi
 done
 exec tar -C /mnt -xf - --numeric-owner --overwrite
 `
