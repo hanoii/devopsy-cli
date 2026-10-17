@@ -16,13 +16,14 @@ const RolledBackFile = "devopsy-rolled-back"
 
 // release is one of an environment's releases and its state.
 type release struct {
-	id                                    string
-	current, failed, fetching, rolledBack bool
+	id                                             string
+	current, failed, fetching, pending, rolledBack bool
 }
 
 // live says whether it went live and stayed: what keep counts and a
-// rollback goes to. One still marked fetching waits for its recovery.
-func (r release) live() bool { return !r.failed && !r.fetching && !r.rolledBack }
+// rollback goes to. One still marked fetching waits for its recovery,
+// one pending never went live.
+func (r release) live() bool { return !r.failed && !r.fetching && !r.pending && !r.rolledBack }
 
 // releases are base's releases, newest first (ids are UTC seconds), an
 // upload under way (.tmp) aside.
@@ -41,6 +42,7 @@ func releases(base string) []release {
 			current:    cur == filepath.Join("releases", id, codeDir),
 			failed:     exists(filepath.Join(dir, failedFile)),
 			fetching:   exists(filepath.Join(dir, FetchingFile)),
+			pending:    exists(filepath.Join(dir, PendingFile)),
 			rolledBack: exists(filepath.Join(dir, RolledBackFile)),
 		})
 	}

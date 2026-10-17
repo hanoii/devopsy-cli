@@ -10,17 +10,18 @@ import (
 )
 
 // layout writes releases under base: each id, with markers by suffix
-// (f failed, b rolled back, x fetching), current pointing at cur.
+// (f failed, b rolled back, x fetching, p pending), current pointing at
+// cur.
 func layout(t *testing.T, cur string, ids ...string) string {
 	t.Helper()
 	base := filepath.Join(t.TempDir(), "app", "prod")
 	for _, spec := range ids {
-		id := strings.TrimRight(spec, "fbx")
+		id := strings.TrimRight(spec, "fbxp")
 		dir := filepath.Join(base, "releases", id)
 		if err := os.MkdirAll(filepath.Join(dir, codeDir), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		for mark, file := range map[string]string{"f": failedFile, "b": RolledBackFile, "x": FetchingFile} {
+		for mark, file := range map[string]string{"f": failedFile, "b": RolledBackFile, "x": FetchingFile, "p": PendingFile} {
 			if strings.Contains(spec[len(id):], mark) {
 				if err := os.WriteFile(filepath.Join(dir, file), nil, 0o644); err != nil {
 					t.Fatal(err)
@@ -51,6 +52,12 @@ func TestToPrune(t *testing.T) {
 	if got := ToPrune(base, 5); got != nil {
 		t.Errorf("fewer live than keep: %v", got)
 	}
+	// A pending one (never made current) counts as a failed one does:
+	// never toward keep, kept while newer than the oldest kept.
+	base = layout(t, "5", "1", "3", "4p", "5")
+	if got := ToPrune(base, 2); !slices.Equal(got, []string{"1"}) {
+		t.Errorf("pending: %v", got)
+	}
 	// After a rollback from 3 to 2, 3 is rolled back: kept, but never
 	// counted, so 1 stays as the next rollback's target.
 	base = layout(t, "2", "1", "2", "3b")
@@ -60,7 +67,7 @@ func TestToPrune(t *testing.T) {
 }
 
 func TestRollbackTarget(t *testing.T) {
-	if got := RollbackTarget(layout(t, "5", "1", "2", "3f", "4b", "5", "6")); got != "2" {
+	if got := RollbackTarget(layout(t, "5", "1", "2", "3f", "4b", "4p", "5", "6")); got != "2" {
 		t.Errorf("target %q, want 2", got)
 	}
 	if got := RollbackTarget(layout(t, "1", "1", "2b")); got != "" {

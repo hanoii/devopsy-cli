@@ -61,6 +61,8 @@ const (
 	FetchingFile = images.FetchingFile
 	// RolledBackFile marks the release a rollback left.
 	RolledBackFile = images.RolledBackFile
+	// PendingFile marks a release from its upload until its switch.
+	PendingFile = images.PendingFile
 	// ServerLogFile is what the server printed from the switch on, as it
 	// printed it, a LogSection line before each activation's part
 	// (followOutput): written whatever happens to the session.
@@ -493,9 +495,9 @@ mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
 # content, not times).
 tar -xzmf - -C "$rel.tmp"
-# Failed until its activation switches to it: one that never gets there
+# Pending until its activation switches to it: one that never gets there
 # (cut, interrupted, its operator gone) is never rolled back to nor kept.
-: >"$rel.tmp/`+FailedFile+`"
+: >"$rel.tmp/`+PendingFile+`"
 mv "$rel.tmp" "$rel"
 `, Quote(id))
 }
@@ -691,7 +693,7 @@ out="$rel/` + ServerLogFile + `"
 `
 	s += switchTraps
 	if !rollback {
-		s += `rm -f "$rel/` + FailedFile + `"
+		s += `rm -f "$rel/` + PendingFile + `"
 `
 	}
 	s += `make_current "releases/$id"
@@ -1198,10 +1200,15 @@ left=`+leftPath(t)+`
 [ ! -s "$left" ] || awk -v t="$(printf '\t')" '{ print "left" t $0 }' "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
+# A pending release is under way while the release lock is held, else it
+# was cut off before its switch: asked without waiting.
+pend=incomplete
+flock -n -s "$base/.lock" true 2>/dev/null || pend=in-progress
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
+  f=-; [ ! -e "$base/releases/$r/`+PendingFile+`" ] || f=$pend
   # A release cut off mid-fetch is failed too, recovered or not.
-  f=-; { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
+  { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
   [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
   # Names only: the ids after a tab stay on the server.
   i=
@@ -1219,6 +1226,9 @@ type Release struct {
 	Current, Failed bool
 	// RolledBack: a rollback left it (images.RolledBackFile).
 	RolledBack bool
+	// Incomplete: uploaded, never made current, nothing running it now
+	// (PendingFile); InProgress: the same while a release runs.
+	Incomplete, InProgress bool
 	// Images are the names it runs (ImagesFile): what a rollback to it
 	// restores, and what removing it may free.
 	Images []string
@@ -1233,7 +1243,8 @@ func ParseReleases(out string) []Release {
 		if len(parts) < 3 || parts[0] == "left" {
 			continue
 		}
-		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back"}
+		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back",
+			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1264,10 +1275,15 @@ func (r Release) Line() string {
 		}
 	}
 	status := ""
-	if r.Failed {
+	switch {
+	case r.Failed:
 		status = "  FAILED"
-	} else if r.RolledBack {
+	case r.RolledBack:
 		status = "  ROLLED BACK"
+	case r.Incomplete:
+		status = "  INCOMPLETE"
+	case r.InProgress:
+		status = "  IN PROGRESS"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
