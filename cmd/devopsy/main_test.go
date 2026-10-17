@@ -654,8 +654,16 @@ func TestReleaseSteps(t *testing.T) {
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == second {
 		t.Fatalf("third release (%d):\n%s", code, out)
 	}
+	third := current()
 	if out, code := run(nil, "@prod", "--rollback"); code != 0 || !strings.Contains(out, "deploy --back in") || current() != second {
 		t.Fatalf("rollback (%d), current %s, want %s:\n%s", code, current(), second, out)
+	}
+	// The release it left is marked: never kept nor rolled back to again.
+	if _, err := os.Stat(filepath.Join(server, filepath.Dir(third), remote.RolledBackFile)); err != nil {
+		t.Errorf("the release rolled back from is not marked: %v", err)
+	}
+	if out, code := run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, "ROLLED BACK") {
+		t.Errorf("--releases (%d):\n%s", code, out)
 	}
 	// The rollback's log is appended to the restored release's.
 	if data, err := os.ReadFile(filepath.Join(server, filepath.Dir(second), remote.LogFile)); err != nil || !strings.Contains(string(data), "release exited 0") || !strings.Contains(string(data), "rollback exited 0") {

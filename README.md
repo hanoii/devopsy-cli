@@ -468,7 +468,7 @@ environments` shows it resolved.
 
 ```sh
 devopsy @vm1:prod --release      # upload, switch, run the release steps
-devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps
+devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
 devopsy @vm1:prod --releases     # list them and their images, * marks the current one
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
@@ -584,10 +584,15 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   shares it: pruning never waits for it, and when another release holds
   it (naming who and for how long), skips this time, releases and
   images, and the next release prunes them.
+- **Rolled back:** `--rollback` marks the release it leaves (`ROLLED
+  BACK` in `--releases`): like a failed one it never counts toward
+  `keep` and a later rollback never goes back to it, so after a fix is
+  released, the next rollback skips the bad release. Its log stays until
+  pruning takes it.
 - **Removing releases by hand:** `--releases remove <id>...` takes
   releases away as pruning does, images included; an id can be its
-  start, and `failed` is every release that never went live or whose
-  run failed, ids alongside. The current release is refused, and every
+  start, and `failed` is every release that never went live, whose run
+  failed, or that a rollback left, ids alongside. The current release is refused, and every
   id is checked before anything goes. It asks first at a terminal, and
   takes `--yes` in scripts. Data in `shared/` is never touched.
 - **The names check:** containers of the release's compose project from

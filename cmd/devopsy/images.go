@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
@@ -18,7 +20,11 @@ import (
 // bookmark <release>..., restore <release> (exit 1 when it cannot),
 // remove <release>... (exit 1 when Docker failed: keep the release),
 // undo [--rollback] <release> [<current release>], recover <environment>
-// [<current release>], prune.
+// [<current release>], prune; for an environment's releases (images.ToPrune,
+// RollbackTarget, RemoveReleases): to-prune <environment> <keep> (the ids,
+// one per line), rollback-target <environment> (exit 1 without one),
+// remove-releases [--quiet] <environment> <id>... (exit 1 when refused or
+// a release stays).
 const imagesFlag = "--images"
 
 func runImages(args []string, color bool) int {
@@ -28,7 +34,7 @@ func runImages(args []string, color bool) int {
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback, named := false, false
+	rollback, named, quiet := false, false, false
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -44,6 +50,8 @@ func runImages(args []string, color bool) int {
 			i++
 		case "--rollback":
 			rollback = true
+		case "--quiet":
+			quiet = true
 		default:
 			words = append(words, args[i])
 		}
@@ -95,6 +103,30 @@ func runImages(args []string, color bool) int {
 		return code
 	case "prune":
 		s.Prune()
+	case "to-prune":
+		k, err := strconv.Atoi(arg(1))
+		if len(rest) != 2 || err != nil {
+			return imagesUsage(color)
+		}
+		for _, id := range images.ToPrune(rest[0], k) {
+			fmt.Println(id)
+		}
+	case "rollback-target":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		id := images.RollbackTarget(rest[0])
+		if id == "" {
+			return 1
+		}
+		fmt.Println(id)
+	case "remove-releases":
+		if len(rest) < 2 {
+			return imagesUsage(color)
+		}
+		if err := s.RemoveReleases(rest[0], rest[1:], quiet); err != nil {
+			return 1
+		}
 	default:
 		return imagesUsage(color)
 	}
@@ -102,6 +134,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	cli.Fprint(os.Stderr, red, "devopsy: "+imagesFlag+" --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune ...", color)
+	cli.Fprint(os.Stderr, red, "devopsy: "+imagesFlag+" --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...", color)
 	return 2
 }
