@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHumanBytes(t *testing.T) {
@@ -41,5 +42,19 @@ func TestUploadProgress(t *testing.T) {
 	q.add(10)
 	if done := q.done(); !strings.HasPrefix(done, "Uploaded 10 B in ") {
 		t.Fatalf("summary: %q", done)
+	}
+}
+
+// What the server says during the upload starts on its own line, and
+// the progress line is not drawn again after it.
+func TestUploadProgressBefore(t *testing.T) {
+	var term, said bytes.Buffer
+	p := newUploadProgress(&term, "", 100)
+	p.add(10)
+	_, _ = p.before(&said).Write([]byte("devopsy: upgrade it\n"))
+	p.drawn = time.Time{}
+	p.add(10)
+	if got := term.String(); !strings.HasSuffix(got, "\r\033[K") || strings.Count(got, "Uploading") != 1 || said.String() != "devopsy: upgrade it\n" {
+		t.Errorf("terminal %q, said %q", got, said.String())
 	}
 }

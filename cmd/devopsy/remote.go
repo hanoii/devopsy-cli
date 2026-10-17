@@ -519,7 +519,18 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				remote.TargetEnvFile: targetEnv(t, projectName, record.Commit),
 			}, progress.add))
 		}()
-		code, err := remote.SSHLog(t, remote.UploadScript(t, record.ID), pr, nil, false, rlog)
+		// What the server says (a refusal, an error) starts on a line of
+		// its own, and no redraw follows it.
+		var errOut io.Writer = os.Stderr
+		var colored *remote.ColorWriter
+		if remote.Color {
+			colored = remote.Colorize(os.Stderr)
+			errOut = colored
+		}
+		code, err := remote.SSHStreams(context.Background(), t, nil, remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		if colored != nil {
+			colored.Flush()
+		}
 		progress.clear()
 		if err == nil && code == 0 {
 			say(cyan, progress.done())

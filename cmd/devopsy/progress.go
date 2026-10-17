@@ -60,6 +60,22 @@ func (p *uploadProgress) clear() {
 	p.w = nil
 }
 
+// before is w, but the progress line goes for good before anything is
+// written to it.
+func (p *uploadProgress) before(w io.Writer) io.Writer {
+	return clearingWriter{p, w}
+}
+
+type clearingWriter struct {
+	p *uploadProgress
+	w io.Writer
+}
+
+func (c clearingWriter) Write(b []byte) (int, error) {
+	c.p.clear()
+	return c.w.Write(b)
+}
+
 // done is the upload's summary line.
 func (p *uploadProgress) done() string {
 	p.clear()
