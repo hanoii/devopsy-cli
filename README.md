@@ -685,8 +685,8 @@ devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
 (its images), `devopsy-log-session` and `devopsy-log-server`,
-`devopsy-failed` until it goes live (for good when it never did, or its
-run failed), and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
+`devopsy-pending` until it goes live, `devopsy-failed` when it never
+did or its run failed, and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
 tree: rollbacks cannot go back to them, and their image tags stay until
 removed by hand (`docker image rm`).
 

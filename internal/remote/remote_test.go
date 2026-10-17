@@ -701,6 +701,8 @@ case "$1 $2" in
 esac
 `)
 	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
+# FAKE_RELEASE_BUSY: the release lock asked by its path is held.
+[ -z "${FAKE_RELEASE_BUSY:-}" ] || case " $* " in *"/.lock "*) exit 1 ;; esac
 case " $* " in *[!8]" ") exit 0 ;; esac
 [ ! -e "$FAKE_ROOT/locked" ] || exit 1
 case " $* " in
@@ -1064,6 +1066,16 @@ exit 0
 	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
 		t.Errorf("formatted:\n%s", f)
 	}
+	// A release never made current: in progress while the release lock is
+	// held, else incomplete.
+	write(t, filepath.Join(root, "app/a/prod/releases/5", PendingFile), "")
+	for env, want := range map[string]string{"FAKE_UNUSED=1": "INCOMPLETE", "FAKE_RELEASE_BUSY=1": "IN PROGRESS"} {
+		out, err := run(ReleasesScript(target("a")), env)
+		if rs := ParseReleases(out); err != nil || len(rs) != 2 || !strings.HasSuffix(rs[0].Line(), "  "+want) {
+			t.Errorf("pending release with %s (%v): %+v\n%s", env, err, rs, out)
+		}
+	}
+	os.RemoveAll(filepath.Join(root, "app/a/prod/releases/5"))
 
 	// --destroy with the lock taken: nothing removed.
 	os.Remove(filepath.Join(root, "calls"))
@@ -1470,9 +1482,9 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	if s := HolderScript(aliased, "x", &SyncOptions{}, nil); !strings.Contains(s, "devopsy @vm1-traefik --release") {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
-	// A release is failed until its switch, and cut uploads go.
-	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+FailedFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
-		t.Errorf("upload without its failed marker or the stale uploads' cleanup:\n%s", s)
+	// A release is pending until its switch, and cut uploads go.
+	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
 	if !strings.Contains(act, `ln -sfn "$base/shared/`+InheritFile+`" "$code/.devopsy/`+InheritFile+`"`) {

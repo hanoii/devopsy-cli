@@ -37,6 +37,9 @@ const (
 	// left behind was cut off without a signal (a CI session that
 	// dropped), and Recover finishes what the release script would have.
 	FetchingFile = "devopsy-fetching"
+	// PendingFile marks a release from its upload until its switch: one
+	// left was never made current (still under way, or cut off before).
+	PendingFile = "devopsy-pending"
 	// LeftFile, in a project's directory, records the names a removal
 	// could not remove (Docker refused: a container, even a stopped one,
 	// uses the image), one tab-separated line each: time, compose name,

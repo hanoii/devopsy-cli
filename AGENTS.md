@@ -385,14 +385,16 @@ repositories fit together and the open ideas.
   fetch, so recovery never races one still running. Rollbacks never
   write the marker, which would mark a good release failed.
 - **Before the switch, a dropped session cancels.** A release is
-  failed from its upload (`UploadScript` writes `FailedFile` into the
+  pending from its upload (`UploadScript` writes `PendingFile` into the
   `.tmp` before the `mv`) until its activation removes the mark right
   before `make_current`: one cut off anywhere before (an upload, a
   prepare step, its operator killed between sessions) is never rolled
-  back to nor kept. `prelude` removes stale `releases/*.tmp` under the
+  back to nor kept (`images` treats pending as failed). `--releases`
+  shows it IN PROGRESS while the release lock is held (`flock -n -s`,
+  never waiting), else INCOMPLETE, which `remove failed` takes. `prelude` removes stale `releases/*.tmp` under the
   lock. On `-T` the activation's stdin is a pipe devopsy keeps open
   (`WatchEnv`), and the server's devopsy watches it (`watchSession`,
-  the hidden `--watch-session <pid> [--answer <fifo>] [--cancel-until
+  the hidden `--watch-session <pid> [--answer-fd <fd>] [--cancel-until
   <file>]`, cmd/devopsy/watch.go, in the background on fd 4: a
   background job's stdin is /dev/null): the server closes it within
   milliseconds of the client's death, and the watcher sends SIGTERM to

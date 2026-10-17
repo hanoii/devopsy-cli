@@ -117,7 +117,7 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 	for _, w := range words {
 		if w == "failed" {
 			for _, r := range releases {
-				if (r.Failed || r.RolledBack) && !r.Current {
+				if (r.Failed || r.RolledBack || r.Incomplete) && !r.Current {
 					pick[r.ID] = true
 				}
 			}
