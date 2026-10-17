@@ -678,6 +678,10 @@ func TestSyncCapability(t *testing.T) {
 	if _, err := os.Stat(spool); err == nil {
 		t.Errorf("the spool stays")
 	}
+	// --log shows the copy in its place: the server's own log starts
+	// after the sync, at the run step.
+	out, code = s.run(nil, "@dev", "--log")
+	inOrder("--log", out, code, "prepare child in shop-dev", "Copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
 	// --sync's arguments reach the hooks and the import.
 	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
 	s.logs()

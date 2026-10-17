@@ -432,8 +432,14 @@ repositories fit together and the open ideas.
   TERM ignored; HUP and PIPE are ignored. The trap records it
   (`runSig`): under `script` the `^C` reaches the inner terminal, so
   the status is only `script`'s, which exits 0 when itself signaled. A
-  sync's holder follows its output the same way from its start, and
-  its marker comes on stderr. Without GNU's `tail` (macOS, in tests) only the traps
+  release that syncs starts following after the sync, at its run step,
+  and so does a sync's holder (only with a run step): the sync has its
+  own way through a drop (`syncWait`), and the copy's lines reach the
+  session's log through the push, so `--log` shows them in their place,
+  not after the server's whole part. From the switch to there,
+  `switchTraps` hold and the one write ("current is now") tolerates a
+  gone session; PIPE is ignored again before `followOutput`, whose
+  marker write does too. Without GNU's `tail` (macOS, in tests) only the traps
   apply, and the session's log has everything (`TestAfterSwitchSurvives`
   skips).
 - **Release logs: two per release.** The session's (`LogFile`,
