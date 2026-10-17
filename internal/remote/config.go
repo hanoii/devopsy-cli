@@ -1262,7 +1262,12 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		t.From[k] = v
 	}
 	if alias != nil {
-		t.User, t.Alias, t.Source = true, aliasName, alias.Source
+		// The alias names the child: a parent's hints name its own
+		// address.
+		t.User = true
+		if !parent {
+			t.Alias, t.Source = aliasName, alias.Source
+		}
 	}
 
 	lookup := func(k string) (string, string) {

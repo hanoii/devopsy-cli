@@ -23,9 +23,9 @@ import (
 // service that reads the entry raw is left with.
 const HalfCopiedNotice = "is half copied: a database copied raw cannot start on it until the next sync completes it"
 
-// SyncMarker starts the line the holder prints on stdout, followed by the
-// child's directory on its server ($base), once the child is ready to be
-// written. The only stdout devopsy reads from that session.
+// SyncMarker starts the line the holder prints (on stderr: holders print
+// on one stream), followed by the child's directory on its server
+// ($base), once the child is ready to be written.
 const SyncMarker = "devopsy: ready for sync in "
 
 // SyncingInto is the line the holder of --sync prints on stderr: the
@@ -223,11 +223,12 @@ func syncWait(failed string) string {
   reply=
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
+    sync_gone=1
     exec >>"$base/.devopsy-sync.log" 2>&1
     echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy: restoring what was stopped" >&2
   fi
   if [ "$reply" != go ]; then
-    echo "devopsy: the copy from the parent failed: ` + failed + `" >&2
+    echo "devopsy: the copy from the parent failed: ` + failed + `" >&2 || true
   fi
 `
 }

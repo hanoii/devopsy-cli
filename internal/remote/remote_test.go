@@ -465,9 +465,9 @@ exit 0
 	root := t.TempDir()
 	out, errOut, err := run(root, "1", "go\n")
 	base := filepath.Join(root, tg.Path)
-	// The marker on stdout, or on stderr once the output follows a file
-	// (GNU's tail: followOutput).
-	if err != nil || !strings.Contains(out+errOut, SyncMarker+base+"\n") || current(root) != "releases/1/code" {
+	// The marker on stderr, which is all the operator reads for it:
+	// nothing on stdout.
+	if err != nil || out != "" || !strings.Contains(errOut, SyncMarker+base+"\n") || current(root) != "releases/1/code" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
 	// The capability's hooks run from --sync-services, never the script;
@@ -507,6 +507,36 @@ exit 0
 	}
 	if got := calls(root); strings.Contains(got, "--sync-services") || strings.Contains(got, "deploy") {
 		t.Errorf("devopsy gone, calls:\n%s", got)
+	}
+
+	// A holder whose session is gone before it starts reading (its
+	// watcher reads EOF at once and leaves): no answer, never a wait on
+	// the fifo, nothing left in $base.
+	root = t.TempDir()
+	write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
+		t.Fatal(err)
+	}
+	gone := exec.Command("sh", "-c", HolderScript(tg, "app-dev", opts, []string{"deploy"}))
+	gone.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	var goneOut bytes.Buffer
+	gone.Stdout, gone.Stderr = &goneOut, &goneOut
+	if err := gone.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- gone.Wait() }()
+	select {
+	case err := <-waited:
+		if err == nil || !strings.Contains(readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no answer from devopsy") {
+			t.Errorf("holder with its session gone (%v):\n%s", err, goneOut.String())
+		}
+	case <-time.After(30 * time.Second):
+		_ = gone.Process.Kill()
+		t.Fatalf("holder with its session gone hangs:\n%s", goneOut.String())
+	}
+	if left, _ := filepath.Glob(filepath.Join(root, tg.Path, ".devopsy-sync.answer*")); len(left) > 0 {
+		t.Errorf("left in $base: %v", left)
 	}
 
 	// A failing prepare prints no marker, restores, and does not go live.
@@ -1436,7 +1466,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 		t.Errorf("upload without the lock:\n%s", s)
 	}
 	// Hints in scripts name the alias as typed.
-	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Address: "vm1:prod", Path: "traefik/prod"}
+	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Source: "~/traefik", Address: "vm1:prod", Path: "traefik/prod"}
 	if s := HolderScript(aliased, "x", &SyncOptions{}, nil); !strings.Contains(s, "devopsy @vm1-traefik --release") {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
