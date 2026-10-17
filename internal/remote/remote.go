@@ -709,8 +709,10 @@ fi
 oldest=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ] || echo "$r"
 done | sed -n "${k}p")
+# A release still marked fetching waits for its recovery: its images
+# have no listing until then.
 pruned=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | awk -v o="$oldest" 'past { print } $0 == o { past = 1 }' | while read -r r; do
-  [ "releases/$r/`+CodeDir+`" = "$(readlink "$base/current")" ] || echo "$r"
+  [ "releases/$r/`+CodeDir+`" = "$(readlink "$base/current")" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ] || echo "$r"
 done)
 # Removing images needs the server's image lock alone: when another
 # release holds it, pruning waits for the next release, directories
@@ -766,7 +768,6 @@ func leftPath(t *Target) string {
 const noImages = `img() { :; }
 image_lock() { :; }
 image_unlock() { :; }
-image_holders() { echo "another release"; }
 `
 
 // releaseImages defines the shell functions that give each release its own
@@ -802,9 +803,15 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	if holder == "" {
 		holder = "a release"
 	}
+	// The containers' compose project: the operator's COMPOSE_PROJECT_NAME
+	// wins over the target's name (cmd/devopsy's projectName).
+	project := projectName
+	if project == "" {
+		project = name
+	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name}, false) + ` --left "$left" "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--project", project}, false) + ` --left "$left" "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)

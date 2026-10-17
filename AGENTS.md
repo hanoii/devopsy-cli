@@ -278,8 +278,8 @@ repositories fit together and the open ideas.
     restored. `devopsy-images` lists `ref<tab>image id` (the id when
     Docker had the image): what a removal decides from even after a
     bookmark went; `--releases` shows the names. Docker shows names short (`docker.io/library/nginx` is
-    `nginx`): every comparison of a computed name with one Docker
-    reports goes through `familiar`.
+    `nginx:latest`): every comparison of a computed name with one
+    Docker reports goes through `familiar`.
   - **Bookmark** (`img bookmark`): lists through `devopsy -- config
     --images` in the release's code, records, tags by image id (another
     fetch may move the name meanwhile). A release listed
@@ -291,13 +291,19 @@ repositories fit together and the open ideas.
     bookmark gone): names back on the bookmarks, except a name whose
     current image another environment uses (`others`: a container of
     another compose project, from `docker ps -a --filter ancestor=`,
-    checked on Docker 29's containerd store, or a bookmark none of this
-    environment's releases made, exact names, so `app-prod` never
-    matches `app-prod-eu`): a rollback must not change another
-    environment, so that name stays on the newer image, said.
+    checked on Docker 29's containerd store, against `--project`, the
+    compose project the containers carry, which the operator's
+    `COMPOSE_PROJECT_NAME` can make differ from `--name`; or a bookmark
+    none of this environment's releases made, exact names, so
+    `app-prod` never matches `app-prod-eu`): a rollback must not change
+    another environment, so that name stays on the newer image, said.
+    A digest's bookmark must be there too: a restore that leaves its
+    image to the run step's `up` would pull after the switch.
   - **Remove** (`img remove`): untags the going release's bookmarks,
     then per image it ran, from Docker's state: held by another
-    bookmark, it stays (said, with its names); used by a container,
+    bookmark, it stays (said, with its names), its names in
+    repositories none of the holders is in (a mirror, a digest)
+    recorded, or they would outlive every release; used by a container,
     its names are recorded, never stripped (taking all but the last
     would free nothing and cost whoever runs them a pull); else its
     listed names and its other names in the same repositories go
@@ -361,7 +367,8 @@ repositories fit together and the open ideas.
   release failed, bookmarks it and restores current's names, run after
   the lock by every activation, `--destroy` and `--releases remove`.
   Until then it counts as failed: never a rollback target, never kept by
-  `keep`, `failed` in `--releases`. The release lock is inherited by the
+  `keep`, `failed` in `--releases`, and pruning leaves it to the
+  recovery (its images have no listing yet). The release lock is inherited by the
   fetch, so recovery never races one still running. Rollbacks never
   write the marker, which would mark a good release failed.
 - Release logs (`releaseLog`): devopsy's messages, local steps' command

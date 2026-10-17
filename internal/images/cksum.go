@@ -1,8 +1,8 @@
 package images
 
 // cksum is POSIX cksum's CRC of data, as `printf '%s' ref | cksum`
-// prints it: bookmarks made by the release scripts before this package
-// used it, so the names must match.
+// prints it: the suffix of a bookmark whose repository a release names
+// twice, as v0.38's scripts named them too.
 func cksum(data []byte) uint32 {
 	var crc uint32
 	add := func(b byte) {
