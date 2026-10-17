@@ -161,7 +161,7 @@ func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "it's app/prod", Mode: ModeImage}
 	scripts := map[string]string{
 		"upload":          UploadScript(tg, "20261005120000"),
-		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{}, nil),
+		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{Run: []string{"deploy"}}, nil),
 		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, After: [][]string{{"warm"}}}, nil),
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
 		"run":             RunScript(tg, "app", []string{"logs", "-f"}),
@@ -185,7 +185,7 @@ func TestScriptsParse(t *testing.T) {
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
 		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
-		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{}, &SyncOptions{From: "vm1:prod"}),
+		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod"}),
 		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, []string{"deploy"}),
 		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
@@ -1378,7 +1378,7 @@ func TestActivatePruneFailed(t *testing.T) {
 	if err := os.Symlink("releases/5/code", filepath.Join(base, "current")); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", "-c", ActivateScript(tg, "6", false, "", Phases{}, nil))
+	cmd := exec.Command("sh", "-c", ActivateScript(tg, "6", false, "", Phases{Run: []string{"deploy"}}, nil))
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("release (%v):\n%s", err, out)
@@ -1792,5 +1792,37 @@ func TestStatusLastSync(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "synced\t2026-10-02 10:00:03\n") {
 		t.Errorf("last sync (%v):\n%s", err, out)
+	}
+}
+
+// A step's text is printed as it is: a $VAR, a quote or a $(...) in it
+// is neither expanded nor run by the line that says it runs, and the step
+// itself gets its arguments as written.
+func TestStepTextQuoted(t *testing.T) {
+	bin, root := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
+case "$1" in deploy|prep) printf '%s|' "$@" >>"$FAKE_ROOT/args"; echo >>"$FAKE_ROOT/args" ;; esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	pwned := filepath.Join(root, "pwned")
+	odd := []string{"--tag=$TAG", `say "hi`, "$(touch " + pwned + ")"}
+	script := ActivateScript(tg, "1", false, "app-prod", Phases{Prepare: [][]string{append([]string{"prep"}, odd...)}, Run: append([]string{"deploy"}, odd...)}, nil)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	out, err := cmd.CombinedOutput()
+	if err != nil || fileExists(pwned) || !strings.Contains(string(out), "devopsy: running 'devopsy deploy --tag=$TAG say \"hi $(touch ") {
+		t.Fatalf("odd step text (%v), pwned %v:\n%s", err, fileExists(pwned), out)
+	}
+	want := "prep|--tag=$TAG|say \"hi|$(touch " + pwned + ")|\ndeploy|--tag=$TAG|say \"hi|$(touch " + pwned + ")|\n"
+	if got := readFile(filepath.Join(root, "args")); got != want {
+		t.Errorf("steps' arguments:\n%q\nwant\n%q", got, want)
+	}
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/1/code" {
+		t.Errorf("current %q", l)
 	}
 }
