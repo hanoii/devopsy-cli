@@ -438,7 +438,7 @@ func basePrelude(t *Target) string {
 	// and 9) and hold them while it asks GitHub.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
 settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + hintAddress(t) + ` --upgrade)" >&2; exit 1; }
+[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + cmp.Or(t.Alias, t.Address, t.Host) + ` --upgrade)" >&2; exit 1; }
 with_tty() {
   if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
     script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
@@ -476,8 +476,10 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   exit 1
 fi
 ` + releaseLock(false, true) + `mkdir -p "$base/releases" "$base/shared/mnt"
-# An upload cut off leaves its .tmp: none runs while the lock is held.
+# An upload cut off leaves its .tmp, a watcher its file: none runs while
+# the lock is held.
 rm -rf "$base"/releases/*.tmp
+rm -f "$base"/.devopsy-watch.*
 # make_current releases/<id>: current points at its code.
 make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 `
@@ -579,6 +581,16 @@ echo "devopsy: rolling back to $id" >&2
 	s += `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
 `
+	if !rollback {
+		// Held until the switch: --releases tells this release in
+		// progress from one cut off before (ReleasesScript), whatever
+		// else holds the release lock.
+		s += `if [ -e "$rel/` + PendingFile + `" ]; then
+  exec 7<"$rel/` + PendingFile + `"
+  flock -n 7 || true
+fi
+`
+	}
 	// A rollback's steps are the restored release's, read from its own
 	// config on the server (ReleaseStepsFlag): the checkout's may have
 	// changed since. Its before steps run in the current release, as a
@@ -675,25 +687,38 @@ fetch_release "$rel" || fr=$?
 # img recover and current as it was. img bookmark ignores SIGPIPE, so
 # nothing died sooner.
 [ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
-rm -f "$rel/` + FetchingFile + `"
-[ "$fr" -eq 0 ] || not_live "$fr"
-[ -z "${watch_pid:-}" ] || : >"$ws_until"
+if [ "$fr" -ne 0 ]; then
+  rm -f "$rel/` + FetchingFile + `"
+  not_live "$fr"
+fi
+# Disarmed by taking its file away, atomically against the watcher,
+# which takes it before it signals: when it got there first, its SIGTERM
+# is on its way, or here.
+if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
+  fetch_sig=1
+fi
+rm -f "$ws_armed.off"
 # A session gone (or Ctrl-C) after fetch_release's own check and before
-# the watcher was disarmed: undone the same way, under the lock.
+# the watcher was disarmed: undone the same way, under the lock. The
+# fetching marker stays when it cannot be, for img recover.
 if [ -n "$fetch_sig" ]; then
   trap '' INT TERM HUP PIPE
   set +e
   if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
     image_unlock
+    rm -f "$rel/` + FetchingFile + `"
   fi
+  rm -f "$ws_armed.fired"
   not_live 130
 fi
+rm -f "$rel/` + FetchingFile + `"
 out="$rel/` + ServerLogFile + `"
 `
 	s += switchTraps
 	if !rollback {
 		s += `rm -f "$rel/` + PendingFile + `"
+exec 7<&-
 `
 	}
 	s += `make_current "releases/$id"
@@ -800,10 +825,10 @@ fi
 }
 
 // followOutput runs where a script must go on whatever happens to its
-// session: before a release's switch, from where it goes live, or fails
-// and brings the previous release back (after the sync, in a release
-// that syncs: the sync has its own way through a drop, and its copy's
-// lines come through the push), and before a sync's run step. A session
+// session: right after a release's switch, from where it goes live, or
+// fails and brings the previous release back (after the sync, in a
+// release that syncs: the sync has its own way through a drop, and its
+// copy's lines come through the push), and before a sync's run step. A session
 // gone without a signal (CI's -T) kills whatever writes to it next: the
 // shell, compose, the switch back halfway. So the output goes to a file
 // ($out: ServerLogFile, appended after a LogSection line; the operator's
@@ -856,18 +881,18 @@ const WatchSessionFlag = "--watch-session"
 // abort, EOF when the session is gone. Armed, the session's end before
 // the switch sends SIGTERM to the script's group (the shell leads one
 // under sshd; else the shell alone): before the fetch the script just
-// ends (its release is failed since the upload), during it fetch_sig's
+// ends (its release is pending since the upload), during it fetch_sig's
 // trap undoes the fetch, at once rather than at the next write, a build
-// later. $ws_until, written right before the switch, disarms it: from
-// there on a release finishes whatever happens to its session
-// (followOutput). A plain release is armed when its stdin is the
+// later. Taking $ws_armed (the watcher takes it before it signals),
+// right before the switch, disarms it: from there on a release finishes
+// whatever happens to its session (followOutput). A plain release is armed when its stdin is the
 // operator's pipe (WatchEnv; on -t the pty's hangup does it), a syncing
 // one always (its stdin is the answer's pipe), a sync's holder never: a
 // SIGTERM would stop it halfway through restoring.
 func watchSession(answer, armed bool) string {
 	args := `"$$"`
-	s := `ws_until="$base/.devopsy-watch.$$"
-rm -f "$ws_until"
+	s := `ws_armed="$base/.devopsy-watch.$$"
+rm -f "$ws_armed" "$ws_armed.off" "$ws_armed.fired"
 `
 	if answer {
 		// Both ends open before the watcher starts, the read end on fd 3,
@@ -890,12 +915,14 @@ exec 4<&-
 	if answer {
 		start += "exec 5>&-\n"
 	}
-	cancel := ` --cancel-until "$ws_until"`
+	cancel := ` --armed "$ws_armed"`
 	switch {
 	case armed && answer:
-		s += fmt.Sprintf(start, cancel)
+		s += `: >"$ws_armed"
+` + fmt.Sprintf(start, cancel)
 	case armed:
 		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
+  : >"$ws_armed"
 ` + fmt.Sprintf(start, cancel) + `fi
 `
 	default:
@@ -1200,16 +1227,21 @@ left=`+leftPath(t)+`
 [ ! -s "$left" ] || awk -v t="$(printf '\t')" '{ print "left" t $0 }' "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
-# A pending release is under way while the release lock is held, else it
-# was cut off before its switch: asked without waiting.
-pend=incomplete
-flock -n -s "$base/.lock" true 2>/dev/null || pend=in-progress
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
-  f=-; [ ! -e "$base/releases/$r/`+PendingFile+`" ] || f=$pend
-  # A release cut off mid-fetch is failed too, recovered or not.
-  { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
-  [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
+  # A pending release is under way while its activation holds its
+  # marker's lock (asked without waiting), whatever else marks it (it
+  # is fetching), else it was cut off before its switch.
+  p="$base/releases/$r/`+PendingFile+`"
+  f=-
+  if [ -e "$p" ] && ! flock -n -s "$p" true 2>/dev/null; then
+    f=in-progress
+  else
+    [ ! -e "$p" ] || f=incomplete
+    # A release cut off mid-fetch is failed too, recovered or not.
+    { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
+    [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
+  fi
   # Names only: the ids after a tab stay on the server.
   i=
   [ ! -f "$base/releases/$r/%s" ] || i=$(cut -f 1 < "$base/releases/$r/%s" | tr '\n' ' ')

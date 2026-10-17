@@ -390,11 +390,14 @@ repositories fit together and the open ideas.
   before `make_current`: one cut off anywhere before (an upload, a
   prepare step, its operator killed between sessions) is never rolled
   back to nor kept (`images` treats pending as failed). `--releases`
-  shows it IN PROGRESS while the release lock is held (`flock -n -s`,
-  never waiting), else INCOMPLETE, which `remove failed` takes. `prelude` removes stale `releases/*.tmp` under the
+  shows it IN PROGRESS while its activation holds the marker's lock
+  (fd 7, from the start of the activation to the switch; `flock -n -s`
+  on the file, never waiting), else INCOMPLETE, which `remove failed`
+  takes when older than current (a newer one may be between its upload
+  and its activation, which nothing locks: by id only). `prelude` removes stale `releases/*.tmp` under the
   lock. On `-T` the activation's stdin is a pipe devopsy keeps open
   (`WatchEnv`), and the server's devopsy watches it (`watchSession`,
-  the hidden `--watch-session <pid> [--answer-fd <fd>] [--cancel-until
+  the hidden `--watch-session <pid> [--answer-fd <fd>] [--armed
   <file>]`, cmd/devopsy/watch.go, in the background on fd 4: a
   background job's stdin is /dev/null): the server closes it within
   milliseconds of the client's death, and the watcher sends SIGTERM to
@@ -402,11 +405,16 @@ repositories fit together and the open ideas.
   shell alone; nothing once the script is gone, the watcher no longer
   its child), so the fetch is undone at once through `fetch_sig`
   instead of at the next write, a build later. PIPE is ignored from the
-  fetch on (dash writes "Terminated" to the dead session). The script
-  writes `$ws_until` right before the switch, which disarms it (a file:
-  a signal sent before the watcher could handle it would kill it), and
-  checks `fetch_sig` once more (a drop in between: undone like one
-  during the fetch, under the shared image lock). A sync's answer
+  fetch on (dash writes "Terminated" to the dead session). The watcher
+  takes the armed file (`$ws_armed`, renamed to `.fired`) before it
+  signals; the script disarms it by taking the file first (`mv` to
+  `.off`) right before the switch: one rename wins, so a SIGTERM never
+  lands past a switch the script went on with, and a failed `mv` means
+  one is coming (a file, not a signal: one sent before the watcher
+  could handle it would kill it). Then `fetch_sig` is checked once more
+  (a drop in between: undone like one during the fetch, under the
+  shared image lock; the fetching marker stays for `img recover` when
+  the lock cannot be had). `prelude` removes stale `.devopsy-watch.*`. A sync's answer
   goes through the same watcher (`--answer-fd`: a fifo whose ends the
   script opens before starting it, the read end on fd 3, the write end
   read-write so the open never waits, handed to the watcher and closed
@@ -421,8 +429,9 @@ repositories fit together and the open ideas.
   gives up: activations pass no keepalive, and devopsy-server never
   sets sshd's `ClientAliveInterval`. Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
-  previous one back, whatever happens to its session: before
-  `make_current` the output goes to `$rel/devopsy-log-server`
+  previous one back, whatever happens to its session: right after
+  `make_current` (after the sync, in a release that syncs; switchTraps
+  hold from before it) the output goes to `$rel/devopsy-log-server`
   (`ServerLogFile`, `followOutput`: both streams in one file, in their
   order, each activation's part after a `LogSection` line with its
   time) and a GNU `tail -f` copies it to the session's stderr, so a

@@ -11,21 +11,24 @@ import (
 )
 
 // runWatchSession is the hidden --watch-session <pid> [--answer-fd <fd>]
-// [--cancel-until <file>], which a script on a server starts in the
+// [--armed <file>], which a script on a server starts in the
 // background with the session's stdin (remote.WatchSessionFlag). It
 // passes what comes in on to the fd, the only write end of a fifo whose
 // read end is the script's fd 3 (a sync's go or abort), and, when stdin
-// ends, the session gone, closes it: no answer. With --cancel-until, unless the file exists by then (the
-// script writes it right before its switch), it sends SIGTERM to the
+// ends, the session gone, closes it: no answer. With --armed, it then
+// takes the file (renamed to <file>.fired) and sends SIGTERM to the
 // script, pid, and everything it runs: its process group when the script
 // leads one, as under sshd, else the script alone, which cancels a
-// release before its switch (fetch_sig). A file, not a signal: one sent
-// before this process could handle it would kill it, and with it a
-// sync's answer. Nothing is sent once the script is gone (this process
-// is no longer its child).
+// release before its switch (fetch_sig). The script disarms it by taking
+// the file first, right before its switch: one rename or the other
+// succeeds, never both, so a SIGTERM never lands past a switch the
+// script went on with. A file, not a signal: one sent before this
+// process could handle it would kill it, and with it a sync's answer.
+// Nothing is sent once the script is gone (this process is no longer its
+// child).
 func runWatchSession(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--cancel-until <file>]")
+		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--armed <file>]")
 		return 2
 	}
 	pid, err := strconv.Atoi(args[0])
@@ -34,11 +37,11 @@ func runWatchSession(args []string) int {
 		return 2
 	}
 	var answer = -1
-	var until string
+	var armed string
 	for i := 1; i < len(args); i++ {
 		switch {
-		case args[i] == "--cancel-until" && i+1 < len(args):
-			until = args[i+1]
+		case args[i] == "--armed" && i+1 < len(args):
+			armed = args[i+1]
 			i++
 		case args[i] == "--answer-fd" && i+1 < len(args):
 			if answer, err = strconv.Atoi(args[i+1]); err != nil || answer < 3 {
@@ -72,11 +75,15 @@ func runWatchSession(args []string) int {
 	if out != nil {
 		out.Close()
 	}
-	if until == "" {
+	if armed == "" {
 		return 0
 	}
-	if _, err := os.Stat(until); err == nil || os.Getppid() != pid {
-		os.Remove(until)
+	if os.Getppid() != pid {
+		os.Remove(armed)
+		return 0
+	}
+	if os.Rename(armed, armed+".fired") != nil {
+		// The script took it: disarmed.
 		return 0
 	}
 	if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {

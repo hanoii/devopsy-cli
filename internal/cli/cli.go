@@ -585,7 +585,8 @@ remove takes releases away, each with its images, as pruning does: its
 tags, and the images no other release on the server still tags (any
 environment or project), then docker image prune -f. An id can be its
 start, when only one release starts so; failed is every failed, rolled
-back or incomplete release, and can go with ids. The current release is refused, and so
+back or incomplete release (one newer than the current release only by
+its id: it may be about to go live), and can go with ids. The current release is refused, and so
 is an id that names none or several: nothing is removed then. Rollbacks
 cannot go back to a removed release; data in shared/ is never touched.
 Asks first at a terminal; --yes for scripts and CI. It waits for the
