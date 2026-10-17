@@ -158,11 +158,11 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		colored = append(colored, o, e)
 		out, errOut = o, e
 	}
+	// The marker comes on stderr: holders print on one stream.
 	marker := make(chan string, 1)
 	lm := &remote.LineMarker{Prefix: remote.SyncMarker, Found: func(base string) { marker <- base }}
-	mw, mwErr := lm.Writer(out), lm.Writer(errOut)
+	mwErr := lm.Writer(errOut)
 	flush := func() {
-		mw.Flush()
 		mwErr.Flush()
 		for _, c := range colored {
 			c.Flush()
@@ -173,12 +173,17 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		err  error
 	}
 	done := make(chan result, 1)
+	// Ended by devopsy only: before the marker on an interrupt, and when
+	// devopsy returns while it still runs (a second Ctrl-C).
+	holderCtx, endHolder := context.WithCancel(context.Background())
+	defer endHolder()
 	go func() {
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(context.Background()), job.child, remote.KeepAlive, script, r, mw, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
-	// Interrupted before the marker, devopsy just exits: the holder gets
-	// no answer and restores on its own. After it, the push ends first, so
+	// Interrupted before the marker, devopsy ends the holder's session
+	// and waits for it: before a release's switch nothing changes, and a
+	// holder restores on its own. After it, the push ends first, so
 	// nothing copies into the child once its services are back, then the
 	// holder gets abort.
 	sigs := make(chan os.Signal, 1)
@@ -188,7 +193,10 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	select {
 	case res = <-done:
 	case <-sigs:
-		say(red, "devopsy: interrupted: the child's server restores what it stopped")
+		say(red, "devopsy: interrupted: ending the session on @"+job.child.Address+", which leaves it as it was")
+		endHolder()
+		<-done
+		flush()
 		return 130
 	case base := <-marker:
 		ctx, cancel := context.WithCancel(context.Background())

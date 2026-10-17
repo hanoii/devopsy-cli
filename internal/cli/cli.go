@@ -613,13 +613,15 @@ target.
 `,
 	"--log": `Usage: devopsy @<target> --log [<release id>]
 
-Every release and rollback is recorded as it runs and saved on the server
-in the release's directory (releases/<id>/devopsy-log): devopsy's
-messages, the local steps run and how they ended, and everything the server
-printed (steps, compose, the variables check). A rollback's is appended to
-the log of the release it restores. Saved even when it fails, once the
-server was reached; terminal colors and progress redraws are dropped. Logs
-go with their releases when they are pruned.
+Every release, rollback and sync is recorded on the server in the
+release's directory, in two logs that --log shows joined: what your
+session said and saw up to the switch (devopsy-log-session: devopsy's
+messages, the local steps run and how they ended, the server's lines),
+and what the server printed from there on (devopsy-log-server), written
+whatever happens to your connection. A rollback's goes with the release
+it restores. Kept even when it fails, once the server was reached;
+terminal colors and progress redraws are dropped. Logs go with their
+releases when they are pruned.
 
   devopsy @prod --log                   the most recent one
   devopsy @prod --log 20261009113901    that release's (an id, or its start;

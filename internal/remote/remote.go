@@ -14,6 +14,7 @@ package remote
 
 import (
 	"archive/tar"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -435,7 +436,7 @@ func basePrelude(t *Target) string {
 	// and 9) and hold them while it asks GitHub.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
 settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + upgradeAddress(t) + ` --upgrade)" >&2; exit 1; }
+[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + hintAddress(t) + ` --upgrade)" >&2; exit 1; }
 with_tty() {
   if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
     script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
@@ -450,13 +451,11 @@ base="$root"/` + Quote(t.Path) + `
 `
 }
 
-// upgradeAddress is the address an upgrade hint names: the resolved
-// one, else the server.
-func upgradeAddress(t *Target) string {
-	if t.Address != "" {
-		return t.Address
-	}
-	return t.Host
+// hintAddress is the address a hint in a script names: the alias as
+// typed (with source:, releases only from its checkout), else the
+// resolved one, else the server.
+func hintAddress(t *Target) string {
+	return cmp.Or(t.Alias, t.Address, t.Host)
 }
 
 // prelude adds, for release scripts, the checks, the release lock and
@@ -543,7 +542,10 @@ func RemotePhases(steps *Steps) Phases {
 // prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
-	s := prelude(t)
+	// One stream: nothing an activation prints is a result, and on two
+	// pipes a line on stdout could reach the log after SwitchMarker on
+	// stderr and be cut from it.
+	s := prelude(t) + "exec 1>&2\n"
 	if sync != nil {
 		s += syncStdin
 	} else {
@@ -675,6 +677,8 @@ fetch_release "$rel" || fr=$?
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 [ -z "${watch_pid:-}" ] || kill "$watch_pid" 2>/dev/null || true
+# A session gone (or Ctrl-C) after the fetch and before the watcher went.
+[ -z "$fetch_sig" ] || not_live 130
 out="$rel/` + ServerLogFile + `"
 ` + followOutput + switchTraps
 	if !rollback {
@@ -795,6 +799,7 @@ fi
 // nothing may reap one. Neither holds the locks nor the sync's answer.
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
+  (umask 077; : >>"$out")
   echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S')" >>"$out"
   fo_off=$(wc -c <"$out")
   tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
@@ -815,7 +820,8 @@ const WatchEnv = "DEVOPSY_INTERNAL_WATCH"
 
 // watchSession, before the switch, turns the session's end into a
 // SIGTERM for the script's process group (under ssh -T the shell leads
-// its own, checked: in a group of others', the shell alone gets it):
+// its own, checked: in a group of others', the shell alone gets it; a
+// shell gone, nothing):
 // before the fetch the script just ends (its release is marked
 // failed since the upload), during it fetch_sig's trap undoes the fetch.
 // Otherwise a dropped session only ended the script at its next write,
@@ -826,7 +832,9 @@ const WatchEnv = "DEVOPSY_INTERNAL_WATCH"
 const watchSession = `if [ -n "${` + WatchEnv + `:-}" ]; then
   exec 4<&0 </dev/null
   ( cat <&4 >/dev/null 2>&1
-    if read -r _ _ _ _ wg _ </proc/$$/stat && [ "$wg" = $$ ]; then kill -TERM 0; else kill -TERM $$; fi
+    if read -r _ _ _ _ wg _ </proc/$$/stat 2>/dev/null; then
+      if [ "$wg" = $$ ]; then kill -TERM 0; else kill -TERM $$; fi
+    fi
   ) 3<&- 8>&- 9>&- >/dev/null 2>&1 &
   watch_pid=$!
   exec 4<&-
@@ -843,6 +851,11 @@ const LogSection = "devopsy-log-section "
 // (LineMarker) and records nothing of the session after it, which the
 // server's log has.
 const SwitchMarker = "devopsy-internal-switch"
+
+// LogAnchor is the session's log's line where it stops at SwitchMarker:
+// --log puts the server's part of that activation after it, in order, so
+// two machines' clocks never decide where it goes.
+const LogAnchor = "devopsy: from here, the server's own log (" + ServerLogFile + "):"
 
 // LogServerPart separates LogReadScript's two logs.
 const LogServerPart = "devopsy-internal-server-log"
@@ -1081,7 +1094,7 @@ else
   echo "devopsy: $base has no release and no .devopsy/ project: run 'devopsy @%s --release' first" >&2
   exit 1
 fi
-`, upgradeAddress(t))
+`, hintAddress(t))
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -1358,16 +1371,20 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if stderr == nil {
 		cmd.Stderr = term(os.Stderr)
 	}
-	// SwitchMarker never shows, and the log stops at it: the server's
-	// own log has the rest (followOutput).
-	shown := &LineMarker{Prefix: SwitchMarker}
-	logged := &LineMarker{Prefix: SwitchMarker, Cut: true}
-	flush := []*MarkerWriter{shown.Writer(cmd.Stdout), shown.Writer(cmd.Stderr)}
-	cmd.Stdout, cmd.Stderr = flush[0], flush[1]
+	// A logged session (an activation, a sync's holder) may print
+	// SwitchMarker: it never shows, and the log stops at it with
+	// LogAnchor, where --log puts the server's own log (followOutput).
+	// Other sessions stay a plain passthrough: a shell's typing, an
+	// export's data.
+	var flush []*MarkerWriter
 	if log != nil {
-		flush = append(flush, logged.Writer(log), logged.Writer(log))
-		cmd.Stdout = io.MultiWriter(cmd.Stdout, flush[2])
-		cmd.Stderr = io.MultiWriter(cmd.Stderr, flush[3])
+		shown := &LineMarker{Prefix: SwitchMarker}
+		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(string) {
+			_, _ = log.Write([]byte(LogAnchor + "\n"))
+		}}
+		flush = []*MarkerWriter{shown.Writer(cmd.Stdout), shown.Writer(cmd.Stderr), logged.Writer(log), logged.Writer(log)}
+		cmd.Stdout = io.MultiWriter(flush[0], flush[2])
+		cmd.Stderr = io.MultiWriter(flush[1], flush[3])
 	}
 	err := cmd.Run()
 	for _, f := range flush {

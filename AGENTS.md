@@ -63,8 +63,10 @@ repositories fit together and the open ideas.
   which otherwise only counts its lines. Failures with something to add
   (why, what to do) go through `internal/report`: one `[error]` or
   `[warning]` line, then why and the ways to fix it on their own lines,
-  never packed into the message. Hints with an address use the resolved
-  one (`t.Address`), so the command works when copied.
+  never packed into the message. Hints with an address use the alias
+  as typed, else the resolved one (`targetRef`, `hintAddress` in
+  scripts), so the command works when copied (an alias with `source:`
+  releases only from its checkout).
 - **Words are never built-ins.** devopsy's features are flags or `@target`;
   a word is a project command, else a compose command (`ComposeCommands`:
   compose's own completion, cached, refreshed when a word is missing), else
@@ -393,11 +395,19 @@ repositories fit together and the open ideas.
   it within milliseconds of the client's death, and the watcher sends
   SIGTERM to the script's group (`kill -TERM 0`, only when the shell
   leads its group, as under sshd: read from `/proc/$$/stat`, else the
-  shell alone), so the fetch is undone at once through `fetch_sig`
-  instead of at the next write, a build later. PIPE is ignored from
-  the fetch on (dash writes "Terminated" to the dead session). Stopped
-  before the switch. Not with a sync, whose stdin is the answer. `-t`
-  sessions get HUP.
+  shell alone, and nothing once the shell is gone), so the fetch is
+  undone at once through `fetch_sig` instead of at the next write, a
+  build later. PIPE is ignored from the fetch on (dash writes
+  "Terminated" to the dead session). Stopped before the switch, and
+  `fetch_sig` checked once more after that (a drop in between). Not
+  with a sync, whose stdin is the answer: there devopsy ends the
+  holder's session itself on a Ctrl-C before the marker and waits for
+  it. `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and
+  does not make the shell a group leader: test the watcher through a
+  real sshd (in the machine, to `localhost`). A connection that dies
+  silently (a laptop asleep) is seen only when the server writes or TCP
+  gives up: activations pass no keepalive, and devopsy-server never
+  sets sshd's `ClientAliveInterval`.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: before
   `make_current` the output goes to `$rel/devopsy-log-server`
@@ -407,8 +417,12 @@ repositories fit together and the open ideas.
   session gone kills only the tail (it killed the shell at its next
   write, or compose mid-`up`, or the switch back before the restart).
   `SwitchMarker`, printed just before, tells the operator's devopsy to
-  stop logging the session (`LineMarker` with `Cut` in `SSHStreams`;
-  never shown). The tail ends half a second after the shell (an EXIT
+  stop logging the session and log `LogAnchor` there (`LineMarker` with
+  `Cut` in `SSHStreams`, never shown; only on logged sessions: every
+  other is a plain passthrough, a shell's typing and an export's data).
+  Activations and holders print on one stream (`exec 1>&2`): on two
+  pipes, a line on stdout could reach the log after the marker on
+  stderr and be cut. The file is the deploy user's alone (umask 077). The tail ends half a second after the shell (an EXIT
   trap, which keeps the exit status: a `-t` session's pty hangs up the
   moment the shell exits, which cut the last lines), or a second after
   a helper finds the shell gone without its trap: never `tail --pid`,
@@ -418,9 +432,8 @@ repositories fit together and the open ideas.
   TERM ignored; HUP and PIPE are ignored. The trap records it
   (`runSig`): under `script` the `^C` reaches the inner terminal, so
   the status is only `script`'s, which exits 0 when itself signaled. A
-  sync's holder follows its output the same way from its start, so its
-  marker comes on stderr: the operator looks on both streams (one
-  `LineMarker`). Without GNU's `tail` (macOS, in tests) only the traps
+  sync's holder follows its output the same way from its start, and
+  its marker comes on stderr. Without GNU's `tail` (macOS, in tests) only the traps
   apply, and the session's log has everything (`TestAfterSwitchSurvives`
   skips).
 - **Release logs: two per release.** The session's (`LogFile`,
@@ -437,10 +450,12 @@ repositories fit together and the open ideas.
   (`ServerLogFile`), raw, from each switch on. They never overlap, and
   neither is rewritten: `--log` (`LogReadScript` prints both,
   `LogServerPart` between) joins them for display (`joinLogs`): each
-  server part among the session's lines at its time, cleaned the same
-  way and indented under a line saying where it comes from. A session
-  gone keeps the server's part whole; an operator gone (CI killed)
-  leaves the server's alone. Pruned with their releases. Local steps'
+  server part after the session's next `LogAnchor`, in order, cleaned
+  the same way and indented; never by time (two machines' clocks, and
+  lines of the same second). Parts no anchor claims (an operator gone
+  before saving, as when CI is killed) follow at the end under their
+  `LogSection` time. A sync's push lines, logged after the holder's
+  anchor, show after its part. Pruned with their releases. Local steps'
   output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
@@ -587,8 +602,8 @@ repositories fit together and the open ideas.
   `SyncOptions` between `make_current` and `run`) takes the release lock,
   runs prepare, and prints the marker with its directory
   (`SyncMarker` + `$base`: the operator does not know the release root),
-  taken out by a `LineMarker` on both streams (stderr once the holder
-  follows its output from a file, `followOutput`). The holder's and the
+  taken out by a `LineMarker` on stderr (holders print on one stream).
+  The holder's and the
   push's ssh ignore SIGINT (`remote.WithoutInterrupt`: a terminal's
   Ctrl-C reaches the whole foreground group, and a `-T` ssh quits on
   it), so devopsy alone ends them, in order. Then the push on the parent's (`PushScript`:

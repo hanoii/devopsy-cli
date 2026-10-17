@@ -2,6 +2,9 @@ package remote
 
 import (
 	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,5 +86,50 @@ func TestLineMarker(t *testing.T) {
 	_, _ = o.Write([]byte(marker + "/c\n"))
 	if found != 1 || errOut.String() != "x\n" || out.String() != marker+"/c\n" {
 		t.Errorf("two streams: found %d, stderr %q, stdout %q", found, errOut.String(), out.String())
+	}
+}
+
+// A line one stream held while the marker came on the other goes before
+// that stream's next bytes.
+func TestLineMarkerHeld(t *testing.T) {
+	var out, errOut bytes.Buffer
+	m := &LineMarker{Prefix: SyncMarker}
+	o, e := m.Writer(&out), m.Writer(&errOut)
+	_, _ = o.Write([]byte("devopsy: "))
+	_, _ = e.Write([]byte(SyncMarker + "/b\n"))
+	_, _ = o.Write([]byte("restoring\n"))
+	if out.String() != "devopsy: restoring\n" {
+		t.Errorf("held line: %q", out.String())
+	}
+}
+
+// Only a logged session filters SwitchMarker (and logs LogAnchor where it
+// was): any other is a plain passthrough, a shell's typing and an
+// export's data untouched.
+func TestSSHSwitchMarker(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n")
+	if err := os.Chmod(filepath.Join(bin, "fakessh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVOPSY_SSH_COMMAND", filepath.Join(bin, "fakessh"))
+	tg := &Target{Host: "h"}
+	script := "echo before >&2; echo " + SwitchMarker + " >&2; echo after >&2; echo out"
+	var out, log bytes.Buffer
+	if _, err := SSHStreams(context.Background(), tg, nil, script, strings.NewReader(""), &out, &out, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), SwitchMarker) {
+		t.Errorf("unlogged session filtered: %q", out.String())
+	}
+	out.Reset()
+	if _, err := SSHStreams(context.Background(), tg, nil, script, strings.NewReader(""), &out, &out, false, &log); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), SwitchMarker) || !strings.Contains(out.String(), "after") {
+		t.Errorf("logged session's output: %q", out.String())
+	}
+	if l := log.String(); !strings.Contains(l, "before\n"+LogAnchor+"\n") || strings.Contains(l, "after") {
+		t.Errorf("logged session's log: %q", l)
 	}
 }

@@ -42,9 +42,14 @@ func (mw *MarkerWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if m.found {
 		if m.Cut {
+			mw.line = nil
 			return n, nil
 		}
-		_, err := mw.w.Write(p)
+		// A line this stream held while the marker came on the other
+		// goes first.
+		held := mw.line
+		mw.line = nil
+		_, err := mw.w.Write(append(held, p...))
 		return n, err
 	}
 	for len(p) > 0 && !m.found {
