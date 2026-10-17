@@ -102,7 +102,7 @@ case "$*" in
   "run --rm --name devopsy-import-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
-    for e; do if [ "$e" = . ]; then d=$dst; else d=$dst/$e; fi; [ ! -d "$d" ] || find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; done
+    for e; do if [ "$e" = . ]; then find "$dst" -mindepth 2 -maxdepth 2 -exec rm -rf {} +; find "$dst" -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +; elif [ -d "$dst/$e" ] && [ ! -L "$dst/$e" ]; then find "$dst/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done
     exec tar -C "$dst" -xf - ;;
 esac
 exit 0
@@ -1370,6 +1370,7 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
 	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "releases", "19990101000000", remote.FailedFile), "", 0o644)
 	out, code = s.run(nil, "@prod", "--status")
 	if code != 0 || !strings.Contains(out, "release     "+s.current("prod")[len("releases/"):]) || !strings.Contains(out, "just now") || !strings.Contains(out, "(1 kept)") || !strings.Contains(out, "url https://shop-prod.example\n") || strings.Contains(out, "parent") {
 		t.Fatalf("prod status (%d):\n%s", code, out)

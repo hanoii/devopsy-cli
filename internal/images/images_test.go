@@ -650,26 +650,33 @@ func TestRemoveDockerFails(t *testing.T) {
 }
 
 // An image a release ran under a name in another repository than the
-// release holding it (a mirror) is recorded when the release goes, and
-// removed once nothing holds it.
+// release holding it (a mirror), or by digest, is recorded when the
+// release goes, and removed once nothing holds it.
 func TestRemoveOtherRepository(t *testing.T) {
-	d := newFake()
-	var out bytes.Buffer
-	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
-	d.pull("bitnami/redis:7", "sha256:1")
-	d.pull("mirror.example/bitnami/redis:7", "sha256:1")
-	older := e.newRelease("bitnami/redis:7")
-	e.set.Bookmark(e.rel(older))
-	newer := e.newRelease("mirror.example/bitnami/redis:7")
-	e.set.Bookmark(e.rel(newer))
-	for _, id := range []string{newer, older} { // pruning: newest first
-		if err := e.set.Remove(e.rel(id)); err != nil {
-			t.Fatal(err)
+	for _, c := range [][2]any{{"bitnami/redis:7", false}, {"bitnami/redis:7", true}, {"mirror.example/bitnami/redis@sha256:abc", false}, {"mirror.example/bitnami/redis@sha256:abc", true}, {"bitnami/redis@sha256:abc", false}, {"bitnami/redis@sha256:abc", true}} {
+		first, newestFirst := c[0].(string), c[1].(bool)
+		d := newFake()
+		var out bytes.Buffer
+		e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+		d.pull(first, "sha256:1")
+		d.pull("mirror.example/bitnami/redis:7", "sha256:1")
+		older := e.newRelease(first)
+		e.set.Bookmark(e.rel(older))
+		newer := e.newRelease("mirror.example/bitnami/redis:7")
+		e.set.Bookmark(e.rel(newer))
+		order := []string{older, newer}
+		if newestFirst { // pruning's order
+			order = []string{newer, older}
 		}
-		e.set.Prune()
-	}
-	if len(d.images) != 0 {
-		t.Errorf("left: %v\n%s", d.names, out.String())
+		for _, id := range order {
+			if err := e.set.Remove(e.rel(id)); err != nil {
+				t.Fatal(err)
+			}
+			e.set.Prune()
+		}
+		if len(d.images) != 0 {
+			t.Errorf("%s, newest first %v: left: %v\n%s", first, newestFirst, d.names, out.String())
+		}
 	}
 }
 

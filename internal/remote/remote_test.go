@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1351,5 +1352,37 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	}
 	if !strings.Contains(act, "unset "+SyncFromTargetEnv) {
 		t.Errorf("the sync's variables reach the run step")
+	}
+}
+
+// A .lock removed while its lock was awaited (--destroy, a failed first
+// release removing $base) is opened again: a lock on the removed file
+// keeps nothing out. Without create, a $base gone fails.
+func TestReleaseLockReopens(t *testing.T) {
+	bin, root := t.TempDir(), t.TempDir()
+	base := filepath.Join(root, "app", "prod")
+	// The first flock "waits" while the file goes; later ones lock.
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\necho flock >> \"$ROOT/calls\"\n[ -e \"$ROOT/once\" ] || { : > \"$ROOT/once\"; rm -rf \"$BASE\"; mkdir -p \"$BASE\"; }\nexit 0\n")
+	if err := os.Chmod(filepath.Join(bin, "flock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(create bool) (string, error) {
+		cmd := exec.Command("sh", "-c", "set -eu\nbase=\"$BASE\"\n"+releaseLock(false, create)+"echo locked\n")
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ROOT=" + root, "BASE=" + base}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	// Twice where /dev/fd names the open file (Linux, the servers); once
+	// on macOS, which cannot tell and never loops.
+	want := 2
+	if runtime.GOOS == "darwin" {
+		want = 1
+	}
+	if out, err := run(true); err != nil || !strings.Contains(out, "locked") || strings.Count(readFile(filepath.Join(root, "calls")), "flock") != want {
+		t.Errorf("reopen (%v), calls %q:\n%s", err, readFile(filepath.Join(root, "calls")), out)
+	}
+	os.RemoveAll(base)
+	if out, err := run(false); err == nil || !strings.Contains(out, "is gone") {
+		t.Errorf("gone (%v):\n%s", err, out)
 	}
 }

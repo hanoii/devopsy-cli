@@ -382,6 +382,29 @@ func lockWait(fd int, shared bool, what string) string {
 	return fmt.Sprintf(`flock -n %s%d || { echo "devopsy: waiting for %s, up to 10 minutes" >&2; flock %s-w 600 %d || { echo "devopsy: %s did not end in 10 minutes" >&2; exit 75; }; }`, opt, fd, what, opt, fd, what)
 }
 
+// releaseLock takes the environment's release lock on fd 9 (lockWait,
+// shared or exclusive), creating $base first with create; without it, a
+// $base gone meanwhile fails. A lock taken on a .lock that --destroy or a
+// failed first release removed while it waited is no lock (whoever opens
+// the path next locks another file), so it opens the path again.
+func releaseLock(shared, create bool) string {
+	mk := `[ -d "$base" ] || { echo "devopsy: $base is gone" >&2; exit 1; }`
+	if create {
+		mk = `mkdir -p "$base"`
+	}
+	// /dev/fd names the open file on Linux, not on macOS (where -ef is
+	// always false): checked on the file just opened, compared after the
+	// wait only where it can, so the loop never spins.
+	return `while :; do
+  ` + mk + `
+  exec 9>"$base/.lock"
+  if [ /dev/fd/9 -ef "$base/.lock" ]; then rl_check=1; else rl_check=; fi
+  ` + lockWait(9, shared, "the release running on $base") + `
+  if [ -z "$rl_check" ] || [ /dev/fd/9 -ef "$base/.lock" ]; then break; fi
+done
+`
+}
+
 // Protocol is what the scripts need from the server's devopsy, which
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
@@ -421,7 +444,9 @@ func upgradeAddress(t *Target) string {
 	return t.Host
 }
 
-// prelude adds, for release scripts, the checks and helpers they share.
+// prelude adds, for release scripts, the checks, the release lock and
+// the helpers they share: a first release failing meanwhile removes
+// $base, and --destroy removes it whole.
 func prelude(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
@@ -431,13 +456,9 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   echo "devopsy: $base/current is a directory, not a link to a release: containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root. Take them down (docker compose -p <project> down) and remove it (docker run --rm -v \"$base:/env\" alpine rm -rf /env/current), then release again" >&2
   exit 1
 fi
-mkdir -p "$base/releases" "$base/shared/mnt"
+` + releaseLock(false, true) + `mkdir -p "$base/releases" "$base/shared/mnt"
 # make_current releases/<id>: current points at its code.
 make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
-lock() {
-  exec 9>"$base/.lock"
-  ` + lockWait(9, false, "the release running on $base") + `
-}
 `
 }
 
@@ -446,11 +467,7 @@ lock() {
 // would put the new tree inside the existing release and the old one
 // would run again.
 func UploadScript(t *Target, id string) string {
-	// Under the release lock: a first release failing meanwhile removes
-	// $base, and --destroy removes it whole.
-	return prelude(t) + `exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-` + fmt.Sprintf(`rel="$base/releases/"%s
+	return prelude(t) + fmt.Sprintf(`rel="$base/releases/"%s
 [ ! -e "$rel" ] || { echo "devopsy: release $(basename "$rel") exists already on $base (another release in the same second?): try again" >&2; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
@@ -512,7 +529,6 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	}
 	// Defined first: not_live removes a first release's images.
 	s += releaseImages(projectName, t, t.Mode)
-	s += "lock\n"
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -1114,9 +1130,7 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string) string {
   echo "devopsy: $base has no releases" >&2
   exit 1
 fi
-exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { echo "devopsy: nothing removed" >&2; exit 75; }
 img recover "$base" ${prev:+"$base/$prev"}
@@ -1303,9 +1317,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not an environment with releases: remove it by hand" >&2
   exit 1
 fi
-exec 9>"$base/.lock"
-` + lockWait(9, false, "the release running on $base") + `
-` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
+` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
 img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
