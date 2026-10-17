@@ -13,7 +13,8 @@ import (
 // imagesFlag is the hidden flag release scripts run on a server, under
 // the server's image lock, for a release's images (internal/images):
 //
-//	devopsy --images --name <compose name> --left <record> <action> ...
+//	devopsy --images --name <compose name> [--project <its containers'>]
+//	    --left <record> <action> ...
 //
 // bookmark <release>..., restore <release> (exit 1 when it cannot),
 // remove <release>... (exit 1 when Docker failed: keep the release),
@@ -32,13 +33,16 @@ func runImages(args []string, color bool) int {
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--name", "--left":
+		case "--name", "--left", "--project":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
-			if args[i] == "--name" {
+			switch args[i] {
+			case "--name":
 				s.Name, named = args[i+1], true
-			} else {
+			case "--project":
+				s.Project = args[i+1]
+			default:
 				s.Left = args[i+1]
 			}
 			i++

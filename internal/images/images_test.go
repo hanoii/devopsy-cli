@@ -162,18 +162,18 @@ func TestCksum(t *testing.T) {
 }
 
 func TestBookmarkPrefix(t *testing.T) {
-	if got := BookmarkPrefix("app-prod"); got != "devopsy-app-prod-" {
+	if got := bookmarkPrefix("app-prod"); got != "devopsy-app-prod-" {
 		t.Errorf("short: %q", got)
 	}
-	if got := BookmarkPrefix(""); got != "devopsy-" {
+	if got := bookmarkPrefix(""); got != "devopsy-" {
 		t.Errorf("empty: %q", got)
 	}
 	long1 := strings.Repeat("a", 94)
-	if BookmarkPrefix(long1) != "devopsy-"+long1+"-" {
+	if bookmarkPrefix(long1) != "devopsy-"+long1+"-" {
 		t.Errorf("94 characters are kept")
 	}
 	long2, long3 := strings.Repeat("b", 120)+"x", strings.Repeat("b", 120)+"y"
-	p2, p3 := BookmarkPrefix(long2), BookmarkPrefix(long3)
+	p2, p3 := bookmarkPrefix(long2), bookmarkPrefix(long3)
 	if p2 == p3 || len(p2) != len("devopsy-")+85+1+8+1 {
 		t.Errorf("long names: %q %q", p2, p3)
 	}
@@ -181,7 +181,7 @@ func TestBookmarkPrefix(t *testing.T) {
 	if n := len(p2) + 14 + 1 + 10; n > 128 {
 		t.Errorf("a tag can reach %d characters", n)
 	}
-	if BookmarkPrefix(long2) != p2 {
+	if bookmarkPrefix(long2) != p2 {
 		t.Errorf("not stable")
 	}
 }
@@ -196,8 +196,8 @@ func TestRepo(t *testing.T) {
 		"x:1@sha256:abc":            "x",
 		"docker.io/library/nginx:1": "docker.io/library/nginx",
 	} {
-		if got := Repo(ref); got != want {
-			t.Errorf("Repo(%q) = %q, want %q", ref, got, want)
+		if got := repoOf(ref); got != want {
+			t.Errorf("repoOf(%q) = %q, want %q", ref, got, want)
 		}
 	}
 	if repoKey("docker.io/library/nginx:1") != "nginx" || repoKey("library/nginx") != "nginx" || repoKey("index.docker.io/x/y") != "x/y" {
@@ -286,7 +286,7 @@ func randomHistory(t *testing.T, seed int64) {
 		log = append(log, step)
 		for _, e := range envs {
 			for _, id := range e.releases() {
-				es := ReadList(e.rel(id))
+				es := readList(e.rel(id))
 				for i, b := range bookmarks(es, e.set.Name, id) {
 					if es[i].ID == "" || gone[b] {
 						continue
@@ -314,8 +314,11 @@ func randomHistory(t *testing.T, seed int64) {
 		shared := "docker.io/library/mariadb:11"
 		if e.set.Name == "app-b" {
 			shared = "mariadb:11"
-			if rng.Intn(3) == 0 {
+			switch rng.Intn(4) {
+			case 0:
 				shared = "mariadb:11.4"
+			case 1: // the same image from a mirror: another repository
+				shared = "mirror.example/mariadb:11"
 			}
 		}
 		own := e.set.Name + "-app"
@@ -344,7 +347,7 @@ func randomHistory(t *testing.T, seed int64) {
 			id := e.newRelease(refs...)
 			d.pull(own, newImage())
 			switch {
-			case shared == "mariadb:11.4":
+			case shared == "mariadb:11.4" || shared == "mirror.example/mariadb:11":
 				if cur, err := d.ID("mariadb:11"); err == nil && rng.Intn(2) == 0 {
 					d.pull(shared, cur) // the same image, another name
 				} else {
@@ -396,7 +399,7 @@ func randomHistory(t *testing.T, seed int64) {
 			if e.set.Restore(e.rel(target)) {
 				assertKept(t, d, before, log, &out)
 				// Exact, but for the names another environment uses.
-				es := ReadList(e.rel(target))
+				es := readList(e.rel(target))
 				for i, b := range bookmarks(es, e.set.Name, target) {
 					if strings.Contains(es[i].Ref, "@") {
 						continue
@@ -416,7 +419,7 @@ func randomHistory(t *testing.T, seed int64) {
 					d.pull(r, newImage())
 				}
 				e.set.Bookmark(e.rel(target))
-				for _, b := range bookmarks(ReadList(e.rel(target)), e.set.Name, target) {
+				for _, b := range bookmarks(readList(e.rel(target)), e.set.Name, target) {
 					delete(gone, b)
 				}
 			}
@@ -431,18 +434,18 @@ func randomHistory(t *testing.T, seed int64) {
 					held := map[string]string{}
 					for n, i := range d.names {
 						for _, c := range d.containers {
-							if c.image == i && !IsBookmark(n) {
+							if c.image == i && !isBookmark(n) {
 								held[n] = i
 							}
 						}
 					}
 					for n, i := range d.names {
-						if IsBookmark(n) {
+						if isBookmark(n) {
 							continue
 						}
 						tags, _ := d.Tags(i)
 						for _, tg := range tags {
-							if IsBookmark(tg) && !strings.HasSuffix(tg, "-"+id) && !strings.Contains(tg, "-"+id+"-") {
+							if isBookmark(tg) && !strings.HasSuffix(tg, "-"+id) && !strings.Contains(tg, "-"+id+"-") {
 								held[n] = i
 							}
 						}
@@ -464,7 +467,7 @@ func randomHistory(t *testing.T, seed int64) {
 				if id == e.current {
 					continue
 				}
-				bs := bookmarks(ReadList(e.rel(id)), e.set.Name, id)
+				bs := bookmarks(readList(e.rel(id)), e.set.Name, id)
 				if len(bs) > 0 && e.set.Docker.Remove(bs[0]) == nil {
 					gone[bs[0]] = true
 					check(e.set.Name + " bookmark removed " + bs[0])
@@ -513,7 +516,7 @@ func randomHistory(t *testing.T, seed int64) {
 func usedNames(d *fakeDocker, other *env) map[string]string {
 	used := map[string]string{}
 	if other.current != "" {
-		for _, e := range ReadList(other.rel(other.current)) {
+		for _, e := range readList(other.rel(other.current)) {
 			if e.ID != "" && d.names[e.Ref] == e.ID {
 				used[e.Ref] = e.ID
 			}
@@ -521,7 +524,7 @@ func usedNames(d *fakeDocker, other *env) map[string]string {
 	}
 	for n, id := range d.names {
 		for _, c := range d.containers {
-			if c.project == other.set.Name && c.image == id && !IsBookmark(n) {
+			if c.project == other.set.Name && c.image == id && !isBookmark(n) {
 				used[n] = id
 			}
 		}
@@ -535,7 +538,7 @@ func usedNames(d *fakeDocker, other *env) map[string]string {
 func sharedNames(d *fakeDocker, other *env) map[string]string {
 	shared := map[string]string{}
 	for n, id := range d.names {
-		if IsBookmark(n) {
+		if isBookmark(n) {
 			continue
 		}
 		for _, c := range d.containers {
@@ -545,7 +548,7 @@ func sharedNames(d *fakeDocker, other *env) map[string]string {
 		}
 		tags, _ := d.Tags(id)
 		for _, tg := range tags {
-			if strings.Contains(tg, ":"+BookmarkPrefix(other.set.Name)) {
+			if strings.Contains(tg, ":"+bookmarkPrefix(other.set.Name)) {
 				shared[n] = id
 			}
 		}
@@ -625,7 +628,7 @@ func TestBookmarkRenamed(t *testing.T) {
 	e.set.Bookmark(e.rel(id))
 	e.lists[id] = []string{"postgres:15", "postgres:16"}
 	e.set.Bookmark(e.rel(id))
-	if _, err := d.ID("postgres:" + BookmarkPrefix("app-prod") + id); err == nil {
+	if _, err := d.ID("postgres:" + bookmarkPrefix("app-prod") + id); err == nil {
 		t.Errorf("the old bookmark stays")
 	}
 	if exists(left) {
@@ -648,5 +651,97 @@ func TestRemoveDockerFails(t *testing.T) {
 	}
 	if err := e.set.Remove(e.rel(id)); err != nil || len(d.images) != 0 {
 		t.Errorf("the next removal did not finish it (%v): %v\n%s", err, d.names, out.String())
+	}
+}
+
+// An image a release ran under a name in another repository than the
+// release holding it (a mirror) is recorded when the release goes, and
+// removed once nothing holds it.
+func TestRemoveOtherRepository(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	d.pull("bitnami/redis:7", "sha256:1")
+	d.pull("mirror.example/bitnami/redis:7", "sha256:1")
+	older := e.newRelease("bitnami/redis:7")
+	e.set.Bookmark(e.rel(older))
+	newer := e.newRelease("mirror.example/bitnami/redis:7")
+	e.set.Bookmark(e.rel(newer))
+	for _, id := range []string{newer, older} { // pruning: newest first
+		if err := e.set.Remove(e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		e.set.Prune()
+	}
+	if len(d.images) != 0 {
+		t.Errorf("left: %v\n%s", d.names, out.String())
+	}
+}
+
+// A release whose digest's image is gone is not restored: the fetch
+// pulls it before the switch, never the run step after.
+func TestRestoreDigestGone(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	d.pull("nginx@sha256:abc", "sha256:1")
+	id := e.newRelease("nginx@sha256:abc")
+	e.set.Bookmark(e.rel(id))
+	for n := range d.names {
+		delete(d.names, n)
+	}
+	delete(d.images, "sha256:1")
+	if e.set.Restore(e.rel(id)) {
+		t.Errorf("restored with its image gone\n%s", out.String())
+	}
+}
+
+// The containers' compose project is the one a restore leaves out, also
+// when the operator's COMPOSE_PROJECT_NAME named it otherwise.
+func TestRestoreOwnProject(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	e.set.Project = "custom"
+	d.pull("app:1", "sha256:1")
+	first := e.newRelease("app:1")
+	e.set.Bookmark(e.rel(first))
+	d.pull("app:1", "sha256:2")
+	second := e.newRelease("app:1")
+	e.set.Bookmark(e.rel(second))
+	d.containers = []container{{"sha256:2", "custom"}}
+	if !e.set.Restore(e.rel(first)) || d.names["app:1"] != "sha256:1" {
+		t.Errorf("app:1 is %s, want sha256:1\n%s", d.names["app:1"], out.String())
+	}
+}
+
+// A name rewritten the same to Docker (docker.io/library/nginx:1 and
+// nginx:1) between two listings is not recorded as dropped.
+func TestBookmarkRespelled(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	e := newEnv(t, d, "app-prod", left, &out)
+	d.pull("nginx:1", "sha256:1")
+	id := e.newRelease("docker.io/library/nginx:1")
+	e.set.Bookmark(e.rel(id))
+	e.lists[id] = []string{"nginx:1"}
+	e.set.Bookmark(e.rel(id))
+	if exists(left) {
+		t.Errorf("recorded as dropped\n%s", out.String())
+	}
+}
+
+func TestIsBookmark(t *testing.T) {
+	for tag, want := range map[string]bool{
+		"app:devopsy-app-prod-1":          true,
+		"reg:5000/app:devopsy-app-prod-1": true,
+		"devopsy-docs-prod-app":           false,
+		"devopsy-docs-prod-app:latest":    false,
+		"reg:5000/devopsy-x":              false,
+	} {
+		if isBookmark(tag) != want {
+			t.Errorf("isBookmark(%q) = %v", tag, !want)
+		}
 	}
 }

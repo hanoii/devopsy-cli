@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func ListCompose(rel string) ([]string, error) {
 	var out bytes.Buffer
 	cmd := exec.Command("devopsy", "--", "config", "--images")
 	cmd.Dir = filepath.Join(rel, codeDir)
-	cmd.Stdout = &out
+	cmd.Stdout, cmd.Stderr = &out, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config --images: %w", err)
 	}

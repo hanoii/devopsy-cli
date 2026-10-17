@@ -80,18 +80,19 @@ type Set struct {
 	Docker Docker
 	// Name is the environment's compose name, which its bookmarks carry.
 	Name string
+	// Project is the compose project its containers carry: Name, unless
+	// the operator's COMPOSE_PROJECT_NAME said otherwise.
+	Project string
 	// Left is its project's LeftFile.
 	Left string
 	// Out takes what it says, one "devopsy: " line each.
 	Out io.Writer
 	// List lists the images a release runs (ListCompose).
 	List func(rel string) ([]string, error)
-	// Now is the clock for the record; time.Now when nil.
-	Now func() time.Time
 }
 
-// Entry is one image a release runs.
-type Entry struct {
+// entry is one image a release runs.
+type entry struct {
 	Ref string
 	// ID is the image Ref had when bookmarked; "" when Docker had none.
 	ID string
@@ -102,13 +103,13 @@ func (s *Set) say(format string, args ...any) {
 	_, _ = fmt.Fprintf(s.Out, "devopsy: "+format+"\n", args...)
 }
 
-// BookmarkPrefix is the start of a release's bookmarks, the release id
+// bookmarkPrefix is the start of a release's bookmarks, the release id
 // following it: devopsy-<compose name>-, then the 14-digit id, then,
 // when the release names a repository more than once, - and the ref's
 // cksum (up to 10 digits). Docker's tags end at 128 characters, so a
 // name over 94 is cut to 85 and followed by the first 8 hex digits of its
 // sha256, which keeps names that differ only past the cut apart.
-func BookmarkPrefix(composeName string) string {
+func bookmarkPrefix(composeName string) string {
 	if composeName == "" {
 		return "devopsy-"
 	}
@@ -119,8 +120,8 @@ func BookmarkPrefix(composeName string) string {
 	return "devopsy-" + composeName + "-"
 }
 
-// Repo is a ref's repository: no digest, no tag; a registry's port stays.
-func Repo(ref string) string {
+// repoOf is a ref's repository: no digest, no tag; a registry's port stays.
+func repoOf(ref string) string {
 	r, _, _ := strings.Cut(ref, "@")
 	slash := strings.LastIndex(r, "/")
 	if colon := strings.LastIndex(r, ":"); colon > slash {
@@ -132,35 +133,40 @@ func Repo(ref string) string {
 // repoKey is the repository as Docker shows it: docker.io/library/nginx
 // and library/nginx are nginx, docker.io/bitnami/redis is bitnami/redis.
 func repoKey(ref string) string {
-	r := Repo(ref)
+	r := repoOf(ref)
 	r = strings.TrimPrefix(r, "index.docker.io/")
 	r = strings.TrimPrefix(r, "docker.io/")
 	return strings.TrimPrefix(r, "library/")
 }
 
 // familiar is a name as Docker shows it, so a name devopsy computed and
-// one Docker reports compare equal.
+// one Docker reports compare equal: nginx is nginx:latest.
 func familiar(ref string) string {
-	return repoKey(ref) + ref[len(Repo(ref)):]
+	rest := ref[len(repoOf(ref)):]
+	if rest == "" {
+		rest = ":latest"
+	}
+	return repoKey(ref) + rest
 }
 
-// IsBookmark says whether a tag (repo:tag) is a release's bookmark.
-func IsBookmark(tag string) bool {
-	return strings.HasPrefix(tag[strings.LastIndex(tag, ":")+1:], "devopsy-")
+// isBookmark says whether a tag (repo:tag) is a release's bookmark.
+func isBookmark(tag string) bool {
+	r := repoOf(tag)
+	return len(tag) > len(r) && strings.HasPrefix(tag[len(r)+1:], "devopsy-")
 }
 
 // bookmarks are the bookmark names of a release's entries, in order: a
 // repository named more than once gets the ref's cksum, so no bookmark
 // overwrites another.
-func bookmarks(entries []Entry, name, id string) []string {
+func bookmarks(entries []entry, name, id string) []string {
 	count := map[string]int{}
 	for _, e := range entries {
 		count[repoKey(e.Ref)]++
 	}
-	prefix := BookmarkPrefix(name)
+	prefix := bookmarkPrefix(name)
 	bs := make([]string, len(entries))
 	for i, e := range entries {
-		b := Repo(e.Ref) + ":" + prefix + id
+		b := repoOf(e.Ref) + ":" + prefix + id
 		if count[repoKey(e.Ref)] > 1 {
 			b += "-" + strconv.FormatUint(uint64(cksum([]byte(e.Ref))), 10)
 		}
@@ -169,23 +175,24 @@ func bookmarks(entries []Entry, name, id string) []string {
 	return bs
 }
 
-// ReadList reads a release's ListFile: nil when it has none.
-func ReadList(rel string) []Entry {
+// readList reads a release's ListFile: nil when it has none. Lines
+// without an id are v0.38's, or an image Docker did not have.
+func readList(rel string) []entry {
 	data, err := os.ReadFile(filepath.Join(rel, ListFile))
 	if err != nil {
 		return nil
 	}
-	var es []Entry
+	var es []entry
 	for _, line := range strings.Split(string(data), "\n") {
 		ref, id, _ := strings.Cut(strings.TrimSpace(line), "\t")
 		if ref != "" {
-			es = append(es, Entry{Ref: ref, ID: id})
+			es = append(es, entry{Ref: ref, ID: id})
 		}
 	}
 	return es
 }
 
-func writeList(rel string, es []Entry) error {
+func writeList(rel string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
 		b.WriteString(e.Ref)
@@ -223,13 +230,13 @@ func (s *Set) Bookmark(rel string) {
 		s.say("could not list the images of %s: a rollback to it builds or pulls them again", id)
 		return
 	}
-	old := ReadList(rel)
-	es := make([]Entry, 0, len(refs))
+	old := readList(rel)
+	es := make([]entry, 0, len(refs))
 	listed := map[string]bool{}
 	for _, ref := range refs {
 		img, _ := s.Docker.ID(ref)
-		es = append(es, Entry{Ref: ref, ID: img})
-		listed[ref] = true
+		es = append(es, entry{Ref: ref, ID: img})
+		listed[familiar(ref)] = true
 	}
 	if err := writeList(rel, es); err != nil {
 		s.say("could not record the images of %s (%v): a rollback to it builds or pulls them again", id, err)
@@ -241,7 +248,9 @@ func (s *Set) Bookmark(rel string) {
 		keep[familiar(names[i])] = true
 		// By id: another release's fetch may move the name meanwhile.
 		if e.ID != "" {
-			_ = s.Docker.Tag(e.ID, names[i])
+			if err := s.Docker.Tag(e.ID, names[i]); err != nil {
+				s.say("could not bookmark %s as %s (%v): a rollback to %s builds or pulls it again", e.Ref, names[i], err, id)
+			}
 		}
 	}
 	oldNames := bookmarks(old, s.Name, id)
@@ -253,7 +262,7 @@ func (s *Set) Bookmark(rel string) {
 				}
 			}
 		}
-		if e.ID != "" && !listed[e.Ref] {
+		if e.ID != "" && !listed[familiar(e.Ref)] {
 			if cur, err := s.Docker.ID(e.Ref); err == nil && cur == e.ID {
 				s.record(e.Ref, e.ID, id, "no release lists it any more")
 			}
@@ -268,7 +277,7 @@ func (s *Set) own(rel string) map[string]bool {
 	own := map[string]bool{}
 	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
 	for _, d := range dirs {
-		for _, b := range bookmarks(ReadList(d), s.Name, filepath.Base(d)) {
+		for _, b := range bookmarks(readList(d), s.Name, filepath.Base(d)) {
 			own[familiar(b)] = true
 		}
 	}
@@ -285,14 +294,17 @@ func (s *Set) own(rel string) map[string]bool {
 // When Docker cannot tell, it stays too.
 func (s *Set) Restore(rel string) bool {
 	id := filepath.Base(rel)
-	es := ReadList(rel)
+	es := readList(rel)
 	if len(es) == 0 {
 		return false
 	}
 	names := bookmarks(es, s.Name, id)
 	marks := make([]string, len(es))
 	for i, e := range es {
-		if strings.Contains(e.Ref, "@") {
+		// A digest is exact, but its image must still be there: a restore
+		// that leaves it to the run step's up would pull after the switch.
+		// One Docker never had (no id) was never bookmarked.
+		if strings.Contains(e.Ref, "@") && e.ID == "" {
 			continue
 		}
 		img, err := s.Docker.ID(names[i])
@@ -304,10 +316,13 @@ func (s *Set) Restore(rel string) bool {
 	own := s.own(rel)
 	var stayed []string
 	for i, e := range es {
-		if marks[i] == "" {
+		if strings.Contains(e.Ref, "@") {
 			continue
 		}
 		cur, err := s.Docker.ID(e.Ref)
+		if err != nil && !errors.Is(err, ErrNoImage) {
+			return false
+		}
 		if err == nil && cur != marks[i] {
 			if who := s.others(cur, own); len(who) > 0 {
 				s.say("%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
@@ -331,34 +346,26 @@ func (s *Set) Restore(rel string) bool {
 // projects' containers, and bookmarks none of its releases made. When
 // Docker cannot tell, that is said as a user, so the name stays.
 func (s *Set) others(img string, own map[string]bool) []string {
-	var who []string
-	seen := map[string]bool{}
 	users, err := s.Docker.Users(img)
 	if err != nil {
 		return []string{"Docker could not tell: " + err.Error()}
 	}
+	project := s.Project
+	if project == "" {
+		project = s.Name
+	}
+	var others []string
 	for _, u := range users {
-		if u == s.Name {
-			continue
-		}
-		if u == "" {
-			u = "a container outside Compose"
-		}
-		if !seen[u] {
-			seen[u] = true
-			who = append(who, u)
+		if u != project {
+			others = append(others, u)
 		}
 	}
+	who := describe(others)
 	tags, err := s.Docker.Tags(img)
 	if err != nil {
 		return append(who, "Docker could not tell: "+err.Error())
 	}
-	for _, t := range tags {
-		if IsBookmark(t) && !own[familiar(t)] {
-			who = append(who, t)
-		}
-	}
-	return who
+	return append(who, holding(tags, own)...)
 }
 
 // Undo puts the live release's names back after a release's fetch failed
@@ -382,10 +389,7 @@ func (s *Set) Recover(base, prev string) {
 	for _, m := range marks {
 		rel := filepath.Dir(m)
 		s.say("the images' fetch of release %s was interrupted: marking it failed, its images bookmarked", filepath.Base(rel))
-		s.Bookmark(rel)
-		if prev != "" {
-			s.Restore(prev)
-		}
+		s.Undo(rel, prev, false)
 		if f, err := os.Create(filepath.Join(rel, failedFile)); err == nil {
 			f.Close()
 		}
@@ -405,7 +409,7 @@ func (s *Set) Recover(base, prev string) {
 // the next removal finds its listing again.
 func (s *Set) Remove(rel string) error {
 	id := filepath.Base(rel)
-	es := ReadList(rel)
+	es := readList(rel)
 	if len(es) == 0 {
 		return nil
 	}
@@ -426,10 +430,10 @@ func (s *Set) Remove(rel string) error {
 		if err != nil {
 			return err
 		}
-		if imgs[i] == "" {
+		if imgs[i] == "" { // a v0.38 listing, without ids
 			imgs[i] = bm
 		}
-		if err := s.Docker.Remove(b); err != nil {
+		if err := s.Docker.Remove(b); err != nil && !errors.Is(err, ErrNoImage) {
 			s.leftAdd(b, bm, id, err)
 		}
 	}
@@ -453,20 +457,8 @@ func (s *Set) Remove(rel string) error {
 		if err != nil {
 			return err
 		}
-		held := false
-		for _, t := range tags {
-			if IsBookmark(t) && !mine[familiar(t)] {
-				held = true
-			}
-		}
-		if held {
-			for _, r := range refs[img] {
-				stay = appendNew(stay, r)
-			}
-			continue
-		}
-		// The names to remove: the ones it listed that still point to the
-		// image, and the image's other names in those repositories (one
+		// Its names in the release's repositories: the ones it listed that
+		// still point to the image, and the image's other names there (one
 		// release ran mariadb:11, another mariadb:11.4: whichever goes last
 		// takes both).
 		keys := map[string]bool{}
@@ -480,9 +472,28 @@ func (s *Set) Remove(rel string) error {
 			}
 		}
 		for _, t := range tags {
-			if !IsBookmark(t) && keys[repoKey(t)] {
+			if !isBookmark(t) && keys[repoKey(t)] {
 				rm = appendNew(rm, t)
 			}
+		}
+		if holders := holding(tags, mine); len(holders) > 0 {
+			// The releases holding it take the names in their own
+			// repositories when they go; the ones in others (a mirror
+			// beside bitnami/redis, a digest) would outlive them all:
+			// recorded, retried once nothing holds the image.
+			repos := map[string]bool{}
+			for _, h := range holders {
+				repos[repoKey(h)] = true
+			}
+			for _, r := range refs[img] {
+				stay = appendNew(stay, r)
+			}
+			for _, r := range rm {
+				if !repos[repoKey(r)] {
+					s.record(r, img, id, "another release holds its image under another name")
+				}
+			}
+			continue
 		}
 		if len(rm) == 0 {
 			continue
@@ -494,14 +505,16 @@ func (s *Set) Remove(rel string) error {
 			return err
 		}
 		if len(users) > 0 {
+			why := "a container of " + strings.Join(describe(users), ", ") + " uses its image"
 			for _, r := range rm {
-				s.record(r, img, id, "a container uses its image")
+				s.record(r, img, id, why)
 			}
-			s.say("%s stay: a container uses their image (recorded: --releases lists them, the next pruning retries)", strings.Join(rm, ", "))
+			s.say("%s stay: %s (recorded: --releases lists them, the next pruning retries)", strings.Join(rm, ", "), why)
 			continue
 		}
 		for _, r := range rm {
-			if err := s.Docker.Remove(r); err != nil {
+			// Gone already: removing a sibling name took the image.
+			if err := s.Docker.Remove(r); err != nil && !errors.Is(err, ErrNoImage) {
 				s.leftAdd(r, img, id, err)
 			} else {
 				gone = append(gone, r)
@@ -515,6 +528,29 @@ func (s *Set) Remove(rel string) error {
 		s.say("removed %s, which only %s held", strings.Join(gone, ", "), id)
 	}
 	return nil
+}
+
+// holding are the bookmarks among an image's tags that are not in mine.
+func holding(tags []string, mine map[string]bool) []string {
+	var hs []string
+	for _, t := range tags {
+		if isBookmark(t) && !mine[familiar(t)] {
+			hs = append(hs, t)
+		}
+	}
+	return hs
+}
+
+// describe names compose projects for messages, once each.
+func describe(users []string) []string {
+	var ds []string
+	for _, u := range users {
+		if u == "" {
+			u = "a project outside Compose"
+		}
+		ds = appendNew(ds, u)
+	}
+	return ds
 }
 
 func appendNew(list []string, v string) []string {
@@ -556,11 +592,8 @@ func readLeft(path string) []left {
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		p := strings.SplitN(sc.Text(), "\t", 6)
-		if len(p) < 5 || p[3] == "" {
+		if len(p) < 6 || p[3] == "" {
 			continue
-		}
-		for len(p) < 6 {
-			p = append(p, "")
 		}
 		ls = append(ls, left{p[0], p[1], p[2], p[3], p[4], p[5]})
 	}
@@ -585,15 +618,11 @@ func (s *Set) record(ref, img, release, why string) {
 			return
 		}
 	}
-	now := time.Now
-	if s.Now != nil {
-		now = s.Now
-	}
 	name := strings.ReplaceAll(s.Name, " ", "_")
 	if name == "" {
 		name = "a release"
 	}
-	line := left{strconv.FormatInt(now().Unix(), 10), name, release, ref, img, strings.Join(strings.Fields(why), " ")}.line()
+	line := left{strconv.FormatInt(time.Now().Unix(), 10), name, release, ref, img, strings.Join(strings.Fields(why), " ")}.line()
 	err := os.MkdirAll(filepath.Dir(s.Left), 0o755)
 	if err == nil {
 		var f *os.File
@@ -633,7 +662,7 @@ func (s *Set) retry() {
 		if cur != l.id {
 			continue
 		}
-		if !IsBookmark(l.ref) && (s.held(l.id) || s.used(l.id)) {
+		if !isBookmark(l.ref) && (s.held(l.id) || s.used(l.id)) {
 			keep = append(keep, l)
 			continue
 		}
@@ -660,15 +689,7 @@ func (s *Set) retry() {
 // it does.
 func (s *Set) held(img string) bool {
 	tags, err := s.Docker.Tags(img)
-	if err != nil {
-		return true
-	}
-	for _, t := range tags {
-		if IsBookmark(t) {
-			return true
-		}
-	}
-	return false
+	return err != nil || len(holding(tags, nil)) > 0
 }
 
 // used says whether a container uses an image; when Docker cannot tell,
