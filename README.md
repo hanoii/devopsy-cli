@@ -504,10 +504,10 @@ devopsy @prod --ssh-keys         # prod's server's, in the project
 devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 ```
 
-Releases run part of their work in the server's devopsy (its images'
-rules, for one), so it must be recent enough for yours: an older one
-stops the release before anything changes and says to run `devopsy
-@<target> --upgrade`.
+Commands on a server run part of their work in the server's devopsy
+(releases' images, for one), so it must be recent enough for yours: an
+older one stops them before anything changes and says to run `devopsy
+@<target> --upgrade`, which always works.
 
 Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
 command line:

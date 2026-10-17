@@ -265,7 +265,9 @@ repositories fit together and the open ideas.
   (`releaseImages`): the locks, which a fetch's children inherit, and
   fetching on a terminal (`fetch_images`, `with_tty`). `Protocol`, which
   `--release-settings` reports, makes a script refuse an older server
-  devopsy before anything changes ("upgrade it").
+  devopsy before anything changes ("upgrade it"). It is in
+  `basePrelude`, so every command on a server needs it, read-only ones
+  too: one upgrade, and the message names it.
   - **Bookmarks** are the reference count: `<repo>:devopsy-<compose
     name>-<id>` (`images.BookmarkPrefix`: past 94 characters of name,
     cut to 85 plus 8 hex of its sha256, so a tag fits Docker's 128 with
@@ -273,11 +275,18 @@ repositories fit together and the open ideas.
     when the release names a repository twice, compared as Docker
     resolves them, `library/nginx` is `nginx`), digests included (`prune
     -f` deletes an image pulled by digest only, unused) but never
-    restored. `devopsy-images` lists `ref<tab>image id` (older files
-    the ref alone): what a removal decides from even after a bookmark
-    went.
+    restored. `devopsy-images` lists the names, one per line, as
+    before; `devopsy-images-ids` (`images.IDFile`) keeps `ref<tab>image
+    id`, what a removal decides from even after a bookmark went: a file
+    of its own, so an older devopsy (a pinned CI) still reads the
+    listing. Docker shows names short (`docker.io/library/nginx` is
+    `nginx`): every comparison of a computed name with one Docker
+    reports goes through `familiar`. Bookmarks named before repositories
+    were counted as Docker resolves them (`legacyBookmarks`) are found
+    too.
   - **Bookmark** (`img bookmark`): lists through `devopsy -- config
-    --images` in the release's code, records, tags. A release listed
+    --images` in the release's code, records, tags by image id (another
+    fetch may move the name meanwhile). A release listed
     before (fetched again) untags the bookmarks its new listing no
     longer makes, and records the names it dropped for the next
     pruning: it runs under the shared lock, beside other fetches, so it
@@ -292,20 +301,34 @@ repositories fit together and the open ideas.
     environment, so that name stays on the newer image, said.
   - **Remove** (`img remove`): untags the going release's bookmarks,
     then per image it ran, from Docker's state: held by another
-    bookmark, it stays (said, with its names); else its listed names
-    and its other names in the same repositories go (`mariadb:11` and
-    `mariadb:11.4`: whichever release goes last takes both); a name
-    that moved on stays. Never `-f`: a refusal (a container, even a
-    stopped one) is recorded. Idempotent: a removal cut off anywhere is
-    finished by the next, nothing kept between passes.
+    bookmark, it stays (said, with its names); used by a container,
+    its names are recorded, never stripped (taking all but the last
+    would free nothing and cost whoever runs them a pull); else its
+    listed names and its other names in the same repositories go
+    (`mariadb:11` and `mariadb:11.4`: whichever release goes last takes
+    both); a name that moved on stays. Never `-f`: a refusal is
+    recorded. Idempotent: a removal cut off anywhere is finished by the
+    next, nothing kept between passes. Docker failing (anything but a
+    missing image) stops it with exit 1, and the scripts keep the
+    release (`img remove && rm -rf`), so the next removal finds its
+    listing again; `--destroy` then keeps the directory and says to run
+    it again.
   - **The record** (`images.LeftFile`, `<release
     root>/<project>/.devopsy-images-left`: time, compose name, release,
     ref, image id, reason): `--releases` lists it (`ParseLeft`), `img
     prune` retries it first, this project's only (decided), dropping a
     line once its name is gone, moved on or removed, keeping it while a
-    release holds the image or on any error but a missing image;
+    release holds the image, a container uses it, or on any error but a
+    missing image. Lines are appended (`O_APPEND`, one write: two
+    environments of a project record under the shared lock); only the
+    retry, alone under the lock, rewrites the file;
     `LeftoverScript` treats it like the project's `.env`, and `--purge`
     says what it forgets.
+  - **Signals**: `runImages` ignores SIGPIPE, SIGTERM, SIGINT and SIGHUP,
+    its steps being short and under the lock. Go does not keep an
+    inherited ignored SIGPIPE or SIGTERM (only SIGINT and SIGHUP), so
+    the script's `trap ''` alone would let a gone session or a second
+    TERM kill an undo halfway. `leftAdd` records before it says.
   - **Undo** (`img undo [--rollback] <release> [<current>]`): a new
     release's fetch bookmarked (it goes with the release), a rollback's
     target left alone (the names may hold the live release's images),

@@ -717,9 +717,10 @@ done)
 # included (one gone without its images would leave tags nothing finds).
 if [ -n "$pruned" ]; then
   if image_lock exclusive removing now; then
+    # A release whose images Docker could not finish removing stays, for
+    # the next pruning.
     for r in $pruned; do
-      img remove "$base/releases/$r"
-      rm -rf "$base/releases/$r"
+      img remove "$base/releases/$r" && rm -rf "$base/releases/$r"
     done
     img prune
     image_unlock
@@ -910,10 +911,11 @@ const NotLive = `not_live() {
     elif ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
       if image_lock exclusive removing now; then
         for r in "$base"/releases/*; do
-          img remove "$r"
+          img remove "$r" || nl_gone=
         done
         img prune
         image_unlock
+        [ -n "$nl_gone" ] || echo "devopsy: keeping $base: its images are not all removed ('--releases remove failed' tries again)" >&2
       else
         echo "devopsy: keeping $base: $il_busy, and the images its releases got go with it ('--releases remove failed' removes them)" >&2
         nl_gone=
@@ -1010,13 +1012,13 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A release cut off mid-fetch is failed too, recovered or not.
   f=-; { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
-  # Names only: the image ids after a tab stay on the server.
-  i=$(cut -f 1 < "$base/releases/$r/%s" 2>/dev/null | tr '\n' ' ' || true)
+  i=
+  [ ! -f "$base/releases/$r/%s" ] || i=$(tr '\n' ' ' < "$base/releases/$r/%s")
   printf '%%s\t%%s\t%%s\t%%s\t' "$r" "$c" "$f" "$i"
-  tr -d '\n' < "$base/releases/$r/%s" 2>/dev/null || true
+  [ ! -f "$base/releases/$r/%s" ] || tr -d '\n' < "$base/releases/$r/%s"
   echo
 done
-`, ImagesFile, RecordFile)
+`, ImagesFile, ImagesFile, RecordFile, RecordFile)
 }
 
 // Release is one line of ReleasesScript's output.
@@ -1150,13 +1152,18 @@ for id in ` + quoteAll(ids) + `; do
     exit 1
   fi
 done
+rr=0
 for id in ` + quoteAll(ids) + `; do
-  img remove "$base/releases/$id"
-  rm -rf "$base/releases/$id"
-  echo "devopsy: removed release $id" >&2
+  if img remove "$base/releases/$id"; then
+    rm -rf "$base/releases/$id"
+    echo "devopsy: removed release $id" >&2
+  else
+    rr=1
+  fi
 done
 img prune
 image_unlock
+exit "$rr"
 `
 }
 
@@ -1354,10 +1361,14 @@ else
   echo "devopsy: no release: nothing to take down" >&2
 fi
 for r in "$base"/releases/*; do
-  [ ! -d "$r" ] || img remove "$r"
+  [ ! -d "$r" ] || img remove "$r" || d_fail=1
 done
 img prune
 image_unlock
+if [ -n "${d_fail:-}" ]; then
+  echo "devopsy: $base stays: its images are not all removed; run --destroy again" >&2
+  exit 1
+fi
 cd /
 rm -rf "$base" || {
   echo "devopsy: could not remove everything in $base" >&2

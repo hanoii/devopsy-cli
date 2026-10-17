@@ -15,11 +15,22 @@ import (
 // fakeDocker is Docker's image store as the rules see it: names (tags
 // and digests) pointing to images, containers pinning them. Removing a
 // name untags it while the image has another; the last one deletes the
-// image, refused while a container, even a stopped one, uses it.
+// image, refused while a container, even a stopped one, uses it. Names
+// are kept and shown as Docker shows them (docker.io/library/nginx is
+// nginx). fail, when set, makes the next call of that method fail.
 type fakeDocker struct {
 	images     map[string]bool
 	names      map[string]string
 	containers []container
+	fail       map[string]bool
+}
+
+func (d *fakeDocker) failing(method string) error {
+	if d.fail[method] {
+		delete(d.fail, method)
+		return fmt.Errorf("Cannot connect to the Docker daemon")
+	}
+	return nil
 }
 
 type container struct{ image, project string }
@@ -29,7 +40,10 @@ func newFake() *fakeDocker {
 }
 
 func (d *fakeDocker) ID(ref string) (string, error) {
-	if id, ok := d.names[ref]; ok {
+	if err := d.failing("ID"); err != nil {
+		return "", err
+	}
+	if id, ok := d.names[familiar(ref)]; ok {
 		return id, nil
 	}
 	if d.images[ref] {
@@ -39,6 +53,9 @@ func (d *fakeDocker) ID(ref string) (string, error) {
 }
 
 func (d *fakeDocker) Tags(id string) ([]string, error) {
+	if err := d.failing("Tags"); err != nil {
+		return nil, err
+	}
 	if !d.images[id] {
 		return nil, ErrNoImage
 	}
@@ -57,11 +74,12 @@ func (d *fakeDocker) Tag(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	d.names[dst] = id
+	d.names[familiar(dst)] = id
 	return nil
 }
 
 func (d *fakeDocker) Remove(ref string) error {
+	ref = familiar(ref)
 	id, ok := d.names[ref]
 	if !ok {
 		return ErrNoImage
@@ -85,6 +103,9 @@ func (d *fakeDocker) Remove(ref string) error {
 }
 
 func (d *fakeDocker) Users(id string) ([]string, error) {
+	if err := d.failing("Users"); err != nil {
+		return nil, err
+	}
 	var us []string
 	for _, c := range d.containers {
 		if c.image == id {
@@ -120,7 +141,7 @@ outer:
 // pull points ref at a new image, or at an existing one.
 func (d *fakeDocker) pull(ref, id string) {
 	d.images[id] = true
-	d.names[ref] = id
+	d.names[familiar(ref)] = id
 }
 
 func TestCksum(t *testing.T) {
@@ -288,12 +309,22 @@ func randomHistory(t *testing.T, seed int64) {
 		if e == other {
 			other = envs[1]
 		}
-		shared := "mariadb:11"
-		if e.set.Name == "app-b" && rng.Intn(3) == 0 {
-			shared = "mariadb:11.4"
+		// app-a writes the shared name as Docker Hub's full one: the same
+		// name to Docker.
+		shared := "docker.io/library/mariadb:11"
+		if e.set.Name == "app-b" {
+			shared = "mariadb:11"
+			if rng.Intn(3) == 0 {
+				shared = "mariadb:11.4"
+			}
 		}
 		own := e.set.Name + "-app"
-		switch op := rng.Intn(8); op {
+		switch op := rng.Intn(9); op {
+		case 8: // a container outside Compose on the shared name's image
+			if i, err := d.ID("mariadb:11"); err == nil {
+				d.containers = append(d.containers, container{i, ""})
+				check("outside container on " + i)
+			}
 		case 7: // taken down (devopsy down): no containers, current stays
 			var cs []container
 			for _, c := range d.containers {
@@ -304,7 +335,13 @@ func randomHistory(t *testing.T, seed int64) {
 			d.containers = cs
 			check(e.set.Name + " down")
 		case 0, 1: // a release: builds its app, pulls the shared name
-			id := e.newRelease(own, shared)
+			refs := []string{own, shared}
+			if rng.Intn(4) == 0 { // a repository named twice: suffixed bookmarks
+				refs = append(refs, "postgres:15", "postgres:16")
+				d.pull("postgres:15", newImage())
+				d.pull("postgres:16", newImage())
+			}
+			id := e.newRelease(refs...)
 			d.pull(own, newImage())
 			switch {
 			case shared == "mariadb:11.4":
@@ -355,8 +392,20 @@ func randomHistory(t *testing.T, seed int64) {
 				continue
 			}
 			before := usedNames(d, other)
+			shared := sharedNames(d, other)
 			if e.set.Restore(e.rel(target)) {
 				assertKept(t, d, before, log, &out)
+				// Exact, but for the names another environment uses.
+				es := ReadList(e.rel(target))
+				for i, b := range bookmarks(es, e.set.Name, target) {
+					if strings.Contains(es[i].Ref, "@") {
+						continue
+					}
+					want, _ := d.ID(b)
+					if got := d.names[familiar(es[i].Ref)]; got != want && shared[familiar(es[i].Ref)] == "" {
+						t.Fatalf("after %v: rolling back to %s left %s on %s, want %s\n%s", log, target, es[i].Ref, got, want, out.String())
+					}
+				}
 			} else {
 				// Fetched again, sometimes listing another repository (a variable
 				// changed since): its old bookmarks must not linger.
@@ -377,8 +426,16 @@ func randomHistory(t *testing.T, seed int64) {
 		case 4: // a release removed (pruned or by hand), never the current one
 			for _, id := range e.releases() {
 				if id != e.current {
-					// Names whose image another release's bookmark holds stay.
+					// Names whose image another release's bookmark holds, or a
+					// container uses, stay.
 					held := map[string]string{}
+					for n, i := range d.names {
+						for _, c := range d.containers {
+							if c.image == i && !IsBookmark(n) {
+								held[n] = i
+							}
+						}
+					}
 					for n, i := range d.names {
 						if IsBookmark(n) {
 							continue
@@ -393,7 +450,7 @@ func randomHistory(t *testing.T, seed int64) {
 					e.set.Remove(e.rel(id))
 					for n, i := range held {
 						if d.names[n] != i {
-							t.Fatalf("after %v: removing %s took %s, which another release holds\n%s", log, id, n, out.String())
+							t.Fatalf("after %v: removing %s took %s, which another release or a container holds\n%s", log, id, n, out.String())
 						}
 					}
 					os.RemoveAll(e.rel(id))
@@ -472,6 +529,30 @@ func usedNames(d *fakeDocker, other *env) map[string]string {
 	return used
 }
 
+// sharedNames are the names a restore may leave alone: whose image the
+// other environment's containers or one outside Compose use, or one of
+// its bookmarks, any release's, holds.
+func sharedNames(d *fakeDocker, other *env) map[string]string {
+	shared := map[string]string{}
+	for n, id := range d.names {
+		if IsBookmark(n) {
+			continue
+		}
+		for _, c := range d.containers {
+			if (c.project == other.set.Name || c.project == "") && c.image == id {
+				shared[n] = id
+			}
+		}
+		tags, _ := d.Tags(id)
+		for _, tg := range tags {
+			if strings.Contains(tg, ":"+BookmarkPrefix(other.set.Name)) {
+				shared[n] = id
+			}
+		}
+	}
+	return shared
+}
+
 func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []string, out *bytes.Buffer) {
 	t.Helper()
 	for n, id := range before {
@@ -484,4 +565,88 @@ func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []str
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// A release going leaves every name of an image a container uses, so a
+// project outside devopsy running mariadb:11.4 keeps it although the
+// release ran the same image as mariadb:11: recorded, retried once the
+// container is gone.
+func TestRemoveLeavesUsedImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	d.pull("mariadb:11", "sha256:1")
+	d.pull("mariadb:11.4", "sha256:1")
+	id := e.newRelease("mariadb:11")
+	e.set.Bookmark(e.rel(id))
+	d.containers = []container{{"sha256:1", ""}}
+	if err := e.set.Remove(e.rel(id)); err != nil {
+		t.Fatal(err)
+	}
+	if d.names["mariadb:11"] != "sha256:1" || d.names["mariadb:11.4"] != "sha256:1" {
+		t.Errorf("names of a used image went: %v\n%s", d.names, out.String())
+	}
+	d.containers = nil
+	e.set.Prune()
+	if len(d.images) != 0 {
+		t.Errorf("not retried once the container went: %v\n%s", d.names, out.String())
+	}
+}
+
+// A bookmark Docker shows short (nginx for docker.io/library/nginx) is
+// still the environment's own: its rollback restores exactly.
+func TestRestoreFamiliarNames(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	ref := "docker.io/library/nginx:1.27"
+	d.pull(ref, "sha256:1")
+	first := e.newRelease(ref)
+	e.set.Bookmark(e.rel(first))
+	d.pull(ref, "sha256:2")
+	second := e.newRelease(ref)
+	e.set.Bookmark(e.rel(second))
+	if !e.set.Restore(e.rel(first)) || d.names["nginx:1.27"] != "sha256:1" {
+		t.Errorf("nginx:1.27 is %s after the rollback, want sha256:1\n%s", d.names["nginx:1.27"], out.String())
+	}
+}
+
+// A release fetched again whose repository count changed (a second
+// postgres added) renames its bookmarks: the old one goes, and the name
+// it still lists is not recorded as dropped.
+func TestBookmarkRenamed(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	e := newEnv(t, d, "app-prod", left, &out)
+	d.pull("postgres:15", "sha256:1")
+	d.pull("postgres:16", "sha256:2")
+	id := e.newRelease("postgres:15")
+	e.set.Bookmark(e.rel(id))
+	e.lists[id] = []string{"postgres:15", "postgres:16"}
+	e.set.Bookmark(e.rel(id))
+	if _, err := d.ID("postgres:" + BookmarkPrefix("app-prod") + id); err == nil {
+		t.Errorf("the old bookmark stays")
+	}
+	if exists(left) {
+		t.Errorf("postgres:15, still listed, was recorded as dropped\n%s", out.String())
+	}
+}
+
+// Docker failing midway stops a removal with an error, so the release
+// stays for the next one, which finishes it.
+func TestRemoveDockerFails(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
+	d.pull("app:1", "sha256:1")
+	id := e.newRelease("app:1")
+	e.set.Bookmark(e.rel(id))
+	d.fail = map[string]bool{"Tags": true}
+	if err := e.set.Remove(e.rel(id)); err == nil {
+		t.Fatalf("no error with Docker failing\n%s", out.String())
+	}
+	if err := e.set.Remove(e.rel(id)); err != nil || len(d.images) != 0 {
+		t.Errorf("the next removal did not finish it (%v): %v\n%s", err, d.names, out.String())
+	}
 }
