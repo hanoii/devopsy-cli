@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -586,8 +587,35 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	return code
 }
 
-// errNotConfirmed: the name typed was not the environment's.
+// errNotConfirmed: the name typed was not the one asked for.
 var errNotConfirmed = errors.New("")
+
+// typeToGoOn asks to type name to go on, after what (what follows, a
+// sentence): errNotConfirmed when something else is typed, noTerminal
+// as the error without a terminal (--yes is the way there). tty reads
+// and asks on the terminal itself, when stdin carries data.
+func typeToGoOn(what, name, noTerminal string, tty bool) error {
+	var in interface {
+		ReadString(byte) (string, error)
+	} = stdinReader
+	var out io.Writer = os.Stderr
+	if tty {
+		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return errors.New(noTerminal)
+		}
+		defer f.Close()
+		in, out = bufio.NewReader(f), f
+	} else if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return errors.New(noTerminal)
+	}
+	fmt.Fprintf(out, "%s Type %s to go on: ", what, name)
+	line, _ := in.ReadString('\n')
+	if strings.TrimSpace(line) != name {
+		return errNotConfirmed
+	}
+	return nil
+}
 
 // syncRefused is what a refused confirmation prints, then nothing.
 func syncRefused(err error, nothing string) string {
@@ -602,16 +630,8 @@ func syncRefused(err error, nothing string) string {
 // terminal it fails: --yes is the way there.
 func confirmSync(t, p *remote.Target, then string) error {
 	where := t.Host + ":" + t.Path
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return errors.New("--sync replaces the data of " + where + " with its parent's: add --yes when not at a terminal")
-	}
-	fmt.Fprintf(os.Stderr, "This replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s. Type %s to go on: ",
-		t.Address, where, p.Address, p.Host, p.Path, then, t.Name)
-	line, _ := stdinReader.ReadString('\n')
-	if strings.TrimSpace(line) != t.Name {
-		return errNotConfirmed
-	}
-	return nil
+	return typeToGoOn(fmt.Sprintf("This replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s.", t.Address, where, p.Address, p.Host, p.Path, then),
+		t.Name, "--sync replaces the data of "+where+" with its parent's: add --yes when not at a terminal", false)
 }
 
 // Server side: the hidden flags a sync runs.
@@ -1003,17 +1023,24 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string)
 	return nil
 }
 
+// childSSHArgs are ssh's arguments for a session from the parent's
+// server to the child's (to) running script: -o option, remote.ChildSSH,
+// remote.KeepAlive, -T, extra, the sync's port; traced, script aside.
+func childSSHArgs(to, script, option string, extra ...string) []string {
+	args := append(append([]string{"-o", option}, remote.ChildSSH...), remote.KeepAlive...)
+	args = append(append(args, "-T"), extra...)
+	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
+		args = append(args, "-p", p)
+	}
+	trace(append([]string{"ssh"}, append(args, to)...))
+	return append(args, to, "sh -c "+remote.Quote(script))
+}
+
 // exportInto runs the export of name with its stdout written to spool on
 // the child's server (to), by cat in an SSH session the forwarded agent
 // opens. Both must succeed.
 func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to, spool string) error {
-	sshArgs := append(append([]string{"-o", "ClearAllForwardings=yes"}, remote.ChildSSH...), remote.KeepAlive...)
-	sshArgs = append(sshArgs, "-T")
-	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
-		sshArgs = append(sshArgs, "-p", p)
-	}
-	sshArgs = append(sshArgs, to, "sh -c "+remote.Quote("umask 077; cat > "+remote.Quote(spool)))
-	trace(append([]string{"ssh"}, sshArgs[:len(sshArgs)-1]...))
+	sshArgs := childSSHArgs(to, "umask 077; cat > "+remote.Quote(spool), "ClearAllForwardings=yes")
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1299,13 +1326,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := append(append([]string{"-o", "ExitOnForwardFailure=yes"}, remote.ChildSSH...), remote.KeepAlive...)
-		sshArgs = append(sshArgs, "-T", "-R", "127.0.0.1:"+port+":"+ip+":873")
-		if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
-			sshArgs = append(sshArgs, "-p", p)
-		}
-		sshArgs = append(sshArgs, to, "sh -c "+remote.Quote(remote.SyncReceiveScript(toDir, port, present, files, args)))
-		trace(append([]string{"ssh"}, sshArgs[:len(sshArgs)-1]...))
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, port, present, files, args), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1399,13 +1420,7 @@ func runSyncExec(args []string, color bool) int {
 	}
 	if to := os.Getenv(remote.SyncToEnv); to != "" {
 		remote.Verbose = cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0
-		sshArgs := append(append([]string{"-o", "ClearAllForwardings=yes"}, remote.ChildSSH...), remote.KeepAlive...)
-		sshArgs = append(sshArgs, "-T")
-		if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
-			sshArgs = append(sshArgs, "-p", p)
-		}
-		sshArgs = append(sshArgs, to, "sh -c "+remote.Quote(remote.SyncExecScript(toDir, toProject, syncExecEnv(), args)))
-		trace(append([]string{"ssh"}, sshArgs[:len(sshArgs)-1]...))
+		sshArgs := childSSHArgs(to, remote.SyncExecScript(toDir, toProject, syncExecEnv(), args), "ClearAllForwardings=yes")
 		cmd := remote.SSHCommand(sshArgs...)
 		err := syscall.Exec(cmd.Path, cmd.Args, os.Environ())
 		return fail(err.Error())

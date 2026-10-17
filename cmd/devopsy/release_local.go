@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/term"
-
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -152,17 +150,13 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 		name = c.Project.Name
 	}
 	if !yes {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return fail("--destroy removes the local project's containers, volumes and data in .devopsy/mnt: add --yes when not at a terminal")
-		}
 		what := ""
 		if len(step) > 0 {
 			what = "runs 'devopsy " + strings.Join(step, " ") + "', then "
 		}
-		fmt.Fprintf(os.Stderr, "This %stakes %s's containers, volumes and built images down and empties %s. Type %s to go on: ", what, name, filepath.Join(projectDir, "mnt"), name)
-		line, _ := stdinReader.ReadString('\n')
-		if strings.TrimSpace(line) != name {
-			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
+		if err := typeToGoOn(fmt.Sprintf("This %stakes %s's containers, volumes and built images down and empties %s.", what, name, filepath.Join(projectDir, "mnt")),
+			name, "--destroy removes the local project's containers, volumes and data in .devopsy/mnt: add --yes when not at a terminal", false); err != nil {
+			cli.Fprint(os.Stderr, red, syncRefused(err, "Nothing removed."), color)
 			return 1
 		}
 	}

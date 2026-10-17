@@ -198,6 +198,22 @@ fi
 `
 }
 
+// syncBlock is a sync's part on the child, in its current release with
+// $status 0, the sync's variables exported (SyncOptions.exports): prepare
+// (services stopped), the marker, devopsy's go or abort, finish; $status
+// says how it went. failed says what happens without an answer.
+func syncBlock(projectName, failed string) string {
+	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
+` + syncWait(failed) + `  if [ "$reply" != go ]; then
+    sync_finish abort || true
+    status=1
+  else
+    sync_finish go || status=$?
+  fi
+fi
+` + syncRestorePipe
+}
+
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
@@ -237,13 +253,8 @@ id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"
 status=0
-` + syncFinish(projectName) + syncPrepare(projectName) + `[ "$status" = 0 ] || exit "$status"
-` + syncWait("restoring what was stopped") + `if [ "$reply" != go ]; then
-  sync_finish abort || true
-  exit 1
-fi
-sync_finish go || exit "$?"
-` + syncRestorePipe
+` + syncBlock(projectName, "restoring what was stopped") + `[ "$status" = 0 ] || exit "$status"
+`
 	if len(run) > 0 {
 		s += fmt.Sprintf("echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(run, " ")) + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
 	}

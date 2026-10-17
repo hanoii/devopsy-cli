@@ -651,17 +651,9 @@ echo "devopsy: current is now $id" >&2
 	}
 	if sync != nil {
 		s += sync.exports(t) + `cd "$base/current"
-` + syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-` + syncWait("the release does not go live") + `  if [ "$reply" != go ]; then
-    sync_finish abort || true
-    status=1
-  else
-    sync_finish go || status=$?
-  fi
-fi
-cd "$base"
+` + syncBlock(projectName, "the release does not go live") + `cd "$base"
 [ "$status" = 0 ] || failed=sync
-` + syncRestorePipe
+`
 	}
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
