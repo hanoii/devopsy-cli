@@ -116,8 +116,14 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 	pick := map[string]bool{}
 	for _, w := range words {
 		if w == "failed" {
+			// An incomplete one newer than current may be a release whose
+			// activation has not started yet: named by id only.
+			older := false
 			for _, r := range releases {
-				if (r.Failed || r.RolledBack || r.Incomplete) && !r.Current {
+				if r.Current {
+					older = true
+				}
+				if (r.Failed || r.RolledBack || (r.Incomplete && older)) && !r.Current {
 					pick[r.ID] = true
 				}
 			}

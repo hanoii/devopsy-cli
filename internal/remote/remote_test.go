@@ -701,8 +701,8 @@ case "$1 $2" in
 esac
 `)
 	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
-# FAKE_RELEASE_BUSY: the release lock asked by its path is held.
-[ -z "${FAKE_RELEASE_BUSY:-}" ] || case " $* " in *"/.lock "*) exit 1 ;; esac
+# FAKE_RELEASE_BUSY: a pending release's lock, asked by its path, is held.
+[ -z "${FAKE_RELEASE_BUSY:-}" ] || case " $* " in *"/`+PendingFile+` "*) exit 1 ;; esac
 case " $* " in *[!8]" ") exit 0 ;; esac
 [ ! -e "$FAKE_ROOT/locked" ] || exit 1
 case " $* " in
@@ -1066,14 +1066,21 @@ exit 0
 	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
 		t.Errorf("formatted:\n%s", f)
 	}
-	// A release never made current: in progress while the release lock is
-	// held, else incomplete.
+	// A release never made current, cut off mid-fetch: in progress while
+	// its activation holds its marker's lock, else failed (a fetch cut
+	// off).
 	write(t, filepath.Join(root, "app/a/prod/releases/5", PendingFile), "")
-	for env, want := range map[string]string{"FAKE_UNUSED=1": "INCOMPLETE", "FAKE_RELEASE_BUSY=1": "IN PROGRESS"} {
+	write(t, filepath.Join(root, "app/a/prod/releases/5", FetchingFile), "")
+	for env, want := range map[string]string{"FAKE_UNUSED=1": "FAILED", "FAKE_RELEASE_BUSY=1": "IN PROGRESS"} {
 		out, err := run(ReleasesScript(target("a")), env)
 		if rs := ParseReleases(out); err != nil || len(rs) != 2 || !strings.HasSuffix(rs[0].Line(), "  "+want) {
 			t.Errorf("pending release with %s (%v): %+v\n%s", env, err, rs, out)
 		}
+	}
+	// Pending alone, nothing running it: incomplete.
+	os.Remove(filepath.Join(root, "app/a/prod/releases/5", FetchingFile))
+	if out, err := run(ReleasesScript(target("a"))); err != nil || !strings.HasSuffix(ParseReleases(out)[0].Line(), "  INCOMPLETE") {
+		t.Errorf("pending alone (%v):\n%s", err, out)
 	}
 	os.RemoveAll(filepath.Join(root, "app/a/prod/releases/5"))
 
@@ -1476,6 +1483,11 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
+	}
+	// The upgrade hint names an alias whatever its source: --upgrade
+	// needs only a server.
+	if s := basePrelude(&Target{Name: "prod", Alias: "vm1-reg", Address: "vm1:prod", Host: "vm1"}); !strings.Contains(s, "devopsy @vm1-reg --upgrade") {
+		t.Errorf("upgrade hint without the alias:\n%s", s)
 	}
 	// Hints in scripts name the alias as typed.
 	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Source: "~/traefik", Address: "vm1:prod", Path: "traefik/prod"}
