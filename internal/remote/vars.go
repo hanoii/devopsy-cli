@@ -92,8 +92,8 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // everything else stay as they are. Releases take the release lock, so this
 // never interleaves with a deploy writing its own secrets.
 var varsEdit = `if [ -z "$plain" ]; then
-  mkdir -p "$(dirname "$file")"
-  ` + releaseLock(false, true) + `fi
+  ` + releaseLock(false, true) + `  mkdir -p "$(dirname "$file")"
+fi
 umask 077
 [ -f "$file" ] || : > "$file"
 cat > "$file.vars"
@@ -152,8 +152,8 @@ func InheritWriteScript(t *Target, keys []string, pending bool) string {
   echo "devopsy: $base is a plain directory: nothing inherits into it" >&2
   exit 1
 fi
-mkdir -p "$base/shared"
-` + releaseLock(false, false) + `file=` + file + `
+` + releaseLock(false, true) + `mkdir -p "$base/shared"
+file=` + file + `
 cat > "$file.tmp"
 chmod 600 "$file.tmp"
 mv -f "$file.tmp" "$file"

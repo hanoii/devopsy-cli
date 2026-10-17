@@ -259,6 +259,16 @@ status=0
 	return s
 }
 
+// syncSourceLock takes the locks a read of a live environment's data
+// holds (PushScript, ExportScript): its release lock shared (a release
+// waits) and its sync lock exclusively (each stops and restores the
+// environment's stop=true services, so two at once would restore them
+// under the other).
+func syncSourceLock() string {
+	return releaseLock(true, false) + `exec 8>"$base/.sync-lock"
+` + lockWait(8, false, "another sync from $base") + "\n"
+}
+
 // PushScript is the parent's side of a sync: under a shared hold of the
 // parent's release lock (a release of the parent waits) and an exclusive
 // one on its sync lock (other syncs from it wait: each push stops and
@@ -276,9 +286,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
-` + releaseLock(true, false) + `exec 8>"$base/.sync-lock"
-` + lockWait(8, false, "another sync from $base") + `
-cd "$base/current"
+` + syncSourceLock() + `cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, true) + "\n"
 }
 
@@ -289,9 +297,7 @@ export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, tru
 // services a stop=true export does.
 func ExportScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: nothing to export" >&2; exit 1; }
-` + releaseLock(true, false) + `exec 8>"$base/.sync-lock"
-` + lockWait(8, false, "a sync from $base") + `
-cd "$base/current"
+` + syncSourceLock() + `cd "$base/current"
 ` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
 }
 

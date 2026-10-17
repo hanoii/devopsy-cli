@@ -405,6 +405,13 @@ done
 `
 }
 
+// removeBase removes $base under its release lock (releaseLock): moved
+// aside first, so another session opening $base/.lock while rm -rf runs
+// neither locks the going directory nor puts a file in it while rm -rf
+// empties it. What rm -rf could not remove goes back to $base, unless a
+// new one exists already, so running it again finds it.
+const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e "$base" ] || mv "$base.rm.$$" "$base"; false; }; }`
+
 // Protocol is what the scripts need from the server's devopsy, which
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
@@ -643,6 +650,10 @@ trap 'fetch_sig=1' INT TERM HUP
 	s += `fr=0
 fetch_release "$rel" || fr=$?
 [ "$fr" -eq 0 ] || [ -z "$fetch_sig" ] || fr=130
+# A write before the marker goes: a -T session gone during the fetch (no
+# signal) dies here, the marker kept for img recover and current as it
+# was. img bookmark ignores SIGPIPE, so nothing died sooner.
+[ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 trap - INT TERM HUP
@@ -919,7 +930,7 @@ const NotLive = `not_live() {
   if [ -n "$nl_gone" ]; then
     # A first release that never went live, with nothing set yet: leave
     # no directory behind (an instance's, when it is empty, neither).
-    rm -rf "$base"
+    ` + removeBase + `
     rmdir "$(dirname "$base")" 2>/dev/null || true
     echo "devopsy: removed $base: its first release did not go live" >&2
   else
@@ -1340,7 +1351,7 @@ if [ -n "$d_fail" ]; then
   exit 1
 fi
 cd /
-rm -rf "$base" || {
+` + removeBase + ` || {
   echo "devopsy: could not remove everything in $base" >&2
   exit 1
 }
