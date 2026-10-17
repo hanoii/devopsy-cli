@@ -275,10 +275,9 @@ repositories fit together and the open ideas.
     when the release names a repository twice, compared as Docker
     resolves them, `library/nginx` is `nginx`), digests included (`prune
     -f` deletes an image pulled by digest only, unused) but never
-    restored. `devopsy-images` lists the names, one per line, as
-    before; `devopsy-images-ids` (`images.IDFile`) keeps `ref<tab>image
-    id`, what a removal decides from even after a bookmark went: a file
-    of its own, so the listing stays plain names. Docker shows names short (`docker.io/library/nginx` is
+    restored. `devopsy-images` lists `ref<tab>image id` (the id when
+    Docker had the image): what a removal decides from even after a
+    bookmark went; `--releases` shows the names. Docker shows names short (`docker.io/library/nginx` is
     `nginx`): every comparison of a computed name with one Docker
     reports goes through `familiar`.
   - **Bookmark** (`img bookmark`): lists through `devopsy -- config
