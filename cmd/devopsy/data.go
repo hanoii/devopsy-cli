@@ -61,15 +61,11 @@ func stopFor(cwd string, s cli.SyncService) (restore func() error, err error) {
 	if !s.Stop {
 		return restore, nil
 	}
-	running, err := composeList(cwd, "--status", "running")
+	up, err := upServices(cwd)
 	if err != nil {
-		return restore, fmt.Errorf("docker compose ps: %w", err)
+		return restore, err
 	}
-	restarting, err := composeList(cwd, "--status", "restarting")
-	if err != nil {
-		return restore, fmt.Errorf("docker compose ps: %w", err)
-	}
-	if !slices.Contains(append(running, restarting...), s.Name) {
+	if !slices.Contains(up, s.Name) {
 		return restore, nil
 	}
 	sayErr("devopsy: stopping " + s.Name)

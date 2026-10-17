@@ -460,9 +460,10 @@ exit 0
 	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1/code" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
-	// The capability's hooks run from --sync-services, never the script.
+	// The capability's hooks run from --sync-services, never the script;
+	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, ".devopsy-sync.inherit.env")
-	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from=vm1:prod to=vm2:dev args=-v"+file+"\n" {
+	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1342,5 +1343,23 @@ func TestRebookmark(t *testing.T) {
 	run(`ghcr.io/y/app:1\n`)
 	if bs := bookmarks(); len(bs) != 1 || bs[0] != "ghcr.io_y_app:devopsy-app-prod-1" {
 		t.Errorf("bookmarks after the listing changed: %v", bs)
+	}
+}
+
+// The upload takes the release lock: a first release failing meanwhile
+// removes $base, --destroy all of it. Every release links inherit.env, so
+// --inherit reaches one released before the parent had inherit:. A sync's
+// variables stop at its end.
+func TestScriptsLockAndLinks(t *testing.T) {
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
+	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
+		t.Errorf("upload without the lock:\n%s", s)
+	}
+	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
+	if !strings.Contains(act, `ln -sfn "$base/shared/`+InheritFile+`" "$code/.devopsy/`+InheritFile+`"`) {
+		t.Errorf("inherit.env not always linked")
+	}
+	if !strings.Contains(act, "unset "+SyncFromTargetEnv) {
+		t.Errorf("the sync's variables reach the run step")
 	}
 }

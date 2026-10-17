@@ -3,6 +3,7 @@ package remote
 import (
 	"errors"
 	"fmt"
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"path/filepath"
@@ -1380,12 +1381,11 @@ func ReleaseEnvironment(projectDir string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, "DEVOPSY_ENVIRONMENT="); ok {
-			name = strings.Trim(v, `'"`)
-		}
+	vars, err := dotenv.UnmarshalWithLookup(string(data), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
 	}
+	name := vars["DEVOPSY_ENVIRONMENT"]
 	if name == "" {
 		return nil, fmt.Errorf("%s names no environment (DEVOPSY_ENVIRONMENT)", file)
 	}

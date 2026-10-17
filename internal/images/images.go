@@ -137,13 +137,26 @@ func repoKey(ref string) string {
 }
 
 // familiar is a name as Docker shows it, so a name devopsy computed and
-// one Docker reports compare equal: nginx is nginx:latest.
+// one Docker reports compare equal: nginx is nginx:latest, and
+// nginx:1.27@sha256:... is nginx@sha256:... (a digest wins over a tag).
 func familiar(ref string) string {
+	if _, digest, ok := strings.Cut(ref, "@"); ok {
+		return repoKey(ref) + "@" + digest
+	}
 	rest := ref[len(repoOf(ref)):]
 	if rest == "" {
 		rest = ":latest"
 	}
 	return repoKey(ref) + rest
+}
+
+// digestRef is a ref by digest as Docker takes it: the tag beside the
+// digest dropped (nginx@sha256:..., not nginx:1.27@sha256:...).
+func digestRef(ref string) string {
+	if _, digest, ok := strings.Cut(ref, "@"); ok {
+		return repoOf(ref) + "@" + digest
+	}
+	return ref
 }
 
 // isBookmark says whether a tag (repo:tag) is a release's bookmark.
@@ -231,7 +244,7 @@ func (s *Set) Bookmark(rel string) {
 	es := make([]entry, 0, len(refs))
 	listed := map[string]bool{}
 	for _, ref := range refs {
-		img, _ := s.Docker.ID(ref)
+		img, _ := s.Docker.ID(digestRef(ref))
 		es = append(es, entry{Ref: ref, ID: img})
 		listed[familiar(ref)] = true
 	}
@@ -260,8 +273,8 @@ func (s *Set) Bookmark(rel string) {
 			}
 		}
 		if e.ID != "" && !listed[familiar(e.Ref)] {
-			if cur, err := s.Docker.ID(e.Ref); err == nil && cur == e.ID {
-				s.record(e.Ref, e.ID, id, "no release lists it any more")
+			if cur, err := s.Docker.ID(digestRef(e.Ref)); err == nil && cur == e.ID {
+				s.record(digestRef(e.Ref), e.ID, id, "no release lists it any more")
 			}
 		}
 	}
@@ -310,8 +323,10 @@ func (s *Set) Restore(rel string) bool {
 		}
 		marks[i] = img
 	}
+	// Every check before any tag, so a Docker error changes nothing.
 	own := s.own(rel)
 	var stayed []string
+	var tag []int
 	for i, e := range es {
 		if strings.Contains(e.Ref, "@") {
 			continue
@@ -327,7 +342,10 @@ func (s *Set) Restore(rel string) bool {
 				continue
 			}
 		}
-		if err := s.Docker.Tag(names[i], e.Ref); err != nil {
+		tag = append(tag, i)
+	}
+	for _, i := range tag {
+		if err := s.Docker.Tag(names[i], es[i].Ref); err != nil {
 			return false
 		}
 	}
@@ -459,8 +477,8 @@ func (s *Set) Remove(rel string) error {
 		for _, r := range refs[img] {
 			keys[repoKey(r)] = true
 			if strings.Contains(r, "@") {
-				if cur, err := s.Docker.ID(r); err == nil && cur == img {
-					rm = appendNew(rm, r)
+				if cur, err := s.Docker.ID(digestRef(r)); err == nil && cur == img {
+					rm = appendNew(rm, digestRef(r))
 				}
 			}
 		}
