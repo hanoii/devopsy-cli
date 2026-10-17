@@ -151,11 +151,6 @@ func (o *SyncOptions) exports(t *Target) string {
 	return s
 }
 
-// syncStdin keeps devopsy's go or abort on fd 3 and gives every command
-// /dev/null as stdin: none may read the answer, or wait on it, before the
-// marker.
-const syncStdin = "exec 3<&0 </dev/null\n"
-
 // syncFinish defines sync_finish go|abort, in the child's current
 // release: on go, the pending inherited variables move into
 // shared/inherit.env (which every release links), so what follows reads
@@ -247,7 +242,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) s
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it" >&2; exit 1; }
-`, hintAddress(t)) + syncStdin + `` + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
+`, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"

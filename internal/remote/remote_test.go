@@ -221,7 +221,7 @@ func TestFormatReleases(t *testing.T) {
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	fake := "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	fake := "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +413,7 @@ func TestActivateSync(t *testing.T) {
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
 if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
@@ -433,10 +433,22 @@ exit 0
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-dev", phases, opts))
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, extra...)
-		cmd.Stdin = strings.NewReader(stdin)
+		// As devopsy does: stdin a pipe it keeps open until the script
+		// ends, the answer in it; none means devopsy is gone.
+		r, w, perr := os.Pipe()
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		defer w.Close()
+		cmd.Stdin = r
+		_, _ = w.WriteString(stdin)
+		if stdin == "" {
+			w.Close()
+		}
 		var o, e strings.Builder
 		cmd.Stdout, cmd.Stderr = &o, &e
 		err = cmd.Run()
+		r.Close()
 		return o.String(), e.String(), err
 	}
 	calls := func(root string) string {
@@ -477,17 +489,24 @@ exit 0
 		t.Errorf("abort calls:\n%s", got)
 	}
 
-	// abort, or no answer, on a first release: nothing current, the
-	// directory kept (the data is partly there).
-	for _, stdin := range []string{"abort\n", ""} {
-		root := t.TempDir()
-		_, errOut, err := run(root, "1", stdin)
-		if err == nil || current(root) != "" || !strings.Contains(errOut+readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no previous release to go back to") {
-			t.Fatalf("first abort %q (%v), current %q:\n%s", stdin, err, current(root), errOut)
-		}
-		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
-			t.Errorf("first abort %q calls:\n%s", stdin, got)
-		}
+	// abort on a first release: nothing current, the directory kept
+	// (the data is partly there).
+	root = t.TempDir()
+	_, errOut, err = run(root, "1", "abort\n")
+	if err == nil || current(root) != "" || !strings.Contains(errOut, "no previous release to go back to") {
+		t.Fatalf("first abort (%v), current %q:\n%s", err, current(root), errOut)
+	}
+	if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
+		t.Errorf("first abort calls:\n%s", got)
+	}
+	// devopsy gone before the switch (its stdin ends): the watcher
+	// cancels the release before anything of the sync runs.
+	root = t.TempDir()
+	if _, errOut, err := run(root, "1", ""); err == nil || current(root) != "" {
+		t.Fatalf("devopsy gone (%v), current %q:\n%s", err, current(root), errOut)
+	}
+	if got := calls(root); strings.Contains(got, "--sync-services") || strings.Contains(got, "deploy") {
+		t.Errorf("devopsy gone, calls:\n%s", got)
 	}
 
 	// A failing prepare prints no marker, restores, and does not go live.
@@ -548,7 +567,13 @@ exit 0
 		}
 		cmd := exec.Command("sh", "-c", script)
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "FAKE_HANGUP=1"}, extra...)
-		cmd.Stdin = strings.NewReader("")
+		// stdin ends with the session, as devopsy's pipe does.
+		in, inW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer in.Close()
+		cmd.Stdin = in
 		cmd.Stdout, cmd.Stderr = w, w
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -564,6 +589,7 @@ exit 0
 			seen += string(buf[:n])
 		}
 		r.Close()
+		inW.Close()
 		write(t, filepath.Join(root, "closed"), "")
 		_ = cmd.Wait()
 	}
@@ -658,7 +684,7 @@ esac
 	if err := os.Rename(filepath.Join(bin, "devopsy"), filepath.Join(bin, "devopsy.fake")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --images ]; then exec "+Quote(realDevopsy)+" \"$@\"; fi\nexec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") exec "+Quote(realDevopsy)+" \"$@\" ;; esac\nexec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
 	for _, f := range []string{"devopsy", "devopsy.fake", "docker", "flock", "mv"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
@@ -683,7 +709,7 @@ func TestActivateImages(t *testing.T) {
 	// pull and build put the release's id in the image store, and fail
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
@@ -863,7 +889,7 @@ exit 0
 func TestImagesRemoved(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1057,7 +1083,7 @@ exit 0
 func TestBookmarksPerRef(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
@@ -1106,7 +1132,7 @@ exit 0
 func TestFetchInterrupted(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1253,11 +1279,8 @@ exit 0
 
 	// Release 5's -T session drops while it builds (watchSession): its
 	// stdin ends, the script's group gets SIGTERM, and the fetch is
-	// undone at once, not a build later. Linux: the watcher reads /proc
-	// to check the shell leads its group, as under sshd (Setpgid here).
-	if runtime.GOOS != "linux" {
-		return
-	}
+	// undone at once, not a build later. Setpgid: the shell leads its
+	// group, as under sshd.
 	r, w, pipeErr := os.Pipe()
 	if pipeErr != nil {
 		t.Fatal(pipeErr)
@@ -1295,7 +1318,7 @@ func fileExists(path string) bool {
 // kept stays, with its log, and older ones go.
 func TestActivatePruneFailed(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	root := t.TempDir()
@@ -1329,7 +1352,7 @@ func TestActivatePruneFailed(t *testing.T) {
 // removals left is a leftover too; removing it says what is forgotten.
 func TestLeftoverImagesRecord(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1521,7 +1544,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=2\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --images") printf 'app-prod-app\n' ;;
   "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
@@ -1574,13 +1597,22 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	dropped := command("2", "FAKE_WAIT=1")
+	// With the watcher (WatchEnv, its stdin ending with the session): past
+	// the switch it is disarmed, so the drop cancels nothing.
+	in, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped := command("2", "FAKE_WAIT=1", WatchEnv+"=1")
+	dropped.Stdin = in
 	dropped.Stdout, dropped.Stderr = w, w
+	dropped.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := dropped.Start(); err != nil {
 		t.Fatal(err)
 	}
 	w.Close()
-	running(dropped, func() { r.Close() })
+	in.Close()
+	running(dropped, func() { r.Close(); inW.Close() })
 	if code := dropped.ProcessState.ExitCode(); code != 0 || current() != "releases/2/code" || fileExists(filepath.Join(base, "releases/2", FailedFile)) {
 		t.Errorf("release 2 after its session went: exit %d, current %q", code, current())
 	}

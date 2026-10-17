@@ -19,7 +19,7 @@ func runVarsScript(t *testing.T, script, stdin string) string {
 	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	settings := "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"\n"
+	settings := "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=2\\n' \"$FAKE_ROOT\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755); err != nil {
 		t.Fatal(err)
 	}

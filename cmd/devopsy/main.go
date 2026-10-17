@@ -78,6 +78,8 @@ func run() int {
 			return runReleaseSettings(color)
 		case imagesFlag:
 			return runImages(args[1:], color)
+		case remote.WatchSessionFlag:
+			return runWatchSession(args[1:])
 		}
 	}
 
