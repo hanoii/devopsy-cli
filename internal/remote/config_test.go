@@ -351,14 +351,8 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	root := t.TempDir()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=1\\n' \""+root+"\"; exit; fi\n")
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	// GNU mv -T replaces a symlink to a directory; BSD mv has no -T.
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "flock", "mv"} {
-		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// flock, mv -T, a fake docker, and the real --images.
+	fakeImageTools(t, bin)
 	run := func(tg *Target, id string) string {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")

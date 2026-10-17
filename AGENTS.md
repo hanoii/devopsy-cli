@@ -194,8 +194,8 @@ repositories fit together and the open ideas.
   whatever project devopsy runs in.
 - **Release settings belong to the server:** its deploy user's `releases:`
   (`root`, default home; `keep`, `max_keep`, default 5; `keep` counts
-  releases that went live, failed ones only go once older than the oldest
-  kept), read by the hidden
+  releases that went live and stayed, failed and rolled-back ones only go
+  once older than the oldest kept), read by the hidden
   `--release-settings` that every script asks first (`basePrelude`), so a
   laptop and CI resolve the same paths. A project's `keep` is capped by
   `max_keep`; `root` and `max_keep` in a project are errors.
@@ -252,8 +252,9 @@ repositories fit together and the open ideas.
   `current`; `run`; on failure switch back and restart the previous release
   with its own run step (`--release-steps restart run`: its own config's
   rollback:, else release:), its own images back first (`get_images`);
-  prune to
-  `keep`; remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
+  a rollback marks the release it left (`RolledBackFile`); prune to
+  `keep` (`img to-prune`, `img remove-releases`, `images.ToPrune`);
+  remote after steps. A failure before the switch calls `not_live` (`NotLive`, `RollbackNotLive`): nothing live
   changes. No prompts: what is missing is listed with its `--vars set`
   line.
 - **Images go with their releases.** The rules live in Go,
@@ -330,6 +331,15 @@ repositories fit together and the open ideas.
     inherited ignored SIGPIPE or SIGTERM (only SIGINT and SIGHUP), so
     the script's `trap ''` alone would let a gone session or a second
     TERM kill an undo halfway. `leftAdd` records before it says.
+  - **Releases** (`images/releases.go`): which releases pruning removes
+    (`ToPrune`, `img to-prune`: older than the `keep`-th live one,
+    newest first; live is neither failed, rolled back nor still
+    fetching; current and fetching ones stay), the rollback target
+    (`RollbackTarget`, `img rollback-target`: the newest live one older
+    than current) and removing releases by id (`RemoveReleases`, `img
+    remove-releases`), unit-tested on directories. A target without a
+    mode (only tests build one) gets build mode's functions: there is
+    no other path.
   - **Undo** (`img undo [--rollback] <release> [<current>]`): a new
     release's fetch bookmarked (it goes with the release), a rollback's
     target left alone (the names may hold the live release's images),
@@ -472,9 +482,10 @@ repositories fit together and the open ideas.
   and refuses all of them when one names nothing, several or the
   current release, then asks `[y/N]` (only rollback targets are lost),
   `--yes` without a terminal. `ReleasesRemoveScript`: release lock,
-  image lock exclusive (10 minutes, then 75), `img recover`, the
-  same checks again, then `img remove` and `rm -rf` per release and
-  `img prune` once. Completion offers `remove`, `failed` and `--yes`,
+  image lock exclusive (10 minutes, then 75), `img recover`, then `img
+  remove-releases` (`images.RemoveReleases`: the same checks again,
+  then each release's images and directory) and `img prune` once, only
+  when everything went. Completion offers `remove`, `failed` and `--yes`,
   never ids (the server's).
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
   mounts"): never uploaded, `shared/mnt` created by the upload and linked

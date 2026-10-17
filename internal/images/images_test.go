@@ -565,11 +565,6 @@ func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []str
 	}
 }
 
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // A release going leaves every name of an image a container uses, so a
 // project outside devopsy running mariadb:11.4 keeps it although the
 // release ran the same image as mariadb:11: recorded, retried once the

@@ -54,6 +54,8 @@ const (
 	// left behind was interrupted without a signal (a CI session that
 	// dropped), and img recover finishes what its script would have.
 	FetchingFile = images.FetchingFile
+	// RolledBackFile marks the release a rollback left.
+	RolledBackFile = images.RolledBackFile
 )
 
 // ReleaseFile is name, one of a release's devopsy files, for the project
@@ -509,32 +511,21 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 		s += syncStdin
 	}
 	// Defined first: not_live removes a first release's images.
-	images := releaseImages(projectName, t, t.Mode)
-	if images != "" {
-		s += images
-	} else {
-		s += noImages
-	}
+	s += releaseImages(projectName, t, t.Mode)
 	s += "lock\n"
+	// The release lock is held until a dropped session's fetch ends, so
+	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-`
-	if images != "" {
-		// The release lock is held until a dropped session's fetch ends, so
-		// none is still running.
-		s += `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
   img recover "$base" ${prev:+"$base/$prev"}
   image_unlock
 fi
 `
-	}
 	if rollback {
-		s += `id=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
-  [ -e "$base/releases/$r/` + FailedFile + `" ] || [ -e "$base/releases/$r/` + FetchingFile + `" ] && continue
-  if [ -n "${found:-}" ]; then echo "$r"; break; fi
-  [ "releases/$r" = "$prev" ] && found=1
-done)
-[ -n "$id" ] || { echo "devopsy: no release before the current one" >&2; exit 1; }
+		// The newest live release older than current (images.RollbackTarget):
+		// never a failed, rolled-back or still fetching one.
+		s += `id=$(img rollback-target "$base") || { echo "devopsy: no release before the current one" >&2; exit 1; }
 echo "devopsy: rolling back to $id" >&2
 ` + RollbackNotLive
 	} else {
@@ -596,24 +587,23 @@ done
 		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
-	if images != "" {
-		// fetch_release: the release's images under the shared lock,
-		// undone before the lock goes on a failure or a signal, so no
-		// removal comes in between: a new release's own images are
-		// bookmarked, so they go with it, and the live release's names come
-		// back (img undo; a rollback's target keeps its bookmarks). A
-		// signal only sets fetch_sig: the fetch's child gets it too and
-		// fails, and the same path undoes it, with signals and SIGPIPE
-		// ignored from there on, so neither a second Ctrl-C nor a write to
-		// a gone session stops it. A session that drops without a signal
-		// (CI's -T) leaves FetchingFile, which the next activation, --destroy
-		// and --releases remove recover; a rollback writes none, which
-		// would mark a good release failed.
-		undo := `img undo "$1" ${prev:+"$base/$prev"}`
-		if rollback {
-			undo = `img undo --rollback "$1" ${prev:+"$base/$prev"}`
-		}
-		s += `fetch_release() {
+	// fetch_release: the release's images under the shared lock,
+	// undone before the lock goes on a failure or a signal, so no
+	// removal comes in between: a new release's own images are
+	// bookmarked, so they go with it, and the live release's names come
+	// back (img undo; a rollback's target keeps its bookmarks). A
+	// signal only sets fetch_sig: the fetch's child gets it too and
+	// fails, and the same path undoes it, with signals and SIGPIPE
+	// ignored from there on, so neither a second Ctrl-C nor a write to
+	// a gone session stops it. A session that drops without a signal
+	// (CI's -T) leaves FetchingFile, which the next activation, --destroy
+	// and --releases remove recover; a rollback writes none, which
+	// would mark a good release failed.
+	undo := `img undo "$1" ${prev:+"$base/$prev"}`
+	if rollback {
+		undo = `img undo --rollback "$1" ${prev:+"$base/$prev"}`
+	}
+	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
   img restore "$1" || { fetch_images "$1" && img bookmark "$1"; } || fr=$?
@@ -630,18 +620,17 @@ done
 fetch_sig=
 trap 'fetch_sig=1' INT TERM HUP
 `
-		if !rollback {
-			s += `: >"$rel/` + FetchingFile + `"
+	if !rollback {
+		s += `: >"$rel/` + FetchingFile + `"
 `
-		}
-		s += `fr=0
+	}
+	s += `fr=0
 fetch_release "$rel" || fr=$?
 [ "$fr" -eq 0 ] || [ -z "$fetch_sig" ] || fr=130
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 trap - INT TERM HUP
 `
-	}
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
@@ -649,14 +638,11 @@ echo "devopsy: current is now $id" >&2
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
 	// release: (ReleaseStepsFlag).
-	restart := ""
-	if images != "" {
-		// The new release's images took the names the previous one runs
-		// (build mode's are the compose project's, a floating tag's the
-		// registry's): its own back.
-		restart = `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+	// The new release's images took the names the previous one runs
+	// (build mode's are the compose project's, a floating tag's the
+	// registry's): its own back.
+	restart := `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
-	}
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `
@@ -702,26 +688,27 @@ fi
 fi
 `
 	}
+	if rollback {
+		// The release it left: never counted toward keep, never rolled back
+		// to again, its log kept until pruning takes it.
+		s += `: >"$base/$prev/` + RolledBackFile + `"
+echo "devopsy: ${prev#releases/} is marked rolled back" >&2
+`
+	}
 	// keep: the target's or project's, else the server's, at most its
-	// max_keep. Only releases that went live count: failed ones never
-	// ran, and a rollback skips them. A failed one newer than the oldest
-	// release kept stays, with its log; older ones go.
+	// max_keep. Only releases that went live and stayed count: failed ones
+	// never ran, a rolled-back one was left, and a rollback skips both. One
+	// newer than the oldest release kept stays, with its log; older ones
+	// go. A rollback marks the release it left (images.RolledBackFile).
 	s += fmt.Sprintf(`k=%d
 [ "$k" -gt 0 ] || k=$keep
 if [ "$k" -gt "$max_keep" ]; then
   echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k" >&2
   k=$max_keep
 fi
-# The k-th live release, newest first: none while fewer went live, and
-# nothing goes.
-oldest=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
-  [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ] || echo "$r"
-done | sed -n "${k}p")
-# A release still marked fetching waits for its recovery: its images
-# have no listing until then.
-pruned=$(ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | awk -v o="$oldest" 'past { print } $0 == o { past = 1 }' | while read -r r; do
-  [ "releases/$r/`+CodeDir+`" = "$(readlink "$base/current")" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ] || echo "$r"
-done)
+# What pruning removes (images.ToPrune): releases older than the k-th
+# live one, current and those still fetching aside.
+pruned=$(img to-prune "$base" "$k")
 # Removing images needs the server's image lock alone: when another
 # release holds it, pruning waits for the next release, directories
 # included (one gone without its images would leave tags nothing finds).
@@ -729,9 +716,7 @@ if [ -n "$pruned" ]; then
   if image_lock exclusive removing now; then
     # A release whose images Docker could not finish removing stays, for
     # the next pruning.
-    for r in $pruned; do
-      img remove "$base/releases/$r" && rm -rf "$base/releases/$r"
-    done
+    img remove-releases --quiet "$base" $pruned || true
     img prune
     image_unlock
   else
@@ -771,15 +756,9 @@ func leftPath(t *Target) string {
 	return `"$root"/` + Quote(strings.SplitN(t.Path, "/", 2)[0]) + `/` + ImagesLeftFile
 }
 
-// noImages stands in for releaseImages' functions when there is no mode,
-// so scripts call them either way.
-const noImages = `img() { :; }
-image_lock() { :; }
-image_unlock() { :; }
-`
-
 // releaseImages defines the shell functions that give each release its own
-// images, for mode (noImages for any other). The rules are the server's
+// images, for mode (build when empty: only tests build a target without
+// one). The rules are the server's
 // devopsy's (--images, internal/images: bookmarks, restores, removals,
 // the record); the script keeps what needs the shell: the lock, which a
 // fetch's children inherit, and fetching on a terminal.
@@ -799,10 +778,10 @@ image_unlock() { :; }
 //     processes, so a holder that dies frees it; a fetch's children keep
 //     it until they end, as they keep the release lock.
 func releaseImages(projectName string, t *Target, mode string) string {
-	fetch := fetchImages(projectName, mode)
-	if fetch == "" {
-		return ""
+	if mode == "" {
+		mode = ModeBuild
 	}
+	fetch := fetchImages(projectName, mode)
 	name := t.ComposeName()
 	if name == "" {
 		name = projectName
@@ -907,7 +886,7 @@ func fetchImages(projectName, mode string) string {
 // shared/ yet, no directory left at all, its releases' images removed
 // first (the directory is their only record), unless the server's image
 // lock is busy: then it is marked failed too. $base, $prev, $rel and $id
-// are set, and releaseImages' functions (or noImages) defined.
+// are set, and releaseImages' functions defined.
 const NotLive = `not_live() {
   nl_gone=
   if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
@@ -919,9 +898,7 @@ const NotLive = `not_live() {
       nl_gone=
     elif ls "$base"/releases/*/` + ImagesFile + ` >/dev/null 2>&1; then
       if image_lock exclusive removing now; then
-        for r in "$base"/releases/*; do
-          img remove "$r" || nl_gone=
-        done
+        img remove "$base"/releases/* || nl_gone=
         img prune
         image_unlock
         [ -n "$nl_gone" ] || echo "devopsy: keeping $base: its images are not all removed ('--releases remove failed' tries again)" >&2
@@ -1021,6 +998,7 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A release cut off mid-fetch is failed too, recovered or not.
   f=-; { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
+  [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
   # Names only: the ids after a tab stay on the server.
   i=
   [ ! -f "$base/releases/$r/%s" ] || i=$(cut -f 1 < "$base/releases/$r/%s" | tr '\n' ' ')
@@ -1035,6 +1013,8 @@ done
 type Release struct {
 	ID              string
 	Current, Failed bool
+	// RolledBack: a rollback left it (images.RolledBackFile).
+	RolledBack bool
 	// Images are the names it runs (ImagesFile): what a rollback to it
 	// restores, and what removing it may free.
 	Images []string
@@ -1049,7 +1029,7 @@ func ParseReleases(out string) []Release {
 		if len(parts) < 3 || parts[0] == "left" {
 			continue
 		}
-		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed"}
+		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1082,6 +1062,8 @@ func (r Release) Line() string {
 	status := ""
 	if r.Failed {
 		status = "  FAILED"
+	} else if r.RolledBack {
+		status = "  ROLLED BACK"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
@@ -1136,42 +1118,21 @@ func FormatReleases(out string) string {
 // release's images (img remove) and directory go, and img prune
 // runs once.
 func ReleasesRemoveScript(t *Target, projectName string, ids []string) string {
-	images := releaseImages(projectName, t, t.Mode)
-	if images == "" {
-		images = noImages
-	}
 	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base/releases" ]; then
   echo "devopsy: $base has no releases" >&2
   exit 1
 fi
 exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + `
-` + images + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { echo "devopsy: nothing removed" >&2; exit 75; }
 img recover "$base" ${prev:+"$base/$prev"}
-for id in ` + quoteAll(ids) + `; do
-  if [ ! -d "$base/releases/$id" ]; then
-    echo "devopsy: release $id is gone: nothing removed" >&2
-    image_unlock
-    exit 1
-  fi
-  if [ "releases/$id" = "$prev" ]; then
-    echo "devopsy: release $id is current: nothing removed" >&2
-    image_unlock
-    exit 1
-  fi
-done
+# Every id checked first (gone, current: nothing removed), then each with
+# its images (images.RemoveReleases).
 rr=0
-for id in ` + quoteAll(ids) + `; do
-  if img remove "$base/releases/$id"; then
-    rm -rf "$base/releases/$id"
-    echo "devopsy: removed release $id" >&2
-  else
-    rr=1
-  fi
-done
-img prune
+img remove-releases "$base" ` + quoteAll(ids) + ` || rr=$?
+[ "$rr" -ne 0 ] || img prune
 image_unlock
 exit "$rr"
 `
@@ -1338,10 +1299,6 @@ cat "$f"
 // before anything goes: compose's down removes images too); then the
 // directory. A failure before the removal removes nothing.
 func DestroyScript(t *Target, projectName string) string {
-	images := releaseImages(projectName, t, t.Mode)
-	if images == "" {
-		images = noImages
-	}
 	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base" ]; then
   echo "devopsy: nothing at $base" >&2
   exit 0
@@ -1356,7 +1313,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
 fi
 exec 9>"$base/.lock"
 ` + lockWait(9, false, "the release running on $base") + `
-` + images + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
+` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
 img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -1370,12 +1327,11 @@ if [ -n "$dir" ]; then
 else
   echo "devopsy: no release: nothing to take down" >&2
 fi
-for r in "$base"/releases/*; do
-  [ ! -d "$r" ] || img remove "$r" || d_fail=1
-done
+d_fail=
+img remove "$base"/releases/* || d_fail=1
 img prune
 image_unlock
-if [ -n "${d_fail:-}" ]; then
+if [ -n "$d_fail" ]; then
   echo "devopsy: $base stays: its images are not all removed; run --destroy again" >&2
   exit 1
 fi

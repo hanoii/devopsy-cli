@@ -571,8 +571,9 @@ never asks: --yes is accepted, and changes nothing.
        devopsy @<target> --releases remove <id|failed>... [--yes]
 
 Lists the releases on the target, newest first: id, who made it, mode,
-branch and commit (+dirty when made with uncommitted changes), and FAILED for
-releases that never went live or whose run step failed. * marks the
+branch and commit (+dirty when made with uncommitted changes), FAILED for
+releases that never went live or whose run step failed, and ROLLED BACK for
+one a rollback left (never kept nor rolled back to again). * marks the
 current one. Under each, the images it runs: what a rollback to it
 restores, and what removing it may free. Then the images the project's
 removals left, because a container (even a stopped one) uses them: each
@@ -581,13 +582,12 @@ pruning on the server retries them.
 remove takes releases away, each with its images, as pruning does: its
 tags, and the images no other release on the server still tags (any
 environment or project), then docker image prune -f. An id can be its
-start, when only one release starts so; failed is every failed release,
-and can go with ids. The current release is refused, and so is an id
-that names none or several: nothing is removed then. Rollbacks cannot
-go back to a removed release; data in shared/ is never touched. Asks
-first at a terminal; --yes for scripts and CI. It waits for the
-release lock, and up to 10 minutes for releases using the server's
-images.
+start, when only one release starts so; failed is every failed or rolled
+back release, and can go with ids. The current release is refused, and so
+is an id that names none or several: nothing is removed then. Rollbacks
+cannot go back to a removed release; data in shared/ is never touched.
+Asks first at a terminal; --yes for scripts and CI. It waits for the
+release lock, and up to 10 minutes for releases using the server's images.
 `,
 	"--env": `Usage: devopsy @<target> --env [--show]
 

@@ -422,13 +422,8 @@ fi
 exit 0
 `
 	write(t, filepath.Join(bin, "devopsy"), fake)
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "flock", "mv"} {
-		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// flock, mv -T, a fake docker, and the real --images.
+	fakeImageTools(t, bin)
 	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
 	phases := Phases{Run: []string{"deploy"}}
 	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}
@@ -463,7 +458,7 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, ".devopsy-sync.inherit.env")
-	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
+	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1234,13 +1229,8 @@ func fileExists(path string) bool {
 func TestActivatePruneFailed(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=1\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
-	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
-	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
-	for _, f := range []string{"devopsy", "flock", "mv"} {
-		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// flock, mv -T, a fake docker, and the real --images.
+	fakeImageTools(t, bin)
 	root := t.TempDir()
 	tg := &Target{Name: "prod", Path: "app/prod", Keep: 3}
 	base := filepath.Join(root, tg.Path)

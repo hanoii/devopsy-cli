@@ -15,7 +15,8 @@ import (
 
 // runReleases implements devopsy @<target> --releases [remove
 // <id|failed>... [--yes]]: the list, or releases removed with the images only they
-// hold. Ids are exact or a unique prefix, failed is every failed release,
+// hold. Ids are exact or a unique prefix, failed is every failed or
+// rolled-back release,
 // and every word is resolved before anything is asked or removed: one that
 // names nothing, or the current release, refuses them all. Asks [y/N] at a
 // terminal unless --yes; without one, --yes is required.
@@ -103,7 +104,8 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 }
 
 // chooseReleases resolves --releases remove's words against the listing,
-// newest first and each once: failed is every failed release, anything
+// newest first and each once: failed is every failed or rolled-back
+// release, anything
 // else an id or a unique prefix of one. The current release, or a word
 // naming none or several, is an error.
 func chooseReleases(t *remote.Target, releases []remote.Release, words []string) ([]remote.Release, error) {
@@ -115,7 +117,7 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 	for _, w := range words {
 		if w == "failed" {
 			for _, r := range releases {
-				if r.Failed && !r.Current {
+				if (r.Failed || r.RolledBack) && !r.Current {
 					pick[r.ID] = true
 				}
 			}
