@@ -291,9 +291,8 @@ repositories fit together and the open ideas.
     bookmark gone): names back on the bookmarks, except a name whose
     current image another environment uses (`others`: a container of
     another compose project, from `docker ps -a --filter ancestor=`,
-    checked on Docker 29's containerd store, against `--project`, the
-    compose project the containers carry, which the operator's
-    `COMPOSE_PROJECT_NAME` can make differ from `--name`; or a bookmark
+    checked on Docker 29's containerd store, against `--name`, the
+    compose project the containers carry; or a bookmark
     none of this environment's releases made, exact names, so
     `app-prod` never matches `app-prod-eu`): a rollback must not change
     another environment, so that name stays on the newer image, said.
@@ -401,8 +400,13 @@ repositories fit together and the open ideas.
   server and rollbacks restore it. Precedence there: caller, `shared/.env`,
   `inherit.env` (a child's, from its parent's `inherit:`), `instance.env`,
   `project.env`, `devopsy-target.env`.
-- A nested devopsy (`DEVOPSY_PROJECT_DIR` set) ignores the inherited
-  `COMPOSE_PROJECT_NAME`: it is the local project's, not the target's.
+- Nothing of the local environment goes to a server: a target's
+  `COMPOSE_PROJECT_NAME` is always its compose name (`projectName` in
+  `runRemote`), whatever the shell exports or a project command
+  inherits (one exported for local work put every environment under one
+  compose project). What does go: values `--vars set KEY` reads on
+  purpose, display settings (`DEVOPSY_INTERNAL_*`, `DEVOPSY_VERBOSE`),
+  who released (`USER`, CI's actor) in the record.
 - `mode:` defaults to `build`: it works for every project, where a wrong
   `image` fails the release. devopsy fetches the images itself, before the
   switch, so the run step only starts them: a build or pull there would

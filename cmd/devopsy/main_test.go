@@ -676,7 +676,8 @@ func TestReleaseSteps(t *testing.T) {
 }
 
 // A project command calling devopsy @target inherits the local project's
-// COMPOSE_PROJECT_NAME; the target's own name must win.
+// COMPOSE_PROJECT_NAME, and a shell may export one: the target's own
+// name always wins.
 func TestNestedRemoteProjectName(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -690,6 +691,10 @@ func TestNestedRemoteProjectName(t *testing.T) {
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "nested")
 	if code != 0 || !strings.Contains(out, `COMPOSE_PROJECT_NAME='\''app-prod'\'' exec devopsy`) {
 		t.Errorf("(%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo", "COMPOSE_PROJECT_NAME=mine"}, "@prod", "ps")
+	if code != 0 || !strings.Contains(out, `COMPOSE_PROJECT_NAME='\''app-prod'\'' exec devopsy`) || strings.Contains(out, "mine") {
+		t.Errorf("exported COMPOSE_PROJECT_NAME (%d):\n%s", code, out)
 	}
 }
 

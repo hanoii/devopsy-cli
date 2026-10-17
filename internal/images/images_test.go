@@ -696,25 +696,6 @@ func TestRestoreDigestGone(t *testing.T) {
 	}
 }
 
-// The containers' compose project is the one a restore leaves out, also
-// when the operator's COMPOSE_PROJECT_NAME named it otherwise.
-func TestRestoreOwnProject(t *testing.T) {
-	d := newFake()
-	var out bytes.Buffer
-	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
-	e.set.Project = "custom"
-	d.pull("app:1", "sha256:1")
-	first := e.newRelease("app:1")
-	e.set.Bookmark(e.rel(first))
-	d.pull("app:1", "sha256:2")
-	second := e.newRelease("app:1")
-	e.set.Bookmark(e.rel(second))
-	d.containers = []container{{"sha256:2", "custom"}}
-	if !e.set.Restore(e.rel(first)) || d.names["app:1"] != "sha256:1" {
-		t.Errorf("app:1 is %s, want sha256:1\n%s", d.names["app:1"], out.String())
-	}
-}
-
 // A name rewritten the same to Docker (docker.io/library/nginx:1 and
 // nginx:1) between two listings is not recorded as dropped.
 func TestBookmarkRespelled(t *testing.T) {
