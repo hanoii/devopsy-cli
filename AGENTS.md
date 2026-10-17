@@ -278,12 +278,9 @@ repositories fit together and the open ideas.
     restored. `devopsy-images` lists the names, one per line, as
     before; `devopsy-images-ids` (`images.IDFile`) keeps `ref<tab>image
     id`, what a removal decides from even after a bookmark went: a file
-    of its own, so an older devopsy (a pinned CI) still reads the
-    listing. Docker shows names short (`docker.io/library/nginx` is
+    of its own, so the listing stays plain names. Docker shows names short (`docker.io/library/nginx` is
     `nginx`): every comparison of a computed name with one Docker
-    reports goes through `familiar`. Bookmarks named before repositories
-    were counted as Docker resolves them (`legacyBookmarks`) are found
-    too.
+    reports goes through `familiar`.
   - **Bookmark** (`img bookmark`): lists through `devopsy -- config
     --images` in the release's code, records, tags by image id (another
     fetch may move the name meanwhile). A release listed

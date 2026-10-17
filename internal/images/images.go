@@ -33,9 +33,8 @@ const (
 	// line (compose config --images).
 	ListFile = "devopsy-images"
 	// IDFile keeps, per name of ListFile, the image it had when
-	// bookmarked: name, a tab, the id. A file of its own, so devopsy
-	// before it, which reads ListFile line by line, still finds its
-	// bookmarks.
+	// bookmarked: name, a tab, the id. A file of its own, so ListFile
+	// stays plain names, as --releases shows them.
 	IDFile = "devopsy-images-ids"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
@@ -158,27 +157,15 @@ func IsBookmark(tag string) bool {
 // repository named more than once gets the ref's cksum, so no bookmark
 // overwrites another.
 func bookmarks(entries []Entry, name, id string) []string {
-	return bookmarksBy(entries, name, id, repoKey)
-}
-
-// legacyBookmarks are the names devopsy gave before it counted
-// repositories as Docker resolves them (by the repository as written):
-// different only for a release naming one repository two ways
-// (library/nginx and nginx), whose bookmarks must still be found.
-func legacyBookmarks(entries []Entry, name, id string) []string {
-	return bookmarksBy(entries, name, id, Repo)
-}
-
-func bookmarksBy(entries []Entry, name, id string, key func(string) string) []string {
 	count := map[string]int{}
 	for _, e := range entries {
-		count[key(e.Ref)]++
+		count[repoKey(e.Ref)]++
 	}
 	prefix := BookmarkPrefix(name)
 	bs := make([]string, len(entries))
 	for i, e := range entries {
 		b := Repo(e.Ref) + ":" + prefix + id
-		if count[key(e.Ref)] > 1 {
+		if count[repoKey(e.Ref)] > 1 {
 			b += "-" + strconv.FormatUint(uint64(cksum([]byte(e.Ref))), 10)
 		}
 		bs[i] = b
@@ -271,12 +258,9 @@ func (s *Set) Bookmark(rel string) {
 			_ = s.Docker.Tag(e.ID, names[i])
 		}
 	}
-	oldNames, oldLegacy := bookmarks(old, s.Name, id), legacyBookmarks(old, s.Name, id)
+	oldNames := bookmarks(old, s.Name, id)
 	for i, e := range old {
-		for _, b := range []string{oldNames[i], oldLegacy[i]} {
-			if keep[familiar(b)] {
-				continue
-			}
+		if b := oldNames[i]; !keep[familiar(b)] {
 			if img, err := s.Docker.ID(b); err == nil {
 				if err := s.Docker.Remove(b); err != nil {
 					s.leftAdd(b, img, id, err)
@@ -298,8 +282,7 @@ func (s *Set) own(rel string) map[string]bool {
 	own := map[string]bool{}
 	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
 	for _, d := range dirs {
-		es := ReadList(d)
-		for _, b := range append(bookmarks(es, s.Name, filepath.Base(d)), legacyBookmarks(es, s.Name, filepath.Base(d))...) {
+		for _, b := range bookmarks(ReadList(d), s.Name, filepath.Base(d)) {
 			own[familiar(b)] = true
 		}
 	}
@@ -440,29 +423,28 @@ func (s *Set) Remove(rel string) error {
 	if len(es) == 0 {
 		return nil
 	}
-	names, legacy := bookmarks(es, s.Name, id), legacyBookmarks(es, s.Name, id)
+	names := bookmarks(es, s.Name, id)
 	mine := map[string]bool{}
 	imgs := make([]string, len(es))
 	for i, e := range es {
 		imgs[i] = e.ID
-		for _, b := range []string{names[i], legacy[i]} {
-			if mine[familiar(b)] {
-				continue
-			}
-			mine[familiar(b)] = true
-			bm, err := s.Docker.ID(b)
-			if errors.Is(err, ErrNoImage) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			if imgs[i] == "" {
-				imgs[i] = bm
-			}
-			if err := s.Docker.Remove(b); err != nil {
-				s.leftAdd(b, bm, id, err)
-			}
+		b := names[i]
+		if mine[familiar(b)] {
+			continue // a ref listed twice
+		}
+		mine[familiar(b)] = true
+		bm, err := s.Docker.ID(b)
+		if errors.Is(err, ErrNoImage) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if imgs[i] == "" {
+			imgs[i] = bm
+		}
+		if err := s.Docker.Remove(b); err != nil {
+			s.leftAdd(b, bm, id, err)
 		}
 	}
 	var order []string
