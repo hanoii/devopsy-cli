@@ -299,9 +299,10 @@ compose reads `--env-file` more than once).
 
 **Project name:** devopsy always sets `COMPOSE_PROJECT_NAME`: the config's
 `project:`, else compose's top-level `name:`, else the directory containing
-`.devopsy/`, normalized. On servers it is
-`<project>[-<instance>]-<environment>` (below), whatever `name:` says. Your
-own `COMPOSE_PROJECT_NAME` wins.
+`.devopsy/`, normalized; your own `COMPOSE_PROJECT_NAME` wins. On servers
+it is always `<project>[-<instance>]-<environment>` (below), whatever
+`name:` or your environment says: nothing of your local environment goes
+to a server.
 
 **`--shell`** opens bash (or sh) in the service named, else the one labeled
 `devopsy.shell=true`, else the only one running, as `devopsy.shell.user`
@@ -365,7 +366,7 @@ with what it links to, like `shared/.env`), `devopsy-target.env` and what the
 release imported into it, what devopsy sets itself and what the `env`
 capability computed. Secrets are masked as above, unless `--show`. For a
 target, the caller's environment is the server's SSH session plus the
-`COMPOSE_PROJECT_NAME` your devopsy sends.
+target's `COMPOSE_PROJECT_NAME`, which devopsy sends.
 
 Help, `--debug`, devopsy's messages and the lines a server sends are in
 color on a terminal, unless `NO_COLOR=1`; `FORCE_COLOR=1` forces them

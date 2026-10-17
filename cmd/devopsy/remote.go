@@ -126,16 +126,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	}
 
 	// The compose project: <project>[-<instance>]-<environment>, whatever
-	// compose.yaml's name: says. A user-level target without source belongs
-	// to no local project: the server's own files name it (target.env in
-	// releases). A nested devopsy (DEVOPSY_PROJECT_DIR set: a project
-	// command, or a release step, calling devopsy @target) inherits the local
-	// project's COMPOSE_PROJECT_NAME, which says nothing about the target:
-	// ignore it.
+	// compose.yaml's name: says, and whatever the local COMPOSE_PROJECT_NAME
+	// is: nothing of the local environment goes to a server (one exported
+	// for local work would put every environment under one project). A
+	// user-level target without source belongs to no local project: the
+	// server's own files name it (target.env in releases).
 	projectName := ""
-	if v := os.Getenv("COMPOSE_PROJECT_NAME"); v != "" && os.Getenv("DEVOPSY_PROJECT_DIR") == "" {
-		projectName = v
-	} else if t.Project != nil && t.Name != "" {
+	if t.Project != nil && t.Name != "" {
 		projectName = t.ComposeName()
 	}
 

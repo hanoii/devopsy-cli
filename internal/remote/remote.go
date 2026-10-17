@@ -803,15 +803,9 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	if holder == "" {
 		holder = "a release"
 	}
-	// The containers' compose project: the operator's COMPOSE_PROJECT_NAME
-	// wins over the target's name (cmd/devopsy's projectName).
-	project := projectName
-	if project == "" {
-		project = name
-	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--project", project}, false) + ` --left "$left" "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name}, false) + ` --left "$left" "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)

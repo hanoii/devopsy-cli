@@ -80,9 +80,6 @@ type Set struct {
 	Docker Docker
 	// Name is the environment's compose name, which its bookmarks carry.
 	Name string
-	// Project is the compose project its containers carry: Name, unless
-	// the operator's COMPOSE_PROJECT_NAME said otherwise.
-	Project string
 	// Left is its project's LeftFile.
 	Left string
 	// Out takes what it says, one "devopsy: " line each.
@@ -350,13 +347,9 @@ func (s *Set) others(img string, own map[string]bool) []string {
 	if err != nil {
 		return []string{"Docker could not tell: " + err.Error()}
 	}
-	project := s.Project
-	if project == "" {
-		project = s.Name
-	}
 	var others []string
 	for _, u := range users {
-		if u != project {
+		if u != s.Name {
 			others = append(others, u)
 		}
 	}
