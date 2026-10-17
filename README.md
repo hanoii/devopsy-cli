@@ -631,7 +631,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   was reached: devopsy's messages, the local steps run, and all the server
   printed, each line after its time in UTC (`2026-10-09 15:24:32`),
   progress displays reduced to their final state. `--log` shows the most recent, `--log <id>` one release's. Local steps'
-  own output stays on your screen only, keeping their terminal.
+  own output stays on your screen only, keeping their terminal. From
+  the switch on, a release no longer depends on your connection: a
+  session that drops (a cancelled CI job, a closed laptop) leaves it to
+  finish, or fail and bring the previous release back, on its own, and
+  `--log` then adds what the server printed after the session ended.
+  Before the switch, a dropped session cancels the release. Ctrl-C
+  during the run step stops it: the release fails and the previous one
+  comes back.
 - **Destroying:** `--destroy`, under the lock, in the current release:
   the environment's `destroy:` step if it has one (optional, one devopsy
   command, while everything still runs: a last dump), then `docker compose
@@ -948,8 +955,8 @@ interrupted export imports nothing, and its file goes. Interrupted
 server, which stops the copy (an export too) and restores its own
 services, then tells the child's to restore its services. Once the copy
 is in and the run step runs, a Ctrl-C only says so: the step is the
-server's, and cutting the session would fail it and bring the previous
-release back, which a second Ctrl-C does. If devopsy itself goes away
+server's, and a second Ctrl-C ends your session while the step ends
+there (`--log` shows how). If devopsy itself goes away
 mid-sync (killed, connection lost), each side restores its own
 services and writes what happened to `<environment>/.devopsy-sync.log`
 on its server. Restoring means what the sync stopped

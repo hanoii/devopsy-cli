@@ -453,7 +453,9 @@ exit 0
 	root := t.TempDir()
 	out, errOut, err := run(root, "1", "go\n")
 	base := filepath.Join(root, tg.Path)
-	if err != nil || out != SyncMarker+base+"\n" || current(root) != "releases/1/code" {
+	// The marker on stdout, or on stderr once the output follows a file
+	// (GNU's tail: followOutput).
+	if err != nil || !strings.Contains(out+errOut, SyncMarker+base+"\n") || current(root) != "releases/1/code" {
 		t.Fatalf("go (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
 	// The capability's hooks run from --sync-services, never the script;
@@ -491,7 +493,7 @@ exit 0
 	// A failing prepare prints no marker, restores, and does not go live.
 	root = t.TempDir()
 	out, errOut, err = run(root, "1", "go\n", "FAIL_PREPARE=3")
-	if err == nil || out != "" || current(root) != "" || !strings.Contains(errOut, "preparing the sync failed (3)") {
+	if err == nil || strings.Contains(out+errOut, SyncMarker) || current(root) != "" || !strings.Contains(errOut, "preparing the sync failed (3)") {
 		t.Fatalf("failing prepare (%v), current %q:\nstdout %q\n%s", err, current(root), out, errOut)
 	}
 	if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
@@ -1460,5 +1462,135 @@ func TestReleaseLockReopens(t *testing.T) {
 		} else if !fileExists(filepath.Join(base, "old")) || len(moved()) != 0 {
 			t.Errorf("rm failing: old back %v, aside %v", fileExists(filepath.Join(base, "old")), moved())
 		}
+	}
+}
+
+// From the switch on, a release finishes or goes back whatever happens
+// to its session (followOutput, switchTraps): one gone without a signal mid-run kills
+// only the tails, and the run step ends well; Ctrl-C stops the run step,
+// and the shell marks the release failed and restarts the previous one.
+// GNU's tail only: as before without it.
+func TestAfterSwitchSurvives(t *testing.T) {
+	// The script's PATH, not the test's: a GNU tail from Homebrew is not
+	// the one it finds.
+	if exec.Command("/bin/sh", "-c", "PATH=/usr/bin:/bin tail --version").Run() != nil {
+		t.Skip("needs GNU tail (--pid)")
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=1\n' "$FAKE_ROOT"; exit; fi
+case "$*" in
+  "-- config --images") printf 'app-prod-app\n' ;;
+  "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
+  deploy)
+    if [ -n "${FAKE_WAIT:-}" ]; then
+      touch "$FAKE_ROOT/running"
+      while [ ! -e "$FAKE_ROOT/go" ]; do sleep 0.05; done
+    fi
+    [ -z "${FAKE_FAIL:-}" ] || exit 1
+    echo "deployed $(pwd -P)"; echo "deploy progress" >&2 ;;
+  "--release-steps restart run") echo restarted >>"$FAKE_ROOT/calls" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "images"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
+	base := filepath.Join(root, tg.Path)
+	command := func(id string, env ...string) *exec.Cmd {
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		return cmd
+	}
+	current := func() string { l, _ := os.Readlink(filepath.Join(base, "current")); return l }
+	out, err := command("1").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "deployed") || !strings.Contains(string(out), "deploy progress") {
+		t.Fatalf("release 1 (%v), its output through the tails:\n%s", err, out)
+	}
+
+	// running starts cmd, waits for its run step, does what it is given
+	// and lets the step go on.
+	running := func(cmd *exec.Cmd, during func()) {
+		t.Helper()
+		os.Remove(filepath.Join(root, "running"))
+		os.Remove(filepath.Join(root, "go"))
+		for i := 0; i < 200 && !fileExists(filepath.Join(root, "running")); i++ {
+			time.Sleep(50 * time.Millisecond)
+		}
+		during()
+		write(t, filepath.Join(root, "go"), "")
+		_ = cmd.Wait()
+	}
+
+	// Release 2's session goes mid-run, no signal.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped := command("2", "FAKE_WAIT=1")
+	dropped.Stdout, dropped.Stderr = w, w
+	if err := dropped.Start(); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	running(dropped, func() { r.Close() })
+	if code := dropped.ProcessState.ExitCode(); code != 0 || current() != "releases/2/code" || fileExists(filepath.Join(base, "releases/2", FailedFile)) {
+		t.Errorf("release 2 after its session went: exit %d, current %q", code, current())
+	}
+	if o := readFile(filepath.Join(base, "releases/2", OutputFile)); !strings.Contains(o, "deployed") {
+		t.Errorf("release 2's output file: %q", o)
+	}
+
+	// Release 3 gets Ctrl-C mid-run: SIGINT to the session's group, the
+	// run step under script (a terminal's size set), which exits 0 when
+	// a signal ends its child.
+	var buf bytes.Buffer
+	interrupted := command("3", "FAKE_WAIT=1", "DEVOPSY_INTERNAL_TTY=80 24")
+	interrupted.Stdout, interrupted.Stderr = &buf, &buf
+	interrupted.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	os.Remove(filepath.Join(root, "calls"))
+	if err := interrupted.Start(); err != nil {
+		t.Fatal(err)
+	}
+	running(interrupted, func() {
+		if err := syscall.Kill(-interrupted.Process.Pid, syscall.SIGINT); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if interrupted.ProcessState.ExitCode() == 0 || current() != "releases/2/code" || !fileExists(filepath.Join(base, "releases/3", FailedFile)) || !strings.Contains(readFile(filepath.Join(root, "calls")), "restarted") {
+		t.Errorf("release 3 after Ctrl-C: exit %d, current %q, calls %q:\n%s", interrupted.ProcessState.ExitCode(), current(), readFile(filepath.Join(root, "calls")), buf.String())
+	}
+
+	// --log after the drop: no log saved, the output file instead.
+	logCmd := exec.Command("sh", "-c", LogReadScript(tg, "2"))
+	logCmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	if out, err := logCmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "after the session ended") || !strings.Contains(string(out), "deployed") {
+		t.Errorf("--log of release 2 (%v):\n%s", err, out)
+	}
+
+	// On a terminal (a pty, as on -t), the last lines reach it: the pty
+	// hangs up as the shell exits, so the shell waits for the tail.
+	pty := command("4", "FAKE_FAIL=1")
+	pty.Args = []string{"script", "-qec", "sh -c " + Quote(pty.Args[2]), "/dev/null"}
+	pty.Path, _ = exec.LookPath("script")
+	if pty.Path == "" {
+		t.Skip("needs script")
+	}
+	if out, _ := pty.CombinedOutput(); !strings.Contains(string(out), "restarting 2 with its own run step") {
+		t.Errorf("release 4 on a pty, its last line lost:\n%s", out)
+	}
+
+	// A rollback to 1 appends to 1's output, after its own.
+	rollback := exec.Command("sh", "-c", ActivateScript(tg, "", true, "app-prod", Phases{}, nil))
+	rollback.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	if out, err := rollback.CombinedOutput(); err != nil {
+		t.Fatalf("rollback (%v):\n%s", err, out)
+	}
+	if o := readFile(filepath.Join(base, "releases/1", OutputFile)); strings.Count(o, "devopsy: 20") != 2 || !strings.Contains(o, "deployed") {
+		t.Errorf("release 1's output after a rollback to it:\n%s", o)
 	}
 }

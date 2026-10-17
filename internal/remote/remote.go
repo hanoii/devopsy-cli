@@ -56,6 +56,10 @@ const (
 	FetchingFile = images.FetchingFile
 	// RolledBackFile marks the release a rollback left.
 	RolledBackFile = images.RolledBackFile
+	// OutputFile is what an activation printed from the switch on, then
+	// each rollback to it and sync into it (followOutput): a session that
+	// went meanwhile left the rest there, which --log shows.
+	OutputFile = "devopsy-output"
 )
 
 // ReleaseFile is name, one of a release's devopsy files, for the project
@@ -656,8 +660,8 @@ fetch_release "$rel" || fr=$?
 [ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
-trap - INT TERM HUP
-`
+out="$rel/` + OutputFile + `"
+` + followOutput + switchTraps
 	s += `make_current "releases/$id"
 echo "devopsy: current is now $id" >&2
 `
@@ -668,7 +672,8 @@ echo "devopsy: current is now $id" >&2
 	// The new release's images took the names the previous one runs
 	// (build mode's are the compose project's, a floating tag's the
 	// registry's): its own back.
-	restart := `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+	restart := `    trap '' INT TERM
+    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
@@ -685,12 +690,12 @@ echo "devopsy: current is now $id" >&2
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
-fi
+  ` + runSig + `fi
 `
 	} else if len(p.Run) > 0 {
 		s += `if [ "$status" = 0 ]; then
 ` + fmt.Sprintf("  echo \"devopsy: running 'devopsy %s' (run)\" >&2\n", strings.Join(p.Run, " ")) + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
-fi
+  ` + runSig + `fi
 `
 	}
 	if sync != nil || hasRun {
@@ -752,6 +757,52 @@ fi
 	}
 	return s
 }
+
+// followOutput runs where a script must go on whatever happens to its
+// session: before a release's switch, from where it goes live, or fails
+// and brings the previous release back, and around a sync's handover. A
+// session gone without a signal (CI's -T) kills whatever writes to it
+// next: the shell, compose, the switch back halfway. So the output goes
+// to a file ($out: OutputFile), both streams in their order (a sync's
+// marker among them: the operator looks for it on stderr too), and a
+// tail copies it to the session's stderr: only the tail dies with it.
+// Appended after a header line: a rollback's and a sync's go into a
+// release that has its own already. The tail ends half a second after
+// the shell (the EXIT trap, which keeps the exit status: on a -t session
+// the pty hangs up as soon as the shell exits, which cut the last lines,
+// and inotify has the tail copy a line in milliseconds), or a second
+// after a helper finds the shell gone without its trap (killed): never
+// tail's --pid, which, like kill -0, takes a zombie for alive, and
+// nothing may reap one. Neither holds the locks nor the sync's answer.
+// Without GNU's tail (macOS, in tests), as before.
+const followOutput = `if tail --version >/dev/null 2>&1; then
+  echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S')" >>"$out"
+  fo_off=$(wc -c <"$out")
+  tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
+  fo_tp=$!
+  ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
+    sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
+  fo_hp=$!
+  exec >>"$out" 2>&1
+  trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
+fi
+`
+
+// switchTraps follow followOutput in a release: Ctrl-C still stops the
+// step running and the shell carries on to its end, the release marked
+// failed (runSig) and the previous one back, its restart with INT and
+// TERM ignored. HUP, the terminal gone, and PIPE reach nothing.
+const switchTraps = `switch_sig=
+trap 'switch_sig=1' INT TERM
+trap '' HUP PIPE
+`
+
+// runSig fails a run step during which Ctrl-C or TERM came, whatever it
+// returned: under script (with_tty) the ^C reaches the inner terminal
+// and script's exit status says how its child ended, and script itself
+// signaled exits 0.
+const runSig = `[ -z "$switch_sig" ] || [ "$status" != 0 ] || status=130
+`
 
 // ImagesLock is the server's image lock, under its release root: shared
 // while a release fetches and bookmarks its images or restores them,
@@ -1182,6 +1233,12 @@ func SSHWith(t *Target, extra []string, script string, stdin io.Reader, stdout i
 // SIGTERM, which closes the session, and SIGKILL after SSHKillDelay. Its
 // output is cut then too, should something it started still hold it.
 func SSHContext(ctx context.Context, t *Target, extra []string, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
+	return SSHStreams(ctx, t, extra, script, stdin, stdout, nil, tty, log)
+}
+
+// SSHStreams is SSHContext with the session's stderr to stderr too, when
+// not nil, instead of the terminal's.
+func SSHStreams(ctx context.Context, t *Target, extra []string, script string, stdin io.Reader, stdout, stderr io.Writer, tty bool, log io.Writer) (int, error) {
 	ttyFlag := "-T"
 	if tty {
 		ttyFlag = "-t"
@@ -1230,7 +1287,10 @@ func SSHContext(ctx context.Context, t *Target, extra []string, script string, s
 	if stdout == nil {
 		cmd.Stdout = term(os.Stdout)
 	}
-	cmd.Stderr = term(os.Stderr)
+	cmd.Stderr = stderr
+	if stderr == nil {
+		cmd.Stderr = term(os.Stderr)
+	}
 	if log != nil {
 		cmd.Stdout = io.MultiWriter(cmd.Stdout, log)
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, log)
@@ -1292,18 +1352,28 @@ cat %s "$d/%s"
 func LogReadScript(t *Target, prefix string) string {
 	s := "set -eu\n" + basePrelude(t)
 	if prefix == "" {
-		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` 2>/dev/null | head -n 1) || true
+		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` "$base"/releases/*/` + OutputFile + ` 2>/dev/null | head -n 1) || true
 [ -n "$f" ] || { echo "devopsy: no release logs in $base/releases yet" >&2; exit 1; }
+d=$(dirname "$f")
 `
 	} else {
 		s += fmt.Sprintf(`r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | grep -- "^"%s | sort -r | head -n 1) || true
 [ -n "$r" ] || { echo "devopsy: no release starting with "%s" in $base/releases" >&2; exit 1; }
-f="$base/releases/$r/%s"
-[ -f "$f" ] || { echo "devopsy: release $r has no log" >&2; exit 1; }
-`, Quote(prefix), Quote(prefix), LogFile)
+d="$base/releases/$r"
+[ -f "$d/%s" ] || [ -f "$d/%s" ] || { echo "devopsy: release $r has no log" >&2; exit 1; }
+`, Quote(prefix), Quote(prefix), LogFile, OutputFile)
 	}
-	return s + `echo "devopsy: $f" >&2
-cat "$f"
+	// The server's own output from the switch on, when it is newer than
+	// the log: the session went before the release ended (the log, saved
+	// by the operator, stops there), or no log was saved at all.
+	return s + `if [ -f "$d/` + LogFile + `" ]; then
+  echo "devopsy: $d/` + LogFile + `" >&2
+  cat "$d/` + LogFile + `"
+fi
+if [ -f "$d/` + OutputFile + `" ] && { [ ! -f "$d/` + LogFile + `" ] || [ "$d/` + OutputFile + `" -nt "$d/` + LogFile + `" ]; }; then
+  echo "devopsy: $d/` + OutputFile + `: what the server printed from the switch on, after the session ended" >&2
+  cat "$d/` + OutputFile + `"
+fi
 `
 }
 
