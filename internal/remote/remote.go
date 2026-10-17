@@ -466,7 +466,11 @@ func hintAddress(t *Target) string {
 // prelude adds, for release scripts, the checks, the release lock and
 // the helpers they share: a first release failing meanwhile removes
 // $base, and --destroy removes it whole.
-func prelude(t *Target) string {
+//
+// Only the upload creates $base: an activation whose release went while
+// it waited (--destroy, a failed first release, --releases remove)
+// fails instead of making it again.
+func prelude(t *Target, create bool) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
   exit 1
@@ -475,7 +479,7 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   echo "devopsy: $base/current is a directory, not a link to a release: containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root. Take them down (docker compose -p <project> down) and remove it (docker run --rm -v \"$base:/env\" alpine rm -rf /env/current), then release again" >&2
   exit 1
 fi
-` + releaseLock(false, true) + `mkdir -p "$base/releases" "$base/shared/mnt"
+` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared/mnt"
 # An upload cut off leaves its .tmp, a watcher its file: none runs while
 # the lock is held.
 rm -rf "$base"/releases/*.tmp
@@ -490,7 +494,7 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 // would put the new tree inside the existing release and the old one
 // would run again.
 func UploadScript(t *Target, id string) string {
-	return prelude(t) + fmt.Sprintf(`rel="$base/releases/"%s
+	return prelude(t, true) + fmt.Sprintf(`rel="$base/releases/"%s
 [ ! -e "$rel" ] || { echo "devopsy: release $(basename "$rel") exists already on $base (another release in the same second?): try again" >&2; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
@@ -552,7 +556,7 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	// One stream: nothing an activation prints is a result, and on two
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
-	s := prelude(t) + "exec 1>&2\n"
+	s := prelude(t, false) + "exec 1>&2\n"
 	s += watchSession(sync != nil, true)
 	// Defined first: not_live removes a first release's images.
 	s += releaseImages(projectName, t, t.Mode)
@@ -580,6 +584,7 @@ echo "devopsy: rolling back to $id" >&2
 	}
 	s += `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
+[ -d "$code" ] || { echo "devopsy: release $id is gone: removed while it waited for the release lock" >&2; exit 1; }
 `
 	if !rollback {
 		// Held until the switch: --releases tells this release in
@@ -587,7 +592,7 @@ code="$rel/` + CodeDir + `"
 		// else holds the release lock.
 		s += `if [ -e "$rel/` + PendingFile + `" ]; then
   exec 7<"$rel/` + PendingFile + `"
-  flock -n 7 || true
+  flock -w 5 7 || true
 fi
 `
 	}
@@ -659,7 +664,16 @@ done
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
-  img restore "$1" || { fetch_images "$1" && img bookmark "$1"; } || fr=$?
+  # A signal during the restore (img ignores it) skips the fetch.
+  img restore "$1" || { [ -z "$fetch_sig" ] && fetch_images "$1" && img bookmark "$1"; } || fr=$?
+  # Disarmed here, under the lock, by taking the watcher's file away,
+  # atomically against the watcher, which takes it before it signals:
+  # when it got there first, its SIGTERM is on its way, or here, and the
+  # fetch is undone like one interrupted. Past this, the release goes on.
+  if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
+    fetch_sig=1
+  fi
+  [ -z "${watch_pid:-}" ] || rm -f "$ws_armed.off" "$ws_armed.fired"
   [ -z "$fetch_sig" ] || fr=130
   if [ "$fr" -ne 0 ]; then
     trap '' INT TERM HUP PIPE
@@ -687,32 +701,8 @@ fetch_release "$rel" || fr=$?
 # img recover and current as it was. img bookmark ignores SIGPIPE, so
 # nothing died sooner.
 [ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
-if [ "$fr" -ne 0 ]; then
-  rm -f "$rel/` + FetchingFile + `"
-  not_live "$fr"
-fi
-# Disarmed by taking its file away, atomically against the watcher,
-# which takes it before it signals: when it got there first, its SIGTERM
-# is on its way, or here.
-if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
-  fetch_sig=1
-fi
-rm -f "$ws_armed.off"
-# A session gone (or Ctrl-C) after fetch_release's own check and before
-# the watcher was disarmed: undone the same way, under the lock. The
-# fetching marker stays when it cannot be, for img recover.
-if [ -n "$fetch_sig" ]; then
-  trap '' INT TERM HUP PIPE
-  set +e
-  if image_lock shared undoing; then
-    ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
-    image_unlock
-    rm -f "$rel/` + FetchingFile + `"
-  fi
-  rm -f "$ws_armed.fired"
-  not_live 130
-fi
 rm -f "$rel/` + FetchingFile + `"
+[ "$fr" -eq 0 ] || not_live "$fr"
 out="$rel/` + ServerLogFile + `"
 `
 	s += switchTraps
@@ -1122,7 +1112,9 @@ func fetchImages(projectName, mode string) string {
 // are set, and releaseImages' functions defined.
 const NotLive = `not_live() {
   nl_gone=
-  if [ -z "$prev" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
+  # Never with another release there: one uploaded meanwhile waits for
+  # the lock.
+  if [ -z "$prev" ] && [ "$(ls -A "$base/releases")" = "$id" ] && [ ! -s "$base/shared/.env" ] && [ -z "$(ls -A "$base/shared/mnt" 2>/dev/null)" ]; then
     nl_gone=1
     if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1; then
       # A release cut off mid-fetch that recovery could not reach yet
@@ -1234,7 +1226,9 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   # is fetching), else it was cut off before its switch.
   p="$base/releases/$r/`+PendingFile+`"
   f=-
-  if [ -e "$p" ] && ! flock -n -s "$p" true 2>/dev/null; then
+  # Through a redirection: flock's own open of a path creates the file,
+  # which could bring the marker back on a release going live meanwhile.
+  if [ -e "$p" ] && ! { flock -n -s 7; } 7<"$p" 2>/dev/null && [ -e "$p" ]; then
     f=in-progress
   else
     [ ! -e "$p" ] || f=incomplete

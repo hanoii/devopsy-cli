@@ -644,8 +644,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   server notices, at its next write or when TCP gives up. From the switch on, a
   release no longer depends on your connection: it finishes, or fails
   and brings the previous release back, on its own, and `--log` shows
-  how. Ctrl-C during the run step stops it: the release fails and the
-  previous one comes back.
+  how. Ctrl-C before the switch cancels the release. During the run
+  step, at a terminal, it stops the step: the release fails and the
+  previous one comes back; without one (output piped, CI), the step is
+  the server's and goes on, which devopsy says, and a second Ctrl-C
+  only ends the session.
 - **Destroying:** `--destroy`, under the lock, in the current release:
   the environment's `destroy:` step if it has one (optional, one devopsy
   command, while everything still runs: a last dump), then `docker compose

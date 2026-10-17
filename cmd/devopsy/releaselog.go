@@ -83,6 +83,18 @@ func (l *releaseLog) flush() {
 	l.cur.Reset()
 }
 
+// has says whether a line recorded so far contains s.
+func (l *releaseLog) has(s string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		if strings.Contains(line.text, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // Line records one line of devopsy's own.
 func (l *releaseLog) Line(s string) {
 	_, _ = l.Write([]byte(s + "\n"))

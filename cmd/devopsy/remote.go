@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -299,27 +301,72 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			rlog.Line(msg)
 			return fail(msg)
 		}
-		// session runs an activation. Without a terminal its stdin is a
-		// pipe devopsy keeps open (remote.WatchEnv): the server sees it
-		// end with the session and cancels the release before its switch.
-		// With one, a dropped session is a hangup there.
+		// session runs an activation, with keepalives (a quiet run step
+		// over a dead connection would wait for TCP). With a terminal,
+		// Ctrl-C reaches the server's session, and a dropped one is a
+		// hangup there. Without one, its stdin is a pipe devopsy keeps
+		// open (remote.WatchEnv), which the server watches, and devopsy
+		// takes Ctrl-C itself (ssh ignores it): before the switch it
+		// closes the pipe, which cancels the release there, and waits for
+		// the session; after it, the run step is the server's, which it
+		// says once, and a second Ctrl-C ends the session.
 		session := func(script string) int {
-			var stdin io.Reader
-			if !tty {
-				r, w, err := os.Pipe()
+			if tty {
+				code, err := remote.SSHWith(t, remote.KeepAlive, script, nil, nil, true, rlog)
 				if err != nil {
 					return stop(err.Error())
 				}
-				defer r.Close()
-				defer w.Close()
-				stdin = r
-				script = remote.WatchEnv + "=1\n" + script
+				return code
 			}
-			code, err := remote.SSHLog(t, script, stdin, nil, tty, rlog)
+			r, w, err := os.Pipe()
 			if err != nil {
 				return stop(err.Error())
 			}
-			return code
+			defer r.Close()
+			defer w.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sigs := make(chan os.Signal, 1)
+			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sigs)
+			type result struct {
+				code int
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+script, r, nil, false, rlog)
+				done <- result{code, err}
+			}()
+			var res result
+			select {
+			case res = <-done:
+			case <-sigs:
+				if rlog.has(remote.LogAnchor) {
+					say(yellow, "devopsy: interrupted: the run step goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the step")
+					select {
+					case res = <-done:
+					case <-sigs:
+						cancel()
+						<-done
+						return 130
+					}
+				} else {
+					say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
+					w.Close()
+					select {
+					case <-done:
+					case <-sigs:
+						cancel()
+						<-done
+					}
+					return 130
+				}
+			}
+			if res.err != nil {
+				return stop(res.err.Error())
+			}
+			return res.code
 		}
 		// save ends the log with code and saves it in release id's
 		// directory on the server: a rollback's is appended to the log of
@@ -337,7 +384,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				text = append([]byte("\n"), text...)
 			}
 			if c, err := remote.SSH(t, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false); err != nil || c != 0 {
-				cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the %s log on the server (%v, %d)", what, err, c), color)
+				why := fmt.Sprint(c)
+				if err != nil {
+					why = err.Error()
+				}
+				cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the %s log on the server (%s)", what, why), color)
 			}
 			return code
 		}
@@ -527,11 +578,31 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			colored = remote.Colorize(os.Stderr)
 			errOut = colored
 		}
-		code, err := remote.SSHStreams(context.Background(), t, nil, remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		// Interrupted, the progress line goes and the session ends: what
+		// the upload left (its .tmp) goes with the next release.
+		upCtx, upCancel := context.WithCancel(context.Background())
+		upSigs := make(chan os.Signal, 1)
+		signal.Notify(upSigs, os.Interrupt, syscall.SIGTERM)
+		var upInterrupted atomic.Bool
+		go func() {
+			if _, ok := <-upSigs; ok {
+				upInterrupted.Store(true)
+				progress.clear()
+				upCancel()
+			}
+		}()
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		signal.Stop(upSigs)
+		close(upSigs)
+		upCancel()
 		if colored != nil {
 			colored.Flush()
 		}
 		progress.clear()
+		if upInterrupted.Load() {
+			say(red, "devopsy: interrupted during the upload: nothing changed on @"+t.Address)
+			return 130
+		}
 		if err == nil && code == 0 {
 			say(cyan, progress.done())
 		}
@@ -811,7 +882,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		case "--purge":
 			purge = true
 		default:
-			cli.Fprint(os.Stderr, red, "usage: devopsy @"+t.Name+" --destroy [--yes] [--purge]", color)
+			cli.Fprint(os.Stderr, red, "usage: devopsy @"+targetRef(t)+" --destroy [--yes] [--purge]", color)
 			return 1
 		}
 	}
