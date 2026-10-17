@@ -382,6 +382,28 @@ repositories fit together and the open ideas.
   recovery (its images have no listing yet). The release lock is inherited by the
   fetch, so recovery never races one still running. Rollbacks never
   write the marker, which would mark a good release failed.
+- **From the switch on** a release goes live, or fails and brings the
+  previous one back, whatever happens to its session: before
+  `make_current` the output goes to `$rel/devopsy-output` (`OutputFile`,
+  `followOutput`: both streams in one file, in their order, appended
+  after a time line, so rollbacks and syncs into a release keep what it
+  had) and a GNU `tail -f` copies it to the session's stderr, so a
+  session gone kills only the tail (it killed the shell at its next
+  write, or compose mid-`up`, or the switch back before the restart).
+  The tail follows a helper as long as the shell lives, and an EXIT
+  trap (which keeps the exit status) waits for it: a `-t` session's
+  pty hangs up the moment the shell exits, which cut the last lines.
+  Neither holds the locks or fd 3. `switchTraps`: Ctrl-C still stops
+  the run step, and the shell marks the release failed and restarts the
+  previous one, under `trap '' INT TERM`; HUP and PIPE are ignored. The
+  trap records it (`runSig`): under `script` the `^C` reaches the inner
+  terminal, so the status is only `script`'s, which exits 0 when itself
+  signaled. A sync's holder follows its output the same way from its
+  start, so its marker can come on stderr: the operator looks on both
+  streams. After a drop, the file is the only record of the rest (the
+  log is saved by the operator): `--log` adds it when it is newer than
+  the log, or there is none. Without GNU's `tail` (macOS, in tests)
+  only the traps apply (`TestAfterSwitchSurvives` skips).
 - Release logs (`releaseLog`): devopsy's messages, local steps' command
   lines and exit codes, and the upload and activation sessions' output
   (`SSHLog`, both streams), each line after its UTC time (`2006-01-02
@@ -538,7 +560,8 @@ repositories fit together and the open ideas.
   `SyncOptions` between `make_current` and `run`) takes the release lock,
   runs prepare, and prints the marker with its directory
   (`SyncMarker` + `$base`: the operator does not know the release root),
-  swallowed by `markerWriter`. Then the push on the parent's (`PushScript`:
+  swallowed by `markerWriter` (on stdout, or stderr once the holder
+  follows its output from a file, `followOutput`). Then the push on the parent's (`PushScript`:
   shared `flock -s` on its release lock, exclusive on `.sync-lock` so
   syncs from one parent serialize, `devopsy --sync-push`), with
   `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
@@ -556,9 +579,8 @@ repositories fit together and the open ideas.
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
   `abort`, and devopsy exits 130. After `go`, during the run step, the
-  first Ctrl-C only says the step goes on on the server (cutting the
-  session would fail it and bring the previous release back); the
-  second cuts it. The push session's stdin is a pipe
+  first Ctrl-C only says the step goes on on the server; the second
+  cuts the session, and the step still ends there (`followOutput`). The push session's stdin is a pipe
   devopsy keeps open (`SyncWatchEnv` says so: an older devopsy's
   `/dev/null` would read as a session gone at once), so the parent's
   `--sync-push` sees EOF as soon as the session ends, not at its next

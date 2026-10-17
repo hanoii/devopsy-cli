@@ -215,18 +215,23 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	defer r.Close()
 	defer w.Close()
 	// The marker is taken out before the lines are colored for the
-	// terminal (the holder's stdout is read here, not in SSHContext).
-	var out io.Writer = os.Stdout
-	var colored *remote.ColorWriter
+	// terminal (the holder's streams are read here, not in SSHContext),
+	// from either: once the holder follows its output from a file
+	// (remote's followOutput), everything comes on stderr.
+	var out, errOut io.Writer = os.Stdout, os.Stderr
+	var colored []*remote.ColorWriter
 	if color {
-		colored = remote.Colorize(os.Stdout)
-		out = colored
+		o, e := remote.Colorize(os.Stdout), remote.Colorize(os.Stderr)
+		colored = append(colored, o, e)
+		out, errOut = o, e
 	}
 	mw := newMarkerWriter(out)
+	mwErr := &markerWriter{w: errOut, marker: mw.marker}
 	flush := func() {
 		mw.flush()
-		if colored != nil {
-			colored.Flush()
+		mwErr.flush()
+		for _, c := range colored {
+			c.Flush()
 		}
 	}
 	type result struct {
@@ -235,7 +240,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	done := make(chan result, 1)
 	go func() {
-		code, err := remote.SSHWith(job.child, remote.KeepAlive, script, r, mw, false, rlog)
+		code, err := remote.SSHStreams(context.Background(), job.child, remote.KeepAlive, script, r, mw, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy just exits: the holder gets
@@ -299,13 +304,13 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			flush()
 			return 130
 		}
-		// The run step is the server's now: an interrupt here would only
-		// cut the session, failing the step and bringing the previous
-		// release back. Say so once; a second one does it.
+		// The run step is the server's now: an interrupt here only cuts
+		// the session, and the step goes on there (remote's followOutput).
+		// Say so once; a second one cuts it.
 		select {
 		case res = <-done:
 		case <-sigs:
-			say(yellow, "devopsy: interrupted: the run step goes on on @"+job.child.Address+" (devopsy @"+targetRef(job.child)+" --log shows how it ends). Ctrl-C again ends the session, which fails it: the previous release comes back")
+			say(yellow, "devopsy: interrupted: the run step goes on on @"+job.child.Address+" (devopsy @"+targetRef(job.child)+" --log shows how it ends). Ctrl-C again ends the session, not the step")
 			select {
 			case res = <-done:
 			case <-sigs:
