@@ -44,38 +44,42 @@ func TestReleaseLogFrames(t *testing.T) {
 	}
 }
 
-// --log joins the session's log and the server's: each server part at the
-// time it started, cleaned and indented, a later activation's (a
-// rollback's) in its place too.
+// --log joins the session's log and the server's: each server part right
+// after the line where the session's stopped (remote.LogAnchor), cleaned
+// and indented, whatever the times say; parts no anchor claims at the end.
 func TestJoinLogs(t *testing.T) {
+	anchor := remote.LogAnchor
 	session := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
 		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +
-		"2026-10-17 10:00:09 devopsy: release exited 0\n" +
+		"2026-10-17 10:00:05 " + anchor + "\n" +
+		"2026-10-17 10:00:05 devopsy: release exited 0\n" +
 		"2026-10-17 11:00:00 devopsy rollback: rollback of @prod\n" +
+		"2026-10-17 11:00:02 " + anchor + "\n" +
 		"2026-10-17 11:00:03 devopsy: rollback exited 0\n"
-	server := remote.LogSection + "2026-10-17 10:00:05\n" +
+	// The server's clock behind the operator's: places nothing.
+	server := remote.LogSection + "2026-10-17 09:59:58\n" +
 		"devopsy: current is now 1\n" +
 		"\x1b[32mdeployed\x1b[0m\n" +
 		"\n" +
-		remote.LogSection + "2026-10-17 11:00:02\n" +
-		"devopsy: current is now 0\n"
+		remote.LogSection + "2026-10-17 10:59:58\n" +
+		"devopsy: current is now 0\n" +
+		remote.LogSection + "2026-10-17 12:00:00\n" +
+		"devopsy: syncing\n"
 	got := string(joinLogs([]byte(session + remote.LogServerPart + "\n" + server)))
 	pad := strings.Repeat(" ", 20)
 	want := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
 		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +
-		"2026-10-17 10:00:05 devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n" +
+		"2026-10-17 10:00:05 " + anchor + "\n" +
 		pad + "devopsy: current is now 1\n" +
 		pad + "deployed\n" +
-		"2026-10-17 10:00:09 devopsy: release exited 0\n" +
+		"2026-10-17 10:00:05 devopsy: release exited 0\n" +
 		"2026-10-17 11:00:00 devopsy rollback: rollback of @prod\n" +
-		"2026-10-17 11:00:02 devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n" +
+		"2026-10-17 11:00:02 " + anchor + "\n" +
 		pad + "devopsy: current is now 0\n" +
-		"2026-10-17 11:00:03 devopsy: rollback exited 0\n"
+		"2026-10-17 11:00:03 devopsy: rollback exited 0\n" +
+		"2026-10-17 12:00:00 " + anchor + "\n" +
+		pad + "devopsy: syncing\n"
 	if got != want {
 		t.Errorf("joined:\n%s\nwant:\n%s", got, want)
-	}
-	// No session log (its operator gone): the server's alone.
-	if got := string(joinLogs([]byte(remote.LogServerPart + "\n" + server))); !strings.HasPrefix(got, "2026-10-17 10:00:05 devopsy: from here, the server's own log") || !strings.Contains(got, pad+"devopsy: current is now 0\n") {
-		t.Errorf("server log alone:\n%s", got)
 	}
 }

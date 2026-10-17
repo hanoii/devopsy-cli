@@ -1412,6 +1412,11 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
 	}
+	// Hints in scripts name the alias as typed.
+	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Address: "vm1:prod", Path: "traefik/prod"}
+	if s := HolderScript(aliased, "x", &SyncOptions{}, nil); !strings.Contains(s, "devopsy @vm1-traefik --release") {
+		t.Errorf("hint without the alias:\n%s", s)
+	}
 	// A release is failed until its switch, and cut uploads go.
 	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+FailedFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
 		t.Errorf("upload without its failed marker or the stale uploads' cleanup:\n%s", s)

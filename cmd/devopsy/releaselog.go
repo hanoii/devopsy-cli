@@ -156,10 +156,11 @@ func cleanLines(lines []logLine) []logLine {
 
 // joinLogs is --log's view of what LogReadScript printed: the session's
 // log (remote.LogFile) with each part of the server's (remote.
-// ServerLogFile, from a switch on) among its lines at the time the part
-// started, cleaned like the session's and indented under a line that
-// says where it comes from. The two never overlap: the session's log
-// stops at the switch (remote.SwitchMarker).
+// ServerLogFile) after the line where the session's stopped
+// (remote.LogAnchor), in order, cleaned like the session's and
+// indented. Parts no anchor claims (the operator gone before saving its
+// log) follow at the end, under their own time. The two never overlap:
+// the session's log stops at the switch (remote.SwitchMarker).
 func joinLogs(out []byte) []byte {
 	session, server, _ := strings.Cut(string(out), remote.LogServerPart+"\n")
 	type part struct {
@@ -177,7 +178,6 @@ func joinLogs(out []byte) []byte {
 	indent := strings.Repeat(" ", len(logTime)+1)
 	var b strings.Builder
 	put := func(p part) {
-		b.WriteString(p.at + " devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n")
 		for _, line := range cleanLines(p.lines) {
 			b.WriteString(indent + line.text + "\n")
 		}
@@ -186,13 +186,14 @@ func joinLogs(out []byte) []byte {
 		if line == "" {
 			continue
 		}
-		for len(parts) > 0 && len(line) >= len(logTime) && line[:len(logTime)] > parts[0].at {
+		b.WriteString(line)
+		if len(parts) > 0 && len(line) > len(logTime) && strings.TrimRight(line[len(logTime)+1:], "\n") == remote.LogAnchor {
 			put(parts[0])
 			parts = parts[1:]
 		}
-		b.WriteString(line)
 	}
 	for _, p := range parts {
+		b.WriteString(p.at + " " + remote.LogAnchor + "\n")
 		put(p)
 	}
 	return []byte(b.String())

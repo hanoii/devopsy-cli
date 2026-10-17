@@ -637,8 +637,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   recent, or `--log <id>` one release's. Local steps' own output stays
   on your screen only, keeping their terminal.
 - **Dropped connections:** before the switch, a session that drops (a
-  cancelled CI job, a closed laptop) cancels the release at once: the
-  server notices and undoes what it fetched. From the switch on, a
+  cancelled CI job, a killed devopsy) cancels the release at once: the
+  server notices and undoes what it fetched. A connection that dies
+  silently (a laptop asleep or off the network) cancels it only once the
+  server notices, at its next write or when TCP gives up. From the switch on, a
   release no longer depends on your connection: it finishes, or fails
   and brings the previous release back, on its own, and `--log` shows
   how. Ctrl-C during the run step stops it: the release fails and the
