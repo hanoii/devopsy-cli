@@ -497,12 +497,12 @@ repositories fit together and the open ideas.
   output is not piped: it would lose its terminal.
 - Before uploading: a role taken by another compose project fails
   (`RoleHoldersScript`), and a new instance asks (`InstanceExistsScript`,
-  `--yes`). A first release that fails before going live, with nothing in
-  `shared/` yet, removes its directory, its releases' images first (the
-  directory is their only record: `not_live` takes the image lock with
-  `now`, and keeps the directory, the release marked failed, when it is
-  busy, or when a `FetchingFile` waits for `img recover`). The image
-  functions are defined before `not_live` can run.
+  `--yes`). A release that fails before going live is marked failed,
+  a first one included: its environment's directory stays until
+  `--destroy` or `--releases remove failed` (until October 2026
+  `not_live` removed a first release's directory itself, a lighter copy
+  of `--destroy`'s ending, and removed a second release uploaded behind
+  it). The image functions are defined before `not_live` can run.
 - `basePrelude` exports `DEVOPSY_NO_UPDATE_CHECK=1`: the detached
   `--upgrade-check` would inherit the scripts' locks (fds 8 and 9, not
   close-on-exec: compose has to keep them) and hold them while it asks

@@ -697,9 +697,9 @@ Everything in `shared/` is linked into each release's `.devopsy/`: `.env`
 for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
 anything else (a `compose.override.yaml`). Local `.env`, `mnt/` and override
 files are never uploaded. Each release records its commit, branch and who
-made it. A first release that fails before going live leaves nothing
-behind, the images it got included (while another release is using the
-server's images, it stays, marked failed).
+made it. A release that fails before going live stays, marked failed, a
+first one too: `devopsy @<target> --destroy` removes an environment that
+never went live, `--releases remove failed` the release alone.
 One that fails in its `run` step leaves what the step started: a container
 left restarting recreates its bind mounts under `current` as a directory
 (Docker does, as root), and the next release refuses until it is taken

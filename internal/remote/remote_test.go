@@ -370,8 +370,8 @@ func TestPrepareScript(t *testing.T) {
 	}
 }
 
-// A first release that fails before going live, with nothing in shared/,
-// leaves no directory; with secrets already set, it stays.
+// A first release that fails before going live is marked failed, its
+// directory kept, whatever shared/ has: --destroy removes it.
 func TestPrepareScriptFirstRelease(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nexit 1\n")
@@ -394,13 +394,8 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 		if err == nil {
 			t.Fatalf("want a failure:\n%s", out)
 		}
-		_, baseErr := os.Stat(base)
-		_, instanceErr := os.Stat(filepath.Dir(base))
-		if secrets && baseErr != nil {
-			t.Errorf("removed despite shared/.env:\n%s", out)
-		}
-		if !secrets && (baseErr == nil || instanceErr == nil || !strings.Contains(string(out), "did not go live")) {
-			t.Errorf("left behind: base %v, instance %v:\n%s", baseErr, instanceErr, out)
+		if !fileExists(filepath.Join(rel, FailedFile)) || !strings.Contains(string(out), "release 1 not made current") {
+			t.Errorf("secrets %v: not marked failed, or removed:\n%s", secrets, out)
 		}
 	}
 }
@@ -866,9 +861,8 @@ exit 0
 		t.Errorf("pruning kept bookmarks of pruned releases, or dropped 5's")
 	}
 
-	// A first release whose build fails leaves no directory, and the
-	// images it got go first: the directory was their only record. With
-	// the server's image lock busy, it stays, marked failed.
+	// A first release whose build fails stays, marked failed, the images
+	// it got bookmarked: they go with it (--destroy, --releases remove).
 	first := func(env ...string) (string, string, error) {
 		root := t.TempDir()
 		write(t, filepath.Join(root, build.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
@@ -876,12 +870,8 @@ exit 0
 		return root, out, err
 	}
 	r, out, err := first()
-	if _, statErr := os.Stat(filepath.Join(r, build.Path)); err == nil || statErr == nil || image(r, "mariadb:devopsy-app-prod-1") != "" || image(r, "mariadb:11") != "" {
+	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FailedFile)); err == nil || statErr != nil || image(r, "mariadb:devopsy-app-prod-1") != "1" {
 		t.Errorf("failed first release (%v):\n%s", err, out)
-	}
-	r, out, err = first("FAKE_LOCKED=1")
-	if _, statErr := os.Stat(filepath.Join(r, build.Path, "releases", "1", FailedFile)); err == nil || statErr != nil || image(r, "mariadb:devopsy-app-prod-1") != "1" || !strings.Contains(out, "keeping "+filepath.Join(r, build.Path)) {
-		t.Errorf("failed first release, image lock busy (%v):\n%s", err, out)
 	}
 	// Never got the lock to fetch: nothing to undo, so no second wait.
 	r, out, err = first("FAKE_LOCKED=all")
@@ -897,7 +887,7 @@ exit 0
 	// left), and the directory stays, failed, for a later removal.
 	r, out, err = first("LOCK_AFTER=1")
 	rel1 := filepath.Join(r, build.Path, "releases", "1")
-	if err == nil || !fileExists(filepath.Join(rel1, FailedFile)) || fileExists(filepath.Join(rel1, FetchingFile)) || image(r, "mariadb:devopsy-app-prod-1") != "1" || !strings.Contains(out, "keeping "+filepath.Join(r, build.Path)) {
+	if err == nil || !fileExists(filepath.Join(rel1, FailedFile)) || fileExists(filepath.Join(rel1, FetchingFile)) || image(r, "mariadb:devopsy-app-prod-1") != "1" {
 		t.Errorf("failed first release, lock taken after the fetch (%v):\n%s", err, out)
 	}
 
@@ -1725,9 +1715,10 @@ exit 0
 	}
 }
 
-// A failed first release leaves no directory, unless another release
-// was uploaded meanwhile (waiting for the lock); an activation whose
-// release went while it waited fails, and never makes $base again.
+// A failed first release is marked failed and leaves the other releases
+// (one uploaded meanwhile waits for the lock); an activation whose
+// release or environment went while it waited fails, and never makes
+// $base again.
 func TestActivateGoneAndNeighbours(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
@@ -1754,10 +1745,7 @@ exit 0
 	if out, err := run("1"); err == nil || !fileExists(filepath.Join(base, "releases", "2", CodeDir)) || !fileExists(filepath.Join(base, "releases", "1", FailedFile)) {
 		t.Errorf("first release failing beside another (%v):\n%s", err, out)
 	}
-	os.RemoveAll(filepath.Join(base, "releases", "1"))
-	if out, err := run("2"); err == nil || fileExists(base) {
-		t.Errorf("first release failing alone (%v), base kept %v:\n%s", err, fileExists(base), out)
-	}
+	os.RemoveAll(base)
 	if out, err := run("3"); err == nil || !strings.Contains(out, "is gone") || fileExists(base) {
 		t.Errorf("activation of a gone environment (%v), base made again %v:\n%s", err, fileExists(base), out)
 	}
