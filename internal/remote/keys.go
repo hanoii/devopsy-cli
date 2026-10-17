@@ -144,7 +144,8 @@ func KeysRemoveScript() string {
 [ -f "$f" ] || { echo "devopsy: no authorized keys on this server" >&2; exit 3; }
 grep -qF -- " $blob" "$f" || { echo "devopsy: that key is not authorized" >&2; exit 3; }
 grep -vF -- " $blob" "$f" > "$f.tmp" || true
-if ! grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)' "$f.tmp"; then
+# Keys left, comments and blank lines aside (a commented-out key is none).
+if ! grep -Ev '^[[:space:]]*(#|$)' "$f.tmp" | grep -Eq '(^|[[:space:]])(ssh-|ecdsa-|sk-)'; then
   rm -f "$f.tmp"
   echo "devopsy: that is the last key: removing it would lock everyone out" >&2
   exit 4

@@ -220,7 +220,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if len(args) == 2 {
 			prefix = args[1]
 		}
-		return ssh(remote.LogReadScript(t, prefix), bytes.NewReader(nil), false)
+		var out bytes.Buffer
+		code, err := remote.SSH(t, remote.LogReadScript(t, prefix), bytes.NewReader(nil), &out, false)
+		if err != nil {
+			return fail(err.Error())
+		}
+		_, _ = os.Stdout.Write(joinLogs(out.Bytes()))
+		return code
 
 	case "--release", "--release-sync", "--release-no-sync", "--rollback":
 		// --release-sync and --release-no-sync are releases that sync
@@ -259,7 +265,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			if from != "" {
 				flag = "--from"
 			}
-			return fail(fmt.Sprintf("%s: @%s is not a child: environment %s has no parent: in %s", flag, t.Name, t.Name, cmp.Or(t.File, "the project's config")))
+			return fail(fmt.Sprintf("%s: @%s is not a child: environment %s has no parent: in %s", flag, t.Address, t.Name, cmp.Or(t.File, "the project's config")))
 		}
 		steps := t.Release
 		if rollback {
@@ -293,8 +299,23 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			rlog.Line(msg)
 			return fail(msg)
 		}
+		// session runs an activation. Without a terminal its stdin is a
+		// pipe devopsy keeps open (remote.WatchEnv): the server sees it
+		// end with the session and cancels the release before its switch.
+		// With one, a dropped session is a hangup there.
 		session := func(script string) int {
-			code, err := remote.SSHLog(t, script, nil, nil, tty, rlog)
+			var stdin io.Reader
+			if !tty {
+				r, w, err := os.Pipe()
+				if err != nil {
+					return stop(err.Error())
+				}
+				defer r.Close()
+				defer w.Close()
+				stdin = r
+				script = remote.WatchEnv + "=1\n" + script
+			}
+			code, err := remote.SSHLog(t, script, stdin, nil, tty, rlog)
 			if err != nil {
 				return stop(err.Error())
 			}

@@ -625,20 +625,24 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   `--from @<address>` syncs such a release from another environment of
   the project instead of the parent; a child's only, and only on a
   release that syncs.
-- **Logs:** each release and rollback is recorded and saved on the server,
-  in the release's directory (`releases/<id>/devopsy-log`; a rollback's
-  appended to the restored release's), failed ones included once the server
-  was reached: devopsy's messages, the local steps run, and all the server
-  printed, each line after its time in UTC (`2026-10-09 15:24:32`),
-  progress displays reduced to their final state. `--log` shows the most recent, `--log <id>` one release's. Local steps'
-  own output stays on your screen only, keeping their terminal. From
-  the switch on, a release no longer depends on your connection: a
-  session that drops (a cancelled CI job, a closed laptop) leaves it to
-  finish, or fail and bring the previous release back, on its own, and
-  `--log` then adds what the server printed after the session ended.
-  Before the switch, a dropped session cancels the release. Ctrl-C
-  during the run step stops it: the release fails and the previous one
-  comes back.
+- **Logs:** each release and rollback is recorded on the server, in the
+  release's directory (a rollback's and a sync's added to the release
+  they go to), failed ones included once the server was reached, in two
+  logs: `devopsy-log-session`, what your session said and saw up to the
+  switch (devopsy's messages, the local steps run, the server's lines),
+  each line after its time in UTC (`2026-10-09 15:24:32`), and
+  `devopsy-log-server`, what the server printed from the switch on,
+  written there whatever happens to your connection. `--log` shows the
+  two joined, progress displays reduced to their final state: the most
+  recent, or `--log <id>` one release's. Local steps' own output stays
+  on your screen only, keeping their terminal.
+- **Dropped connections:** before the switch, a session that drops (a
+  cancelled CI job, a closed laptop) cancels the release at once: the
+  server notices and undoes what it fetched. From the switch on, a
+  release no longer depends on your connection: it finishes, or fails
+  and brings the previous release back, on its own, and `--log` shows
+  how. Ctrl-C during the run step stops it: the release fails and the
+  previous one comes back.
 - **Destroying:** `--destroy`, under the lock, in the current release:
   the environment's `destroy:` step if it has one (optional, one devopsy
   command, while everything still runs: a last dump), then `docker compose
@@ -677,8 +681,9 @@ uploaded in `code/`, where `current` points and commands run, and
 devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
-(its images), `devopsy-log`, `devopsy-failed` when it never went live
-or its run failed, and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
+(its images), `devopsy-log-session` and `devopsy-log-server`,
+`devopsy-failed` until it goes live (for good when it never did, or its
+run failed), and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
 tree: rollbacks cannot go back to them, and their image tags stay until
 removed by hand (`docker image rm`).
 

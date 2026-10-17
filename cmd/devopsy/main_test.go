@@ -1196,7 +1196,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("remove by comment (%d):\n%s", code, out)
 	}
 	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--ssh-keys"), "SHA256:", 2)[1], " ", 2)[0])
-	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code != 4 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "ci-server") {
+	if out, code := run("", "@prod", "--ssh-keys", "remove", fp[:8]); code == 0 || !strings.Contains(out, "last key") || !strings.Contains(readString(authorized), "ci-server") {
 		t.Errorf("remove the last key (%d):\n%s", code, out)
 	}
 }
@@ -1342,7 +1342,7 @@ func TestReleasesRemove(t *testing.T) {
 	if out, code := run(nil, "@prod", "--releases", "remove", "1999", "--yes"); code == 0 || !strings.Contains(out, "devopsy@server:prod has no release 1999: nothing removed") {
 		t.Errorf("an unknown id (%d):\n%s", code, out)
 	}
-	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @prod --releases [remove <id|failed>... [--yes]]") {
+	if out, code := run(nil, "@prod", "--releases", "drop", first); code == 0 || !strings.Contains(out, "usage: devopsy @devopsy@server:prod --releases [remove <id|failed>... [--yes]]") {
 		t.Errorf("another word (%d):\n%s", code, out)
 	}
 	if got := releases(); len(got) != 5 {

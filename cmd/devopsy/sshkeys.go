@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -171,6 +172,10 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		}
 		k := matches[0]
 		fp, _ := k.Fingerprint()
+		// The server checks too (KeysRemoveScript), under its lock.
+		if len(keys) == 1 {
+			return fail(fp + " is " + t.Host + "'s last key: removing it would lock everyone out")
+		}
 		var buf bytes.Buffer
 		code, err := remote.SSH(t, remote.KeysRemoveScript(), strings.NewReader(k.Blob+"\n"), &buf, false)
 		if err != nil {
@@ -263,5 +268,7 @@ func targetRef(t *remote.Target) string {
 		// A server named alone.
 		return t.Host
 	}
-	return t.Name
+	// Resolved, so a hint works when copied (an instance, a server from
+	// variables).
+	return cmp.Or(t.Address, t.Name)
 }

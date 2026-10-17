@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // The log keeps final states only: no terminal codes, spinner frames or
@@ -39,5 +41,41 @@ func TestReleaseLogFrames(t *testing.T) {
 	}
 	if strings.Count(got, "step one") != 1 || strings.Count(got, "step two") != 1 {
 		t.Errorf("frames kept:\n%s", got)
+	}
+}
+
+// --log joins the session's log and the server's: each server part at the
+// time it started, cleaned and indented, a later activation's (a
+// rollback's) in its place too.
+func TestJoinLogs(t *testing.T) {
+	session := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
+		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +
+		"2026-10-17 10:00:09 devopsy: release exited 0\n" +
+		"2026-10-17 11:00:00 devopsy rollback: rollback of @prod\n" +
+		"2026-10-17 11:00:03 devopsy: rollback exited 0\n"
+	server := remote.LogSection + "2026-10-17 10:00:05\n" +
+		"devopsy: current is now 1\n" +
+		"\x1b[32mdeployed\x1b[0m\n" +
+		"\n" +
+		remote.LogSection + "2026-10-17 11:00:02\n" +
+		"devopsy: current is now 0\n"
+	got := string(joinLogs([]byte(session + remote.LogServerPart + "\n" + server)))
+	pad := strings.Repeat(" ", 20)
+	want := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
+		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +
+		"2026-10-17 10:00:05 devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n" +
+		pad + "devopsy: current is now 1\n" +
+		pad + "deployed\n" +
+		"2026-10-17 10:00:09 devopsy: release exited 0\n" +
+		"2026-10-17 11:00:00 devopsy rollback: rollback of @prod\n" +
+		"2026-10-17 11:00:02 devopsy: from here, the server's own log (" + remote.ServerLogFile + "):\n" +
+		pad + "devopsy: current is now 0\n" +
+		"2026-10-17 11:00:03 devopsy: rollback exited 0\n"
+	if got != want {
+		t.Errorf("joined:\n%s\nwant:\n%s", got, want)
+	}
+	// No session log (its operator gone): the server's alone.
+	if got := string(joinLogs([]byte(remote.LogServerPart + "\n" + server))); !strings.HasPrefix(got, "2026-10-17 10:00:05 devopsy: from here, the server's own log") || !strings.Contains(got, pad+"devopsy: current is now 0\n") {
+		t.Errorf("server log alone:\n%s", got)
 	}
 }
