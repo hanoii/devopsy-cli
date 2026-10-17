@@ -2,6 +2,9 @@ package main
 
 import (
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
@@ -13,13 +16,19 @@ import (
 //	devopsy --images --name <compose name> --left <record> <action> ...
 //
 // bookmark <release>..., restore <release> (exit 1 when it cannot),
+// remove <release>... (exit 1 when Docker failed: keep the release),
 // undo [--rollback] <release> [<current release>], recover <environment>
-// [<current release>], remove <release>..., prune.
+// [<current release>], prune.
 const imagesFlag = "--images"
 
 func runImages(args []string, color bool) int {
+	// Short steps that change what releases run, under the image lock:
+	// they finish whatever happens to the session. Go would die of a
+	// SIGPIPE writing to a gone one, and of a SIGTERM, even ignored by
+	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback := false
+	rollback, named := false, false
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -28,7 +37,7 @@ func runImages(args []string, color bool) int {
 				return imagesUsage(color)
 			}
 			if args[i] == "--name" {
-				s.Name = args[i+1]
+				s.Name, named = args[i+1], true
 			} else {
 				s.Left = args[i+1]
 			}
@@ -39,7 +48,9 @@ func runImages(args []string, color bool) int {
 			words = append(words, args[i])
 		}
 	}
-	if len(words) == 0 || s.Left == "" {
+	// The name decides the bookmarks: one forgotten would make
+	// devopsy-<id> ones every environment shares.
+	if len(words) == 0 || s.Left == "" || !named {
 		return imagesUsage(color)
 	}
 	rest := words[1:]
@@ -72,9 +83,16 @@ func runImages(args []string, color bool) int {
 		}
 		s.Recover(rest[0], arg(1))
 	case "remove":
+		// Docker failing midway: the release stays (exit 1), so the next
+		// removal finds its listing again.
+		code := 0
 		for _, r := range rest {
-			s.Remove(r)
+			if err := s.Remove(r); err != nil {
+				cli.Fprint(os.Stderr, red, "devopsy: the images of "+filepath.Base(r)+" could not all be removed ("+err.Error()+"): the release stays for the next removal", color)
+				code = 1
+			}
 		}
+		return code
 	case "prune":
 		s.Prune()
 	default:
