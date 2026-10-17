@@ -158,20 +158,18 @@ const syncStdin = "exec 3<&0 </dev/null\n"
 
 // syncFinish defines sync_finish go|abort, in the child's current
 // release: on go, the pending inherited variables move into
-// shared/inherit.env (linked into the release if it was not yet), so
-// what follows reads them there; on abort they go. Then --sync-services
+// shared/inherit.env (which every release links), so what follows reads
+// them there; on abort they go. Then --sync-services
 // finish go|abort, which starts what was stopped and waits for it to be
 // healthy, removes the stream spools on abort, then runs the sync
 // capability's finish child go|abort.
 func syncFinish(projectName string) string {
 	pending := `"$` + InheritPendingEnv + `"`
 	shared := `"$base/shared/` + InheritFile + `"`
-	link := `"$base/current/.devopsy/` + InheritFile + `"`
 	return `sync_finish() {
   if [ "$1" = go ]; then
     if [ -f ` + pending + ` ]; then
       mv -Tf ` + pending + ` ` + shared + ` || return 1
-      [ -e ` + link + ` ] || [ -L ` + link + ` ] || ln -s ` + shared + ` ` + link + `
     fi
   else
     rm -f ` + pending + `
@@ -201,8 +199,9 @@ fi
 }
 
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
-// step, which runs as release steps always do.
-const syncRestorePipe = "trap - PIPE\n"
+// step, which runs as release steps always do, and the sync's variables
+// (SyncOptions.exports): the run and after steps are no sync's.
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody

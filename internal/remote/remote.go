@@ -444,7 +444,11 @@ lock() {
 // would put the new tree inside the existing release and the old one
 // would run again.
 func UploadScript(t *Target, id string) string {
-	return prelude(t) + fmt.Sprintf(`rel="$base/releases/"%s
+	// Under the release lock: a first release failing meanwhile removes
+	// $base, and --destroy removes it whole.
+	return prelude(t) + `exec 9>"$base/.lock"
+` + lockWait(9, false, "the release running on $base") + `
+` + fmt.Sprintf(`rel="$base/releases/"%s
 [ ! -e "$rel" ] || { echo "devopsy: release $(basename "$rel") exists already on $base (another release in the same second?): try again" >&2; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
@@ -567,6 +571,10 @@ for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   rm -rf "$code/.devopsy/${f##*/}"
   ln -s "$f" "$code/.devopsy/${f##*/}"
 done
+`
+	// inherit.env (a child's, from its parent's inherit:) likewise: --inherit
+	// writes it into a running release.
+	s += `ln -sfn "$base/shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 `
 	// The project's and the instance's .env, shared by their environments:
 	// linked even when missing, so one created later applies too.

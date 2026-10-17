@@ -23,8 +23,9 @@ import (
 // (devopsy.sync.stop=true), app depending on db (FAKE_APP and FAKE_DB
 // change them: rsync, stream, each with +stop, or none for no label;
 // $DOCKER_LOG.<compose project> sets them for one side, past the clean
-// environment), each container exited when its label stops it, else
-// running, and copies what the rsync containers would: within one host,
+// environment), each container running until a stop (remembered, until
+// a start or an up), exited with FAKE_DB_DOWN, restarting with
+// FAKE_DB_RESTARTING, and copies what the rsync containers would: within one host,
 // or from the daemon's mount (remembered) across hosts. The tar
 // containers of --export and --import run tar here.
 const syncFakeDocker = `#!/bin/sh
@@ -41,24 +42,40 @@ absent() {
 lab() {
   case $1 in none) echo '{}' ;; *+stop) echo "{\"devopsy.sync\":\"${1%+stop}\",\"devopsy.sync.stop\":\"true\"}" ;; *) echo "{\"devopsy.sync\":\"$1\"}" ;; esac
 }
-st() { case $1 in *+stop) echo exited ;; *) echo running ;; esac; }
+stopped="$DOCKER_LOG.stopped.${COMPOSE_PROJECT_NAME:-}"
+# st: a service's container state, none without one.
+st() {
+  if absent "$1"; then echo none
+  elif grep -qx "$1" "$stopped" 2>/dev/null; then echo exited
+  elif [ "$1" = db ] && [ -n "${FAKE_DB_RESTARTING:-}" ]; then echo restarting
+  elif [ "$1" = db ] && [ -n "${FAKE_DB_DOWN:-}" ]; then echo exited
+  else echo running
+  fi
+}
+# services after a compose command (stop, start, up -d --wait).
+after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at" ] && w=1; done; }
 case "$*" in
   *" config --format json")
     printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-rsync}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-rsync+stop}")" "$dir" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
-  *" stop db") [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
-  *" ps --services --status running") absent app || echo app; absent db || [ -n "${FAKE_DB_DOWN:-}" ] || echo db ;;
-  *" ps --services --status restarting") [ -z "${FAKE_DB_RESTARTING:-}" ] || echo db ;;
-  *" ps --services --all --status exited") absent db || echo db; absent app || echo app ;;
-  *" ps --all --format json "*) printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$last" ;;
+  *" stop "*)
+    after stop "$@" >> "$stopped"
+    # FAIL_STOP: a stop that fails partway, its services stopped.
+    [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
+  *" start "*)
+    for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
+  *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
+  *" ps --all --format json "*)
+    for s in $(after json "$@"); do printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"; done ;;
   *" ps --all --format json")
-    absent app || printf '{"Service":"app","State":"%s"}\n' "$(st "${FAKE_APP:-rsync}")"
-    if [ -n "${FAKE_DB_DOWN:-}" ]; then dbst=exited; else dbst=$(st "${FAKE_DB:-rsync+stop}"); fi
-    absent db || printf '{"Service":"db","State":"%s"}\n' "$dbst" ;;
+    for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
-    up=0; for a; do [ "$up" = 1 ] && echo "$a" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; [ "$a" = --wait ] && up=1; done ;;
+    for s in $(after --wait "$@"); do
+      echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
+      grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
+    done ;;
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
@@ -1082,7 +1099,8 @@ func TestSyncLabels(t *testing.T) {
 		cmd := exec.Command(binary, "--sync-services", "finish", answer)
 		cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
 		// PWD as a shell's cd leaves it: the record lives next to current.
-		cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
+		// db is down: what a restore starts, or not, by the record.
+		cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir, "FAKE_DB_DOWN=1")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("finish: %v\n%s", err, out)
@@ -1344,7 +1362,7 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 func TestStatus(t *testing.T) {
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), "#!/bin/sh\necho \"url https://$COMPOSE_PROJECT_NAME.example\"\n", 0o755)
-	out, code := s.run(nil, "--status")
+	out, code := s.run([]string{"FAKE_DB_DOWN=1"}, "--status")
 	if code != 0 || !strings.Contains(out, "containers\n") || !strings.Contains(out, "  app ") || !strings.Contains(out, "  db ") || !strings.Contains(out, "exited") || !strings.Contains(out, "url https://shop.example\n") {
 		t.Fatalf("local status (%d):\n%s", code, out)
 	}
@@ -1835,5 +1853,22 @@ func TestSyncInheritedLabel(t *testing.T) {
 		if out, code := s.run(env, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+pending+"\n") {
 			t.Errorf("--sync-exec, %s (%d):\n%s", name, code, out)
 		}
+	}
+}
+
+// A sync that finds containers drops a first release's mark an earlier,
+// failed sync left; its stops stay.
+func TestSyncRecordStaleFirst(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "current")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(filepath.Dir(cwd), syncState), "first\nstop db\n", 0o644)
+	if err := startSyncState(cwd, false); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := readSyncRecord(cwd)
+	if !ok || rec.first || len(rec.stops) != 1 || rec.stops[0] != "db" {
+		t.Errorf("record: %+v %v", rec, ok)
 	}
 }

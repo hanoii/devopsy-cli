@@ -1281,11 +1281,17 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 	if err != nil || ip == "" {
 		return fmt.Errorf("the rsync daemon's address: %v", err)
 	}
-	for i := 0; i < 50; i++ {
-		if exec.CommandContext(ctx, "docker", "exec", id, "rsync", "rsync://127.0.0.1/").Run() == nil {
-			break
+	ready := false
+	for i := 0; i < 50 && !ready; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		time.Sleep(100 * time.Millisecond)
+		if ready = exec.CommandContext(ctx, "docker", "exec", id, "rsync", "rsync://127.0.0.1/").Run() == nil; !ready {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if !ready {
+		return fmt.Errorf("the rsync daemon did not answer in 5 seconds")
 	}
 
 	// A port free on the child's server: ssh fails at once when the
@@ -1594,12 +1600,28 @@ func composeContext(ctx context.Context, cwd string, stdout io.Writer, args ...s
 }
 
 // composeServices lists the services docker compose ps prints for args.
-func composeList(cwd string, args ...string) ([]string, error) {
-	var out bytes.Buffer
-	if err := compose(cwd, &out, append([]string{"ps", "--services"}, args...)...); err != nil {
+// servicesIn are the services whose container is in one of states
+// (serviceStates: one docker compose ps), sorted.
+func servicesIn(cwd string, states ...string) ([]string, error) {
+	all, err := serviceStates(cwd)
+	if err != nil {
 		return nil, err
 	}
-	return strings.Fields(out.String()), nil
+	var names []string
+	for name, state := range all {
+		if slices.Contains(states, state) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// upServices are the services running or restarting: a container in a
+// restart loop (a database on a datadir an aborted copy left half
+// written) is up as far as a copy is concerned.
+func upServices(cwd string) ([]string, error) {
+	return servicesIn(cwd, "running", "restarting")
 }
 
 func intersect(a, b []string) []string {
@@ -1621,30 +1643,25 @@ func stopServices(cwd string, services []cli.SyncService) error {
 	if len(stop) == 0 {
 		return nil
 	}
-	if err := startSyncState(cwd, false); err != nil {
+	// The record exists before anything can fail (startSyncState).
+	rec, _ := readSyncRecord(cwd)
+	if err := rec.write(cwd); err != nil {
 		return err
 	}
-	running, err := composeList(cwd, "--status", "running")
+	// The guard on the parent's side counts a restarting one as running:
+	// stop it too.
+	up, err := upServices(cwd)
 	if err != nil {
-		return fmt.Errorf("docker compose ps: %w", err)
+		return err
 	}
-	// A container in a restart loop (a database on a datadir an aborted
-	// copy left half written) is up as far as the copy is concerned, and
-	// the guard on the parent's side counts it as running: stop it too.
-	restarting, err := composeList(cwd, "--status", "restarting")
-	if err != nil {
-		return fmt.Errorf("docker compose ps: %w", err)
+	stop = intersect(stop, up)
+	for _, name := range stop {
+		if !slices.Contains(rec.stops, name) {
+			rec.stops = append(rec.stops, name)
+		}
 	}
-	stop = intersect(stop, append(running, restarting...))
-	state := ""
-	if recordedFirst(cwd) {
-		state = syncFirst + "\n"
-	}
-	for _, name := range append(recordedStops(cwd), stop...) {
-		state += "stop " + name + "\n"
-	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(cwd), syncState), []byte(state), 0o644); err != nil {
-		return fmt.Errorf("recording the services to restore: %w", err)
+	if err := rec.write(cwd); err != nil {
+		return err
 	}
 	if len(stop) == 0 {
 		return nil
@@ -1660,45 +1677,66 @@ func stopServices(cwd string, services []cli.SyncService) error {
 // container at all when the sync started.
 const syncFirst = "first"
 
-// startSyncState makes sure a record exists (syncState) before a sync's
-// prepare changes or asks anything: without one, restoring brings back
-// every service labeled to stop, a service down on purpose included. One
-// left by an earlier sync that could not restore stays: its services
-// come back with this one's. first adds syncFirst.
-func startSyncState(cwd string, first bool) error {
-	f, err := os.OpenFile(filepath.Join(filepath.Dir(cwd), syncState), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+// syncRecord is the record a sync keeps (syncState): whether it started
+// on a child's first release (no container at all: syncFirst) and the
+// services it stopped ("stop <name>" lines).
+type syncRecord struct {
+	first bool
+	stops []string
+}
+
+// readSyncRecord reads the record; ok is false without one.
+func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
+	state, err := os.ReadFile(filepath.Join(filepath.Dir(cwd), syncState))
 	if err != nil {
+		return rec, false
+	}
+	for _, line := range strings.Split(string(state), "\n") {
+		if line == syncFirst {
+			rec.first = true
+		} else if action, name, ok := strings.Cut(line, " "); ok && action == "stop" && !slices.Contains(rec.stops, name) {
+			rec.stops = append(rec.stops, name)
+		}
+	}
+	return rec, true
+}
+
+// write replaces the record whole.
+func (rec syncRecord) write(cwd string) error {
+	var b strings.Builder
+	if rec.first {
+		b.WriteString(syncFirst + "\n")
+	}
+	for _, name := range rec.stops {
+		b.WriteString("stop " + name + "\n")
+	}
+	path := filepath.Join(filepath.Dir(cwd), syncState)
+	if err := os.WriteFile(path+".tmp", []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("recording the services to restore: %w", err)
 	}
-	if first && !recordedFirst(cwd) {
-		_, err = f.WriteString(syncFirst + "\n")
+	if err := os.Rename(path+".tmp", path); err != nil {
+		return fmt.Errorf("recording the services to restore: %w", err)
 	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	return err
+	return nil
+}
+
+// startSyncState makes sure a record exists (syncState) before a sync's
+// prepare changes or asks anything: without one, restoring brings back
+// every service labeled to stop, a service down on purpose included. The
+// stops of one left by an earlier sync that could not restore stay: their
+// services come back with this one's. first is what the sync finds now:
+// an earlier first release's mark goes once containers exist.
+func startSyncState(cwd string, first bool) error {
+	rec, _ := readSyncRecord(cwd)
+	rec.first = first
+	return rec.write(cwd)
 }
 
 // recordedFirst reports whether the record says the sync started on a
 // first release (syncFirst).
 func recordedFirst(cwd string) bool {
-	state, err := os.ReadFile(filepath.Join(filepath.Dir(cwd), syncState))
-	return err == nil && slices.Contains(strings.Split(string(state), "\n"), syncFirst)
-}
-
-// recordedStops are the services the record names (nil without one).
-func recordedStops(cwd string) []string {
-	state, err := os.ReadFile(filepath.Join(filepath.Dir(cwd), syncState))
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, line := range strings.Split(string(state), "\n") {
-		if action, name, ok := strings.Cut(line, " "); ok && action == "stop" && !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	return names
+	rec, _ := readSyncRecord(cwd)
+	return rec.first
 }
 
 // healthyTimeout is how long restoreServices waits for a started service.
@@ -1718,8 +1756,9 @@ func restoreServices(cwd string, services []cli.SyncService) error {
 	// up would a moment later; only then: a service without a container
 	// in a project that has others was removed on purpose. The record
 	// says so (imports created some since); without one, no containers.
-	first := recordedFirst(cwd)
-	if _, err := os.Stat(filepath.Join(filepath.Dir(cwd), syncState)); err != nil {
+	rec, recorded := readSyncRecord(cwd)
+	first := rec.first
+	if !recorded {
 		states, err := serviceStates(cwd)
 		if err != nil {
 			return err
@@ -1741,13 +1780,13 @@ func restoreServices(cwd string, services []cli.SyncService) error {
 		}
 	}
 	stateFile := filepath.Join(filepath.Dir(cwd), syncState)
-	if _, err := os.Stat(stateFile); err == nil {
-		stop = intersect(stop, recordedStops(cwd))
+	if recorded {
+		stop = intersect(stop, rec.stops)
 	}
 	if len(stop) > 0 {
-		exited, err := composeList(cwd, "--all", "--status", "exited")
+		exited, err := servicesIn(cwd, "exited")
 		if err != nil {
-			errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
+			errs = append(errs, err)
 		}
 		if start := intersect(stop, exited); len(start) > 0 {
 			sayErr("devopsy: starting " + strings.Join(start, " "))
@@ -1828,7 +1867,13 @@ func waitHealthy(cwd string, services []string) error {
 		if err != nil {
 			return fmt.Errorf("docker compose ps: %w", err)
 		}
-		ready := len(entries) > 0
+		// Every service must have a container: one gone cannot be started.
+		ready := true
+		for _, name := range services {
+			if !slices.ContainsFunc(entries, func(e psEntry) bool { return e.Service == name }) {
+				ready = false
+			}
+		}
 		for _, e := range entries {
 			switch {
 			case e.State == "exited" || e.State == "dead" || e.Health == "unhealthy":

@@ -430,6 +430,9 @@ repositories fit together and the open ideas.
   tree; `prev` is `releases/<id>`, `current`'s target without `/code`.
   Go finds them from a project directory with `remote.ReleaseFile`
   (symlinks resolved). No migration: older releases are not rolled back to.
+- The upload (`UploadScript`) takes the release lock: a first release
+  failing meanwhile removes `$base`, `--destroy` all of it; a second
+  release's upload waits for the first's activation.
 - Release ids are UTC seconds (`NewRecord`): `UploadScript` refuses an
   id that exists on the target (two releases of one target in the same
   second), since `mv` would put the new tree inside the old release and
@@ -637,7 +640,9 @@ repositories fit together and the open ideas.
   check and the hook, `stopServices` before its first `ps`), because no
   record means restore every `stop=true` service, a service down on
   purpose included; one left by an earlier sync that could not restore
-  is kept and added to. Restoring brings the recorded ones back, from
+  is kept and added to (`syncRecord`, rewritten whole; a sync that finds
+  containers drops an earlier first release's `first`). Restoring brings
+  the recorded ones back, from
   container state (exited), so it also recovers after an interrupted
   sync, and a service down before the sync (a maintenance stop) stays
   down. A child's first release (no container at all when prepare
@@ -647,7 +652,11 @@ repositories fit together and the open ideas.
   them (drupal11's needs the app: without it, prod's passwords reached a
   child), and a stream imported then stays up; never otherwise, since a
   missing one was removed on purpose. A restore that brought everything
-  back removes the record.
+  back removes the record; it waits for every service it started to have
+  a running, healthy container (`waitHealthy`: one gone fails). Service
+  states come from one `docker compose ps --format json`
+  (`serviceStates`, `servicesIn`); the sync tests' fake docker remembers
+  stops and starts to answer it.
   `--sync-push` and an import cancel on SIGINT, SIGTERM, SIGHUP, SIGPIPE
   and restore; servers' commands write to `errOut`, never an `*os.File`,
   so a gone session cannot kill them with a broken pipe.
@@ -730,8 +739,9 @@ repositories fit together and the open ideas.
   release's `inherit.env`, same precedence, when it exists. So the
   child's labels follow an inherited variable in the same sync, where
   writing after the copy made them lag one sync. `sync_finish go` moves
-  it over `shared/inherit.env` (`mv -Tf`, linked into the release if the
-  link was missing) before restoring services, `finish child go` and the
+  it over `shared/inherit.env` (`mv -Tf`; every release links it, even
+  missing, so `--inherit` reaches a running one too) before restoring
+  services, `finish child go` and the
   run step; `sync_finish abort` removes it, so a failed copy writes
   nothing. A holder told the operator wrote none
   (`SyncOptions.Inherit` false: no `inherit:` on the parent, a first

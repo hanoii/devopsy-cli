@@ -726,3 +726,15 @@ func TestIsBookmark(t *testing.T) {
 		}
 	}
 }
+
+func TestDigestNames(t *testing.T) {
+	if got := familiar("docker.io/library/nginx:1.27@sha256:abc"); got != "nginx@sha256:abc" {
+		t.Errorf("familiar: %q", got)
+	}
+	if got := digestRef("nginx:1.27@sha256:abc"); got != "nginx@sha256:abc" {
+		t.Errorf("digestRef: %q", got)
+	}
+	if got := familiar("nginx"); got != "nginx:latest" {
+		t.Errorf("familiar: %q", got)
+	}
+}
