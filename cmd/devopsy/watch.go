@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
-	"golang.org/x/term"
 )
 
 // runWatchSession is the hidden --watch-session <pid> [--answer-fd <fd>]
@@ -64,17 +62,11 @@ func runWatchSession(args []string) int {
 	if answer >= 0 {
 		out = os.NewFile(uintptr(answer), "answer")
 	}
-	// On a terminal (-t), end of file is a Ctrl-D, not the session's
-	// end, which reads as an error (EIO, the terminal hung up).
-	tty := term.IsTerminal(int(os.Stdin.Fd()))
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 && out != nil {
 			_, _ = out.Write(buf[:n])
-		}
-		if err == io.EOF && tty {
-			continue
 		}
 		if err != nil {
 			break

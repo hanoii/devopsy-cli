@@ -302,22 +302,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return fail(msg)
 		}
 		// session runs an activation, with keepalives (a quiet run step
-		// over a dead connection would wait for TCP). With a terminal,
-		// Ctrl-C reaches the server's session, and a dropped one is a
-		// hangup there. Without one, its stdin is a pipe devopsy keeps
-		// open (remote.WatchEnv), which the server watches, and devopsy
-		// takes Ctrl-C itself (ssh ignores it): before the switch it
-		// closes the pipe, which cancels the release there, and waits for
-		// the session; after it, the run step is the server's, which it
-		// says once, and a second Ctrl-C ends the session.
+		// over a dead connection would wait for TCP), never on a
+		// terminal: its stdin is a pipe devopsy keeps open
+		// (remote.WatchEnv), which the server watches, and devopsy takes
+		// Ctrl-C itself (ssh ignores it), the same at a terminal and in
+		// CI. The first closes the pipe, which before the switch cancels
+		// the release there, and devopsy waits for the session; after the
+		// switch nothing listens, the release goes on, which devopsy says
+		// (as soon as it knows, for a switch under way). A second Ctrl-C
+		// ends the session.
 		session := func(script string) int {
-			if tty {
-				code, err := remote.SSHWith(t, remote.KeepAlive, script, nil, nil, true, rlog)
-				if err != nil {
-					return stop(err.Error())
-				}
-				return code
-			}
 			r, w, err := os.Pipe()
 			if err != nil {
 				return stop(err.Error())
@@ -340,60 +334,50 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				done <- result{code, err}
 			}()
 			var res result
-			select {
-			case res = <-done:
-			case <-sigs:
-				if switched.Load() {
-					say(yellow, "devopsy: interrupted: the release goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
-					select {
-					case res = <-done:
-					case <-sigs:
+			var slow <-chan time.Time
+			tick := time.NewTicker(200 * time.Millisecond)
+			defer tick.Stop()
+			interrupted, said := false, false
+			goesOn := func() {
+				if !said {
+					said, slow = true, nil
+					say(yellow, "devopsy: interrupted: the release goes on on @"+t.Address+", past its switch (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
+				}
+			}
+		wait:
+			for {
+				select {
+				case res = <-done:
+					break wait
+				case <-tick.C:
+					if interrupted && switched.Load() {
+						goesOn()
+					}
+				case <-slow:
+					// The server takes the cancel once it holds the
+					// release lock, which another release may hold.
+					say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
+				case <-sigs:
+					if interrupted {
 						cancel()
 						<-done
 						return 130
 					}
-				} else {
-					say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
+					interrupted = true
 					w.Close()
-					// The switch may be under way, its marker not here
-					// yet: then it goes on, which devopsy says as soon as
-					// the marker comes.
-					slow := time.After(5 * time.Second)
-					tick := time.NewTicker(200 * time.Millisecond)
-					defer tick.Stop()
-					said := false
-				wait:
-					for {
-						select {
-						case res = <-done:
-							break wait
-						case <-tick.C:
-							if !said && switched.Load() {
-								said = true
-								slow = nil
-								say(yellow, "devopsy: it had switched already: the release goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
-							}
-						case <-slow:
-							// The server takes the cancel once it holds the
-							// release lock, which another release may hold.
-							say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
-						case <-sigs:
-							cancel()
-							<-done
-							return 130
-						}
-					}
 					if switched.Load() {
-						if !said {
-							say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
-						}
-						if res.err != nil {
-							return stop(res.err.Error())
-						}
-						return res.code
+						goesOn()
+					} else {
+						say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
+						slow = time.After(5 * time.Second)
 					}
-					return 130
 				}
+			}
+			if interrupted && !switched.Load() {
+				return 130
+			}
+			if interrupted && !said {
+				say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
 			}
 			if res.err != nil {
 				return stop(res.err.Error())
