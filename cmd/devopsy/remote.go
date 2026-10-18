@@ -355,27 +355,38 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				} else {
 					say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
 					w.Close()
-					select {
-					case res = <-done:
-					case <-time.After(5 * time.Second):
-						// The server takes the cancel once it holds the
-						// release lock, which another release may hold.
-						say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
+					// The switch may be under way, its marker not here
+					// yet: then it goes on, which devopsy says as soon as
+					// the marker comes.
+					slow := time.After(5 * time.Second)
+					tick := time.NewTicker(200 * time.Millisecond)
+					defer tick.Stop()
+					said := false
+				wait:
+					for {
 						select {
 						case res = <-done:
+							break wait
+						case <-tick.C:
+							if !said && switched.Load() {
+								said = true
+								slow = nil
+								say(yellow, "devopsy: it had switched already: the release goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
+							}
+						case <-slow:
+							// The server takes the cancel once it holds the
+							// release lock, which another release may hold.
+							say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
 						case <-sigs:
 							cancel()
 							<-done
 							return 130
 						}
-					case <-sigs:
-						cancel()
-						<-done
-						return 130
 					}
-					// Its switch was under way: it went on.
 					if switched.Load() {
-						say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
+						if !said {
+							say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
+						}
 						if res.err != nil {
 							return stop(res.err.Error())
 						}

@@ -79,7 +79,7 @@ To get there it makes choices for you:
   visible with `devopsy --env`. Anything else is compose's.
 - **Push over SSH, never pull.** The server needs no access to the
   repository: no deploy keys, tokens or webhooks. Locally devopsy needs
-  `ssh`; on the server `devopsy`, `tar`, `flock` and `script`.
+  `ssh`; on the server `devopsy`, `tar`, `flock`, `setsid` and `script`.
 - **Releases are complete directories,** run through a `current` symlink;
   `shared/` keeps data and secrets across them. A release never changes a
   live tree in place.
@@ -644,11 +644,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   server notices, at its next write or when TCP gives up. From the switch on, a
   release no longer depends on your connection: it finishes, or fails
   and brings the previous release back, on its own, and `--log` shows
-  how. Ctrl-C before the switch cancels the release. During the run
-  step, at a terminal, it stops the step: the release fails and the
-  previous one comes back; without one (output piped, CI), the step is
-  the server's and goes on, which devopsy says, and a second Ctrl-C
-  only ends the session.
+  how. Ctrl-C before the switch cancels the release. After it, the
+  run step goes on: at a terminal Ctrl-C does nothing; without one
+  (output piped, CI), devopsy says so, and a second Ctrl-C only ends
+  the session. To go back, `--rollback` once it ends.
 - **Destroying:** `--destroy`, under the lock, in the current release:
   the environment's `destroy:` step if it has one (optional, one devopsy
   command, while everything still runs: a last dump), then `docker compose

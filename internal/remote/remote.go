@@ -454,7 +454,7 @@ settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy 
 [ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + cmp.Or(t.Alias, t.Address, t.Host) + ` --upgrade)" >&2; exit 1; }
 with_tty() {
   if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
-    script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
+    ${tty_detach:+setsid -w} script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
   else
     eval "$1"
   fi
@@ -690,12 +690,16 @@ done
   fi
   [ -z "${watch_pid:-}" ] || rm -f "$ws_armed.off" "$ws_armed.fired"
   [ -z "$fetch_sig" ] || fr=130
-  # Past this point the release goes on. Until its run step (switchTraps)
-  # signals are ignored: a trapped one still kills the foreground child
-  # (rm, ln, mv in make_current), which set -e turns into the script's
-  # end, halfway through the switch; ignored, children inherit that.
+  # Past this point the release goes on, and signals are ignored to its
+  # end: a trapped one still kills the foreground child (rm, ln, mv in
+  # make_current), which set -e turns into the script's end, halfway
+  # through the switch, and one stopping the run step left its
+  # grandchildren (script's session) running into the restart.
+  # Ignored, children inherit that; script, which reads its signals
+  # even ignored, gets its own session (tty_detach, with_tty).
   if [ "$fr" -eq 0 ]; then
     trap '' INT TERM HUP
+    tty_detach=1
   fi
   if [ "$fr" -ne 0 ]; then
     trap '' INT TERM HUP PIPE
@@ -756,37 +760,32 @@ echo "devopsy: current is now $id" >&2 || true
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `
-	s += "switch_sig=\nstatus=0\nfailed=run\n"
+	s += "status=0\nfailed=run\n"
 	if sync != nil {
-		// The sync records a Ctrl-C (its holder's answer is the
-		// operator's), then signals are ignored again for the log's set
-		// up.
-		s += switchTraps + sync.exports(t) + `cd "$base/current"
+		s += sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live") + `cd "$base"
 [ "$status" = 0 ] || failed=sync
-trap '' INT TERM HUP
 `
 	}
-	// The server's log starts here, after the switch (switchTraps hold
+	// The server's log starts here, after the switch (signals ignored
 	// from before it, and its one write tolerates a gone session) and
 	// after a sync, which has its own way through a dropped session
 	// (syncWait) and whose copy's lines reach the session's log from the
 	// push, so --log shows them in their place. PIPE is ignored again: a
 	// sync's end restores it.
-	s += "trap '' PIPE\n" + followOutput + switchTraps
+	s += "trap '' PIPE\n" + followOutput
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
-  ` + runSig + `fi
+fi
 `
 	} else {
 		s += `if [ "$status" = 0 ]; then
 ` + runningLine(p.Run, "run") + `  (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, p.Run, false)) + `) || status=$?
-  ` + runSig + `fi
+fi
 `
 	}
 	s += `if [ "$status" != 0 ]; then
-  trap '' INT TERM HUP
   touch "$rel/` + FailedFile + `"
   if [ -n "$prev" ]; then
     make_current "$prev"
@@ -975,23 +974,6 @@ const LogAnchor = "devopsy: from here, the server's own log (" + ServerLogFile +
 
 // LogServerPart separates LogReadScript's two logs.
 const LogServerPart = "devopsy-internal-server-log"
-
-// switchTraps follow followOutput in a release, for its run step (and
-// its sync, before): Ctrl-C still stops the step running and the shell
-// carries on to its end, the release marked failed (runSig) and the
-// previous one back, all that with signals ignored. HUP, the terminal
-// gone, and PIPE reach nothing. Between the fetch and here signals are
-// ignored, so no short command dies of one halfway through the switch.
-const switchTraps = `trap 'switch_sig=1' INT TERM
-trap '' HUP PIPE
-`
-
-// runSig fails a run step during which Ctrl-C or TERM came, whatever it
-// returned: under script (with_tty) the ^C reaches the inner terminal
-// and script's exit status says how its child ended, and script itself
-// signaled exits 0.
-const runSig = `[ -z "$switch_sig" ] || [ "$status" != 0 ] || status=130
-`
 
 // ImagesLock is the server's image lock, under its release root: shared
 // while a release fetches and bookmarks its images or restores them,

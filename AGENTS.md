@@ -417,8 +417,8 @@ repositories fit together and the open ideas.
   one is coming (a file, not a signal: one sent before the watcher
   could handle it would kill it). The disarm is inside `fetch_release`,
   under the image lock it already holds, before its last `fetch_sig`
-  check: a drop then is undone like one during the fetch. From there a
-  Ctrl-C counts as one in the run step (`switch_sig`). `prelude`
+  check: a drop then is undone like one during the fetch. From there
+  signals are ignored (below). `prelude`
   removes stale `.devopsy-watch.*`. A sync's answer
   goes through the same watcher (`--answer-fd`: a fifo whose ends the
   script opens before starting it, the read end on fd 3, the write end
@@ -450,19 +450,26 @@ repositories fit together and the open ideas.
   switch already under way when the pipe closed goes on, and devopsy
   says so. Interrupted during the upload (`signal.NotifyContext`), the
   progress line goes and nothing changed. From the end of a fetch that
-  went through to the run step (or the sync), INT, TERM and HUP are
-  ignored: a trapped signal still kills the foreground child (`rm`, the
-  `ln` and `mv` of `make_current`), which `set -e` turns into the
-  script's end halfway through the switch; ignored, children inherit it
-  (hence the tail and its helper die by SIGKILL). A Ctrl-C there is
-  lost: the release goes live and the run step's traps take over. The
-  failed-run branch ignores them too. During the fetch, a terminal's hangup is the
-  watcher's to act on (above).
+  went through to the script's end, INT, TERM and HUP are ignored: a
+  trapped signal still kills the foreground child (`rm`, the `ln` and
+  `mv` of `make_current`), which `set -e` turns into the script's end
+  halfway through the switch; ignored, children inherit it (hence the
+  tail and its helper die by SIGKILL). So a terminal's Ctrl-C after the
+  switch does what a piped one does: nothing, the run step goes on
+  (decided, October 2026). Until then it stopped the step and restarted
+  the previous release, but a dash subshell resets a trapped INT, so it
+  died at once while `script`'s session (compose) ran on into the
+  restart: two `up`s on one project, containers removed. `script`
+  reads its signals through a signalfd, ignored ones included, and
+  exits 0 when signaled (a restart's `get_images` took that for a
+  fetch), so from there `with_tty` runs it under `setsid -w`
+  (`tty_detach`): the terminal's signals never reach it. During the
+  fetch, a terminal's hangup is the watcher's to act on (above).
   Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
-  `make_current` (after the sync, in a release that syncs; switchTraps
-  hold from before it) the output goes to `$rel/devopsy-log-server`
+  `make_current` (after the sync, in a release that syncs; signals are
+  ignored from before it) the output goes to `$rel/devopsy-log-server`
   (`ServerLogFile`, `followOutput`: both streams in one file, in their
   order, each activation's part after a `LogSection` line with its
   time) and a GNU `tail -f` copies it to the session's stderr, so a
@@ -479,17 +486,13 @@ repositories fit together and the open ideas.
   moment the shell exits, which cut the last lines), or a second after
   a helper finds the shell gone without its trap: never `tail --pid`,
   which takes an unreaped zombie for alive. Neither holds the locks or
-  fd 3. `switchTraps`: Ctrl-C still stops the run step, and the shell
-  marks the release failed and restarts the previous one, with INT and
-  TERM ignored; HUP and PIPE are ignored. The trap records it
-  (`runSig`): under `script` the `^C` reaches the inner terminal, so
-  the status is only `script`'s, which exits 0 when itself signaled. A
+  fd 3. A
   release that syncs starts following after the sync, at its run step,
   and so does a sync's holder (only with a run step): the sync has its
   own way through a drop (`syncWait`), and the copy's lines reach the
   session's log through the push, so `--log` shows them in their place,
-  not after the server's whole part. From the switch to there,
-  `switchTraps` hold and the one write ("current is now") tolerates a
+  not after the server's whole part. From the switch to there, the
+  one write ("current is now") tolerates a
   gone session; PIPE is ignored again before `followOutput`, whose
   marker write does too. Without GNU's `tail` (macOS, in tests) only the traps
   apply, and the session's log has everything (`TestAfterSwitchSurvives`
@@ -590,7 +593,7 @@ repositories fit together and the open ideas.
   has taken, not the gzip's size, which is unknown until the end. One
   line redrawn on stderr when it is a terminal, never logged; the log
   and CI get the summary line. Server
-  needs: `devopsy`, `tar`, `flock` and `script` (util-linux; without the last, no live build progress on syncing releases); locally only `ssh`.
+  needs: `devopsy`, `tar`, `flock`, `setsid` and `script` (util-linux; without the last, no live build progress on syncing releases); locally only `ssh`.
 - `--vars`, `--vars-instance` and `--vars-project` (one file each, so
   flags, not options of `--vars`) send values over SSH's stdin, never as
   arguments; edits replace

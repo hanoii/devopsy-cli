@@ -1584,9 +1584,9 @@ func TestReleaseLockReopens(t *testing.T) {
 }
 
 // From the switch on, a release finishes or goes back whatever happens
-// to its session (followOutput, switchTraps): one gone without a signal mid-run kills
-// only the tails, and the run step ends well; Ctrl-C stops the run step,
-// and the shell marks the release failed and restarts the previous one.
+// to its session (followOutput): one gone without a signal mid-run kills
+// only the tails, and the run step ends well; so does one that gets
+// Ctrl-C, which nothing there takes (script in a session of its own).
 // GNU's tail only: as before without it.
 func TestAfterSwitchSurvives(t *testing.T) {
 	// The script's PATH, not the test's: a GNU tail from Homebrew is not
@@ -1673,8 +1673,8 @@ exit 0
 	}
 
 	// Release 3 gets Ctrl-C mid-run: SIGINT to the session's group, the
-	// run step under script (a terminal's size set), which exits 0 when
-	// a signal ends its child.
+	// run step under script (a terminal's size set), which would read it
+	// even ignored and end its child, exiting 0.
 	var buf bytes.Buffer
 	interrupted := command("3", "FAKE_WAIT=1", "DEVOPSY_INTERNAL_TTY=80 24")
 	interrupted.Stdout, interrupted.Stderr = &buf, &buf
@@ -1688,7 +1688,7 @@ exit 0
 			t.Fatal(err)
 		}
 	})
-	if interrupted.ProcessState.ExitCode() == 0 || current() != "releases/2/code" || !fileExists(filepath.Join(base, "releases/3", FailedFile)) || !strings.Contains(readFile(filepath.Join(root, "calls")), "restarted") {
+	if interrupted.ProcessState.ExitCode() != 0 || current() != "releases/3/code" || fileExists(filepath.Join(base, "releases/3", FailedFile)) || fileExists(filepath.Join(root, "calls")) || !strings.Contains(readFile(filepath.Join(base, "releases/3", ServerLogFile)), "deployed") {
 		t.Errorf("release 3 after Ctrl-C: exit %d, current %q, calls %q:\n%s", interrupted.ProcessState.ExitCode(), current(), readFile(filepath.Join(root, "calls")), buf.String())
 	}
 
@@ -1707,19 +1707,19 @@ exit 0
 	if pty.Path == "" {
 		t.Skip("needs script")
 	}
-	if out, _ := pty.CombinedOutput(); !strings.Contains(string(out), "restarting 2 with its own run step") {
+	if out, _ := pty.CombinedOutput(); !strings.Contains(string(out), "restarting 3 with its own run step") {
 		t.Errorf("release 4 on a pty, its last line lost:\n%s", out)
 	}
 
-	// A rollback to 1 appends to 1's output, after its own.
+	// A rollback to 2 appends to 2's output, after its own.
 	rollback := exec.Command("sh", "-c", ActivateScript(tg, "", true, "app-prod", Phases{}, nil))
 	rollback.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	rbOut, err := rollback.CombinedOutput()
 	if err != nil {
 		t.Fatalf("rollback (%v):\n%s", err, rbOut)
 	}
-	if o := readFile(filepath.Join(base, "releases/1", ServerLogFile)); strings.Count(o, LogSection) != 2 || !strings.Contains(o, "deployed") {
-		t.Errorf("release 1's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
+	if o := readFile(filepath.Join(base, "releases/2", ServerLogFile)); strings.Count(o, LogSection) != 2 || !strings.Contains(o, "deployed") {
+		t.Errorf("release 2's output after a rollback to it:\n%s\nthe rollback's session:\n%s", o, rbOut)
 	}
 }
 
