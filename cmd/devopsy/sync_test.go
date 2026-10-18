@@ -409,7 +409,20 @@ func TestReleaseFirstSync(t *testing.T) {
 		t.Errorf("parent not restored:\n%s", docker)
 	}
 
+	// The copy was cut: the child's data is a partial copy, which only
+	// a sync completes.
+	if !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) || !strings.Contains(out, "the copy was cut") {
+		t.Errorf("a cut copy not marked partial:\n%s", out)
+	}
 	next()
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "Nothing changed.") {
+		t.Fatalf("--release-no-sync on a partial copy (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 || !strings.Contains(out, "deploy in shop-dev") || s.current("dev") == "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("a first release again, syncing (%d):\n%s", code, out)
+	}
+	next()
+	s.logs()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Syncing") || s.current("dev") == "" {
 		t.Fatalf("--release-no-sync (%d):\n%s", code, out)
 	}
@@ -597,36 +610,74 @@ func TestSyncAbort(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
-	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes")
+	// The parent's stop fails, before anything is written: what it
+	// stopped comes back, and so does the child.
+	out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
 	docker, _ := s.logs()
-	if code != 1 || !strings.Contains(out, "aborting the sync") || strings.Contains(out, "deploy in shop-dev") {
-		t.Fatalf("abort (%d):\n%s", code, out)
-	}
-	rest := docker
-	for _, want := range []string{"shop-dev compose", "stop db", "shop-prod compose", "start db", "shop-dev compose", "start db"} {
-		i := strings.Index(rest, want)
-		if i < 0 {
-			t.Fatalf("missing %q in order:\n%s", want, docker)
-		}
-		rest = rest[i+len(want):]
-	}
-	if s.current("dev") == "" {
-		t.Error("an aborted sync changed current")
-	}
-
-	// The parent's stop fails: what it stopped comes back.
-	out, code = s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
-	docker, _ = s.logs()
-	if code != 1 || !strings.Contains(out, "aborting the sync") {
+	if code != 1 || !strings.Contains(out, "aborting the sync") || !strings.Contains(out, "before writing anything") {
 		t.Fatalf("parent's stop fails (%d):\n%s", code, out)
 	}
-	rest = docker
+	rest := docker
 	for _, want := range []string{"shop-prod compose", "stop db", "shop-prod compose", "start db", "shop-dev compose", "start db"} {
 		i := strings.Index(rest, want)
 		if i < 0 {
 			t.Fatalf("parent not restored, missing %q in order:\n%s", want, docker)
 		}
 		rest = rest[i+len(want):]
+	}
+
+	// The rsync fails: the child's data is a partial copy, its stopped
+	// services stay down, the parent's come back.
+	out, code = s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 1 || !strings.Contains(out, "aborting the sync") || !strings.Contains(out, "the copy was cut") || !strings.Contains(out, "db stay down") || strings.Contains(out, "deploy in shop-dev") {
+		t.Fatalf("abort (%d):\n%s", code, out)
+	}
+	rest = docker
+	for _, want := range []string{"shop-dev compose", "stop db", "shop-prod compose", "start db"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s", want, docker)
+		}
+		rest = rest[i+len(want):]
+	}
+	if strings.Contains(rest, "start db") {
+		t.Errorf("the child restored on a partial copy:\n%s", docker)
+	}
+	if s.current("dev") == "" {
+		t.Error("an aborted sync changed current")
+	}
+	if !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Error("not marked as a partial copy")
+	}
+
+	// Nothing runs on it but a sync: a release and a rollback refuse, a
+	// sync from it too.
+	next()
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a release on a partial copy (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a rollback on a partial copy (%d):\n%s", code, out)
+	}
+	if status, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(status, "did not complete") {
+		t.Errorf("--status (%d):\n%s", code, status)
+	}
+	s.logs()
+
+	// An abort that writes nothing leaves it so.
+	if out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes"); code != 1 || !strings.Contains(out, "db stay down") {
+		t.Errorf("an abort on a partial copy (%d):\n%s", code, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start") {
+		t.Errorf("the child restored on a partial copy:\n%s", docker)
+	}
+
+	// A sync that completes brings it back.
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("a complete sync (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
@@ -704,17 +755,22 @@ func TestSyncCapability(t *testing.T) {
 	}
 
 	// An export that fails is never imported: the sync aborts, the
-	// spool goes, both sides finish abort.
+	// spool goes, the parent finishes abort; the rsync before it wrote,
+	// so the child finishes partial, until a sync completes.
 	s.labels("FAKE_DB=stream")
 	out, code = s.run([]string{"FAIL_EXPORT=db"}, "@dev", "--sync", "--yes")
 	s.logs()
 	if code == 0 || !strings.Contains(out, "export db: exit status 3: nothing imported") || strings.Contains(out, "import db into") || strings.Contains(out, "deploy in shop-dev") ||
-		!strings.Contains(out, "finish parent abort in shop-prod") || !strings.Contains(out, "finish child abort in shop-dev") {
+		!strings.Contains(out, "finish parent abort in shop-prod") || !strings.Contains(out, "finish child partial in shop-dev") {
 		t.Errorf("failing export (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(spool); err == nil {
 		t.Errorf("the spool of a failed export stays")
 	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "finish child go in shop-dev") {
+		t.Fatalf("a complete sync after (%d):\n%s", code, out)
+	}
+	s.logs()
 
 	// A failing prepare aborts before anything stops on its side: on the
 	// child, before the parent starts; on the parent, before its own.
@@ -749,7 +805,7 @@ func TestSyncCapability(t *testing.T) {
 	}
 	out, code = s.run(append(across, "FAIL_EXPORT=db"), "@devopsy@two:dev", "--sync", "--yes")
 	s.logs()
-	if code == 0 || strings.Contains(out, "import db into") || !strings.Contains(out, "finish child abort") {
+	if code == 0 || strings.Contains(out, "import db into") || !strings.Contains(out, "finish child partial") {
 		t.Errorf("failing export across servers (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(spool); err == nil {
@@ -1023,14 +1079,17 @@ func TestSyncInterrupt(t *testing.T) {
 	if cmd.ProcessState.ExitCode() == 0 || time.Since(start) > 15*time.Second || !strings.Contains(out, "stopping the copy from @devopsy@one:prod, then aborting") || strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "IMPORT RAN") || !strings.Contains(out, "export db: interrupted: nothing imported") {
 		t.Fatalf("interrupt (%d, %s):\n%s", cmd.ProcessState.ExitCode(), time.Since(start), out)
 	}
-	for _, side := range []string{"dev", "prod"} {
-		restored := "shop-" + side + " compose -f " + filepath.Join(s.root, "shop", side, "current", ".devopsy", "compose.yaml") + " start db"
-		for !strings.Contains(readString(s.log), restored) {
-			if time.Since(start) > 10*time.Second {
-				t.Fatalf("%s not restored:\n%s", side, readString(s.log))
-			}
-			time.Sleep(100 * time.Millisecond)
+	// The parent comes back; the child, whose rsync had gone, holds a
+	// partial copy and stays down.
+	restored := "shop-prod compose -f " + filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml") + " start db"
+	for !strings.Contains(readString(s.log), restored) || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("prod not restored, or dev not marked partial:\n%s\n%s", readString(s.log), readString(outFile.Name()))
 		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if strings.Contains(readString(s.log), "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") {
+		t.Errorf("the child restored on a partial copy:\n%s", readString(s.log))
 	}
 	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")); err == nil {
 		t.Errorf("the spool of an interrupted export stays")
@@ -1927,5 +1986,45 @@ func TestReleaseInterrupt(t *testing.T) {
 	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
 	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
 		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
+	}
+}
+
+// A sync whose holder never decided (killed) leaves its files: whatever
+// takes the lock next counts the data as a partial copy, which only a
+// sync completes. A partial copy is never a parent.
+func TestSyncSettle(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "finish"), "#!/bin/sh\n[ \"${FAIL_FINISH:-}\" != \"$1 $2\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev, prod := filepath.Join(s.root, "shop", "dev"), filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
+	next()
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "ended without deciding") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
+	}
+
+	// A partial copy is no parent.
+	write(t, filepath.Join(prod, remote.SyncIncompleteFile), "2026-10-18 00:00:00 x\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a sync from a partial copy (%d):\n%s", code, out)
+	}
+	os.Remove(filepath.Join(prod, remote.SyncIncompleteFile))
+
+	// A sync completes with its finish.
+	if out, code := s.run([]string{"FAIL_FINISH=child go"}, "@dev", "--sync", "--yes"); code == 0 || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Errorf("a failing finish child go (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Fatalf("a sync completes it (%d):\n%s", code, out)
+	}
+	next()
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Errorf("a release after (%d):\n%s", code, out)
 	}
 }

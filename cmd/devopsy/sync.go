@@ -101,8 +101,12 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syn
 	if code != 0 {
 		return nil, fmt.Errorf("could not check the parent @%s (%d)", p.Address, code)
 	}
-	if strings.TrimSpace(out.String()) != "current" {
+	current, incomplete := remote.ParseCurrent(out.String())
+	if !current {
 		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
+	}
+	if incomplete {
+		return nil, fmt.Errorf("the parent @%s (%s:%s) holds data from a sync that did not complete: sync it first (devopsy @%s --sync)", p.Address, p.Host, p.Path, targetRef(p))
 	}
 	return job, nil
 }
@@ -240,13 +244,17 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		_, _ = w.WriteString(answer)
 		w.Close()
 		if interrupted {
-			// The holder's restoring is worth seeing, unless interrupted
-			// again.
+			// The holder's ending is worth seeing, unless interrupted
+			// again: a copy that had completed goes on there.
 			select {
-			case <-done:
+			case res = <-done:
+				flush()
+				if res.err == nil && res.code == 0 {
+					return 0
+				}
 			case <-sigs:
+				flush()
 			}
-			flush()
 			return 130
 		}
 		// The run step is the server's now: an interrupt here only cuts
@@ -452,7 +460,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		if code != 0 {
 			return fail(fmt.Sprintf("could not check @%s (%d)", x.Address, code))
 		}
-		if strings.TrimSpace(out.String()) != "current" {
+		if current, _ := remote.ParseCurrent(out.String()); !current {
 			return fail(fmt.Sprintf("@%s (%s:%s) has no current release: release it first", x.Address, x.Host, x.Path))
 		}
 	}
@@ -830,13 +838,16 @@ func runSyncPush(cwd string, color bool) int {
 		}
 		return finish(code)
 	}
+	// The child's side writes remote.SyncStartedFile before its first
+	// change and SyncDoneFile after the last (the rsync's or the last
+	// import's): what its holder decides from, answer or not.
 	code := 0
 	if len(dirs) > 0 {
-		if err := syncRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.SyncArgsEnv))); err != nil {
+		if err := syncRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.SyncArgsEnv)), len(streams) == 0); err != nil {
 			code = fail(err.Error())
 		}
 	}
-	for _, name := range streams {
+	for i, name := range streams {
 		if code != 0 {
 			break
 		}
@@ -844,7 +855,7 @@ func runSyncPush(cwd string, color bool) int {
 			code = fail("interrupted: " + name + " not exported")
 			break
 		}
-		if err := syncStream(ctx, cwd, projectDir, name, env); err != nil {
+		if err := syncStream(ctx, cwd, projectDir, name, env, i == len(streams)-1); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -907,7 +918,7 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 // once the export exited 0 does the child's --sync-services import read
 // it. A cut export never reaches the import; its partial spool is removed
 // here on the same server, by the child's abort across servers.
-func syncStream(ctx context.Context, cwd, projectDir, name string, env []string) error {
+func syncStream(ctx context.Context, cwd, projectDir, name string, env []string, last bool) error {
 	spool := remote.StreamSpool(os.Getenv(remote.SyncToBaseEnv), name)
 	to := os.Getenv(remote.SyncToEnv)
 	sayErr("devopsy: exporting " + name)
@@ -937,8 +948,12 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string)
 	if err != nil {
 		self = "devopsy"
 	}
-	trace([]string{"devopsy", cli.SyncExecFlag, cli.SyncServicesFlag, "import", name})
-	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "import", name)
+	importArgs := []string{cli.SyncExecFlag, cli.SyncServicesFlag, "import", name}
+	if last {
+		importArgs = append(importArgs, "last")
+	}
+	trace(append([]string{"devopsy"}, importArgs...))
+	cmd := exec.CommandContext(ctx, self, importArgs...)
 	cmd.Stdout, cmd.Stderr = errOut, errOut
 	// The import watches its stdin (SyncWatchEnv, passed on by
 	// --sync-exec): a pipe kept open until the import ends or the sync is
@@ -1180,7 +1195,7 @@ func rsyncdConf(entries, files []string) string {
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, projectDir string, dirs, args []string) error {
+func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -1214,6 +1229,10 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 		if err != nil {
 			return fmt.Errorf("the child's mnt: %w", err)
 		}
+		toBase := os.Getenv(remote.SyncToBaseEnv)
+		if err := markWritten(toBase, remote.SyncStartedFile); err != nil {
+			return err
+		}
 		for i, d := range present {
 			sayErr("devopsy: rsync mnt/" + d)
 			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
@@ -1237,6 +1256,9 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 				}
 				return fmt.Errorf("rsync mnt/%s: %w", d, err)
 			}
+		}
+		if last {
+			return markWritten(toBase, remote.SyncDoneFile)
 		}
 		return nil
 	}
@@ -1276,7 +1298,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string) erro
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, port, present, files, args), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), port, present, files, args, last), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1396,22 +1418,29 @@ func runSyncExec(args []string, color bool) int {
 //   - prepare: checks a stream service has the import to receive it, runs
 //     the sync capability's prepare child, then stops the services
 //     labeled devopsy.sync.stop=true;
-//   - finish go|abort: starts those again and waits until they are
-//     healthy, removes what the streams left on abort, then runs finish
-//     child go|abort;
-//   - import <service>: the stream's spool into the service (the
-//     capability's import), the spool removed whatever happens;
+//   - finish go|abort|partial: what the copy did to the data (the
+//     holder decides from remote.SyncStartedFile and SyncDoneFile): go,
+//     complete, and abort, nothing written, start those again and wait
+//     until they are healthy; partial, written in part, leaves them
+//     down and marks the environment (remote.SyncIncompleteFile), as
+//     abort does on one marked already; then finish child with the word;
+//   - settle: a sync's files no holder decided on (it was killed): the
+//     environment marked, finish child partial;
+//   - import <service> [last]: the stream's spool into the service (the
+//     capability's import), the spool removed whatever happens; with
+//     last, the copy's last write, remote.SyncDoneFile once it went;
 //   - list: name, label, state and entries of mnt, one service per line.
 func runSyncServices(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		cli.Fprint(errOut, red, "devopsy: "+msg, color)
 		return 1
 	}
-	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare | finish go|abort | import <service> | list"
+	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare | finish go|abort|partial | settle | import <service> [last] | list"
 	switch {
-	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list"):
-	case len(args) == 2 && args[0] == "finish" && (args[1] == "go" || args[1] == "abort"):
+	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle"):
+	case len(args) == 2 && args[0] == "finish" && slices.Contains([]string{"go", "abort", "partial"}, args[1]):
 	case len(args) == 2 && args[0] == "import":
+	case len(args) == 3 && args[0] == "import" && args[2] == "last":
 	default:
 		return fail(usage)
 	}
@@ -1432,12 +1461,38 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		return 0
 	case "import":
-		return syncImport(cwd, projectDir, base, args[1], services, env, fail)
+		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, env, fail)
 	}
 	// A session gone is no reason to die halfway: the holder restores
 	// what this stopped.
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
+	// settle marks an environment whose sync's files no holder decided
+	// on: its data may be anything from untouched to complete, never
+	// finished by finish child go.
+	settle := func() int {
+		started, done := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncDoneFile)
+		if !fileExists(started) && !fileExists(done) {
+			return 0
+		}
+		sayErr("devopsy: an earlier sync into " + base + " ended without deciding (its holder was killed): its data counts as a partial copy")
+		code := 0
+		if err := markIncomplete(base); err != nil {
+			code = fail(err.Error())
+		}
+		_ = os.Remove(started)
+		_ = os.Remove(done)
+		if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", "partial"); err != nil {
+			code = fail("the sync capability's finish child partial: " + err.Error())
+		}
+		return code
+	}
+	if args[0] == "settle" {
+		return settle()
+	}
 	if args[0] == "prepare" {
+		if code := settle(); code != 0 {
+			return code
+		}
 		// The child refuses before anything stops anywhere: its holder
 		// runs this before the parent's push starts.
 		// The record first: whatever fails from here, finish abort then
@@ -1462,20 +1517,78 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		return 0
 	}
-	code := 0
-	if err := restoreServices(cwd, services); err != nil {
-		code = fail(err.Error())
+	word, code := args[1], 0
+	incomplete := filepath.Join(base, remote.SyncIncompleteFile)
+	if word == "abort" && fileExists(incomplete) {
+		// Nothing written this time, but the data is an earlier sync's
+		// partial copy still.
+		word = "partial"
 	}
-	if args[1] == "abort" {
+	switch word {
+	case "go":
+		// Complete: whatever an earlier sync left is replaced.
+		_ = os.Remove(incomplete)
+		if err := restoreServices(cwd, services); err != nil {
+			code = fail(err.Error())
+		}
+	case "abort":
+		if err := restoreServices(cwd, services); err != nil {
+			code = fail(err.Error())
+		}
+	case "partial":
+		if err := markIncomplete(base); err != nil {
+			code = fail(err.Error())
+		}
+		if stopped := cli.SyncStopped(services); len(stopped) > 0 {
+			sayErr("devopsy: " + strings.Join(stopped, " ") + " stay down: the data is a partial copy until a sync completes")
+		}
+	}
+	if word != "go" {
 		spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
 		for _, f := range spools {
 			_ = os.Remove(f)
 		}
 	}
-	if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", args[1]); err != nil {
-		code = fail("the sync capability's finish child " + args[1] + ": " + err.Error())
+	if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", word); err != nil {
+		code = fail("the sync capability's finish child " + word + ": " + err.Error())
+		// A sync completes with its finish: until one does, nothing runs
+		// on what it left (the hook says what stays up).
+		if word == "go" {
+			if err := markIncomplete(base); err != nil {
+				fail(err.Error())
+			}
+		}
 	}
 	return code
+}
+
+// markIncomplete marks the environment at base as holding a partial
+// copy (remote.SyncIncompleteFile: when, from where), keeping an earlier
+// mark: it says since when.
+func markIncomplete(base string) error {
+	path := filepath.Join(base, remote.SyncIncompleteFile)
+	if fileExists(path) {
+		return nil
+	}
+	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		return fmt.Errorf("marking %s as a partial copy: %w", base, err)
+	}
+	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// markWritten writes one of a sync's files (remote.SyncStartedFile,
+// SyncDoneFile) into the child's directory base.
+func markWritten(base, name string) error {
+	if err := os.WriteFile(filepath.Join(base, name), nil, 0o644); err != nil {
+		return fmt.Errorf("the sync's %s: %w", name, err)
+	}
+	return nil
 }
 
 // syncImport is --sync-services import <name>: the spool the parent's
@@ -1483,7 +1596,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 // exited 0) into the child's service, through the sync capability's
 // import. The service is brought up unless it is stopped for the sync.
 // The spool goes whatever happens, an interrupt included.
-func syncImport(cwd, projectDir, base, name string, services []cli.SyncService, env []string, fail func(string) int) (code int) {
+func syncImport(cwd, projectDir, base, name string, last bool, services []cli.SyncService, env []string, fail func(string) int) (code int) {
 	spool := remote.StreamSpool(base, name)
 	defer os.Remove(spool)
 	ctx, stop := interruptible()
@@ -1514,8 +1627,16 @@ func syncImport(cwd, projectDir, base, name string, services []cli.SyncService, 
 			}
 		}()
 	}
+	// The service's data changes from here.
+	if err := markWritten(base, remote.SyncStartedFile); err != nil {
+		return fail(err.Error())
+	}
 	if err := runSyncHook(ctx, cwd, projectDir, env, f, nil, "import", name); err != nil {
 		code = fail("the sync capability's import " + name + ": " + err.Error())
+	} else if last {
+		if err := markWritten(base, remote.SyncDoneFile); err != nil {
+			code = fail(err.Error())
+		}
 	}
 	return code
 }

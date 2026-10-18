@@ -5,7 +5,8 @@ import "fmt"
 // StatusScript prints what the server knows about a target, for --status:
 // "plain" for a plain devopsy directory, "none" for an unreleased one,
 // else tab-separated header lines (release <id> <record JSON>, kept <n>,
-// synced <time or empty>), then "---" and, from the current release,
+// synced <time or empty>, partial <when and from> when a sync left its
+// data a partial copy), then "---" and, from the current release,
 // devopsy --status there: the containers and the project's own lines.
 func StatusScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
@@ -27,6 +28,11 @@ printf 'kept\t%%s\n' "$kept"
 # The last sync whose copy went through (SyncCopied), whatever its run
 # step did after it.
 printf 'synced\t%%s\n' "$(grep -h '^[0-9-]* [0-9:]* `+SyncCopied+`' "$base"/releases/*/`+LogFile+` 2>/dev/null | cut -c1-19 | sort | tail -n 1)"
+if [ -e "$base/`+SyncIncompleteFile+`" ]; then
+  printf 'partial\t%%s\n' "$(cat "$base/`+SyncIncompleteFile+`" 2>/dev/null)"
+elif [ -e "$base/`+SyncStartedFile+`" ] || [ -e "$base/`+SyncDoneFile+`" ]; then
+  printf 'partial\t\n'
+fi
 echo ---
 cd "$base/current" && exec devopsy --status
 `, RecordFile)

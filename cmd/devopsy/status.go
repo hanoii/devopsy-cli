@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -106,7 +107,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	}
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	cli.Fprint(os.Stdout, cyan, fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), color)
-	kept, synced := "", ""
+	kept, synced, partial := "", "", ""
 	var record *remote.Record
 	id := ""
 	for _, line := range strings.Split(header, "\n") {
@@ -127,6 +128,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			kept = value
 		case "synced":
 			synced = value
+		case "partial":
+			partial = cmp.Or(value, "a sync is copying, or was cut")
 		}
 	}
 	if id != "" {
@@ -164,6 +167,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			line += "  never synced"
 		}
 		fmt.Println(line)
+	}
+	if partial != "" {
+		cli.Fprint(os.Stdout, red, "data        from a sync that did not complete ("+partial+"): nothing runs on it until one does: devopsy @"+targetRef(t)+" --sync", color)
 	}
 	fmt.Print(rest)
 	return 0

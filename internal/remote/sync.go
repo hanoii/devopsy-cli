@@ -23,6 +23,24 @@ import (
 // service that reads the entry raw is left with.
 const HalfCopiedNotice = "is half copied: a database copied raw cannot start on it until the next sync completes it"
 
+// What a sync writes into the child's directory ($base), so the child
+// knows what happened to its data whatever its answer says: the push
+// writes SyncStartedFile right before its first write into the child
+// (rsync or an import) and SyncDoneFile after its last, and the holder
+// decides from them, its answer only telling it the push ended: done
+// is go (the copy is complete), started alone partial (written in part:
+// the stop=true services stay down, SyncIncompleteFile), neither the
+// answer (nothing written). A holder that never decided (killed) leaves
+// them for whoever takes the lock next (--sync-services settle).
+const (
+	SyncStartedFile = ".devopsy-sync.started"
+	SyncDoneFile    = ".devopsy-sync.done"
+	// SyncIncompleteFile marks a child whose data is a partial copy:
+	// "<UTC time> <parent's address>". Releases and rollbacks refuse,
+	// a push from it too, until a sync completes and removes it.
+	SyncIncompleteFile = ".devopsy-sync.incomplete"
+)
+
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
 // does after it: --status's last sync.
@@ -156,13 +174,12 @@ func (o *SyncOptions) exports(t *Target) string {
 	return s
 }
 
-// syncFinish defines sync_finish go|abort, in the child's current
-// release: on go, the pending inherited variables move into
+// syncFinish defines sync_finish go|abort|partial, in the child's
+// current release: on go, the pending inherited variables move into
 // shared/inherit.env (which every release links), so what follows reads
-// them there; on abort they go. Then --sync-services
-// finish go|abort, which starts what was stopped and waits for it to be
-// healthy, removes the stream spools on abort, then runs the sync
-// capability's finish child go|abort.
+// them there; otherwise they go. Then --sync-services finish, which
+// starts what was stopped (not on partial) and runs the sync
+// capability's finish child.
 func syncFinish(projectName string) string {
 	pending := `"$` + InheritPendingEnv + `"`
 	shared := `"$base/shared/` + InheritFile + `"`
@@ -200,15 +217,32 @@ fi
 
 // syncBlock is a sync's part on the child, in its current release with
 // $status 0, the sync's variables exported (SyncOptions.exports): prepare
-// (services stopped), the marker, devopsy's go or abort, finish; $status
-// says how it went. failed says what happens without an answer.
+// (services stopped), the marker, the push's end (devopsy's answer, or
+// none), then finish with what the files say was written; $status says
+// how it went. failed says what a failure means here.
 func syncBlock(projectName, failed string) string {
+	started, done := `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`
 	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-` + syncWait(failed) + `  if [ "$reply" != go ]; then
-    sync_finish abort || true
-    status=1
-  else
+` + syncWait() + `  sync_word=abort
+  if [ -e ` + done + ` ]; then
+    sync_word=go
+  elif [ -e ` + started + ` ]; then
+    sync_word=partial
+  elif [ "$reply" = go ]; then
+    sync_word=go
+  fi
+  rm -f ` + started + ` ` + done + `
+  case "$reply.$sync_word" in
+    go.go) ;;
+    *.go) echo "devopsy: the copy had completed: going on with it" >&2 || true ;;
+    *.partial) echo "devopsy: the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" >&2 || true ;;
+    *) echo "devopsy: the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" >&2 || true ;;
+  esac
+  if [ "$sync_word" = go ]; then
     sync_finish go || status=$?
+  else
+    sync_finish "$sync_word" || true
+    status=1
   fi
 fi
 ` + syncRestorePipe
@@ -223,17 +257,14 @@ const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncTo
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
 // reads this session any more, and a write to it would kill what restores
 // the services, so the rest goes to a file in $base.
-func syncWait(failed string) string {
+func syncWait() string {
 	return `  echo "` + SyncMarker + `$base" || true
   reply=
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
     sync_gone=1
     exec >>"$base/.devopsy-sync.log" 2>&1
-    echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy: restoring what was stopped" >&2
-  fi
-  if [ "$reply" != go ]; then
-    echo "devopsy: the copy from the parent failed: ` + failed + `" >&2 || true
+    echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy" >&2
   fi
 `
 }
@@ -255,7 +286,7 @@ exec 1>&2
 echo "devopsy: syncing into $id" >&2
 ` + o.exports(t) + `cd "$base/current"
 status=0
-` + syncBlock(projectName, "restoring what was stopped") + `[ "$status" = 0 ] || exit "$status"
+` + syncBlock(projectName, "the run step does not run") + `[ "$status" = 0 ] || exit "$status"
 `
 	if len(run) > 0 {
 		// The run step goes on whatever happens to the session, after
@@ -295,7 +326,11 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
-` + syncSourceLock() + `cd "$base/current"
+` + syncSourceLock() + `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
+  echo "devopsy: the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)" >&2
+  exit 1
+fi
+cd "$base/current"
 export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, true) + "\n"
 }
 
@@ -328,11 +363,24 @@ export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []s
 
 // CurrentExistsScript prints "current" when the target has a current
 // release, else "none": whether a release is its first, and whether a
-// parent was released.
+// parent was released. Then "incomplete" when a sync left it with a
+// partial copy (SyncIncompleteFile, or a sync's files no holder
+// settled): a release that does not sync refuses before uploading.
 func CurrentExistsScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/current/.devopsy" ]; then echo current; else echo none; fi
+` + IncompleteCheck + `
 `
 }
+
+// ParseCurrent reads CurrentExistsScript's output.
+func ParseCurrent(out string) (current, incomplete bool) {
+	lines := strings.Fields(out)
+	return slices.Contains(lines, "current"), slices.Contains(lines, "incomplete")
+}
+
+// IncompleteCheck prints "incomplete" when the environment's data is a
+// partial copy, $base set.
+const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then echo incomplete; fi`
 
 // buildUtilImage builds UtilImage when the host lacks it.
 func buildUtilImage() string {
@@ -358,11 +406,13 @@ func RsyncModule(entry string) string {
 
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
-// per entry of the child's mnt (toDir is its current .devopsy/), from the
-// daemon's module of that name (RsyncModule), as root in UtilImage, on
-// the host's network to reach the forward.
-func SyncReceiveScript(toDir, port string, dirs, files, args []string) string {
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() +
+// per entry of the child's mnt (toDir is its current .devopsy/, base its
+// directory), from the daemon's module of that name (RsyncModule), as
+// root in UtilImage, on the host's network to reach the forward.
+// SyncStartedFile goes first, and with last (no stream follows)
+// SyncDoneFile once every entry is copied.
+func SyncReceiveScript(toDir, base, port string, dirs, files, args []string, last bool) string {
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ": >" + Quote(path.Join(base, SyncStartedFile)) + "\n" +
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
   docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
@@ -379,6 +429,9 @@ func SyncReceiveScript(toDir, port string, dirs, files, args []string) string {
 			src, dst, opts = d+"/"+d, "", "--inplace"
 		}
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
+	}
+	if last {
+		script += ": >" + Quote(path.Join(base, SyncDoneFile)) + "\n"
 	}
 	return script
 }
