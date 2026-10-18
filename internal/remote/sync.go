@@ -61,6 +61,13 @@ var SyncingInto = regexp.MustCompile(`devopsy: syncing into ([0-9]{14})`)
 // sync halfway, or leave a push writing into a child already restored.
 var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
 
+// Bounded are KeepAlive plus a connect timeout: for sessions devopsy
+// must not hang on, a release log's save after a dropped connection
+// (it waited on connect, minutes, with nobody to tell), --export and
+// --import (their data can pause, and a dead connection otherwise
+// lasts until TCP gives up).
+var Bounded = []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
+
 // ChildSSH are the options of the parent's sessions to the child (the
 // rsync session and --sync-exec), with KeepAlive: the operator's agent,
 // forwarded to the parent for the push, never goes one hop further
@@ -263,11 +270,23 @@ func syncWait() string {
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
     sync_gone=1
+    ` + trimSyncLog + `
     exec >>"$base/.devopsy-sync.log" 2>&1
     echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy" >&2
   fi
 `
 }
+
+// SyncLogMax is the size past which .devopsy-sync.log, appended to by
+// every sync whose session went, keeps only its last SyncLogKeep lines.
+const (
+	SyncLogMax  = 1 << 20
+	SyncLogKeep = 1000
+)
+
+// trimSyncLog cuts .devopsy-sync.log to its last lines once too big,
+// $base set; never fails.
+var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -c <"$base/.devopsy-sync.log")" -lt %d ] || { tail -n %d "$base/.devopsy-sync.log" >"$base/.devopsy-sync.log.tmp" && mv -f "$base/.devopsy-sync.log.tmp" "$base/.devopsy-sync.log"; }; } 2>/dev/null || true`, SyncLogMax, SyncLogKeep)
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for

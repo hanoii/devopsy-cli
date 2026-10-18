@@ -454,7 +454,9 @@ func basePrelude(t *Target) string {
 settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
 [ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + cmp.Or(t.Alias, t.Address, t.Host) + ` --upgrade)" >&2; exit 1; }
 with_tty() {
-  if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1; then
+  # Past a fetch, script only in a session of its own (tty_detach): it
+  # reads the terminal's signals even ignored. Without setsid, plainly.
+  if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
     ${tty_detach:+setsid -w} script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
   else
     eval "$1"

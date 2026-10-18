@@ -415,7 +415,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				id = string(m[1])
 				text = append([]byte("\n"), text...)
 			}
-			if c, err := remote.SSH(t, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false); err != nil || c != 0 {
+			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 				why := fmt.Sprint(c)
 				if err != nil {
 					why = err.Error()
