@@ -33,6 +33,11 @@ const HalfCopiedNotice = "is half copied: a database copied raw cannot start on 
 // answer (nothing written). A holder that never decided (killed) leaves
 // them for whoever takes the lock next (--sync-services settle).
 const (
+	// SyncOpenFile is the gate: the holder writes it (the parent's
+	// address) before its marker and removes it before deciding; the
+	// first write renames it to SyncStartedFile, and one that finds
+	// neither never starts.
+	SyncOpenFile    = ".devopsy-sync.open"
 	SyncStartedFile = ".devopsy-sync.started"
 	SyncDoneFile    = ".devopsy-sync.done"
 	// SyncIncompleteFile marks a child whose data is a partial copy:
@@ -224,27 +229,42 @@ fi
 
 // syncBlock is a sync's part on the child, in its current release with
 // $status 0, the sync's variables exported (SyncOptions.exports): prepare
-// (services stopped), the marker, the push's end (devopsy's answer, or
-// none), then finish with what the files say was written; $status says
-// how it went. failed says what a failure means here.
+// (services stopped), the gate (SyncOpenFile) and the marker, the push's
+// end (devopsy's answer, or none), then finish with what the files say
+// was written; $status says how it went. failed says what a failure
+// means here.
 func syncBlock(projectName, failed string) string {
-	started, done := `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`
+	open, started, done, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-` + syncWait() + `  sync_word=abort
+  printf '%s\n' "$` + SyncFromTargetEnv + `" >` + open + `
+` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
+  # rename or the unlink wins), so nothing is written into what abort
+  # restores.
+  rm -f ` + open + `
+  sync_word=abort
   if [ -e ` + done + ` ]; then
     sync_word=go
-  elif [ -e ` + started + ` ]; then
+  elif [ -e ` + started + ` ] || [ -e ` + incomplete + ` ]; then
     sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
   fi
-  rm -f ` + started + ` ` + done + `
   case "$reply.$sync_word" in
     go.go) ;;
     *.go) echo "devopsy: the copy had completed: going on with it" >&2 || true ;;
-    *.partial) echo "devopsy: the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" >&2 || true ;;
+    *.partial)
+      if [ -e ` + started + ` ]; then
+        echo "devopsy: the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" >&2 || true
+      else
+        echo "devopsy: nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" >&2 || true
+      fi
+      # Marked before the files go: a kill in between leaves one or
+      # the other.
+      [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cat ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
+      ;;
     *) echo "devopsy: the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" >&2 || true ;;
   esac
+  rm -f ` + started + ` ` + done + `
   if [ "$sync_word" = go ]; then
     sync_finish go || status=$?
   else
@@ -391,6 +411,14 @@ func CurrentExistsScript(t *Target) string {
 `
 }
 
+// ClaimWriteScript claims the right to write into the child at base,
+// before the first write (SyncOpenFile renamed to SyncStartedFile), or
+// fails: its holder decided already.
+func ClaimWriteScript(base string) string {
+	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
+	return "mv -f " + open + " " + started + " 2>/dev/null || [ -e " + started + " ] || { echo \"devopsy: the child's side ended already (" + base + "): nothing copied\" >&2; exit 1; }\n"
+}
+
 // ParseCurrent reads CurrentExistsScript's output.
 func ParseCurrent(out string) (current, incomplete bool) {
 	lines := strings.Fields(out)
@@ -399,7 +427,11 @@ func ParseCurrent(out string) (current, incomplete bool) {
 
 // IncompleteCheck prints "incomplete" when the environment's data is a
 // partial copy, $base set.
-const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then echo incomplete; fi`
+const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then echo incomplete; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+
+// LockBusy succeeds while something holds the environment's release
+// lock ($base set): a sync's files are its own then, not leftovers.
+const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 2>/dev/null`
 
 // buildUtilImage builds UtilImage when the host lacks it.
 func buildUtilImage() string {
@@ -431,7 +463,7 @@ func RsyncModule(entry string) string {
 // SyncStartedFile goes first, and with last (no stream follows)
 // SyncDoneFile once every entry is copied.
 func SyncReceiveScript(toDir, base, port string, dirs, files, args []string, last bool) string {
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ": >" + Quote(path.Join(base, SyncStartedFile)) + "\n" +
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base) +
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
   docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {

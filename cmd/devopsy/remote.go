@@ -507,7 +507,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			// A partial copy from a sync is never run on: only a sync
 			// completes it (the activation checks again).
 			if incomplete && (noSync || (current && !syncFlag)) {
-				return fail(fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: devopsy @%s --release-sync, or --sync\nNothing changed.", t.Address, releaseRef(t)))
+				fix := "devopsy @" + releaseRef(t) + " --release-sync, or --sync"
+				if !current {
+					fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
+				}
+				return fail(fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: %s\nNothing changed.", t.Address, fix))
 			}
 			if !noSync {
 				if from != "" && !syncFlag && !first {

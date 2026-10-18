@@ -1889,6 +1889,10 @@ func TestSyncInheritedLabel(t *testing.T) {
 	if out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes"); code == 0 || readString(childInherit) != "FAKE_DB='stream'\n" {
 		t.Errorf("failed copy (%d): %q\n%s", code, readString(childInherit), out)
 	}
+	// It left a partial copy, which a sync that completes clears.
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("a complete sync (%d):\n%s", code, out)
+	}
 
 	// From solo, which inherits nothing: a stale pending file goes before
 	// the child reads its labels (it would make db a stream here).
@@ -2005,7 +2009,7 @@ func TestSyncSettle(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "ended without deciding") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
 		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
 	}
 
@@ -2043,5 +2047,26 @@ func TestTrimSyncLog(t *testing.T) {
 	write(t, path, "small\n", 0o644)
 	if trimSyncLog(path); readString(path) != "small\n" {
 		t.Errorf("a small log changed: %q", readString(path))
+	}
+}
+
+// A write into the child claims the holder's gate first: once the holder
+// closed it (deciding), nothing is written into what it restored.
+func TestClaimWrite(t *testing.T) {
+	base := t.TempDir()
+	if err := claimWrite(base); err == nil {
+		t.Error("claimed with the gate closed")
+	}
+	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod\n", 0o644)
+	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile)) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod\n" {
+		t.Errorf("first claim: %v", err)
+	}
+	// Later writes of the same sync.
+	if err := claimWrite(base); err != nil {
+		t.Errorf("second claim: %v", err)
+	}
+	// The mark names the parent that wrote.
+	if err := markIncomplete(base); err != nil || !strings.HasSuffix(readString(filepath.Join(base, remote.SyncIncompleteFile)), " vm1:prod\n") {
+		t.Errorf("mark %q (%v)", readString(filepath.Join(base, remote.SyncIncompleteFile)), err)
 	}
 }

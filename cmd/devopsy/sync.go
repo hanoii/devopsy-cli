@@ -221,9 +221,9 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			<-pushed
 		case res = <-done:
 			// The holder is gone (its server's connection dropped, its
-			// session killed): it restored the child's services on its
-			// way out, so nothing may copy into them any more, and
-			// nobody is left to answer.
+			// session killed): it decided on its way out (or whatever
+			// takes the child's lock next does), so nothing may copy
+			// into the child any more, and nobody is left to answer.
 			why := fmt.Sprint(res.code)
 			if res.err != nil {
 				why = res.err.Error()
@@ -232,6 +232,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			cancel()
 			<-pushed
 			flush()
+			say(yellow, "devopsy: @"+job.child.Address+" may hold a partial copy now: devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
 			return cmp.Or(res.code, 1)
 		}
 		answer := "go\n"
@@ -255,6 +256,8 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			case res = <-done:
 				flush()
 				if res.err == nil && res.code == 0 {
+					// The copy had completed: the sync went on.
+					rlog.Line(remote.SyncCopied + job.parent.Address)
 					return 0
 				}
 			case <-sigs:
@@ -280,6 +283,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	flush()
 	if res.err != nil {
 		say(red, res.err.Error())
+		say(yellow, "devopsy: @"+job.child.Address+" may hold a partial copy now: devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
 		return 1
 	}
 	return res.code
@@ -1262,7 +1266,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 			return fmt.Errorf("the child's mnt: %w", err)
 		}
 		toBase := os.Getenv(remote.SyncToBaseEnv)
-		if err := markWritten(toBase, remote.SyncStartedFile); err != nil {
+		if err := claimWrite(toBase); err != nil {
 			return err
 		}
 		for i, d := range present {
@@ -1506,7 +1510,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		if !fileExists(started) && !fileExists(done) {
 			return 0
 		}
-		sayErr("devopsy: an earlier sync into " + base + " ended without deciding (its holder was killed): its data counts as a partial copy")
+		sayErr("devopsy: an earlier sync into " + base + " left its files (its holder was killed, or a write came after it decided): its data counts as a partial copy")
 		code := 0
 		if err := markIncomplete(base); err != nil {
 			code = fail(err.Error())
@@ -1602,7 +1606,10 @@ func markIncomplete(base string) error {
 	if fileExists(path) {
 		return nil
 	}
-	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
+	// Who wrote it: the parent the gate named (remote.SyncOpenFile's
+	// content, carried into SyncStartedFile), else this sync's.
+	from, _ := os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
+	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(strings.TrimSpace(string(from)), os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
 	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
 		return fmt.Errorf("marking %s as a partial copy: %w", base, err)
 	}
@@ -1612,6 +1619,19 @@ func markIncomplete(base string) error {
 func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+// claimWrite claims the right to write into the child at base before
+// the first write: the holder's gate (remote.SyncOpenFile) renamed to
+// remote.SyncStartedFile, one rename or the holder's unlink winning, or
+// a write of this sync claimed it already. Neither: the holder decided,
+// and nothing may be written into what it restored.
+func claimWrite(base string) error {
+	started := filepath.Join(base, remote.SyncStartedFile)
+	if os.Rename(filepath.Join(base, remote.SyncOpenFile), started) == nil || fileExists(started) {
+		return nil
+	}
+	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)
 }
 
 // markWritten writes one of a sync's files (remote.SyncStartedFile,
@@ -1660,7 +1680,7 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		}()
 	}
 	// The service's data changes from here.
-	if err := markWritten(base, remote.SyncStartedFile); err != nil {
+	if err := claimWrite(base); err != nil {
 		return fail(err.Error())
 	}
 	if err := runSyncHook(ctx, cwd, projectDir, env, f, nil, "import", name); err != nil {

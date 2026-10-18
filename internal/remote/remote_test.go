@@ -1873,3 +1873,34 @@ exit 0
 		t.Errorf("current %q", l)
 	}
 }
+
+// A sync's files with its lock held are a sync running, not leftovers:
+// nothing refuses for them.
+func TestIncompleteCheckBusy(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("needs flock")
+	}
+	base := t.TempDir()
+	check := func() string {
+		out, _ := exec.Command("sh", "-c", "base="+Quote(base)+"\n"+IncompleteCheck).CombinedOutput()
+		return strings.TrimSpace(string(out))
+	}
+	write(t, filepath.Join(base, ".lock"), "")
+	write(t, filepath.Join(base, SyncStartedFile), "")
+	if got := check(); got != "incomplete" {
+		t.Errorf("leftovers: %q", got)
+	}
+	holder := exec.Command("flock", filepath.Join(base, ".lock"), "sleep", "5")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Process.Kill(); _ = holder.Wait() }()
+	time.Sleep(300 * time.Millisecond)
+	if got := check(); got != "" {
+		t.Errorf("a sync running: %q", got)
+	}
+	write(t, filepath.Join(base, SyncIncompleteFile), "x\n")
+	if got := check(); got != "incomplete" {
+		t.Errorf("marked: %q", got)
+	}
+}

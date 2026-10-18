@@ -17,6 +17,7 @@ fi
 cur=$(readlink "$base/current" 2>/dev/null || true)
 if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
   echo none
+  `+partialStatus+`
   exit 0
 fi
 cur=${cur%%/`+CodeDir+`}
@@ -28,12 +29,17 @@ printf 'kept\t%%s\n' "$kept"
 # The last sync whose copy went through (SyncCopied), whatever its run
 # step did after it.
 printf 'synced\t%%s\n' "$(grep -h '^[0-9-]* [0-9:]* `+SyncCopied+`' "$base"/releases/*/`+LogFile+` 2>/dev/null | cut -c1-19 | sort | tail -n 1)"
-if [ -e "$base/`+SyncIncompleteFile+`" ]; then
-  printf 'partial\t%%s\n' "$(cat "$base/`+SyncIncompleteFile+`" 2>/dev/null)"
-elif [ -e "$base/`+SyncStartedFile+`" ] || [ -e "$base/`+SyncDoneFile+`" ]; then
-  printf 'partial\t\n'
-fi
+`+partialStatus+`
 echo ---
 cd "$base/current" && exec devopsy --status
 `, RecordFile)
 }
+
+// partialStatus prints StatusScript's partial line: the mark's content,
+// "syncing" while a sync holds the lock with its files out, or empty for
+// files nobody settled yet.
+var partialStatus = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+  printf 'partial\t%%s\n' "$(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)"
+elif [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
+  if ` + LockBusy + `; then echo syncing; else printf 'partial\t\n'; fi
+fi`
