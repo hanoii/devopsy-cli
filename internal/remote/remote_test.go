@@ -166,7 +166,7 @@ func TestScriptsParse(t *testing.T) {
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
 		"run":             RunScript(tg, "app", []string{"logs", "-f"}),
 		"releases":        ReleasesScript(tg),
-		"releases remove": ReleasesRemoveScript(tg, "app", []string{"1", "2"}),
+		"releases remove": ReleasesRemoveScript(tg, "app", []string{"1", "2"}, false),
 		"shell":           ShellScript(tg),
 		"vars":            VarsReadScript(tg, nil),
 		"vars set":        VarsSetScript(tg, nil),
@@ -1015,7 +1015,7 @@ exit 0
 	// or one gone meanwhile, refuses them all.
 	write(t, filepath.Join(root, "app/a/prod/releases/1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	for _, ids := range [][]string{{"1", "2"}, {"1", "9"}} {
-		out, err := run(ReleasesRemoveScript(target("a"), "", ids))
+		out, err := run(ReleasesRemoveScript(target("a"), "", ids, false))
 		if err == nil || !strings.Contains(out, "nothing removed") || !exists("app/a/prod/releases/1") {
 			t.Errorf("remove %v (%v):\n%s", ids, err, out)
 		}
@@ -1029,7 +1029,7 @@ exit 0
 	write(t, filepath.Join(root, "other", ImagesLeftFile), "1\tother-prod\t9\tother:1\tV\tconflict\n")
 	write(t, filepath.Join(root, "images", "other:1"), "V\n")
 	// The recorded registry/app:def is retried: no container uses it now.
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") || strings.Contains(out, "other:1") || !exists(filepath.Join("other", ImagesLeftFile)) {
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"1"}, false), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || exists("app/a/prod/releases/1") || !strings.Contains(out, "removed release 1") || !strings.Contains(out, "mariadb:devopsy-app-a-prod-1 stays: conflict") || !strings.Contains(out, "removed registry/app:def, left by release 3 of app-b-prod") || strings.Contains(out, "other:1") || !exists(filepath.Join("other", ImagesLeftFile)) {
 		t.Errorf("remove 1 (%v):\n%s", err, out)
 	}
 	if got := readFile(left); strings.Contains(got, "registry/app:def") || strings.Count(got, "\n") != 1 || !strings.Contains(got, "\tapp-a-prod\t1\tmariadb:devopsy-app-a-prod-1\tW\t") {
@@ -1081,7 +1081,7 @@ exit 0
 	write(t, filepath.Join(root, "app/a/prod/releases/7", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	write(t, filepath.Join(root, "app/a/prod/releases/7", ImagesFile), "old:1\tO\n")
 	write(t, filepath.Join(root, "images", "old:1"), "O\n")
-	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"7"}), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || fakeImage(root, "old:1") != "" || exists("app/a/prod/releases/7") {
+	if out, err := run(ReleasesRemoveScript(target("a"), "", []string{"7"}, false), "FAKE_IN_USE=mariadb:devopsy-app-a-prod-1"); err != nil || fakeImage(root, "old:1") != "" || exists("app/a/prod/releases/7") {
 		t.Errorf("remove 7, cut off before (%v):\n%s", err, out)
 	}
 
@@ -1309,16 +1309,18 @@ exit 0
 	}
 
 	// Release 4b gets Ctrl-C right after its fetch (here as the fetching
-	// marker goes): it counts as one in the run step, the release fails
-	// and the previous one comes back.
-	write(t, filepath.Join(bin, "rm"), "#!/bin/sh\ncase \"$*\" in *"+FetchingFile+"*) [ -z \"${FAKE_INT_AT_RM:-}\" ] || kill -INT $PPID ;; esac\nexec /bin/rm \"$@\"\n")
+	// marker goes): ignored until the run step, so nothing of the switch
+	// dies halfway, and the release goes live with its names.
+	// As a terminal's Ctrl-C does: SIGINT to the whole group, rm too.
+	write(t, filepath.Join(bin, "rm"), "#!/bin/sh\ncase \"$*\" in *"+FetchingFile+"*) [ -z \"${FAKE_INT_AT_RM:-}\" ] || kill -INT 0 ;; esac\nexec /bin/rm \"$@\"\n")
 	if err := os.Chmod(filepath.Join(bin, "rm"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	late := command("4b", "FAKE_INT_AT_RM=1")
+	late.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	outLate, errLate := late.CombinedOutput()
 	os.Remove(filepath.Join(bin, "rm"))
-	if l, _ := os.Readlink(filepath.Join(base, "current")); errLate == nil || l != "releases/3/code" || !exists("releases/4b/"+FailedFile) {
+	if l, _ := os.Readlink(filepath.Join(base, "current")); errLate != nil || l != "releases/4b/code" || exists("releases/4b/"+FailedFile) || fakeImage(root, "mariadb:11") != "4b" {
 		t.Errorf("Ctrl-C right after the fetch (%v): current %q:\n%s", errLate, l, outLate)
 	}
 
@@ -1349,7 +1351,7 @@ exit 0
 	if code := watched.ProcessState.ExitCode(); code != 130 || time.Since(start) > 10*time.Second || !exists("releases/5/"+FailedFile) || exists("releases/5/"+FetchingFile) {
 		t.Errorf("release 5 after its session ended: exit %d in %v, failed %v, fetching %v:\n%s", code, time.Since(start), exists("releases/5/"+FailedFile), exists("releases/5/"+FetchingFile), buf5.String())
 	}
-	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/3/code" || fakeImage(root, "mariadb:11") != "3" {
+	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/4b/code" || fakeImage(root, "mariadb:11") != "4b" {
 		t.Errorf("after release 5's cancel: current %q, mariadb:11 %q", l, fakeImage(root, "mariadb:11"))
 	}
 }

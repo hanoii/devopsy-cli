@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/term"
@@ -95,7 +96,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	for i, r := range chosen {
 		ids[i] = r.ID
 	}
-	code, err = remote.SSH(t, remote.ReleasesRemoveScript(t, projectName, ids), bytes.NewReader(nil), nil, false)
+	code, err = remote.SSH(t, remote.ReleasesRemoveScript(t, projectName, ids, slices.Contains(words[1:], "failed")), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
 		return 1

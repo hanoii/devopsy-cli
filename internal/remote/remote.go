@@ -690,11 +690,12 @@ done
   fi
   [ -z "${watch_pid:-}" ] || rm -f "$ws_armed.off" "$ws_armed.fired"
   [ -z "$fetch_sig" ] || fr=130
-  # Past this point the release goes on: a Ctrl-C from here counts as
-  # one during the run step (switchTraps, runSig).
+  # Past this point the release goes on. Until its run step (switchTraps)
+  # signals are ignored: a trapped one still kills the foreground child
+  # (rm, ln, mv in make_current), which set -e turns into the script's
+  # end, halfway through the switch; ignored, children inherit that.
   if [ "$fr" -eq 0 ]; then
-    switch_sig=
-    trap 'switch_sig=1' INT TERM
+    trap '' INT TERM HUP
   fi
   if [ "$fr" -ne 0 ]; then
     trap '' INT TERM HUP PIPE
@@ -727,9 +728,15 @@ rm -f "$rel/` + FetchingFile + `"
 out="$rel/` + ServerLogFile + `"
 # Made before the switch: a full disk or a bad mode fails here, the
 # release not live, rather than at the log's first write after it.
-(umask 077; : >>"$out") || not_live 1
+if ! (umask 077; : >>"$out"); then
+  set +e
+  if image_lock shared undoing; then
+    ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
+    image_unlock
+  fi
+  not_live 1
+fi
 `
-	s += switchTraps
 	if !rollback {
 		s += `rm -f "$rel/` + PendingFile + `"
 exec 7<&-
@@ -744,17 +751,20 @@ echo "devopsy: current is now $id" >&2 || true
 	// The new release's images took the names the previous one runs
 	// (build mode's are the compose project's, a floating tag's the
 	// registry's): its own back.
-	restart := `    trap '' INT TERM
-    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+	restart := `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
 `
-	s += "status=0\nfailed=run\n"
+	s += "switch_sig=\nstatus=0\nfailed=run\n"
 	if sync != nil {
-		s += sync.exports(t) + `cd "$base/current"
+		// The sync records a Ctrl-C (its holder's answer is the
+		// operator's), then signals are ignored again for the log's set
+		// up.
+		s += switchTraps + sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live") + `cd "$base"
 [ "$status" = 0 ] || failed=sync
+trap '' INT TERM HUP
 `
 	}
 	// The server's log starts here, after the switch (switchTraps hold
@@ -763,7 +773,7 @@ echo "devopsy: current is now $id" >&2 || true
 	// (syncWait) and whose copy's lines reach the session's log from the
 	// push, so --log shows them in their place. PIPE is ignored again: a
 	// sync's end restores it.
-	s += "trap '' PIPE\n" + followOutput
+	s += "trap '' PIPE\n" + followOutput + switchTraps
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
@@ -776,6 +786,7 @@ echo "devopsy: current is now $id" >&2 || true
 `
 	}
 	s += `if [ "$status" != 0 ]; then
+  trap '' INT TERM HUP
   touch "$rel/` + FailedFile + `"
   if [ -n "$prev" ]; then
     make_current "$prev"
@@ -847,13 +858,14 @@ fi
 // it. A tag (time and pid) on the LogSection line and the marker ties
 // this part to the session log's anchor. No tail once a sync found
 // devopsy gone (sync_gone: stderr is .devopsy-sync.log by then). The
-// tail ends half a second after
-// the shell (the EXIT trap, which keeps the exit status: on a -t session
+// tail ends half a second after the shell (the EXIT trap, which keeps the exit status: on a -t session
 // the pty hangs up as soon as the shell exits, which cut the last lines,
 // and inotify has the tail copy a line in milliseconds), or a second
 // after a helper finds the shell gone without its trap (killed): never
 // tail's --pid, which, like kill -0, takes a zombie for alive, and
-// nothing may reap one. Neither holds the locks nor the sync's answer.
+// nothing may reap one. Both are killed with SIGKILL: they start while
+// the script ignores INT, TERM and HUP (from the fetch to the run step),
+// which they inherit. Neither holds the locks nor the sync's answer.
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
@@ -864,10 +876,10 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
     tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
     fo_tp=$!
     ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
-      sleep 1; kill $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
+      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
     fo_hp=$!
     echo "` + SwitchMarker + ` $fo_tag" >&2 || true
-    trap 'fo_s=$?; kill $fo_hp 2>/dev/null || true; sleep 0.5; kill $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
+    trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
   fi
   exec >>"$out" 2>&1
 fi
@@ -895,7 +907,8 @@ const WatchSessionFlag = "--watch-session"
 // later. Taking $ws_armed (the watcher takes it before it signals),
 // right before the switch, disarms it: from there on a release finishes
 // whatever happens to its session (followOutput). A plain release is armed when its stdin is the
-// operator's pipe (WatchEnv; on -t the pty's hangup does it), a syncing
+// operator's pipe (WatchEnv) or a terminal (-t: its hangup reaches the
+// shell alone, whose trap waits for the build to end), a syncing
 // one always (its stdin is the answer's pipe), a sync's holder never: a
 // SIGTERM would stop it halfway through restoring.
 func watchSession(answer, armed bool) string {
@@ -930,7 +943,10 @@ exec 4<&-
 		s += `: >"$ws_armed"
 ` + fmt.Sprintf(start, cancel)
 	case armed:
-		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
+		// A terminal session too: its hangup reaches only the shell,
+		// which runs its trap only once the command it waits for ends (a
+		// build), while the watcher's read of the terminal ends at once.
+		s += `if [ -n "${` + WatchEnv + `:-}" ] || [ -t 0 ]; then
   : >"$ws_armed"
 ` + fmt.Sprintf(start, cancel) + `fi
 `
@@ -960,12 +976,13 @@ const LogAnchor = "devopsy: from here, the server's own log (" + ServerLogFile +
 // LogServerPart separates LogReadScript's two logs.
 const LogServerPart = "devopsy-internal-server-log"
 
-// switchTraps follow followOutput in a release: Ctrl-C still stops the
-// step running and the shell carries on to its end, the release marked
-// failed (runSig) and the previous one back, its restart with INT and
-// TERM ignored. HUP, the terminal gone, and PIPE reach nothing.
-const switchTraps = `switch_sig=${switch_sig:-}
-trap 'switch_sig=1' INT TERM
+// switchTraps follow followOutput in a release, for its run step (and
+// its sync, before): Ctrl-C still stops the step running and the shell
+// carries on to its end, the release marked failed (runSig) and the
+// previous one back, all that with signals ignored. HUP, the terminal
+// gone, and PIPE reach nothing. Between the fetch and here signals are
+// ignored, so no short command dies of one halfway through the switch.
+const switchTraps = `trap 'switch_sig=1' INT TERM
 trap '' HUP PIPE
 `
 
@@ -1350,7 +1367,14 @@ func FormatReleases(out string) string {
 // checked again, refusing them all when one is gone or current, then each
 // release's images (img remove) and directory go, and img prune
 // runs once.
-func ReleasesRemoveScript(t *Target, projectName string, ids []string) string {
+//
+// goneOK (the ids came from failed) passes over a release a pruning took
+// meanwhile.
+func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bool) string {
+	flag := ""
+	if goneOK {
+		flag = "--gone-ok "
+	}
 	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base/releases" ]; then
   echo "devopsy: $base has no releases" >&2
   exit 1
@@ -1362,7 +1386,7 @@ img recover "$base" ${prev:+"$base/$prev"}
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
 rr=0
-img remove-releases "$base" ` + quoteAll(ids) + ` || rr=$?
+img remove-releases ` + flag + `"$base" ` + quoteAll(ids) + ` || rr=$?
 [ "$rr" -ne 0 ] || img prune
 image_unlock
 exit "$rr"

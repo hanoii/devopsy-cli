@@ -82,11 +82,16 @@ func TestRemoveReleases(t *testing.T) {
 	s := &Set{Docker: d, Name: "app-prod", Left: filepath.Join(t.TempDir(), LeftFile), Out: &out}
 	base := layout(t, "3", "1", "2", "3")
 	for _, ids := range [][]string{{"1", "3"}, {"1", "8"}} {
-		if err := s.RemoveReleases(base, ids, false); err == nil || !exists(filepath.Join(base, "releases", "1")) {
+		if err := s.RemoveReleases(base, ids, false, false); err == nil || !exists(filepath.Join(base, "releases", "1")) {
 			t.Errorf("%v: not refused (%v)\n%s", ids, err, out.String())
 		}
 	}
-	if err := s.RemoveReleases(base, []string{"1", "2"}, false); err != nil || exists(filepath.Join(base, "releases", "1")) || !strings.Contains(out.String(), "removed release 2") {
+	if err := s.RemoveReleases(base, []string{"1", "2"}, false, false); err != nil || exists(filepath.Join(base, "releases", "1")) || !strings.Contains(out.String(), "removed release 2") {
 		t.Errorf("remove (%v)\n%s", err, out.String())
+	}
+	// failed's ids, one taken by a pruning meanwhile: passed over.
+	base = layout(t, "3", "1", "2", "3")
+	if err := s.RemoveReleases(base, []string{"8", "2"}, false, true); err != nil || exists(filepath.Join(base, "releases", "2")) {
+		t.Errorf("gone ok (%v)\n%s", err, out.String())
 	}
 }
