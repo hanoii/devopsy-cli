@@ -702,10 +702,16 @@ repositories fit together and the open ideas.
 - **What the copy did decides, not the answer** (October 2026: an answer
   lost after a complete copy restored the child on the parent's data
   unsanitized, `finish child abort` doing nothing, and one lost mid-copy
-  ran it on a mix). The child's side of the push writes
-  `remote.SyncStartedFile` into `$base` right before its first write
-  (the same-server rsync in the push, `SyncReceiveScript` across, an
-  import in `syncImport`) and `SyncDoneFile` after its last (the rsync's
+  ran it on a mix). The holder opens a gate before its marker
+  (`SyncOpenFile`, the parent's address) and closes it (`rm`) right
+  before deciding; the child's side of the push claims it right before
+  its first write (`claimWrite`, `ClaimWriteScript`: a rename to
+  `SyncStartedFile`, one of the two wins; the same-server rsync in the
+  push, `SyncReceiveScript` across, an import in `syncImport`), so a
+  push that outlived its connection (seen: a parent's prepare sleeping
+  past the operator's abort, then an rsync into the restored child)
+  writes nothing once the holder decided, and writes `SyncDoneFile`
+  after its last (the rsync's
   when no stream follows, else the last import's, `import <service>
   last`): on the child, never through another session. The holder
   (`syncBlock`) decides once its read of the answer ends, however it
@@ -719,7 +725,9 @@ repositories fit together and the open ideas.
   While it is there nothing runs on the data: `partialGuard` refuses a
   release that does not sync and a rollback (after `settle`, below), the
   restart after a failed release that synced is skipped,
-  `CurrentExistsScript` says `incomplete` so the operator refuses
+  `CurrentExistsScript` says `incomplete` (the mark, or a sync's files
+  while nothing holds the lock, `LockBusy`: a sync running is no
+  leftover) so the operator refuses
   before uploading (`--release-no-sync` included: no override, a sync
   is the fix, `--release-sync` when the sync itself needs a code fix),
   a push from it refuses (a chain), `--status` shows it. A holder killed

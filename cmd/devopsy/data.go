@@ -136,6 +136,9 @@ func runExport(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	if fileExists(filepath.Join(filepath.Dir(cwd), remote.SyncIncompleteFile)) {
+		cli.Fprint(errOut, yellow, "devopsy: this environment's data is from a sync that did not complete: exporting it anyway", color)
+	}
 	ctx, stop := interruptible()
 	defer stop()
 	// From devopsy @<target> --export: its stdin is a pipe devopsy keeps

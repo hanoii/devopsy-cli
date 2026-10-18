@@ -108,6 +108,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	cli.Fprint(os.Stdout, cyan, fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), color)
 	kept, synced, partial := "", "", ""
+	syncing := false
 	var record *remote.Record
 	id := ""
 	for _, line := range strings.Split(header, "\n") {
@@ -115,7 +116,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		switch key {
 		case "none":
 			fmt.Println("release     none: not released yet")
-			return 0
+			id = ""
 		case "plain":
 			fmt.Println("release     none: a plain devopsy directory")
 		case "release":
@@ -129,7 +130,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		case "synced":
 			synced = value
 		case "partial":
-			partial = cmp.Or(value, "a sync is copying, or was cut")
+			partial = cmp.Or(value, "a sync was cut")
+		case "syncing":
+			syncing = true
 		}
 	}
 	if id != "" {
@@ -167,6 +170,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			line += "  never synced"
 		}
 		fmt.Println(line)
+	}
+	if syncing {
+		fmt.Println("data        a sync is copying into it")
 	}
 	if partial != "" {
 		cli.Fprint(os.Stdout, red, "data        from a sync that did not complete ("+partial+"): nothing runs on it until one does: devopsy @"+targetRef(t)+" --sync", color)
