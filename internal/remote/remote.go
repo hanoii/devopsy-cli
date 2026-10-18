@@ -439,8 +439,9 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // Protocol is what the scripts need from the server's devopsy, which
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
-// changes instead of failing halfway. 1: --images.
-const Protocol = 2
+// changes instead of failing halfway. 1: --images; 2: --watch-session;
+// 3: --sync-services finish partial, settle, import <service> last.
+const Protocol = 3
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -586,6 +587,7 @@ if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shar
 fi
 `
 	if rollback {
+		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
 		s += `id=$(img rollback-target "$base") || { echo "devopsy: no release before the current one" >&2; exit 1; }
@@ -601,6 +603,9 @@ echo "devopsy: rolling back to $id" >&2
 code="$rel/` + CodeDir + `"
 [ -d "$code" ] || { echo "devopsy: release $id is gone: removed while it waited for the release lock" >&2; exit 1; }
 `
+	if sync == nil && !rollback {
+		s += partialGuard(t, projectName, "not_live 1")
+	}
 	if !rollback {
 		// Held until the switch: --releases tells this release in
 		// progress from one cut off before (ReleasesScript), whatever
@@ -755,7 +760,13 @@ echo "devopsy: current is now $id" >&2 || true
 	// The new release's images took the names the previous one runs
 	// (build mode's are the compose project's, a floating tag's the
 	// registry's): its own back.
-	restart := `    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+	// Not on a partial copy (a sync's that went wrong): the previous
+	// release's code would run on it.
+	restart := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+      echo "devopsy: not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync" >&2
+      exit "$status"
+    fi
+    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
 `
 	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
@@ -953,6 +964,20 @@ exec 4<&-
 		s += fmt.Sprintf(start, "")
 	}
 	return s
+}
+
+// partialGuard refuses a release or rollback (then runs refuse) on a
+// partial copy from a sync, which nothing runs on: only a sync completes
+// it. A holder that never decided (killed) left its files, settled first.
+func partialGuard(t *Target, projectName, refuse string) string {
+	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; }; then
+  (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
+fi
+if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+  echo "devopsy: @` + t.Address + `'s data is from a sync that did not complete ($(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)), and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync, or --release-sync" >&2
+  ` + refuse + `
+fi
+`
 }
 
 // LogSection starts each activation's part of ServerLogFile, before its

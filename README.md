@@ -813,10 +813,10 @@ release lock (a release of the parent waits for the copy) and a sync
 lock of its own (syncs from one parent run one at a time): `prepare
 parent`, its `stop=true` services stopped, the rsync, each stream
 (export, then the child's import), its services started, `finish parent
-go|abort`. Then the child's: its services started, `finish child
-go|abort`, and after `go` its `run` step. The child's stopped services
-stay down through the imports, so an app never runs on a half-imported
-database. A lock held by something else is announced ("waiting for the
+go|abort`. Then the child's: its services started, `finish child go`,
+and its `run` step. The child's stopped services stay down through the
+imports, so an app never runs on a half-imported database, and after a
+copy that did not complete too (below). A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
@@ -953,25 +953,47 @@ pipe cannot tell an export that failed halfway from one that ended, so
 for what matters, go through a file and check the export's exit code.
 
 **Logs and failures:** a sync's output goes into the log of the release
-it syncd into (`--log`), after the release's own. A failed copy restores
-the stopped services on both sides and skips the child's `run` step; on
-a first release, the release is marked failed and nothing is current,
-and the next release syncs again. The child's `mnt` may be partly copied
-then; rsync picks up from there, and a database copied raw is unusable
-until it does (devopsy says which entry was cut; its container restarts
-in a loop, and the next sync stops it like a running one). A failed or
-interrupted export imports nothing, and its file goes. Interrupted
-(Ctrl-C) during the copy, devopsy ends its session to the parent's
-server, which stops the copy (an export too) and restores its own
-services, then tells the child's to restore its services. Once the copy
-is in and the run step runs, a Ctrl-C only says so: the step is the
-server's, and a second Ctrl-C ends your session while the step ends
-there (`--log` shows how). If devopsy itself goes away
-mid-sync (killed, connection lost), each side restores its own
-services and writes what happened to `<environment>/.devopsy-sync.log`
-on its server. Restoring means what the sync stopped
-(`<environment>/.devopsy-sync.services` meanwhile): a service that was
-down before it, stopped for maintenance, stays down.
+it syncd into (`--log`), after the release's own. The parent's side
+always restores its stopped services. The child's side knows what the
+copy did to its data, whatever happened to devopsy: the parent marks it
+right before its first write into the child and after its last, and the
+child goes by that:
+
+- **Nothing written** (a prepare or a check failed, the parent's stop
+  failed, an export failed before any rsync): its stopped services come
+  back, `finish child abort`, and the run step is skipped.
+- **Written in part** (the rsync or an import failed or was cut,
+  Ctrl-C mid-copy, a connection lost): the child's data is part old, part
+  the parent's, so its stopped services stay down and the run step is
+  skipped, `finish child partial`. A database copied raw would not start
+  on it anyway (devopsy says which entry was cut). Nothing runs on it
+  until a sync completes: releases and rollbacks refuse, the previous
+  release is not restarted after a release that synced, a sync from it
+  refuses, and `--status` says so. `--sync` (or `--release-sync`)
+  completes it.
+- **All of it** (the copy completed, even if devopsy then went away or
+  was interrupted): it goes on as after a success, `finish child go`,
+  then the run step. A sync completes with its finish: one whose `finish
+  child go` fails leaves the child as one that did not complete.
+
+On a first release a failure marks the release failed and leaves nothing
+current, and the next release syncs again. A failed or interrupted
+export imports nothing, and its file goes. Interrupted (Ctrl-C) during
+the copy, devopsy ends its session to the parent's server, which stops
+the copy (an export too) and restores its own services, then tells the
+child's to finish as above. Once the copy is in and the run step runs, a
+Ctrl-C only says so: the step is the server's, and a second Ctrl-C ends
+your session while the step ends there (`--log` shows how). If devopsy
+itself goes away mid-sync (killed, connection lost), each side finishes
+on its own and writes what happened to `<environment>/.devopsy-sync.log`
+on its server; a child's side killed before deciding is decided by
+whatever takes its lock next, counting it as not completed. Restoring
+means what the sync stopped (`<environment>/.devopsy-sync.services`
+meanwhile): a service that was down before it, stopped for maintenance,
+stays down. Only `devopsy.sync.stop=true` services are kept off partial
+data: a service left running during the copy (an rsync one with
+`stop=false`, a stream imported into a running one) sees it change, as
+it chose.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
@@ -1150,15 +1172,23 @@ lists them with their contracts):
   - `import <service>` reads that data from stdin, complete: on the
     child's server, its service brought up first (`up -d --wait`) unless
     stopped; and `devopsy --import`.
-  - `finish parent|child go|abort` runs on each side after the copy
-    (`go`) or a failure (`abort`), once devopsy has started that side's
-    stopped services and waited for them to be healthy. On the child
-    after `go` it is where a copy of production is sanitized (emails and
+  - `finish parent|child go|abort|partial` runs on each side once the
+    sync ended. The parent's gets `go` or `abort`: its data is never
+    written, and its stopped services are back. The child's says what
+    the copy did to its data: `go`, complete; `abort`, nothing of the
+    parent's written; `partial`, written in part (Logs and failures,
+    above). After `go` and `abort` devopsy has started its stopped
+    services and waited for them to be healthy; after `partial` they
+    stay down, and the hook must not start them. On the child after
+    `go` it is where a copy of production is sanitized (emails and
     passwords scrubbed, a login set for a child that had none:
-    devopsy-template-drupal11's); then the release's `run` step runs. On
-    a child's first release nothing of it existed, so devopsy creates
-    every labeled service first (`up -d --wait`), as the run step's `up`
-    would a moment later: the hook finds them running either way.
+    devopsy-template-drupal11's); then the release's `run` step runs. A
+    failing `finish child go` fails the sync, and nothing runs on the
+    child's data until a sync completes: the hook decides what stays
+    up (drupal11's stops the app). On a child's first release nothing
+    of it existed, so devopsy creates every labeled service first (`up
+    -d --wait`), as the run step's `up` would a moment later: the hook
+    finds them running either way.
   - Every action gets its side's services by label, space separated:
     `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM` (in `depends_on` order)
     and `DEVOPSY_SYNC_STOP` (a stopped `stream` service is in both); in a

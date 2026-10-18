@@ -508,7 +508,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// checked before anything changes, so a release never goes live on
 		// empty data after a late failure.
 		var job *syncJob
-		if t.Parent != "" && !noSync {
+		if t.Parent != "" {
 			var out bytes.Buffer
 			code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
 			if err != nil {
@@ -517,29 +517,37 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			if code != 0 {
 				return code
 			}
-			first := strings.TrimSpace(out.String()) == "none"
-			if from != "" && !syncFlag && !first {
-				return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, releaseRef(t), from))
+			current, incomplete := remote.ParseCurrent(out.String())
+			first := !current
+			// A partial copy from a sync is never run on: only a sync
+			// completes it (the activation checks again).
+			if incomplete && (noSync || (current && !syncFlag)) {
+				return fail(fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: devopsy @%s --release-sync, or --sync\nNothing changed.", t.Address, releaseRef(t)))
 			}
-			if syncFlag || first {
-				p := t.ParentTarget
-				if from != "" {
-					if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
-						return fail("--from: " + err.Error())
+			if !noSync {
+				if from != "" && !syncFlag && !first {
+					return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, releaseRef(t), from))
+				}
+				if syncFlag || first {
+					p := t.ParentTarget
+					if from != "" {
+						if p, err = remote.LoadTarget(projectDir, from, projectEnv); err != nil {
+							return fail("--from: " + err.Error())
+						}
+					} else if t.ParentErr != nil {
+						return failParent(t, color, args[0])
 					}
-				} else if t.ParentErr != nil {
-					return failParent(t, color, args[0])
+					if job, err = syncPreflight(t, p, projectName, nil); err != nil {
+						return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
+					}
+					job.first = first
 				}
-				if job, err = syncPreflight(t, p, projectName, nil); err != nil {
-					return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
-				}
-				job.first = first
-			}
-			// Replacing a live child's data asks, as --sync does; a first
-			// release has none to lose.
-			if syncFlag && !first && !yes {
-				if err := confirmSync(t, job.parent, "the release's run step runs on it"); err != nil {
-					return fail(syncRefused(err, "Nothing released."))
+				// Replacing a live child's data asks, as --sync does; a first
+				// release has none to lose.
+				if syncFlag && !first && !yes {
+					if err := confirmSync(t, job.parent, "the release's run step runs on it"); err != nil {
+						return fail(syncRefused(err, "Nothing released."))
+					}
 				}
 			}
 		}

@@ -465,7 +465,7 @@ repositories fit together and the open ideas.
   fetch), so from there `with_tty` runs it under `setsid -w`
   (`tty_detach`): the terminal's signals never reach it. During the
   fetch, a terminal's hangup is the watcher's to act on (above).
-  Protocol 2.
+  Protocol 2; 3 since the sync decisions (`finish partial`, `settle`).
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
   `make_current` (after the sync, in a release that syncs; signals are
@@ -675,11 +675,42 @@ repositories fit together and the open ideas.
   syncs from one parent serialize, `devopsy --sync-push`), with
   `ForwardAgent=yes` across servers. The push's exit gives `go` or `abort`
   to the holder; the holder's exit is the command's.
+- **What the copy did decides, not the answer** (October 2026: an answer
+  lost after a complete copy restored the child on the parent's data
+  unsanitized, `finish child abort` doing nothing, and one lost mid-copy
+  ran it on a mix). The child's side of the push writes
+  `remote.SyncStartedFile` into `$base` right before its first write
+  (the same-server rsync in the push, `SyncReceiveScript` across, an
+  import in `syncImport`) and `SyncDoneFile` after its last (the rsync's
+  when no stream follows, else the last import's, `import <service>
+  last`): on the child, never through another session. The holder
+  (`syncBlock`) decides once its read of the answer ends, however it
+  ends: done is `go` (an `abort` after it too: the copy is complete),
+  started alone `partial`, neither the answer (`go` with nothing to
+  sync); then removes both. `--sync-services finish partial` (and
+  `abort` on an environment marked already) leaves the `stop=true`
+  services down and writes `SyncIncompleteFile` (when, from where);
+  `finish go` removes it, and a failing `finish child go` writes it (a
+  sync completes with its finish; the hook decides what stays up).
+  While it is there nothing runs on the data: `partialGuard` refuses a
+  release that does not sync and a rollback (after `settle`, below), the
+  restart after a failed release that synced is skipped,
+  `CurrentExistsScript` says `incomplete` so the operator refuses
+  before uploading (`--release-no-sync` included: no override, a sync
+  is the fix, `--release-sync` when the sync itself needs a code fix),
+  a push from it refuses (a chain), `--status` shows it. A holder killed
+  before deciding leaves the files: `--sync-services settle`, run by
+  the next sync's prepare and by `partialGuard`, counts them as not
+  completed (marked, `finish child partial`). A late write (an import
+  running on in its container after the holder decided) leaves a file
+  the next lock-taker settles the same way. Labels bound the promise:
+  only `stop=true` services are kept off partial data.
 - **fd 3:** the holder keeps devopsy's answer on fd 3 and gives every
   command `/dev/null` as stdin, so nothing it runs can eat or wait on the
   answer. No answer (devopsy interrupted, connection lost): the holder
   sends its output to `$base/.devopsy-sync.log` (a write to the dead
-  session would kill what restores the services) and restores. From
+  session would kill what restores the services) and finishes as the
+  files say. From
   prepare until the services are restored the holder ignores SIGPIPE
   (`trap '' PIPE`, reset before `run`) and restores before it reports, so
   a session gone during prepare cannot leave them stopped either.
@@ -689,7 +720,8 @@ repositories fit together and the open ideas.
   its own. After it, the
   push session's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL and its
   output cut after `SSHKillDelay`) and is waited for, then the holder gets
-  `abort`, and devopsy exits 130. After `go`, during the run step, the
+  `abort` and finishes as the files say, and devopsy exits 130, or 0
+  when the copy had completed and the holder went on. After `go`, during the run step, the
   first Ctrl-C only says the step goes on on the server; the second
   cuts the session, and the step still ends there (`followOutput`). The push session's stdin is a pipe
   devopsy keeps open (`SyncWatchEnv` says so: an older devopsy's
@@ -769,15 +801,15 @@ repositories fit together and the open ideas.
   group and removes the spool; on the same server it also gets SIGTERM. Never a pipe into the import: a cut
   export never reaches it, which every old `push` had to check itself.
   A failed export's spool goes at once on the same server, by the
-  child's `finish abort` (`$base/.devopsy-sync.stream.*`) across servers.
+  child's finish (`$base/.devopsy-sync.stream.*`, unless go) across servers.
 - **Who stops what:** the child's `stop=true` services by the holder,
   for the whole sync (`--sync-services prepare`: the import check, the
   `prepare child` hook, then one `compose stop`, so Compose orders them
   by `depends_on`, dependents first: keep it one call; `--sync-services
-  finish go|abort` starts them and waits until healthy, removes the
-  spools on abort, then runs `finish child go|abort`). The child's
-  stopped services stay down through the imports (no app on a
-  half-imported database). The parent's inside `--sync-push`
+  finish go|abort` starts them and waits until healthy, `partial` leaves
+  them down, the spools removed unless go, then `finish child` with the
+  word). The child's stopped services stay down through the imports (no
+  app on a half-imported database), and after a partial copy. The parent's inside `--sync-push`
   (`runSyncPush`): the checks (labels, the `export` script when a
   service is `stream`, the child guard, the util image) before
   anything, then `prepare parent`, stop, rsync, streams, start (healthy),
@@ -817,7 +849,7 @@ repositories fit together and the open ideas.
   so a gone session cannot kill them with a broken pipe.
 - **Hidden flags** (dispatched in `main.go` before anything else):
   `--sync-push`, `--sync-exec <devopsy args>`, `--sync-services prepare |
-  finish go|abort | import <service> | list`. The first two need the
+  finish go|abort|partial | settle | import <service> [last] | list`. The first two need the
   push's `DEVOPSY_SYNC_TO_DIR` and `DEVOPSY_SYNC_TO_PROJECT`.
   `DEVOPSY_SYNC_ARGS` (space-joined, split like `StepArgs`) go to rsync,
   and to the hooks to read.
