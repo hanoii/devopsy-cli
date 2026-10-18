@@ -1394,6 +1394,11 @@ exit 0
 	if l, _ := os.Readlink(filepath.Join(base, "current")); l != "releases/4b/code" || fakeImage(root, "mariadb:11") != "4b" {
 		t.Errorf("after release 5's cancel: current %q, mariadb:11 %q", l, fakeImage(root, "mariadb:11"))
 	}
+	// Nobody reads the session: the undo wrote to the release's server
+	// log, never to it.
+	if o := readFile(filepath.Join(base, "releases/5", ServerLogFile)); !strings.Contains(o, LogSection) || !strings.Contains(o, "the session is gone: undoing the fetch") || strings.Contains(buf5.String(), "undoing the fetch") {
+		t.Errorf("release 5's undo, its log:\n%s\nits session:\n%s", o, buf5.String())
+	}
 }
 
 func fileExists(path string) bool {

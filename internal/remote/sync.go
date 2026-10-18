@@ -59,14 +59,14 @@ var SyncingInto = regexp.MustCompile(`devopsy: syncing into ([0-9]{14})`)
 // push, and the parent's sessions to the child): a session can stay quiet
 // for the whole copy, and a NAT or firewall dropping it would abort the
 // sync halfway, or leave a push writing into a child already restored.
-var KeepAlive = []string{"-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
+var KeepAlive = []string{"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 
 // Bounded are KeepAlive plus a connect timeout: for sessions devopsy
 // must not hang on, a release log's save after a dropped connection
 // (it waited on connect, minutes, with nobody to tell), --export and
 // --import (their data can pause, and a dead connection otherwise
 // lasts until TCP gives up).
-var Bounded = []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"}
+var Bounded = []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 
 // ChildSSH are the options of the parent's sessions to the child (the
 // rsync session and --sync-exec), with KeepAlive: the operator's agent,

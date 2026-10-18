@@ -440,7 +440,8 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
 // changes instead of failing halfway. 1: --images; 2: --watch-session;
-// 3: --sync-services finish partial, settle, import <service> last.
+// 3: --sync-services finish partial, settle, import <service> last,
+// --stdin-guard, --watch-session --heartbeat.
 const Protocol = 3
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
@@ -514,8 +515,9 @@ func UploadScript(t *Target, id string) string {
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
-# content, not times).
-tar -xzmf - -C "$rel.tmp"
+# content, not times). Guarded: a session gone silently would leave tar
+# waiting, the release lock held, until TCP gives up.
+devopsy `+StdinGuardFlag+` | tar -xzmf - -C "$rel.tmp"
 # Pending until its activation switches to it: one that never gets there
 # (cut, interrupted, its operator gone) is never rolled back to nor kept.
 : >"$rel.tmp/`+PendingFile+`"
@@ -697,6 +699,10 @@ done
   if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
     fetch_sig=1
   fi
+  # The watcher fired: nobody reads the session, whose buffers may be
+  # full, and a write there would block the undo with the lock held.
+  ws_gone=
+  [ -z "${watch_pid:-}" ] || [ ! -e "$ws_armed.fired" ] || ws_gone=1
   [ -z "${watch_pid:-}" ] || rm -f "$ws_armed.off" "$ws_armed.fired"
   [ -z "$fetch_sig" ] || fr=130
   # Past this point the release goes on, and signals are ignored to its
@@ -713,6 +719,12 @@ done
   if [ "$fr" -ne 0 ]; then
     trap '' INT TERM HUP PIPE
     set +e
+    if [ -n "$ws_gone" ]; then
+      (umask 077; : >>"$1/` + ServerLogFile + `") || true
+      exec >>"$1/` + ServerLogFile + `" 2>&1
+      echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') cancel.$$"
+      echo "devopsy: the session is gone: undoing the fetch"
+    fi
     [ -z "$fetch_sig" ] || echo "devopsy: the images' fetch was interrupted" >&2
     ` + undo + `
   fi
@@ -946,6 +958,13 @@ rm -f "$ws_fifo"
 `
 		args += ` --answer-fd 5`
 	}
+	// With devopsy's heartbeat, a silence is the session gone: a
+	// holder's waits longer than the push it answers for.
+	quiet := HeartbeatQuiet
+	if answer {
+		quiet = HeartbeatQuietHolder
+	}
+	args += ` ${` + HeartbeatEnv + `:+--heartbeat ` + strconv.Itoa(int(quiet.Seconds())) + `}`
 	start := `exec 4<&0 </dev/null
 devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
 watch_pid=$!

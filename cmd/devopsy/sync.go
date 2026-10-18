@@ -176,12 +176,16 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		err  error
 	}
 	done := make(chan result, 1)
+	// Beats until the answer: the holder's watcher passes on none of
+	// them.
+	stopBeat := heartbeat(w)
+	defer stopBeat()
 	// Ended by devopsy only: before the marker on an interrupt, and when
 	// devopsy returns while it still runs (a second Ctrl-C).
 	holderCtx, endHolder := context.WithCancel(context.Background())
 	defer endHolder()
 	go func() {
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, script, r, out, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, remote.HeartbeatEnv+"=1\n"+script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy ends the holder's session
@@ -241,6 +245,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			answer = "abort\n"
 			say(red, fmt.Sprintf("devopsy: the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
 		}
+		stopBeat()
 		_, _ = w.WriteString(answer)
 		w.Close()
 		if interrupted {
@@ -296,6 +301,7 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 		remote.SyncArgsEnv:       strings.Join(job.args, " "),
 		remote.SyncFromTargetEnv: p.Address,
 		remote.SyncWatchEnv:      "1",
+		remote.HeartbeatEnv:      "1",
 	}
 	if color {
 		env[remote.ColorEnv] = "1"
@@ -324,6 +330,7 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 	// did not exec, it does not).
 	stop := context.AfterFunc(ctx, func() { w.Close() })
 	defer stop()
+	defer heartbeat(w)()
 	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
 		cli.Fprint(os.Stderr, red, err.Error(), color)
@@ -697,11 +704,13 @@ func interruptible() (context.Context, func()) {
 
 // watchSession cancels ctx when stdin reaches EOF: devopsy keeps the push
 // session's stdin open (SyncWatchEnv), so EOF means the session is gone.
-// Without it, a silent copy would only notice at its next write.
+// Without it, a silent copy would only notice at its next write. With
+// devopsy's heartbeat, a silence (heartbeatQuiet) means it too: a
+// connection that died silently.
 func watchSession(ctx context.Context) context.Context {
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
-		_, _ = io.Copy(io.Discard, os.Stdin)
+		_, _ = readQuiet(os.Stdin, heartbeatQuiet(), func([]byte) error { return nil })
 		cancel()
 	}()
 	return ctx
@@ -992,8 +1001,9 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 	defer closeW()
 	stopWatch := context.AfterFunc(ctx, closeW)
 	defer stopWatch()
+	defer heartbeat(w)()
 	cmd.Stdin = r
-	cmd.Env = append(os.Environ(), remote.SyncWatchEnv+"=1")
+	cmd.Env = append(os.Environ(), remote.SyncWatchEnv+"=1", remote.HeartbeatEnv+"=1")
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	err = cmd.Start()
@@ -1353,13 +1363,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}

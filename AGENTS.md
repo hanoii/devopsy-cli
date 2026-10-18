@@ -414,7 +414,11 @@ repositories fit together and the open ideas.
   signals; the script disarms it by taking the file first (`mv` to
   `.off`) right before the switch: one rename wins, so a SIGTERM never
   lands past a switch the script went on with, and a failed `mv` means
-  one is coming (a file, not a signal: one sent before the watcher
+  one is coming, the `.fired` file that nobody reads the session any
+  more: the undo then writes to the release's `ServerLogFile` (a
+  `cancel.<pid>` part, which `--log` shows at the end), since a write
+  to a session whose buffers are full would block it with the lock
+  held (a file, not a signal: one sent before the watcher
   could handle it would kill it). The disarm is inside `fetch_release`,
   under the image lock it already holds, before its last `fetch_sig`
   check: a drop then is undone like one during the fetch. From there
@@ -437,9 +441,26 @@ repositories fit together and the open ideas.
   armed on its terminal until then, with Ctrl-D ignored. OrbStack's own SSH keeps stdin open and does
   not make the shell a group leader: test the watcher through a real
   sshd (in the machine, to `localhost`). A connection that dies
-  silently (a laptop asleep) is seen by the server only when it writes
-  or TCP gives up: devopsy-server never sets sshd's
-  `ClientAliveInterval`. The operator's side passes `KeepAlive` on
+  silently (a laptop asleep, a network gone: no FIN, no RST) would be
+  seen by the server only when TCP gives up (measured: 16 minutes with
+  writes pending, over two hours for a quiet holder; devopsy-server
+  never sets sshd's `ClientAliveInterval`, and the client's
+  `ServerAlive*` only help the client), hence the heartbeat
+  (`remote/heartbeat.go`, October 2026): every pipe devopsy keeps as a
+  session's stdin (an activation, a holder, a push, the push's import,
+  `--export`) gets a zero byte every 5 seconds (`heartbeat`), and the
+  readers on the server (`--watch-session --heartbeat <s>`, given only
+  when the session says `HeartbeatEnv`; `watchSession` in Go for the
+  push, an import, an export) take a silence for the session gone, as
+  EOF: 30 seconds, 90 for a holder (an answer's fifo, stripped of the
+  beats), so a push still copying is cancelled before the holder
+  decides, with the operator's ssh noticing in between (`KeepAlive`
+  15 x 3; one timeout for both let a holder restore while the push
+  wrote into it, seen). Data streams carry no beat: the upload's tar
+  reads through `--stdin-guard` and the server's `--import` its stdin
+  with `remote.DataQuiet` (2 minutes: an export piped in may stop
+  services first). A busy operator (a laptop asleep, Ctrl-Z) cancels
+  too, cleanly. The operator's side passes `KeepAlive` on
   activations and uploads, so it notices one, and `Bounded` (KeepAlive
   plus `ConnectTimeout=30`) on a log's save, `--export` and `--import`,
   which otherwise waited minutes on a dead connection. devopsy takes
@@ -467,7 +488,8 @@ repositories fit together and the open ideas.
   exits 0 when signaled (a restart's `get_images` took that for a
   fetch), so from there `with_tty` runs it under `setsid -w`
   (`tty_detach`, plainly without `setsid`): no signal reaches it.
-  Protocol 2; 3 since the sync decisions (`finish partial`, `settle`).
+  Protocol 2; 3 since the sync decisions (`finish partial`, `settle`)
+  and the heartbeat (`--heartbeat`, `--stdin-guard`).
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
   `make_current` (after the sync, in a release that syncs; signals are
@@ -879,9 +901,9 @@ repositories fit together and the open ideas.
   command-line forwardings too (`ssh_config(5)`); a taken port retries
   another (3 tries, 20000-60000). `--sync-exec`'s session keeps
   `ClearAllForwardings`, and so does a stream's `cat` session. All the
-  sync's sessions (holder, push, `-R`, `--sync-exec`, `cat`) pass `KeepAlive` (`ServerAliveInterval=30`,
-  `ServerAliveCountMax=4`): the holder is quiet for the whole copy, and a
-  dropped one aborts mid-copy. The preflight asks the local agent for its
+  sync's sessions (holder, push, `-R`, `--sync-exec`, `cat`) pass `KeepAlive` (`ServerAliveInterval=15`,
+  `ServerAliveCountMax=3`): the holder is quiet for the whole copy, and a
+  dropped one aborts mid-copy; the heartbeat is the server's side of it. The preflight asks the local agent for its
   keys (`agentHasKeys`, `ssh-add -l`: `SSH_AUTH_SOCK` set is not an
   agent), so an empty or dead one fails before any session. No agent on
   the parent with `DEVOPSY_SYNC_TO` set means a `restrict`ed key or

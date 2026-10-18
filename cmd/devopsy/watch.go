@@ -1,17 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // runWatchSession is the hidden --watch-session <pid> [--answer-fd <fd>]
-// [--armed <file>], which a script on a server starts in the
+// [--armed <file>] [--heartbeat <seconds>], which a script on a server starts in the
 // background with the session's stdin (remote.WatchSessionFlag). It
 // passes what comes in on to the fd, the only write end of a fifo whose
 // read end is the script's fd 3 (a sync's go or abort), and, when stdin
@@ -25,7 +27,9 @@ import (
 // script went on with. A file, not a signal: one sent before this
 // process could handle it would kill it, and with it a sync's answer.
 // Nothing is sent once the script is gone (this process is no longer its
-// child).
+// child). With --heartbeat, devopsy sends a zero byte every few seconds
+// (remote.HeartbeatEnv), never passed on: that many seconds without a
+// byte is the session gone too, a connection that died silently.
 func runWatchSession(args []string) int {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--armed <file>]")
@@ -38,10 +42,19 @@ func runWatchSession(args []string) int {
 	}
 	var answer = -1
 	var armed string
+	var quiet time.Duration
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "--armed" && i+1 < len(args):
 			armed = args[i+1]
+			i++
+		case args[i] == "--heartbeat" && i+1 < len(args):
+			secs, err := strconv.Atoi(args[i+1])
+			if err != nil || secs < 1 {
+				fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not seconds: "+args[i+1])
+				return 2
+			}
+			quiet = time.Duration(secs) * time.Second
 			i++
 		case args[i] == "--answer-fd" && i+1 < len(args):
 			if answer, err = strconv.Atoi(args[i+1]); err != nil || answer < 3 {
@@ -62,16 +75,12 @@ func runWatchSession(args []string) int {
 	if answer >= 0 {
 		out = os.NewFile(uintptr(answer), "answer")
 	}
-	buf := make([]byte, 4096)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if n > 0 && out != nil {
-			_, _ = out.Write(buf[:n])
+	_, _ = readQuiet(os.Stdin, quiet, func(b []byte) error {
+		if b = bytes.ReplaceAll(b, []byte{0}, nil); len(b) > 0 && out != nil {
+			_, _ = out.Write(b)
 		}
-		if err != nil {
-			break
-		}
-	}
+		return nil
+	})
 	if out != nil {
 		out.Close()
 	}
@@ -86,8 +95,8 @@ func runWatchSession(args []string) int {
 		// The script took it: disarmed.
 		return 0
 	}
-	// Taken: the script cannot disarm any more, and the file is no use.
-	os.Remove(armed + ".fired")
+	// Taken: the script cannot disarm any more, and finds it to know
+	// nobody reads the session (it removes it; prelude a stale one).
 	if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
 		_ = syscall.Kill(-pid, syscall.SIGTERM)
 	} else if err == nil {
