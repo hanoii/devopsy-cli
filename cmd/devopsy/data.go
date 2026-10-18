@@ -549,7 +549,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		return fail(cli.ExportFlag + " writes " + args[0] + "'s data to stdout: redirect it (> " + args[0] + ".data) or pipe it (| devopsy " + cli.ImportFlag + " " + args[0] + ")")
 	}
-	code, err := remote.SSH(t, remote.ExportScript(t, projectName, args[0]), bytes.NewReader(nil), os.Stdout, false)
+	code, err := remote.SSHWith(t, remote.Bounded, remote.ExportScript(t, projectName, args[0]), bytes.NewReader(nil), os.Stdout, false, nil)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -594,7 +594,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		}
 		w.Close()
 	}()
-	code, err := remote.SSH(t, remote.ImportScript(t, projectName, name, end), r, nil, false)
+	code, err := remote.SSHWith(t, remote.Bounded, remote.ImportScript(t, projectName, name, end), r, nil, false, nil)
 	r.Close()
 	if err != nil {
 		return fail(err.Error())

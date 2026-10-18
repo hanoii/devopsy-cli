@@ -538,7 +538,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	text := rlog.Text()
 	if m := remote.SyncingInto.FindSubmatch(text); m != nil {
 		text = append([]byte("\n"), text...)
-		if c, err := remote.SSH(t, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 			cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the sync log on the server (%v, %d)", err, c), color)
 		}
 	}
@@ -621,6 +621,7 @@ func (q *quietWriter) Write(p []byte) (int, error) {
 // keep sends what follows to $base/.devopsy-sync.log too, like the
 // holder does on the child when nobody reads the session any more.
 func (q *quietWriter) keep(base string) {
+	trimSyncLog(filepath.Join(base, syncLog))
 	f, err := os.OpenFile(filepath.Join(base, syncLog), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return
@@ -629,6 +630,27 @@ func (q *quietWriter) keep(base string) {
 	q.file = f
 	q.mu.Unlock()
 	sayErr("devopsy: " + time.Now().UTC().Format("2006-01-02 15:04:05") + ": the sync's session is gone: restoring what was stopped")
+}
+
+// trimSyncLog keeps the last remote.SyncLogKeep lines of the log at
+// path once it grew past remote.SyncLogMax: every sync whose session
+// went appends to it.
+func trimSyncLog(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < remote.SyncLogMax {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	lines := strings.SplitAfter(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) > remote.SyncLogKeep {
+		lines = lines[len(lines)-remote.SyncLogKeep:]
+	}
+	if os.WriteFile(path+".tmp", []byte(strings.Join(lines, "")+"\n"), 0o644) == nil {
+		_ = os.Rename(path+".tmp", path)
+	}
 }
 
 // syncState records, next to syncLog, the services a sync stopped ("stop

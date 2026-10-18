@@ -438,7 +438,9 @@ repositories fit together and the open ideas.
   silently (a laptop asleep) is seen by the server only when it writes
   or TCP gives up: devopsy-server never sets sshd's
   `ClientAliveInterval`. The operator's side passes `KeepAlive` on
-  activations and uploads, so it notices one. Without a terminal
+  activations and uploads, so it notices one, and `Bounded` (KeepAlive
+  plus `ConnectTimeout=30`) on a log's save, `--export` and `--import`,
+  which otherwise waited minutes on a dead connection. Without a terminal
   (output piped, CI), devopsy takes Ctrl-C itself (`session` in
   runRemote; ssh ignores it): before the switch (no `LogAnchor` logged
   yet) it closes the pipe, which cancels the release through the
@@ -708,7 +710,8 @@ repositories fit together and the open ideas.
 - **fd 3:** the holder keeps devopsy's answer on fd 3 and gives every
   command `/dev/null` as stdin, so nothing it runs can eat or wait on the
   answer. No answer (devopsy interrupted, connection lost): the holder
-  sends its output to `$base/.devopsy-sync.log` (a write to the dead
+  sends its output to `$base/.devopsy-sync.log` (cut to its last
+  `SyncLogKeep` lines past `SyncLogMax`, on both sides; a write to the dead
   session would kill what restores the services) and finishes as the
   files say. From
   prepare until the services are restored the holder ignores SIGPIPE

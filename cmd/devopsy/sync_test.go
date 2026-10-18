@@ -558,10 +558,10 @@ func TestSyncDifferentHosts(t *testing.T) {
 	}
 	// Every session of the release keeps itself alive: the upload, the
 	// holder, the push, the push's look at the child's services
-	// (--sync-exec) and the receive.
+	// (--sync-exec), the receive, and the log's save.
 	keep := "-o ServerAliveInterval=30 -o ServerAliveCountMax=4"
-	if strings.Count(ssh, keep) != 5 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
-		t.Errorf("keepalive on upload, holder, push, exec and receive:\n%s", ssh)
+	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
@@ -2026,5 +2026,22 @@ func TestSyncSettle(t *testing.T) {
 	next()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Errorf("a release after (%d):\n%s", code, out)
+	}
+}
+
+// The sync log, appended to by every sync whose session went, keeps its
+// last lines once too big.
+func TestTrimSyncLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), syncLog)
+	line := strings.Repeat("x", 99) + "\n"
+	write(t, path, strings.Repeat(line, remote.SyncLogMax/len(line)+10)+"last\n", 0o644)
+	trimSyncLog(path)
+	data := readString(path)
+	if n := strings.Count(data, "\n"); n != remote.SyncLogKeep || !strings.HasSuffix(data, "last\n") {
+		t.Errorf("%d lines, ends %q", n, data[len(data)-10:])
+	}
+	write(t, path, "small\n", 0o644)
+	if trimSyncLog(path); readString(path) != "small\n" {
+		t.Errorf("a small log changed: %q", readString(path))
 	}
 }

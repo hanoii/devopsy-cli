@@ -645,9 +645,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   release no longer depends on your connection: it finishes, or fails
   and brings the previous release back, on its own, and `--log` shows
   how. Ctrl-C before the switch cancels the release. After it, the
-  run step goes on: at a terminal Ctrl-C does nothing; without one
-  (output piped, CI), devopsy says so, and a second Ctrl-C only ends
-  the session. To go back, `--rollback` once it ends.
+  release goes on to its end (the run step, pruning, the remote after
+  steps): at a terminal Ctrl-C does nothing; without one (output piped,
+  CI), devopsy says so, and a second Ctrl-C only ends the session. To
+  go back, `--rollback` once it ends. A release that syncs is the
+  exception during its copy: Ctrl-C there aborts the sync, and the
+  release goes back (Parent environments and syncs).
 - **Destroying:** `--destroy`, under the lock, in the current release:
   the environment's `destroy:` step if it has one (optional, one devopsy
   command, while everything still runs: a last dump), then `docker compose
