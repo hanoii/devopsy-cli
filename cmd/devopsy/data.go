@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -139,6 +138,12 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 	ctx, stop := interruptible()
 	defer stop()
+	// From devopsy @<target> --export: its stdin is a pipe devopsy keeps
+	// open, with a heartbeat, so a session gone, even silently, stops
+	// the export and restores what it stopped.
+	if os.Getenv(remote.SyncWatchEnv) != "" {
+		ctx = watchSession(ctx)
+	}
 
 	var entries []string
 	var mnt string
@@ -385,8 +390,23 @@ func runImport(cwd string, args []string, color bool) int {
 		err error
 	}
 	done := make(chan copied, 1)
+	// From devopsy @<target> --import (its end line set), a pause longer
+	// than remote.DataQuiet is the session gone, silently: the release
+	// lock is held meanwhile.
+	quiet := time.Duration(0)
+	if os.Getenv(remote.ImportEndEnv) != "" {
+		quiet = remote.DataQuiet
+	}
 	go func() {
-		n, err := io.Copy(f, os.Stdin)
+		var n int64
+		silent, err := readQuiet(os.Stdin, quiet, func(b []byte) error {
+			m, err := f.Write(b)
+			n += int64(m)
+			return err
+		})
+		if silent {
+			err = fmt.Errorf("nothing came for %s, the session is gone", remote.DataQuiet)
+		}
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
@@ -549,7 +569,16 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		return fail(cli.ExportFlag + " writes " + args[0] + "'s data to stdout: redirect it (> " + args[0] + ".data) or pipe it (| devopsy " + cli.ImportFlag + " " + args[0] + ")")
 	}
-	code, err := remote.SSHWith(t, remote.Bounded, remote.ExportScript(t, projectName, args[0]), bytes.NewReader(nil), os.Stdout, false, nil)
+	// stdin is a pipe kept open with a heartbeat: the server stops the
+	// export when the session goes, even silently.
+	r, w, err := os.Pipe()
+	if err != nil {
+		return fail(err.Error())
+	}
+	defer r.Close()
+	defer w.Close()
+	defer heartbeat(w)()
+	code, err := remote.SSHWith(t, remote.Bounded, "export "+remote.SyncWatchEnv+"=1 "+remote.HeartbeatEnv+"=1\n"+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
 	if err != nil {
 		return fail(err.Error())
 	}

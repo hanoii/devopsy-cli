@@ -1,0 +1,91 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// With a heartbeat, the watcher takes a silence for the session gone: an
+// armed one signals the script; beats keep it quiet, and never reach the
+// answer.
+func TestWatchHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	armed := filepath.Join(dir, "armed")
+	answer := filepath.Join(dir, "answer")
+	// The script: the watcher's parent, waiting for it, as the server's
+	// shell does.
+	watch := func(args string) (*exec.Cmd, *os.File) {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// As watchSession does: a background job's stdin is /dev/null
+		// (dash), so the session's goes through fd 4.
+		cmd := exec.Command("sh", "-c", `exec 5>"$ANSWER" 4<&0; "$BIN" --watch-session $$ `+args+` <&4 & exec 4<&- 5>&-; wait`)
+		cmd.Env = append(os.Environ(), "BIN="+binary, "ANSWER="+answer)
+		cmd.Stdin = r
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		r.Close()
+		return cmd, w
+	}
+	ended := func(cmd *exec.Cmd, within time.Duration) bool {
+		done := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+			return true
+		case <-time.After(within):
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+			return false
+		}
+	}
+
+	// Silence: the armed watcher signals the script.
+	write(t, armed, "", 0o644)
+	cmd, w := watch(`--heartbeat 1 --armed "` + armed + `"`)
+	start := time.Now()
+	if !ended(cmd, 10*time.Second) || time.Since(start) < 900*time.Millisecond || fileExists(armed) || !fileExists(armed+".fired") {
+		t.Errorf("silence: ended after %s, armed %v", time.Since(start), fileExists(armed))
+	}
+	w.Close()
+
+	// Beats keep it going; the answer gets none of them.
+	write(t, armed, "", 0o644)
+	cmd, w = watch(`--heartbeat 1 --answer-fd 5 --armed "` + armed + `"`)
+	for i := 0; i < 8; i++ {
+		_, _ = w.Write([]byte{0})
+		time.Sleep(300 * time.Millisecond)
+	}
+	if syscall.Kill(cmd.Process.Pid, 0) != nil || !fileExists(armed) {
+		t.Fatalf("cancelled despite the beats")
+	}
+	_, _ = w.Write([]byte("\x00go\n\x00"))
+	time.Sleep(200 * time.Millisecond)
+	_ = os.Rename(armed, armed+".off") // disarmed, as before a switch
+	w.Close()
+	if !ended(cmd, 10*time.Second) {
+		t.Errorf("the script did not end once its stdin ended")
+	}
+	if got := readString(answer); got != "go\n" {
+		t.Errorf("answer %q", got)
+	}
+}
+
+// The upload's guard passes data through and fails on a silence.
+func TestStdinGuard(t *testing.T) {
+	cmd := exec.Command(binary, "--stdin-guard")
+	cmd.Stdin = strings.NewReader("data\n")
+	if out, err := cmd.Output(); err != nil || string(out) != "data\n" {
+		t.Errorf("guard (%v): %q", err, out)
+	}
+}
