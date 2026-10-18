@@ -646,8 +646,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   and brings the previous release back, on its own, and `--log` shows
   how. Ctrl-C before the switch cancels the release. After it, the
   release goes on to its end (the run step, pruning, the remote after
-  steps): at a terminal Ctrl-C does nothing; without one (output piped,
-  CI), devopsy says so, and a second Ctrl-C only ends the session. To
+  steps): devopsy says so, at a terminal or in CI alike, and a second
+  Ctrl-C only ends the session. To
   go back, `--rollback` once it ends. A release that syncs is the
   exception during its copy: Ctrl-C there aborts the sync, and the
   release goes back (Parent environments and syncs).

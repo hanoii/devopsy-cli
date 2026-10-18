@@ -598,8 +598,10 @@ echo "devopsy: rolling back to $id" >&2
 	} else {
 		s += "id=" + Quote(id) + "\n" + NotLive
 	}
+	// On a pseudo-terminal when the operator has one (with_tty), as
+	// the fetch and the run step: activations are never -t.
 	step := func(phase, dir string, args []string, onFail string) string {
-		return runningLine(args, phase) + fmt.Sprintf("(cd %s && %s) || %s\n", dir, devopsyCall(projectName, args, false), onFail)
+		return runningLine(args, phase) + fmt.Sprintf("(cd %s && with_tty %s) || %s\n", dir, Quote(devopsyCall(projectName, args, false)), onFail)
 	}
 	s += `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
@@ -899,7 +901,8 @@ fi
 
 // WatchEnv tells an activation that its stdin stays open for as long as
 // the operator's devopsy runs (a pipe it keeps), so EOF there means the
-// session is gone: set on -T sessions, whose drop sends no signal.
+// session is gone: activations are always -T, whose drop sends no
+// signal.
 const WatchEnv = "DEVOPSY_INTERNAL_WATCH"
 
 // WatchSessionFlag is the hidden devopsy flag that watches a session's
@@ -918,11 +921,13 @@ const WatchSessionFlag = "--watch-session"
 // trap undoes the fetch, at once rather than at the next write, a build
 // later. Taking $ws_armed (the watcher takes it before it signals),
 // right before the switch, disarms it: from there on a release finishes
-// whatever happens to its session (followOutput). A plain release is armed when its stdin is the
-// operator's pipe (WatchEnv) or a terminal (-t: its hangup reaches the
-// shell alone, whose trap waits for the build to end), a syncing
-// one always (its stdin is the answer's pipe), a sync's holder never: a
-// SIGTERM would stop it halfway through restoring.
+// whatever happens to its session (followOutput). A plain release is
+// armed when its stdin is the operator's pipe (WatchEnv: always, from
+// devopsy; until October 2026 a -t session was armed on its terminal,
+// whose hangup reached the shell alone, which ran its trap only once the
+// build ended), a syncing one always (its stdin is the answer's pipe), a
+// sync's holder never: a SIGTERM would stop it halfway through
+// restoring.
 func watchSession(answer, armed bool) string {
 	args := `"$$"`
 	s := `ws_armed="$base/.devopsy-watch.$$"
@@ -955,10 +960,7 @@ exec 4<&-
 		s += `: >"$ws_armed"
 ` + fmt.Sprintf(start, cancel)
 	case armed:
-		// A terminal session too: its hangup reaches only the shell,
-		// which runs its trap only once the command it waits for ends (a
-		// build), while the watcher's read of the terminal ends at once.
-		s += `if [ -n "${` + WatchEnv + `:-}" ] || [ -t 0 ]; then
+		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
   : >"$ws_armed"
 ` + fmt.Sprintf(start, cancel) + `fi
 `

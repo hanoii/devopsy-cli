@@ -427,12 +427,14 @@ repositories fit together and the open ideas.
   no open ever waits on a watcher that came and went): so a release that syncs is
   armed too, always (its stdin is the answer's pipe), and a sync's
   holder never (a SIGTERM would stop it halfway through restoring).
-  A terminal session (`-t`, stdin a tty) is armed too: its hangup
-  reaches only the shell, the session leader, and dash runs a trap only
-  once the command it waits for ends (seen: a build ran on, then compose
-  hung on its gone terminal for ten minutes), where the watcher's read
-  of the terminal ends at once; a release takes no input, and Ctrl-C is
-  the terminal's signal before anything reads. OrbStack's own SSH keeps stdin open and does
+  Activations are never `-t` (October 2026): at a terminal too the
+  session is `-T` with the pipe, so a terminal and CI share one path,
+  and the steps, the fetch and the run step get a pseudo-terminal from
+  `with_tty` (`remote.TTY`) for colors and live progress. A `-t`
+  session's hangup reached only the shell, the session leader, and dash
+  runs a trap only once the command it waits for ends (seen: a build ran
+  on, then compose hung on its gone terminal for ten minutes); it was
+  armed on its terminal until then, with Ctrl-D ignored. OrbStack's own SSH keeps stdin open and does
   not make the shell a group leader: test the watcher through a real
   sshd (in the machine, to `localhost`). A connection that dies
   silently (a laptop asleep) is seen by the server only when it writes
@@ -440,14 +442,13 @@ repositories fit together and the open ideas.
   `ClientAliveInterval`. The operator's side passes `KeepAlive` on
   activations and uploads, so it notices one, and `Bounded` (KeepAlive
   plus `ConnectTimeout=30`) on a log's save, `--export` and `--import`,
-  which otherwise waited minutes on a dead connection. Without a terminal
-  (output piped, CI), devopsy takes Ctrl-C itself (`session` in
-  runRemote; ssh ignores it): before the switch (no `LogAnchor` logged
-  yet) it closes the pipe, which cancels the release through the
-  watcher, and waits (and says so after 5 seconds: the server takes the
-  cancel only once it holds the release lock); after it, it says the run
-  step goes on and only a second one ends the session; the log is saved
-  either way. "After the switch" is SSHStreams' flag on SwitchMarker
+  which otherwise waited minutes on a dead connection. devopsy takes
+  Ctrl-C itself (`session` in runRemote; ssh ignores it): the first
+  closes the pipe, which before the switch cancels the release through
+  the watcher, and devopsy waits (and says so after 5 seconds: the
+  server takes the cancel only once it holds the release lock); after
+  it nothing listens, devopsy says the release goes on, and only a
+  second one ends the session; the log is saved either way. "After the switch" is SSHStreams' flag on SwitchMarker
   (`WithSwitched`), never the release log, which stops at its cap; a
   switch already under way when the pipe closed goes on, and devopsy
   says so. Interrupted during the upload (`signal.NotifyContext`), the
@@ -456,17 +457,16 @@ repositories fit together and the open ideas.
   trapped signal still kills the foreground child (`rm`, the `ln` and
   `mv` of `make_current`), which `set -e` turns into the script's end
   halfway through the switch; ignored, children inherit it (hence the
-  tail and its helper die by SIGKILL). So a terminal's Ctrl-C after the
-  switch does what a piped one does: nothing, the run step goes on
-  (decided, October 2026). Until then it stopped the step and restarted
+  tail and its helper die by SIGKILL). So after the switch nothing
+  stops the release, the run step goes on (decided, October 2026).
+  Until then a terminal's Ctrl-C stopped the step and restarted
   the previous release, but a dash subshell resets a trapped INT, so it
   died at once while `script`'s session (compose) ran on into the
   restart: two `up`s on one project, containers removed. `script`
   reads its signals through a signalfd, ignored ones included, and
   exits 0 when signaled (a restart's `get_images` took that for a
   fetch), so from there `with_tty` runs it under `setsid -w`
-  (`tty_detach`): the terminal's signals never reach it. During the
-  fetch, a terminal's hangup is the watcher's to act on (above).
+  (`tty_detach`, plainly without `setsid`): no signal reaches it.
   Protocol 2; 3 since the sync decisions (`finish partial`, `settle`).
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
