@@ -344,7 +344,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			case res = <-done:
 			case <-sigs:
 				if switched.Load() {
-					say(yellow, "devopsy: interrupted: the run step goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the step")
+					say(yellow, "devopsy: interrupted: the release goes on on @"+t.Address+" (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
 					select {
 					case res = <-done:
 					case <-sigs:

@@ -427,7 +427,12 @@ repositories fit together and the open ideas.
   no open ever waits on a watcher that came and went): so a release that syncs is
   armed too, always (its stdin is the answer's pipe), and a sync's
   holder never (a SIGTERM would stop it halfway through restoring).
-  `-t` sessions get HUP. OrbStack's own SSH keeps stdin open and does
+  A terminal session (`-t`, stdin a tty) is armed too: its hangup
+  reaches only the shell, the session leader, and dash runs a trap only
+  once the command it waits for ends (seen: a build ran on, then compose
+  hung on its gone terminal for ten minutes), where the watcher's read
+  of the terminal ends at once; a release takes no input, and Ctrl-C is
+  the terminal's signal before anything reads. OrbStack's own SSH keeps stdin open and does
   not make the shell a group leader: test the watcher through a real
   sshd (in the machine, to `localhost`). A connection that dies
   silently (a laptop asleep) is seen by the server only when it writes
@@ -444,9 +449,15 @@ repositories fit together and the open ideas.
   (`WithSwitched`), never the release log, which stops at its cap; a
   switch already under way when the pipe closed goes on, and devopsy
   says so. Interrupted during the upload (`signal.NotifyContext`), the
-  progress line goes and nothing changed. A Ctrl-C right after the
-  fetch counts as one in the run step: `fetch_release` sets
-  `switch_sig`'s trap once the fetch went through.
+  progress line goes and nothing changed. From the end of a fetch that
+  went through to the run step (or the sync), INT, TERM and HUP are
+  ignored: a trapped signal still kills the foreground child (`rm`, the
+  `ln` and `mv` of `make_current`), which `set -e` turns into the
+  script's end halfway through the switch; ignored, children inherit it
+  (hence the tail and its helper die by SIGKILL). A Ctrl-C there is
+  lost: the release goes live and the run step's traps take over. The
+  failed-run branch ignores them too. During the fetch, a terminal's hangup is the
+  watcher's to act on (above).
   Protocol 2.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after

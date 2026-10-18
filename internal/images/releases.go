@@ -100,16 +100,20 @@ func RollbackTarget(base string) string {
 
 // RemoveReleases removes releases by id, each with its images (Remove),
 // then its directory. Every id is checked first: one gone, or the
-// current one, refuses them all. A release whose images Docker could not
+// current one, refuses them all; with goneOK, one gone meanwhile (taken
+// by a pruning: --releases remove failed) is passed over. A release whose images Docker could not
 // finish removing stays, for the next removal; quiet leaves out the line
 // per release (pruning).
-func (s *Set) RemoveReleases(base string, ids []string, quiet bool) error {
+func (s *Set) RemoveReleases(base string, ids []string, quiet, goneOK bool) error {
 	rs := map[string]release{}
 	for _, r := range releases(base) {
 		rs[r.id] = r
 	}
 	for _, id := range ids {
 		r, ok := rs[id]
+		if !ok && goneOK {
+			continue
+		}
 		if !ok {
 			s.say("release %s is gone: nothing removed", id)
 			return fmt.Errorf("release %s is gone", id)
@@ -121,6 +125,10 @@ func (s *Set) RemoveReleases(base string, ids []string, quiet bool) error {
 	}
 	var failed []string
 	for _, id := range ids {
+		if _, ok := rs[id]; !ok {
+			s.say("release %s is gone already", id)
+			continue
+		}
 		dir := filepath.Join(base, "releases", id)
 		if err := s.Remove(dir); err != nil {
 			s.say("the images of %s could not all be removed (%v): the release stays for the next removal", id, err)

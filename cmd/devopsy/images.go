@@ -23,7 +23,7 @@ import (
 // [<current release>], prune; for an environment's releases (images.ToPrune,
 // RollbackTarget, RemoveReleases): to-prune <environment> <keep> (the ids,
 // one per line), rollback-target <environment> (exit 1 without one),
-// remove-releases [--quiet] <environment> <id>... (exit 1 when refused or
+// remove-releases [--quiet] [--gone-ok] <environment> <id>... (exit 1 when refused or
 // a release stays).
 const imagesFlag = "--images"
 
@@ -34,7 +34,7 @@ func runImages(args []string, color bool) int {
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback, named, quiet := false, false, false
+	rollback, named, quiet, goneOK := false, false, false, false
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -52,6 +52,8 @@ func runImages(args []string, color bool) int {
 			rollback = true
 		case "--quiet":
 			quiet = true
+		case "--gone-ok":
+			goneOK = true
 		default:
 			words = append(words, args[i])
 		}
@@ -124,7 +126,7 @@ func runImages(args []string, color bool) int {
 		if len(rest) < 2 {
 			return imagesUsage(color)
 		}
-		if err := s.RemoveReleases(rest[0], rest[1:], quiet); err != nil {
+		if err := s.RemoveReleases(rest[0], rest[1:], quiet, goneOK); err != nil {
 			return 1
 		}
 	default:

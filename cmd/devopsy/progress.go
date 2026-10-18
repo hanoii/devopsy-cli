@@ -20,6 +20,9 @@ type uploadProgress struct {
 	n      int64
 	drawn  time.Time
 	active bool
+	// first and last are when bytes went in: the summary's time leaves
+	// out the server's wait for the release lock before it reads.
+	first, last time.Time
 }
 
 const progressEvery = 100 * time.Millisecond
@@ -33,6 +36,10 @@ func (p *uploadProgress) add(n int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.n += n
+	if p.first.IsZero() {
+		p.first = time.Now()
+	}
+	p.last = time.Now()
 	if p.w == nil || time.Since(p.drawn) < progressEvery {
 		return
 	}
@@ -79,7 +86,9 @@ func (c clearingWriter) Write(b []byte) (int, error) {
 // done is the upload's summary line.
 func (p *uploadProgress) done() string {
 	p.clear()
-	d := time.Since(p.start)
+	p.mu.Lock()
+	d := p.last.Sub(p.first)
+	p.mu.Unlock()
 	return fmt.Sprintf("Uploaded %s in %s (%s/s).", humanBytes(p.total), d.Round(100*time.Millisecond), humanBytes(rate(p.total, d)))
 }
 

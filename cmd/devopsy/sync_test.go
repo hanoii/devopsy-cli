@@ -1925,7 +1925,7 @@ func TestReleaseInterrupt(t *testing.T) {
 	}
 	next()
 	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
-	if code != 0 || !strings.Contains(out, "the run step goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
+	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
 		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
 	}
 }
