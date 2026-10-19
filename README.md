@@ -41,8 +41,9 @@ code, so every project works the same way.
 
 People and small teams who deploy different web applications, sometimes
 with complex stacks and their own deploy strategies, to a few servers they
-own, and want what a hosting platform gives (an environment per branch, releases and rollbacks, secrets
-out of git, URLs and certificates) without running or paying for one.
+own, and want what a hosting platform gives (an environment per branch,
+releases and rollbacks, secrets out of git, URLs and certificates) without
+running or paying for one.
 
 It assumes some technical knowledge: a terminal, SSH, and the basics of
 Docker. It is also a good way to learn how Docker and Docker Compose
@@ -79,7 +80,8 @@ To get there it makes choices for you:
   visible with `devopsy --env`. Anything else is compose's.
 - **Push over SSH, never pull.** The server needs no access to the
   repository: no deploy keys, tokens or webhooks. Locally devopsy needs
-  `ssh`; on the server `devopsy`, `tar`, `flock`, `setsid` and `script`.
+  `ssh`; on the server `devopsy` and what Debian has: `tar`, GNU
+  coreutils and util-linux (`flock`, `setsid`, `script`).
 - **Releases are complete directories,** run through a `current` symlink;
   `shared/` keeps data and secrets across them. A release never changes a
   live tree in place.
@@ -195,12 +197,12 @@ source <(devopsy --completion zsh)    # ~/.zshrc, after compinit
 echo 'command -q devopsy; and devopsy --completion fish | source' > ~/.config/fish/completions/devopsy.fish
 ```
 
-It completes targets (`@prod`, and environments after `@vm1:` or `@vm1:b/`),
-aliases, then servers after `@` (`@vm1:`, from the `Host` lines of
-`~/.ssh/config` and the files it includes), project commands with their
-descriptions, devopsy's flags and, through compose's own completion,
-compose's commands and services. It never connects to servers. The scripts ask devopsy at every Tab, so they follow
-the installed version.
+It completes targets (`@prod`, and environments after `@vm1:` or
+`@vm1:b/`), aliases, then servers after `@` (`@vm1:`, from the `Host`
+lines of `~/.ssh/config` and the files it includes), project commands with
+their descriptions, devopsy's flags and, through compose's own completion,
+compose's commands and services. It never connects to servers. The scripts
+ask devopsy at every Tab, so they follow the installed version.
 
 ## Locally
 
@@ -267,11 +269,12 @@ Two more lines say where it runs:
   address.
 
 Help shows them like a flag's scope (`(runs locally)` after a local
-command that takes an address), completion offers each command where it runs, and
-a release refuses steps that name one in the wrong place (`local:` steps
-run locally, the rest on the server) before anything changes. devopsy tells a
-server from your machine by the release's `devopsy-target.env`, so `target`
-commands do not run in plain directories.
+command that takes an address), completion offers each command where it
+runs, and a release refuses steps that name one in the wrong place
+(`local:` steps run locally, the rest on the server) before anything
+changes. devopsy tells a server from your machine by the release's
+`devopsy-target.env`, so `target` commands do not run in plain
+directories.
 
 ```sh
 #!/bin/sh
@@ -371,12 +374,12 @@ target's `COMPOSE_PROJECT_NAME`, which devopsy sends.
 Help, `--debug`, devopsy's messages and the lines a server sends are in
 color on a terminal, unless `NO_COLOR=1`; `FORCE_COLOR=1` forces them
 through a pipe or in CI (`0` or `false` do not), and `NO_COLOR` wins.
-A release that syncs runs its session without a terminal, so its run step
-gets one on the server (`script`, from util-linux) sized like yours, and a
-build's live progress looks as it does on a plain release. Logs are saved
-without any of it. Variables named `DEVOPSY_INTERNAL_*` are how one devopsy
-tells another these things: never set or read them, they change in any
-release.
+Releases and syncs run their sessions without a terminal, so their steps,
+builds and run step get one on the server (`script`, from util-linux)
+sized like yours, and a build's live progress shows as it would locally.
+Logs are saved without any of it. Variables named `DEVOPSY_INTERNAL_*` are
+how one devopsy tells another these things: never set or read them, they
+change in any release.
 
 ## Servers
 
@@ -451,18 +454,17 @@ volumes are named `<project>[-<instance>]-<environment>`
 (`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
 A child's **parent** (`parent:`, a concrete environment of the project)
-resolves like a target of its own, one level only: at the child's instance,
-on the server its variables name
-(`DEVOPSY_SERVER_<PARENT>`, its pattern's, `DEVOPSY_SERVER`), never the
-child's: a guess could copy the wrong data, so a sync without one fails
-and says which variable to set. `@vm2:develop` with
-`DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Without the variable,
-an address does it for one command: `devopsy @vm2:develop --release
---from @vm1:prod`, or `--release-sync --from`, `--sync --from`. Parents can chain
-(`pr-*` from `staging` from `prod`), never in a cycle: two environments
-that are each other's parent could never be released, since a child's
-first release syncs from a released parent. `devopsy --debug
-environments` shows it resolved.
+resolves like a target of its own, one level only: at the child's
+instance, on the server its variables name (`DEVOPSY_SERVER_<PARENT>`,
+`DEVOPSY_SERVER`), never the child's: a guess could copy the wrong data,
+so a sync without one fails and says which variable to set. `@vm2:develop`
+with `DEVOPSY_SERVER_PROD=vm1` syncs from `vm1:prod`. Without the
+variable, an address does it for one command: `devopsy @vm2:develop
+--release --from @vm1:prod`, or `--release-sync --from`, `--sync --from`.
+Parents can chain (`pr-*` from `staging` from `prod`), never in a cycle:
+two environments that are each other's parent could never be released,
+since a child's first release syncs from a released parent. `devopsy
+--debug environments` shows it resolved.
 
 ### Releases
 
@@ -526,11 +528,30 @@ release:
 rollback: deploy         # only a run step: the same phases, in the restored release
 ```
 
+- **One SSH session:** the remote steps share it, under the release lock.
+  Hence local before steps first and local after steps last. Remote before
+  steps run in the current release, with its commands, and none run on a
+  first release.
+- **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
+  resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
+  `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
+  Without steps, devopsy prints a starting point.
 - **The variables check:** after `prepare`, devopsy checks that every
   variable compose requires (`${VAR:?message}`) is set there, env capability
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
   check finds them, and name them in `secrets:`.
+- **The names check:** containers of the release's compose project from
+  another environment's directory fail the release before it goes live.
+  Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
+  `b-c` are both `<project>-a-b-c`, and Compose would take the other's
+  containers and volumes as its own. Rename an instance or environment.
+- **The networks check:** a network the compose file names as its own
+  (not `external`) that belongs to another compose project on the server
+  fails the release before it goes live: Compose would silently share it,
+  and the two projects' containers would reach each other by service
+  name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
+  another project, join its network as `external`.
 - **Images:** after the checks, devopsy gets the release's images, by
   `mode:`, on the server and before it goes live: in build mode `docker
   compose pull --ignore-buildable` (services without a `build:`) then
@@ -542,26 +563,68 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
   `current` as it was, its images included; what the failed release got
   is tagged as its own, so it goes with it. So does an interrupted one
-  (Ctrl-C, a lost connection): the release is marked failed once the
-  build or pull stops. A CI session that drops gets no signal, so the
-  build runs to its end; the next release, `--destroy` or `--releases
-  remove` then finds it marked as fetching and does the same.
+  (Ctrl-C, a lost connection: Dropped connections, below): the build
+  or pull stops, and the release is marked failed.
+- **When `run` fails,** `current` goes back to the previous release, which
+  is restarted with its own run step, from its own config (its `rollback:`
+  run step, else its `release:` one), with its own images back, so its
+  containers are the previous release's again. Data changes, like database
+  updates, are the project's to undo.
+- **A child's first release** syncs its parent's data between switching
+  `current` and `run`, so `run` (`deploy`: database updates, cache clears)
+  works on the parent's data and no empty site is ever served. A failed
+  copy does not go live. `--release-sync` does that on any release,
+  asking for the environment's name first when it already has one, as
+  `--sync` does (`--yes` skips it); `--release-no-sync` never syncs, a
+  child's first release included (see Parent environments and syncs).
+  `--from @<address>` syncs such a release from another environment of
+  the project instead of the parent; a child's only, and only on a
+  release that syncs.
+- **Dropped connections:** before the switch, a session that drops (a
+  cancelled CI job, a killed devopsy) cancels the release at once: the
+  server notices and undoes what it fetched. A connection that dies
+  silently (a laptop asleep or off the network) cancels it within about 30
+  seconds: devopsy sends the server a heartbeat, and a silence counts as
+  the session gone (so does devopsy itself stopped that long; 90 seconds
+  for a release that syncs). Syncs, `--export` and `--import` do the same.
+  From the switch on, a release no longer depends on your connection: it
+  finishes, or fails and brings the previous release back, on its own, and
+  `--log` shows how. Ctrl-C before the switch cancels the release. After
+  it, the release goes on to its end (the run step, pruning, the remote
+  after steps): devopsy says so, at a terminal or in CI alike, and a
+  second Ctrl-C only ends the session. To go back, `--rollback` once it
+  ends. A release that syncs is the exception during its copy: Ctrl-C
+  there aborts the sync, and the release goes back (Parent environments
+  and syncs).
+- **Logs:** each release and rollback is recorded on the server, in the
+  release's directory (a rollback's and a sync's added to the release they
+  go to), failed ones included once the server was reached, in two logs:
+  `devopsy-log-session`, what your session said and saw up to the switch,
+  or to the run step after a sync (devopsy's messages, the local steps
+  run, the server's lines, the copy's), each line after its time in UTC
+  (`2026-10-09 15:24:32`), and `devopsy-log-server`, what the server
+  printed from there on, written there whatever happens to your
+  connection. `--log` shows the two joined, progress displays reduced to
+  their final state: the most recent, or `--log <id>` one release's. Local
+  steps' own output stays on your screen only, keeping their terminal.
+- **Rolled back:** `--rollback` marks the release it leaves (`ROLLED
+  BACK` in `--releases`): like a failed one it never counts toward
+  `keep` and a later rollback never goes back to it, so after a fix is
+  released, the next rollback skips the bad release. Its log stays until
+  pruning takes it.
 - **Each release keeps its images:** once fetched, every image the release
-  runs gets a second tag, `devopsy-<compose name>-<release id>`, without
-  changing the names Compose runs (`drupal11-prod-app`, `mariadb:11`),
-  images pulled by digest included. A release naming one repository
-  twice (`postgres:15` and `postgres:16`) gets a tag per name, ending in
-  a checksum of it. Docker's tags end at 128 characters: a compose name
-  longer than 94 is cut to 85, followed by 8 characters of its hash. A
+  runs gets a second tag, `devopsy-<compose name>-<release id>` (a long
+  compose name shortened, a checksum added when a release names one
+  repository twice), without changing the names Compose runs
+  (`drupal11-prod-app`, `mariadb:11`), images pulled by digest included. A
   rollback, or the restart after a failed `run`, points those names back
   at that release's tags: exactly the images it ran, floating tags
-  included, without building or pulling. A release without them (pruned
-  images, a release older than this) builds or pulls again. One
-  exception: a shared name (`mariadb:11`) whose newer image another
-  compose project on the server runs, any environment, instance or
-  project, or a container outside Compose, stays on it, and the release
-  says so: rolling back one environment never changes another. Pin such
-  images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
+  included, without building or pulling. A release whose images are gone
+  builds or pulls again. One exception: a shared name (`mariadb:11`) whose
+  newer image another compose project on the server runs, any environment,
+  instance or project, or a container outside Compose, stays on it, and
+  the release says so: rolling back one environment never changes another.
+  Pin such images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
   bookmark is what the name held when the release fetched: two releases
   pulling `mariadb:11` at the same moment may each bookmark the other's.
 - **Images go with their releases:** pruning a release removes its tags.
@@ -576,109 +639,45 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   from the compose file): it stays, recorded in the project's directory
   (`.devopsy-images-left`), which `--releases` lists, and every later
   pruning, `--releases remove` or `--destroy` of the same project
-  retries it, so it goes once its container does. A name
-  another project on the server runs by the same name, with no release
-  of its own holding it, goes too; that project pulls it again. Images
-  are the server's, so removing them takes the server's image lock
-  (`.devopsy-images.lock` in the release root) alone, while fetching
-  shares it: pruning never waits for it, and when another release holds
-  it (naming who and for how long), skips this time, releases and
-  images, and the next release prunes them.
-- **Rolled back:** `--rollback` marks the release it leaves (`ROLLED
-  BACK` in `--releases`): like a failed one it never counts toward
-  `keep` and a later rollback never goes back to it, so after a fix is
-  released, the next rollback skips the bad release. Its log stays until
-  pruning takes it.
+  retries it, so it goes once its container does. A name another
+  project's compose file uses, with no container and no release of its
+  own holding it, goes too; that project pulls it again. Images are the
+  server's, so removing them needs the server's image lock alone, while
+  fetches share it: pruning never waits for it, and when another
+  release holds it (devopsy names it and since when), skips this time,
+  releases and images, and the next release prunes them.
 - **Removing releases by hand:** `--releases remove <id>...` takes
-  releases away as pruning does, images included; an id can be its
-  start, and `failed` is every release that never went live, whose run
-  failed, or that a rollback left, ids alongside. The current release is refused, and every
-  id is checked before anything goes. It asks first at a terminal, and
-  takes `--yes` in scripts. Data in `shared/` is never touched.
-- **The names check:** containers of the release's compose project from
-  another environment's directory fail the release before it goes live.
-  Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
-  `b-c` are both `<project>-a-b-c`, and Compose would take the other's
-  containers and volumes as its own. Rename an instance or environment.
-- **The networks check:** a network the compose file names as its own
-  (not `external`) that belongs to another compose project on the server
-  fails the release before it goes live: Compose would silently share it,
-  and the two projects' containers would reach each other by service
-  name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
-  another project, join its network as `external`.
-- **When `run` fails,** `current` goes back to the previous release, which is
-  restarted with its own run step, from its own config (its `rollback:`
-  run step, else its `release:` one), with its own images back, so its containers are the previous release's
-  again. Data changes, like
-  database updates, are the project's to undo.
-- **One SSH session:** the remote steps share it, under the release lock.
-  Hence local before steps first and local after steps last. Remote before
-  steps run in the current release, with its commands, and none run on a
-  first release.
-- **A child's first release** syncs its parent's data between switching
-  `current` and `run`, so `run` (`deploy`: database updates, cache clears)
-  works on the parent's data and no empty site is ever served. A failed
-  copy does not go live. `--release-sync` does that on any release,
-  asking for the environment's name first when it already has one, as
-  `--sync` does (`--yes` skips it); `--release-no-sync` never syncs, a
-  child's first release included (see Parent environments and syncs).
-  `--from @<address>` syncs such a release from another environment of
-  the project instead of the parent; a child's only, and only on a
-  release that syncs.
-- **Logs:** each release and rollback is recorded on the server, in the
-  release's directory (a rollback's and a sync's added to the release
-  they go to), failed ones included once the server was reached, in two
-  logs: `devopsy-log-session`, what your session said and saw up to the
-  switch, or to the run step after a sync (devopsy's messages, the local
-  steps run, the server's lines, the copy's), each line after its time
-  in UTC (`2026-10-09 15:24:32`), and `devopsy-log-server`, what the
-  server printed from there on, written there whatever happens to your
-  connection. `--log` shows the
-  two joined, progress displays reduced to their final state: the most
-  recent, or `--log <id>` one release's. Local steps' own output stays
-  on your screen only, keeping their terminal.
-- **Dropped connections:** before the switch, a session that drops (a
-  cancelled CI job, a killed devopsy) cancels the release at once: the
-  server notices and undoes what it fetched. A connection that dies
-  silently (a laptop asleep or off the network) cancels it within about
-  30 seconds: devopsy sends the server a heartbeat, and a silence counts
-  as the session gone (so does devopsy itself stopped that long). Syncs,
-  `--export` and `--import` do the same. From the switch on, a
-  release no longer depends on your connection: it finishes, or fails
-  and brings the previous release back, on its own, and `--log` shows
-  how. Ctrl-C before the switch cancels the release. After it, the
-  release goes on to its end (the run step, pruning, the remote after
-  steps): devopsy says so, at a terminal or in CI alike, and a second
-  Ctrl-C only ends the session. To
-  go back, `--rollback` once it ends. A release that syncs is the
-  exception during its copy: Ctrl-C there aborts the sync, and the
-  release goes back (Parent environments and syncs).
-- **Destroying:** `--destroy`, under the lock, in the current release:
-  the environment's `destroy:` step if it has one (optional, one devopsy
-  command, while everything still runs: a last dump), then `docker compose
-  down --volumes --remove-orphans --rmi local` (every profile; the images
-  built without an `image:` name go too), then `shared/mnt` emptied as
-  root in `devopsy-util`, since its files belong to container users; then
-  each release's images, as pruning removes them; then the directory
-  (releases, `shared/` with its data and `.env`). It takes the server's
-  image lock before anything goes, waiting up to 10 minutes for releases
-  fetching images, and fetches wait while it runs. A failure before the
-  removal removes nothing.
-  The project's and the instance's `.env` stay, shared by their
-  environments; when none is left in their directory, `--purge` removes
-  them with it (at a terminal devopsy asks; otherwise a warning says how),
-  also after the environment is gone.
-- **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
-  resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
-  `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
-  Without steps, devopsy prints a starting point.
+  releases away as pruning does, images included; an id can be its start,
+  and `failed` is every release that never went live (one cut off before
+  its switch only when older than the current one), whose run failed, or
+  that a rollback left, ids alongside. The current release is refused, and
+  every id is checked before anything goes. It asks first at a terminal,
+  and takes `--yes` in scripts. Data in `shared/` is never touched.
+- **Destroying:** `--destroy`, under the lock, in the current release
+  (else the newest one): the environment's `destroy:` step if it has one
+  (optional, one devopsy command, while everything still runs: a last
+  dump), then `docker compose down --volumes --remove-orphans --rmi local`
+  (every profile; the images built without an `image:` name go too), then
+  `shared/mnt` emptied as root in `devopsy-util`, since its files belong
+  to container users; then each release's images, as pruning removes them;
+  then the directory (releases, `shared/` with its data and `.env`). It
+  takes the server's image lock before anything goes, waiting up to 10
+  minutes for releases fetching images, and fetches wait while it runs. A
+  failure before the removal removes nothing. The project's and the
+  instance's `.env` stay, shared by their environments; when none is left
+  in their directory, `--purge` removes them with it (at a terminal
+  devopsy asks; otherwise a warning says how), also after the environment
+  is gone.
+
+Two modes, `mode:` in the config:
 
 - **build** mode (default) uploads the project as git sees it, uncommitted
   changes included, and builds on the server, before the release goes
   live.
 - **image** mode uploads `.devopsy/` only; images come from a registry. Tag
-  them with the commit, `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`,
-  so rollbacks run their own image. devopsy pulls them before the release
+  them with the commit,
+  `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`, so rollbacks
+  run their own image. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
 
 A release says how much it uploads, shows the upload's progress on one
@@ -692,10 +691,9 @@ devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
 (its images), `devopsy-log-session` and `devopsy-log-server`,
-`devopsy-pending` until it goes live, `devopsy-failed` when it never
-did or its run failed, and `devopsy-fetching` while it gets its images. Releases from before October 2026 kept these inside the
-tree: rollbacks cannot go back to them, and their image tags stay until
-removed by hand (`docker image rm`).
+`devopsy-pending` until it goes live, `devopsy-fetching` while it gets
+its images, `devopsy-failed` when it never went live or its run failed,
+and `devopsy-rolled-back` once a rollback left it.
 
 Everything in `shared/` is linked into each release's `.devopsy/`: `.env`
 for secrets and overrides, `mnt/` for data (bind mounts like `./mnt/data`),
@@ -724,11 +722,11 @@ local copy is uploaded with each release. The alternatives:
 
 `shared/mnt` starts empty and belongs to the deploy user, and Docker
 creates a missing bind-mount directory as root. A container running as
-non-root from the start cannot write there, and the deploy user cannot give
-it away: start as root and fix ownership in the entrypoint, or give the
-directory away in a one-shot `init` service running as root. `--destroy`
-empties it as root in `devopsy-util`. Back up `shared/.env` and `shared/mnt` (databases as
-dumps).
+non-root from the start cannot write there, and the deploy user cannot
+give it away: start as root and fix ownership in the entrypoint, or give
+the directory away in a one-shot `init` service running as root.
+`--destroy` empties it as root in `devopsy-util`. Back up `shared/.env`
+and `shared/mnt` (databases as dumps).
 
 **Parent environments and syncs.** A child (`develop: {parent: prod}`)
 is a clone of its parent: its first release syncs the parent's data, and
@@ -743,7 +741,8 @@ with a label, `devopsy.sync`, which says how their data moves:
   `shared/mnt` into the child's, with `rsync -a --delete --numeric-ids`:
   the child's copy equals the parent's, owners and modes included. Files
   a running service removes during the copy (rsync's "vanished", its exit
-  24) are a notice, not a failure: the rest is copied.
+  24) are a notice, not a failure: the rest is copied. An entry missing
+  on the parent is skipped, said, and the child's is left as it is.
 - `devopsy.sync=stream`: the parent's sync capability `export <service>`
   writes the service's data to stdout (a database dump), devopsy spools
   it into a file in the child's directory (`.devopsy-sync.stream.<service>`),
@@ -756,8 +755,8 @@ with a label, `devopsy.sync`, which says how their data moves:
   (`devopsy @a --export db | devopsy @b --import db`) a failed export
   looks like a short one and its import gets what came: when the export
   can fail, go through a file and check its exit code first. Both sides
-  must label the service `stream`, or the parent refuses before anything
-  stops. A label from an inherited variable
+  must label the service `stream`, or the parent refuses before it
+  stops anything. A label from an inherited variable
   (`devopsy.sync=${SYNC_DATABASE:-rsync}`, `inherit: [SYNC_DATABASE]`)
   follows the parent's in the same sync: change it on the parent, then
   `--sync`.
@@ -785,19 +784,21 @@ nothing.
 | `devopsy.sync=stream` + `devopsy.sync.stop=true` | the same, the scripts using `run --rm` | stopped |
 
 `devopsy.sync.rsync.exclude=<entry>[,<entry>...]` on an `rsync` service
-names entries of `mnt` it mounts that are not copied through it anyway:
-an access log next to the site's files (`./mnt/logs`), which a child does
-not want. On a `stream` service it is ignored, so a variable can flip a
-service between `rsync` and `stream` and keep it. Another service
-mounting the same entry without excluding it still gets it copied. A
-service mounting `./mnt` itself copies everything, the entries of
-unlabeled and `stream` services included, against their labels: the
-parent says so before the copy, with the exclude label to write.
-Mounting entries, one per concern, says who owns what. `shared/.env` is
-never copied: the child keeps its own secrets.
+names entries of `mnt` it mounts that are not copied through it anyway: an
+access log next to the site's files (`./mnt/logs`), which a child does not
+want. On a `stream` service it is ignored, so a variable can flip a
+service between `rsync` and `stream` and keep it. Another service mounting
+the same entry without excluding it still gets it copied. A service
+mounting `./mnt` itself copies everything, the entries of unlabeled and
+`stream` services included, against their labels: the parent says so
+before the copy. Mount the entries it needs instead. Mounting entries, one
+per concern, says who owns what. `shared/.env` is never copied: the child
+keeps its own secrets.
 
-A project without any labeled service syncs nothing ("nothing to
-sync"), and the child's `run` step still runs.
+A project without any labeled service, or whose labeled services have
+nothing to copy, syncs nothing ("nothing to sync"): the parent's
+`prepare` and `finish` do not run, and the child's `run` step still
+runs.
 
 Each side reads the labels from its own release, so they can differ: a
 variable in the label (`devopsy.sync=${SYNC_DATABASE:-rsync}`) that the
@@ -814,33 +815,32 @@ sets in its own `shared/.env` can still differ).
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its `stop=true` services stopped; then
 it waits for the parent. On the parent's, under a shared hold of its
-release lock (a release of the parent waits for the copy) and a sync
-lock of its own (syncs from one parent run one at a time): `prepare
-parent`, its `stop=true` services stopped, the rsync, each stream
-(export, then the child's import), its services started, `finish parent
-go|abort`. Then the child's: its services started, `finish child go`,
-and its `run` step. The child's stopped services stay down through the
-imports, so an app never runs on a half-imported database, and after a
-copy that did not complete too (below). A lock held by something else is announced ("waiting for the
+release lock (a release of the parent waits for the copy) and a sync lock
+of its own (syncs from one parent run one at a time): `prepare parent`,
+its `stop=true` services stopped, the rsync, each stream (export, then the
+child's import), its services started, `finish parent go|abort`. Then the
+child's: its services started, `finish child go`, and its `run` step. The
+child's stopped services stay down through the imports, so an app never
+runs on a half-imported database, and after a copy that did not complete
+too (below). A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
-The rsync runs as root in `devopsy-util` (until October 2026
-`devopsy-rsync`: remove that one by hand, `docker image rm
-devopsy-rsync:2`), devopsy's own image (alpine
-with rsync and tar), built on each server the first time, so ownership
-and the deploy user's permissions do not matter. **On one server**, one
-container copies between the two directories, without SSH, and a stream
-is written into the child's directory directly. **Across servers**, the
-parent's server starts an rsync daemon (read-only, serving only the
-entries being copied, no published port) and reaches the child's over
-SSH, through a reverse forward, with your SSH agent forwarded for that
-session only, and never on to the child; a stream goes to the child's
+The rsync runs as root in `devopsy-util`, devopsy's own image (alpine with
+rsync and tar; it replaced `devopsy-rsync`, which `docker image rm
+devopsy-rsync:2` removes), built on each server the first time, so
+ownership and the deploy user's permissions do not matter. **On one
+server**, one container copies between the two directories, without SSH,
+and a stream is written into the child's directory directly. **Across
+servers**, the parent's server starts an rsync daemon (read-only, serving
+only the entries being copied, no published port) and reaches the child's
+over SSH, through a reverse forward, with your SSH agent forwarded for
+that session only, and never on to the child; a stream goes to the child's
 file through an SSH session of the parent's too. Data goes server to
 server, never through your machine. The sync's SSH sessions send
-keepalives every 30 seconds, so a firewall does not drop a quiet copy,
-and the parent gives up on a child it cannot reach, or that refuses its
-key, in seconds rather than keeping its services stopped for minutes.
+keepalives every 15 seconds, so a firewall does not drop a quiet copy, and
+the parent gives up on a child it cannot reach, or that refuses its key,
+within 30 seconds rather than keeping its services stopped for minutes.
 So, across servers:
 
 - an agent must be running where devopsy runs, with keys both servers
@@ -925,17 +925,17 @@ Each side's database credentials stay its own: the dump runs with the
 parent's, the import with the child's. Whether the export exited 0 is
 devopsy's to check, not the scripts'.
 
-**One service's data, anywhere:** `devopsy [@<target>] --export
-<service>` writes a labeled service's data to stdout, and `devopsy
-[@<target>] --import <service>` replaces it with stdin, the way its label
-says: a `stream` through the capability's `export` and `import`, an
-`rsync` service as a tar of its entries of `mnt` (made and extracted as
-root in `devopsy-util`, numeric owners and modes kept; an import empties
-each entry the tar carries first, as a sync's `--delete` does, and leaves
-the service running unless it is stopped), `devopsy.sync.stop=true`
-stopping it around either. A `stream` service that is not stopped is
-brought up for its import, and down again after it if it was down. Production's database and files on a laptop,
-with no project command:
+**One service's data, anywhere:** `devopsy [@<target>] --export <service>`
+writes a labeled service's data to stdout, and `devopsy [@<target>]
+--import <service>` replaces it with stdin, the way its label says: a
+`stream` through the capability's `export` and `import`, an `rsync`
+service as a tar of its entries of `mnt` (made and extracted as root in
+`devopsy-util`, numeric owners and modes kept; an import empties each
+entry the tar carries first, as a sync's `--delete` does, and leaves the
+service running unless it is stopped), `devopsy.sync.stop=true` stopping
+it around either. A `stream` service that is not stopped is brought up for
+its import, and down again after it if it was down. Production's database
+and files on a laptop, with no project command:
 
 ```sh
 devopsy @prod --export database | devopsy --import database
@@ -951,22 +951,26 @@ truncated tar (`tar -t` fails, or the end-of-archive blocks are missing),
 or one carrying entries the service does not mount or excludes, is
 refused. A service mounting `./mnt` itself exports, and imports, all of
 `mnt`: devopsy names what else that includes. On a target, `--export`
-holds the release lock shared and the environment's sync lock (a sync
-from it waits), `--import` the release lock, and asks for the environment's name on the terminal unless
-`--yes` (stdin is the data); a session cut halfway imports nothing. A
-pipe cannot tell an export that failed halfway from one that ended, so
-for what matters, go through a file and check the export's exit code.
+holds the release lock shared and the environment's sync lock (a sync from
+it waits), `--import` the release lock, and asks for the environment's
+name on the terminal unless `--yes` (stdin is the data); a session cut
+halfway imports nothing, and one silent for 2 minutes counts as cut.
+`--export` of data a sync left partial (below) warns and goes on. A pipe
+cannot tell an export that failed halfway from one that ended, so for what
+matters, go through a file and check the export's exit code.
 
 **Logs and failures:** a sync's output goes into the log of the release
-it syncd into (`--log`), after the release's own. The parent's side
+it synced into (`--log`), after the release's own. The parent's side
 always restores its stopped services. The child's side knows what the
 copy did to its data, whatever happened to devopsy: the parent marks it
 right before its first write into the child and after its last, and the
 child goes by that:
 
 - **Nothing written** (a prepare or a check failed, the parent's stop
-  failed, an export failed before any rsync): its stopped services come
-  back, `finish child abort`, and the run step is skipped.
+  failed, the first export failed with nothing to rsync): its stopped
+  services come back, `finish child abort`, and the run step is
+  skipped. On data an earlier sync left partial, it stays partial
+  (below).
 - **Written in part** (the rsync or an import failed or was cut,
   Ctrl-C mid-copy, a connection lost): the child's data is part old, part
   the parent's, so its stopped services stay down and the run step is
@@ -982,23 +986,24 @@ child goes by that:
   child go` fails leaves the child as one that did not complete.
 
 On a first release a failure marks the release failed and leaves nothing
-current, and the next release syncs again. A failed or interrupted
-export imports nothing, and its file goes. Interrupted (Ctrl-C) during
-the copy, devopsy ends its session to the parent's server, which stops
-the copy (an export too) and restores its own services, then tells the
-child's to finish as above. Once the copy is in and the run step runs, a
-Ctrl-C only says so: the step is the server's, and a second Ctrl-C ends
-your session while the step ends there (`--log` shows how). If devopsy
-itself goes away mid-sync (killed, connection lost), each side finishes
-on its own and writes what happened to `<environment>/.devopsy-sync.log`
-on its server; a child's side killed before deciding is decided by
-whatever takes its lock next, counting it as not completed. Restoring
-means what the sync stopped (`<environment>/.devopsy-sync.services`
-meanwhile): a service that was down before it, stopped for maintenance,
-stays down. Only `devopsy.sync.stop=true` services are kept off partial
-data: a service left running during the copy (an rsync one with
-`stop=false`, a stream imported into a running one) sees it change, as
-it chose.
+current, and the next release syncs again. A failed or interrupted export
+imports nothing, and its file goes. Interrupted (Ctrl-C) during the copy,
+devopsy ends its session to the parent's server, which stops the copy (an
+export too) and restores its own services, then tells the child's to
+finish as above. Once the copy is in and the run step runs, a Ctrl-C only
+says so: the step is the server's, and a second Ctrl-C ends your session
+while the step ends there (`--log` shows how). If devopsy itself goes away
+mid-sync (killed, connection lost, or silent: the parent's side gives up
+after 30 seconds without devopsy's heartbeat, the child's after 90), each
+side finishes on its own and writes what happened to
+`<environment>/.devopsy-sync.log` on its server; a child's side killed
+before deciding is decided by the next sync, release or rollback of it,
+counting it as not completed. Restoring means what the sync stopped
+(`<environment>/.devopsy-sync.services` meanwhile): a service that was
+down before it, stopped for maintenance, stays down. Only
+`devopsy.sync.stop=true` services are kept off partial data: a service
+left running during the copy (an rsync one with `stop=false`, a stream
+imported into a running one) sees it change, as it chose.
 
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
@@ -1059,19 +1064,20 @@ through a jump host or VPN. `devopsy @<server> --ssh-config` prints a
 keepalives, commented out. It never connects.
 
 **Keys on a server.** Who may log in as the deploy user is its
-`~/.ssh/authorized_keys`, and `devopsy @<server> --ssh-keys` edits it over the
-usual session, as that user, no root; any target on the server does too. `--ssh-keys`
-lists them (fingerprint, type, comment, options), `--ssh-keys add <file>`
-authorizes a public key, `--ssh-keys remove <fingerprint or comment>` removes
-one (never the last: it would lock everyone out). `add --restricted` is
-for a machine's key: `restrict` (commands only, no shell) plus the agent
-and port forwarding a sync across servers needs. Without a target,
-`devopsy --ssh-keys-generate [<name>]` makes an ed25519 pair in `~/.ssh`
-(`devopsy-ci` by default), nothing sent anywhere. For CI: generate, `add`
-the `.pub` on each server with `--restricted`, the private key as a
-protected file variable, and in the job `eval "$(ssh-agent)"; ssh-add
-"$DEVOPSY_SSH_KEY"` before `devopsy @prod --release`. Rotate by generating
-another, adding it, then removing the old one.
+`~/.ssh/authorized_keys`, and `devopsy @<server> --ssh-keys` edits it over
+the usual session, as that user, no root; any target on the server does
+too. `--ssh-keys` lists them (fingerprint, type, comment, options),
+`--ssh-keys add <file>` authorizes a public key, `--ssh-keys remove
+<fingerprint or comment>` removes one (never the last: it would lock
+everyone out). `add --restricted` is for a machine's key: `restrict`
+(commands only, no shell) plus the agent and port forwarding a sync across
+servers needs. Without a target, `devopsy --ssh-keys-generate [<name>]`
+makes an ed25519 pair in `~/.ssh` (`devopsy-ci` by default; `--out <file>`
+elsewhere), nothing sent anywhere. For CI: generate, `add` the `.pub` on
+each server with `--restricted`, the private key as a protected file
+variable, and in the job `eval "$(ssh-agent)"; ssh-add "$DEVOPSY_SSH_KEY"`
+before `devopsy @prod --release`. Rotate by generating another, adding it,
+then removing the old one.
 
 ### Aliases
 
@@ -1080,7 +1086,7 @@ name targets you use from anywhere:
 
 ```yaml
 aliases:
-  vm1-traefik:  {source: ~/src/devopsy-template-traefik, to: "vm1:main"}
+  vm1-traefik:  {source: ~/src/devopsy-template-traefik, to: "vm1:prod"}
   eu: {source: ~/src/shop, to: "vm1:eu/prod"}
 ```
 
@@ -1148,13 +1154,14 @@ lists them with their contracts):
   template's). Locally and on servers (`devopsy @prod --status` runs it
   in the current release there, after the release's record, the parent
   and the last sync).
-- **env:** `compute` runs before every devopsy command in the project
-  (not help or completion), locally and on servers, and prints `.env`
-  lines; devopsy sets those not set yet, at the lowest precedence, and
-  `--env` shows them. For values a project derives from others, like the
-  site templates' hosts and Traefik rule from `COMPOSE_PROJECT_NAME`, the
+- **env:** `compute` runs before every devopsy command in the project (not
+  help or completion), locally and on servers, and prints `.env` lines;
+  devopsy sets those not set yet, at the lowest precedence, and `--env`
+  shows them. For values a project derives from others, like the site
+  templates' hosts and Traefik rule from `COMPOSE_PROJECT_NAME`, the
   imported `DEVOPSY_WILDCARD_DOMAIN` and their own `DEVOPSY_DOMAINS`. It
-  runs every time, so keep it fast; a devopsy it calls skips it. A failure stops the command.
+  runs every time, so keep it fast; a devopsy it calls skips it. A failure
+  stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
   devopsy's own `--shell`, locally and on servers.
 - **sync:** hooks into a sync (Parent environments and syncs), and the
@@ -1166,7 +1173,8 @@ lists them with their contracts):
   - `prepare parent|child` runs on each side, in its current release,
     before anything is stopped there: the child's under its release lock,
     before the parent's side starts; the parent's under a shared hold of
-    its lock. A failure aborts the sync (`finish abort` runs).
+    its lock, and only when there is something to copy. A failure aborts
+    the sync (`finish abort` runs).
   - `export <service>` writes a `stream` service's data to stdout: on the
     parent's server, once its `stop=true` services are stopped and the
     rsync is done, once per `stream` service in `depends_on` order; and
@@ -1177,23 +1185,24 @@ lists them with their contracts):
   - `import <service>` reads that data from stdin, complete: on the
     child's server, its service brought up first (`up -d --wait`) unless
     stopped; and `devopsy --import`.
-  - `finish parent|child go|abort|partial` runs on each side once the
-    sync ended. The parent's gets `go` or `abort`: its data is never
-    written, and its stopped services are back. The child's says what
-    the copy did to its data: `go`, complete; `abort`, nothing of the
-    parent's written; `partial`, written in part (Logs and failures,
-    above). After `go` and `abort` devopsy has started its stopped
-    services and waited for them to be healthy; after `partial` they
-    stay down, and the hook must not start them. On the child after
-    `go` it is where a copy of production is sanitized (emails and
-    passwords scrubbed, a login set for a child that had none:
-    devopsy-template-drupal11's); then the release's `run` step runs. A
-    failing `finish child go` fails the sync, and nothing runs on the
-    child's data until a sync completes: the hook decides what stays
-    up (drupal11's stops the app). On a child's first release nothing
-    of it existed, so devopsy creates every labeled service first (`up
-    -d --wait`), as the run step's `up` would a moment later: the hook
-    finds them running either way.
+  - `finish parent|child go|abort|partial` runs on each side once the sync
+    ended. The parent's gets `go` or `abort`: its data is never written,
+    and its stopped services are back. The child's says what the copy did
+    to its data: `go`, complete; `abort`, nothing of the parent's written;
+    `partial`, written in part (Logs and failures, above). After `go` and
+    `abort` devopsy has started its stopped services and waited for them
+    to be healthy; after `partial` they stay down, and the hook must not
+    start them. On the child after `go` it is where a copy of production
+    is sanitized (emails and passwords scrubbed, a login set for a child
+    that had none: devopsy-template-drupal11's); then the release's `run`
+    step runs. A failing `finish child go` fails the sync, and nothing
+    runs on the child's data until a sync completes: the hook decides what
+    stays up (drupal11's stops the app). On a child's first release
+    nothing of it existed, so devopsy creates every labeled service first
+    (`up -d --wait`), as the run step's `up` would a moment later: the
+    hook finds them running either way. `finish child partial` also runs
+    outside a sync, when a child's side was killed before deciding: in the
+    next sync, release or rollback of it.
   - Every action gets its side's services by label, space separated:
     `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM` (in `depends_on` order)
     and `DEVOPSY_SYNC_STOP` (a stopped `stream` service is in both); in a
