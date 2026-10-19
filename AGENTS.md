@@ -147,113 +147,106 @@ conflicts with one is a design question for the user, not a detail.
 
 ## Conventions
 
-How the code is written; the principles above say what it is for.
+How the code is written; the principles above say what it is for. Each:
+the rule, why, and where it lives.
 
-- **Output:** stdout is the result (compose's output, `--env`, `--vars
-  get`, `--context-hash`, `--export`), stderr is everything devopsy
-  says: progress, notices and errors, the server scripts' `echo` lines
-  included (`>&2`), so pipes stay clean and the two never interleave
-  out of order. Anything that can contain arguments or scripts goes
-  through `cli.Secrets`. Scripts show at `-vv` only: a session's, and
-  an argument of several lines in the "Running" notice
-  (`Plan.running`), which otherwise only counts its lines.
-- **Failures and warnings** with something to add go through
-  `internal/report`: `report.Fail` (`[error] <message>`, red) or
-  `report.Warn` (`[warning] <message>`, yellow), then why it happens,
-  one detail per line, then "To fix it:" and the fix, or "To fix it, do
-  one of these:" and each numbered, a fix's commands on their own
-  lines; plain, never wrapped or indented, so a command copies whole.
-  The message reads as a sentence ("dev's parent, prod, has no
-  server"). `report.Error` carries details and fixes through wrapping;
-  a command adds the fixes only it knows. Used so far for a parent
-  without a server, a local `--release` without steps, `--releases
-  remove` and `--destroy`'s leftovers: other messages move over as
-  they are touched. Hints with an address use the alias as typed, else
-  the resolved address (`targetRef`, `hintAddress` in scripts), so the
-  command works when copied (an alias with `source:` releases only
-  from its checkout).
+- **stdout is the result, stderr is devopsy talking.** The result:
+  compose's output, `--env`, `--vars get`, `--context-hash`, `--export`;
+  everything else (progress, notices, errors, the server scripts' `echo`
+  lines, `>&2`) on stderr. Why: pipes stay clean, and the two never
+  interleave out of order. Scripts show only at `-vv`: a session's, and
+  an argument of several lines in the "Running" notice, which otherwise
+  counts its lines (`Plan.running`).
+- **Failures and warnings say why and how to fix it** (`internal/report`):
+  `report.Fail` (`[error] <message>`, red) or `report.Warn` (`[warning]
+  <message>`, yellow), then why, one detail per line, then "To fix it:"
+  and the fix, or "To fix it, do one of these:" and each numbered; a
+  fix's commands on their own lines, never wrapped or indented. The
+  message reads as a sentence ("dev's parent, prod, has no server").
+  Why: the fix is a command to copy, whole. `report.Error` carries
+  details and fixes through wrapping; a command adds the fixes only it
+  knows. Used so far for a parent without a server, a local `--release`
+  without steps, `--releases remove` and `--destroy`'s leftovers: other
+  messages move over as they are touched.
+- **Hints name the address as typed** (the alias, else the resolved
+  address: `targetRef`, `hintAddress` in scripts). Why: the command
+  works when copied, and an alias with `source:` releases only from its
+  checkout.
 - **Words are never built-ins.** devopsy's features are flags or
   `@target`; a word is a project command, else a compose command
   (`ComposeCommands`: compose's own completion, cached, refreshed when
-  a word is missing), else an error. The bare help says so in a line
-  and stays devopsy's own: compose's help is `devopsy -- --help` and
-  `devopsy <command> --help`, captured with `docker compose` read as
-  `devopsy`, no notice. Arguments starting with a flag go to compose
-  unchecked (`--profile x up`), except a flag alone: compose's flags
-  never stand alone, so a lone flag devopsy does not know is an error
-  with the nearest flag as a hint (`cli.LoneUnknownFlag`, in `Build`
-  and in `runRemote` before any connection); `--` is the escape hatch.
-  Flags that need a target say so without one.
-- **`cli.Flags` is every flag of devopsy's,** by task group, each with
-  its scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: the
-  help's list, completion's (`LocalFlags`, `RemoteFlags`), `RemoteOnly`
-  and `ServerScope` all come from it, so a new flag is one entry there
-  (one that differs locally and on a server, like `--upgrade`, has one
-  per scope). Lines fit 80 columns (`TestUsage`).
-- **Two scopes:** a flag in `cli.ServerScope` (`--shell-host`,
-  `--ssh-keys`, `--ssh-config`, `--environments`, `--vars-project`,
-  `--upgrade`) needs only a server and resolves with
-  `remote.ServerTarget`: `@<server>:` alone, a bare name that is no
-  environment (exact or pattern) or alias, or any target leniently (no
-  instance needed, a server is). A server named alone has no `Name`.
-  Every other flag needs an environment, and `@<server>:` with one says
-  so.
-- **Project commands say where they run** (`## Run: local|target`,
-  `## Needs: target|server`, `cli.CommandRun`): help's prefix, the
-  completion's filter (`CommandOffered`), and `CheckCommand` in
-  `Build`, in `runRemote` before connecting (an older server's devopsy
-  would run a local one) and on release steps (`checkStepScopes`).
-  Where a command runs is decided by the directory, `cli.InRelease`
-  (`devopsy-target.env` beside its `code/`, `remote.ReleaseFile`),
-  never by a variable: a shell on the server or a plain `ssh` has
-  none, and a variable would reach every child. `Needs:` takes `Run:
-  local` (a server alone has no release to take a command from):
-  `runRemote` resolves the address (`needsServer`: as a server's), then
-  runs devopsy locally in the command's project (`runAddressed`) with
-  the address as typed in `DEVOPSY_INTERNAL_COMMAND_TARGET`, which
-  `Build` turns into `DEVOPSY_COMMAND_TARGET` for that command only, so
-  an outer command's address never reaches an inner one. Never the
-  target's variables: the command calls devopsy with the address.
+  a word is missing), else an error. Why: a project command or a new
+  compose command never clashes with devopsy. Arguments starting with a
+  flag go to compose unchecked (`--profile x up`), except a flag alone,
+  which compose never has: an unknown lone flag is an error with the
+  nearest flag as a hint (`cli.LoneUnknownFlag`, in `Build` and in
+  `runRemote` before any connection); `--` is the escape hatch. The bare
+  help is devopsy's own; compose's is `devopsy -- --help` and `devopsy
+  <command> --help` (captured, `docker compose` read as `devopsy`).
+- **Every flag is one entry in `cli.Flags`,** by task group, with its
+  scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description. Why: the
+  help, completion (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and
+  `ServerScope` all come from it, so they never disagree; a flag that
+  differs locally and on a server (`--upgrade`) has one entry per
+  scope. Lines fit 80 columns (`TestUsage`).
+- **A flag needs a server or an environment.** `cli.ServerScope`
+  (`--shell-host`, `--ssh-keys`, `--ssh-config`, `--environments`,
+  `--vars-project`, `--upgrade`) needs only a server
+  (`remote.ServerTarget`: `@<server>:` alone, a bare name that is no
+  environment or alias, or any target leniently); a server named alone
+  has no `Name`. Every other flag needs an environment, and says so
+  given `@<server>:`. Why: server tasks work before any project is
+  released there.
+- **Project commands say where they run** (`## Run: local|target`, `##
+  Needs: target|server`, `cli.CommandRun`), checked in `Build`, in
+  `runRemote` before connecting (an older server's devopsy would run a
+  local one) and on release steps (`checkStepScopes`); help and
+  completion show it. Where a command runs is decided by the directory
+  (`cli.InRelease`: `devopsy-target.env` beside its `code/`), never by
+  a variable. Why: a shell on the server or a plain `ssh` has none, and
+  a variable would reach every child. A `Needs:` command runs locally
+  (`Run: local`), in its project (`runAddressed`), with the address as
+  typed in `DEVOPSY_COMMAND_TARGET` for that command only (passed as
+  `DEVOPSY_INTERNAL_COMMAND_TARGET`), so an outer command's address
+  never reaches an inner one; never the target's variables: the command
+  calls devopsy with the address.
 - **Secrets are opt in:** `secrets:` in `config.yaml` (names, `*`
-  patterns, `path.Match`) is the only rule, whatever set the value. No
-  guessing from names (a regex did, and went), no "everything in
-  `.env`", no mask-everything fallback. `cli.Secrets`: `Value` for
-  listings (`--env`, `--vars`, `--debug env`: `***` whatever the
-  length, `--show` unmasks), `Mask` for messages (values of 8
+  patterns) is the only rule, whatever set the value. Why: guessing
+  from names (a regex did, and went) masked the wrong things and missed
+  others; no "everything in `.env`", no mask-everything fallback.
+  `cli.Secrets`: `Value` for listings (`--env`, `--vars`, `--debug
+  env`: `***`, `--show` unmasks), `Mask` for messages (values of 8
   characters or more). On a server the release's config decides;
-  `--vars` masks locally from the configs `VarsReadScript` sends (every
-  `current` under a level's directory, read with the lenient
-  `ConfigSecrets`) plus the checkout's. Secret-like names (`secretLike`)
-  only ask: `confirmUnnamedSecrets` before `--release`
-  (`ComposeVariables` and the target's `env:`, locally, no session:
-  names only in the server's files are left to `--vars set`) and
-  on `--vars set`, a prompt at a terminal, else a failure, `--yes`
-  included. `public:` lets a name through.
+  `--vars` masks locally from the configs `VarsReadScript` sends plus
+  the checkout's. Secret-like names (`secretLike`) only ask: before
+  `--release` (`confirmUnnamedSecrets`, locally, no session: names only
+  in the server's files are left to `--vars set`) and on `--vars set`;
+  a prompt at a terminal, else a failure, `--yes` included. `public:`
+  lets a name through.
 - **`@<target> <subcommand> --help` only prints help**
-  (`cli.RemoteCommandHelp`, an entry per subcommand) and resolves the
-  target leniently (`DescribeTarget`), so it never needs a server.
-- Few dependencies, standard library first. Linux and macOS only.
-- **Color** only on a terminal and without `NO_COLOR` (`styleFor`), or
-  forced (`cli.ColorForced`: `FORCE_COLOR`, not `0` or `false`, or the
-  internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`: in a
-  session it would reach every tool there, which would then color what
-  scripts capture. A session's lines are colored locally as they arrive
-  (`remote.Colorize`, line-buffered, terminal writers only): `devopsy:`
-  lines cyan, red when they report a failure, Compose's done steps
-  green and the steps on the way dim, errors red: coloring on the
-  server reaches nothing (plain progress, echoed lines). `remote.Color`
-  exports `DEVOPSY_INTERNAL_COLOR` into sessions for the little the
-  server colors itself. Release logs get the raw lines. Help is colored
-  by layout (headings end with `:`, entries start with two to seven
-  spaces, a scope `@t` magenta and `@s` yellow).
-- **A terminal on the server** is `remote.TTY`
-  (`DEVOPSY_INTERNAL_TTY='<cols> <rows>'`, exported into sessions when
-  stderr is a terminal, colors or not; 80x24 when its size is unknown):
-  sessions without a tty (activations and holders are all `-T`) run
-  steps, the fetch and the run step under `script` (util-linux, like
-  `flock`; `with_tty` in `basePrelude`, plain when `script` is missing
-  or stdout is a tty already), so BuildKit draws its live progress
-  through the pipe.
+  (`cli.RemoteCommandHelp`), resolving the target leniently
+  (`DescribeTarget`). Why: help never needs a server.
+- **Few dependencies, standard library first. Linux and macOS only.**
+- **Color only on a terminal** without `NO_COLOR` (`styleFor`), or
+  forced (`cli.ColorForced`: `FORCE_COLOR` not `0` or `false`, or the
+  internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
+  in a session it would reach every tool there, which would then color
+  what scripts capture. A session's lines are colored locally as they
+  arrive (`remote.Colorize`, line-buffered, terminal writers only),
+  since coloring on the server reaches nothing: `devopsy:` lines cyan,
+  red for a failure, Compose's done steps green, steps on the way dim,
+  errors red. `remote.Color` exports `DEVOPSY_INTERNAL_COLOR` for the
+  little the server colors itself. Release logs get the raw lines. Help
+  is colored by layout (headings end with `:`, entries start with two
+  to seven spaces, `@t` magenta, `@s` yellow).
+- **A pseudo-terminal on the server, never a `-t` session** for
+  activations and holders: `remote.TTY` (`DEVOPSY_INTERNAL_TTY='<cols>
+  <rows>'`, exported when stderr is a terminal; 80x24 when its size is
+  unknown) makes steps, the fetch and the run step run under `script`
+  (`with_tty` in `basePrelude`; plain when `script` is missing or stdout
+  is a tty already). Why: BuildKit draws its live progress and colors
+  through the pipe, while the session stays one path for a terminal and
+  CI (Sessions, drops and signals).
 
 ## Config and targets
 
