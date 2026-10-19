@@ -90,7 +90,7 @@ conflicts with one is a design question for the user, not a detail.
   and signals; From the switch on). A sync goes by what its copy wrote
   (Syncs). Why: a release is either the old one or the new one, never
   half, whatever happens to the operator. Cost: a stuck run step can
-  only be stopped on the server (`--cancel` is a deferred idea).
+  only be stopped on the server.
 - **Check everything before changing anything; leave every state
   visible and recoverable.** Preflights run before the upload, before
   a service stops, before the switch. What a cut-off session leaves is
@@ -1105,7 +1105,7 @@ under their `LogSection` time, never under a later anchor.
   Checked only at releases, never on a local `up` (a test proxy beside
   a main one is normal locally), and two releases claiming one role on
   different targets at once are not locked against each other
-  (accepted; pinning roles to their holders is an idea, not built).
+  (accepted).
 
 ## Other features
 
@@ -1180,8 +1180,7 @@ under their `LogSection` time, never under a later anchor.
   `ClearAllForwardings=yes`, since
   the user's `LocalForward` lines clash between sessions. Anything
   faster (connection sharing) is the user's SSH config, which
-  `--ssh-config` suggests and never writes; built-in sharing is an
-  idea, not built. Test fakes of ssh run their last argument.
+  `--ssh-config` suggests and never writes. Test fakes of ssh run their last argument.
 - **`--context-hash`** is a pure helper; devopsy builds nothing. Errors
   only ever go towards a new hash (a kept file costs a rebuild, a
   dropped one would reuse a stale image), hence Docker's own matcher
