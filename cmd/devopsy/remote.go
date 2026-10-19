@@ -742,7 +742,7 @@ func commandsDir(t *remote.Target, projectDir string) string {
 func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 	cmds := cli.CustomCommands(projectDir)
 	check := func(step string, onTarget bool) error {
-		args := remote.StepArgs(step)
+		args := stepCommand(remote.StepArgs(step))
 		if len(args) == 0 || !slices.Contains(cmds, args[0]) {
 			return nil
 		}
@@ -781,6 +781,15 @@ func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 	return nil
 }
 
+// stepCommand is a step's arguments from its command word on: past -v and
+// -vv, the only flags devopsy takes before one (main).
+func stepCommand(args []string) []string {
+	for len(args) > 0 && (args[0] == "-v" || args[0] == "-vv") {
+		args = args[1:]
+	}
+	return args
+}
+
 // runLocalStep runs `devopsy args...` in the local project, for a
 // release or rollback of t: with the target's env, a child's parent and,
 // for a release, DEVOPSY_RELEASE_COMMIT, over the caller's environment.
@@ -810,8 +819,8 @@ func runLocalStep(t *remote.Target, projectDir string, args []string, commit str
 		cmd.Env = append(cmd.Env, "DEVOPSY_RELEASE_COMMIT="+commit)
 	}
 	// A command that needs an address gets the target's.
-	if len(args) > 0 && slices.Contains(cli.CustomCommands(projectDir), args[0]) {
-		if run, err := cli.ReadCommandRun(filepath.Join(projectDir, "commands", args[0])); err == nil && run.Needs != "" {
+	if c := stepCommand(args); len(c) > 0 && slices.Contains(cli.CustomCommands(projectDir), c[0]) {
+		if run, err := cli.ReadCommandRun(filepath.Join(projectDir, "commands", c[0])); err == nil && run.Needs != "" {
 			cmd.Env = cli.CommandTargetEnviron(cmd.Env, t.Address)
 		}
 	}
