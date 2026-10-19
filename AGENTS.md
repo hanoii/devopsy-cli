@@ -241,12 +241,12 @@ function works, line by line, is in its comments: keep the detail there.
   wrong `image` fails the release. devopsy fetches the images itself,
   before the switch, so the run step only starts them: a build or pull
   there would run after the switch, and in a sync after the copy.
-- `--release` without a target (`runLocalRelease`) is a release in
-  place: `defaults:`' release steps (no environment is local),
-  prepare, `--missing-vars`, the images always as build mode, run; no
-  before or after steps, no switch. `--destroy` likewise
-  (`runLocalDestroy`): after the project's name, `runDestroyData` in
-  place; never the checkout. The other release flags stay target only.
+- `--release` without a target (`runLocalRelease`) is a release in place:
+  `defaults:`' release steps (no environment is local), prepare,
+  `--missing-vars`, the images always as build mode, run; no before or
+  after steps, no switch. `--destroy` likewise (`runLocalDestroy`): after
+  the project's name, `runDestroyData` in place, `defaults:`' destroy step
+  if any; never the checkout. The other release flags stay target only.
 
 ### Upload
 
@@ -284,11 +284,11 @@ function works, line by line, is in its comments: keep the detail there.
 4. Links into the release: `shared/*`, `inherit.env`, and the project's
    and instance's `.env` (`project.env`, `instance.env`), even when
    missing, so one created later applies.
-5. `--prepare-release` when the compose files use role or import labels
-   (`PrepareScript`); `--check-names "$base"`: containers of the same
-   compose project from another directory (`cli.ProjectConflict`:
-   `-`-joined names coincide, `a-b`/`c` and `a`/`b-c`), and a network
-   the project names as its own that another compose project owns
+5. Releases only: `--prepare-release` when the compose files use role or
+   import labels (`PrepareScript`); `--check-names "$base"`: containers of
+   the same compose project from another directory (`cli.ProjectConflict`:
+   `-`-joined names coincide, `a-b`/`c` and `a`/`b-c`), and a network the
+   project names as its own that another compose project owns
    (`cli.NetworkConflicts`: Compose would silently share it; external
    networks are how a project joins another's).
 6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`:
@@ -309,8 +309,10 @@ function works, line by line, is in its comments: keep the detail there.
     release stays live).
 
 A failure before the switch calls `not_live` (`NotLive`,
-`RollbackNotLive`): the release is marked failed, nothing live changes.
-No prompts: what is missing is listed with its `--vars set` line.
+`RollbackNotLive`): nothing live changes, and a release is marked failed.
+It never removes a directory: it once removed a failed first release's,
+and with it a second release uploaded behind it. No prompts: what is
+missing is listed with its `--vars set` line.
 
 ### Releases on disk
 
@@ -348,17 +350,19 @@ No prompts: what is missing is listed with its `--vars set` line.
 
 ### Locks
 
-- **The release lock** (`$base/.lock`, fd 9): every script that changes
-  an environment takes it (`releaseLock`, `lockWait`: `-n`, then a
-  "waiting for" line and `-w 600`, so a wait is never silent). The
-  upload too: `--destroy` never empties `$base` under an upload, and a
-  second release's upload waits for the first's activation. Only the
-  upload creates `$base`. A `.lock` removed while awaited is opened
-  again (`[ /dev/fd/9 -ef "$base/.lock" ]`, Linux only), or two
-  releases would hold locks on different files; `removeBase` moves
-  `$base` aside before `rm -rf`, so a session arriving meanwhile makes
-  a new one. A fetch's children inherit the lock, so a recovery never
-  races a fetch still running.
+- **The release lock** (`$base/.lock`, fd 9): every script that changes an
+  environment takes it (`releaseLock`, `lockWait`: `-n`, then a "waiting
+  for" line and `-w 600`, so a wait is never silent). The upload too:
+  `--destroy` never empties `$base` under an upload, and a second
+  release's upload waits for the first's activation. Among release scripts
+  only the upload creates `$base` (`--vars` edits and the inherit write do
+  too): an activation whose release went while it waited fails instead of
+  making it again. A `.lock` removed while awaited is opened again (`[
+  /dev/fd/9 -ef "$base/.lock" ]`, Linux only), or two releases would hold
+  locks on different files; `removeBase` moves `$base` aside before `rm
+  -rf`, so a session arriving meanwhile makes a new one. A fetch's
+  children inherit the lock, so a recovery never races a fetch still
+  running.
 - **The image lock** (`ImagesLock` in the release root, fd 8, always
   taken after fd 9): images are the whole server's. Shared for
   fetches, exclusive for removals, which also need Docker to answer,
@@ -387,15 +391,16 @@ action decides; these are the rules.
   image mode `pull`, which pulls buildable services with an `image:`
   too and fails on a missing tag. A rollback or a restart restores its
   bookmarks (`img restore`) and fetches only when it cannot.
-- **Bookmarks are the reference count:** each release tags, by image
-  id, every image it runs as `<repo>:devopsy-<compose name>-<id>`
-  (`bookmarkPrefix`: a long compose name is cut and hashed so the tag
-  fits Docker's 128; a repository named twice adds a checksum of the
-  ref). Digests too (`prune -f` would delete an unused image pulled by
-  digest), never restored. `devopsy-images` lists `ref<tab>image id`,
-  what a removal decides from even after a bookmark went. Docker shows
-  names short (`docker.io/library/nginx` is `nginx:latest`): every
-  comparison with a name Docker reports goes through `familiar`.
+- **Bookmarks are the reference count:** each release tags, by image id
+  (another fetch may move the name meanwhile), every image it runs as
+  `<repo>:devopsy-<compose name>-<id>` (`bookmarkPrefix`: a long compose
+  name is cut and hashed so the tag fits Docker's 128; a repository named
+  twice adds a checksum of the ref). Digests too (`prune -f` would delete
+  an unused image pulled by digest), never restored. `devopsy-images`
+  lists `ref<tab>image id`, what a removal decides from even after a
+  bookmark went. Docker shows names short (`docker.io/library/nginx` is
+  `nginx:latest`): every comparison with a name Docker reports goes
+  through `familiar`.
 - A release fetched again untags the bookmarks its new listing no
   longer makes and records the names it dropped for the next pruning:
   under the shared lock, beside other fetches, it never removes names.
@@ -457,22 +462,22 @@ action decides; these are the rules.
   off anywhere before is never rolled back to nor kept. `prelude`
   removes stale `releases/*.tmp` and `.devopsy-watch.*` under the lock.
 - **The watcher** (`watchSession`, hidden `--watch-session`,
-  `cmd/devopsy/watch.go`) reads the session's stdin in the background
-  once the release lock is held. When stdin ends it takes the armed
-  file (renamed to `.fired`) and sends SIGTERM to the script's group
-  (when the script or its login shell leads one, as under sshd; else
-  the script alone), so a fetch is undone at once through `fetch_sig`,
-  not at the next write, a build later. The script disarms it by
-  taking the file first (`mv` to `.off`) in `fetch_release`, under the
-  image lock, before its last `fetch_sig` check: one rename wins, so a
-  SIGTERM never lands past a switch. When the watcher won, nobody reads
-  the session, so the undo writes to `ServerLogFile` (a `cancel.<pid>`
-  part, which `--log` shows at the end): a write to a session whose
-  buffers are full would block with the lock held. A file, not a
-  signal, because a signal sent before the watcher could handle it
-  would kill it. Armed: releases, a release that syncs always (its
-  stdin is the answer's pipe); never a sync's holder, which a SIGTERM
-  would stop halfway through restoring.
+  `cmd/devopsy/watch.go`) reads the session's stdin in the background, in
+  an activation once the release lock is held (a holder's before it). When
+  stdin ends it takes the armed file (renamed to `.fired`) and sends
+  SIGTERM to the script's group (when the script or its login shell leads
+  one, as under sshd; else the script alone), so a fetch is undone at once
+  through `fetch_sig`, not at the next write, a build later. The script
+  disarms it by taking the file first (`mv` to `.off`) in `fetch_release`,
+  under the image lock, before its last `fetch_sig` check: one rename
+  wins, so a SIGTERM never lands past a switch. When the watcher won,
+  nobody reads the session, so the undo writes to `ServerLogFile` (a
+  `cancel.<pid>` part, which `--log` shows at the end): a write to a
+  session whose buffers are full would block with the lock held. A file,
+  not a signal, because a signal sent before the watcher could handle it
+  would kill it. Armed: releases, a release that syncs always (its stdin
+  is the answer's pipe); never a sync's holder, which a SIGTERM would stop
+  halfway through restoring.
 - **The heartbeat** (`internal/remote/heartbeat.go`): a connection that
   dies silently (a laptop asleep, a network gone) is seen by the server
   only when TCP gives up (measured: 16 minutes with writes pending,
@@ -500,34 +505,37 @@ action decides; these are the rules.
   sync's sessions; `Bounded` (`KeepAlive` plus `ConnectTimeout=30`) on
   a log's save, `--export` and `--import`, which otherwise waited
   minutes on a dead connection.
-- **Ctrl-C:** devopsy takes it (`session` in `runRemote`; ssh ignores
-  it). The first closes the pipe: before the switch the watcher
-  cancels the release and devopsy waits (saying so after 5 seconds: the
-  server takes the cancel once it holds the release lock); after it,
-  devopsy says the release goes on, and a second ends the session; the
-  log is saved either way. "After the switch" is `SSHStreams`' flag on
-  `SwitchMarker` (`WithSwitched`), never the release log, which stops
-  at its cap. During the upload (`signal.NotifyContext`) the progress
-  line goes and nothing changed.
+- **Ctrl-C:** devopsy takes it (`session` in `runRemote`; ssh ignores it).
+  The first closes the pipe: before the switch the watcher cancels the
+  release and devopsy waits (saying so after 5 seconds: the server takes
+  the cancel once it holds the release lock); after it, devopsy says the
+  release goes on, and a second ends the session; the log is saved either
+  way. "After the switch" is `SSHStreams`' flag on `SwitchMarker`
+  (`WithSwitched`), never the release log, which stops at its cap; a
+  switch already under way when the pipe closed goes on, said. During the
+  upload (`signal.NotifyContext`) the progress line goes and nothing
+  changed.
 - **An interrupted fetch:** a signal only sets `fetch_sig` (INT, TERM,
-  HUP); the fetch's child gets it too and fails, and the same path
-  undoes it under the image lock, with signals and PIPE ignored from
-  there on, so a second Ctrl-C or a gone session cannot stop the undo;
-  exit 130. For a shell killed outright, `FetchingFile` marks a new
-  release's fetch until a line says its images are ready, and `img
-  recover` (by every activation, `--destroy` and `--releases remove`,
-  after the lock) marks such a release failed, bookmarks its images and
-  restores current's names; until then it counts as failed. Rollbacks
-  never write the marker, which would mark a good release failed.
+  HUP); the fetch's child gets it too and fails, and the same path undoes
+  it under the image lock, with signals ignored from there on, so a second
+  Ctrl-C cannot stop the undo; exit 130. PIPE is ignored from the fetch
+  on: dash writes "Terminated" to the dead session. For a shell killed
+  outright, `FetchingFile` marks a new release's fetch until a line says
+  its images are ready, and `img recover` (by every activation,
+  `--destroy` and `--releases remove`, after the lock) marks such a
+  release failed, bookmarks its images and restores current's names; until
+  then it counts as failed. Rollbacks never write the marker, which would
+  mark a good release failed.
 - **From the end of a fetch that went through, INT, TERM and HUP are
   ignored** to the script's end: a trapped signal still kills the
   foreground child (the `ln` and `mv` of `make_current`), which `set -e`
-  turns into the script's end halfway through the switch. So nothing
-  stops a release after its switch, the run step included (decided:
-  stopping it restarted the previous release while `script`'s compose
-  ran on, two `up`s on one project). `script` reads its signals through
-  a signalfd, ignored ones too, so from there `with_tty` runs it under
-  `setsid -w` (`tty_detach`).
+  turns into the script's end halfway through the switch. So nothing stops
+  a release after its switch, the run step included (decided: stopping it
+  restarted the previous release while `script`'s compose ran on, two
+  `up`s on one project). `script` reads its signals through a signalfd,
+  ignored ones too, and exits 0 when signaled (a restart's `get_images`
+  took that for a fetch), so from there `with_tty` runs it under `setsid
+  -w` (`tty_detach`).
 - **255 is ssh's** for a connection that failed or was lost, and ssh
   passes a script's own status on, so activations and holders never
   exit 255 (`NoExit255`, `followOutput`'s trap: 254 instead; drush on a
@@ -541,25 +549,25 @@ action decides; these are the rules.
 
 ### From the switch on
 
-A release goes live, or fails and brings the previous one back,
-whatever happens to its session. Right after `make_current` (after the
-sync, in a release that syncs), `followOutput` sends the script's
-output to `ServerLogFile` (both streams, each activation's part after a
-`LogSection` line with its time and a tag) and a GNU `tail -f` copies
-it to the session, so a session gone kills only the tail, never the
-shell, compose mid-`up` or the switch back. `SwitchMarker`, printed
-just before, tells the operator's devopsy to stop logging the session
-and log `LogAnchor` there (`LineMarker` with `Cut`, on logged sessions
-only: others pass through untouched, a shell's typing and an export's
-data). Activations and holders print on one stream (`exec 1>&2`): on
-two pipes a line on stdout could reach the log after the marker and be
-cut. The tail ends half a second after the shell (an EXIT trap), or a
-second after a helper finds the shell gone without its trap: never
-`tail --pid`, which takes an unreaped zombie for alive. A release that
-syncs and a sync's holder follow from the run step: the sync has its
-own way through a drop, and the copy's lines reach the session's log
-through the push. Without GNU's `tail` (macOS, in tests) only the
-traps apply (`TestAfterSwitchSurvives` skips).
+A release goes live, or fails and brings the previous one back, whatever
+happens to its session. Right after `make_current` (after the sync, in a
+release that syncs), `followOutput` sends the script's output to
+`ServerLogFile` (the deploy user's alone, umask 077; both streams, each
+activation's part after a `LogSection` line with its time and a tag) and a
+GNU `tail -f` copies it to the session, so a session gone kills only the
+tail, never the shell, compose mid-`up` or the switch back.
+`SwitchMarker`, printed just before, tells the operator's devopsy to stop
+logging the session and log `LogAnchor` there (`LineMarker` with `Cut`, on
+logged sessions only: others pass through untouched, a shell's typing and
+an export's data). Activations and holders print on one stream (`exec
+1>&2`): on two pipes a line on stdout could reach the log after the marker
+and be cut. The tail ends half a second after the shell (an EXIT trap), or
+a second after a helper finds the shell gone without its trap: never `tail
+--pid`, which takes an unreaped zombie for alive. A release that syncs and
+a sync's holder follow from the run step: the sync has its own way through
+a drop, and the copy's lines reach the session's log through the push.
+Without GNU's `tail` (macOS, in tests) only the traps apply
+(`TestAfterSwitchSurvives` skips).
 
 ### Logs
 
@@ -577,19 +585,19 @@ Two per release, never overlapping, neither rewritten, pruned with it:
   its terminal.
 - The server's (`ServerLogFile`), raw, from each switch on.
 
-`--log` (`LogReadScript`) joins them for display (`joinLogs`): each
-server part after the session's anchor with its tag, cleaned the same
-way and indented; never by time (two machines' clocks, lines of the
-same second). Parts no anchor claims (an operator gone before saving)
-follow at the end under their `LogSection` time.
+`--log` (`LogReadScript`) joins them for display (`joinLogs`): each server
+part after the session's anchor with its tag, cleaned the same way and
+indented; never by time (two machines' clocks, lines of the same second).
+Parts no anchor claims (an operator gone before saving) follow at the end
+under their `LogSection` time, never under a later anchor.
 
 ### Data, destroying and removing
 
 - `.devopsy/mnt/` is devopsy's one data directory (README, "Data and
-  mounts"): never uploaded, `shared/mnt` created by the upload and
-  linked like every `shared/` entry. Its contents and their ownership
-  are the project's: only `--destroy` and an `--import` (its entries)
-  remove anything in it.
+  mounts"): never uploaded, `shared/mnt` created by the upload and linked
+  like every `shared/` entry. Its contents and their ownership are the
+  project's: only `--destroy`, an `--import` (its entries) and a sync into
+  a child remove anything in it.
 - `--destroy` (`DestroyScript`, both locks; asks for the target's name
   unless `--yes`): the hidden `--destroy-data` (`runDestroyData`) in
   `current`, else the newest release: the environment's `destroy:`
@@ -634,15 +642,15 @@ follow at the end under their `LogSection` time.
   the child. `DescribeTarget` resolves it leniently.
 - **When:** a child's first release (`CurrentExistsScript` prints
   `current` or `none`, then `incomplete` on a partial copy: one extra
-  session on every release of a child), `--release-sync` (any
-  release), never `--release-no-sync`, and `@<child> --sync`, which asks for the name
-  like `--destroy` and reruns `run`. `--from <address>` (`@` optional)
-  on `--release`, `--release-sync` and `--sync` copies from that
-  address instead of `ParentTarget`, `ParentErr` ignored: a child's
-  only, and on `--release` only a first one (a released child says to
-  use `--release-sync`); `--release-no-sync --from` is an error.
-  `failParent` lists the fixes: the variable, the same release with
-  `--from`, and a release without the data then `--sync --from`.
+  session on every release of a child), `--release-sync` (any release),
+  never `--release-no-sync`, and `@<child> --sync`, which asks for the
+  name like `--destroy` and reruns `run`. `--from <address>` (`@`
+  optional) on `--release`, `--release-sync` and `--sync` copies from that
+  address instead of `ParentTarget`, `ParentErr` ignored: a child's only,
+  and on `--release` only a first one (a released child says to use
+  `--release-sync`); `--release-no-sync --from` is an error. `failParent`
+  lists the fixes: the variable, the same release with `--from`, and a
+  release without the data then `--sync --from`.
 - **Preflight:** everything that can fail (`syncPreflight`: a run step,
   the parent released, across servers a local agent that has keys
   (`agentHasKeys`, `ssh-add -l`: `SSH_AUTH_SOCK` set is no agent) and a
@@ -835,31 +843,32 @@ follow at the end under their `LogSection` time.
 - **A clean environment:** on the same server the child's devopsy
   (`--sync-exec`) runs with `cleanEnv`: the machine's variables, the
   sync's own (addresses, arguments, id, watch, heartbeat, the pending
-  inherit file through `childInheritEnv`), `DEVOPSY_VERBOSE`, Docker's
-  and devopsy's settings, and the child's `COMPOSE_PROJECT_NAME`: the
-  caller's environment wins over a project's `.env`, so the parent's
-  secrets and project name would otherwise reach the child's commands.
-  Across servers `SyncExecScript` exports the same (`syncExecEnv`); the
-  login environment is clean.
+  inherit file through `childInheritEnv`), `DEVOPSY_VERBOSE`, Docker's and
+  devopsy's settings, and the child's `COMPOSE_PROJECT_NAME`: the caller's
+  environment wins over a project's `.env`, so the parent's secrets and
+  project name would otherwise reach the child's commands. Across servers
+  `SyncExecScript` exports the sync's own (`syncExecEnv`),
+  `DEVOPSY_VERBOSE` comes through the call, and the rest is the clean
+  login environment.
 - **SSH between servers:** through `DEVOPSY_SSH_COMMAND` too, with
-  `ChildSSH` on the parent's sessions to the child: `ForwardAgent=no`
-  (the operator's agent reaches the parent, never the child, whatever
-  the parent's ssh config says; the parent can use every key in it for
-  the session, which only the operator's agent limits: README),
-  `BatchMode=yes` (a refused key fails instead of prompting),
-  `ConnectTimeout=30` (an unreachable child fails before the TCP
-  timeout, the parent's services stopped meanwhile) and
-  `StrictHostKeyChecking=accept-new`. The rsync session (`-R` to the
-  parent's daemon, `--network host` on the child) passes
-  `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which
+  `ChildSSH` on the parent's sessions to the child: `ForwardAgent=no` (the
+  operator's agent reaches the parent, never the child, whatever the
+  parent's ssh config says; the parent can use every key in it for the
+  session, prod's included when a chain's middle environment is the
+  parent, which only the operator's agent limits: README), `BatchMode=yes`
+  (a refused key fails instead of prompting), `ConnectTimeout=30` (an
+  unreachable child fails before the TCP timeout, the parent's services
+  stopped meanwhile) and `StrictHostKeyChecking=accept-new`. The rsync
+  session (`-R` to the parent's daemon, `--network host` on the child)
+  passes `ExitOnForwardFailure=yes` and never `ClearAllForwardings`, which
   clears command-line forwardings too (`ssh_config(5)`); a taken port
   retries another (3 tries, 20000-60000). `--sync-exec`'s session and a
-  stream's `cat` keep `ClearAllForwardings`. All of a sync's sessions
-  pass `KeepAlive`: the holder is quiet for the whole copy. No agent on
-  the parent with `DEVOPSY_SYNC_TO` set means a `restrict`ed key or
-  sshd's `AllowAgentForwarding no`: say so. A `restrict`ed key also
-  refuses the `-R` (`port-forwarding`), which sshd reports like a taken
-  port: after the last try, say both.
+  stream's `cat` keep `ClearAllForwardings`. All of a sync's sessions pass
+  `KeepAlive`: the holder is quiet for the whole copy. No agent on the
+  parent with `DEVOPSY_SYNC_TO` set means a `restrict`ed key or sshd's
+  `AllowAgentForwarding no`: say so. A `restrict`ed key also refuses the
+  `-R` (`port-forwarding`), which sshd reports like a taken port: after
+  the last try, say both.
 - **Transport:** rsync always in `devopsy-util:<n>` (`UtilImage`, now
   `:1`; built on each host from `UtilDockerfile` when missing; GNU tar
   for `--export` and `--import` too), as root with `--numeric-ids`:
@@ -926,14 +935,14 @@ follow at the end under their `LogSection` time.
   The spool always goes.
 - On a target the server runs the same code: `ExportScript` (shared
   release lock and exclusive `.sync-lock`, like the push: both stop and
-  restore the same services; stdout through as it is, never
-  `Colorize`d) and `ImportScript` (exclusive lock, `devopsy --import
-  <service> --yes`). The local side asks for the environment's name on
-  `/dev/tty` (`confirmImport`: stdin is the data), then sends stdin
-  and, only after a clean EOF, an end line with a random nonce
-  (`ImportEndEnv`): a session cut halfway reaches the server as a plain
-  EOF, so the server requires the line and takes it off. A pipe from a
-  failed export still looks complete: README says to go through a file
+  restore the same services; stdout through as it is, never `Colorize`d)
+  and `ImportScript` (exclusive lock, `devopsy --import <service> --yes`).
+  The local side asks for the environment's name on `/dev/tty`
+  (`confirmImport`: stdin is the data; no terminal and no `--yes` fails),
+  then sends stdin and, only after a clean EOF, an end line with a random
+  nonce (`ImportEndEnv`): a session cut halfway reaches the server as a
+  plain EOF, so the server requires the line and takes it off. A pipe from
+  a failed export still looks complete: README says to go through a file
   for what matters.
 
 ## Roles, exports and imports

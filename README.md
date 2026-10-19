@@ -536,22 +536,22 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
   `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
   Without steps, devopsy prints a starting point.
-- **The variables check:** after `prepare`, devopsy checks that every
-  variable compose requires (`${VAR:?message}`) is set there, env capability
-  included. A missing one fails the release before it goes live, listing the
-  variables and the `--vars set` line. Generate secrets in `prepare` so the
-  check finds them, and name them in `secrets:`.
 - **The names check:** containers of the release's compose project from
-  another environment's directory fail the release before it goes live.
+  another environment's directory fail the release before `prepare`.
   Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
   `b-c` are both `<project>-a-b-c`, and Compose would take the other's
   containers and volumes as its own. Rename an instance or environment.
 - **The networks check:** a network the compose file names as its own
   (not `external`) that belongs to another compose project on the server
-  fails the release before it goes live: Compose would silently share it,
+  fails the release before `prepare`: Compose would silently share it,
   and the two projects' containers would reach each other by service
   name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
   another project, join its network as `external`.
+- **The variables check:** after `prepare`, devopsy checks that every
+  variable compose requires (`${VAR:?message}`) is set there, env capability
+  included. A missing one fails the release before it goes live, listing the
+  variables and the `--vars set` line. Generate secrets in `prepare` so the
+  check finds them, and name them in `secrets:`.
 - **Images:** after the checks, devopsy gets the release's images, by
   `mode:`, on the server and before it goes live: in build mode `docker
   compose pull --ignore-buildable` (services without a `build:`) then
@@ -631,21 +631,21 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   An image no other release still tags, of any environment, instance or
   project on the server, also loses the names that release ran that still
   point to it (`mariadb:11.8.9`, `registry/app:<commit>`), so Docker
-  deletes it; then `docker image prune -f` removes what that left
-  dangling (server-wide: an untagged image built by hand goes too). Kept
-  releases, the ones a rollback goes to, keep theirs, and a name that
-  moved on to a newer image stays. Docker refuses a name a container
-  uses, even a stopped one (a `run` without `--rm`, a service dropped
-  from the compose file): it stays, recorded in the project's directory
+  deletes it; then `docker image prune -f` removes what that left dangling
+  (server-wide: an untagged image built by hand goes too). Kept releases,
+  the ones a rollback goes to, keep theirs, and a name that moved on to a
+  newer image stays. Docker refuses a name a container uses, even a
+  stopped one (a `run` without `--rm`, a service dropped from the compose
+  file): it stays, recorded in the project's directory
   (`.devopsy-images-left`), which `--releases` lists, and every later
-  pruning, `--releases remove` or `--destroy` of the same project
-  retries it, so it goes once its container does. A name another
-  project's compose file uses, with no container and no release of its
-  own holding it, goes too; that project pulls it again. Images are the
-  server's, so removing them needs the server's image lock alone, while
-  fetches share it: pruning never waits for it, and when another
-  release holds it (devopsy names it and since when), skips this time,
-  releases and images, and the next release prunes them.
+  pruning, `--releases remove` or `--destroy` of the same project retries
+  it, so it goes once its container does. A name another project's compose
+  file uses, with no container and no release of its own holding it, goes
+  too; that project pulls it again. Images are the server's, so removing
+  them needs the server's image lock alone, while fetches share it:
+  pruning never waits for it, and when another release holds it (devopsy
+  names it and for how long), skips this time, releases and images, and
+  the next release prunes them.
 - **Removing releases by hand:** `--releases remove <id>...` takes
   releases away as pruning does, images included; an id can be its start,
   and `failed` is every release that never went live (one cut off before
@@ -997,8 +997,9 @@ mid-sync (killed, connection lost, or silent: the parent's side gives up
 after 30 seconds without devopsy's heartbeat, the child's after 90), each
 side finishes on its own and writes what happened to
 `<environment>/.devopsy-sync.log` on its server; a child's side killed
-before deciding is decided by the next sync, release or rollback of it,
-counting it as not completed. Restoring means what the sync stopped
+before deciding is decided by the next sync, release that syncs or
+rollback of it, counting it as not completed (a release that does not sync
+is refused). Restoring means what the sync stopped
 (`<environment>/.devopsy-sync.services` meanwhile): a service that was
 down before it, stopped for maintenance, stays down. Only
 `devopsy.sync.stop=true` services are kept off partial data: a service
@@ -1202,7 +1203,7 @@ lists them with their contracts):
     (`up -d --wait`), as the run step's `up` would a moment later: the
     hook finds them running either way. `finish child partial` also runs
     outside a sync, when a child's side was killed before deciding: in the
-    next sync, release or rollback of it.
+    next sync, release that syncs or rollback of it.
   - Every action gets its side's services by label, space separated:
     `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM` (in `depends_on` order)
     and `DEVOPSY_SYNC_STOP` (a stopped `stream` service is in both); in a
