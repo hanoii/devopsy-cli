@@ -62,8 +62,7 @@ conflicts with one is a design question for the user, not a detail.
   its things by that name alone, with no registry of environments. The
   `-` join can collide (`a-b` + `c`, `a` + `b-c`): `--check-names`
   refuses then (Activation). Cost: renaming any of the three is a new,
-  empty environment; moving the old one is by hand (done once,
-  Traefik's `main` to `prod`, devopsy-traefik's AGENTS.md).
+  empty environment; moving the old one is by hand.
 - **Deployment facts belong to targets, never to a project's config:**
   servers (`server:` is an error) and instance names come from the
   address, variables or aliases (Config and targets); a server's own
