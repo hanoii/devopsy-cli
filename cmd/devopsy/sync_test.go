@@ -2005,11 +2005,12 @@ func TestSyncSettle(t *testing.T) {
 	}
 	dev, prod := filepath.Join(s.root, "shop", "dev"), filepath.Join(s.root, "shop", "prod")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
+	write(t, filepath.Join(dev, remote.SyncOpenFile), "devopsy@one:prod 1.2\n", 0o644)
 	next()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) || fileExists(filepath.Join(dev, remote.SyncOpenFile)) {
 		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
 	}
 
@@ -2124,5 +2125,23 @@ func TestReadQuiet(t *testing.T) {
 	silent, err = readQuiet(strings.NewReader("c"), 0, func([]byte) error { return nil })
 	if silent || err != nil {
 		t.Errorf("an end: %v %v", silent, err)
+	}
+}
+
+// A first release whose sync aborted before writing anything does not go
+// live: its services are not created on the child's empty data.
+func TestSyncFirstAbortCreatesNothing(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-dev", "FAKE_ABSENT='app db'\n", 0o644)
+	defer os.Remove(s.log + ".shop-dev")
+	s.logs()
+	out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--release")
+	docker, _ := s.logs()
+	if code == 0 || s.current("dev") != "" || !strings.Contains(out, "before writing anything") {
+		t.Fatalf("an aborted first sync (%d), current %q:\n%s", code, s.current("dev"), out)
+	}
+	if strings.Contains(out, "devopsy: creating") || strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait") {
+		t.Errorf("services created on an aborted first release:\n%s\n%s", out, docker)
 	}
 }
