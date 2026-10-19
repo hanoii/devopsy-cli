@@ -286,8 +286,14 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		say(yellow, "devopsy: @"+job.child.Address+" may hold a partial copy now: devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
 		return 1
 	}
+	if res.code == sshLost {
+		say(yellow, "devopsy: the connection to @"+job.child.Address+" was lost: the server finishes the sync as far as its copy went (devopsy @"+targetRef(job.child)+" --status says how it ended)")
+	}
 	return res.code
 }
+
+// sshLost is ssh's exit code when the connection failed or was lost.
+const sshLost = 255
 
 // runPush is the push session: devopsy --sync-push on the parent's
 // server, into the child's directory base. Across servers it forwards the
@@ -863,6 +869,13 @@ func runSyncPush(cwd string, color bool) int {
 	}
 	if err := runSyncHook(ctx, cwd, projectDir, env, nil, nil, "prepare", "parent"); err != nil {
 		return finish(fail("the sync capability's prepare parent: " + err.Error()))
+	}
+	// On the same server, a child that decided already (its gate closed)
+	// is seen before anything stops here: the claim would refuse later.
+	if os.Getenv(remote.SyncToEnv) == "" {
+		if base := os.Getenv(remote.SyncToBaseEnv); !fileExists(filepath.Join(base, remote.SyncOpenFile)) && !fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+			return finish(fail("the child's side ended already (" + base + "): nothing copied"))
+		}
 	}
 	if err := stopServices(cwd, services); err != nil {
 		// What it stopped before failing comes back: restoring reads the

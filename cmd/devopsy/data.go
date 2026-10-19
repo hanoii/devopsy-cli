@@ -102,9 +102,16 @@ func dockerRunIO(ctx context.Context, name string, stdin io.Reader, stdout io.Wr
 	if stdout == nil {
 		cmd.Stdout = errOut
 	}
+	// The client first: one stuck writing to a dead session's full pipe
+	// keeps dockerd from finishing the attach, and rm -f waits on it
+	// (seen: an export's container "removing" for minutes, the
+	// services it stopped down meanwhile).
 	cmd.Cancel = func() error {
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-		return cmd.Process.Kill()
+		err := cmd.Process.Kill()
+		rm, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = exec.CommandContext(rm, "docker", "rm", "-f", name).Run()
+		return err
 	}
 	cmd.WaitDelay = 5 * time.Second
 	return cmd.Run()
@@ -294,9 +301,16 @@ func tarEntries(ctx context.Context, spool string) ([]string, error) {
 	trace(append([]string{"docker"}, full...))
 	cmd := exec.CommandContext(ctx, "docker", full...)
 	cmd.Stdin, cmd.Stderr = f, errOut
+	// The client first: one stuck writing to a dead session's full pipe
+	// keeps dockerd from finishing the attach, and rm -f waits on it
+	// (seen: an export's container "removing" for minutes, the
+	// services it stopped down meanwhile).
 	cmd.Cancel = func() error {
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-		return cmd.Process.Kill()
+		err := cmd.Process.Kill()
+		rm, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = exec.CommandContext(rm, "docker", "rm", "-f", name).Run()
+		return err
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
