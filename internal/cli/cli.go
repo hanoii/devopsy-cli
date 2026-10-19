@@ -503,8 +503,9 @@ its own config on the server (its rollback:, else its release:).
 
 Each step is a devopsy command line, split on spaces. The remote steps
 share one SSH session, under the release lock: hence local before steps
-first and local after steps last. Local steps get the target's env,
-DEVOPSY_TARGET and DEVOPSY_RELEASE_COMMIT, never the server's shared/.env.
+first and local after steps last. Local steps get the target's env and
+DEVOPSY_RELEASE_COMMIT, never the server's shared/.env, and never
+DEVOPSY_TARGET: a command that needs the address says ## Needs: target.
 Remote before steps run in the current release, so they use its commands;
 none run on a first release.
 
