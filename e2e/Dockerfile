@@ -15,5 +15,8 @@ RUN apt-get update -q \
  && useradd -m -s /bin/sh -G docker devopsy \
  && install -d -m 700 -o devopsy -g devopsy /home/devopsy/.ssh \
  && mkdir -p /run/sshd
+# devopsy-server's: /24 address pools, without which the suite's
+# environments, left running, take Docker's 30 or so networks.
+COPY daemon.json /etc/docker/daemon.json
 COPY entrypoint /usr/local/bin/entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
