@@ -10,6 +10,114 @@ This file holds the rules, the decisions with their reasons, and the
 findings a later session must not have to rediscover. How a script or a
 function works, line by line, is in its comments: keep the detail there.
 
+## Principles
+
+The few rules that shape every design. Each says what, why, what it
+costs (accepted: do not "fix" it) and where it lives. A change that
+conflicts with one is a design question for the user, not a detail.
+
+- **Compose plus environment variables.** devopsy never generates or
+  rewrites compose files; everything it computes shows in `devopsy
+  --env`. Why: a project stays a plain compose project anyone can read
+  and run, and devopsy adds no format of its own to learn or debug.
+  Cost: what compose cannot express through variables or labels is a
+  project's command or capability, never devopsy's. If a feature needs
+  to change compose files, it is the wrong feature.
+- **Nothing is frozen before 1.0.0.** One person uses devopsy and runs
+  every server, so anything may change when the change makes it better
+  in the long run, the basics included (project discovery, `.env`
+  loading with compose's parser and the caller's environment winning,
+  `commands/` with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`,
+  the recursion guard, everything else passed to compose). Propose such
+  changes rather than work around a design. No migration code: older
+  files and syntax just stop working, with an error that says what to
+  do; a breaking change is marked (`feat!`, `fix!`); a protocol bump
+  (`remote.Protocol`) means upgrading the servers. A 1.0.0 is when
+  this gets a compatibility promise.
+- **devopsy replaces itself with what it runs** (`syscall.Exec`). Why:
+  signals, the terminal and exit codes belong to that command, so
+  `devopsy up` behaves as `docker compose up` does, Ctrl-C included.
+  Cost: nothing runs after the command (no cleanup, no notice): what
+  must happen after is a detached helper (`--upgrade-check`) or a
+  server script.
+- **Push over SSH, never pull.** A release is a tar stream over `ssh`
+  from wherever devopsy runs (a laptop, CI); the server needs Docker,
+  util-linux and devopsy, never access to the repository, and nothing
+  listens. Why: no control plane, no daemon, no webhooks, no deploy
+  keys; one command from anywhere. Cost: a release needs the operator
+  until its switch (Sessions, drops and signals), and syncs across
+  servers only work through the operator's forwarded agent.
+- **Names come only from project, instance and environment:** compose
+  name `<project>[-<instance>]-<environment>` (`Target.ComposeName`),
+  directory `<project>/[<instance>/]<environment>` under the server's
+  release root (`releases: root`), nothing else: not a `path:` key
+  (there was one, it went), not compose's `name:` (overridden through
+  `COMPOSE_PROJECT_NAME`, `devopsy-target.env`), not the checkout's
+  folder (`project:` is required for anything remote), not the local
+  shell's `COMPOSE_PROJECT_NAME` ("Nothing of the local environment
+  goes to a server", Releases on disk). Why: the same target lands in
+  the same place from any laptop or CI, two environments never share
+  containers, volumes, networks or a URL, and everything per
+  environment (syncs, images' bookmarks, `--destroy`, `--status`) finds
+  its things by that name alone, with no registry of environments. The
+  `-` join can collide (`a-b` + `c`, `a` + `b-c`): `--check-names`
+  refuses then (Activation). Cost: renaming any of the three is a new,
+  empty environment; moving the old one is by hand (done once,
+  Traefik's `main` to `prod`, devopsy-traefik's AGENTS.md).
+- **Deployment facts belong to targets, never to a project's config:**
+  servers (`server:` is an error) and instance names come from the
+  address, variables or aliases (Config and targets); a server's own
+  settings (`releases:`) are its deploy user's (Release settings), and
+  there is no server-wide variable layer (`/etc/devopsy/devopsy.env`
+  went, and a file the proxy's release would write was rejected): what
+  a server knows is its targets' (`--vars`) or an export of the project
+  that owns it (Roles, exports and imports). Why: one checkout releases
+  to any server, and nothing hidden on a host changes what a project
+  sees. Cost: CI and laptops name the server (`DEVOPSY_SERVER`, the
+  address).
+- **What is deployed decides on the server.** A rollback's and a
+  restart's steps come from the release's own config there (Steps), the
+  rules for images run as the server's devopsy (`--images`, Images),
+  and a protocol number makes an older server refuse before anything
+  changes (`Protocol`). Why: a laptop's checkout may be another branch
+  or another version; the server's state is the truth. Cost: every
+  server's devopsy must keep up (`devopsy @<server> --upgrade`).
+- **Before the switch anything cancels; after it nothing interrupts.**
+  A drop, a Ctrl-C, a failure or a silence before `make_current`
+  cancels the release and nothing live changes (`not_live`, the
+  watcher, the heartbeat); from the switch on the release finishes, or
+  fails and brings the previous one back, on its own (Sessions, drops
+  and signals; From the switch on). A sync goes by what its copy wrote
+  (Syncs). Why: a release is either the old one or the new one, never
+  half, whatever happens to the operator. Cost: a stuck run step can
+  only be stopped on the server (`--cancel` is a deferred idea).
+- **Check everything before changing anything; leave every state
+  visible and recoverable.** Preflights run before the upload, before
+  a service stops, before the switch. What a cut-off session leaves is
+  marked (pending, fetching, failed, the partial-sync mark), shown
+  (`--releases`, `--status`) and settled by whatever takes the lock
+  next; removals resume where they were cut. Why: the operator's
+  connection, a laptop or CI can vanish at any point, and a server must
+  never need someone to log in and guess. Cost: marker files and the
+  code that reads them.
+- **The server never waits on the operator for long.** A session's end,
+  clean or silent, is noticed within seconds (`--watch-session`, the
+  heartbeat: 30 s, 90 s for a sync's holder, 2 min for data), so a dead
+  session never holds a lock or keeps a service down; lock waits are
+  announced and bounded (`lockWait`). Cost: an operator frozen past the
+  quiet time (a laptop asleep, Ctrl-Z) cancels, cleanly.
+- **Projects own policy; devopsy owns mechanics.** devopsy knows no
+  URL, proxy or application: projects compute hosts (the `env`
+  capability), sanitize copies (`finish`), hold visitors during a
+  deploy, and put project-specific behavior in `.devopsy/commands/`.
+  Small per-project choices are compose labels (`devopsy.shell`,
+  roles, `devopsy.sync`); capabilities are for behavior a label cannot
+  express, and a new one only when a second use needs it. Why: devopsy
+  stays small and every project can differ. Cost: templates carry the
+  conventions (devopsy-template-*), and devopsy only reports facts to
+  them (the `finish` word, exports). `--shell-host` is never
+  overridable: the way in when a project is broken.
+
 ## Layout
 
 - `cmd/devopsy/`: `main`, which executes what `internal/cli` plans, the
@@ -28,7 +136,7 @@ function works, line by line, is in its comments: keep the detail there.
   -n` in tests; GNU coreutils, `mv -T`).
 - `internal/images/`: the rules for releases' images on a server, behind
   a `Docker` interface, run there as the hidden `--images`.
-- `internal/report/`: failures and warnings (Rules, "Failures and
+- `internal/report/`: failures and warnings (Conventions, "Failures and
   warnings").
 - `internal/complete/`: completion candidates, and the bash, zsh and
   fish scripts (embedded).
@@ -37,25 +145,10 @@ function works, line by line, is in its comments: keep the detail there.
 - `install.sh` (POSIX `sh`, dash and busybox ash), `scripts/devopsy`
   (runs the checkout's code), `.goreleaser.yaml`, `.github/workflows/`.
 
-## Rules
+## Conventions
 
-- **Compose plus environment variables.** devopsy never generates or
-  rewrites compose files; everything it computes shows in `devopsy
-  --env`. If a feature needs to change compose files, it is the wrong
-  feature.
-- **Nothing is frozen before 1.0.0.** One person uses devopsy and runs
-  every server, so anything may change when the change makes it better
-  in the long run, the basics included: project discovery, `.env`
-  loading (compose's parser, caller's environment wins), commands in
-  `commands/` with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`, the
-  recursion guard, everything else passed to compose untouched.
-  Propose such changes rather than work around a design. No migration
-  code: older files and syntax just stop working, with an error that
-  says what to do, a breaking change is marked (`feat!`, `fix!`), and
-  a protocol bump means upgrading the servers. A 1.0.0 is when this
-  gets a compatibility promise.
-- devopsy replaces itself with what it runs (`syscall.Exec`): signals,
-  the terminal and exit codes belong to that command.
+How the code is written; the principles above say what it is for.
+
 - **Output:** stdout is the result (compose's output, `--env`, `--vars
   get`, `--context-hash`, `--export`), stderr is everything devopsy
   says: progress, notices and errors, the server scripts' `echo` lines
@@ -139,12 +232,6 @@ function works, line by line, is in its comments: keep the detail there.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`, an entry per subcommand) and resolves the
   target leniently (`DescribeTarget`), so it never needs a server.
-- **Small per-project choices are compose labels** (`devopsy.shell`,
-  `devopsy.shell.user`, roles); capabilities are for behavior a label
-  cannot express. `--shell-host` is never overridable: the way in when
-  a project is broken.
-- **Project-specific behavior** belongs in projects'
-  `.devopsy/commands/`.
 - Few dependencies, standard library first. Linux and macOS only.
 - **Color** only on a terminal and without `NO_COLOR` (`styleFor`), or
   forced (`cli.ColorForced`: `FORCE_COLOR`, not `0` or `false`, or the
@@ -180,14 +267,6 @@ function works, line by line, is in its comments: keep the detail there.
   `inherit` and `env`; `env` merges key by key, `KEY: ~` removes, `""`
   stays empty (hence parsing YAML nodes: `nullKeys`); `parent: ~` and
   `inherit: ~` remove theirs.
-- **Deployment facts never live in a project's config:** servers
-  (`server:` is an error) and instance names. They come from the
-  target, variables or aliases.
-- **No server-wide variable layer** (`/etc/devopsy/devopsy.env` went,
-  and a file the proxy's release would write was rejected: still a
-  global layer): what a server knows belongs to its targets (`--vars`),
-  or to the project that owns it, as an export (Roles, exports and
-  imports).
 - **A target is an address,** `@[<server>:][<instance>/]<environment>`
   (`parseAddress`): the server ends at the first `:`, the instance
   before the last `/`, empty meaning none. Missing parts come from
@@ -200,23 +279,6 @@ function works, line by line, is in its comments: keep the detail there.
   `<project>/<instance>/<env>` on a server, and `--environments` lists
   one layout. Explicit none (`@vm1:/prod`) only parses: it is the
   default.
-- **Names come only from project, instance and environment:** compose
-  name `<project>[-<instance>]-<environment>` (`Target.ComposeName`),
-  directory `<project>/[<instance>/]<environment>` under the server's
-  release root (`releases: root`), nothing else: not a `path:` key
-  (there was one, it went), not compose's `name:` (overridden through
-  `COMPOSE_PROJECT_NAME`, `devopsy-target.env`), not the checkout's
-  folder (`project:` is required for anything remote), not the local
-  shell's `COMPOSE_PROJECT_NAME` ("Nothing of the local environment
-  goes to a server", Releases on disk). Why: the same target lands in
-  the same place from any laptop or CI, two environments never share
-  containers, volumes, networks or a URL, and everything per
-  environment (syncs, images' bookmarks, `--destroy`, `--status`) finds
-  its things by that name alone, with no registry of environments. The
-  `-` join can collide (`a-b` + `c`, `a` + `b-c`): `--check-names`
-  refuses then (Activation). Cost, accepted: renaming any of the three
-  is a new, empty environment; moving the old one is by hand (done
-  once, Traefik's `main` to `prod`, devopsy-traefik's AGENTS.md).
 - **Patterns:** environment keys with `*` (one or more name
   characters); exact name, then most literal characters; a tie is an
   error.
