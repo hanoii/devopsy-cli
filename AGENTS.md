@@ -28,7 +28,8 @@ function works, line by line, is in its comments: keep the detail there.
   -n` in tests; GNU coreutils, `mv -T`).
 - `internal/images/`: the rules for releases' images on a server, behind
   a `Docker` interface, run there as the hidden `--images`.
-- `internal/report/`: failures and warnings (Rules, Output).
+- `internal/report/`: failures and warnings (Rules, "Failures and
+  warnings").
 - `internal/complete/`: completion candidates, and the bash, zsh and
   fish scripts (embedded).
 - `internal/probe/`, `internal/update/`: `--probe`, `--upgrade`.
@@ -126,7 +127,8 @@ function works, line by line, is in its comments: keep the detail there.
   `current` under a level's directory, read with the lenient
   `ConfigSecrets`) plus the checkout's. Secret-like names (`secretLike`)
   only ask: `confirmUnnamedSecrets` before `--release`
-  (`ComposeVariables` and the target's `env:`, locally, no session) and
+  (`ComposeVariables` and the target's `env:`, locally, no session:
+  names only in the server's files are left to `--vars set`) and
   on `--vars set`, a prompt at a terminal, else a failure, `--yes`
   included. `public:` lets a name through.
 - **`@<target> <subcommand> --help` only prints help**
@@ -146,7 +148,8 @@ function works, line by line, is in its comments: keep the detail there.
   scripts capture. A session's lines are colored locally as they arrive
   (`remote.Colorize`, line-buffered, terminal writers only): `devopsy:`
   lines cyan, red when they report a failure, Compose's done steps
-  green and the steps on the way dim, errors red. `remote.Color`
+  green and the steps on the way dim, errors red: coloring on the
+  server reaches nothing (plain progress, echoed lines). `remote.Color`
   exports `DEVOPSY_INTERNAL_COLOR` into sessions for the little the
   server colors itself. Release logs get the raw lines. Help is colored
   by layout (headings end with `:`, entries start with two to seven
@@ -223,7 +226,8 @@ function works, line by line, is in its comments: keep the detail there.
   remote steps share one SSH session, which holds the release lock, so
   before is local steps then remote ones, after is remote then local,
   checked when the config is read. Local steps get the target's env,
-  `DEVOPSY_TARGET` (the resolved address) and the commit, never the
+  `DEVOPSY_TARGET` (the resolved address), a child's `DEVOPSY_PARENT`
+  and `DEVOPSY_PARENT_TARGET` (`parentEnv`) and the commit, never the
   server's `.env`.
 - Remote commands run through the `current` symlink, never a release
   path: compose stores bind-mount paths in containers, and pruned
@@ -290,7 +294,8 @@ function works, line by line, is in its comments: keep the detail there.
    `-`-joined names coincide, `a-b`/`c` and `a`/`b-c`), and a network the
    project names as its own that another compose project owns
    (`cli.NetworkConflicts`: Compose would silently share it; external
-   networks are how a project joins another's).
+   networks are how a project joins another's; an unreadable config is
+  skipped, the up will say).
 6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`:
    compose's `${VAR:?}`/`${VAR?}` left unset, env capability included).
 7. The images (`fetch_release`). `ServerLogFile` is created before the
@@ -354,10 +359,11 @@ missing is listed with its `--vars set` line.
   environment takes it (`releaseLock`, `lockWait`: `-n`, then a "waiting
   for" line and `-w 600`, so a wait is never silent). The upload too:
   `--destroy` never empties `$base` under an upload, and a second
-  release's upload waits for the first's activation. Among release scripts
-  only the upload creates `$base` (`--vars` edits and the inherit write do
-  too): an activation whose release went while it waited fails instead of
-  making it again. A `.lock` removed while awaited is opened again (`[
+  release's upload waits for the first's activation. Of the release
+  scripts only the upload creates `$base`; outside them `--vars` edits
+  and the inherit write do too (`internal/remote/vars.go`): an
+  activation whose release went while it waited fails instead of making
+  it again. A `.lock` removed while awaited is opened again (`[
   /dev/fd/9 -ef "$base/.lock" ]`, Linux only), or two releases would hold
   locks on different files; `removeBase` moves `$base` aside before `rm
   -rf`, so a session arriving meanwhile makes a new one. A fetch's
@@ -405,8 +411,9 @@ action decides; these are the rules.
   longer makes and records the names it dropped for the next pruning:
   under the shared lock, beside other fetches, it never removes names.
 - **A restore never changes another environment:** a name whose current
-  image another compose project's container uses, or a bookmark none of
-  this environment's releases made holds (exact names: `app-prod`
+  image another compose project's container uses (`docker ps --filter
+  ancestor=`, checked on Docker 29's containerd store), or a bookmark
+  none of this environment's releases made holds (exact names: `app-prod`
   never matches `app-prod-eu`), stays on the newer image, said. A
   digest's bookmark must be there too, or the run step's `up` would
   pull after the switch.
@@ -419,9 +426,11 @@ action decides; these are the rules.
   repositories go (`mariadb:11` and `mariadb:11.4`); a name that moved
   on stays. Never `-f`: a refusal is recorded. Idempotent: one cut off
   anywhere is finished by the next. Docker failing (anything but a
-  missing image) stops it with exit 1 and the release stays
-  (`RemoveReleases` removes a directory only after its images);
-  `--destroy` then keeps everything and says to run it again.
+  missing image) stops it with exit 1 and the release stays, so the
+  next removal finds its listing again (`RemoveReleases` removes a
+  directory only after its images);
+  `--destroy` then keeps the directory (the data is already gone) and
+  says to run it again.
 - **The record** (`images.LeftFile`, `<release
   root>/<project>/.devopsy-images-left`) holds what could not go:
   `--releases` lists it, and `img prune` retries this project's lines
@@ -455,8 +464,8 @@ action decides; these are the rules.
   devopsy keeps open as stdin (`WatchEnv`); steps, the fetch and the
   run step get a pseudo-terminal from `with_tty`. One path for
   terminals and CI (decided): a `-t` session's hangup reached only the
-  shell, which dash signals only once its foreground command ends, so a
-  build ran on and compose then hung on the gone terminal.
+  shell, and dash runs a trap only once the command it waits for ends
+  (a build ran on, then compose hung on the gone terminal).
 - **Before the switch, a dropped session cancels.** A release is
   pending from its upload until right before `make_current`: one cut
   off anywhere before is never rolled back to nor kept. `prelude`
@@ -467,7 +476,9 @@ action decides; these are the rules.
   stdin ends it takes the armed file (renamed to `.fired`) and sends
   SIGTERM to the script's group (when the script or its login shell leads
   one, as under sshd; else the script alone), so a fetch is undone at once
-  through `fetch_sig`, not at the next write, a build later. The script
+  through `fetch_sig`, not at the next write, a build later (without a
+  watcher, as through OrbStack's own SSH, the fetch runs to its end and
+  the script dies at its next write). The script
   disarms it by taking the file first (`mv` to `.off`) in `fetch_release`,
   under the image lock, before its last `fetch_sig` check: one rename
   wins, so a SIGTERM never lands past a switch. When the watcher won,
@@ -475,9 +486,9 @@ action decides; these are the rules.
   `cancel.<pid>` part, which `--log` shows at the end): a write to a
   session whose buffers are full would block with the lock held. A file,
   not a signal, because a signal sent before the watcher could handle it
-  would kill it. Armed: releases, a release that syncs always (its stdin
-  is the answer's pipe); never a sync's holder, which a SIGTERM would stop
-  halfway through restoring.
+  would kill it. Armed: releases and rollbacks (`WatchEnv`), a release
+  that syncs always (its stdin is the answer's pipe); never a sync's
+  holder, which a SIGTERM would stop halfway through restoring.
 - **The heartbeat** (`internal/remote/heartbeat.go`): a connection that
   dies silently (a laptop asleep, a network gone) is seen by the server
   only when TCP gives up (measured: 16 minutes with writes pending,
@@ -760,7 +771,8 @@ under their `LogSection` time, never under a later anchor.
   keep it. A `.` entry (`./mnt` itself) subsumes the rest, other
   services' entries included: `--sync-push` says so (`SyncWholeNotice`,
   yellow when the operator's terminal takes colors, `ColorEnv` passed
-  with the push's variables). Nothing labeled, or nothing to copy (no
+  with the push's variables), only a notice: it never excludes by
+  itself. Nothing labeled, or nothing to copy (no
   entries, no streams): "nothing to sync", success, the parent's hooks
   skipped, and the run step still runs.
 - **The child guard:** each side reads its own labels. Before the
@@ -775,7 +787,7 @@ under their `LogSection` time, never under a later anchor.
   (the child reads the pending file, inherit below); one in the
   child's own `shared/.env` can still differ. The list's columns: the
   service, its label (`rsync`, `stream` or `skip`, with `+stop`), its
-  container's state (`none` without one).
+  container's state (`none` without one), its entries of `mnt`.
 - **Order, the child's side** (`--sync-services prepare`): `settle`,
   the state record, the import check, the `prepare child` hook, then
   one `compose stop` of its `stop=true` services (Compose orders them
@@ -817,8 +829,9 @@ under their `LogSection` time, never under a later anchor.
   containers drops it). Before the finish hook every labeled service is
   created in one `up -d --wait`, since the hook sanitizes through them
   (drupal11's needs the app: without it, prod's passwords reached a
-  child), and a stream imported then stays up. Never otherwise: a
-  missing service was removed on purpose.
+  child), and a stream imported then stays up. Only on go: an aborted
+  first sync creates nothing. Never otherwise: a missing service was
+  removed on purpose.
 - **Streams:** per `stream` service, in `depends_on` order over every
   service (`SyncStreamServices`: dependencies first, ties alphabetical,
   a cycle an error), the parent runs the capability's `export
@@ -1032,8 +1045,9 @@ under their `LogSection` time, never under a later anchor.
   ssh and cannot watch its output, and a server must not make a laptop
   act): proxies print the `--probe` line to run.
 - **SSH:** every session is `ssh [DEVOPSY_SSH_COMMAND's options]
-  [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` only
-  for a command at a terminal (a shell, a project command, `--upgrade`):
+  [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for
+  any command at a terminal (a shell, a project or compose command,
+  `--upgrade`; activations and holders never):
   `ClearAllForwardings=yes`, since
   the user's `LocalForward` lines clash between sessions. Anything
   faster (connection sharing) is the user's SSH config, which

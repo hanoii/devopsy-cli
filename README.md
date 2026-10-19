@@ -563,8 +563,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
   `current` as it was, its images included; what the failed release got
   is tagged as its own, so it goes with it. So does an interrupted one
-  (Ctrl-C, a lost connection: Dropped connections, below): the build
-  or pull stops, and the release is marked failed.
+  (Ctrl-C, a lost connection; see Dropped connections below): the build
+  or pull stops, and the release is marked failed. A drop the server
+  never hears of leaves it marked fetching until the next release,
+  `--destroy` or `--releases remove` marks it failed.
 - **When `run` fails,** `current` goes back to the previous release, which
   is restarted with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its own images back, so its
@@ -586,7 +588,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   silently (a laptop asleep or off the network) cancels it within about 30
   seconds: devopsy sends the server a heartbeat, and a silence counts as
   the session gone (so does devopsy itself stopped that long; 90 seconds
-  for a release that syncs). Syncs, `--export` and `--import` do the same.
+  for a release that syncs). Syncs and `--export` do the same; `--import`
+  counts 2 minutes of silence.
   From the switch on, a release no longer depends on your connection: it
   finishes, or fails and brings the previous release back, on its own, and
   `--log` shows how. Ctrl-C before the switch cancels the release. After
@@ -649,10 +652,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
 - **Removing releases by hand:** `--releases remove <id>...` takes
   releases away as pruning does, images included; an id can be its start,
   and `failed` is every release that never went live (one cut off before
-  its switch only when older than the current one), whose run failed, or
-  that a rollback left, ids alongside. The current release is refused, and
-  every id is checked before anything goes. It asks first at a terminal,
-  and takes `--yes` in scripts. Data in `shared/` is never touched.
+  its switch only when older than the current one: a newer one may be
+  between its upload and its activation, so name it by id), whose run
+  failed, or that a rollback left, ids alongside. The current release is
+  refused, and every id is checked before anything goes. It asks first
+  at a terminal, and takes `--yes` in scripts. Data in `shared/` is never
+  touched.
 - **Destroying:** `--destroy`, under the lock, in the current release
   (else the newest one): the environment's `destroy:` step if it has one
   (optional, one devopsy command, while everything still runs: a last
@@ -997,9 +1002,9 @@ mid-sync (killed, connection lost, or silent: the parent's side gives up
 after 30 seconds without devopsy's heartbeat, the child's after 90), each
 side finishes on its own and writes what happened to
 `<environment>/.devopsy-sync.log` on its server; a child's side killed
-before deciding is decided by the next sync, release that syncs or
-rollback of it, counting it as not completed (a release that does not sync
-is refused). Restoring means what the sync stopped
+before deciding is decided, as not completed, by whatever takes its lock
+next: a sync, a release or a rollback; the last two then refuse (a release
+that syncs is a sync). Restoring means what the sync stopped
 (`<environment>/.devopsy-sync.services` meanwhile): a service that was
 down before it, stopped for maintenance, stays down. Only
 `devopsy.sync.stop=true` services are kept off partial data: a service
@@ -1087,8 +1092,8 @@ name targets you use from anywhere:
 
 ```yaml
 aliases:
-  vm1-traefik:  {source: ~/src/devopsy-template-traefik, to: "vm1:prod"}
-  confcatsdemo: {source: ~/src/catalyze, to: "vm1:confcatsdemo/prod"}
+  vm1-traefik: {source: ~/src/devopsy-template-traefik, to: "vm1:prod"}
+  shop-demo:   {source: ~/src/shop, to: "vm1:demo/prod"}
 ```
 
 `source:` is the project's checkout: its config, and the only directory the
@@ -1202,8 +1207,9 @@ lists them with their contracts):
     nothing of it existed, so devopsy creates every labeled service first
     (`up -d --wait`), as the run step's `up` would a moment later: the
     hook finds them running either way. `finish child partial` also runs
-    outside a sync, when a child's side was killed before deciding: in the
-    next sync, release that syncs or rollback of it.
+    outside a sync, when a child's side was killed before deciding: in
+    whatever takes its lock next, a sync, a release or a rollback (the
+    last two then refuse).
   - Every action gets its side's services by label, space separated:
     `DEVOPSY_SYNC_RSYNC`, `DEVOPSY_SYNC_STREAM` (in `depends_on` order)
     and `DEVOPSY_SYNC_STOP` (a stopped `stream` service is in both); in a
