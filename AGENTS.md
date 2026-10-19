@@ -42,8 +42,8 @@ conflicts with one is a design question for the user, not a detail.
   server script.
 - **Push over SSH, never pull.** A release is a tar stream over `ssh`
   from wherever devopsy runs (a laptop, CI); the server needs Docker,
-  util-linux and devopsy, never access to the repository, and nothing
-  listens. Why: no control plane, no daemon, no webhooks, no deploy
+  devopsy and a few standard tools (Releases), never access to the
+  repository, and nothing listens. Why: no control plane, no daemon, no webhooks, no deploy
   keys; one command from anywhere. Cost: a release needs the operator
   until its switch (Sessions, drops and signals), and syncs across
   servers only work through the operator's forwarded agent.
