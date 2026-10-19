@@ -1,13 +1,17 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // With a heartbeat, the watcher takes a silence for the session gone: an
@@ -88,4 +92,54 @@ func TestStdinGuard(t *testing.T) {
 	if out, err := cmd.Output(); err != nil || string(out) != "data\n" {
 		t.Errorf("guard (%v): %q", err, out)
 	}
+}
+
+// Under a login shell that does not exec the script (dash -c), the
+// session's group is the login shell's: the watcher signals all of it,
+// what the script runs included.
+func TestWatchLoginShellGroup(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("needs /proc (Linux, as servers)")
+	}
+	dir := t.TempDir()
+	armed, pidFile := filepath.Join(dir, "armed"), filepath.Join(dir, "child")
+	write(t, armed, "", 0o644)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := `exec 4<&0; sleep 30 & echo $! >"$CHILD"; "$BIN" --watch-session $$ --heartbeat 1 --armed "$ARMED" <&4 & exec 4<&-; wait`
+	cmd := exec.Command("sh", "-c", "sh -c "+remote.Quote(inner)+"; echo after")
+	cmd.Env = append(os.Environ(), "BIN="+binary, "ARMED="+armed, "CHILD="+pidFile)
+	cmd.Stdin = r
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	defer w.Close()
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		t.Fatal("the session's group was not signalled")
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(readString(pidFile)))
+	time.Sleep(200 * time.Millisecond)
+	if pid > 0 && alive(pid) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Error("what the script ran lives on")
+	}
+}
+
+// alive reports whether pid runs: an orphan nobody reaps (PID 1 in a
+// container being go test) is a zombie, which kill -0 finds.
+func alive(pid int) bool {
+	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		_, rest, _ := strings.Cut(string(stat), ") ")
+		return !strings.HasPrefix(rest, "Z")
+	}
+	return syscall.Kill(pid, 0) == nil
 }

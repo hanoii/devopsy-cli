@@ -331,7 +331,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			defer heartbeat(w)()
 			var switched atomic.Bool
 			go func() {
-				code, err := remote.SSHContext(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatEnv+"=1\n"+script, r, nil, false, rlog)
+				code, err := remote.SSHContext(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 				done <- result{code, err}
 			}()
 			var res result
@@ -610,7 +610,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Interrupted, the session ends: what the upload left (its .tmp)
 		// goes with the next release.
 		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
 		upInterrupted := upCtx.Err() != nil
 		upStop()
 		if colored != nil {

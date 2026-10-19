@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -10,14 +11,14 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
-// heartbeat writes a zero byte to w every remote.HeartbeatEvery, the
+// heartbeat writes a zero byte to w every beat (remote.HeartbeatEvery), the
 // stdin of a session the server watches, until stop or a failed write
 // (the pipe closed).
 func heartbeat(w io.Writer) (stop func()) {
 	done := make(chan struct{})
 	var once sync.Once
 	go func() {
-		t := time.NewTicker(remote.HeartbeatEvery)
+		t := time.NewTicker(remote.HeartbeatEvery())
 		defer t.Stop()
 		for {
 			select {
@@ -83,25 +84,28 @@ func readQuiet(r io.Reader, quiet time.Duration, fn func([]byte) error) (silent 
 
 // heartbeatQuiet is how long a session's stdin may stay quiet before it
 // counts as gone: with devopsy's heartbeat (remote.HeartbeatEnv),
-// remote.HeartbeatQuiet, else forever.
+// remote.QuietBeats of it, else forever.
 func heartbeatQuiet() time.Duration {
-	if os.Getenv(remote.HeartbeatEnv) != "" {
-		return remote.HeartbeatQuiet
-	}
-	return 0
+	return remote.Quiet(remote.QuietBeats)
+}
+
+// dataQuiet is how long data may pause (remote.DataQuietBeats), 2
+// minutes without a heartbeat's beat to count in.
+func dataQuiet() time.Duration {
+	return cmp.Or(remote.Quiet(remote.DataQuietBeats), 2*time.Minute)
 }
 
 // runStdinGuard implements the hidden --stdin-guard: stdin to stdout,
-// failing when nothing came for remote.DataQuiet (an upload's tar would
-// wait on a session gone silently, the release lock held).
+// failing when nothing came for dataQuiet (an upload's tar would wait on
+// a session gone silently, the release lock held).
 func runStdinGuard() int {
-	silent, err := readQuiet(os.Stdin, remote.DataQuiet, func(b []byte) error {
+	silent, err := readQuiet(os.Stdin, dataQuiet(), func(b []byte) error {
 		_, err := os.Stdout.Write(b)
 		return err
 	})
 	switch {
 	case silent:
-		fmt.Fprintf(os.Stderr, "devopsy: nothing came for %s: the session is gone\n", remote.DataQuiet)
+		fmt.Fprintf(os.Stderr, "devopsy: nothing came for %s: the session is gone\n", dataQuiet())
 		return 1
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "devopsy: "+err.Error())
