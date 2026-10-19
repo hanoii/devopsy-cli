@@ -377,6 +377,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			if interrupted && !switched.Load() {
 				return 130
 			}
+			if res.err == nil && res.code == sshLost {
+				if switched.Load() {
+					say(yellow, "devopsy: the connection to @"+t.Address+" was lost after the switch: the release goes on there (devopsy @"+targetRef(t)+" --log shows how it ends)")
+				} else {
+					say(red, "devopsy: the connection to @"+t.Address+" failed or was lost before the switch: the server cancels the release once it notices, within a minute (devopsy @"+targetRef(t)+" --releases shows it)")
+				}
+			}
 			if interrupted && !said {
 				say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
 			}
@@ -627,6 +634,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if err != nil || code != 0 {
 			if err != nil {
 				return stop(err.Error())
+			}
+			if code == sshLost {
+				say(red, "devopsy: the connection to @"+t.Address+" failed or was lost during the upload: nothing changed there")
 			}
 			return code
 		}
