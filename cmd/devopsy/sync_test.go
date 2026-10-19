@@ -415,7 +415,7 @@ func TestReleaseFirstSync(t *testing.T) {
 		t.Errorf("a cut copy not marked partial:\n%s", out)
 	}
 	next()
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "Nothing changed.") {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "--release: a first release syncs") || !strings.Contains(out, "Nothing changed.") {
 		t.Fatalf("--release-no-sync on a partial copy (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 || !strings.Contains(out, "deploy in shop-dev") || s.current("dev") == "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
@@ -1387,7 +1387,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s.logs()
 	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--sync", "--yes")
 	docker, ssh := s.logs()
-	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now: devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 	// The push outlives devopsy's session: its restore may still be
@@ -2068,5 +2068,55 @@ func TestClaimWrite(t *testing.T) {
 	// The mark names the parent that wrote.
 	if err := markIncomplete(base); err != nil || !strings.HasSuffix(readString(filepath.Join(base, remote.SyncIncompleteFile)), " vm1:prod\n") {
 		t.Errorf("mark %q (%v)", readString(filepath.Join(base, remote.SyncIncompleteFile)), err)
+	}
+}
+
+// A push whose child decided already (its gate closed: the holder gone
+// on, a push that outlived its connection) writes nothing into it.
+func TestSyncPushGateClosed(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	base := filepath.Join(s.root, "shop", "dev")
+	// The push runs in the parent's project: here, the checkout's.
+	for _, d := range []string{"db", "storage"} {
+		if err := os.MkdirAll(filepath.Join(s.dot, "mnt", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(base, "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev", "DEVOPSY_SYNC_TO_BASE=" + base, "DEVOPSY_SYNC_FROM_TARGET=devopsy@one:prod"}
+	out, code := s.run(env, "--sync-push")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "the child's side ended already") || strings.Contains(docker, "rsync -a") || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+		t.Errorf("a push into a decided child (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// What every server-side reader of a session shares: through until its
+// end, or a silence.
+func TestReadQuiet(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var got []byte
+	go func() {
+		_, _ = w.Write([]byte("a"))
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte("b"))
+	}()
+	start := time.Now()
+	silent, err := readQuiet(r, 300*time.Millisecond, func(b []byte) error { got = append(got, b...); return nil })
+	if !silent || err != nil || string(got) != "ab" || time.Since(start) < 350*time.Millisecond {
+		t.Errorf("silence: %v %v %q after %s", silent, err, got, time.Since(start))
+	}
+	w.Close()
+	silent, err = readQuiet(strings.NewReader("c"), 0, func([]byte) error { return nil })
+	if silent || err != nil {
+		t.Errorf("an end: %v %v", silent, err)
 	}
 }
