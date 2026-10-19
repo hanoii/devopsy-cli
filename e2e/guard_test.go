@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -75,4 +76,25 @@ func TestImportDropSilently(t *testing.T) {
 	}
 	undrop(t)
 	op(t, "/", "pkill devopsy || true")
+}
+
+// An --import whose writer pauses longer than the data's quiet time
+// (24 beats, 2 minutes) before its first byte: devopsy @a --export db |
+// devopsy @b --import db, the export waiting for @a's sync lock (a sync
+// from @a holds it for its whole copy) or a dump going to a file before
+// stdout. Fails on v0.42.0: the server's --import counts the pause as
+// the session gone (cmd/devopsy/data.go:415, dataQuiet), though the
+// session is alive: an import's stdin is the data, with no heartbeat.
+func TestImportPausedWriter(t *testing.T) {
+	dir := guardProject(t, "impslow")
+	srv(t, "mkdir -p impslow/prod/shared/mnt/data && echo old >impslow/prod/shared/mnt/data/stamp")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	op(t, "/", "rm -rf /tmp/impslow && mkdir -p /tmp/impslow/data && echo new >/tmp/impslow/data/stamp && tar -cf /tmp/impslow.tar -C /tmp/impslow data")
+	pause := quiet(24, 6*time.Second) / time.Second
+	out, code := op(t, dir, fast()+" sh -c '{ sleep "+strconv.Itoa(int(pause))+"; cat /tmp/impslow.tar; } | devopsy @server:prod --import data --yes'")
+	if got, _ := srv(t, "cat impslow/prod/shared/mnt/data/stamp"); code != 0 || got != "new\n" {
+		t.Errorf("an import whose writer paused %ds (%d), stamp %q:\n%s", pause, code, got, out)
+	}
 }
