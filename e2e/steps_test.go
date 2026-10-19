@@ -14,7 +14,7 @@ import (
 func TestStepArguments(t *testing.T) {
 	step := `a'b $HOME x"y`
 	dir := project(t, "stepargs", map[string]string{
-		".devopsy/config.yaml": "project: stepargs\nenvironments:\n  prod:\n    mode: image\n    release:\n      before:\n        - remote: args before " + step + "\n      prepare:\n        - args prepare " + step + "\n      run: deploy\n      after:\n        - remote: args after " + step + "\n    rollback: deploy\n",
+		".devopsy/config.yaml":     "project: stepargs\nenvironments:\n  prod:\n    mode: image\n    release:\n      before:\n        - remote: args before " + step + "\n      prepare:\n        - args prepare " + step + "\n      run: deploy\n      after:\n        - remote: args after " + step + "\n    rollback: deploy\n",
 		".devopsy/compose.yaml":    "services:\n  app:\n    image: busybox:1.37\n    command: [sleep, infinity]\n",
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/commands/args":   "#!/bin/sh\n## Description: records its arguments in ~/args-<first>, and whether it has a terminal\nphase=$1; shift\n{ printf '[%s]' \"$@\"; echo; [ ! -t 2 ] || echo tty; } >\"$HOME/args-$phase\"\n",

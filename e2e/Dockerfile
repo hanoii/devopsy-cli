@@ -1,7 +1,7 @@
 # A devopsy server for the end-to-end tests, as devopsy-server sets one
 # up: Debian 13, Docker from docker.com with buildx (BuildKit), sshd,
-# util-linux, the deploy user in the docker group. Run privileged with a volume on
-# /var/lib/docker; its own dockerd starts with it. The operator runs the
+# util-linux, the deploy user in the docker group. Run privileged with a
+# volume on /var/lib/docker; its own dockerd starts with it. The operator runs the
 # same image as "operator": an ssh client, no daemons.
 FROM debian:trixie
 RUN apt-get update -q \
