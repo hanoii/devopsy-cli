@@ -25,26 +25,14 @@ func TestInterrupt(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	first, _ := srv(t, "readlink ctrlc/prod/current")
-	inTerminal := func(log string) {
-		background(t, dir, `script -qec "devopsy @server:prod --release; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
-	}
-	code := func(log string) string {
-		var out string
-		eventually(t, time.Minute, "devopsy's end", func() bool {
-			out, _ = op(t, "/", "cat "+log+".code 2>/dev/null")
-			return out != ""
-		})
-		return strings.TrimSpace(out)
-	}
-
 	// Before the switch: cancelled.
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing wait-run running") })
 	op(t, dir, "sleep 1.1")
-	inTerminal("/tmp/before")
+	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/before")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	ctrlC(t)
-	if got := code("/tmp/before"); got != "exit=130" {
+	if got := terminalCode(t, "/tmp/before"); got != "exit=130" {
 		out, _ := op(t, "/", "cat /tmp/before")
 		t.Errorf("before the switch: %s\n%s", got, out)
 	}
@@ -56,12 +44,12 @@ func TestInterrupt(t *testing.T) {
 	// After it: the release goes on.
 	srv(t, "rm -f running; touch wait-run")
 	op(t, dir, "sleep 1.1")
-	inTerminal("/tmp/after")
+	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/after")
 	eventually(t, time.Minute, "the run step waiting", func() bool { return exists(t, "running") })
 	ctrlC(t)
 	time.Sleep(time.Second)
 	srv(t, "rm -f wait-run")
-	if got := code("/tmp/after"); got != "exit=0" {
+	if got := terminalCode(t, "/tmp/after"); got != "exit=0" {
 		out, _ := op(t, "/", "cat /tmp/after")
 		t.Errorf("after the switch: %s\n%s", got, out)
 	}

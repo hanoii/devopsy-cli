@@ -24,6 +24,10 @@ var (
 	network  string
 	server   string
 	operator string
+	// server2 is a second server, started by the first test that needs
+	// one (secondServer); bin is devopsy for it.
+	server2 string
+	bin     string
 )
 
 func TestMain(m *testing.M) {
@@ -64,63 +68,105 @@ func setUp() (int, error) {
 	if goarch == "" {
 		return 0, fmt.Errorf("unknown architecture %q", arch)
 	}
-	bin := filepath.Join(os.TempDir(), "devopsy-e2e-"+run)
+	bin = filepath.Join(os.TempDir(), "devopsy-e2e-"+run)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/devopsy")
 	build.Dir = filepath.Dir(dir)
 	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch, "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		return 0, fmt.Errorf("building devopsy: %v\n%s", err, out)
 	}
-	defer os.Remove(bin)
 
 	if out, err := docker("network", "create", network); err != nil {
 		return 0, fmt.Errorf("%v: %s", err, out)
 	}
-	for _, c := range [][]string{{server, "server"}, {operator, "operator"}} {
-		args := []string{"run", "-d", "--privileged", "--name", c[0], "--hostname", c[1], "--network", network, "--network-alias", c[1]}
-		if c[1] == "server" {
-			args = append(args, "-v", "/var/lib/docker")
-		}
-		if out, err := docker(append(args, image, c[1])...); err != nil {
-			return 0, fmt.Errorf("starting %s: %v\n%s", c[0], err, out)
-		}
-		if out, err := docker("cp", bin, c[0]+":/usr/local/bin/devopsy"); err != nil {
-			return 0, fmt.Errorf("%v: %s", err, out)
-		}
-	}
-	// The operator's key, authorized for the deploy user.
-	if out, err := docker("exec", operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server\n  User devopsy\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config`); err != nil {
-		return 0, fmt.Errorf("%v: %s", err, out)
-	}
-	pub, err := docker("exec", operator, "cat", "/root/.ssh/id_ed25519.pub")
-	if err != nil {
+	if err := start(operator, "operator"); err != nil {
 		return 0, err
 	}
-	add := exec.Command("docker", "exec", "-i", "-u", "devopsy", server, "sh", "-c", "cat >>~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys")
-	add.Stdin = strings.NewReader(pub)
-	if out, err := add.CombinedOutput(); err != nil {
+	// The operator's key, authorized for the deploy user of both servers,
+	// and an agent holding it, for syncs across servers (agent()).
+	if out, err := docker("exec", operator, "sh", "-c", `ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519 && printf 'Host server server2\n  User devopsy\n  StrictHostKeyChecking accept-new\n' >/root/.ssh/config && chmod 600 /root/.ssh/config && ssh-agent -a /tmp/agent.sock >/dev/null && SSH_AUTH_SOCK=/tmp/agent.sock ssh-add -q`); err != nil {
 		return 0, fmt.Errorf("%v: %s", err, out)
 	}
-	// The server's dockerd, then SSH all the way.
-	for i := 0; ; i++ {
-		if _, err := docker("exec", "-u", "devopsy", server, "docker", "version"); err == nil {
-			break
-		}
-		if i > 60 {
-			log, _ := docker("exec", server, "cat", "/var/log/dockerd.log")
-			return 0, fmt.Errorf("the server's dockerd did not start:\n%s", log)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if out, err := docker("exec", operator, "ssh", "server", "true"); err != nil {
-		return 0, fmt.Errorf("ssh to the server: %v\n%s", err, out)
+	if err := startServer(server, "server"); err != nil {
+		return 0, err
 	}
 	return 0, nil
 }
 
+// start runs the image as role (server or operator) in a container
+// named name, reached as role on the network, with devopsy.
+func start(name, role string) error {
+	args := []string{"run", "-d", "--privileged", "--name", name, "--hostname", role, "--network", network, "--network-alias", role}
+	if role != "operator" {
+		args = append(args, "-v", "/var/lib/docker")
+	}
+	mode := "server"
+	if role == "operator" {
+		mode = "operator"
+	}
+	if out, err := docker(append(args, image, mode)...); err != nil {
+		return fmt.Errorf("starting %s: %v\n%s", name, err, out)
+	}
+	if out, err := docker("cp", bin, name+":/usr/local/bin/devopsy"); err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	return nil
+}
+
+// startServer starts a server reached as alias, authorizes the
+// operator's key for its deploy user, and waits for its dockerd and SSH.
+func startServer(name, alias string) error {
+	if err := start(name, alias); err != nil {
+		return err
+	}
+	pub, err := docker("exec", operator, "cat", "/root/.ssh/id_ed25519.pub")
+	if err != nil {
+		return err
+	}
+	add := exec.Command("docker", "exec", "-i", "-u", "devopsy", name, "sh", "-c", "cat >>~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys")
+	add.Stdin = strings.NewReader(pub)
+	if out, err := add.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	// The server's dockerd, then SSH all the way.
+	for i := 0; ; i++ {
+		if _, err := docker("exec", "-u", "devopsy", name, "docker", "version"); err == nil {
+			break
+		}
+		if i > 60 {
+			log, _ := docker("exec", name, "cat", "/var/log/dockerd.log")
+			return fmt.Errorf("%s's dockerd did not start:\n%s", alias, log)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if out, err := docker("exec", operator, "ssh", alias, "true"); err != nil {
+		return fmt.Errorf("ssh to %s: %v\n%s", alias, err, out)
+	}
+	return nil
+}
+
+// secondServer starts server2, once, for the tests that sync across
+// servers.
+func secondServer(t *testing.T) {
+	t.Helper()
+	if server2 != "" {
+		return
+	}
+	name := "devopsy-e2e-server2-" + run
+	if err := startServer(name, "server2"); err != nil {
+		_, _ = docker("rm", "-f", "-v", name)
+		t.Fatal(err)
+	}
+	server2 = name
+}
+
 func tearDown() {
 	_, _ = docker("rm", "-f", "-v", server, operator)
+	if server2 != "" {
+		_, _ = docker("rm", "-f", "-v", server2)
+	}
 	_, _ = docker("network", "rm", network)
+	os.Remove(bin)
 }
 
 // docker runs docker args and returns its combined output.
@@ -140,6 +186,50 @@ func op(t *testing.T, dir, script string) (string, int) {
 func srv(t *testing.T, script string) (string, int) {
 	t.Helper()
 	return execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", server}, script)
+}
+
+// srv2 runs script on the second server (secondServer) as the deploy
+// user.
+func srv2(t *testing.T, script string) (string, int) {
+	t.Helper()
+	return execIn(t, []string{"-u", "devopsy", "-w", "/home/devopsy", server2}, script)
+}
+
+// agent is the operator's environment with its SSH agent, which a sync
+// across servers forwards to the parent's.
+const agent = "SSH_AUTH_SOCK=/tmp/agent.sock"
+
+// loginShell makes shell the deploy user's login shell on the server
+// for the test: the image's is dash (/bin/sh), devopsy-server's bash,
+// and they run sshd's command differently (bash execs it, dash does
+// not), which the watcher's signal depends on.
+func loginShell(t *testing.T, shell string) {
+	t.Helper()
+	if out, err := docker("exec", server, "usermod", "-s", shell, "devopsy"); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	t.Cleanup(func() { _, _ = docker("exec", server, "usermod", "-s", "/bin/sh", "devopsy") })
+}
+
+// inTerminal starts command on the operator, in dir, on a terminal of
+// its own (script), its output in log there and its exit code, once it
+// ends, in log.code (terminalCode).
+func inTerminal(t *testing.T, dir, command, log string) {
+	t.Helper()
+	op(t, "/", "rm -f "+log+" "+log+".code")
+	background(t, dir, `script -qec "`+strings.ReplaceAll(command, `"`, `\"`)+`; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
+}
+
+// terminalCode waits for inTerminal's command to end and returns
+// "exit=<code>".
+func terminalCode(t *testing.T, log string) string {
+	t.Helper()
+	var out string
+	eventually(t, 2*time.Minute, "devopsy's end", func() bool {
+		out, _ = op(t, "/", "cat "+log+".code 2>/dev/null")
+		return out != ""
+	})
+	return strings.TrimSpace(out)
 }
 
 func execIn(t *testing.T, where []string, script string) (string, int) {
