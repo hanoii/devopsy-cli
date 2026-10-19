@@ -394,11 +394,11 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	done := make(chan copied, 1)
 	// From devopsy @<target> --import (its end line set), a pause longer
-	// than remote.DataQuiet is the session gone, silently: the release
+	// than dataQuiet is the session gone, silently: the release
 	// lock is held meanwhile.
 	quiet := time.Duration(0)
 	if os.Getenv(remote.ImportEndEnv) != "" {
-		quiet = remote.DataQuiet
+		quiet = dataQuiet()
 	}
 	go func() {
 		var n int64
@@ -408,7 +408,7 @@ func runImport(cwd string, args []string, color bool) int {
 			return err
 		})
 		if silent {
-			err = fmt.Errorf("nothing came for %s, the session is gone", remote.DataQuiet)
+			err = fmt.Errorf("nothing came for %s, the session is gone", quiet)
 		}
 		if cerr := f.Close(); err == nil {
 			err = cerr
@@ -581,7 +581,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	defer r.Close()
 	defer w.Close()
 	defer heartbeat(w)()
-	code, err := remote.SSHWith(t, remote.Bounded, "export "+remote.SyncWatchEnv+"=1 "+remote.HeartbeatEnv+"=1\n"+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
+	code, err := remote.SSHWith(t, remote.Bounded, "export "+remote.SyncWatchEnv+"=1\n"+remote.HeartbeatLine()+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -626,7 +626,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		}
 		w.Close()
 	}()
-	code, err := remote.SSHWith(t, remote.Bounded, remote.ImportScript(t, projectName, name, end), r, nil, false, nil)
+	code, err := remote.SSHWith(t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end), r, nil, false, nil)
 	r.Close()
 	if err != nil {
 		return fail(err.Error())

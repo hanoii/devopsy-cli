@@ -1154,8 +1154,13 @@ End to end, in Docker (`e2e/`, behind the `e2e` build tag): privileged
 Debian 13 containers with their own Docker and sshd as servers, an
 operator container, devopsy built from the checkout in each; the
 tests drive them with `docker exec` and check from outside. Locally
-with any Docker, on GitHub nightly and on demand (`e2e.yml`). A
-scenario a review finds goes there.
+with any Docker, on GitHub on demand and nightly when `main` moved
+since the last run that passed (`e2e.yml`); not part of a release yet.
+Drop tests shorten the heartbeat (`DEVOPSY_INTERNAL_HEARTBEAT_EVERY=1`:
+quiet times are counted in beats). The test server's deploy user has
+`/bin/sh` (dash) as login shell, stricter than devopsy-server's bash:
+it found the watcher signalling only the script there. A scenario a
+review finds goes there.
 
 ```sh
 go test -tags e2e -count=1 -v ./e2e   # E2E_KEEP=1 keeps the containers

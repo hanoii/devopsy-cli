@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -20,7 +23,7 @@ import (
 // ends, the session gone, closes it: no answer. With --armed, it then
 // takes the file (renamed to <file>.fired) and sends SIGTERM to the
 // script, pid, and everything it runs: its process group when the script
-// leads one, as under sshd, else the script alone, which cancels a
+// or its login shell leads one, as under sshd, else the script alone, which cancels a
 // release before its switch (fetch_sig). The script disarms it by taking
 // the file first, right before its switch: one rename or the other
 // succeeds, never both, so a SIGTERM never lands past a switch the
@@ -97,10 +100,32 @@ func runWatchSession(args []string) int {
 	}
 	// Taken: the script cannot disarm any more, and finds it to know
 	// nobody reads the session (it removes it; prelude a stale one).
-	if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
-		_ = syscall.Kill(-pid, syscall.SIGTERM)
-	} else if err == nil {
+	// The script's group: it leads one under sshd when the login shell
+	// execs it (bash -c), else its parent, the login shell, does, the
+	// session's own (dash -c, which never execs the last command). A
+	// group of anything else (a test's) is not the script's: it alone.
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		return 0
+	}
+	if sid, err := unix.Getsid(pid); pgid == pid || (err == nil && sid == pgid && parentPid(pid) == pgid) {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	} else {
 		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	return 0
+}
+
+// parentPid is pid's parent, from /proc (Linux, where servers run), or 0.
+func parentPid(pid int) int {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0
+	}
+	_, rest, _ := strings.Cut(string(stat), ") ")
+	if f := strings.Fields(rest); len(f) > 1 {
+		n, _ := strconv.Atoi(f[1])
+		return n
 	}
 	return 0
 }

@@ -185,7 +185,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	holderCtx, endHolder := context.WithCancel(context.Background())
 	defer endHolder()
 	go func() {
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, remote.HeartbeatEnv+"=1\n"+script, r, out, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy ends the holder's session
@@ -305,7 +305,7 @@ func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, c
 		remote.SyncArgsEnv:       strings.Join(job.args, " "),
 		remote.SyncFromTargetEnv: p.Address,
 		remote.SyncWatchEnv:      "1",
-		remote.HeartbeatEnv:      "1",
+		remote.HeartbeatEnv:      fmt.Sprint(int(remote.HeartbeatEvery().Seconds())),
 	}
 	if color {
 		env[remote.ColorEnv] = "1"
@@ -1007,7 +1007,7 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 	defer stopWatch()
 	defer heartbeat(w)()
 	cmd.Stdin = r
-	cmd.Env = append(os.Environ(), remote.SyncWatchEnv+"=1", remote.HeartbeatEnv+"=1")
+	cmd.Env = append(os.Environ(), remote.SyncWatchEnv+"=1")
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	err = cmd.Start()

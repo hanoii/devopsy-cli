@@ -960,11 +960,11 @@ rm -f "$ws_fifo"
 	}
 	// With devopsy's heartbeat, a silence is the session gone: a
 	// holder's waits longer than the push it answers for.
-	quiet := HeartbeatQuiet
+	beats := QuietBeats
 	if answer {
-		quiet = HeartbeatQuietHolder
+		beats = HolderQuietBeats
 	}
-	args += ` ${` + HeartbeatEnv + `:+--heartbeat ` + strconv.Itoa(int(quiet.Seconds())) + `}`
+	args += ` ${` + HeartbeatEnv + `:+--heartbeat $((` + HeartbeatEnv + ` * ` + strconv.Itoa(beats) + `))}`
 	start := `exec 4<&0 </dev/null
 devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
 watch_pid=$!
