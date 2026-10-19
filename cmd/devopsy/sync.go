@@ -883,7 +883,7 @@ func runSyncPush(cwd string, color bool) int {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
 		code := fail(err.Error())
-		if err := restoreServices(cwd, services); err != nil {
+		if err := restoreServices(cwd, services, false); err != nil {
 			fail(err.Error())
 		}
 		return finish(code)
@@ -909,7 +909,7 @@ func runSyncPush(cwd string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
-	if err := restoreServices(cwd, services); err != nil {
+	if err := restoreServices(cwd, services, false); err != nil {
 		code = fail(err.Error())
 	}
 	return finish(code)
@@ -1537,6 +1537,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		_ = os.Remove(started)
 		_ = os.Remove(done)
+		_ = os.Remove(filepath.Join(base, remote.SyncOpenFile))
 		if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", "partial"); err != nil {
 			code = fail("the sync capability's finish child partial: " + err.Error())
 		}
@@ -1584,11 +1585,13 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	case "go":
 		// Complete: whatever an earlier sync left is replaced.
 		_ = os.Remove(incomplete)
-		if err := restoreServices(cwd, services); err != nil {
+		if err := restoreServices(cwd, services, true); err != nil {
 			code = fail(err.Error())
 		}
 	case "abort":
-		if err := restoreServices(cwd, services); err != nil {
+		// A first release's services are not created on empty data: it
+		// does not go live.
+		if err := restoreServices(cwd, services, false); err != nil {
 			code = fail(err.Error())
 		}
 	case "partial":
@@ -1912,8 +1915,10 @@ const healthyTimeout = 5 * time.Minute
 // devopsy.sync.stop=true and waits until they run and are healthy,
 // whatever happened before: those stopServices recorded (syncState), else
 // every one. It reads the containers' state, so it also recovers after an
-// interrupted sync.
-func restoreServices(cwd string, services []cli.SyncService) error {
+// interrupted sync. With create, a child's first release gets its labeled
+// services created (finish go): never on an abort, which leaves it not
+// live.
+func restoreServices(cwd string, services []cli.SyncService, create bool) error {
 	stop := cli.SyncStopped(services)
 	var errs []error
 	// A child's first release had no containers: nothing was stopped,
@@ -1931,17 +1936,17 @@ func restoreServices(cwd string, services []cli.SyncService) error {
 		}
 		first = len(states) == 0
 	}
-	var create []string
-	if first {
+	var created []string
+	if first && create {
 		for _, s := range services {
 			if s.Labeled {
-				create = append(create, s.Name)
+				created = append(created, s.Name)
 			}
 		}
 	}
-	if len(create) > 0 {
-		sayErr("devopsy: creating " + strings.Join(create, " "))
-		if err := compose(cwd, errOut, append([]string{"up", "-d", "--wait"}, create...)...); err != nil {
+	if len(created) > 0 {
+		sayErr("devopsy: creating " + strings.Join(created, " "))
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--wait"}, created...)...); err != nil {
 			errs = append(errs, fmt.Errorf("docker compose up: %w", err))
 		}
 	}

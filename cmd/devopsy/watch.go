@@ -35,7 +35,7 @@ import (
 // byte is the session gone too, a connection that died silently.
 func runWatchSession(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--armed <file>]")
+		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--armed <file>] [--heartbeat <seconds>]")
 		return 2
 	}
 	pid, err := strconv.Atoi(args[0])

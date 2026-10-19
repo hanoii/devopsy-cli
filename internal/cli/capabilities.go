@@ -98,8 +98,8 @@ var Capabilities = []Capability{
 			},
 			{
 				Name:  "finish",
-				Usage: "finish parent|child go|abort",
-				Does:  "on each side after the copy (go) or a failure (abort), once devopsy has started its stopped services and waited for them to be healthy. On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
+				Usage: "finish parent|child go|abort|partial",
+				Does:  "on each side once the sync ended. The parent's: go or abort, its stopped services back. The child's says what the copy did to its data: go (complete), abort (nothing of the parent's written), both with its stopped services back, or partial (written in part: they stay down, and the hook must not start them). On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
 			},
 		},
 		Env: "every action gets DEVOPSY_SYNC_RSYNC, DEVOPSY_SYNC_STREAM and DEVOPSY_SYNC_STOP, its side's services labeled devopsy.sync=rsync, devopsy.sync=stream (depends_on order) and devopsy.sync.stop=true, space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses) and DEVOPSY_SYNC_ARGS (--sync's arguments after --)",

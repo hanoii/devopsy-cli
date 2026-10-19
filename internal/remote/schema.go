@@ -1,7 +1,7 @@
 package remote
 
 // ProjectSchema documents every key of a project's .devopsy/config.yaml,
-// as a config that parses: `devopsy --config-schema` prints it, and a test
+// as a config that parses: `devopsy --debug schema` prints it, and a test
 // reads it with readConfigFile so it never drifts from what devopsy accepts.
 const ProjectSchema = `# .devopsy/config.yaml: a project's devopsy config. Committed; no secrets,
 # no servers. .devopsy/config.local.yaml (not committed) is read over it:
@@ -38,7 +38,7 @@ releases:
 
 # What every environment takes unless it sets its own: mode, release,
 # rollback, destroy, releases, parent, inherit and env (env merges key by
-# key). Not path.
+# key).
 defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
@@ -130,7 +130,7 @@ const UserSchema = `# ~/.config/devopsy/config.yaml (or $DEVOPSY_HOME/config.yam
 aliases:
   vm1-traefik:
     source: ~/src/devopsy-template-traefik
-    to: devopsy@203.0.113.10:main
+    to: devopsy@203.0.113.10:prod
   shop-demo:
     project: shop
     to: vm1:demo/prod

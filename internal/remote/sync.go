@@ -277,7 +277,7 @@ func syncBlock(projectName, failed string) string {
       fi
       # Marked before the files go: a kill in between leaves one or
       # the other.
-      [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cat ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
+      [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cut -d' ' -f1 ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
       ;;
     *) echo "devopsy: the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" >&2 || true ;;
   esac
