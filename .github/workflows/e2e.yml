@@ -2,8 +2,14 @@ name: e2e
 
 # devopsy against real servers in Docker (e2e/): on demand, and nightly
 # when main moved since the last run that passed. Slower than ci's tests.
+# Nightly with a 1-second heartbeat beat (drops in seconds); on demand,
+# beat 5 runs everything with the real timeouts.
 on:
   workflow_dispatch:
+    inputs:
+      beat:
+        description: "Heartbeat beat in seconds (5: the real timeouts)"
+        default: "1"
   schedule:
     - cron: "17 3 * * *"
 
@@ -14,7 +20,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - id: last
         if: github.event_name == 'schedule'
@@ -33,4 +39,6 @@ jobs:
         with:
           go-version-file: go.mod
       - if: steps.last.outputs.skip != '1'
-        run: go test -tags e2e -count=1 -v ./e2e
+        env:
+          E2E_BEAT: ${{ inputs.beat || '1' }}
+        run: go test -tags e2e -count=1 -v -timeout 40m ./e2e

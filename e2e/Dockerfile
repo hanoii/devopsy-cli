@@ -5,7 +5,7 @@
 # same image as "operator": an ssh client, no daemons.
 FROM debian:trixie
 RUN apt-get update -q \
- && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client util-linux iptables procps \
+ && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client util-linux iptables iproute2 procps \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" >/etc/apt/sources.list.d/docker.list \

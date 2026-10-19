@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -157,9 +158,54 @@ func execIn(t *testing.T, where []string, script string) (string, int) {
 	return out.String(), code
 }
 
-// fast is the operator's environment for tests of drops: a heartbeat
-// beat of a second, so a silence counts in seconds (remote.QuietBeats).
-const fast = "DEVOPSY_INTERNAL_HEARTBEAT_EVERY=1"
+// beat is the heartbeat's beat for the tests, seconds: E2E_BEAT, else 1,
+// so a silence counts in seconds (remote.QuietBeats are 6 of them);
+// E2E_BEAT=5 runs everything with the real timeouts.
+func beat() int {
+	if n, err := strconv.Atoi(os.Getenv("E2E_BEAT")); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
+// fast is the operator's environment with the tests' beat.
+func fast() string {
+	return "DEVOPSY_INTERNAL_HEARTBEAT_EVERY=" + strconv.Itoa(beat())
+}
+
+// quiet is beats of the tests' beat, plus slack for what follows.
+func quiet(beats int, slack time.Duration) time.Duration {
+	return time.Duration(beats*beat())*time.Second + slack
+}
+
+// dropConnection cuts, silently, only the operator's ssh session whose
+// command line matches pattern (a pgrep -f pattern: bracket a letter so
+// it never matches itself).
+func dropConnection(t *testing.T, pattern string) {
+	t.Helper()
+	script := `pid=$(pgrep -f '` + pattern + `' | head -n 1) && [ -n "$pid" ] && port=$(ss -tnpH | grep "pid=$pid," | awk '{print $4}' | sed 's/.*://' | head -n 1) && [ -n "$port" ] && iptables -A OUTPUT -p tcp --sport "$port" -j DROP && iptables -A INPUT -p tcp --dport "$port" -j DROP`
+	if out, code := op(t, "/", script); code != 0 {
+		t.Fatalf("dropping %s (%d): %s", pattern, code, out)
+	}
+	t.Cleanup(func() { undrop(t) })
+}
+
+// throttle slows the operator's traffic to rate (tc's), so a transfer
+// lasts long enough to cut.
+func throttle(t *testing.T, rate string) {
+	t.Helper()
+	if out, code := op(t, "/", "tc qdisc add dev eth0 root tbf rate "+rate+" burst 32kbit latency 400ms"); code != 0 {
+		t.Fatalf("throttling (%d): %s", code, out)
+	}
+	t.Cleanup(func() { op(t, "/", "tc qdisc del dev eth0 root || true") })
+}
+
+// lockFree reports whether nothing holds the lock file path (relative to
+// the deploy user's home) on the server.
+func lockFree(t *testing.T, path string) bool {
+	_, code := srv(t, "flock -n "+quote(path)+" true")
+	return code == 0
+}
 
 // background starts command on the operator, in dir, its output in
 // log there.

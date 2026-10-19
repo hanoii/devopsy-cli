@@ -1156,14 +1156,18 @@ operator container, devopsy built from the checkout in each; the
 tests drive them with `docker exec` and check from outside. Locally
 with any Docker, on GitHub on demand and nightly when `main` moved
 since the last run that passed (`e2e.yml`); not part of a release yet.
-Drop tests shorten the heartbeat (`DEVOPSY_INTERNAL_HEARTBEAT_EVERY=1`:
-quiet times are counted in beats). The test server's deploy user has
+Drop tests shorten the heartbeat (`E2E_BEAT`, default 1, passed as
+`DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times are counted in beats,
+and so is the operator's `KeepAlive`, which keeps their order);
+`E2E_BEAT=5` runs everything with the real timeouts, and one test always
+does. The test server's deploy user has
 `/bin/sh` (dash) as login shell, stricter than devopsy-server's bash:
 it found the watcher signalling only the script there. A scenario a
 review finds goes there.
 
 ```sh
-go test -tags e2e -count=1 -v ./e2e   # E2E_KEEP=1 keeps the containers
+go test -tags e2e -count=1 -v -timeout 25m ./e2e   # E2E_KEEP=1 keeps the containers
+E2E_BEAT=5 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # the real timeouts
 ```
 
 What only a real setup shows (Traefik, certificates, the templates) is

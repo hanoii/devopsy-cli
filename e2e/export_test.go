@@ -32,14 +32,14 @@ func TestExportDropSilently(t *testing.T) {
 		out, _ := srv(t, "docker ps -a --filter label=com.docker.compose.project=exp-prod --format '{{.State}}'")
 		return strings.TrimSpace(out)
 	}
-	background(t, dir, fast+" devopsy @server:prod --export data", "/tmp/exp.tar")
+	background(t, dir, fast()+" devopsy @server:prod --export data", "/tmp/exp.tar")
 	eventually(t, time.Minute, "the export streaming", func() bool {
 		out, _ := op(t, "/", "stat -c %s /tmp/exp.tar 2>/dev/null || echo 0")
 		n, _ := strconv.Atoi(strings.TrimSpace(out))
 		return n > 1000000
 	})
 	dropSilently(t)
-	took := eventually(t, time.Minute, "the export cancelled, data back", func() bool {
+	took := eventually(t, quiet(6, 40*time.Second), "the export cancelled, data back", func() bool {
 		_, code := srv(t, "flock -n exp/prod/.sync-lock true")
 		return code == 0 && state() == "running"
 	})
