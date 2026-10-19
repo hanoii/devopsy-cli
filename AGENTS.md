@@ -178,6 +178,11 @@ function works, line by line, is in its comments: keep the detail there.
 - **Deployment facts never live in a project's config:** servers
   (`server:` is an error) and instance names. They come from the
   target, variables or aliases.
+- **No server-wide variable layer** (`/etc/devopsy/devopsy.env` went,
+  and a file the proxy's release would write was rejected: still a
+  global layer): what a server knows belongs to its targets (`--vars`),
+  or to the project that owns it, as an export (Roles, exports and
+  imports).
 - **A target is an address,** `@[<server>:][<instance>/]<environment>`
   (`parseAddress`): the server ends at the first `:`, the instance
   before the last `/`, empty meaning none. Missing parts come from
@@ -373,11 +378,17 @@ missing is listed with its `--vars set` line.
   taken after fd 9): images are the whole server's. Shared for
   fetches, exclusive for removals, which also need Docker to answer,
   else they count as busy (`il_busy` says which). Pruning skips when it
-  is busy, directories included; `--destroy` and `--releases remove`
-  wait 10 minutes, then fail with 75. The restart after a failed run
-  waits too: on the new release's images it would run them under old
-  code. Holders write `ImagesHolders/<pid>`, for messages only. Linux's
-  `flock` lets new shared holders past a queued exclusive one.
+  is busy, directories included (servers are not expected to be that
+  busy: revisit if skips show up); `--destroy` and `--releases remove`
+  wait 10 minutes, then fail with 75. `--destroy` holds it across its
+  `destroy:` step, since compose's `--rmi local` removes images too: a
+  slow step makes fetches on the server wait (accepted). Docker calls
+  have no timeouts: a hung daemon holds the lock until killed, and
+  waiters give up after 10 minutes (accepted). The restart after a
+  failed run waits too: on the new release's images it would run them
+  under old code. Holders write `ImagesHolders/<pid>`, for messages
+  only. Linux's `flock` lets new shared holders past a queued exclusive
+  one.
 - `basePrelude` exports `DEVOPSY_NO_UPDATE_CHECK=1`: the detached
   `--upgrade-check` would inherit fds 8 and 9 (compose has to keep
   them) and hold the locks while it asks GitHub.
@@ -387,10 +398,11 @@ missing is listed with its `--vars set` line.
 The rules live in Go (`internal/images`), run on the server as the
 hidden `--images` (`runImages`; `img` in the scripts): the server's
 devopsy applies them, whichever laptop or CI wrote the script, since
-the state is the whole server's. The scripts keep what needs the shell
-(`releaseImages`): the locks, and fetching on a terminal
-(`fetch_images`, `with_tty`). The package's comments say how each
-action decides; these are the rules.
+the state is the whole server's (they were generated sh at first,
+where four review rounds found most of the bugs). The scripts keep
+what needs the shell (`releaseImages`): the locks, and fetching on a
+terminal (`fetch_images`, `with_tty`). The package's comments say how
+each action decides; these are the rules.
 
 - **Fetching** (`fetchImages`, through `devopsy --`, past project
   commands): build mode `pull --ignore-buildable` then `build --pull`;
@@ -424,13 +436,19 @@ action decides; these are the rules.
   are recorded, never stripped (all but the last frees nothing and
   costs a pull); else its listed names and its other names in the same
   repositories go (`mariadb:11` and `mariadb:11.4`); a name that moved
-  on stays. Never `-f`: a refusal is recorded. Idempotent: one cut off
+  on stays. Never `-f`: a refusal is recorded (Docker 29's containerd
+  store only untags with it, but the classic store, which servers
+  upgraded from older Docker keep, may delete an image a stopped
+  container uses; not checked). Idempotent: one cut off
   anywhere is finished by the next. Docker failing (anything but a
   missing image) stops it with exit 1 and the release stays, so the
   next removal finds its listing again (`RemoveReleases` removes a
   directory only after its images);
   `--destroy` then keeps the directory (the data is already gone) and
   says to run it again.
+- No directory scanning, server-wide sweep or trash directory
+  (decided): a removal decides from its release's listing and Docker's
+  state, and reads nothing above its project.
 - **The record** (`images.LeftFile`, `<release
   root>/<project>/.devopsy-images-left`) holds what could not go:
   `--releases` lists it, and `img prune` retries this project's lines
@@ -763,8 +781,10 @@ under their `LogSection` time, never under a later anchor.
   `push` and `flush`: no migration). `devopsy.sync.stop=true|false`
   (`SyncStopLabel`, default false, ignored without `devopsy.sync`)
   stops the service on both sides for the whole sync, a stream
-  included. No `pause` (Gotchas). `devopsy.sync.rsync.exclude`
-  (`SyncExcludeLabel`, entries of `mnt`, comma or space separated)
+  included (on the parent, downtime for the copy: the project's choice,
+  a stream without it the alternative). No `pause` (Gotchas).
+  `devopsy.sync.rsync.exclude` (`SyncExcludeLabel`, entries of `mnt`,
+  comma or space separated)
   drops entries from an rsync service's `Dirs` at parse time, so every
   consumer (copy, guard, list) agrees; on a `stream` service it is
   ignored, not validated, so a variable can flip `rsync`/`stream` and
@@ -847,6 +867,19 @@ under their `LogSection` time, never under a later anchor.
   reaches it. The import's stdin is a pipe the push keeps open, so
   across servers the session's end, which a remote process never gets
   as a signal, cancels it too.
+- **Rejected with these labels** (October 2026): keeping a `push`
+  script with helpers (a push only works from the parent's server to
+  the child's, never for a file, a laptop or a relay; `export` and
+  `import` split the same freedom and are reused by `--export` and
+  `--import`); export and import commands in compose labels (scripts do
+  not belong in labels, however short); `stop` as a value and a
+  sub-label at once, or a hold sub-label for streams only (two
+  orthogonal labels instead); a dump into an entry of `mnt` as
+  devopsy's way (at rest on the parent, twice the disk, cleanup and
+  completeness the project's again: still fine for a project that wants
+  dumps on disk anyway); an `--export` that never stops a service (the
+  scripts are written for the label: a `run --rm` export against a
+  live service fails or copies inconsistent files).
 - **Hidden flags** (dispatched in `main.go` before anything else):
   `--sync-push`, `--sync-exec <devopsy args>`, `--sync-services prepare
   | finish go|abort|partial | settle | import <service> [last] | list`.
@@ -915,7 +948,10 @@ under their `LogSection` time, never under a later anchor.
   and set by `--sync-exec`), so the child's labels follow an inherited
   variable in the same sync (written after the copy, they lagged one
   sync). `finish go` moves it into place (`mv -Tf`) before restoring
-  services, the hook and the run step; anything else removes it. A
+  services, the hook and the run step; anything else removes it
+  (rejected: writing `inherit.env` in place with a backup restored on
+  abort, since a holder killed outright leaves the new file over the
+  old data). A
   holder told none was written (`SyncOptions.Inherit`) removes a stale
   one first.
 
@@ -965,11 +1001,18 @@ under their `LogSection` time, never under a later anchor.
   `devopsy.export.<KEY>`, `devopsy.import.<VAR>=<role or
   project>/<KEY>[?]`. devopsy knows no role or key names; `proxy` and
   `WILDCARD_DOMAIN` are the Traefik template's convention. devopsy's
-  core defines no proxy contract.
+  core defines no proxy contract (a `domains` contract in the core was
+  shaped by one pairing, the Traefik template and its projects).
+- Imports resolve on the host at each release, never at runtime in a
+  container: compose interpolates labels (a Traefik rule) before any
+  container exists.
 - `--prepare-release` checks the role and writes imports into the new
   release's `devopsy-target.env` (after `cli.ImportedMarker`) before it
   goes live; an import never overrides what the environment sets (even
-  empty); an empty export is a value; rollbacks never check. Exports
+  empty); an empty export is a value (else every project importing
+  without `?` would fail under a proxy without a wildcard); rollbacks
+  never check (it would fail a rollback exactly when one is needed,
+  the proxy down). Exports
   are read from running containers (`Running`: one snapshot per
   lookup), waiting up to `WaitForExporters` (30 seconds) for required
   sources.
@@ -977,6 +1020,10 @@ under their `LogSection` time, never under a later anchor.
   release's `devopsy-target.env` (found through compose's working_dir
   label).
 - Roles are advisory: anyone in the docker group is root-equivalent.
+  Checked only at releases, never on a local `up` (a test proxy beside
+  a main one is normal locally), and two releases claiming one role on
+  different targets at once are not locked against each other
+  (accepted; ROADMAP.md's pinning roles).
 
 ## Other features
 
