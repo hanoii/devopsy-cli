@@ -60,3 +60,48 @@ func TestInterrupt(t *testing.T) {
 		t.Errorf("current did not switch")
 	}
 }
+
+// TestInterrupt with devopsy-server's login shell, bash, which execs
+// sshd's command (the script leads its group; under dash its parent
+// does): Ctrl-C and a silent drop before the switch cancel the release,
+// the prepare step's processes gone with it.
+func TestInterruptBashLogin(t *testing.T) {
+	loginShell(t, "/bin/bash")
+	dir := dropProject(t, "bashlogin")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	first, _ := srv(t, "readlink bashlogin/prod/current")
+	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing; pkill -f '[c]ommands/wait' || true") })
+	gone := func(what string) {
+		t.Helper()
+		eventually(t, 20*time.Second, what+": the lock freed", func() bool { return lockFree(t, "bashlogin/prod/.lock") })
+		if out, _ := srv(t, "pgrep -af '[c]ommands/wait' || true"); strings.TrimSpace(out) != "" {
+			t.Errorf("%s: the prepare step still runs: %s", what, out)
+		}
+		if now, _ := srv(t, "readlink bashlogin/prod/current"); now != first {
+			t.Errorf("%s: current changed: %s", what, now)
+		}
+	}
+
+	srv(t, "rm -f preparing; touch wait-prepare")
+	op(t, dir, "sleep 1.1")
+	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/bashlogin")
+	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
+	ctrlC(t)
+	if got := terminalCode(t, "/tmp/bashlogin"); got != "exit=130" {
+		out, _ := op(t, "/", "cat /tmp/bashlogin")
+		t.Errorf("Ctrl-C: %s\n%s", got, out)
+	}
+	gone("Ctrl-C")
+
+	srv(t, "rm -f preparing")
+	op(t, dir, "sleep 1.1")
+	background(t, dir, fast()+" devopsy @server:prod --release", "/tmp/bashlogin.log")
+	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
+	dropSilently(t)
+	eventually(t, quiet(6, 20*time.Second), "the release lock freed", func() bool { return lockFree(t, "bashlogin/prod/.lock") })
+	gone("a silent drop")
+	undrop(t)
+	op(t, "/", "pkill devopsy || true")
+}
