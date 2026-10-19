@@ -43,12 +43,17 @@ function works, line by line, is in its comments: keep the detail there.
   rewrites compose files; everything it computes shows in `devopsy
   --env`. If a feature needs to change compose files, it is the wrong
   feature.
-- **Compatibility of the basics:** project discovery, `.env` loading
-  (compose's parser, caller's environment wins), commands in
+- **Nothing is frozen before 1.0.0.** One person uses devopsy and runs
+  every server, so anything may change when the change makes it better
+  in the long run, the basics included: project discovery, `.env`
+  loading (compose's parser, caller's environment wins), commands in
   `commands/` with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`, the
-  recursion guard, everything else passed to compose untouched. No
-  migration code for anything else: older files and syntax just stop
-  working.
+  recursion guard, everything else passed to compose untouched.
+  Propose such changes rather than work around a design. No migration
+  code: older files and syntax just stop working, with an error that
+  says what to do, a breaking change is marked (`feat!`, `fix!`), and
+  a protocol bump means upgrading the servers. A 1.0.0 is when this
+  gets a compatibility promise.
 - devopsy replaces itself with what it runs (`syscall.Exec`): signals,
   the terminal and exit codes belong to that command.
 - **Output:** stdout is the result (compose's output, `--env`, `--vars
