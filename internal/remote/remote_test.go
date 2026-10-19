@@ -408,9 +408,9 @@ if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
 fi
 # What the push writes into the child, as if during the copy.
 if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
-  for f in $FAKE_WRITE; do : >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"; done
+  for f in $FAKE_WRITE; do echo "vm1:prod 123.45" >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"; done
 fi
-[ "$*" = "--sync-services finish partial" ] && : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"
+[ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
 [ "$*" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
 exit 0
 `
@@ -516,6 +516,10 @@ exit 0
 		if fileExists(filepath.Join(root, tg.Path, f)) {
 			t.Errorf("%s left", f)
 		}
+	}
+	// The mark names the parent that wrote, never the sync's id.
+	if mark := readFile(filepath.Join(root, tg.Path, SyncIncompleteFile)); !strings.HasSuffix(mark, " vm1:prod\n") {
+		t.Errorf("the mark: %q", mark)
 	}
 	// Nothing but a sync runs on it.
 	write(t, filepath.Join(root, tg.Path, "releases", "4", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
