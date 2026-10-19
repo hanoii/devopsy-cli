@@ -203,9 +203,20 @@ function works, line by line, is in its comments: keep the detail there.
 - **Names come only from project, instance and environment:** compose
   name `<project>[-<instance>]-<environment>` (`Target.ComposeName`),
   directory `<project>/[<instance>/]<environment>` under the server's
-  release root (`releases: root`), nothing else (a `path:` key went).
-  `project:` is required for anything remote, never taken from the
-  checkout's folder.
+  release root (`releases: root`), nothing else: not a `path:` key
+  (there was one, it went), not compose's `name:` (overridden through
+  `COMPOSE_PROJECT_NAME`, `devopsy-target.env`), not the checkout's
+  folder (`project:` is required for anything remote), not the local
+  shell's `COMPOSE_PROJECT_NAME` ("Nothing of the local environment
+  goes to a server", Releases on disk). Why: the same target lands in
+  the same place from any laptop or CI, two environments never share
+  containers, volumes, networks or a URL, and everything per
+  environment (syncs, images' bookmarks, `--destroy`, `--status`) finds
+  its things by that name alone, with no registry of environments. The
+  `-` join can collide (`a-b` + `c`, `a` + `b-c`): `--check-names`
+  refuses then (Activation). Cost, accepted: renaming any of the three
+  is a new, empty environment; moving the old one is by hand (done
+  once, Traefik's `main` to `prod`, devopsy-traefik's AGENTS.md).
 - **Patterns:** environment keys with `*` (one or more name
   characters); exact name, then most literal characters; a tie is an
   error.
