@@ -441,8 +441,8 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // calling something an older one lacks, so it refuses before anything
 // changes instead of failing halfway. 1: --images; 2: --watch-session;
 // 3: --sync-services finish partial, settle, import <service> last,
-// --stdin-guard, --watch-session --heartbeat.
-const Protocol = 3
+// --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id.
+const Protocol = 4
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -577,7 +577,7 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	// One stream: nothing an activation prints is a result, and on two
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
-	s := prelude(t, false) + "exec 1>&2\n"
+	s := prelude(t, false) + "exec 1>&2\n" + NoExit255
 	s += watchSession(sync != nil, true)
 	// Defined first: the fetch and not_live's callers use them.
 	s += releaseImages(projectName, t, t.Mode)
@@ -905,7 +905,7 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
       sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
     fo_hp=$!
     echo "` + SwitchMarker + ` $fo_tag" >&2 || true
-    trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; exit $fo_s' EXIT
+    trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; [ "$fo_s" != 255 ] || fo_s=254; exit $fo_s' EXIT
   fi
   exec >>"$out" 2>&1
 fi
@@ -1002,6 +1002,12 @@ if [ -e "$base/` + SyncIncompleteFile + `" ]; then
 fi
 `
 }
+
+// NoExit255 keeps a script's own exit status off 255, ssh's for a
+// connection that failed or was lost (sshLost on the operator's side): a
+// step that exits 255 (drush on a PHP error) ends the script with 254.
+// followOutput's EXIT trap, which replaces this one, does the same.
+const NoExit255 = "trap 'ec=$?; [ \"$ec\" != 255 ] || exit 254' EXIT\n"
 
 // LogSection starts each activation's part of ServerLogFile, before its
 // time (UTC, logTime's layout), where --log puts it among the session's

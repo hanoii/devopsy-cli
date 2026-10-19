@@ -54,8 +54,15 @@ const SyncCopied = "devopsy: copied the data from @"
 
 // SyncMarker starts the line the holder prints (on stderr: holders print
 // on one stream), followed by the child's directory on its server
-// ($base), once the child is ready to be written.
+// ($base), a tab and the sync's id (SyncIDEnv), once the child is ready
+// to be written.
 const SyncMarker = "devopsy: ready for sync in "
+
+// SyncIDEnv carries the sync's id, from the holder's marker, to the
+// push and the child's side of its writes: a write claims the gate
+// only when it names this sync (ClaimWriteScript), so one left over
+// from an earlier sync never writes into a newer one.
+const SyncIDEnv = "DEVOPSY_INTERNAL_SYNC_ID"
 
 // SyncingInto is the line the holder of --sync prints on stderr: the
 // release whose log the sync's is appended to.
@@ -241,18 +248,23 @@ fi
 func syncBlock(projectName, failed string) string {
 	open, started, done, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-  printf '%s\n' "$` + SyncFromTargetEnv + `" >` + open + `
+  sync_id=$(date +%s).$$
+  printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
   # rename or the unlink wins), so nothing is written into what abort
   # restores.
   rm -f ` + open + `
+  # A push that went through and wrote nothing (the parent's labels
+  # copy nothing) is go: no data the labels cover is partial any more.
   sync_word=abort
   if [ -e ` + done + ` ]; then
     sync_word=go
-  elif [ -e ` + started + ` ] || [ -e ` + incomplete + ` ]; then
+  elif [ -e ` + started + ` ]; then
     sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
+  elif [ -e ` + incomplete + ` ]; then
+    sync_word=partial
   fi
   case "$reply.$sync_word" in
     go.go) ;;
@@ -290,7 +302,7 @@ const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncTo
 // reads this session any more, and a write to it would kill what restores
 // the services, so the rest goes to a file in $base.
 func syncWait() string {
-	return `  echo "` + SyncMarker + `$base" || true
+	return `  printf '%s%s\t%s\n' "` + SyncMarker + `" "$base" "$sync_id" || true
   reply=
   read -r reply <&3 || true
   if [ -z "$reply" ]; then
@@ -318,7 +330,7 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 // go or abort, finishes and runs run (the release's run step). o says
 // where from (From, the parent's address).
 func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) string {
-	s := "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo "devopsy: $base is a plain devopsy directory, not managed with releases: nothing to sync into" >&2
   exit 1
 fi
@@ -416,12 +428,14 @@ func CurrentExistsScript(t *Target) string {
 `
 }
 
-// ClaimWriteScript claims the right to write into the child at base,
-// before the first write (SyncOpenFile renamed to SyncStartedFile), or
-// fails: its holder decided already.
-func ClaimWriteScript(base string) string {
+// ClaimWriteScript claims the right to write into the child at base for
+// sync id, before the first write (its SyncOpenFile renamed to
+// SyncStartedFile), or fails: its holder decided already, or the gate
+// is another sync's.
+func ClaimWriteScript(base, id string) string {
 	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
-	return "mv -f " + open + " " + started + " 2>/dev/null || [ -e " + started + " ] || { echo \"devopsy: the child's side ended already (" + base + "): nothing copied\" >&2; exit 1; }\n"
+	mine := func(f string) string { return `[ "$(cut -d' ' -f2 ` + f + ` 2>/dev/null)" = ` + Quote(id) + ` ]` }
+	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { echo \"devopsy: the child's side ended already (" + base + "): nothing copied\" >&2; exit 1; }\n"
 }
 
 // ParseCurrent reads CurrentExistsScript's output.
@@ -467,8 +481,8 @@ func RsyncModule(entry string) string {
 // root in UtilImage, on the host's network to reach the forward.
 // SyncStartedFile goes first, and with last (no stream follows)
 // SyncDoneFile once every entry is copied.
-func SyncReceiveScript(toDir, base, port string, dirs, files, args []string, last bool) string {
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base) +
+func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool) string {
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
 		`copy() {
   echo "devopsy: rsync mnt/$1" >&2
   docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {

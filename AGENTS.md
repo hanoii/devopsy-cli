@@ -490,7 +490,17 @@ repositories fit together and the open ideas.
   fetch), so from there `with_tty` runs it under `setsid -w`
   (`tty_detach`, plainly without `setsid`): no signal reaches it.
   Protocol 2; 3 since the sync decisions (`finish partial`, `settle`)
-  and the heartbeat (`--heartbeat`, `--stdin-guard`).
+  and the heartbeat (`--heartbeat`, `--stdin-guard`); 4 since the gate's
+  sync id. ssh exits 255 when the connection failed or was lost, and
+  ssh passes a script's own status on: activations and holders never
+  exit 255 (`NoExit255`, and `followOutput`'s trap: 254 instead; a
+  drush on a PHP error exits 255), so the operator's lost-connection
+  messages (`sshLost`) are only ssh's. A remote `--import` opens its
+  session with the data's first byte: the server's data guard would
+  take a slow writer (an export waiting for its sync lock) for a
+  session gone. Sync hooks never get `SyncWatchEnv` or `HeartbeatEnv`:
+  a hook running `devopsy --export` would take its own `/dev/null`
+  stdin for a session gone.
 - **From the switch on** a release goes live, or fails and brings the
   previous one back, whatever happens to its session: right after
   `make_current` (after the sync, in a release that syncs; signals are
@@ -704,8 +714,10 @@ repositories fit together and the open ideas.
   lost after a complete copy restored the child on the parent's data
   unsanitized, `finish child abort` doing nothing, and one lost mid-copy
   ran it on a mix). The holder opens a gate before its marker
-  (`SyncOpenFile`, the parent's address) and closes it (`rm`) right
-  before deciding; the child's side of the push claims it right before
+  (`SyncOpenFile`: the parent's address and the sync's id, which the
+  marker carries after a tab and the push passes on, `SyncIDEnv`, so a
+  write left over from an earlier sync never claims a newer gate) and
+  closes it (`rm`) right before deciding; the child's side of the push claims it right before
   its first write (`claimWrite`, `ClaimWriteScript`: a rename to
   `SyncStartedFile`, one of the two wins; the same-server rsync in the
   push, `SyncReceiveScript` across, an import in `syncImport`), so a
@@ -718,7 +730,9 @@ repositories fit together and the open ideas.
   (`syncBlock`) decides once its read of the answer ends, however it
   ends: done is `go` (an `abort` after it too: the copy is complete),
   started alone `partial`, neither the answer (`go` with nothing to
-  sync); then removes both. `--sync-services finish partial` (and
+  sync, which clears an earlier mark too: nothing the labels cover is
+  partial any more; `abort` on a marked one stays `partial`); then
+  removes both. `--sync-services finish partial` (and
   `abort` on an environment marked already) leaves the `stop=true`
   services down and writes `SyncIncompleteFile` (when, from where);
   `finish go` removes it, and a failing `finish child go` writes it (a
