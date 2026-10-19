@@ -1,7 +1,7 @@
 name: e2e
 
-# devopsy against real servers in Docker (e2e/): on demand and nightly,
-# slower than ci's tests.
+# devopsy against real servers in Docker (e2e/): on demand, and nightly
+# when main moved since the last run that passed. Slower than ci's tests.
 on:
   workflow_dispatch:
   schedule:
@@ -9,14 +9,28 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - id: last
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list -R "$GITHUB_REPOSITORY" --workflow e2e.yml --status success --limit 1 --json headSha -q '.[0].headSha')
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "nothing new since $last"
+            echo skip=1 >>"$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
+        if: steps.last.outputs.skip != '1'
       - uses: actions/setup-go@v7
+        if: steps.last.outputs.skip != '1'
         with:
           go-version-file: go.mod
-      - run: go test -tags e2e -count=1 -v ./e2e
+      - if: steps.last.outputs.skip != '1'
+        run: go test -tags e2e -count=1 -v ./e2e

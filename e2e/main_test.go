@@ -157,6 +157,59 @@ func execIn(t *testing.T, where []string, script string) (string, int) {
 	return out.String(), code
 }
 
+// fast is the operator's environment for tests of drops: a heartbeat
+// beat of a second, so a silence counts in seconds (remote.QuietBeats).
+const fast = "DEVOPSY_INTERNAL_HEARTBEAT_EVERY=1"
+
+// background starts command on the operator, in dir, its output in
+// log there.
+func background(t *testing.T, dir, command, log string) {
+	t.Helper()
+	if out, code := op(t, dir, "nohup sh -c "+quote(command)+" >"+log+" 2>&1 </dev/null &"); code != 0 {
+		t.Fatalf("starting %s (%d): %s", command, code, out)
+	}
+}
+
+// eventually waits until cond holds, failing after within.
+func eventually(t *testing.T, within time.Duration, what string, cond func() bool) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for !cond() {
+		if time.Since(start) > within {
+			t.Fatalf("%s: not after %s", what, within)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return time.Since(start)
+}
+
+// dropSilently cuts the operator from the server without a FIN or an
+// RST, as a laptop asleep: both directions dropped. undrop restores it.
+func dropSilently(t *testing.T) {
+	t.Helper()
+	if out, code := op(t, "/", `ip=$(getent hosts server | cut -d' ' -f1) && iptables -A OUTPUT -d "$ip" -j DROP && iptables -A INPUT -s "$ip" -j DROP`); code != 0 {
+		t.Fatalf("dropping (%d): %s", code, out)
+	}
+	t.Cleanup(func() { undrop(t) })
+}
+
+func undrop(t *testing.T) {
+	op(t, "/", "iptables -F")
+}
+
+// exists reports whether path, relative to the deploy user's home on the
+// server, exists.
+func exists(t *testing.T, path string) bool {
+	t.Helper()
+	_, code := srv(t, "test -e "+quote(path))
+	return code == 0
+}
+
+// quote quotes s for sh.
+func quote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // project writes files (path to content, executables ending in a
 // newline-led "#!") into a new project directory on the operator and
 // returns its path there.
