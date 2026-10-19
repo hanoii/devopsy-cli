@@ -252,7 +252,9 @@ func SyncWholeNotice(services []SyncService) string {
 	}
 	msg := fmt.Sprintf("devopsy: %s copies mnt whole, %s included", strings.Join(whole, ", "), strings.Join(included, ", "))
 	if len(exclude) > 0 {
-		msg += fmt.Sprintf(": %s=%s on %s leaves them out", SyncExcludeLabel, strings.Join(exclude, ","), strings.Join(whole, ", "))
+		// An exclude on the service mounting ./mnt never matches: its one
+		// entry is "." itself.
+		msg += fmt.Sprintf(": mount mnt's entries (./mnt/%s) on %s instead of ./mnt, so each copies by its own label", exclude[0], strings.Join(whole, ", "))
 	}
 	return msg
 }

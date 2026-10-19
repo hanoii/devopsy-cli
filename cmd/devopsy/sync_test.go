@@ -1202,7 +1202,7 @@ func TestSyncLabels(t *testing.T) {
 	// notice.
 	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: devopsy.sync.rsync.exclude=db on app leaves them out") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
+	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: mount mnt's entries (./mnt/db) on app instead of ./mnt, so each copies by its own label") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
 		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
 	}
 	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--sync", "--yes")
