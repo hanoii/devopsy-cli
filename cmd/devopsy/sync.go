@@ -163,7 +163,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	// The marker comes on stderr: holders print on one stream.
 	marker := make(chan string, 1)
-	lm := &remote.LineMarker{Prefix: remote.SyncMarker, Found: func(base string) { marker <- base }}
+	lm := &remote.LineMarker{Prefix: remote.SyncMarker, Found: func(rest string) { marker <- rest }}
 	mwErr := lm.Writer(errOut)
 	flush := func() {
 		mwErr.Flush()
@@ -205,11 +205,12 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		<-done
 		flush()
 		return 130
-	case base := <-marker:
+	case found := <-marker:
+		base, id, _ := strings.Cut(found, "\t")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		pushed := make(chan int, 1)
-		go func() { pushed <- runPush(ctx, job, base, rlog, color) }()
+		go func() { pushed <- runPush(ctx, job, base, id, rlog, color) }()
 		var code int
 		interrupted := false
 		select {
@@ -299,12 +300,13 @@ const sshLost = 255
 // server, into the child's directory base. Across servers it forwards the
 // SSH agent, so the parent's server reaches the child's for this session
 // only.
-func runPush(ctx context.Context, job *syncJob, base string, rlog *releaseLog, color bool) int {
+func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLog, color bool) int {
 	p := job.parent
 	env := map[string]string{
 		remote.SyncToEnv:         job.to,
 		remote.SyncSSHPortEnv:    job.port,
 		remote.SyncToBaseEnv:     base,
+		remote.SyncIDEnv:         id,
 		remote.SyncToDirEnv:      base + "/current/.devopsy",
 		remote.SyncToProjectEnv:  job.projectName,
 		remote.SyncToTargetEnv:   job.child.Address,
@@ -943,7 +945,12 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	sayErr("devopsy: running 'devopsy --capability sync " + strings.Join(args, " ") + "'")
 	cmd := exec.CommandContext(ctx, self, append([]string{"--capability", "sync"}, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), env...)
+	// The session's watching is devopsy's, never the hook's: a hook
+	// running devopsy --export would take its own /dev/null stdin for a
+	// session gone.
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, remote.SyncWatchEnv+"=") || strings.HasPrefix(kv, remote.HeartbeatEnv+"=")
+	}), env...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	if stdout == nil {
@@ -1347,7 +1354,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), port, present, files, args, last), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1380,13 +1387,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -1621,8 +1628,9 @@ func markIncomplete(base string) error {
 	}
 	// Who wrote it: the parent the gate named (remote.SyncOpenFile's
 	// content, carried into SyncStartedFile), else this sync's.
-	from, _ := os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
-	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(strings.TrimSpace(string(from)), os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
+	started, _ := os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
+	from, _, _ := strings.Cut(strings.TrimSpace(string(started)), " ")
+	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(from, os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
 	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
 		return fmt.Errorf("marking %s as a partial copy: %w", base, err)
 	}
@@ -1635,13 +1643,20 @@ func fileExists(path string) bool {
 }
 
 // claimWrite claims the right to write into the child at base before
-// the first write: the holder's gate (remote.SyncOpenFile) renamed to
-// remote.SyncStartedFile, one rename or the holder's unlink winning, or
-// a write of this sync claimed it already. Neither: the holder decided,
-// and nothing may be written into what it restored.
+// the first write: the holder's gate (remote.SyncOpenFile) of this sync
+// (remote.SyncIDEnv) renamed to remote.SyncStartedFile, one rename or
+// the holder's unlink winning, or a write of this sync claimed it
+// already. Neither: the holder decided, or the gate is another sync's,
+// and nothing may be written into it.
 func claimWrite(base string) error {
-	started := filepath.Join(base, remote.SyncStartedFile)
-	if os.Rename(filepath.Join(base, remote.SyncOpenFile), started) == nil || fileExists(started) {
+	open, started := filepath.Join(base, remote.SyncOpenFile), filepath.Join(base, remote.SyncStartedFile)
+	id := os.Getenv(remote.SyncIDEnv)
+	mine := func(path string) bool {
+		data, err := os.ReadFile(path)
+		f := strings.Fields(string(data))
+		return err == nil && len(f) == 2 && f[1] == id
+	}
+	if (mine(open) && os.Rename(open, started) == nil) || mine(started) {
 		return nil
 	}
 	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)

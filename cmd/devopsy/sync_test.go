@@ -2054,11 +2054,17 @@ func TestTrimSyncLog(t *testing.T) {
 // closed it (deciding), nothing is written into what it restored.
 func TestClaimWrite(t *testing.T) {
 	base := t.TempDir()
+	t.Setenv(remote.SyncIDEnv, "100.7")
 	if err := claimWrite(base); err == nil {
 		t.Error("claimed with the gate closed")
 	}
-	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod\n", 0o644)
-	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile)) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod\n" {
+	// Another sync's gate (a write left over from an earlier one).
+	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod 200.8\n", 0o644)
+	if err := claimWrite(base); err == nil || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+		t.Errorf("claimed another sync's gate: %v", err)
+	}
+	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod 100.7\n", 0o644)
+	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile)) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod 100.7\n" {
 		t.Errorf("first claim: %v", err)
 	}
 	// Later writes of the same sync.

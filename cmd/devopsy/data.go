@@ -630,12 +630,18 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		return fail(err.Error())
 	}
 	end := "\n-- devopsy import end " + hex.EncodeToString(nonce) + " --\n"
+	// The session opens with the data's first byte: the server takes a
+	// pause of remote.DataQuietBeats for a session gone, and a writer
+	// may be slow to start (an export waiting for its environment's
+	// sync lock, or dumping first). After that, data flows.
+	in := bufio.NewReader(os.Stdin)
+	_, _ = in.Peek(1)
 	r, w, err := os.Pipe()
 	if err != nil {
 		return fail(err.Error())
 	}
 	go func() {
-		if _, err := io.Copy(w, os.Stdin); err == nil {
+		if _, err := io.Copy(w, in); err == nil {
 			_, _ = io.WriteString(w, end)
 		}
 		w.Close()

@@ -350,7 +350,7 @@ func TestReleaseSettings(t *testing.T) {
 func TestActivateKeepAndLevels(t *testing.T) {
 	root := t.TempDir()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=3\\n' \""+root+"\"; exit; fi\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=4\\n' \""+root+"\"; exit; fi\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	run := func(tg *Target, id string) string {

@@ -175,7 +175,11 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		fmt.Println("data        a sync is copying into it")
 	}
 	if partial != "" {
-		cli.Fprint(os.Stdout, red, "data        from a sync that did not complete ("+partial+"): nothing runs on it until one does: devopsy @"+targetRef(t)+" --sync", color)
+		fix := "devopsy @" + targetRef(t) + " --sync"
+		if id == "" {
+			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
+		}
+		cli.Fprint(os.Stdout, red, "data        from a sync that did not complete ("+partial+"): nothing runs on it until one does: "+fix, color)
 	}
 	fmt.Print(rest)
 	return 0
