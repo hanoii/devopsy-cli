@@ -23,24 +23,30 @@ func dropProject(t *testing.T, name string) string {
 // the heartbeat's silence cancels the release, its lock freed, nothing
 // live changed, the undo in the release's own log.
 func TestDropSilentlyBeforeSwitch(t *testing.T) {
-	dir := dropProject(t, "dropbefore")
+	dropBeforeSwitch(t, "dropbefore", fast(), quiet(6, 20*time.Second))
+}
+
+// The same with the real timeouts, whatever E2E_BEAT: 30 seconds.
+func TestDropSilentlyRealTimeout(t *testing.T) {
+	dropBeforeSwitch(t, "dropreal", "", 50*time.Second)
+}
+
+func dropBeforeSwitch(t *testing.T, name, env string, within time.Duration) {
+	dir := dropProject(t, name)
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	first, _ := srv(t, "readlink dropbefore/prod/current")
+	first, _ := srv(t, "readlink "+name+"/prod/current")
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing") })
 	op(t, dir, "sleep 1.1")
-	background(t, dir, fast+" devopsy @server:prod --release", "/tmp/dropbefore.log")
+	background(t, dir, env+" devopsy @server:prod --release", "/tmp/"+name+".log")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 
 	dropSilently(t)
-	took := eventually(t, 30*time.Second, "the release lock freed", func() bool {
-		_, code := srv(t, "flock -n dropbefore/prod/.lock true")
-		return code == 0
-	})
+	took := eventually(t, within, "the release lock freed", func() bool { return lockFree(t, name+"/prod/.lock") })
 	t.Logf("cancelled %s after the drop", took)
-	if now, _ := srv(t, "readlink dropbefore/prod/current"); now != first {
+	if now, _ := srv(t, "readlink "+name+"/prod/current"); now != first {
 		t.Errorf("current changed: %s, was %s", now, first)
 	}
 	if out, _ := srv(t, "pgrep -f '[c]ommands/wait' || true"); strings.TrimSpace(out) != "" {
@@ -60,7 +66,7 @@ func TestDropAfterSwitch(t *testing.T) {
 	srv(t, "rm -f running; touch wait-run")
 	t.Cleanup(func() { srv(t, "rm -f wait-run running") })
 	op(t, dir, "sleep 1.1")
-	background(t, dir, fast+" devopsy @server:prod --release", "/tmp/dropafter.log")
+	background(t, dir, fast()+" devopsy @server:prod --release", "/tmp/dropafter.log")
 	eventually(t, time.Minute, "the run step waiting", func() bool { return exists(t, "running") })
 
 	// The operator's ssh killed: the server sees the session close.

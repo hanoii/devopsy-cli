@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -64,14 +65,18 @@ var SyncingInto = regexp.MustCompile(`devopsy: syncing into ([0-9]{14})`)
 // push, and the parent's sessions to the child): a session can stay quiet
 // for the whole copy, and a NAT or firewall dropping it would abort the
 // sync halfway, or leave a push writing into a child already restored.
-var KeepAlive = []string{"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
+//
+// Every 3 beats of the heartbeat (HeartbeatEvery: 15 seconds), so the
+// end-to-end tests' shorter beat keeps the order between the push's
+// silence, the operator noticing and the holder's silence.
+var KeepAlive = []string{"-o", "ServerAliveInterval=" + strconv.Itoa(3*int(HeartbeatEvery().Seconds())), "-o", "ServerAliveCountMax=3"}
 
 // Bounded are KeepAlive plus a connect timeout: for sessions devopsy
 // must not hang on, a release log's save after a dropped connection
 // (it waited on connect, minutes, with nobody to tell), --export and
 // --import (their data can pause, and a dead connection otherwise
 // lasts until TCP gives up).
-var Bounded = []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
+var Bounded = append([]string{"-o", "ConnectTimeout=30"}, KeepAlive...)
 
 // ChildSSH are the options of the parent's sessions to the child (the
 // rsync session and --sync-exec), with KeepAlive: the operator's agent,
