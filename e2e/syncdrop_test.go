@@ -75,3 +75,79 @@ func TestSyncDropHolder(t *testing.T) {
 	undrop(t)
 	op(t, "/", "pkill devopsy || true")
 }
+
+// A holder killed mid-copy (kill -9, the OOM killer): devopsy stops the
+// push, the holder's files stay, and the next to take the lock settles
+// them. --status tells a sync under way from leftovers, a release
+// refuses before uploading, and a sync completes it.
+func TestSyncKilledHolder(t *testing.T) {
+	dir := syncProject(t, "skill")
+	syncReleaseBoth(t, "skill", dir)
+	startSync(t, "skill", dir, 120)
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync is copying into it") {
+		t.Errorf("--status during the sync:\n%s", out)
+	}
+	if out, code := srv(t, "pkill -9 -f '[s]yncing into'"); code != 0 {
+		t.Fatalf("killing the holder (%d): %s", code, out)
+	}
+	eventually(t, time.Minute, "the locks freed", func() bool {
+		return lockFree(t, "skill/dev/.lock") && lockFree(t, "skill/prod/.sync-lock")
+	})
+	if out, _ := srv(t, "pgrep -af '[c]apability sync import' || true"); strings.TrimSpace(out) != "" {
+		t.Errorf("the import still runs: %s", out)
+	}
+	if !exists(t, "skill/dev/.devopsy-sync.started") || syncState(t, "skill", "prod", "data") != "running" {
+		t.Errorf("after the kill: started %v, prod's data %q", exists(t, "skill/dev/.devopsy-sync.started"), syncState(t, "skill", "prod", "data"))
+	}
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "did not complete") {
+		t.Errorf("--status after:\n%s", out)
+	}
+	releases, _ := srv(t, "ls skill/dev/releases | wc -l")
+	op(t, dir, "sleep 1.1")
+	if out, code := op(t, dir, "devopsy @dev --release"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a release on it (%d):\n%s", code, out)
+	}
+	if again, _ := srv(t, "ls skill/dev/releases | wc -l"); again != releases {
+		t.Errorf("uploaded anyway: %s releases, were %s", again, releases)
+	}
+	srv(t, "echo 0 >import-wait-skill-dev; rm -f finish.log")
+	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code != 0 || exists(t, "skill/dev/.devopsy-sync.incomplete") || exists(t, "skill/dev/.devopsy-sync.started") || syncState(t, "skill", "dev", "data") != "running" {
+		t.Errorf("a sync after it (%d):\n%s", code, out)
+	}
+	if finish, _ := srv(t, "cat finish.log"); !strings.HasPrefix(finish, "child partial\n") || !strings.HasSuffix(finish, "child go\n") {
+		t.Errorf("finish: settled, then completed: %q", finish)
+	}
+}
+
+// A --release-sync whose push is cut mid-copy: the release fails, the
+// previous one is current again but not restarted on the partial copy,
+// --releases says FAILED, and a rollback refuses.
+func TestReleaseSyncCut(t *testing.T) {
+	dir := syncProject(t, "rscut")
+	syncReleaseBoth(t, "rscut", dir)
+	first, _ := srv(t, "readlink rscut/dev/current")
+	srv(t, "rm -f importing-rscut-dev; echo 120 >import-wait-rscut-dev")
+	t.Cleanup(func() { srv(t, "rm -f import-wait-rscut-dev importing-rscut-dev") })
+	op(t, dir, "sleep 1.1")
+	background(t, dir, fast()+" devopsy @dev --release-sync --yes", "/tmp/rscut.log")
+	eventually(t, 2*time.Minute, "the import running", func() bool { return exists(t, "importing-rscut-dev") })
+	dropConnection(t, "[-]-sync-push")
+	eventually(t, quiet(18, 40*time.Second), "the release's end", func() bool {
+		return lockFree(t, "rscut/dev/.lock") && lockFree(t, "rscut/prod/.sync-lock")
+	})
+	undrop(t)
+	log, _ := op(t, "/", "sleep 1; cat /tmp/rscut.log")
+	if now, _ := srv(t, "readlink rscut/dev/current"); now != first {
+		t.Errorf("current %s, want %s", now, first)
+	}
+	if !exists(t, "rscut/dev/.devopsy-sync.incomplete") || syncState(t, "rscut", "dev", "data") != "exited" || !strings.Contains(log, "not restarting") {
+		t.Errorf("marked %v, data %q:\n%s", exists(t, "rscut/dev/.devopsy-sync.incomplete"), syncState(t, "rscut", "dev", "data"), log)
+	}
+	if out, _ := op(t, dir, "devopsy @dev --releases"); !strings.Contains(out, "FAILED") {
+		t.Errorf("--releases:\n%s", out)
+	}
+	if out, code := op(t, dir, "devopsy @dev --rollback"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Errorf("a rollback (%d):\n%s", code, out)
+	}
+	op(t, "/", "pkill devopsy || true")
+}
