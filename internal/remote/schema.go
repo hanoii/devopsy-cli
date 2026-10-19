@@ -104,7 +104,7 @@ environments:
       keep: 1
 
 # Targets: devopsy @[<server>:][<instance>/]<environment> ...
-#   @vm1:prod  @vm1:eu/prod  @prod
+#   @vm1:prod  @vm1:shop-demo/prod  @prod
 # What the target leaves out comes from variables, in the environment or
 # .devopsy/.env: the server from DEVOPSY_SERVER_<ENVIRONMENT> (upper case,
 # others as _), the pattern's (pr-*: DEVOPSY_SERVER_PR), then DEVOPSY_SERVER;
