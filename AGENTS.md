@@ -119,6 +119,19 @@ conflicts with one is a design question for the user, not a detail.
   bare help is devopsy's own; compose's is `devopsy -- --help` and
   `devopsy <command> --help` (captured, `docker compose` read as
   `devopsy`).
+- **Every change carries its test.** A fix comes with a test that
+  fails without it (run it against the code before the fix, and say
+  so); a feature with tests of what it promises; and a behavior a
+  change touches that has no test gets one then. Unit tests first: Go
+  tests, the scripts run against fake `docker` and `ssh` (`cmd/devopsy`,
+  `internal/remote`); an end-to-end test (`e2e/`, Checks) only for what
+  needs real sshd, Docker, the network, a terminal or timing. One test
+  per behavior: extend the test that covers it before adding another,
+  and never test the same thing at both levels. Why: the reviews of
+  October 2026 found bugs in code that worked when written and broke
+  under a later change nobody re-tested; a test is what keeps a fix
+  fixed. Cost: fakes grow with the code (extend them, never weaken a
+  test to pass), and the e2e suite takes minutes.
 - **Projects own policy; devopsy owns mechanics.** devopsy knows no
   URL, proxy or application: projects compute hosts (the `env`
   capability), sanitize copies (`finish`), hold visitors during a
@@ -1338,7 +1351,8 @@ as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the operator's
 runs everything with the real timeouts, and one test always does. The
 test server's deploy user has `/bin/sh` (dash) as login shell, stricter
 than devopsy-server's bash (it found the watcher signalling only the
-script there). A scenario a review finds goes there.
+script there). A scenario a review finds goes there, unless a unit
+test can cover it (Principles, "Every change carries its test").
 
 ```sh
 go test -tags e2e -count=1 -v -timeout 25m ./e2e   # E2E_KEEP=1 keeps the containers
