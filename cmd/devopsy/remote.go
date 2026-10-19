@@ -782,9 +782,14 @@ func checkStepScopes(projectDir string, steps ...*remote.Steps) error {
 }
 
 // runLocalStep runs `devopsy args...` in the local project, for a
-// release or rollback of t: with the target's env, DEVOPSY_TARGET and, for
-// a release, DEVOPSY_RELEASE_COMMIT, over the caller's environment. Never
-// the server's shared/.env: its secrets stay there.
+// release or rollback of t: with the target's env, a child's parent and,
+// for a release, DEVOPSY_RELEASE_COMMIT, over the caller's environment.
+// Never the server's shared/.env: its secrets stay there. Never
+// DEVOPSY_TARGET, DEVOPSY_ENVIRONMENT or DEVOPSY_INSTANCE either: set,
+// they mean a release on a server (devopsy-target.env), which projects'
+// env capabilities test, and DEVOPSY_INSTANCE would reach the step's own
+// devopsy calls. A command that needs the address declares it (## Needs:)
+// and gets it in DEVOPSY_COMMAND_TARGET.
 func runLocalStep(t *remote.Target, projectDir string, args []string, commit string) int {
 	self, err := os.Executable()
 	if err != nil {
@@ -796,7 +801,6 @@ func runLocalStep(t *remote.Target, projectDir string, args []string, commit str
 	for k, v := range t.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.Env = append(cmd.Env, "DEVOPSY_TARGET="+t.Address, "DEVOPSY_ENVIRONMENT="+t.Name, "DEVOPSY_INSTANCE="+t.Instance)
 	for _, kv := range parentEnv(t) {
 		if _, ok := t.Env[kv[0]]; !ok {
 			cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])

@@ -231,9 +231,13 @@ function works, line by line, is in its comments: keep the detail there.
   remote steps share one SSH session, which holds the release lock, so
   before is local steps then remote ones, after is remote then local,
   checked when the config is read. Local steps get the target's env,
-  `DEVOPSY_TARGET` (the resolved address), a child's `DEVOPSY_PARENT`
-  and `DEVOPSY_PARENT_TARGET` (`parentEnv`) and the commit, never the
-  server's `.env`.
+  a child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET` (`parentEnv`)
+  and the commit, never the server's `.env`, and never `DEVOPSY_TARGET`,
+  `DEVOPSY_ENVIRONMENT` or `DEVOPSY_INSTANCE` (decided): set, they mean a
+  release on a server, which the templates' `env` capabilities test,
+  and `DEVOPSY_INSTANCE` would reach the step's own devopsy calls. A step
+  that needs the address declares `## Needs: target`
+  (`DEVOPSY_COMMAND_TARGET`).
 - Remote commands run through the `current` symlink, never a release
   path: compose stores bind-mount paths in containers, and pruned
   releases would break them. The exception is `prepare`, in the new

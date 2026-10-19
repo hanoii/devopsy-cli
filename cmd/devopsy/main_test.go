@@ -523,11 +523,11 @@ func TestReleaseSteps(t *testing.T) {
 		"  release:\n    before: [local: check, remote: mark before]\n    prepare: secrets\n    run: deploy --fast\n    after: [remote: mark after, local: done]\n"
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	write(t, filepath.Join(dot, ".env"), "DEVOPSY_SERVER=devopsy@server\n", 0o644)
-	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\n## Run: local\necho \"check target=$DEVOPSY_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "check"), "#!/bin/sh\n## Run: local\necho \"check target=$DEVOPSY_TARGET env=$DEVOPSY_ENVIRONMENT instance=$DEVOPSY_INSTANCE command=$DEVOPSY_COMMAND_TARGET site=$SITE\"\nexit ${FAIL_BEFORE:-0}\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "mark"), "#!/bin/sh\necho \"mark $*\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "secrets"), "#!/bin/sh\ngrep -q '^SECRET=' \"$DEVOPSY_PROJECT_DIR/.env\" || echo SECRET=generated >> \"$DEVOPSY_PROJECT_DIR/.env\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "deploy"), "#!/bin/sh\n## Run: target\necho \"deploy $* in $(basename \"$(readlink \"$DEVOPSY_PROJECT_DIR/..\" 2>/dev/null || dirname \"$DEVOPSY_PROJECT_DIR\")\")\"\n[ \"$1\" = --back ] || exit ${FAIL_REMOTE:-0}\n", 0o755)
-	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\necho after ran\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "done"), "#!/bin/sh\n## Run: local\n## Needs: target\necho \"after ran at=$DEVOPSY_COMMAND_TARGET target=$DEVOPSY_TARGET\"\n", 0o755)
 	env := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":" + fakeBin(t) + ":/usr/bin:/bin", "HOME=" + tmp}
 	run := func(extra []string, args ...string) (string, int) {
 		t.Helper()
@@ -563,9 +563,9 @@ func TestReleaseSteps(t *testing.T) {
 	}
 	// A local command that needs an address runs locally with it, as typed,
 	// and nothing of the target's.
-	write(t, filepath.Join(dot, "commands", "addr"), "#!/bin/sh\n## Run: local\n## Needs: target\necho \"addr=$DEVOPSY_COMMAND_TARGET target=$DEVOPSY_TARGET site=$SITE $*\"\n", 0o755)
+	write(t, filepath.Join(dot, "commands", "addr"), "#!/bin/sh\n## Run: local\n## Needs: target\necho \"addr=$DEVOPSY_COMMAND_TARGET target=$DEVOPSY_TARGET env=$DEVOPSY_ENVIRONMENT instance=$DEVOPSY_INSTANCE site=$SITE $*\"\n", 0o755)
 	write(t, filepath.Join(dot, "commands", "tunnel"), "#!/bin/sh\n## Run: local\n## Needs: server\necho \"tunnel=$DEVOPSY_COMMAND_TARGET\"\n", 0o755)
-	if out, code := run(nil, "@prod", "addr", "x"); code != 0 || !strings.Contains(out, "addr=prod target= site= x") {
+	if out, code := run(nil, "@prod", "addr", "x"); code != 0 || !strings.Contains(out, "addr=prod target= env= instance= site= x") {
 		t.Fatalf("local command with a target (%d):\n%s", code, out)
 	}
 	if out, code := run(nil, "addr"); code == 0 || !strings.Contains(out, "addr needs a target") {
@@ -588,8 +588,10 @@ func TestReleaseSteps(t *testing.T) {
 	targets = "public: [SECRET]\n" + targets
 	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 
-	// A failing local before step stops before the server.
-	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "check target=devopsy@server:prod site=one") || !strings.Contains(out, "nothing changed on devopsy@server:prod") {
+	// A failing local before step stops before the server. Local steps get
+	// the target's env, never its address unless they need it: a set
+	// DEVOPSY_TARGET means a release on a server.
+	if out, code := run([]string{"FAIL_BEFORE=3"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "check target= env= instance= command= site=one") || !strings.Contains(out, "nothing changed on devopsy@server:prod") {
 		t.Fatalf("before failure (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(server); !os.IsNotExist(err) {
@@ -611,7 +613,7 @@ func TestReleaseSteps(t *testing.T) {
 	next()
 	write(t, filepath.Join(server, "shared", ".env"), "SECRET=generated\nNEEDED=1\n", 0o644)
 	out, code = run(nil, "@prod", "--release")
-	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "mark after") || !strings.Contains(out, "after ran") {
+	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "mark after") || !strings.Contains(out, "after ran at=devopsy@server:prod target=\n") {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	first := current()

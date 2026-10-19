@@ -532,9 +532,13 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Hence local before steps first and local after steps last. Remote before
   steps run in the current release, with its commands, and none run on a
   first release.
-- **Local steps** get the environment's `env`, `DEVOPSY_TARGET` (the
-  resolved target), `DEVOPSY_RELEASE_COMMIT` and, for a child,
-  `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never the server's `.env`.
+- **Local steps** get the environment's `env`, `DEVOPSY_RELEASE_COMMIT`
+  and, for a child, `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`, never
+  the server's `.env`. Never `DEVOPSY_TARGET`, `DEVOPSY_ENVIRONMENT` or
+  `DEVOPSY_INSTANCE`: those mean a release on a server, where they come
+  from `devopsy-target.env` (an `env` capability can tell local work
+  from a release by them). A step that needs the address is a command
+  with `## Needs: target`, which gets it in `DEVOPSY_COMMAND_TARGET`.
   Without steps, devopsy prints a starting point.
 - **The names check:** containers of the release's compose project from
   another environment's directory fail the release before `prepare`.
