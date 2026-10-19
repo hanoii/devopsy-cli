@@ -106,6 +106,20 @@ conflicts with one is a design question for the user, not a detail.
   session never holds a lock or keeps a service down; lock waits are
   announced and bounded (`lockWait`). Cost: an operator frozen past the
   quiet time (a laptop asleep, Ctrl-Z) cancels, cleanly.
+- **Words are never built-ins.** devopsy's own features are flags or
+  `@target`; a word is a project command, else a compose command
+  (`ComposeCommands`: compose's own completion, cached, refreshed when
+  a word is missing), else an error. Why: a project command or a new
+  compose command never clashes with devopsy, and `devopsy <anything
+  compose takes>` keeps working. Cost: devopsy's features read as flags
+  (`--release`, `--sync`), never as subcommands. Arguments starting
+  with a flag go to compose unchecked (`--profile x up`), except a flag
+  alone, which compose never has: an unknown lone flag is an error with
+  the nearest flag as a hint (`cli.LoneUnknownFlag`, in `Build` and in
+  `runRemote` before any connection); `--` is the escape hatch. The
+  bare help is devopsy's own; compose's is `devopsy -- --help` and
+  `devopsy <command> --help` (captured, `docker compose` read as
+  `devopsy`).
 - **Projects own policy; devopsy owns mechanics.** devopsy knows no
   URL, proxy or application: projects compute hosts (the `env`
   capability), sanitize copies (`finish`), hold visitors during a
@@ -172,17 +186,6 @@ the rule, why, and where it lives.
   address: `targetRef`, `hintAddress` in scripts). Why: the command
   works when copied, and an alias with `source:` releases only from its
   checkout.
-- **Words are never built-ins.** devopsy's features are flags or
-  `@target`; a word is a project command, else a compose command
-  (`ComposeCommands`: compose's own completion, cached, refreshed when
-  a word is missing), else an error. Why: a project command or a new
-  compose command never clashes with devopsy. Arguments starting with a
-  flag go to compose unchecked (`--profile x up`), except a flag alone,
-  which compose never has: an unknown lone flag is an error with the
-  nearest flag as a hint (`cli.LoneUnknownFlag`, in `Build` and in
-  `runRemote` before any connection); `--` is the escape hatch. The bare
-  help is devopsy's own; compose's is `devopsy -- --help` and `devopsy
-  <command> --help` (captured, `docker compose` read as `devopsy`).
 - **Every flag is one entry in `cli.Flags`,** by task group, with its
   scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description. Why: the
   help, completion (`LocalFlags`, `RemoteFlags`), `RemoteOnly` and
