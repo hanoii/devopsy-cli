@@ -1,0 +1,8 @@
+#!/bin/sh
+# server: dockerd and sshd; operator: nothing, the tests exec into it.
+set -eu
+if [ "${1:-server}" = server ]; then
+  dockerd >/var/log/dockerd.log 2>&1 &
+  /usr/sbin/sshd
+fi
+exec sleep infinity

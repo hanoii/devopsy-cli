@@ -38,6 +38,7 @@ repositories fit together and the open ideas.
   command adds the fixes only it knows. The message reads as a sentence
   ("dev's parent, prod, has no server"). New so far only for a parent
   without a server; the other messages move over as they are touched.
+- `e2e/`: end-to-end tests against servers in Docker (Checks).
 - `install.sh` (POSIX `sh`, dash and busybox ash), `scripts/devopsy` (runs
   the checkout's code), `.goreleaser.yaml`, `.github/workflows/`.
 
@@ -1149,7 +1150,19 @@ docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
   golang:1.26-trixie go test -count=1 ./...
 ```
 
-End to end: an OrbStack Debian 13 machine (`orb create debian:trixie
+End to end, in Docker (`e2e/`, behind the `e2e` build tag): privileged
+Debian 13 containers with their own Docker and sshd as servers, an
+operator container, devopsy built from the checkout in each; the
+tests drive them with `docker exec` and check from outside. Locally
+with any Docker, on GitHub nightly and on demand (`e2e.yml`). A
+scenario a review finds goes there.
+
+```sh
+go test -tags e2e -count=1 -v ./e2e   # E2E_KEEP=1 keeps the containers
+```
+
+What only a real setup shows (Traefik, certificates, the templates) is
+still by hand: an OrbStack Debian 13 machine (`orb create debian:trixie
 devopsy-test`) set up with devopsy-server, a linux/arm64 build installed in
 it, and targets like `@devopsy@devopsy-test@orb:prod` (OrbStack's SSH needs
 no keys). Release the Traefik template there, then a template importing
