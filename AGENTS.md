@@ -2,9 +2,9 @@
 
 devopsy-cli is `devopsy`, a Go CLI that runs Docker Compose projects with a
 `.devopsy/` directory, locally and on servers over SSH. `README.md` is the
-user-facing behavior: keep it in sync with every change. The workspace
-(`../devopsy/README.md`, `../devopsy/ROADMAP.md`) describes how the
-repositories fit together and the open ideas.
+user-facing behavior: keep it in sync with every change. devopsy-server
+sets up hosts for it, and the devopsy-template-* repositories are
+projects built on it.
 
 This file holds the rules, the decisions with their reasons, and the
 findings a later session must not have to rediscover. How a script or a
@@ -1105,7 +1105,7 @@ under their `LogSection` time, never under a later anchor.
   Checked only at releases, never on a local `up` (a test proxy beside
   a main one is normal locally), and two releases claiming one role on
   different targets at once are not locked against each other
-  (accepted; ROADMAP.md's pinning roles).
+  (accepted; pinning roles to their holders is an idea, not built).
 
 ## Other features
 
@@ -1180,8 +1180,8 @@ under their `LogSection` time, never under a later anchor.
   `ClearAllForwardings=yes`, since
   the user's `LocalForward` lines clash between sessions. Anything
   faster (connection sharing) is the user's SSH config, which
-  `--ssh-config` suggests and never writes; built-in sharing is in
-  ROADMAP.md. Test fakes of ssh run their last argument.
+  `--ssh-config` suggests and never writes; built-in sharing is an
+  idea, not built. Test fakes of ssh run their last argument.
 - **`--context-hash`** is a pure helper; devopsy builds nothing. Errors
   only ever go towards a new hash (a kept file costs a rebuild, a
   dropped one would reuse a stale image), hence Docker's own matcher

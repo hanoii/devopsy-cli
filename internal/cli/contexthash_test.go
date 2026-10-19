@@ -88,7 +88,7 @@ const hashCompose = `services:
     image: mariadb:11
 `
 
-// Like shop: the Dockerfile in .devopsy/, which its own dockerignore
+// Like a real image-mode project: the Dockerfile in .devopsy/, which its own dockerignore
 // leaves out of the context, with a re-included directory.
 func hashRepo(t *testing.T) *gitRepo {
 	return newGitRepo(t, map[string]string{
