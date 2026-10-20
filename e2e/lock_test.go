@@ -187,3 +187,132 @@ func TestRemovalsCutWhileWaiting(t *testing.T) {
 		}
 	}
 }
+
+// --releases remove and --destroy interrupted at a terminal (Ctrl-C)
+// while they wait for the server's image lock (another environment's
+// fetch holds it) remove nothing once it is free, as when they wait for
+// the release lock.
+//
+// Bug: their scripts print the locked marker, and take devopsy's go,
+// before they take the image lock: --releases remove, cut while it waits
+// for it, removes the release once the lock comes (img ignores the gone
+// session's SIGPIPE). It should find no go, as it does for the release
+// lock, and remove nothing. --destroy only stops by chance, on its first
+// write to the gone session.
+func TestRemovalsCutWhileWaitingForImages(t *testing.T) {
+	dir := dropProject(t, "cutimages")
+	for i := 0; i < 2; i++ {
+		op(t, dir, "sleep 1.1")
+		if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+			t.Fatalf("release (%d):\n%s", code, out)
+		}
+	}
+	t.Cleanup(func() { srv(t, "rm -f hold-images") })
+	for _, command := range []string{"--releases remove %s --yes", "--destroy --yes"} {
+		old, _ := srv(t, "ls cutimages/prod/releases | head -n 1")
+		old = strings.TrimSpace(old)
+		if strings.Contains(command, "%s") {
+			command = strings.Replace(command, "%s", old, 1)
+		}
+		// The image lock held shared, as a fetch on the server holds it.
+		srv(t, "touch hold-images && (nohup flock -s .devopsy-images.lock sh -c 'while [ -e hold-images ]; do sleep 0.2; done' >/dev/null 2>&1 </dev/null &)")
+		eventually(t, 30*time.Second, command+": the image lock held", func() bool { return !lockFree(t, ".devopsy-images.lock") })
+		// On a terminal of its own, out of a shell's background (see
+		// TestRemovalsCutWhileWaiting).
+		if out, code := op(t, dir, "rm -f /tmp/cutimages && setsid -f script -qfec "+quote("devopsy @server:prod "+command)+" /tmp/cutimages >/dev/null 2>&1 </dev/null"); code != 0 {
+			t.Fatalf("starting %s (%d): %s", command, code, out)
+		}
+		eventually(t, time.Minute, command+": the waiting line", func() bool {
+			out, _ := op(t, "/", "cat /tmp/cutimages")
+			return strings.Contains(out, "waiting for the server's images")
+		})
+		ctrlC(t)
+		eventually(t, 30*time.Second, command+": devopsy's end", func() bool {
+			_, code := op(t, "/", "pgrep -f '^devopsy @server'")
+			return code != 0
+		})
+		srv(t, "rm -f hold-images")
+		// Whatever the cut command left waiting on the server has run.
+		time.Sleep(3 * time.Second)
+		eventually(t, time.Minute, command+": the locks free", func() bool {
+			return lockFree(t, ".devopsy-images.lock") && lockFree(t, "cutimages/prod/.lock")
+		})
+		if !exists(t, "cutimages/prod/releases/"+old) {
+			out, _ := op(t, "/", "cat /tmp/cutimages")
+			list, _ := srv(t, "ls -la cutimages/prod cutimages/prod/releases 2>&1")
+			t.Errorf("%s, interrupted while it waited for the image lock, removed %s:\n%s\n%s", command, old, out, list)
+		}
+		if out, _ := srv(t, "docker ps --filter label=com.docker.compose.project=cutimages-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+			t.Errorf("%s, interrupted while it waited for the image lock: not running: %q", command, out)
+		}
+	}
+}
+
+// --sync cut while its holder waits for the child's release lock (Ctrl-C
+// at a terminal, its connection dropped silently) changes nothing on the
+// child once the lock is free: its stop=true services keep running, and
+// no sync hook runs there.
+//
+// Bug, the silent drop: the holder's watcher is never armed, and the
+// holder reads the session's end only after its prepare: once the lock
+// comes it stops the child's stop=true services, runs the sync
+// capability's hooks (prepare child, finish child abort) and starts the
+// services again, for a sync nobody is there for. Ctrl-C passes only
+// because the holder's first write after the lock ("syncing into") goes
+// to a closed session and ends it. It should end once it holds the lock,
+// before prepare, as the gated scripts do.
+func TestSyncCutWhileWaiting(t *testing.T) {
+	dir := phasesProject(t, "syncwait", nil)
+	syncReleaseBoth(t, "syncwait", dir)
+	started := func() string {
+		out, _ := srv(t, "docker inspect -f '{{.State.StartedAt}}' $(docker ps -aq --filter label=com.docker.compose.project=syncwait-dev --filter label=com.docker.compose.service=data)")
+		return strings.TrimSpace(out)
+	}
+	t.Cleanup(func() { srv(t, "rm -f wait-run-syncwait-dev running-syncwait-dev") })
+	for _, cut := range []string{"Ctrl-C", "a silent drop"} {
+		srv(t, "rm -f running-syncwait-dev finish.log; touch wait-run-syncwait-dev")
+		op(t, dir, "sleep 1.1")
+		// A release of dev holding its lock, in its run step.
+		background(t, dir, "devopsy @dev --release-no-sync; echo exit=$?", "/tmp/syncwaitholder.log")
+		eventually(t, time.Minute, cut+": dev's release in its run step", func() bool { return exists(t, "running-syncwait-dev") })
+		before := started()
+		if cut == "Ctrl-C" {
+			// On a terminal of its own (see TestRemovalsCutWhileWaiting).
+			if out, code := op(t, dir, "rm -f /tmp/syncwait && setsid -f script -qfec "+quote("devopsy @server:dev --sync --yes")+" /tmp/syncwait >/dev/null 2>&1 </dev/null"); code != 0 {
+				t.Fatalf("starting --sync (%d): %s", code, out)
+			}
+		} else {
+			background(t, dir, fast()+" devopsy @server:dev --sync --yes", "/tmp/syncwait")
+		}
+		eventually(t, time.Minute, cut+": the waiting line", func() bool {
+			out, _ := op(t, "/", "cat /tmp/syncwait")
+			return strings.Contains(out, "waiting for the release running on")
+		})
+		if cut == "Ctrl-C" {
+			ctrlC(t)
+		} else {
+			// Only the holder's session: the release holding the lock
+			// keeps its own.
+			dropConnection(t, "[s]yncing into")
+		}
+		eventually(t, quiet(12, 30*time.Second), cut+": devopsy's end", func() bool {
+			_, code := op(t, "/", "pgrep -f '^devopsy @server'")
+			return code != 0
+		})
+		srv(t, "rm -f wait-run-syncwait-dev")
+		eventually(t, 2*time.Minute, cut+": the release's end", func() bool {
+			out, _ := op(t, "/", "cat /tmp/syncwaitholder.log")
+			return strings.Contains(out, "exit=")
+		})
+		// Whatever the cut sync left waiting on the server has run (a
+		// holder's quiet time, with the tests' beat).
+		time.Sleep(quiet(18, 5*time.Second))
+		eventually(t, time.Minute, cut+": the lock free", func() bool { return lockFree(t, "syncwait/dev/.lock") })
+		finish, _ := srv(t, "cat finish.log 2>/dev/null")
+		if after := started(); strings.TrimSpace(finish) != "" || after != before || syncState(t, "syncwait", "dev", "data") != "running" {
+			out, _ := op(t, "/", "cat /tmp/syncwait")
+			t.Errorf("%s while it waited: finish hook %q, data started %s (was %s), data %q:\n%s", cut, finish, after, before, syncState(t, "syncwait", "dev", "data"), out)
+		}
+		undrop(t)
+	}
+}
