@@ -106,8 +106,7 @@ case "$*" in
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; --numeric-owner) shift; break ;; esac; shift; done
-    exec tar -C "$src" -cf - "$@" ;;
-  "run --rm -i --name devopsy-import-"*-list" "*) exec tar -tf - ;;
+    COPYFILE_DISABLE=1 exec tar -C "$src" -cf - "$@" ;;
   "run --rm --name devopsy-import-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
@@ -1745,10 +1744,8 @@ func TestExportImport(t *testing.T) {
 		t.Errorf("tar cut at a member (%d):\n%s", code, errs)
 	}
 	// The same cut after a member whose data ends in zeros (a sparse file,
-	// a database's preallocated pages). Bug: its last 1024 bytes pass for
-	// the end-of-archive blocks wherever they are, and tar -t takes the cut
-	// for the end, so the entry is emptied and only what came is
-	// extracted: the rest of its files are lost.
+	// a database's preallocated pages): its last 1024 bytes are no
+	// end-of-archive blocks.
 	zeros := tarOf(t, map[string]string{"storage/a.img": strings.Repeat("\x00", 4096), "storage/b.txt": "bbbb"})
 	if _, errs, code := s.runIO(nil, zeros[:512+4096], "--import", "app"); code == 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Errorf("tar cut after a member ending in zeros (%d):\n%s", code, errs)
