@@ -330,7 +330,7 @@ compose, Docker and your commands print around it, locally and from a
 server alike:
 
 ```
-devopsy: releasing 20261019214911 to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
+devopsy: releasing to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
 devopsy: warning: uncommitted changes outside .devopsy/ are not released in image mode
 devopsy: error: dev's parent, prod, has no server
 devopsy: | devopsy reads a parent's server from variables only
@@ -716,8 +716,10 @@ Two modes, `mode:` in the config:
   goes live: build and push them first, like a local before step.
 
 A release says how much it uploads, shows the upload's progress on one
-line while it runs (on a terminal only: CI gets none), then its size and
-time, which the release log keeps.
+line while it runs (on a terminal only: CI gets none), then its id, size
+and time, which the release log keeps. The server names it: its own UTC
+second, always later than every release already there, so releases from
+laptops and CI with different clocks stay in order.
 
 On the server, an environment holds `releases/`, `current` and `shared/`.
 Each release is a directory, `releases/<id>/`, with the project as

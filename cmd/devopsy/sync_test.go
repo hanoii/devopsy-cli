@@ -176,7 +176,6 @@ type syncSetup struct {
 	root, project    string
 	dot, sshLog, log string
 	env              []string
-	released         map[string]int64
 }
 
 func newSyncSetup(t *testing.T) *syncSetup {
@@ -211,28 +210,12 @@ func newSyncSetup(t *testing.T) *syncSetup {
 
 func (s *syncSetup) run(extra []string, args ...string) (string, int) {
 	s.t.Helper()
-	s.spaceReleases(args)
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = s.project
 	cmd.Env = append(append([]string{}, s.env...), extra...)
 	cmd.Stdin = strings.NewReader("")
 	out, _ := cmd.CombinedOutput()
 	return string(out), cmd.ProcessState.ExitCode()
-}
-
-// spaceReleases waits for a new second before a second release of the
-// same target: release ids are seconds, and a taken one is refused.
-func (s *syncSetup) spaceReleases(args []string) {
-	if len(args) < 2 || !strings.HasPrefix(args[1], "--release") {
-		return
-	}
-	if s.released == nil {
-		s.released = map[string]int64{}
-	}
-	for s.released[args[0]] == time.Now().Unix() {
-		time.Sleep(20 * time.Millisecond)
-	}
-	s.released[args[0]] = time.Now().Unix()
 }
 
 // logs returns and empties the docker and ssh logs.
@@ -282,8 +265,6 @@ func readString(path string) string {
 	data, _ := os.ReadFile(path)
 	return string(data)
 }
-
-func next() { time.Sleep(1100 * time.Millisecond) } // release ids are per second
 
 // A child's first release syncs its parent on the same server: the
 // services labeled devopsy.sync.stop=true stopped on both sides, one
@@ -343,7 +324,6 @@ func TestSyncSameHost(t *testing.T) {
 	}
 
 	// A later release does not sync.
-	next()
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
 	if code != 0 || strings.Contains(out, "devopsy: syncing") || strings.Contains(docker, "stop db") {
@@ -370,7 +350,6 @@ func TestSyncSameHost(t *testing.T) {
 
 	// --release-sync syncs on any release, asking first on one that
 	// has data (--yes, or a terminal); --release-no-sync never.
-	next()
 	before, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
 	if out, code := s.run(nil, "@dev", "--release-sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") || !strings.Contains(out, "devopsy: error: nothing released") {
 		t.Fatalf("--release-sync without --yes (%d):\n%s", code, out)
@@ -442,14 +421,12 @@ func TestReleaseFirstSync(t *testing.T) {
 	if !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) || !strings.Contains(out, "the copy was cut") {
 		t.Errorf("a cut copy not marked partial:\n%s", out)
 	}
-	next()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "release it: a first release syncs\ndevopsy: | $ devopsy @devopsy@one:dev --release\n") || !strings.Contains(out, ": nothing changed\n") {
 		t.Fatalf("--release-no-sync on a partial copy (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 || !strings.Contains(out, "deploy in shop-dev") || s.current("dev") == "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
 		t.Fatalf("a first release again, syncing (%d):\n%s", code, out)
 	}
-	next()
 	s.logs()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "devopsy: syncing") || s.current("dev") == "" {
 		t.Fatalf("--release-no-sync (%d):\n%s", code, out)
@@ -687,7 +664,6 @@ func TestSyncAbort(t *testing.T) {
 
 	// Nothing runs on it but a sync: a release and a rollback refuse, a
 	// sync from it too.
-	next()
 	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release on a partial copy (%d):\n%s", code, out)
 	}
@@ -1042,11 +1018,9 @@ func TestSyncInherit(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "SHARED_KEY='s1'\n") || !strings.Contains(out, "PROJ_KEY='child'\n") || !strings.Contains(out, "INST_KEY='i 1'\n") {
 		t.Errorf("effective variables (%d):\n%s", code, out)
 	}
-	next := func() { time.Sleep(1100 * time.Millisecond) }
 
 	// --release-no-sync inherits nothing.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s2\n", 0o600)
-	next()
 	if out, code := s.run(nil, "@a/dev", "--release-no-sync"); code != 0 || strings.Contains(out, "devopsy: inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
 		t.Fatalf("--release-no-sync (%d): %q\n%s", code, readString(childInherit), out)
 	}
@@ -2156,7 +2130,6 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 	}
 	os.Remove(s.log + ".failimport")
 	s.logs()
-	next()
 	out, code := s.run(nil, "@dev", "--release")
 	if code != 0 || s.current("dev") == "" {
 		t.Fatalf("the first release again (%d):\n%s", code, out)
@@ -2312,7 +2285,6 @@ func TestReleaseInterrupt(t *testing.T) {
 	if exec.Command("/bin/sh", "-c", "PATH=/usr/bin:/bin tail --version").Run() != nil {
 		return
 	}
-	next()
 	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
 	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
 		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
@@ -2332,7 +2304,6 @@ func TestSyncSettle(t *testing.T) {
 	dev, prod := filepath.Join(s.root, "shop", "dev"), filepath.Join(s.root, "shop", "prod")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
 	write(t, filepath.Join(dev, remote.SyncOpenFile), "devopsy@one:prod 1.2\n", 0o644)
-	next()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
 	}
@@ -2358,7 +2329,6 @@ func TestSyncSettle(t *testing.T) {
 	if _, from, code, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); code != remote.IncompleteFinish || from != "devopsy@one:prod" || !strings.Contains(why, "finish child go failed") {
 		t.Errorf("the mark of a refused copy: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
 	}
-	next()
 	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "the copy completed, but the project's sync capability refused it: finish child go failed") {
 		t.Errorf("a rollback after a refused copy (%d):\n%s", code, out)
 	}
@@ -2368,7 +2338,6 @@ func TestSyncSettle(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
 		t.Fatalf("a sync completes it (%d):\n%s", code, out)
 	}
-	next()
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Errorf("a release after (%d):\n%s", code, out)
 	}

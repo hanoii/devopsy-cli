@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// releasedID is the id a release's output says it releases.
-var releasedID = regexp.MustCompile(`releasing ([0-9]{14}) to`)
+// releasedID is the id a release's output says the server gave it.
+var releasedID = regexp.MustCompile(`uploaded ([0-9]{14}):`)
 
 // A release that finds another holding the release lock says it waits;
 // cut while it waits (Ctrl-C at a terminal, its connection dropped

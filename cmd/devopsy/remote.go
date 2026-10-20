@@ -587,8 +587,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if err != nil {
 			return stop(err)
 		}
-		log.Info(fmt.Sprintf("releasing %s to %s (%s:%s): %d files, %s, %s",
-			record.ID, t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
+		log.Info(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
+			t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
 			log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
 				record.Commit[:min(10, len(record.Commit))]))
@@ -620,7 +620,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// goes with the next release.
 		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		// Gated: the project goes once the server holds the release lock.
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		// The server names the release (remote.UploadScript), on stdout.
+		var idOut bytes.Buffer
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t), pr, &idOut, progress.before(errOut), false, rlog)
+		id := strings.TrimSpace(idOut.String())
 		pr.Close()
 		upInterrupted := upCtx.Err() != nil
 		upStop()
@@ -632,8 +635,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			log.Error("interrupted during the upload: nothing changed on @" + t.Address)
 			return 130
 		}
+		if err == nil && code == 0 && !remote.ReleaseIDFormat.MatchString(id) {
+			err = fmt.Errorf("the server named no release (%q): its devopsy may be older than this one", id)
+		}
 		if err == nil && code == 0 {
-			log.Info(progress.done())
+			log.Info(progress.done(id))
 		}
 		if err != nil || code != 0 {
 			if err != nil {
@@ -645,21 +651,21 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return code
 		}
 		if job == nil {
-			if code := session(remote.ActivateScript(t, record.ID, false, projectName, phases, nil)); code != 0 {
-				return save(record.ID, code)
+			if code := session(remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
+				return save(id, code)
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
+			script := remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
-				return save(record.ID, code)
+				return save(id, code)
 			}
 		}
 		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
 			log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
-			return save(record.ID, 1)
+			return save(id, 1)
 		}
-		return save(record.ID, 0)
+		return save(id, 0)
 
 	default:
 		// A local command that needs an address runs locally, given it as

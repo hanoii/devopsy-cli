@@ -541,7 +541,6 @@ func TestReleaseSteps(t *testing.T) {
 		l, _ := os.Readlink(filepath.Join(server, "current"))
 		return l
 	}
-	next := func() { time.Sleep(1100 * time.Millisecond) } // release ids are per second
 
 	if out, code := run(nil, "@prod", "--release", "deploy"); code == 0 || !strings.Contains(out, "--release takes no command") {
 		t.Fatalf("release with a command (%d):\n%s", code, out)
@@ -610,7 +609,6 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("prepare did not run: %q", data)
 	}
 
-	next()
 	write(t, filepath.Join(server, "shared", ".env"), "SECRET=generated\nNEEDED=1\n", 0o644)
 	out, code = run(nil, "@prod", "--release")
 	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "mark after") || !strings.Contains(out, "after ran at=devopsy@server:prod target=\n") {
@@ -640,19 +638,16 @@ func TestReleaseSteps(t *testing.T) {
 	// rollback:, so its release: one, whatever the checkout says now. After
 	// steps are skipped; remote before steps ran in it.
 	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
-	next()
 	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "--release")
 	if code != 4 || !strings.Contains(out, "mark before") || !strings.Contains(out, "current is back to") || !strings.Contains(out, "with its own run step") || strings.Contains(out, "deploy --back in") || strings.Count(out, "deploy --fast in") < 2 || strings.Contains(out, "after ran") || current() != first {
 		t.Fatalf("run failure (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
 
 	// rollback: back to the release before, running its own rollback:.
-	next()
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}
 	second := current()
-	next()
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == second {
 		t.Fatalf("third release (%d):\n%s", code, out)
 	}

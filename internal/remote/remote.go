@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -267,7 +268,6 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 
 // Record is what a release remembers about where it came from.
 type Record struct {
-	ID     string `json:"id"`
 	Mode   string `json:"mode"`
 	Time   string `json:"time"`
 	By     string `json:"by"`
@@ -279,7 +279,6 @@ type Record struct {
 // NewRecord describes a release made now from projectRoot.
 func NewRecord(projectRoot, mode string, now time.Time) Record {
 	r := Record{
-		ID:   now.UTC().Format("20060102150405"),
 		Mode: mode,
 		Time: now.UTC().Format(time.RFC3339),
 		By:   Whoami(),
@@ -443,7 +442,7 @@ const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 // 5: --say; 6: --sync-services prepare first, --release-steps release, a
 // sync's done holding its id, a stream's spool named by it; 7: a sync's
 // record of its writers (the started file, taken by the holder, the
-// writers ended by finish partial and settle).
+// writers ended by finish partial and settle), --release-id.
 const Protocol = 7
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
@@ -525,28 +524,56 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 `
 }
 
-// UploadScript extracts a release from stdin. An id taken already (a
-// second release of the target within the same second) is refused: mv
-// would put the new tree inside the existing release and the old one
-// would run again.
-func UploadScript(t *Target, id string) string {
-	return prelude(t, true) + lockedGate(false, "") + fmt.Sprintf(`rel="$base/releases/"%s
-[ ! -e "$rel" ] || { devopsy --say error "release $(basename "$rel") exists already on $base (another release in the same second?): try again"; exit 1; }
+// UploadScript extracts a release from stdin, under the release lock,
+// and prints its id on stdout, its only output there: chosen by the
+// server's devopsy (ReleaseIDFlag), never the operator's clock.
+func UploadScript(t *Target) string {
+	return prelude(t, true) + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+rel="$base/releases/$id"
+[ ! -e "$rel" ] || { devopsy --say error "release $id exists already on $base"; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
 # content, not times). Guarded: a session gone silently would leave tar
 # waiting, the release lock held, until TCP gives up. A failure takes the
 # .tmp along: nothing of a cut upload stays.
-if ! devopsy `+StdinGuardFlag+` | tar -xzmf - -C "$rel.tmp"; then
+if ! devopsy ` + StdinGuardFlag + ` | tar -xzmf - -C "$rel.tmp"; then
   rm -rf "$rel.tmp"
   exit 1
 fi
 # Pending until its activation switches to it: one that never gets there
 # (cut, interrupted, its operator gone) is never rolled back to nor kept.
-: >"$rel.tmp/`+PendingFile+`"
+: >"$rel.tmp/` + PendingFile + `"
 mv "$rel.tmp" "$rel"
-`, Quote(id))
+echo "$id"
+`
+}
+
+// ReleaseIDFlag is the hidden devopsy flag that prints a new release's
+// id (NextReleaseID) for the releases in a directory (Protocol 7).
+const ReleaseIDFlag = "--release-id"
+
+// ReleaseIDFormat is a release id: a UTC second, 20261019214911.
+var ReleaseIDFormat = regexp.MustCompile(`^[0-9]{14}$`)
+
+const releaseIDLayout = "20060102150405"
+
+// NextReleaseID is a new release's id: now's second, or a second past the
+// newest of ids when that is not earlier. Why: ids order releases (pruning,
+// rollbacks, --releases), so a release is always newer than every one
+// there, whether two land in one second or older ids came from another
+// clock (an operator's, before the server chose them).
+func NextReleaseID(now time.Time, ids []string) string {
+	next := now.UTC().Truncate(time.Second)
+	for _, id := range ids {
+		if !ReleaseIDFormat.MatchString(id) {
+			continue
+		}
+		if t, err := time.Parse(releaseIDLayout, id); err == nil && !t.Before(next) {
+			next = t.Add(time.Second)
+		}
+	}
+	return next.Format(releaseIDLayout)
 }
 
 // Phases are the remote parts of a release's or rollback's steps, as
