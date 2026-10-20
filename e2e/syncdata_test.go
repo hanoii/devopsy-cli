@@ -122,3 +122,81 @@ func TestSyncDestroy(t *testing.T) {
 		t.Errorf("containers left: %q %q", left("dev"), left("prod"))
 	}
 }
+
+// rsync entries, on one server and across two: a file a running
+// container bind-mounts is written in place (it sees the new content,
+// through --import too), an excluded entry and one missing on the
+// parent are left as the child has them, --delete removes what the
+// parent lacks, and owners and modes come as they are (UID 10001).
+func TestSyncRsyncEntries(t *testing.T) {
+	for _, across := range []bool{false, true} {
+		name, child, childSrv, env := "entries", server, srv, ""
+		if across {
+			secondServer(t)
+			name, child, childSrv, env = "entriesx", server2, srv2, agent+" "
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := project(t, name, map[string]string{
+				".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+				".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+				".devopsy/compose.yaml": `services:
+  files:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/files:/files, ./mnt/logs:/logs, ./mnt/gone:/gone]
+    labels: {devopsy.sync: rsync, devopsy.sync.rsync.exclude: logs}
+  conf:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/app.ini:/etc/app.ini]
+    labels: {devopsy.sync: rsync}
+`,
+				".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+			})
+			if across {
+				op(t, dir, "echo DEVOPSY_SERVER_DEV=server2 >>.devopsy/.env")
+			}
+			p, c := name+"/prod/shared/mnt", name+"/dev/shared/mnt"
+			conf := func() string {
+				out, _ := childSrv(t, "docker exec "+name+"-dev-conf-1 cat /etc/app.ini")
+				return strings.TrimSpace(out)
+			}
+			srv(t, "mkdir -p "+p+"/files/sub "+p+"/logs && echo v1 >"+p+"/app.ini && echo prod >"+p+"/files/sub/a && echo secret >"+p+"/files/secret && echo prod-log >"+p+"/logs/access.log")
+			asRoot(t, server, "chown -R 10001:10002 "+p+"/files && chmod 640 "+p+"/files/secret && chmod 750 "+p+"/files/sub")
+			if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+				t.Fatalf("prod (%d):\n%s", code, out)
+			}
+			// Docker made it for the container: gone again.
+			asRoot(t, server, "rm -rf "+p+"/gone")
+
+			out, code := op(t, dir, env+"devopsy @dev --release")
+			owners, _ := asRoot(t, child, "stat -c '%n %u:%g %a' "+c+"/files/secret "+c+"/files/sub")
+			want := c + "/files/secret 10001:10002 640\n" + c + "/files/sub 10001:10002 750\n"
+			if code != 0 || owners != want || conf() != "v1" {
+				t.Fatalf("dev's first release (%d), owners %q, app.ini %q:\n%s", code, owners, conf(), out)
+			}
+			if !strings.Contains(out, "mnt/gone does not exist") {
+				t.Errorf("no notice of the entry missing on the parent:\n%s", out)
+			}
+			if log, _ := asRoot(t, child, "cat "+c+"/logs/access.log 2>/dev/null"); log != "" {
+				t.Errorf("the excluded logs copied: %q", log)
+			}
+
+			asRoot(t, child, "echo dev-log >"+c+"/logs/access.log && echo kept >"+c+"/gone/keep && echo extra >"+c+"/files/extra")
+			asRoot(t, server, "echo prod2 >"+p+"/files/sub/a")
+			srv(t, "echo v2 >"+p+"/app.ini")
+			if out, code := op(t, dir, env+"devopsy @dev --sync --yes"); code != 0 || conf() != "v2" {
+				t.Fatalf("a sync (%d): the running container reads %q:\n%s", code, conf(), out)
+			}
+			got, _ := asRoot(t, child, "cat "+c+"/files/sub/a "+c+"/logs/access.log "+c+"/gone/keep; ls "+c+"/files")
+			if got != "prod2\ndev-log\nkept\nsecret\nsub\n" {
+				t.Errorf("after the sync: %q", got)
+			}
+
+			srv(t, "echo v3 >"+p+"/app.ini")
+			if out, code := op(t, dir, "devopsy @prod --export conf | "+env+"devopsy @dev --import conf --yes"); code != 0 || conf() != "v3" {
+				t.Errorf("export | import of the file (%d): the running container reads %q:\n%s", code, conf(), out)
+			}
+		})
+	}
+}
