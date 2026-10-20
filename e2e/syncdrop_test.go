@@ -84,7 +84,7 @@ func TestSyncKilledHolder(t *testing.T) {
 	dir := syncProject(t, "skill")
 	syncReleaseBoth(t, "skill", dir)
 	startSync(t, "skill", dir, 120)
-	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync is copying into it") {
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync into it is running") {
 		t.Errorf("--status during the sync:\n%s", out)
 	}
 	if out, code := srv(t, "pkill -9 -f '[s]yncing into'"); code != 0 {

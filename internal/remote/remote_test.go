@@ -1950,3 +1950,47 @@ func TestIncompleteCheckBusy(t *testing.T) {
 		t.Errorf("marked: %q", got)
 	}
 }
+
+// --status's sync lines: "syncing" while a sync's holder holds the
+// child's lock (its holding file there), never for a holder killed
+// outright once the lock is free; "source" while a sync from it (or an
+// export) holds its sync lock. --releases marks the current release.
+func TestSyncStatusLines(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("needs flock")
+	}
+	base := t.TempDir()
+	status := func() string {
+		out, _ := exec.Command("sh", "-c", "base="+Quote(base)+"\n"+strings.ReplaceAll(partialStatus, "%%", "%")).CombinedOutput()
+		return strings.TrimSpace(string(out))
+	}
+	hold := func(lock string) func() {
+		t.Helper()
+		write(t, filepath.Join(base, lock), "")
+		// One process holds it: killed, the lock goes.
+		h := exec.Command("sh", "-c", `exec 9>"$1"; flock 9; exec sleep 5`, "sh", filepath.Join(base, lock))
+		if err := h.Start(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(300 * time.Millisecond)
+		return func() { _ = h.Process.Kill(); _ = h.Wait() }
+	}
+	write(t, filepath.Join(base, SyncHoldingFile), "")
+	if got := status(); got != "" {
+		t.Errorf("a holder's file, the lock free: %q", got)
+	}
+	release := hold(".lock")
+	if got := status(); got != "syncing" {
+		t.Errorf("a holder holding the lock: %q", got)
+	}
+	release()
+	release = hold(".sync-lock")
+	if got := status(); got != "source" {
+		t.Errorf("a push holding the sync lock: %q", got)
+	}
+	release()
+	rs := ParseReleases("20261020000000\tcurrent\tsyncing\t\t{}\n")
+	if len(rs) != 1 || !rs[0].Syncing || !strings.HasSuffix(rs[0].Line(), "  SYNCING") {
+		t.Errorf("a syncing release: %+v %q", rs, rs[0].Line())
+	}
+}

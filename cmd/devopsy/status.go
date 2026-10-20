@@ -109,7 +109,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
-	syncing := false
+	syncing, source := false, false
 	var record *remote.Record
 	id := ""
 	for _, line := range strings.Split(header, "\n") {
@@ -139,6 +139,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			}
 		case "syncing":
 			syncing = true
+		case "source":
+			source = true
 		}
 	}
 	if id != "" {
@@ -178,7 +180,10 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		fmt.Println(line)
 	}
 	if syncing {
-		fmt.Println("data        a sync is copying into it")
+		fmt.Println("data        a sync into it is running")
+	}
+	if source {
+		fmt.Println("data        a sync or an export from it is running")
 	}
 	if partial != "" {
 		fix := "devopsy @" + targetRef(t) + " --sync"

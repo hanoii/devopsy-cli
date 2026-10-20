@@ -1333,7 +1333,11 @@ Smaller features, each with the rule an agent must keep.
   a table, then the `status` capability's `show`. With a target,
   `StatusScript` prints header lines from the server's files (the
   record, live releases kept, the last copy from the session logs'
-  `SyncCopied` lines, a partial or running sync from `partialStatus`),
+  `SyncCopied` lines, a partial or running sync from `partialStatus`:
+  "syncing" while a holder holds the child's lock, from its holding file
+  on, its prepare included, `SyncRunning`; "source" while a push or an
+  export holds the parent's sync lock, `SourceBusy`; `--releases` marks
+  the current release SYNCING the same way),
   `---`, then `devopsy --status` in the current release; the operator
   formats the header and prints the rest as it came.
 - **`--ssh-keys` edits only the deploy user's own

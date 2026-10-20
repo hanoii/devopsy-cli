@@ -1294,6 +1294,7 @@ left=`+leftPath(t)+`
 [ ! -s "$left" ] || awk -v t="$(printf '\t')" '{ print "left" t $0 }' "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
+syncing=; if `+SyncRunning+`; then syncing=1; fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A pending release is under way while its activation holds its
@@ -1310,6 +1311,8 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     # A release cut off mid-fetch is failed too, recovered or not.
     { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
     [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
+    # The current release, while a sync into it runs.
+    [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
   fi
   # Names only: the ids after a tab stay on the server.
   i=
@@ -1330,6 +1333,8 @@ type Release struct {
 	// Incomplete: uploaded, never made current, nothing running it now
 	// (PendingFile); InProgress: the same while a release runs.
 	Incomplete, InProgress bool
+	// Syncing: current, while a sync into it runs (SyncRunning).
+	Syncing bool
 	// Images are the names it runs (ImagesFile): what a rollback to it
 	// restores, and what removing it may free.
 	Images []string
@@ -1345,7 +1350,7 @@ func ParseReleases(out string) []Release {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back",
-			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress"}
+			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1385,6 +1390,8 @@ func (r Release) Line() string {
 		status = "  INCOMPLETE"
 	case r.InProgress:
 		status = "  IN PROGRESS"
+	case r.Syncing:
+		status = "  SYNCING"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
