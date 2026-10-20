@@ -10,10 +10,7 @@ import (
 // Remote steps' arguments with quotes and $ reach the command as
 // written, on the server's pseudo-terminal (with_tty, the operator at a
 // terminal: before and prepare before the fetch, after under setsid)
-// and without one; on a terminal they get one, a rollback's too. Fails
-// on v0.44.0 for a rollback's: its before, prepare and after steps run
-// through --release-steps without with_tty, so they never get a terminal,
-// where a release's do.
+// and without one; on a terminal they get one, a rollback's too.
 func TestStepArguments(t *testing.T) {
 	step := `a'b $HOME x"y`
 	dir := project(t, "stepargs", map[string]string{

@@ -42,12 +42,8 @@ func newest(t *testing.T, env string) string {
 // A release that syncs dropped silently during its images' fetch, before
 // its switch: its watcher counts a holder's quiet time (its stdin is the
 // sync's answer too), then cancels the fetch, the build killed; nothing
-// live changed and no sync began. devopsy, its connection lost, says
-// "the server finishes the sync as far as its copy went", though no sync
-// began and the release is cancelled (cmd/devopsy/sync.go,
-// runSyncSession: the one sshLost message, whatever the phase); it
-// should say the server cancels the release, as a plain release's
-// session does before its switch.
+// live changed and no sync began. devopsy, its connection lost, says the
+// server cancels the release, never that it finishes the sync.
 func TestReleaseSyncDropDuringFetch(t *testing.T) {
 	dir := phasesProject(t, "rsfetch", map[string]string{
 		".devopsy/config.yaml": "project: rsfetch\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
@@ -113,11 +109,9 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
 // its copy began (the child's sync prepare running): the session ends,
 // the sync gets no answer and aborts, and the release fails: current goes
 // back to the previous release, restarted with its own run step.
-// devopsy says it ends the session "which leaves it as it was", as before
-// a switch; it should say the release does not go live and the server
-// goes back to the previous one (cmd/devopsy/sync.go, runSyncSession: one
-// message for any interrupt before the sync's marker, which a release
-// that syncs prints after its switch).
+// devopsy says the release does not go live, never that the session
+// leaves it as it was: a release that syncs prints the sync's marker
+// after its switch.
 func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	dir := phasesProject(t, "rsint", nil)
 	syncReleaseBoth(t, "rsint", dir)

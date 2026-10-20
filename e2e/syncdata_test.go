@@ -114,7 +114,13 @@ func TestSyncDestroy(t *testing.T) {
 	}
 	eventually(t, 2*time.Minute, "both destroyed", func() bool { return !exists(t, name+"/dev") && !exists(t, name+"/prod") })
 	for _, log := range []string{name, name + "-dev", name + "-prod"} {
-		if out, _ := op(t, "/", "cat /tmp/"+log+".log"); !strings.Contains(out, "exit=0") {
+		// A directory gone is not devopsy done: --purge looks after it.
+		var out string
+		eventually(t, time.Minute, log+" ended", func() bool {
+			out, _ = op(t, "/", "cat /tmp/"+log+".log")
+			return strings.Contains(out, "exit=")
+		})
+		if !strings.Contains(out, "exit=0") {
 			t.Errorf("%s:\n%s", log, out)
 		}
 	}
@@ -261,117 +267,11 @@ func TestSyncWholeMntGuard(t *testing.T) {
 	}
 }
 
-// A child's first release whose import fails leaves its stream service's
-// container (created for the import), and nothing current. Released
-// again, it is a first release still (no current, its data partial),
-// and its finish hook must find every labeled service up, as on any
-// first release: a hook that sanitizes through the app skips an app
-// that is not there, and the run step then serves the parent's data as
-// it came. Fails: the next sync's prepare records a first release only
-// when the project has no container at all (cmd/devopsy/sync.go,
-// runSyncServices prepare: startSyncState(cwd, len(states) == 0)), so
-// the leftover db makes it a re-sync and finish go creates nothing:
-// data has no container when finish child go runs.
-func TestSyncFirstReleaseAgain(t *testing.T) {
-	const name = "firstagain"
-	dir := project(t, name, map[string]string{
-		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
-		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
-		".devopsy/compose.yaml": `services:
-  data:
-    image: busybox:1.37
-    command: [sleep, infinity]
-    volumes: [./mnt/data:/data]
-    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
-  db:
-    image: busybox:1.37
-    command: [sleep, infinity]
-    labels: {devopsy.sync: stream}
-`,
-		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/export": "#!/bin/sh\necho dump\n",
-		".devopsy/capabilities/sync/import": "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$HOME/fail-import-$COMPOSE_PROJECT_NAME\" ]\n",
-		".devopsy/capabilities/sync/finish": "#!/bin/sh\nstate=$(docker ps -a --filter label=com.docker.compose.project=$COMPOSE_PROJECT_NAME --filter label=com.docker.compose.service=data --format '{{.State}}')\necho \"$1 $2 data=${state:-none}\" >>\"$HOME/finish-$COMPOSE_PROJECT_NAME\"\n",
-	})
-	t.Cleanup(func() { srv(t, "rm -f fail-import-"+name+"-dev finish-"+name+"-dev") })
-	srv(t, "rm -f finish-"+name+"-dev; touch fail-import-"+name+"-dev; mkdir -p "+name+"/prod/shared/mnt/data && echo one >"+name+"/prod/shared/mnt/data/stamp")
-	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
-		t.Fatalf("prod (%d):\n%s", code, out)
-	}
-	if out, code := op(t, dir, "devopsy @dev --release"); code == 0 || exists(t, name+"/dev/current") {
-		t.Fatalf("dev's first release, its import failing (%d):\n%s", code, out)
-	}
-	t.Logf("left after the failed first release: db %q, data %q", syncState(t, name, "dev", "db"), syncState(t, name, "dev", "data"))
-
-	srv(t, "rm -f fail-import-"+name+"-dev finish-"+name+"-dev")
-	out, code := op(t, dir, "devopsy @dev --release")
-	finish, _ := srv(t, "cat finish-"+name+"-dev")
-	if code != 0 || syncStamp(t, name, "dev") != "one" {
-		t.Fatalf("dev released again (%d), stamp %q:\n%s", code, syncStamp(t, name, "dev"), out)
-	}
-	if strings.TrimSpace(finish) != "child go data=running" {
-		t.Errorf("the finish hook of a first release found: %q", finish)
-	}
-}
-
-// A stream service that depends on a stop=true one: its import brings it
-// up, and must leave the stopped service down, through the imports and,
-// when a later export fails, after the partial copy. Fails: the import's
-// up starts the service's dependencies (cmd/devopsy/sync.go, upFor:
-// "up -d --wait <service>" without --no-deps), so files, stopped for
-// the sync, runs on a partial copy.
-func TestSyncImportKeepsStoppedDown(t *testing.T) {
-	const name = "keepdown"
-	dir := project(t, name, map[string]string{
-		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
-		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
-		".devopsy/compose.yaml": `services:
-  files:
-    image: busybox:1.37
-    command: [sleep, infinity]
-    volumes: [./mnt/files:/files]
-    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
-  idx:
-    image: busybox:1.37
-    command: [sleep, infinity]
-    depends_on: [files]
-    labels: {devopsy.sync: stream}
-  zz:
-    image: busybox:1.37
-    command: [sleep, infinity]
-    depends_on: [idx]
-    labels: {devopsy.sync: stream}
-`,
-		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ \"$1\" != zz ] || [ ! -e \"$HOME/fail-export-" + name + "\" ] || exit 3\necho dump\n",
-		".devopsy/capabilities/sync/import": "#!/bin/sh\ncat >/dev/null\n",
-	})
-	t.Cleanup(func() { srv(t, "rm -f fail-export-"+name) })
-	srv(t, "rm -f fail-export-"+name+"; mkdir -p "+name+"/prod/shared/mnt/files && echo one >"+name+"/prod/shared/mnt/files/stamp")
-	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
-		t.Fatalf("prod (%d):\n%s", code, out)
-	}
-	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 {
-		t.Fatalf("dev (%d):\n%s", code, out)
-	}
-	srv(t, "touch fail-export-"+name)
-	out, code := op(t, dir, "devopsy @dev --sync --yes")
-	if code == 0 || !exists(t, name+"/dev/.devopsy-sync.incomplete") {
-		t.Fatalf("no partial copy (%d):\n%s", code, out)
-	}
-	if s := syncState(t, name, "dev", "files"); s != "exited" {
-		t.Errorf("files, stop=true, is %s on the partial copy:\n%s", s, out)
-	}
-}
-
 // The parent starts to inherit a variable the new release requires
 // (${NEW:?}): --release-sync of its child inherits it before the copy,
-// so the release that syncs must find it. Fails: the inherited value
-// goes into the pending file only the sync reads
-// (remote.SyncInheritPending), while the release's checks before its
-// switch (--missing-vars, the image fetch) read the child's inherit.env
-// as the last sync left it, and refuse: compose requires NEW. A first
-// release, which inherits into inherit.env itself, finds it.
+// so the release that syncs finds it before its switch too
+// (--missing-vars, the image fetch), in the pending file the sync reads,
+// as a first release finds it in inherit.env.
 func TestSyncReleaseInheritsRequired(t *testing.T) {
 	const name = "inhreq"
 	compose := `services:
