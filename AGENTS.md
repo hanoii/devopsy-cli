@@ -1400,4 +1400,5 @@ out ./devopsy ps`).
 
 Tag `vX.Y.Z` on `main` and push the tag: the release workflow tests,
 and GoReleaser publishes the binaries and `checksums.txt`.
-Conventional commits (`feat:`, `fix:`, `docs:`, `build:`...).
+Conventional commits (`feat:`, `fix:`, `docs:`, `build:`...), with no
+attribution trailers: no `Co-Authored-By`, no session links.
