@@ -689,7 +689,7 @@ done
 		// operator wrote: the checks before the switch (prepare,
 		// --missing-vars, the images) see what the release will run
 		// with, as a first release's do in inherit.env.
-		s += "export " + InheritPendingEnv + "=\"$base\"/" + SyncInheritPending + "\n"
+		s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(sync.ID)) + "\n"
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))

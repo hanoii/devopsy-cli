@@ -51,6 +51,19 @@ type syncJob struct {
 	// pending file the sync reads and moves into place on go, so a failed
 	// one leaves the child's own values with its own data.
 	first bool
+	// id is the sync's (remote.SyncIDEnv), chosen here: its pending
+	// inherited variables are written before the holder runs.
+	id string
+}
+
+// staleInherit is the age past which another sync's pending inherited
+// variables are a leftover: longer than any wait for the release lock.
+const staleInherit = time.Hour
+
+// newSyncID is a sync's id: the time, then random hex, so two syncs never
+// share one, from one operator or two.
+func newSyncID() string {
+	return fmt.Sprintf("%d.%06x", time.Now().Unix(), rand.IntN(1<<24))
 }
 
 // syncPreflight checks a sync of p into c can start, before anything
@@ -70,7 +83,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syn
 	if c.Release == nil || len(remote.StepArgs(c.Release.Run)) == 0 {
 		return nil, errors.New(missingSteps(c, "release"))
 	}
-	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args}
+	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args, id: newSyncID()}
 	job.sameHost = sameHost(c.Host, p.Host)
 	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
@@ -451,7 +464,11 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	}
 	var res bytes.Buffer
 	// Gated: the variables go once the child holds its release lock.
-	code, err = remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pending), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
+	pendingID := ""
+	if pending {
+		pendingID = job.id
+	}
+	code, err = remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pendingID), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
@@ -574,7 +591,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0}
+	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id}
 	code := runSyncSession(job, remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
@@ -1412,7 +1429,7 @@ func childInheritEnv() (key, value string) {
 	if base == "" {
 		return "", ""
 	}
-	return remote.InheritPendingEnv, remote.SyncInheritPath(base)
+	return remote.InheritPendingEnv, remote.SyncInheritPath(base, os.Getenv(remote.SyncIDEnv))
 }
 
 func cleanEnv(projectName string) []string {
@@ -1617,11 +1634,21 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			report.Info(strings.Join(stopped, " ") + " stay down: the data is a partial copy until a sync completes")
 		}
 	}
-	// Whatever the word: this sync's imports took theirs, and any other
-	// is an earlier sync's, stale.
+	// Whatever the word: this sync's imports took their spools, and any
+	// other is an earlier sync's, stale (another's push starts only once
+	// its holder holds the lock).
 	spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
 	for _, f := range spools {
 		_ = os.Remove(f)
+	}
+	// Another sync's pending inherited variables may be fresh (written
+	// before its holder waits for the lock): only those older than any
+	// wait go, left by a sync cut before its holder ran.
+	pendings, _ := filepath.Glob(filepath.Join(base, remote.SyncInheritPrefix+"*"))
+	for _, f := range pendings {
+		if fi, err := os.Stat(f); err == nil && time.Since(fi.ModTime()) > staleInherit {
+			_ = os.Remove(f)
+		}
 	}
 	if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", word); err != nil {
 		code = fail("the sync capability's finish child " + word + ": " + err.Error())

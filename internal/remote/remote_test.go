@@ -177,8 +177,8 @@ func TestScriptsParse(t *testing.T) {
 		"vars set":        VarsSetScript(tg, nil),
 		"vars unset":      VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
 		"inherit read":    InheritReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}),
-		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, false),
-		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, true),
+		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
+		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
 		"keys read":       KeysReadScript(),
 		"status":          StatusScript(tg),
 		"keys add":        KeysAddScript(),
@@ -189,10 +189,10 @@ func TestScriptsParse(t *testing.T) {
 		"role holders":    RoleHoldersScript(tg, "proxy"),
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
-		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
-		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod"}),
-		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, true),
-		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, true),
+		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}, ID: "1.2"}),
+		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
+		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true, ID: "1.2"}, true),
+		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true),
@@ -433,7 +433,7 @@ exit 0
 	fakeImageTools(t, bin)
 	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
 	phases := Phases{Run: []string{"deploy"}}
-	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}
+	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, ID: "1.2"}
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
@@ -478,7 +478,7 @@ exit 0
 	}
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
-	file := " file=" + filepath.Join(base, ".devopsy-sync.inherit.env")
+	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
 	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
@@ -617,11 +617,11 @@ exit 0
 
 	// A re-sync's pending inherited variables: read by the sync (the
 	// variable names them), moved into shared/inherit.env on go and linked
-	// into the release, removed on abort; a stale one, from a sync that
-	// wrote none this time, goes before the sync reads anything.
+	// into the release, removed on abort; another sync's (its own id) is
+	// never read.
 	root = t.TempDir()
 	base = filepath.Join(root, tg.Path)
-	pending := filepath.Join(base, ".devopsy-sync.inherit.env")
+	pending := filepath.Join(base, SyncInheritPending("1.2"))
 	opts.Inherit = true
 	write(t, pending, "SYNC_DB='stream'\n")
 	if _, errOut, err := run(root, "1", "go\n"); err != nil {
@@ -644,9 +644,9 @@ exit 0
 		t.Errorf("abort: pending %v, shared %q", err, readFile(filepath.Join(base, "shared", "inherit.env")))
 	}
 	opts.Inherit = false
-	write(t, pending, "STALE=1\n")
+	write(t, filepath.Join(base, SyncInheritPending("9.9")), "STALE=1\n")
 	if _, errOut, err := run(root, "3", "go\n"); err != nil || readFile(filepath.Join(base, "shared", "inherit.env")) != "SYNC_DB='stream'\n" {
-		t.Errorf("stale pending (%v): %q\n%s", err, readFile(filepath.Join(base, "shared", "inherit.env")), errOut)
+		t.Errorf("another sync's pending (%v): %q\n%s", err, readFile(filepath.Join(base, "shared", "inherit.env")), errOut)
 	}
 	if got := calls(root); !strings.Contains(got, "--sync-services prepare from=vm1:prod to=vm2:dev args=-v file="+pending) {
 		t.Errorf("the pending file's variable:\n%s", got)
@@ -692,7 +692,7 @@ exit 0
 	for _, fail := range []string{"0", "3"} {
 		root := t.TempDir()
 		write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
+		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod", ID: "1.2"}), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("release, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
@@ -701,7 +701,7 @@ exit 0
 		if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 			t.Fatal(err)
 		}
-		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, true), "FAIL_PREPARE="+fail)
+		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("--sync, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}

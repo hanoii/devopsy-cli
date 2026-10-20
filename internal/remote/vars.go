@@ -143,13 +143,12 @@ const InheritFile = "inherit.env"
 // GatedInput, sent once the lock is held) as the target's
 // InheritFile, under its release lock, and prints the names among the
 // keys given that the child's own shared/.env also sets: those win over
-// what was just written. With pending, a re-sync's: into
-// SyncInheritPending instead, which the sync reads and moves into place
-// on go.
-func InheritWriteScript(t *Target, keys []string, pending bool) string {
+// what was just written. With pendingID, a re-sync's: into that sync's
+// SyncInheritPending instead, which it reads and moves into place on go.
+func InheritWriteScript(t *Target, keys []string, pendingID string) string {
 	file := `"$base/shared/` + InheritFile + `"`
-	if pending {
-		file = `"$base/` + SyncInheritPending + `"`
+	if pendingID != "" {
+		file = `"$base"/` + Quote(SyncInheritPending(pendingID))
 	}
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain directory: nothing inherits into it"
