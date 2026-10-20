@@ -51,7 +51,12 @@ func TestSyncPartial(t *testing.T) {
 // witness) and a stream one (db), whose import waits as long as
 // ~/import-wait-<compose project> says, and hooks that log.
 func syncProject(t *testing.T, name string) string {
-	return project(t, name, map[string]string{
+	return syncProjectWith(t, name, nil)
+}
+
+// syncProjectWith is syncProject with files added or replaced.
+func syncProjectWith(t *testing.T, name string, files map[string]string) string {
+	base := map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
 		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
 		".devopsy/compose.yaml": `services:
@@ -69,7 +74,11 @@ func syncProject(t *testing.T, name string) string {
 		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
 		".devopsy/capabilities/sync/import": "#!/bin/sh\n: >\"$HOME/importing-$COMPOSE_PROJECT_NAME\"\nsleep \"$(cat \"$HOME/import-wait-$COMPOSE_PROJECT_NAME\" 2>/dev/null || echo 0)\"\ncat >/dev/null\n",
 		".devopsy/capabilities/sync/finish": "#!/bin/sh\necho \"$1 $2\" >>\"$HOME/finish.log\"\n",
-	})
+	}
+	for p, content := range files {
+		base[p] = content
+	}
+	return project(t, name, base)
 }
 
 // syncReleaseBoth releases prod, its data stamped one, then dev, which
