@@ -134,3 +134,62 @@ func TestDestroyWaits(t *testing.T) {
 		t.Errorf("containers or bookmarks left: %s", out)
 	}
 }
+
+// --destroy and --releases remove interrupted at a terminal (Ctrl-C)
+// while they wait for the release lock remove nothing once it is free:
+// the environment, its containers and the release they named stay.
+// Fails on v0.44.0 for --releases remove: its script on the server goes
+// on waiting after the session ended, and once the lock is free removes
+// the release (--images ignores SIGPIPE, so writing to the gone session
+// stops nothing), though devopsy exited 130. --destroy only stops at its
+// first write, before anything goes.
+func TestRemovalsCutWhileWaiting(t *testing.T) {
+	dir := dropProject(t, "cutwait")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing") })
+	for _, command := range []string{"--destroy --yes", "--releases remove %s --yes"} {
+		old, _ := srv(t, "ls cutwait/prod/releases | head -n 1")
+		old = strings.TrimSpace(old)
+		if strings.Contains(command, "%s") {
+			command = strings.Replace(command, "%s", old, 1)
+		}
+		srv(t, "rm -f preparing; touch wait-prepare")
+		op(t, dir, "sleep 1.1")
+		// Not @server, which ctrlC looks for.
+		background(t, dir, "DEVOPSY_SERVER=server devopsy @prod --release; echo exit=$?", "/tmp/cutholder.log")
+		eventually(t, time.Minute, command+": prepare waiting", func() bool { return exists(t, "preparing") })
+		// On a terminal of its own, as inTerminal, but out of a shell's
+		// background, which would start it with SIGINT ignored: these
+		// commands take no Ctrl-C of their own, the terminal's ends them.
+		if out, code := op(t, dir, "rm -f /tmp/cutwait && setsid -f script -qfec "+quote("devopsy @server:prod "+command)+" /tmp/cutwait >/dev/null 2>&1 </dev/null"); code != 0 {
+			t.Fatalf("starting %s (%d): %s", command, code, out)
+		}
+		eventually(t, time.Minute, command+": the waiting line", func() bool {
+			out, _ := op(t, "/", "cat /tmp/cutwait")
+			return strings.Contains(out, "waiting for the release running on")
+		})
+		ctrlC(t)
+		eventually(t, 30*time.Second, command+": devopsy's end", func() bool {
+			_, code := op(t, "/", "pgrep -f '^devopsy @server'")
+			return code != 0
+		})
+		srv(t, "rm -f wait-prepare")
+		eventually(t, 2*time.Minute, command+": the release's end", func() bool {
+			out, _ := op(t, "/", "cat /tmp/cutholder.log")
+			return strings.Contains(out, "exit=")
+		})
+		// Whatever the cut command left waiting on the server has run.
+		time.Sleep(3 * time.Second)
+		eventually(t, time.Minute, command+": the lock free", func() bool { return lockFree(t, "cutwait/prod/.lock") })
+		if !exists(t, "cutwait/prod/releases/"+old) {
+			out, _ := op(t, "/", "cat /tmp/cutwait")
+			list, _ := srv(t, "ls -la cutwait/prod cutwait/prod/releases")
+			t.Fatalf("%s, interrupted while it waited, removed %s:\n%s\n%s", command, old, out, list)
+		}
+		if out, _ := srv(t, "docker ps --filter label=com.docker.compose.project=cutwait-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+			t.Errorf("%s, interrupted while it waited: not running: %q", command, out)
+		}
+	}
+}
