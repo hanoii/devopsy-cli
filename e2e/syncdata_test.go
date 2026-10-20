@@ -5,6 +5,7 @@ package e2e
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // A label from a variable the parent inherits to its child follows the
@@ -61,5 +62,63 @@ func TestSyncInheritedLabel(t *testing.T) {
 	}
 	if syncState(t, "inhl", "dev", "data") != "running" || syncState(t, "inhl", "prod", "data") != "running" {
 		t.Errorf("after the abort: dev data %q, prod data %q", syncState(t, "inhl", "dev", "data"), syncState(t, "inhl", "prod", "data"))
+	}
+}
+
+// --destroy of a child a sync left partial removes it all, its mark
+// included. While a sync holds the child's release lock and the
+// parent's (its import running), --destroy of either waits, says so and
+// changes nothing, and goes once the sync is done.
+func TestSyncDestroy(t *testing.T) {
+	const name = "sdestroy"
+	dir := syncProject(t, name)
+	t.Cleanup(func() { srv(t, "rm -f fail-export import-wait-"+name+"-dev importing-"+name+"-dev") })
+	srv(t, "rm -f fail-export")
+	syncReleaseBoth(t, name, dir)
+	srv(t, "touch fail-export")
+	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, name+"/dev/.devopsy-sync.incomplete") {
+		t.Fatalf("no partial copy (%d):\n%s", code, out)
+	}
+	srv(t, "rm -f fail-export")
+	left := func(env string) string {
+		out, _ := srv(t, "docker ps -aq --filter label=com.docker.compose.project="+name+"-"+env)
+		return strings.TrimSpace(out)
+	}
+	if out, code := op(t, dir, "devopsy @dev --destroy --yes --purge"); code != 0 || exists(t, name+"/dev") || left("dev") != "" {
+		t.Fatalf("--destroy of a partial child (%d), left %v, containers %q:\n%s", code, exists(t, name+"/dev"), left("dev"), out)
+	}
+
+	// Released again, syncing; then a sync whose import lasts.
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 || syncStamp(t, name, "dev") != "one" {
+		t.Fatalf("dev released again (%d), stamp %q:\n%s", code, syncStamp(t, name, "dev"), out)
+	}
+	srv(t, "rm -f importing-"+name+"-dev; echo 20 >import-wait-"+name+"-dev")
+	op(t, "/", "rm -f /tmp/"+name+"*.log")
+	background(t, dir, fast()+" devopsy @dev --sync --yes; echo exit=$?", "/tmp/"+name+".log")
+	eventually(t, time.Minute, "the import running", func() bool { return exists(t, "importing-"+name+"-dev") })
+	for _, env := range []string{"dev", "prod"} {
+		background(t, dir, "devopsy @"+env+" --destroy --yes --purge; echo exit=$?", "/tmp/"+name+"-"+env+".log")
+	}
+	eventually(t, 30*time.Second, "both --destroy waiting", func() bool {
+		out, _ := op(t, "/", "grep -l 'waiting for' /tmp/"+name+"-dev.log /tmp/"+name+"-prod.log | wc -l")
+		return strings.TrimSpace(out) == "2"
+	})
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync is copying into it") {
+		t.Errorf("--status during the sync:\n%s", out)
+	}
+	if out, _ := op(t, dir, "devopsy @dev --releases"); true {
+		t.Logf("--releases during the sync:\n%s", out)
+	}
+	if syncStamp(t, name, "dev") != "one" || syncStamp(t, name, "prod") != "one" || syncState(t, name, "prod", "db") != "running" {
+		t.Errorf("changed under the sync: dev stamp %q, prod stamp %q, prod db %q", syncStamp(t, name, "dev"), syncStamp(t, name, "prod"), syncState(t, name, "prod", "db"))
+	}
+	eventually(t, 2*time.Minute, "both destroyed", func() bool { return !exists(t, name+"/dev") && !exists(t, name+"/prod") })
+	for _, log := range []string{name, name + "-dev", name + "-prod"} {
+		if out, _ := op(t, "/", "cat /tmp/"+log+".log"); !strings.Contains(out, "exit=0") {
+			t.Errorf("%s:\n%s", log, out)
+		}
+	}
+	if left("dev")+left("prod") != "" {
+		t.Errorf("containers left: %q %q", left("dev"), left("prod"))
 	}
 }
