@@ -143,3 +143,17 @@ func alive(pid int) bool {
 	}
 	return syscall.Kill(pid, 0) == nil
 }
+
+// A command name holding ") " never shifts the fields after it.
+func TestStatParent(t *testing.T) {
+	for stat, want := range map[string]int{
+		"4242 (sh) S 77 4242 4242 0 -1":       77,
+		"4242 (a) b) S 77 4242 4242 0 -1":     77,
+		"4242 (x) (y) ) R 1 4242 4242 0 -1\n": 1,
+		"garbage":                             0,
+	} {
+		if got := statParent(stat); got != want {
+			t.Errorf("%q: %d, want %d", stat, got, want)
+		}
+	}
+}
