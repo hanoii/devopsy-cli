@@ -995,9 +995,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   prepare until the services are restored it ignores SIGPIPE, and it
   restores before it reports.
 - **An interrupt stops the push first, then lets the holder decide**
-  (SIGINT, SIGTERM in `runSyncSession`): before the marker devopsy ends
-  the holder's session (`endHolder`) and waits for it (a release that
-  syncs is cancelled by its watcher, a holder restores on its own);
+  (SIGINT, SIGTERM in `runSyncSession`): before the marker devopsy writes
+  `abort`, closes the holder's stdin and waits, as for a release (the
+  watcher, armed during the lock wait or before a release's switch,
+  ends it; past that the holder reads the abort after its prepare and
+  restores in the session, so the operator sees how it ends), saying so
+  after 5 seconds, and a second one ends the session (`endHolder`);
   after it, the push's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL
   after `SSHKillDelay`) and is waited for, then the holder gets `abort`
   and finishes as the files say: exit 130, or 0 when the copy had
