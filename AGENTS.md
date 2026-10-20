@@ -922,11 +922,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   keepalives into the forward's local socket, so it does not help).
 - **The decision** (`syncBlock`), once the holder's read of the answer
   ends, however it ends: its own sync's done is `go` (an `abort` after
-  it too; another sync's, left by a push that outlived its holder,
-  counts for nothing),
-  started alone `partial`, neither the answer (`go` with nothing
-  written clears an earlier mark too; `abort` on a marked environment
-  stays `partial`); then both files go.
+  it too), started alone or another sync's done (a push that outlived
+  its holder wrote meanwhile) `partial`, neither on a marked
+  environment `partial` (decided: nothing written leaves an earlier
+  sync's partial copy as it was, even when the parent's labels cover
+  nothing now), else the answer; then both files go.
 - **A partial copy keeps everything off the data:** `--sync-services
   finish partial` leaves the `stop=true` services down and writes
   `SyncIncompleteFile`; `finish go` removes it, and a failing `finish
@@ -1003,7 +1003,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   other value an error (`live`, `pause`, `stop`, `custom` went, with
   `push` and `flush`: no migration). Nothing labeled, or nothing to
   copy (no entries, no streams): "nothing to sync", success, the
-  parent's hooks skipped, and the run step still runs.
+  parent's hooks skipped, and the run step still runs, unless the child
+  is marked (it stays so).
 - **`devopsy.sync.stop=true|false`** (`SyncStopLabel`, default false,
   ignored without `devopsy.sync`) stops the service on both sides for
   the whole sync, a stream included. On the parent that is downtime for

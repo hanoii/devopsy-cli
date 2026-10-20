@@ -831,7 +831,9 @@ keeps its own secrets.
 A project without any labeled service, or whose labeled services have
 nothing to copy, syncs nothing ("nothing to sync"): the parent's
 `prepare` and `finish` do not run, and the child's `run` step still
-runs.
+runs. On a child whose data is from a sync that did not complete, it
+completes nothing: the earlier copy's data is still there, and the sync
+fails.
 
 Each side reads the labels from its own release, so they can differ: a
 variable in the label (`devopsy.sync=${SYNC_DATABASE:-rsync}`) that the

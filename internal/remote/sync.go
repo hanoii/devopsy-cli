@@ -308,10 +308,12 @@ export ` + SyncIDEnv + `="$sync_id"
     # Started alone: the copy was cut. Another sync's done: a push that
     # outlived its holder wrote into this child meanwhile.
     sync_word=partial
+  elif [ -e ` + incomplete + ` ]; then
+    # Nothing written over an earlier sync's partial copy, whatever the
+    # answer: only a sync that writes completes it.
+    sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
-  elif [ -e ` + incomplete + ` ]; then
-    sync_word=partial
   fi
   case "$reply.$sync_word" in
     go.go) ;;
@@ -329,7 +331,7 @@ export ` + SyncIDEnv + `="$sync_id"
         devopsy --say error "an earlier sync's copy wrote into this one's data after that sync ended: the services stay down until a sync completes, and ` + failed + `" || true
         printf '%s\t%s\t` + IncompleteWrite + `\t%s\n' "$sync_since" "$` + SyncFromTargetEnv + `" "an earlier sync's copy wrote into the data after that sync had ended" >` + incomplete + ` || true
       else
-        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" || true
+        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, fix the child's entries or labels by hand, or --destroy it and release it again" || true
       fi
       ;;
     *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
