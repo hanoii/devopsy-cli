@@ -505,7 +505,7 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 // would put the new tree inside the existing release and the old one
 // would run again.
 func UploadScript(t *Target, id string) string {
-	return prelude(t, true) + lockedGate(false) + fmt.Sprintf(`rel="$base/releases/"%s
+	return prelude(t, true) + lockedGate(false, "") + fmt.Sprintf(`rel="$base/releases/"%s
 [ ! -e "$rel" ] || { devopsy --say error "release $(basename "$rel") exists already on $base (another release in the same second?): try again"; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
@@ -633,6 +633,7 @@ fi
 	if rollback {
 		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
 (cd "$base/current" && with_tty ` + Quote(steps("before")+` "$rb_code"`) + `) || not_live $?
+unset rb_code
 `
 	} else if len(p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
@@ -1424,10 +1425,10 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
   devopsy --say error "$base has no releases"
   exit 1
 fi
-` + releaseLock(false, false) + lockedGate(true) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
-img recover "$base" ${prev:+"$base/$prev"}
+` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
 rr=0
@@ -1612,13 +1613,14 @@ func WithGate(ctx context.Context) context.Context {
 const LockedMarker = "devopsy-internal-locked"
 
 // lockedGate prints LockedMarker; with ack it then takes the "go" a
-// gated session sends (AckInput), failing without it, under
-// --stdin-guard's bound.
-func lockedGate(ack bool) string {
+// gated session sends (AckInput), under --stdin-guard's bound, and
+// without it runs undo (a lock to give back) and fails. A removal takes
+// it once it holds every lock it waits for, the image lock included.
+func lockedGate(ack bool, undo string) string {
 	s := `printf '%s\n' "` + LockedMarker + `" >&2
 `
 	if ack {
-		s += `[ "$(devopsy ` + StdinGuardFlag + `)" = go ] || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+		s += `lg_ack=$(devopsy ` + StdinGuardFlag + `) && [ "$lg_ack" = go ] || { ` + undo + `devopsy --say error "the session ended while this waited for the locks: nothing changed"; exit 1; }
 `
 	}
 	return s
@@ -1733,8 +1735,8 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + lockedGate(true) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
-img recover "$base"
+` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
   dir="$base/current"

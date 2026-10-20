@@ -275,7 +275,9 @@ export ` + SyncIDEnv + `="$sync_id"
   sync_word=abort
   if [ "$(cat ` + done + ` 2>/dev/null)" = "$sync_id" ]; then
     sync_word=go
-  elif [ -e ` + started + ` ]; then
+  elif [ -e ` + done + ` ] || [ -e ` + started + ` ]; then
+    # Another sync's done: a push that outlived its holder wrote into
+    # this child meanwhile.
     sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
@@ -353,7 +355,11 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `# A child's first release failing while this waited takes current away.
+`, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
+# session gone then ends it; from here on it restores on its own.
+mv "$ws_armed" "$ws_armed.off" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+rm -f "$ws_armed.off"
+# A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
@@ -516,6 +522,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string,
 rs_watch=$!
 trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
+  [ "$(cut -d' ' -f2 ` + started + ` 2>/dev/null)" = ` + Quote(id) + ` ] || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
   docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }

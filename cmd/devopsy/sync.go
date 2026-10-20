@@ -207,7 +207,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 	case res = <-done:
 	case <-sigs:
 		if release {
-			log.Error("interrupted: cancelling the release on @" + job.child.Address + ": it does not go live, and past its switch the previous release comes back")
+			log.Error("interrupted: cancelling the release on @" + job.child.Address + ": it does not go live, and past its switch the previous release, if any, comes back")
 		} else {
 			log.Error("interrupted: ending the session on @" + job.child.Address + ", which leaves it as it was")
 		}
@@ -310,11 +310,11 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		lost := "the connection to @" + job.child.Address + " was lost"
 		switch {
 		case !marked && release:
-			log.Error(lost+" before the copy: the server cancels the release once it notices, within two minutes, and past its switch the previous release comes back", "devopsy @"+targetRef(job.child)+" --releases shows it")
+			log.Error(lost+" before the copy: the server cancels the release once it notices, within two minutes, and past its switch the previous release, if any, comes back", "devopsy @"+targetRef(job.child)+" --releases shows it")
 		case !marked:
 			log.Error(lost+" before the copy: the server leaves it as it was once it notices", "devopsy @"+targetRef(job.child)+" --status shows it")
 		case answered:
-			log.Error(lost+" after the copy: the run step goes on there", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Error(lost+" after the copy: the server goes on as far as the copy went, the run step too if it went through", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
 		default:
 			log.Error(lost+": the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
 		}
@@ -1685,10 +1685,10 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		// A first release (the record says so) keeps it up, for the
 		// finish hook and the run step; otherwise one down before the
 		// sync goes down again.
-		// A first release has nothing stopped, and creates what the
-		// service needs.
-		first := recordedFirst(cwd)
-		down, err := upFor(ctx, cwd, name, first, !first)
+		// A first release creates what the service needs, but what the
+		// sync stopped (a retried one finds containers) stays down.
+		rec, _ := readSyncRecord(cwd)
+		down, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -1894,13 +1894,6 @@ func startSyncState(cwd string, first bool) error {
 	return rec.write(cwd)
 }
 
-// recordedFirst reports whether the record says the sync started on a
-// first release (syncFirst).
-func recordedFirst(cwd string) bool {
-	rec, _ := readSyncRecord(cwd)
-	return rec.first
-}
-
 // healthyTimeout is how long restoreServices waits for a started service.
 const healthyTimeout = 5 * time.Minute
 
@@ -1945,9 +1938,14 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 	}
 	stateFile := filepath.Join(filepath.Dir(cwd), syncState)
 	// What a sync stopped comes back whatever its labels say now (an
-	// inherited variable may have changed them since a cut one).
+	// inherited variable may have changed them since a cut one), if the
+	// project still has it: compose start refuses a service it lacks.
 	if recorded {
-		stop = rec.stops
+		var names []string
+		for _, s := range services {
+			names = append(names, s.Name)
+		}
+		stop = intersect(rec.stops, names)
 	}
 	if len(stop) > 0 {
 		exited, err := servicesIn(cwd, "exited")
