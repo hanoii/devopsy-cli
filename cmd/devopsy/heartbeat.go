@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // heartbeat writes a zero byte to w every beat (remote.HeartbeatEvery), the
@@ -105,10 +106,10 @@ func runStdinGuard() int {
 	})
 	switch {
 	case silent:
-		fmt.Fprintf(os.Stderr, "devopsy: nothing came for %s: the session is gone\n", dataQuiet())
+		report.Error(fmt.Sprintf("nothing came for %s: the session is gone", dataQuiet()))
 		return 1
 	case err != nil:
-		fmt.Fprintln(os.Stderr, "devopsy: "+err.Error())
+		report.Fail(err)
 		return 1
 	}
 	return 0

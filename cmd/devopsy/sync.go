@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -23,7 +22,6 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
-	"golang.org/x/term"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -138,15 +136,15 @@ func sameHost(a, b string) bool {
 // session on the parent's, then go or abort to the holder. The holder's
 // exit code is the result.
 func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) int {
-	say := func(c, msg string) {
-		cli.Fprint(os.Stderr, c, msg, color)
-		rlog.Line(msg)
+	log := report.Default().Tee(rlog.Line)
+	partial := func() {
+		log.Warn("@"+job.child.Address+" may hold a partial copy now", "devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
 	}
 	// An *os.File, so the holder's ssh reads it directly: devopsy writes go
 	// or abort, and nothing waits on a copy if the holder ends first.
 	r, w, err := os.Pipe()
 	if err != nil {
-		say(red, err.Error())
+		log.Fail(err)
 		return 1
 	}
 	defer r.Close()
@@ -155,9 +153,9 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	// before the lines are colored for the terminal: the holder's
 	// streams are read here, not in SSHContext.
 	var out, errOut io.Writer = os.Stdout, os.Stderr
-	var colored []*remote.ColorWriter
+	var colored []*report.ColorWriter
 	if color {
-		o, e := remote.Colorize(os.Stdout), remote.Colorize(os.Stderr)
+		o, e := report.Colorize(os.Stdout), report.Colorize(os.Stderr)
 		colored = append(colored, o, e)
 		out, errOut = o, e
 	}
@@ -200,7 +198,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	select {
 	case res = <-done:
 	case <-sigs:
-		say(red, "devopsy: interrupted: ending the session on @"+job.child.Address+", which leaves it as it was")
+		log.Error("interrupted: ending the session on @" + job.child.Address + ", which leaves it as it was")
 		endHolder()
 		<-done
 		flush()
@@ -217,7 +215,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		case code = <-pushed:
 		case <-sigs:
 			interrupted = true
-			say(red, "devopsy: interrupted: stopping the copy from @"+job.parent.Address+", then aborting the sync")
+			log.Error("interrupted: stopping the copy from @" + job.parent.Address + ", then aborting the sync")
 			cancel()
 			<-pushed
 		case res = <-done:
@@ -229,11 +227,11 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			if res.err != nil {
 				why = res.err.Error()
 			}
-			say(red, "devopsy: the session on @"+job.child.Address+" ended during the copy ("+why+"): stopping the copy from @"+job.parent.Address)
+			log.Error("the session on @" + job.child.Address + " ended during the copy (" + why + "): stopping the copy from @" + job.parent.Address)
 			cancel()
 			<-pushed
 			flush()
-			say(yellow, "devopsy: @"+job.child.Address+" may hold a partial copy now: devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
+			partial()
 			return cmp.Or(res.code, 1)
 		}
 		answer := "go\n"
@@ -245,7 +243,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 			answer = "abort\n"
 		} else if code != 0 {
 			answer = "abort\n"
-			say(red, fmt.Sprintf("devopsy: the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
+			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
 		}
 		stopBeat()
 		_, _ = w.WriteString(answer)
@@ -272,7 +270,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		select {
 		case res = <-done:
 		case <-sigs:
-			say(yellow, "devopsy: interrupted: the run step goes on on @"+job.child.Address+" (devopsy @"+targetRef(job.child)+" --log shows how it ends). Ctrl-C again ends the session, not the step")
+			log.Warn("interrupted: the run step goes on on @"+job.child.Address, "devopsy @"+targetRef(job.child)+" --log shows how it ends; Ctrl-C again ends the session, not the step")
 			select {
 			case res = <-done:
 			case <-sigs:
@@ -283,12 +281,12 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	}
 	flush()
 	if res.err != nil {
-		say(red, res.err.Error())
-		say(yellow, "devopsy: @"+job.child.Address+" may hold a partial copy now: devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
+		log.Fail(res.err)
+		partial()
 		return 1
 	}
 	if res.code == sshLost {
-		say(yellow, "devopsy: the connection to @"+job.child.Address+" was lost: the server finishes the sync as far as its copy went (devopsy @"+targetRef(job.child)+" --status says how it ended)")
+		log.Error("the connection to @"+job.child.Address+" was lost: the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
 	}
 	return res.code
 }
@@ -324,9 +322,8 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 		extra = append([]string{"-o", "ForwardAgent=yes"}, remote.KeepAlive...)
 		where = "from " + p.Host + " to " + job.to
 	}
-	msg := fmt.Sprintf("Copying @%s (%s:%s) into @%s, %s...", p.Address, p.Host, p.Path, job.child.Address, where)
-	cli.Fprint(os.Stderr, cyan, msg, color)
-	rlog.Line(msg)
+	log := report.Default().Tee(rlog.Line)
+	log.Info(fmt.Sprintf("copying @%s (%s:%s) into @%s, %s", p.Address, p.Host, p.Path, job.child.Address, where))
 	// The session's stdin stays open until the push ends: the parent's
 	// server sees EOF when the session is gone (interrupted, connection
 	// lost) and stops copying at once, instead of at its next write.
@@ -345,8 +342,7 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	defer heartbeat(w)()
 	code, err := remote.SSHContext(remote.WithoutInterrupt(ctx), p, extra, remote.PushScript(p, job.parentName, env), r, nil, false, rlog)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
-		rlog.Line(err.Error())
+		log.Fail(err)
 		return 1
 	}
 	return code
@@ -367,10 +363,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	if len(p.Inherit) == 0 {
 		return nil
 	}
-	say := func(colr, msg string) {
-		cli.Fprint(os.Stderr, colr, msg, color)
-		rlog.Line(msg)
-	}
+	log := report.Default().Tee(rlog.Line)
 	var out bytes.Buffer
 	code, err := remote.SSHContext(ctx, p, nil, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false, nil)
 	if err != nil {
@@ -435,15 +428,15 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	}
 	switch {
 	case len(keys) > 0 && pending:
-		say(cyan, fmt.Sprintf("Inherited %s from @%s for @%s's sync (its shared/%s once the copy is in).", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
+		log.Info(fmt.Sprintf("inherited %s from @%s for @%s's sync (its shared/%s once the copy is in)", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	case len(keys) > 0:
-		say(cyan, fmt.Sprintf("Inherited %s from @%s into @%s's shared/%s.", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
+		log.Info(fmt.Sprintf("inherited %s from @%s into @%s's shared/%s", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
 	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
-		say(yellow, fmt.Sprintf("@%s's own shared .env also sets %s, which wins there (devopsy @%s --vars unset to inherit it).", c.Address, strings.Join(shadowed, ", "), targetRef(c)))
+		log.Warn(fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), "to inherit it:", report.CmdMark+"devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " "))
 	}
 	if len(missing) > 0 {
-		say(yellow, fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited.", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
+		log.Warn(fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
 	}
 	return nil
 }
@@ -452,7 +445,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 // variables into the child, nothing copied, no run step.
 func runInherit(t *remote.Target, projectName string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) > 0 {
@@ -462,12 +455,12 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		return fail(fmt.Sprintf("@%s is not a child: no parent: in its config", t.Address))
 	}
 	if t.ParentErr != nil {
-		report.Fail(os.Stderr, color, t.ParentErr)
+		report.Fail(t.ParentErr)
 		return 1
 	}
 	p := t.ParentTarget
 	if len(p.Inherit) == 0 {
-		cli.Fprint(os.Stderr, yellow, fmt.Sprintf("@%s inherits nothing: no inherit: on %s", t.Address, p.Name), color)
+		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s", t.Address, p.Name))
 		return 0
 	}
 	for _, x := range []*remote.Target{p, t} {
@@ -495,7 +488,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 // its run step.
 func runSync(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	usage := "usage: devopsy @" + targetRef(t) + " --sync [--from @<address>] [--yes] [-- <rsync args>...]"
@@ -520,7 +513,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		report.Fail(os.Stderr, color, t.ParentErr, "Sync from an address instead:\ndevopsy @"+targetRef(t)+" --sync --from "+parentGuess(t))
+		report.Fail(t.ParentErr, report.Fix("sync from an address instead:", "devopsy @"+targetRef(t)+" --sync --from "+parentGuess(t)))
 		return 1
 	}
 	if from != "" {
@@ -535,80 +528,43 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	run := remote.StepArgs(t.Release.Run)
 	if !yes {
-		if err := confirmSync(t, p, "runs 'devopsy "+strings.Join(run, " ")+"' there"); err != nil {
-			return fail(syncRefused(err, "Nothing syncd."))
+		if err := confirmSync(t, p, "runs 'devopsy "+strings.Join(run, " ")+"' there", "nothing synced"); err != nil {
+			report.Fail(err)
+			return 1
 		}
 	}
 
 	rlog := newReleaseLog("sync", t)
-	msg := fmt.Sprintf("Syncing @%s into @%s (%s:%s)...", p.Address, t.Address, t.Host, t.Path)
-	cli.Fprint(os.Stderr, cyan, msg, color)
-	rlog.Line(msg)
+	log := report.Default().Tee(rlog.Line)
+	log.Info(fmt.Sprintf("syncing @%s into @%s (%s:%s)", p.Address, t.Address, t.Host, t.Path))
 	// The parent's variables first, into the child's pending file: the
 	// holder reads its labels from them; on go they move into place.
 	if err := inheritVars(context.Background(), job, rlog, color, true); err != nil {
-		return fail("inherit: " + err.Error() + "\nNothing syncd.")
+		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
+		return 1
 	}
 	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0}
 	code := runSyncSession(job, remote.HolderScript(t, projectName, o, run), rlog, color)
 
 	// The log goes with the release syncd into, after its own.
-	rlog.Line(fmt.Sprintf("devopsy: sync exited %d", code))
+	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))
 	text := rlog.Text()
 	if m := remote.SyncingInto.FindSubmatch(text); m != nil {
 		text = append([]byte("\n"), text...)
 		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
-			cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the sync log on the server (%v, %d)", err, c), color)
+			report.Warn(fmt.Sprintf("could not save the sync log on the server (%v, %d)", err, c))
 		}
 	}
 	return code
 }
 
-// errNotConfirmed: the name typed was not the one asked for.
-var errNotConfirmed = errors.New("")
-
-// typeToGoOn asks to type name to go on, after what (what follows, a
-// sentence): errNotConfirmed when something else is typed, noTerminal
-// as the error without a terminal (--yes is the way there). tty reads
-// and asks on the terminal itself, when stdin carries data.
-func typeToGoOn(what, name, noTerminal string, tty bool) error {
-	var in interface {
-		ReadString(byte) (string, error)
-	} = stdinReader
-	var out io.Writer = os.Stderr
-	if tty {
-		f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-		if err != nil {
-			return errors.New(noTerminal)
-		}
-		defer f.Close()
-		in, out = bufio.NewReader(f), f
-	} else if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return errors.New(noTerminal)
-	}
-	fmt.Fprintf(out, "%s Type %s to go on: ", what, name)
-	line, _ := in.ReadString('\n')
-	if strings.TrimSpace(line) != name {
-		return errNotConfirmed
-	}
-	return nil
-}
-
-// syncRefused is what a refused confirmation prints, then nothing.
-func syncRefused(err error, nothing string) string {
-	if err == errNotConfirmed {
-		return nothing
-	}
-	return err.Error() + "\n" + nothing
-}
-
 // confirmSync asks for the child's environment name before its data is
 // replaced, like --destroy; then says what follows the copy. Not at a
 // terminal it fails: --yes is the way there.
-func confirmSync(t, p *remote.Target, then string) error {
+func confirmSync(t, p *remote.Target, then, nothing string) error {
 	where := t.Host + ":" + t.Path
-	return typeToGoOn(fmt.Sprintf("This replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s.", t.Address, where, p.Address, p.Host, p.Path, then),
-		t.Name, "--sync replaces the data of "+where+" with its parent's: add --yes when not at a terminal", false)
+	return typeToGoOn(fmt.Sprintf("this replaces the data of @%s (%s, shared/mnt) with @%s's (%s:%s), then %s", t.Address, where, p.Address, p.Host, p.Path, then),
+		t.Name, nothing, false)
 }
 
 // Server side: the hidden flags a sync runs.
@@ -648,7 +604,7 @@ func (q *quietWriter) keep(base string) {
 	q.mu.Lock()
 	q.file = f
 	q.mu.Unlock()
-	sayErr("devopsy: " + time.Now().UTC().Format("2006-01-02 15:04:05") + ": the sync's session is gone: restoring what was stopped")
+	report.Warn(time.Now().UTC().Format("2006-01-02 15:04:05") + ": the sync's session is gone: restoring what was stopped")
 }
 
 // trimSyncLog keeps the last remote.SyncLogKeep lines of the log at
@@ -683,19 +639,8 @@ const syncState = ".devopsy-sync.services"
 // operator's devopsy was gone, in the environment's directory.
 const syncLog = ".devopsy-sync.log"
 
-// sayErr prints a server-side notice.
-func sayErr(msg string) { fmt.Fprintln(errOut, msg) }
-
-// sayWarn is a notice worth a color on the operator's terminal
-// (ColorEnv): the release log strips it.
-func sayWarn(msg string) { cli.Fprint(errOut, yellow, msg, os.Getenv(remote.ColorEnv) != "") }
-
-// trace prints a command devopsy runs on a server, with DEVOPSY_VERBOSE.
-func trace(args []string) {
-	if cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0 {
-		sayErr("devopsy: running '" + strings.Join(args, " ") + "'")
-	}
-}
+// trace says a command devopsy runs on a server, at debug level.
+func trace(args []string) { report.Debug("running '" + strings.Join(args, " ") + "'") }
 
 // interruptible cancels its context on SIGINT, SIGTERM, SIGHUP and
 // SIGPIPE (the session gone), so a sync stops copying and restores its
@@ -756,7 +701,7 @@ func ensureUtilImage(ctx context.Context) error {
 	if exec.CommandContext(ctx, "docker", "image", "inspect", remote.UtilImage).Run() == nil {
 		return nil
 	}
-	sayErr("devopsy: building " + remote.UtilImage)
+	report.Info("building " + remote.UtilImage)
 	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs()...)
 	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
 	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
@@ -784,7 +729,7 @@ func syncEnv(flag string) (toDir, toProject string, err error) {
 // services started again, and finish parent go|abort.
 func runSyncPush(cwd string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
@@ -821,7 +766,7 @@ func runSyncPush(cwd string, color bool) int {
 		return fail(err.Error())
 	}
 	if !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.Labeled }) {
-		sayErr("devopsy: nothing to sync: no service labeled " + cli.SyncLabel)
+		report.Info("nothing to sync: no service labeled " + cli.SyncLabel)
 		return 0
 	}
 	streams, err := cli.SyncStreamServices(services)
@@ -830,7 +775,7 @@ func runSyncPush(cwd string, color bool) int {
 	}
 	dirs := cli.SyncDirs(services)
 	if len(dirs) == 0 && len(streams) == 0 {
-		sayErr("devopsy: nothing to sync: no bind mounts under .devopsy/mnt for the services labeled " + cli.SyncLabel + "=" + cli.SyncRsync)
+		report.Info("nothing to sync: no bind mounts under .devopsy/mnt for the services labeled " + cli.SyncLabel + "=" + cli.SyncRsync)
 		return 0
 	}
 	// Everything that can refuse, before anything changes on this side.
@@ -838,7 +783,7 @@ func runSyncPush(cwd string, color bool) int {
 		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/sync/export", strings.Join(streams, ", "), cli.SyncLabel, cli.SyncStream))
 	}
 	if msg := cli.SyncWholeNotice(services); msg != "" {
-		sayWarn(msg)
+		report.Warn(msg)
 	}
 	// What the rsync would change under a running service of the child,
 	// left running by its own labels, and a stream the child would not
@@ -847,8 +792,16 @@ func runSyncPush(cwd string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if conflicts := append(syncConflicts(services, child), streamMismatches(services, streams, child)...); len(conflicts) > 0 {
-		return fail(strings.Join(conflicts, "\ndevopsy: "))
+	conflicts, mismatches := syncConflicts(services, child), streamMismatches(services, streams, child)
+	if len(conflicts)+len(mismatches) > 0 {
+		// A label from a variable the parent's inherit: names reaches the
+		// child with --inherit, which a re-sync only runs after the copy.
+		fixes := []report.Remedy{report.Fix("label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)")}
+		if len(conflicts) > 0 {
+			fixes = append(fixes, report.Fix(cli.SyncStopLabel+"=true on the child's service, to stop it for the sync"), report.Fix(cli.SyncLabel+"="+cli.SyncRsync+" on the child's service, to copy under it running"))
+		}
+		report.Fail(&report.Failure{Msg: "the child's sync labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Fixes: fixes})
+		return 1
 	}
 	if len(dirs) > 0 {
 		if err := ensureUtilImage(ctx); err != nil {
@@ -942,7 +895,7 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	if err != nil {
 		self = "devopsy"
 	}
-	sayErr("devopsy: running 'devopsy --capability sync " + strings.Join(args, " ") + "'")
+	report.Info("running 'devopsy --capability sync " + strings.Join(args, " ") + "'")
 	cmd := exec.CommandContext(ctx, self, append([]string{"--capability", "sync"}, args...)...)
 	cmd.Dir = cwd
 	// The session's watching is devopsy's, never the hook's: a hook
@@ -976,7 +929,7 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 func syncStream(ctx context.Context, cwd, projectDir, name string, env []string, last bool) error {
 	spool := remote.StreamSpool(os.Getenv(remote.SyncToBaseEnv), name)
 	to := os.Getenv(remote.SyncToEnv)
-	sayErr("devopsy: exporting " + name)
+	report.Info("exporting " + name)
 	var err error
 	if to == "" {
 		var f *os.File
@@ -1136,11 +1089,8 @@ func parseChildServices(out string) []childService {
 // does not: a parent stream the child does not label stream (its import
 // would refuse it, after the rsync and the streams before it), and a
 // child stream the parent rsyncs (its import would never run). Refused
-// before anything stops, with the way out: a label from a variable the
-// parent's inherit: names reaches the child with --inherit, which a
-// re-sync only runs after the copy.
+// before anything stops, with the way out (labelsAlike).
 func streamMismatches(parent []cli.SyncService, streams []string, child []childService) []string {
-	wayOut := " Label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)."
 	var out []string
 	for _, name := range streams {
 		i := slices.IndexFunc(child, func(c childService) bool { return c.Name == name })
@@ -1152,12 +1102,12 @@ func streamMismatches(parent []cli.SyncService, streams []string, child []childS
 			if child[i].Transfer == cli.SyncSkip {
 				label = "has no " + cli.SyncLabel + " label on it"
 			}
-			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child %s: its import would refuse it.", name, cli.SyncLabel, cli.SyncStream, label)+wayOut)
+			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child %s: its import would refuse it", name, cli.SyncLabel, cli.SyncStream, label))
 		}
 	}
 	for _, c := range child {
 		if p, ok := cli.SyncFind(parent, c.Name); ok && c.Transfer == cli.SyncStream && p.Transfer == cli.SyncRsync {
-			out = append(out, fmt.Sprintf("the child streams %s (%s=%s) and the parent rsyncs it (%s=%s): its import would never run.", c.Name, cli.SyncLabel, cli.SyncStream, cli.SyncLabel, cli.SyncRsync)+wayOut)
+			out = append(out, fmt.Sprintf("the child streams %s (%s=%s) and the parent rsyncs it (%s=%s): its import would never run", c.Name, cli.SyncLabel, cli.SyncStream, cli.SyncLabel, cli.SyncRsync))
 		}
 	}
 	return out
@@ -1204,7 +1154,7 @@ func syncConflicts(parent []cli.SyncService, child []childService) []string {
 			if c.Transfer == cli.SyncSkip {
 				label = "without a " + cli.SyncLabel + " label"
 			}
-			conflicts = append(conflicts, fmt.Sprintf("the child's %s is running, %s, and mnt/%s would change under it: the parent copies it for %s. Label it alike on both sides (an inherited variable keeps them so), %s=true to stop it, or %s=%s to copy under a running service.", c.Name, label, d, from(d), cli.SyncStopLabel, cli.SyncLabel, cli.SyncRsync))
+			conflicts = append(conflicts, fmt.Sprintf("the child's %s is running, %s, and mnt/%s would change under it: the parent copies it for %s", c.Name, label, d, from(d)))
 			break
 		}
 	}
@@ -1224,7 +1174,7 @@ func exitCode(err error) int {
 	case errors.As(err, &ee):
 		return ee.ExitCode()
 	}
-	sayErr("devopsy: " + err.Error())
+	report.Info(err.Error())
 	return 1
 }
 
@@ -1266,7 +1216,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	for _, d := range dirs {
 		info, err := os.Stat(filepath.Join(parentMnt, d))
 		if err != nil {
-			sayErr("devopsy: mnt/" + d + " does not exist on this server: skipped")
+			report.Info("mnt/" + d + " does not exist on this server: skipped")
 			continue
 		}
 		present = append(present, d)
@@ -1290,7 +1240,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 			return err
 		}
 		for i, d := range present {
-			sayErr("devopsy: rsync mnt/" + d)
+			report.Info("rsync mnt/" + d)
 			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
 			name := fmt.Sprintf("devopsy-sync-%d-%d", os.Getpid(), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
@@ -1303,10 +1253,10 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 			}
 			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
 				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
-					sayErr("devopsy: rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
+					report.Info("rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
 					continue
 				}
-				sayErr("devopsy: mnt/" + d + " " + remote.HalfCopiedNotice)
+				report.Info("mnt/" + d + " " + remote.HalfCopiedNotice)
 				if ctx.Err() != nil {
 					return errors.New("interrupted")
 				}
@@ -1367,7 +1317,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 		if ctx.Err() != nil {
 			// The child's script says which entry when rsync fails; cut
 			// by the session's end, it says nothing.
-			sayErr("devopsy: the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
+			report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
 			return errors.New("interrupted")
 		}
 		if strings.Contains(stderr.String(), "remote port forwarding failed") {
@@ -1436,7 +1386,7 @@ func cleanEnv(projectName string) []string {
 // clean environment.
 func runSyncExec(args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	toDir, toProject, err := syncEnv(cli.SyncExecFlag)
@@ -1488,7 +1438,7 @@ func runSyncExec(args []string, color bool) int {
 //   - list: name, label, state and entries of mnt, one service per line.
 func runSyncServices(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare | finish go|abort|partial | settle | import <service> [last] | list"
@@ -1530,7 +1480,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		if !fileExists(started) && !fileExists(done) {
 			return 0
 		}
-		sayErr("devopsy: an earlier sync into " + base + " left its files (its holder was killed, or a write came after it decided): its data counts as a partial copy")
+		report.Info("an earlier sync into " + base + " left its files (its holder was killed, or a write came after it decided): its data counts as a partial copy")
 		code := 0
 		if err := markIncomplete(base); err != nil {
 			code = fail(err.Error())
@@ -1599,7 +1549,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 		if stopped := cli.SyncStopped(services); len(stopped) > 0 {
-			sayErr("devopsy: " + strings.Join(stopped, " ") + " stay down: the data is a partial copy until a sync completes")
+			report.Info(strings.Join(stopped, " ") + " stay down: the data is a partial copy until a sync completes")
 		}
 	}
 	if word != "go" {
@@ -1741,7 +1691,7 @@ func upFor(ctx context.Context, cwd, name string, keep bool) (down func() error,
 		return down, nil
 	}
 	return func() error {
-		sayErr("devopsy: stopping " + name + " again: it was down before")
+		report.Info("stopping " + name + " again: it was down before")
 		if err := compose(cwd, errOut, "stop", name); err != nil {
 			return fmt.Errorf("docker compose stop: %w", err)
 		}
@@ -1835,7 +1785,7 @@ func stopServices(cwd string, services []cli.SyncService) error {
 	if len(stop) == 0 {
 		return nil
 	}
-	sayErr("devopsy: stopping " + strings.Join(stop, " "))
+	report.Info("stopping " + strings.Join(stop, " "))
 	if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
 		return fmt.Errorf("docker compose stop: %w", err)
 	}
@@ -1945,7 +1895,7 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 		}
 	}
 	if len(created) > 0 {
-		sayErr("devopsy: creating " + strings.Join(created, " "))
+		report.Info("creating " + strings.Join(created, " "))
 		if err := compose(cwd, errOut, append([]string{"up", "-d", "--wait"}, created...)...); err != nil {
 			errs = append(errs, fmt.Errorf("docker compose up: %w", err))
 		}
@@ -1960,7 +1910,7 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 			errs = append(errs, err)
 		}
 		if start := intersect(stop, exited); len(start) > 0 {
-			sayErr("devopsy: starting " + strings.Join(start, " "))
+			report.Info("starting " + strings.Join(start, " "))
 			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
 			} else if err := waitHealthy(cwd, start); err != nil {

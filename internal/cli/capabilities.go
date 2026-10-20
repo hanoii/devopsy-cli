@@ -164,6 +164,6 @@ func (p *loadedProject) computeEnv() error {
 		p.env.Mark(k)
 		p.env.defs[k] = append(p.env.defs[k], EnvDef{Kind: EnvComputed, Source: file, Value: vars[k]})
 	}
-	p.verbose = append(p.verbose, "devopsy: computed "+file)
+	p.verbose = append(p.verbose, "computed "+file)
 	return nil
 }

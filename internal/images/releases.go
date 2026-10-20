@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // RolledBackFile marks the release a rollback left: like a failed one,
@@ -115,33 +117,33 @@ func (s *Set) RemoveReleases(base string, ids []string, quiet, goneOK bool) erro
 			continue
 		}
 		if !ok {
-			s.say("release %s is gone: nothing removed", id)
+			s.say(report.WarnLevel, "release %s is gone: nothing removed", id)
 			return fmt.Errorf("release %s is gone", id)
 		}
 		if r.current {
-			s.say("release %s is current: nothing removed", id)
+			s.say(report.WarnLevel, "release %s is current: nothing removed", id)
 			return fmt.Errorf("release %s is current", id)
 		}
 	}
 	var failed []string
 	for _, id := range ids {
 		if _, ok := rs[id]; !ok {
-			s.say("release %s is gone already", id)
+			s.say(report.InfoLevel, "release %s is gone already", id)
 			continue
 		}
 		dir := filepath.Join(base, "releases", id)
 		if err := s.Remove(dir); err != nil {
-			s.say("the images of %s could not all be removed (%v): the release stays for the next removal", id, err)
+			s.say(report.ErrorLevel, "the images of %s could not all be removed (%v): the release stays for the next removal", id, err)
 			failed = append(failed, id)
 			continue
 		}
 		if err := os.RemoveAll(dir); err != nil {
-			s.say("could not remove release %s: %v", id, err)
+			s.say(report.ErrorLevel, "could not remove release %s: %v", id, err)
 			failed = append(failed, id)
 			continue
 		}
 		if !quiet {
-			s.say("removed release %s", id)
+			s.say(report.InfoLevel, "removed release %s", id)
 		}
 	}
 	if len(failed) > 0 {

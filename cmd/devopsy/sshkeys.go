@@ -13,6 +13,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runSSHKeys implements devopsy @<target> --ssh-keys [list | add <file>
@@ -21,10 +22,10 @@ import (
 // keys only ever travel; runSSHKeysGenerate makes a local pair.
 func runSSHKeys(t *remote.Target, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
-	say := func(msg string) { cli.Fprint(os.Stderr, cyan, msg, color) }
+	say := func(msg string, details ...string) { report.Info(msg, details...) }
 	usage := "usage: devopsy @" + targetRef(t) + " --ssh-keys [list | add <public key file> [--restricted] | remove <fingerprint or comment>]\n   or: devopsy --ssh-keys-generate [<name>] [--out <file>]   (a local key pair, no target)"
 	restricted := false
 	var words []string
@@ -73,15 +74,16 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if code != 0 {
 			return code
 		}
-		what := "Authorized " + fp
+		what := "authorized " + fp
 		if k.Comment != "" {
 			what += " (" + k.Comment + ")"
 		}
-		what += " for " + t.Host + " in " + strings.TrimSpace(buf.String()) + "."
+		what += " for " + t.Host + " in " + strings.TrimSpace(buf.String())
 		if restricted {
-			what += " Restricted: commands only, no shell, with the agent and port forwarding syncs across servers need."
+			say(what, "restricted: commands only, no shell, with the agent and port forwarding syncs across servers need")
+		} else {
+			say(what)
 		}
-		say(what)
 		return 0
 	}
 
@@ -184,11 +186,11 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 		if code != 0 {
 			return code
 		}
-		what := "Removed " + fp
+		what := "removed " + fp
 		if k.Comment != "" {
 			what += " (" + k.Comment + ")"
 		}
-		say(what + " from " + t.Host + "'s " + strings.TrimSpace(buf.String()) + ".")
+		say(what + " from " + t.Host + "'s " + strings.TrimSpace(buf.String()))
 		return 0
 
 	}
@@ -201,7 +203,7 @@ func runSSHKeys(t *remote.Target, args []string, color bool) int {
 // private key stays where it was made.
 func runSSHKeysGenerate(args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	usage := "usage: devopsy --ssh-keys-generate [<name>] [--out <file>]"
@@ -254,7 +256,11 @@ func runSSHKeysGenerate(args []string, color bool) int {
 		return fail(out + ".pub: " + errors.New("not a public key").Error())
 	}
 	fp, _ := k.Fingerprint()
-	cli.Fprint(os.Stderr, cyan, "Made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub. Authorize it on a server with devopsy @<target> --ssh-keys add "+out+".pub, --restricted for CI (commands only, no shell); then store the private key in CI as a protected file variable and load it in the job: eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\".", color)
+	report.Info("made "+fp+" ("+name+"): private key "+out+", public key "+out+".pub",
+		"authorize it on a server, --restricted for CI (commands only, no shell):",
+		report.CmdMark+"devopsy @<target> --ssh-keys add "+out+".pub --restricted",
+		"then store the private key in CI as a protected file variable and load it in the job:",
+		report.CmdMark+"eval \"$(ssh-agent)\"; ssh-add \"$DEVOPSY_SSH_KEY\"")
 	return 0
 }
 

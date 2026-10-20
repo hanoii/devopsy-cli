@@ -21,6 +21,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // --export and --import: one service's data, the way its devopsy.sync
@@ -67,12 +68,12 @@ func stopFor(cwd string, s cli.SyncService) (restore func() error, err error) {
 	if !slices.Contains(up, s.Name) {
 		return restore, nil
 	}
-	sayErr("devopsy: stopping " + s.Name)
+	report.Info("stopping " + s.Name)
 	if err := compose(cwd, errOut, "stop", s.Name); err != nil {
 		return restore, fmt.Errorf("docker compose stop: %w", err)
 	}
 	return func() error {
-		sayErr("devopsy: starting " + s.Name)
+		report.Info("starting " + s.Name)
 		if err := compose(cwd, errOut, "start", s.Name); err != nil {
 			return fmt.Errorf("docker compose start: %w", err)
 		}
@@ -121,7 +122,7 @@ func dockerRunIO(ctx context.Context, name string, stdin io.Reader, stdout io.Wr
 // everything said on stderr.
 func runExport(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -144,7 +145,7 @@ func runExport(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	if fileExists(filepath.Join(filepath.Dir(cwd), remote.SyncIncompleteFile)) {
-		cli.Fprint(errOut, yellow, "devopsy: this environment's data is from a sync that did not complete: exporting it anyway", color)
+		report.Warn("this environment's data is from a sync that did not complete: exporting it anyway")
 	}
 	ctx, stop := interruptible()
 	defer stop()
@@ -170,12 +171,12 @@ func runExport(cwd string, args []string, color bool) int {
 			if d == "." {
 				entries = []string{"."}
 				if msg := wholeMntNotice(services, s, mnt, "carries"); msg != "" {
-					cli.Fprint(errOut, yellow, msg, color)
+					report.Warn(msg)
 				}
 				break
 			}
 			if _, err := os.Lstat(filepath.Join(mnt, d)); err != nil {
-				sayErr("devopsy: mnt/" + d + " does not exist: skipped")
+				report.Info("mnt/" + d + " does not exist: skipped")
 				continue
 			}
 			entries = append(entries, d)
@@ -198,10 +199,10 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 	code := 0
 	if s.Transfer == cli.SyncStream {
-		sayErr("devopsy: exporting " + name)
+		report.Info("exporting " + name)
 		err = runSyncHook(ctx, cwd, projectDir, syncHookEnv(services), nil, os.Stdout, "export", name)
 	} else {
-		sayErr("devopsy: exporting " + name + ": a tar of mnt/" + strings.Join(entries, ", mnt/"))
+		report.Info("exporting " + name + ": a tar of mnt/" + strings.Join(entries, ", mnt/"))
 		run := append([]string{"-v", mnt + ":/mnt:ro", remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
 		err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 	}
@@ -245,7 +246,7 @@ func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb str
 	for _, d := range s.Excluded {
 		others = append(others, d+" (its "+cli.SyncExcludeLabel+")")
 	}
-	msg := fmt.Sprintf("devopsy: %s mounts mnt whole, so the tar %s all of it (%s)", s.Name, verb, strings.Join(entries, ", "))
+	msg := fmt.Sprintf("%s mounts mnt whole, so the tar %s all of it (%s)", s.Name, verb, strings.Join(entries, ", "))
 	if len(others) > 0 {
 		msg += ": " + strings.Join(others, ", ") + " included"
 	}
@@ -366,7 +367,7 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite
 // session passes after asking: locally nothing asks.
 func runImport(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) >= 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -487,7 +488,7 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 		if slices.Contains(entries, ".") {
 			if msg := wholeMntNotice(services, s, mnt, "replaces"); msg != "" {
-				cli.Fprint(errOut, yellow, msg, color)
+				report.Warn(msg)
 			}
 		}
 	}
@@ -511,14 +512,14 @@ func runImport(cwd string, args []string, color bool) int {
 				down, err = upFor(ctx, cwd, name, false)
 			}
 			if err == nil {
-				sayErr("devopsy: importing " + name)
+				report.Info("importing " + name)
 				err = runSyncHook(ctx, cwd, projectDir, syncHookEnv(services), in, nil, "import", name)
 				if derr := down(); derr != nil {
 					code = fail(derr.Error())
 				}
 			}
 		} else {
-			sayErr("devopsy: importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
+			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
 			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-import-%d", os.Getpid()), in, nil, run...)
 		}
@@ -577,7 +578,7 @@ func importArgs(args []string) (name string, yes bool, err error) {
 // through as it is (never colored).
 func runRemoteExport(t *remote.Target, projectName string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
@@ -608,7 +609,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 // stdin through.
 func runRemoteImport(t *remote.Target, projectName string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	name, yes, err := importArgs(args)
@@ -620,7 +621,8 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 	}
 	if !yes {
 		if err := confirmImport(t, name); err != nil {
-			return fail(syncRefused(err, "Nothing imported."))
+			report.Fail(err)
+			return 1
 		}
 	}
 	// stdin through, then the end line only once it ended cleanly: the
@@ -659,6 +661,6 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 // Without a terminal it fails: --yes is the way there.
 func confirmImport(t *remote.Target, name string) error {
 	where := t.Host + ":" + t.Path
-	return typeToGoOn(fmt.Sprintf("This replaces %s's data on @%s (%s) with what stdin carries.", name, t.Address, where),
-		t.Name, cli.ImportFlag+" replaces "+name+"'s data on "+where+": add --yes when not at a terminal", true)
+	return typeToGoOn(fmt.Sprintf("this replaces %s's data on @%s (%s) with what stdin carries", name, t.Address, where),
+		t.Name, "nothing imported", true)
 }

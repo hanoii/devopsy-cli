@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Files in a release's directory, beside its code, and the project's
@@ -85,7 +87,7 @@ type Set struct {
 	Name string
 	// Left is its project's LeftFile.
 	Left string
-	// Out takes what it says, one "devopsy: " line each.
+	// Out takes what it says (report.Line).
 	Out io.Writer
 	// List lists the images a release runs (ListCompose).
 	List func(rel string) ([]string, error)
@@ -98,9 +100,9 @@ type entry struct {
 	ID string
 }
 
-func (s *Set) say(format string, args ...any) {
+func (s *Set) say(lv report.Level, format string, args ...any) {
 	// A session gone takes these lines with it: never a reason to stop.
-	_, _ = fmt.Fprintf(s.Out, "devopsy: "+format+"\n", args...)
+	_, _ = io.WriteString(s.Out, report.Line(lv, fmt.Sprintf(format, args...))+"\n")
 }
 
 // bookmarkPrefix is the start of a release's bookmarks, the release id
@@ -240,7 +242,7 @@ func (s *Set) Bookmark(rel string) {
 	id := filepath.Base(rel)
 	refs, err := s.List(rel)
 	if err != nil {
-		s.say("could not list the images of %s: a rollback to it builds or pulls them again", id)
+		s.say(report.WarnLevel, "could not list the images of %s: a rollback to it builds or pulls them again", id)
 		return
 	}
 	old := readList(rel)
@@ -252,7 +254,7 @@ func (s *Set) Bookmark(rel string) {
 		listed[familiar(ref)] = true
 	}
 	if err := writeList(rel, es); err != nil {
-		s.say("could not record the images of %s (%v): a rollback to it builds or pulls them again", id, err)
+		s.say(report.WarnLevel, "could not record the images of %s (%v): a rollback to it builds or pulls them again", id, err)
 		return
 	}
 	names := bookmarks(es, s.Name, id)
@@ -262,7 +264,7 @@ func (s *Set) Bookmark(rel string) {
 		// By id: another release's fetch may move the name meanwhile.
 		if e.ID != "" {
 			if err := s.Docker.Tag(e.ID, names[i]); err != nil {
-				s.say("could not bookmark %s as %s (%v): a rollback to %s builds or pulls it again", e.Ref, names[i], err, id)
+				s.say(report.WarnLevel, "could not bookmark %s as %s (%v): a rollback to %s builds or pulls it again", e.Ref, names[i], err, id)
 			}
 		}
 	}
@@ -340,7 +342,7 @@ func (s *Set) Restore(rel string) bool {
 		}
 		if err == nil && cur != marks[i] {
 			if who := s.others(cur, own); len(who) > 0 {
-				s.say("%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
+				s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
 				stayed = append(stayed, e.Ref)
 				continue
 			}
@@ -353,9 +355,9 @@ func (s *Set) Restore(rel string) bool {
 		}
 	}
 	if len(stayed) > 0 {
-		s.say("images of %s restored, but for %s", id, strings.Join(stayed, ", "))
+		s.say(report.WarnLevel, "images of %s restored, but for %s", id, strings.Join(stayed, ", "))
 	} else {
-		s.say("images of %s restored", id)
+		s.say(report.InfoLevel, "images of %s restored", id)
 	}
 	return true
 }
@@ -402,7 +404,7 @@ func (s *Set) Recover(base, prev string) {
 	marks, _ := filepath.Glob(filepath.Join(base, "releases", "*", FetchingFile))
 	for _, m := range marks {
 		rel := filepath.Dir(m)
-		s.say("the images' fetch of release %s was interrupted: marking it failed, its images bookmarked", filepath.Base(rel))
+		s.say(report.WarnLevel, "the images' fetch of release %s was interrupted: marking it failed, its images bookmarked", filepath.Base(rel))
 		s.Undo(rel, prev, false)
 		if f, err := os.Create(filepath.Join(rel, failedFile)); err == nil {
 			f.Close()
@@ -523,7 +525,7 @@ func (s *Set) Remove(rel string) error {
 			for _, r := range rm {
 				s.record(r, img, id, why)
 			}
-			s.say("%s stay: %s (recorded: --releases lists them, the next pruning retries)", strings.Join(rm, ", "), why)
+			s.say(report.WarnLevel, "%s stay: %s (recorded: --releases lists them, the next pruning retries)", strings.Join(rm, ", "), why)
 			continue
 		}
 		for _, r := range rm {
@@ -536,10 +538,10 @@ func (s *Set) Remove(rel string) error {
 		}
 	}
 	if len(stay) > 0 {
-		s.say("the images of %s that other releases hold stay: %s", id, strings.Join(stay, ", "))
+		s.say(report.InfoLevel, "the images of %s that other releases hold stay: %s", id, strings.Join(stay, ", "))
 	}
 	if len(gone) > 0 {
-		s.say("removed %s, which only %s held", strings.Join(gone, ", "), id)
+		s.say(report.InfoLevel, "removed %s, which only %s held", strings.Join(gone, ", "), id)
 	}
 	return nil
 }
@@ -582,7 +584,7 @@ func appendNew(list []string, v string) []string {
 func (s *Set) Prune() {
 	s.retry()
 	if freed, err := s.Docker.Prune(); err == nil && freed != "" && freed != "0B" {
-		s.say("dangling images pruned, %s freed", freed)
+		s.say(report.InfoLevel, "dangling images pruned, %s freed", freed)
 	}
 }
 
@@ -619,7 +621,7 @@ func readLeft(path string) []left {
 func (s *Set) leftAdd(ref, img, release string, err error) {
 	why := strings.Join(strings.Fields(err.Error()), " ")
 	s.record(ref, img, release, why)
-	s.say("%s stays: %s (recorded: --releases lists it, the next pruning retries)", ref, why)
+	s.say(report.WarnLevel, "%s stays: %s (recorded: --releases lists it, the next pruning retries)", ref, why)
 }
 
 // record appends a name to the project's record, once. One write with
@@ -648,7 +650,7 @@ func (s *Set) record(ref, img, release, why string) {
 		}
 	}
 	if err != nil {
-		s.say("could not record %s (%v): remove it by hand once nothing uses it", ref, err)
+		s.say(report.WarnLevel, "could not record %s (%v): remove it by hand once nothing uses it", ref, err)
 	}
 }
 
@@ -684,7 +686,7 @@ func (s *Set) retry() {
 			keep = append(keep, l)
 			continue
 		}
-		s.say("removed %s, left by release %s of %s", l.ref, l.release, l.name)
+		s.say(report.InfoLevel, "removed %s, left by release %s of %s", l.ref, l.release, l.name)
 	}
 	if len(keep) == 0 {
 		os.Remove(s.Left)
@@ -695,7 +697,7 @@ func (s *Set) retry() {
 		b.WriteString(l.line())
 	}
 	if err := writeFile(s.Left, b.String()); err != nil {
-		s.say("could not rewrite %s (%v): it is retried as it was", s.Left, err)
+		s.say(report.WarnLevel, "could not rewrite %s (%v): it is retried as it was", s.Left, err)
 	}
 }
 

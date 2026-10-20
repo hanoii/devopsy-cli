@@ -30,3 +30,8 @@ func TestMain(m *testing.M) {
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// sayCase is a fake devopsy's line passing --say to the real one.
+func sayCase() string {
+	return "[ \"$1\" != " + SayFlag + " ] || exec " + Quote(realDevopsy) + " \"$@\"\n"
+}

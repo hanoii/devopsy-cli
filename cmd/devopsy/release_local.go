@@ -20,7 +20,7 @@ import (
 // run. Nothing to switch or go back to: a failure stops there.
 func runLocalRelease(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -39,11 +39,11 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return fail(err.Error())
 	}
 	if c.Defaults == nil || c.Defaults.Release == nil {
-		report.Fail(os.Stderr, color, report.Errorf([]string{
-			"Without a target, --release runs the release steps under defaults: in .devopsy/config.yaml, in place.",
+		report.Fail(report.Errorf([]string{
+			"without a target, --release runs the release steps under defaults: in .devopsy/config.yaml, in place",
 		}, "the project has no release steps under defaults:"),
-			"Add them to .devopsy/config.yaml, like:\ndefaults:\n  release: {prepare: secrets, run: deploy}",
-			"Release to a target instead:\ndevopsy @<target> --release")
+			report.Fix("add them to .devopsy/config.yaml, like:\ndefaults:\n  release: {prepare: secrets, run: deploy}"),
+			report.Fix("release to a target instead:", "devopsy @<target> --release"))
 		return 1
 	}
 	steps := c.Defaults.Release
@@ -68,7 +68,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 	if code := run("", []string{"--missing-vars"}); code != 0 {
 		return code
 	}
-	sayErr("devopsy: pulling and building images")
+	report.Info("pulling and building images")
 	if code := run("", []string{"--", "pull", "--ignore-buildable"}); code != 0 {
 		return code
 	}
@@ -85,7 +85,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 // step in the release, saying so for a phase's step.
 func runInPlace(root, phase string, a []string) int {
 	if phase != "" {
-		sayErr(fmt.Sprintf("devopsy: running 'devopsy %s' (%s)", strings.Join(a, " "), phase))
+		report.Info(fmt.Sprintf("running 'devopsy %s' (%s)", strings.Join(a, " "), phase))
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -98,7 +98,7 @@ func runInPlace(root, phase string, a []string) int {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintln(os.Stderr, err)
+		report.Fail(err)
 		return 1
 	}
 	return 0
@@ -111,7 +111,7 @@ func runInPlace(root, phase string, a []string) int {
 // is the checkout.
 func runLocalDestroy(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -154,9 +154,9 @@ func runLocalDestroy(cwd string, args []string, color bool) int {
 		if len(step) > 0 {
 			what = "runs 'devopsy " + strings.Join(step, " ") + "', then "
 		}
-		if err := typeToGoOn(fmt.Sprintf("This %stakes %s's containers, volumes and built images down and empties %s.", what, name, filepath.Join(projectDir, "mnt")),
-			name, "--destroy removes the local project's containers, volumes and data in .devopsy/mnt: add --yes when not at a terminal", false); err != nil {
-			cli.Fprint(os.Stderr, red, syncRefused(err, "Nothing removed."), color)
+		if err := typeToGoOn(fmt.Sprintf("this %stakes %s's containers, volumes and built images down and empties %s", what, name, filepath.Join(projectDir, "mnt")),
+			name, "nothing removed", false); err != nil {
+			report.Fail(err)
 			return 1
 		}
 	}
@@ -188,17 +188,17 @@ func destroyStep(projectDir string) ([]string, error) {
 // server's release: destroyData with the release's own destroy step.
 func runDestroyData(cwd string, args []string, color bool) int {
 	if len(args) > 0 {
-		cli.Fprint(errOut, red, "devopsy: "+cli.DestroyDataFlag+" takes nothing", color)
+		report.Error(cli.DestroyDataFlag + " takes nothing")
 		return 2
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
 	if err != nil {
-		cli.Fprint(errOut, red, "devopsy: "+err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	step, err := destroyStep(projectDir)
 	if err != nil {
-		cli.Fprint(errOut, red, "devopsy: the release's destroy step: "+err.Error(), color)
+		report.Error("the release's destroy step: " + err.Error())
 		return 1
 	}
 	return destroyData(filepath.Dir(projectDir), step, color)
@@ -213,7 +213,7 @@ func runDestroyData(cwd string, args []string, color bool) int {
 // remote ones. The first failure ends it, with its code.
 func runReleaseSteps(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) < 2 || len(args) > 3 {
@@ -277,7 +277,7 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 // users own its files. A failed step changes nothing.
 func destroyData(cwd string, step []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(errOut, red, "devopsy: "+msg, color)
+		report.Error(msg)
 		return 1
 	}
 	projectDir, err := cli.FindProjectDir(cwd)
@@ -293,7 +293,7 @@ func destroyData(cwd string, step []string, color bool) int {
 	}
 	ctx, stop := interruptible()
 	defer stop()
-	sayErr("devopsy: taking the containers, volumes and built images down")
+	report.Info("taking the containers, volumes and built images down")
 	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
 		return fail("docker compose down: " + err.Error())
 	}
@@ -308,7 +308,7 @@ func destroyData(cwd string, step []string, color bool) int {
 	if err := ensureUtilImage(ctx); err != nil {
 		return fail(err.Error())
 	}
-	sayErr("devopsy: emptying " + mnt)
+	report.Info("emptying " + mnt)
 	if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
 		return fail("emptying mnt: " + err.Error())
 	}

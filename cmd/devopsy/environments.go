@@ -9,6 +9,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runEnvironments implements `devopsy --environments`: the project's
@@ -16,7 +17,7 @@ import (
 // addresses. On one server: devopsy @<server> --environments.
 func runEnvironments(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) > 0 {
@@ -55,7 +56,7 @@ func listEnvironments(project *remote.Project, servers []string, color bool) int
 	code := 0
 	for _, server := range servers {
 		if strings.Contains(server, ":") {
-			cli.Fprint(os.Stderr, red, fmt.Sprintf("server %q: no ':' in a server; use an ~/.ssh/config alias for ports", server), color)
+			report.Error(fmt.Sprintf("server %q: no ':' in a server; use an ~/.ssh/config alias for ports", server))
 			code = 1
 			continue
 		}
@@ -63,7 +64,7 @@ func listEnvironments(project *remote.Project, servers []string, color bool) int
 		t := &remote.Target{Host: server, Project: project}
 		c, err := remote.SSH(t, remote.EnvironmentsScript(t), bytes.NewReader(nil), &out, false)
 		if err != nil {
-			cli.Fprint(os.Stderr, red, err.Error(), color)
+			report.Fail(err)
 			code = 1
 			continue
 		}
@@ -72,7 +73,7 @@ func listEnvironments(project *remote.Project, servers []string, color bool) int
 			continue
 		}
 		if out.Len() == 0 {
-			cli.Fprint(os.Stderr, cyan, fmt.Sprintf("No environments of %s on %s.", project.Name, server), color)
+			report.Info(fmt.Sprintf("no environments of %s on %s", project.Name, server))
 			continue
 		}
 		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {

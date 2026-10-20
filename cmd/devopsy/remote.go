@@ -28,7 +28,7 @@ import (
 // runRemote handles `devopsy @target ...`.
 func runRemote(cwd string, args []string, color bool, verbose int) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 
@@ -58,8 +58,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// masked. devopsy on the server is verbose too.
 		secrets := cli.NewSecrets(env, localSecrets(projectDir))
 		remote.Verbose = true
-		remote.Trace = func(msg string) { cli.Fprint(os.Stderr, "", secrets.Mask(msg), color) }
-		remote.TraceScripts = verbose > 1
+		remote.Trace = report.Default().WithMask(secrets.Mask)
 	}
 	// @[<server>:][<instance>/]<environment>, or an alias. Help needs no
 	// server: it only explains.
@@ -293,13 +292,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// been touched: devopsy @<target> --log.
 		what := kind
 		rlog := newReleaseLog(what, t)
-		say := func(c, msg string) {
-			cli.Fprint(os.Stderr, c, msg, color)
-			rlog.Line(msg)
-		}
-		stop := func(msg string) int {
-			rlog.Line(msg)
-			return fail(msg)
+		log := report.Default().Tee(rlog.Line)
+		stop := func(err error) int {
+			log.Fail(err)
+			return 1
 		}
 		// session runs an activation, with keepalives (a quiet run step
 		// over a dead connection would wait for TCP), never on a
@@ -314,7 +310,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		session := func(script string) int {
 			r, w, err := os.Pipe()
 			if err != nil {
-				return stop(err.Error())
+				return stop(err)
 			}
 			defer r.Close()
 			defer w.Close()
@@ -342,7 +338,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			goesOn := func() {
 				if !said {
 					said, slow = true, nil
-					say(yellow, "devopsy: interrupted: the release goes on on @"+t.Address+", past its switch (devopsy @"+targetRef(t)+" --log shows how it ends). Ctrl-C again ends the session, not the release")
+					log.Warn("interrupted: the release goes on on @"+t.Address+", past its switch", "devopsy @"+targetRef(t)+" --log shows how it ends; Ctrl-C again ends the session, not the release")
 				}
 			}
 		wait:
@@ -357,7 +353,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				case <-slow:
 					// The server takes the cancel once it holds the
 					// release lock, which another release may hold.
-					say(yellow, "devopsy: the server is cancelling it (first waiting for the release lock, if another release holds it). Ctrl-C again leaves now")
+					log.Warn("the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now")
 				case <-sigs:
 					if interrupted {
 						cancel()
@@ -369,7 +365,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					if switched.Load() {
 						goesOn()
 					} else {
-						say(red, "devopsy: interrupted: cancelling the release on @"+t.Address)
+						log.Error("interrupted: cancelling the release on @" + t.Address)
 						slow = time.After(5 * time.Second)
 					}
 				}
@@ -379,16 +375,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			if res.err == nil && res.code == sshLost {
 				if switched.Load() {
-					say(yellow, "devopsy: the connection to @"+t.Address+" was lost after the switch: the release goes on there (devopsy @"+targetRef(t)+" --log shows how it ends)")
+					log.Error("the connection to @"+t.Address+" was lost after the switch: the release goes on there", "devopsy @"+targetRef(t)+" --log shows how it ends")
 				} else {
-					say(red, "devopsy: the connection to @"+t.Address+" failed or was lost before the switch: the server cancels the release once it notices, within a minute (devopsy @"+targetRef(t)+" --releases shows it)")
+					log.Error("the connection to @"+t.Address+" failed or was lost before the switch: the server cancels the release once it notices, within a minute", "devopsy @"+targetRef(t)+" --releases shows it")
 				}
 			}
 			if interrupted && !said {
-				say(yellow, "devopsy: it had switched already, and went on (devopsy @"+targetRef(t)+" --log shows how it ends)")
+				log.Warn("it had switched already, and went on", "devopsy @"+targetRef(t)+" --log shows how it ends")
 			}
 			if res.err != nil {
-				return stop(res.err.Error())
+				return stop(res.err)
 			}
 			return res.code
 		}
@@ -396,7 +392,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// directory on the server: a rollback's is appended to the log of
 		// the release it restores, which its script names.
 		save := func(id string, code int) int {
-			rlog.Line(fmt.Sprintf("devopsy: %s exited %d", what, code))
+			rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("%s exited %d", what, code)))
 			text := rlog.Text()
 			rollback := id == ""
 			if rollback {
@@ -412,15 +408,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				if err != nil {
 					why = err.Error()
 				}
-				cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy: could not save the %s log on the server (%s)", what, why), color)
+				report.Warn(fmt.Sprintf("could not save the %s log on the server (%s)", what, why))
 			}
 			return code
 		}
 		local := func(phase string, list []string, commit string) int {
 			for _, step := range list {
-				say(cyan, fmt.Sprintf("Running 'devopsy %s' locally (%s)...", step, phase))
+				log.Info(fmt.Sprintf("running 'devopsy %s' locally (%s)", step, phase))
 				if code := runLocalStep(t, projectDir, remote.StepArgs(step), commit); code != 0 {
-					rlog.Line(fmt.Sprintf("devopsy: 'devopsy %s' exited %d", step, code))
+					rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("'devopsy %s' exited %d", step, code)))
 					return code
 				}
 			}
@@ -431,12 +427,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			if code := local("before", remote.Commands(steps.Before, false), ""); code != 0 {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
-			say(cyan, fmt.Sprintf("Rolling back %s (%s:%s)...", t.Address, t.Host, t.Path))
+			log.Info(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
 			if code := session(remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
 				return save("", code)
 			}
 			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {
-				return save("", stop(fmt.Sprintf("an after step failed (%d): the rollback stays", code)))
+				log.Error(fmt.Sprintf("an after step failed (%d): the rollback stays", code))
+				return save("", 1)
 			}
 			return save("", 0)
 		}
@@ -452,7 +449,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			names = append(names, k)
 		}
 		if err := confirmUnnamedSecrets(names, t.Project, yes); err != nil {
-			return fail(err.Error())
+			report.Fail(err)
+			return 1
 		}
 
 		// A role taken by another compose project on the server fails before
@@ -469,7 +467,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			for _, holder := range strings.Fields(out.String()) {
 				if holder != projectName {
-					return fail(fmt.Sprintf("role %s is held by %s on %s: one compose project per role (%s=%s). Nothing changed.", role, holder, t.Host, cli.RoleLabel, role))
+					return fail(fmt.Sprintf("role %s is held by %s on %s: one compose project per role (%s=%s), nothing changed", role, holder, t.Host, cli.RoleLabel, role))
 				}
 			}
 		}
@@ -481,15 +479,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return fail(err.Error())
 			}
 			if code != 0 {
-				q := fmt.Sprintf("New instance: %s has no %q instance of %s yet.\nThis release creates it: %s, compose project %s, its own data and URL.",
-					t.Host, t.Instance, t.Project.Name, t.Path, t.ComposeName())
-				if !term.IsTerminal(int(os.Stdin.Fd())) {
-					return fail(q + "\nAdd --yes when not at a terminal: devopsy @" + releaseRef(t) + " --release --yes")
+				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
+				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
+				if !atTerminal() {
+					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+releaseRef(t)+" --release --yes")}})
+					return 1
 				}
-				fmt.Fprintf(os.Stderr, "%s\nCreate it? [y/N] ", q)
-				line, _ := stdinReader.ReadString('\n')
-				if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
-					return fail("Nothing released.")
+				report.Info(q, creates)
+				if !report.Default().Confirm(stdinReader, "create it?") {
+					return fail("nothing released")
 				}
 			}
 		}
@@ -514,15 +512,17 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			// A partial copy from a sync is never run on: only a sync
 			// completes it (the activation checks again).
 			if incomplete && (noSync || (current && !syncFlag)) {
-				fix := "devopsy @" + releaseRef(t) + " --release-sync, or --sync"
+				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync")}
 				if !current {
-					fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
+					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
 				}
-				return fail(fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: %s\nNothing changed.", t.Address, fix))
+				report.Fail(&report.Failure{Msg: fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address), Fixes: fixes})
+				return 1
 			}
 			if !noSync {
 				if from != "" && !syncFlag && !first {
-					return fail(fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one: devopsy @%s --release-sync --from @%s syncs on any release", t.Address, releaseRef(t), from))
+					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", releaseRef(t), from))}})
+					return 1
 				}
 				if syncFlag || first {
 					p := t.ParentTarget
@@ -534,15 +534,17 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						return failParent(t, color, args[0])
 					}
 					if job, err = syncPreflight(t, p, projectName, nil); err != nil {
-						return fail(err.Error() + "\nNothing changed. --release-no-sync releases without the parent's data.")
+						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
+						return 1
 					}
 					job.first = first
 				}
 				// Replacing a live child's data asks, as --sync does; a first
 				// release has none to lose.
 				if syncFlag && !first && !yes {
-					if err := confirmSync(t, job.parent, "the release's run step runs on it"); err != nil {
-						return fail(syncRefused(err, "Nothing released."))
+					if err := confirmSync(t, job.parent, "the release's run step runs on it", "nothing released"); err != nil {
+						report.Fail(err)
+						return 1
 					}
 				}
 			}
@@ -567,7 +569,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// the sync reads, moved into place once the copy is in.
 		if job != nil {
 			if err := inheritVars(context.Background(), job, rlog, color, !job.first); err != nil {
-				return stop("inherit: " + err.Error() + "\nNothing released.")
+				return stop(fmt.Errorf("inherit: %w: nothing released", err))
 			}
 		}
 		src := record.Mode
@@ -579,12 +581,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		size, err := remote.Size(projectRoot, files)
 		if err != nil {
-			return stop(err.Error())
+			return stop(err)
 		}
-		say(cyan, fmt.Sprintf("Releasing %s to %s (%s:%s): %d files, %s, %s...",
+		log.Info(fmt.Sprintf("releasing %s to %s (%s:%s): %d files, %s, %s",
 			record.ID, t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
-			say(yellow, fmt.Sprintf("Uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s).",
+			log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
 				record.Commit[:min(10, len(record.Commit))]))
 		}
 
@@ -594,11 +596,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if term.IsTerminal(int(os.Stderr.Fd())) {
 			progressOut = os.Stderr
 		}
-		progressColor := ""
-		if color {
-			progressColor = cyan
-		}
-		progress := newUploadProgress(progressOut, progressColor, size)
+		progress := newUploadProgress(progressOut, color, size)
 		pr, pw := io.Pipe()
 		go func() {
 			pw.CloseWithError(remote.Pack(pw, projectRoot, files, map[string][]byte{
@@ -609,9 +607,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// What the server says (a refusal, an error) starts on a line of
 		// its own, and no redraw follows it.
 		var errOut io.Writer = os.Stderr
-		var colored *remote.ColorWriter
+		var colored *report.ColorWriter
 		if remote.Color {
-			colored = remote.Colorize(os.Stderr)
+			colored = report.Colorize(os.Stderr)
 			errOut = colored
 		}
 		// Interrupted, the session ends: what the upload left (its .tmp)
@@ -625,18 +623,18 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		}
 		progress.clear()
 		if upInterrupted {
-			say(red, "devopsy: interrupted during the upload: nothing changed on @"+t.Address)
+			log.Error("interrupted during the upload: nothing changed on @" + t.Address)
 			return 130
 		}
 		if err == nil && code == 0 {
-			say(cyan, progress.done())
+			log.Info(progress.done())
 		}
 		if err != nil || code != 0 {
 			if err != nil {
-				return stop(err.Error())
+				return stop(err)
 			}
 			if code == sshLost {
-				say(red, "devopsy: the connection to @"+t.Address+" failed or was lost during the upload: nothing changed there")
+				log.Error("the connection to @" + t.Address + " failed or was lost during the upload: nothing changed there")
 			}
 			return code
 		}
@@ -645,14 +643,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return save(record.ID, code)
 			}
 		} else {
-			say(cyan, fmt.Sprintf("Syncing @%s's data into it before its run step (--release-no-sync skips it)...", job.parent.Address))
+			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
 			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0})
 			if code := runSyncSession(job, script, rlog, color); code != 0 {
 				return save(record.ID, code)
 			}
 		}
 		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
-			return save(record.ID, stop(fmt.Sprintf("an after step failed (%d): the release stays", code)))
+			log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
+			return save(record.ID, 1)
 		}
 		return save(record.ID, 0)
 
@@ -679,9 +678,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool, flag string) int {
-	report.Fail(os.Stderr, color, t.ParentErr,
-		"Name "+t.Parent+"'s address for this release:\ndevopsy @"+releaseRef(t)+" "+flag+" --from "+parentGuess(t),
-		"Release without "+t.Parent+"'s data for now, and sync it whenever you are ready:\ndevopsy @"+releaseRef(t)+" --release-no-sync\ndevopsy @"+releaseRef(t)+" --sync --from "+parentGuess(t))
+	report.Fail(t.ParentErr,
+		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+releaseRef(t)+" "+flag+" --from "+parentGuess(t)),
+		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+releaseRef(t)+" --release-no-sync", "devopsy @"+releaseRef(t)+" --sync --from "+parentGuess(t)))
 	return 1
 }
 
@@ -707,11 +706,11 @@ func needsServer(projectDir, name string) bool {
 func runAddressed(root, address string, args []string, verbose int) int {
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		report.Fail(err)
 		return 1
 	}
 	if err := os.Chdir(root); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		report.Fail(err)
 		return 1
 	}
 	argv := []string{self}
@@ -720,7 +719,7 @@ func runAddressed(root, address string, args []string, verbose int) int {
 	}
 	argv = append(argv, args...)
 	err = syscall.Exec(self, argv, cli.CommandTargetEnviron(os.Environ(), address))
-	fmt.Fprintln(os.Stderr, err)
+	report.Fail(err)
 	return 126
 }
 
@@ -829,7 +828,7 @@ func runLocalStep(t *remote.Target, projectDir string, args []string, commit str
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintln(os.Stderr, err)
+		report.Fail(err)
 		return 1
 	}
 	return 0
@@ -923,22 +922,22 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		case "--purge":
 			purge = true
 		default:
-			cli.Fprint(os.Stderr, red, "usage: devopsy @"+targetRef(t)+" --destroy [--yes] [--purge]", color)
+			report.Error("usage: devopsy @" + targetRef(t) + " --destroy [--yes] [--purge]")
 			return 1
 		}
 	}
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		if err := typeToGoOn(fmt.Sprintf("This runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env).", t.Name, where),
-			t.Name, "--destroy removes "+where+" with its data: add --yes when not at a terminal", false); err != nil {
-			cli.Fprint(os.Stderr, red, syncRefused(err, "Nothing removed."), color)
+		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)", t.Name, where),
+			t.Name, "nothing removed", false); err != nil {
+			report.Fail(err)
 			return 1
 		}
 	}
 	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	if code != 0 {
@@ -960,19 +959,17 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 		return 0
 	}
 	if !purge && terminal {
-		fmt.Fprintf(os.Stderr, "No environment is left in %s: remove it and its .env, shared by its environments, too? [y/N] ", strings.Join(dirs, " and "))
-		line, _ := stdinReader.ReadString('\n')
-		purge = strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
+		purge = report.Default().Confirm(stdinReader, fmt.Sprintf("no environment is left in %s: remove it and its .env, shared by its environments, too?", strings.Join(dirs, " and ")))
 	}
 	if !purge {
-		details := []string{"No environment is left there. Its .env stays, with what --vars-project or --vars-instance set, for the next environment released there."}
-		details = append(details, "To remove them:", "devopsy @"+targetRef(t)+" --destroy --yes --purge")
-		report.Warn(os.Stderr, color, t.Host+" keeps "+strings.Join(dirs, " and "), details...)
+		report.Warn(t.Host+" keeps "+strings.Join(dirs, " and "),
+			"no environment is left there: its .env stays, with what --vars-project or --vars-instance set, for the next environment released there",
+			"to remove them:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy --yes --purge")
 		return 0
 	}
 	code, err := remote.SSH(t, remote.LeftoverScript(t, true), bytes.NewReader(nil), nil, false)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	return code

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -100,19 +101,17 @@ func missingVars(p *loadedProject) error {
 	if len(missing) == 0 {
 		return &Output{}
 	}
-	var b strings.Builder
-	b.WriteString("devopsy: compose requires variables that are not set:\n")
 	width := 0
 	for _, m := range missing {
 		width = max(width, len(m[0]))
 	}
+	var lines []string
 	for _, m := range missing {
-		fmt.Fprintf(&b, "  %-*s  %s\n", width, m[0], m[1])
+		lines = append(lines, fmt.Sprintf("  %-*s  %s", width, m[0], m[1]))
 	}
+	fix := report.Fix("set them in " + p.dotenvFile + " or the environment")
 	if target, _ := p.env.Lookup("DEVOPSY_TARGET"); target != "" {
-		fmt.Fprintf(&b, "Set them, then try again: devopsy @%s --vars set <KEY>...\n(--vars-instance or --vars-project for the instance's or the project's .env).", target)
-	} else {
-		b.WriteString("Set them in " + p.dotenvFile + " or the environment.")
+		fix = report.Fix("set them (--vars-instance or --vars-project for the instance's or the project's .env), then try again:", "devopsy @"+target+" --vars set <KEY>...")
 	}
-	return &ExitError{Code: 1, Msg: b.String()}
+	return &ExitError{Code: 1, Err: &report.Failure{Msg: "compose requires variables that are not set:", Details: lines, Fixes: []report.Remedy{fix}}}
 }

@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Tests never ask the machine's docker: compose's commands and the running
@@ -171,7 +173,7 @@ func TestShell(t *testing.T) {
 
 	// No label: the only running service, else an error naming them.
 	bare := project(t, "bare", map[string]string{"compose.yaml": "services:\n  a:\n    image: x\n  b:\n    image: y\n"})
-	if _, err := build(bare, []string{"--shell"}, nil); err == nil || !strings.Contains(err.Error(), "Services: a, b") {
+	if _, err := build(bare, []string{"--shell"}, nil); err == nil || err.Error() != "--shell: which service?" || !slices.Contains(report.Details(err), "services: a, b") {
 		t.Fatalf("no label: %v", err)
 	}
 	saved := RunningServices

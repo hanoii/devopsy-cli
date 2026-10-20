@@ -268,7 +268,7 @@ func TestSyncSameHost(t *testing.T) {
 
 	out, code := s.run(nil, "@dev", "--release")
 	docker, ssh := s.logs()
-	if code != 0 || !strings.Contains(out, "Syncing @devopsy@one:prod's data into it") || !strings.Contains(out, "deploy in shop-dev parent=prod devopsy@one:prod") || s.current("dev") == "" {
+	if code != 0 || !strings.Contains(out, "devopsy: syncing @devopsy@one:prod's data into it") || !strings.Contains(out, "deploy in shop-dev parent=prod devopsy@one:prod") || s.current("dev") == "" {
 		t.Fatalf("first release (%d), current %q:\n%s", code, s.current("dev"), out)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "from prod\n" {
@@ -318,14 +318,14 @@ func TestSyncSameHost(t *testing.T) {
 	next()
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || strings.Contains(out, "Syncing") || strings.Contains(docker, "stop db") {
+	if code != 0 || strings.Contains(out, "devopsy: syncing") || strings.Contains(docker, "stop db") {
 		t.Fatalf("second release (%d):\n%s\n%s", code, out, docker)
 	}
 
 	// --sync asks; --yes; arguments after -- go to rsync; the log goes
 	// with the current release.
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "newer\n", 0o644)
-	if out, code := s.run(nil, "@dev", "--sync"); code == 0 || !strings.Contains(out, "add --yes when not at a terminal") {
+	if out, code := s.run(nil, "@dev", "--sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") {
 		t.Fatalf("--sync without a terminal (%d):\n%s", code, out)
 	}
 	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
@@ -344,13 +344,13 @@ func TestSyncSameHost(t *testing.T) {
 	// has data (--yes, or a terminal); --release-no-sync never.
 	next()
 	before, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
-	if out, code := s.run(nil, "@dev", "--release-sync"); code == 0 || !strings.Contains(out, "add --yes when not at a terminal") || !strings.Contains(out, "Nothing released.") {
+	if out, code := s.run(nil, "@dev", "--release-sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") || !strings.Contains(out, "devopsy: error: nothing released") {
 		t.Fatalf("--release-sync without --yes (%d):\n%s", code, out)
 	}
 	if after, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases")); len(after) != len(before) {
 		t.Errorf("uploaded before asking: %d releases, then %d", len(before), len(after))
 	}
-	if out, code := s.run(nil, "@dev", "--release-sync", "--yes"); code != 0 || !strings.Contains(out, "Syncing @devopsy@one:prod's data") {
+	if out, code := s.run(nil, "@dev", "--release-sync", "--yes"); code != 0 || !strings.Contains(out, "devopsy: syncing @devopsy@one:prod's data") {
 		t.Fatalf("--release-sync --yes (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -415,7 +415,7 @@ func TestReleaseFirstSync(t *testing.T) {
 		t.Errorf("a cut copy not marked partial:\n%s", out)
 	}
 	next()
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "--release: a first release syncs") || !strings.Contains(out, "Nothing changed.") {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") || !strings.Contains(out, "release it: a first release syncs\ndevopsy: | $ devopsy @devopsy@one:dev --release\n") || !strings.Contains(out, ": nothing changed\n") {
 		t.Fatalf("--release-no-sync on a partial copy (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 || !strings.Contains(out, "deploy in shop-dev") || s.current("dev") == "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
@@ -423,7 +423,7 @@ func TestReleaseFirstSync(t *testing.T) {
 	}
 	next()
 	s.logs()
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Syncing") || s.current("dev") == "" {
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "devopsy: syncing") || s.current("dev") == "" {
 		t.Fatalf("--release-no-sync (%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "stop db") {
@@ -440,10 +440,10 @@ func TestReleaseFrom(t *testing.T) {
 
 	out, code := s.run(nil, "@devopsy@one:dev", "--release")
 	for _, want := range []string{
-		"[error] dev's parent, prod, has no server\n",
-		"To fix it, do one of these:\n1. Set prod's server in .devopsy/.env",
-		"\n2. Name prod's address for this release:\ndevopsy @devopsy@one:dev --release --from @devopsy@one:prod\n",
-		"\n3. Release without prod's data for now, and sync it whenever you are ready:\ndevopsy @devopsy@one:dev --release-no-sync\ndevopsy @devopsy@one:dev --sync --from @devopsy@one:prod\n",
+		"devopsy: error: dev's parent, prod, has no server\n",
+		"devopsy: | to fix it, do one of these:\ndevopsy: | 1. set prod's server in .devopsy/.env",
+		"\ndevopsy: | 2. name prod's address for this release:\ndevopsy: |    $ devopsy @devopsy@one:dev --release --from @devopsy@one:prod\n",
+		"\ndevopsy: | 3. release without prod's data for now, and sync it whenever you are ready:\ndevopsy: |    $ devopsy @devopsy@one:dev --release-no-sync\ndevopsy: |    $ devopsy @devopsy@one:dev --sync --from @devopsy@one:prod\n",
 	} {
 		if code == 0 || !strings.Contains(out, want) || s.current("dev") != "" {
 			t.Fatalf("no parent server, missing %q (%d):\n%s", want, code, out)
@@ -456,7 +456,7 @@ func TestReleaseFrom(t *testing.T) {
 	}
 	s.logs()
 	// Released: a plain release no longer syncs, so --from has no use there.
-	if out, code := s.run(nil, "@devopsy@one:dev", "--release", "--from", "devopsy@one:prod"); code == 0 || !strings.Contains(out, "--release-sync --from @devopsy@one:prod syncs on any release") {
+	if out, code := s.run(nil, "@devopsy@one:dev", "--release", "--from", "devopsy@one:prod"); code == 0 || !strings.Contains(out, "devopsy: | $ devopsy @devopsy@one:dev --release-sync --from @devopsy@one:prod\n") {
 		t.Fatalf("--from on a released child (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "newer\n", 0o644)
@@ -721,7 +721,7 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stream (%d):\n%s", code, out)
 	}
-	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=", "Copying",
+	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=", "devopsy: copying",
 		"prepare parent in shop-prod rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "rsync mnt/storage", "devopsy: exporting db",
 		"import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
 	if strings.Contains(docker, "stop db") || strings.Contains(docker, "/src/db/") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait db") {
@@ -733,7 +733,7 @@ func TestSyncCapability(t *testing.T) {
 	// --log shows the copy in its place: the server's own log starts
 	// after the sync, at the run step.
 	out, code = s.run(nil, "@dev", "--log")
-	inOrder("--log", out, code, "prepare child in shop-dev", "Copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
+	inOrder("--log", out, code, "prepare child in shop-dev", "devopsy: copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
 	// --sync's arguments reach the hooks and the import.
 	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
 	s.logs()
@@ -749,7 +749,7 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("two streams (%d):\n%s", code, out)
 	}
-	inOrder("two streams", out, code, "prepare child in shop-dev rsync= stream=db app stop=db", "devopsy: stopping db", "Copying", "devopsy: stopping db", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev")
+	inOrder("two streams", out, code, "prepare child in shop-dev rsync= stream=db app stop=db", "devopsy: stopping db", "devopsy: copying", "devopsy: stopping db", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev")
 	if strings.Contains(docker, "up -d --wait db") || !strings.Contains(docker, "up -d --wait app") || strings.Contains(out, "rsync mnt/") {
 		t.Errorf("two streams docker:\n%s", docker)
 	}
@@ -777,7 +777,7 @@ func TestSyncCapability(t *testing.T) {
 	s.labels("")
 	out, code = s.run([]string{"FAIL_PREPARE=child"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || strings.Contains(out, "Copying") || strings.Contains(docker, "stop db") || !strings.Contains(out, "finish child abort in shop-dev") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || strings.Contains(out, "devopsy: copying") || strings.Contains(docker, "stop db") || !strings.Contains(out, "finish child abort in shop-dev") || strings.Contains(out, "deploy in shop-dev") {
 		t.Errorf("failing prepare child (%d):\n%s\n%s", code, out, docker)
 	}
 	out, code = s.run([]string{"FAIL_PREPARE=parent"}, "@dev", "--sync", "--yes")
@@ -822,7 +822,7 @@ func TestSyncCapability(t *testing.T) {
 	s.labels("FAKE_DB=stream+stop")
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "db labeled devopsy.sync=stream: the child's release needs an executable .devopsy/capabilities/sync/import") || strings.Contains(docker, "stop db") || strings.Contains(out, "Copying") || strings.Contains(out, "prepare child") {
+	if code == 0 || !strings.Contains(out, "db labeled devopsy.sync=stream: the child's release needs an executable .devopsy/capabilities/sync/import") || strings.Contains(docker, "stop db") || strings.Contains(out, "devopsy: copying") || strings.Contains(out, "prepare child") {
 		t.Errorf("no import on the child (%d):\n%s\n%s", code, out, docker)
 	}
 	if err := os.Rename(childImport+".off", childImport); err != nil {
@@ -945,14 +945,14 @@ func TestSyncInherit(t *testing.T) {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
-		"Inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod into @devopsy@one:a/dev's shared/inherit.env.",
+		"devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod into @devopsy@one:a/dev's shared/inherit.env\n",
 		"@devopsy@one:a/prod does not set MISSING_KEY",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
-	if i, j := strings.Index(out, "Inherited SHARED_KEY"), strings.Index(out, "Releasing "); i < 0 || j < i {
+	if i, j := strings.Index(out, "devopsy: inherited SHARED_KEY"), strings.Index(out, "devopsy: releasing "); i < 0 || j < i {
 		t.Errorf("inherited after the upload:\n%s", out)
 	}
 	if got := readString(childInherit); got != "SHARED_KEY='s1'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
@@ -961,7 +961,7 @@ func TestSyncInherit(t *testing.T) {
 	// The child's own shared/.env is untouched and wins; a key set there
 	// too is named.
 	write(t, childEnv, "OWN=1\nPROJ_KEY=child\n", 0o600)
-	if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "@devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there (devopsy @devopsy@one:a/dev --vars unset to inherit it).") {
+	if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "devopsy: warning: @devopsy@one:a/dev's own shared .env also sets PROJ_KEY, which wins there\ndevopsy: | to inherit it:\ndevopsy: | $ devopsy @devopsy@one:a/dev --vars unset PROJ_KEY\n") {
 		t.Errorf("shadowed key (%d):\n%s", code, out)
 	}
 	if got := readString(childEnv); got != "OWN=1\nPROJ_KEY=child\n" {
@@ -984,7 +984,7 @@ func TestSyncInherit(t *testing.T) {
 	// --release-no-sync inherits nothing.
 	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s2\n", 0o600)
 	next()
-	if out, code := s.run(nil, "@a/dev", "--release-no-sync"); code != 0 || strings.Contains(out, "Inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
+	if out, code := s.run(nil, "@a/dev", "--release-no-sync"); code != 0 || strings.Contains(out, "devopsy: inherited") || !strings.Contains(readString(childInherit), "SHARED_KEY='s1'") {
 		t.Fatalf("--release-no-sync (%d): %q\n%s", code, readString(childInherit), out)
 	}
 
@@ -992,7 +992,7 @@ func TestSyncInherit(t *testing.T) {
 	s.logs()
 	out, code = s.run(nil, "@a/dev", "--inherit")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "Inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
+	if code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
 		t.Fatalf("--inherit (%d): %q\n%s\n%s", code, readString(childInherit), out, docker)
 	}
 	if out, code := s.run(nil, "@a/prod", "--inherit"); code == 0 || !strings.Contains(out, "is not a child") {
@@ -1009,7 +1009,7 @@ func TestSyncInherit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--sync (%d):\n%s", code, out)
 	}
-	if i, j := strings.Index(out, "Inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod for @devopsy@two:a/dev's sync (its shared/inherit.env once the copy is in)."), strings.Index(out, "syncing into"); i < 0 || j < i {
+	if i, j := strings.Index(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod for @devopsy@two:a/dev's sync (its shared/inherit.env once the copy is in)\n"), strings.Index(out, "syncing into"); i < 0 || j < i {
 		t.Errorf("not inherited before the holder:\n%s", out)
 	}
 	// The write takes the child's lock before the holder does.
@@ -1117,7 +1117,7 @@ func TestSyncLabels(t *testing.T) {
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	rest := out
-	for _, want := range []string{"devopsy: stopping db", "Copying", "devopsy: stopping db", "rsync mnt/db", "rsync mnt/storage", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev"} {
+	for _, want := range []string{"devopsy: stopping db", "devopsy: copying", "devopsy: stopping db", "rsync mnt/db", "rsync mnt/storage", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev"} {
 		i := strings.Index(rest, want)
 		if code != 0 || i < 0 {
 			t.Fatalf("missing %q in order (%d):\n%s", want, code, out)
@@ -1202,7 +1202,7 @@ func TestSyncLabels(t *testing.T) {
 	// notice.
 	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: app copies mnt whole, db (skip: db) included: mount mnt's entries (./mnt/db) on app instead of ./mnt, so each copies by its own label") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
+	if code != 0 || !strings.Contains(out, "devopsy: warning: app copies mnt whole, db (skip: db) included: mount mnt's entries (./mnt/db) on app instead of ./mnt, so each copies by its own label") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
 		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
 	}
 	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--sync", "--yes")
@@ -1237,7 +1237,7 @@ func TestSyncMismatch(t *testing.T) {
 		if label == "none" {
 			want = "without a devopsy.sync label"
 		}
-		if code == 0 || !strings.Contains(out, "the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.sync=rsync)") ||
+		if code == 0 || !strings.Contains(out, "devopsy: error: the child's sync labels do not match the parent's: nothing changed\ndevopsy: | the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.sync=rsync)\n") ||
 			strings.Contains(out, "deploy in shop-dev") || strings.Count(docker, "shop-prod compose") != 1 || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
 			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start app") {
 			t.Errorf("child db %s (%d):\n%s\n%s", label, code, out, docker)
@@ -1253,10 +1253,10 @@ func TestSyncMismatch(t *testing.T) {
 	// anything, either way round, with the way out: an inherited label
 	// needs --inherit before the sync, which only writes it after the copy.
 	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "sync", "export"), "#!/bin/sh\necho dump\n", 0o755)
-	inherit := "Label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)."
+	inherit := "label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)"
 	for _, c := range []struct{ prod, dev, want string }{
-		{"FAKE_DB=stream", "FAKE_DB=rsync+stop", "the parent streams db (devopsy.sync=stream) and the child labels it devopsy.sync=rsync: its import would refuse it."},
-		{"FAKE_DB=rsync+stop", "FAKE_DB=stream+stop", "the child streams db (devopsy.sync=stream) and the parent rsyncs it (devopsy.sync=rsync): its import would never run."},
+		{"FAKE_DB=stream", "FAKE_DB=rsync+stop", "devopsy: | the parent streams db (devopsy.sync=stream) and the child labels it devopsy.sync=rsync: its import would refuse it\n"},
+		{"FAKE_DB=rsync+stop", "FAKE_DB=stream+stop", "devopsy: | the child streams db (devopsy.sync=stream) and the parent rsyncs it (devopsy.sync=rsync): its import would never run\n"},
 	} {
 		write(t, s.log+".shop-prod", c.prod+"\n", 0o644)
 		write(t, s.log+".shop-dev", c.dev+"\n", 0o644)
@@ -1387,7 +1387,7 @@ func TestSyncHolderGone(t *testing.T) {
 	s.logs()
 	out, code := s.run([]string{"FAKE_SLOW_RSYNC=" + started, "FAKE_HOLDER_DIE=" + started}, "@dev", "--sync", "--yes")
 	docker, ssh := s.logs()
-	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now: devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
+	if code == 0 || !strings.Contains(out, "ended during the copy (255): stopping the copy from @devopsy@one:prod") || !strings.Contains(out, "may hold a partial copy now\ndevopsy: | devopsy @devopsy@one:dev --status") || strings.Contains(out, "deploy in shop-dev") {
 		t.Fatalf("holder gone (%d):\n%s\n%s\n%s", code, out, ssh, docker)
 	}
 	// The push outlives devopsy's session: its restore may still be
@@ -1677,7 +1677,7 @@ func TestExportImport(t *testing.T) {
 	// An import asks for the environment's name, on the terminal: without
 	// one, --yes.
 	os.Remove(imported)
-	if _, errs, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db"); code == 0 || !strings.Contains(errs, "--import replaces db's data on devopsy@one:shop/prod: add --yes when not at a terminal") || !strings.Contains(errs, "Nothing imported.") || readString(imported) != "" {
+	if _, errs, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db"); code == 0 || !strings.Contains(errs, "devopsy: error: nothing imported: no terminal to confirm it on\ndevopsy: | this replaces db's data on @devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(errs, "add --yes to go on without asking") || readString(imported) != "" {
 		t.Errorf("@prod --import without --yes (%d):\n%s", code, errs)
 	}
 	if _, errs, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || readString(imported) != "import db into shop-prod\nrows\n" {

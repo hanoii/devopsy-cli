@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // maxReleaseLog caps a release log: a runaway build log stays on the
@@ -90,7 +91,7 @@ func (l *releaseLog) Line(s string) {
 
 // rollingBackTo is the line a rollback's script prints once it has picked
 // the release to restore.
-var rollingBackTo = regexp.MustCompile(`devopsy: rolling back to ([0-9]{14})`)
+var rollingBackTo = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `rolling back to ([0-9]{14})`)
 
 // terminalCodes are colors and cursor movements, which make no sense in a
 // file.

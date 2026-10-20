@@ -11,6 +11,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/probe"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 const probeUsage = "usage: devopsy --probe [--ip <server ip>] <host>..."
@@ -41,14 +42,14 @@ line to run, like devopsy-template-traefik's domains.
 		case strings.HasPrefix(a, "--ip="):
 			ip = strings.TrimPrefix(a, "--ip=")
 		case strings.HasPrefix(a, "-"):
-			cli.Fprint(os.Stderr, red, probeUsage, color)
+			report.Error(probeUsage)
 			return 1
 		default:
 			hosts = append(hosts, strings.ToLower(a))
 		}
 	}
 	if len(hosts) == 0 || (ip != "" && net.ParseIP(ip) == nil) {
-		cli.Fprint(os.Stderr, red, probeUsage, color)
+		report.Error(probeUsage)
 		return 1
 	}
 	if ip != "" {
@@ -74,13 +75,13 @@ line to run, like devopsy-template-traefik's domains.
 // runPrepareRelease implements the hidden --prepare-release, run by the
 // release script on the server (cli.PrepareRelease).
 func runPrepareRelease(cwd string, color bool) int {
-	cli.Progress = func(s string) { fmt.Fprintln(os.Stderr, s) }
+	cli.Progress = func(s string) { report.Info(s) }
 	said, err := cli.PrepareRelease(cwd, os.Environ())
 	for _, s := range said {
-		fmt.Fprintln(os.Stderr, s)
+		report.Info(s)
 	}
 	if err != nil {
-		cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	return 0
@@ -92,7 +93,7 @@ func runPrepareRelease(cwd string, color bool) int {
 func runReleaseSettings(color bool) int {
 	r, err := remote.ReleaseSettings()
 	if err != nil {
-		cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nprotocol=%d\n", r.Root, r.Keep, r.MaxKeep, remote.Protocol)

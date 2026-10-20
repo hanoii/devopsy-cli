@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runVars handles `devopsy @target --vars ...`: the target's variables file,
@@ -28,7 +28,7 @@ import (
 // go anywhere after --vars: names never start with "-".
 func runVars(t *remote.Target, flag string, args []string, lookup func(string) (string, bool), color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--show | get KEY | set [--show] KEY... | unset KEY...]"
@@ -119,7 +119,7 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if show {
 			secrets, note = nil, ""
 		}
-		cli.Fprint(os.Stderr, cyan, fmt.Sprintf("%s:%s%s", t.Host, file, note), color)
+		report.Info(fmt.Sprintf("%s:%s%s", t.Host, file, note))
 		for _, k := range names {
 			fmt.Println(cli.DotenvLine(k, secrets.Value(k, vars[k])))
 		}
@@ -131,7 +131,8 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		}
 		if t.Project != nil && t.Project.Dir != "" {
 			if err := confirmUnnamedSecrets(args, t.Project, false); err != nil {
-				return fail(err.Error())
+				report.Fail(err)
+				return 1
 			}
 		}
 		var lines strings.Builder
@@ -159,8 +160,8 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 	if v, ok := lookup(k); ok {
 		return v, nil
 	}
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Fprintf(os.Stderr, "%s: ", k)
+	if atTerminal() {
+		report.Default().Prompt(k + ":")
 		if show {
 			line, err := stdinReader.ReadString('\n')
 			if err == io.EOF && line != "" {
@@ -169,7 +170,7 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 			return strings.TrimSuffix(line, "\n"), err
 		}
 		b, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr)
+		report.Default().EndPrompt()
 		return string(b), err
 	}
 	if only {
@@ -179,22 +180,18 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 	return "", fmt.Errorf("%s is not set in your environment or the project's .env, and stdin can only give one value", k)
 }
 
-// stdinReader is shared by the --show prompts, so a buffered line is never
-// lost between keys.
-var stdinReader = bufio.NewReader(os.Stdin)
-
 func editVars(t *remote.Target, script, stdin, verb string, keys []string, color bool) int {
 	var out bytes.Buffer
 	code, err := remote.SSH(t, script, strings.NewReader(stdin), &out, false)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	if code != 0 {
 		return code
 	}
-	cli.Fprint(os.Stderr, cyan, fmt.Sprintf("%s %s in %s:%s. Running containers keep their old values until they are recreated, as by the next release.",
-		strings.ToUpper(verb[:1])+verb[1:], strings.Join(keys, ", "), t.Host, strings.TrimSpace(out.String())), color)
+	report.Info(fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, strings.TrimSpace(out.String())),
+		"running containers keep their old values until they are recreated, as by the next release")
 	return 0
 }
 
@@ -229,25 +226,15 @@ func confirmUnnamedSecrets(names []string, p *remote.Project, yes bool) error {
 	if len(unnamed) > 1 {
 		what, its, them = strings.Join(unnamed, ", ")+" look like secrets", "their values", "them"
 	}
-	prompt := !yes && term.IsTerminal(int(os.Stdin.Fd()))
-	st := styleFor(os.Stderr)
-	key := func(k string) string {
-		if prompt {
-			return st.name("`" + k + "`")
-		}
-		return "`" + k + "`"
+	warning := fmt.Sprintf("%s, but secrets: does not list %s", what, them)
+	why := fmt.Sprintf("devopsy would print %s in --env, --vars and its messages", its)
+	fix := report.Fix(fmt.Sprintf("add %s to secrets: in %s to mask %s, or to public: if not secret", them, file, its))
+	if yes || !atTerminal() {
+		return &report.Failure{Msg: warning, Details: []string{why}, Fixes: []report.Remedy{fix}}
 	}
-	warning := fmt.Sprintf("%s, but `secrets:` does not list %s.", what, them)
-	info := fmt.Sprintf("devopsy would print %s in --env, --vars and its messages.\n"+
-		"Add %s to %s in %s to mask %s, or to %s if not secret.",
-		its, them, key("secrets:"), file, its, key("public:"))
-	if !prompt {
-		return errors.New(warning + "\n" + info)
-	}
-	fmt.Fprintf(os.Stderr, "%s\n%s\nGo on anyway? [y/N] ", st.warn("[warning] "+warning), info)
-	line, _ := stdinReader.ReadString('\n')
-	if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
-		return errors.New("Nothing changed.")
+	report.Default().Say(report.WarnLevel, warning, []string{why}, []report.Remedy{fix})
+	if !report.Default().Confirm(stdinReader, "go on anyway?") {
+		return errors.New("nothing changed")
 	}
 	return nil
 }

@@ -1,13 +1,14 @@
 package remote
 
 import (
-	"github.com/hanoii/devopsy-cli/internal/report"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 func TestLoadTarget(t *testing.T) {
@@ -350,7 +351,7 @@ func TestReleaseSettings(t *testing.T) {
 func TestActivateKeepAndLevels(t *testing.T) {
 	root := t.TempDir()
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=4\\n' \""+root+"\"; exit; fi\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=5\\n' \""+root+"\"; exit; fi\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	run := func(tg *Target, id string) string {
@@ -447,7 +448,7 @@ environments:
 	}
 	// The parent's server is never the child's: without a variable it
 	// has none, which only a sync minds.
-	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Fixes(tg.ParentErr)) != 1 || !strings.Contains(report.Fixes(tg.ParentErr)[0], "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Fixes(tg.ParentErr)) != 1 || !strings.Contains(report.Fixes(tg.ParentErr)[0].Text, "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
 		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
 	}
 	t.Setenv("DEVOPSY_SERVER", "vm1")

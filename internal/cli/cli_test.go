@@ -155,14 +155,14 @@ func TestBuildNoticeScript(t *testing.T) {
 	if plan.Args[len(plan.Args)-3] != script {
 		t.Fatalf("args changed: %q", plan.Args)
 	}
-	if !strings.HasSuffix(plan.Notice, "run --rm web sh -c <script: 2 lines> sh x'...") {
+	if !strings.HasSuffix(plan.Notice, "run --rm web sh -c <script: 2 lines> sh x'") {
 		t.Fatalf("notice %s", plan.Notice)
 	}
 	if !strings.Contains(plan.NoticeFull, "echo one\n  *** two") {
 		t.Fatalf("full notice %q", plan.NoticeFull)
 	}
 	plan, err = build(root, []string{"ps"}, nil)
-	if err != nil || plan.NoticeFull != "" || !strings.HasSuffix(plan.Notice, " ps'...") {
+	if err != nil || plan.NoticeFull != "" || !strings.HasSuffix(plan.Notice, " ps'") {
 		t.Fatalf("plain notice %q, full %q (%v)", plan.Notice, plan.NoticeFull, err)
 	}
 }
@@ -610,7 +610,7 @@ func TestBuildVerbose(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, ProjectDirName)
-	want := []string{"devopsy: project " + dir, "devopsy: loaded " + filepath.Join(dir, ".env")}
+	want := []string{"project " + dir, "loaded " + filepath.Join(dir, ".env")}
 	if !slices.Equal(plan.Verbose, want) {
 		t.Fatalf("verbose\n got %q\nwant %q", plan.Verbose, want)
 	}

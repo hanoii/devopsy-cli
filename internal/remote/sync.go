@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // A sync copies a parent environment's data (shared/mnt) into a child's,
@@ -50,13 +52,13 @@ const (
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
 // does after it: --status's last sync.
-const SyncCopied = "devopsy: copied the data from @"
+const SyncCopied = report.Prefix + "copied the data from @"
 
 // SyncMarker starts the line the holder prints (on stderr: holders print
 // on one stream), followed by the child's directory on its server
 // ($base), a tab and the sync's id (SyncIDEnv), once the child is ready
 // to be written.
-const SyncMarker = "devopsy: ready for sync in "
+const SyncMarker = report.Prefix + "ready for sync in "
 
 // SyncIDEnv carries the sync's id, from the holder's marker, to the
 // push and the child's side of its writes: a write claims the gate
@@ -66,7 +68,7 @@ const SyncIDEnv = "DEVOPSY_INTERNAL_SYNC_ID"
 
 // SyncingInto is the line the holder of --sync prints on stderr: the
 // release whose log the sync's is appended to.
-var SyncingInto = regexp.MustCompile(`devopsy: syncing into ([0-9]{14})`)
+var SyncingInto = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `syncing into ([0-9]{14})`)
 
 // KeepAlive are the ssh options of a sync's sessions (the holder, the
 // push, and the parent's sessions to the child): a session can stay quiet
@@ -234,7 +236,7 @@ func syncPrepare(projectName string) string {
 ` + devopsyCall(projectName, []string{"--sync-services", "prepare"}, false) + ` || status=$?
 if [ "$status" != 0 ]; then
   sync_finish abort || true
-  echo "devopsy: preparing the sync failed ($status)" >&2 || true
+  devopsy --say error "preparing the sync failed ($status)" || true
 fi
 `
 }
@@ -268,18 +270,18 @@ func syncBlock(projectName, failed string) string {
   fi
   case "$reply.$sync_word" in
     go.go) ;;
-    *.go) echo "devopsy: the copy had completed: going on with it" >&2 || true ;;
+    *.go) devopsy --say info "the copy had completed: going on with it" || true ;;
     *.partial)
       if [ -e ` + started + ` ]; then
-        echo "devopsy: the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" >&2 || true
+        devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
       else
-        echo "devopsy: nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" >&2 || true
+        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" || true
       fi
       # Marked before the files go: a kill in between leaves one or
       # the other.
       [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cut -d' ' -f1 ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
       ;;
-    *) echo "devopsy: the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" >&2 || true ;;
+    *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
   esac
   rm -f ` + started + ` ` + done + `
   if [ "$sync_word" = go ]; then
@@ -309,7 +311,7 @@ func syncWait() string {
     sync_gone=1
     ` + trimSyncLog + `
     exec >>"$base/.devopsy-sync.log" 2>&1
-    echo "devopsy: $(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy" >&2
+    devopsy --say warning "$(date -u '+%Y-%m-%d %H:%M:%S'): no answer from devopsy"
   fi
 `
 }
@@ -331,15 +333,15 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 // where from (From, the parent's address).
 func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) string {
 	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base is a plain devopsy directory, not managed with releases: nothing to sync into" >&2
+  devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
 fi
-[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it" >&2; exit 1; }
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
 `, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `# A child's first release failing while this waited takes current away.
-[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release any more: its release failed while this sync waited" >&2; exit 1; }
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
-echo "devopsy: syncing into $id" >&2
+devopsy --say info "syncing into $id"
 ` + o.exports(t) + `cd "$base/current"
 status=0
 ` + syncBlock(projectName, "the run step does not run") + `[ "$status" = 0 ] || exit "$status"
@@ -381,9 +383,9 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	for _, k := range keys {
 		exports += " " + k + "=" + Quote(env[k])
 	}
-	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: the parent $base has no current release" >&2; exit 1; }
+	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
 ` + syncSourceLock() + `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
-  echo "devopsy: the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)" >&2
+  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi
 cd "$base/current"
@@ -396,7 +398,7 @@ export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, tru
 // lock: a push from this environment stops and restores the same
 // services a stop=true export does.
 func ExportScript(t *Target, projectName, service string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: nothing to export" >&2; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to export"; exit 1; }
 ` + syncSourceLock() + `cd "$base/current"
 ` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
 }
@@ -412,7 +414,7 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 // the target's current release under its release lock, as a sync holds it.
 // end is what the data must end with (ImportEndEnv).
 func ImportScript(t *Target, projectName, service, end string) string {
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { echo "devopsy: $base has no current release: run 'devopsy @%s --release' first" >&2; exit 1; }
+	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + `` + releaseLock(false, false) + `cd "$base/current"
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
@@ -435,7 +437,7 @@ func CurrentExistsScript(t *Target) string {
 func ClaimWriteScript(base, id string) string {
 	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
 	mine := func(f string) string { return `[ "$(cut -d' ' -f2 ` + f + ` 2>/dev/null)" = ` + Quote(id) + ` ]` }
-	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { echo \"devopsy: the child's side ended already (" + base + "): nothing copied\" >&2; exit 1; }\n"
+	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
 }
 
 // ParseCurrent reads CurrentExistsScript's output.
@@ -454,7 +456,7 @@ const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 
 
 // buildUtilImage builds UtilImage when the host lacks it.
 func buildUtilImage() string {
-	return "docker image inspect " + Quote(UtilImage) + " >/dev/null 2>&1 || { echo \"devopsy: building " + UtilImage + "\" >&2; printf '%s\\n' " + quoteAll(UtilDockerfile) + " | docker build -q -t " + Quote(UtilImage) + " - >/dev/null; }\n"
+	return "docker image inspect " + Quote(UtilImage) + " >/dev/null 2>&1 || { devopsy --say info \"building " + UtilImage + "\"; printf '%s\\n' " + quoteAll(UtilDockerfile) + " | docker build -q -t " + Quote(UtilImage) + " - >/dev/null; }\n"
 }
 
 // RsyncVanished is rsync's exit code when files vanished between its scan
@@ -484,10 +486,10 @@ func RsyncModule(entry string) string {
 func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool) string {
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
 		`copy() {
-  echo "devopsy: rsync mnt/$1" >&2
+  devopsy --say info "rsync mnt/$1"
   docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
-    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { echo "devopsy: mnt/$1 ` + HalfCopiedNotice + `" >&2; exit 1; }
-    echo "devopsy: rsync mnt/$1: ` + RsyncVanishedNotice + `" >&2
+    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
+    devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
 }
 `

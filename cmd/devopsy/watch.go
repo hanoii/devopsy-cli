@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runWatchSession is the hidden --watch-session <pid> [--answer-fd <fd>]
@@ -35,12 +35,12 @@ import (
 // byte is the session gone too, a connection that died silently.
 func runWatchSession(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: devopsy "+remote.WatchSessionFlag+" <pid> [--answer-fd <fd>] [--armed <file>] [--heartbeat <seconds>]")
+		report.Error("usage: devopsy " + remote.WatchSessionFlag + " <pid> [--answer-fd <fd>] [--armed <file>] [--heartbeat <seconds>]")
 		return 2
 	}
 	pid, err := strconv.Atoi(args[0])
 	if err != nil || pid <= 1 {
-		fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not a pid: "+args[0])
+		report.Error(remote.WatchSessionFlag + ": not a pid: " + args[0])
 		return 2
 	}
 	var answer = -1
@@ -54,19 +54,19 @@ func runWatchSession(args []string) int {
 		case args[i] == "--heartbeat" && i+1 < len(args):
 			secs, err := strconv.Atoi(args[i+1])
 			if err != nil || secs < 1 {
-				fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not seconds: "+args[i+1])
+				report.Error(remote.WatchSessionFlag + ": not seconds: " + args[i+1])
 				return 2
 			}
 			quiet = time.Duration(secs) * time.Second
 			i++
 		case args[i] == "--answer-fd" && i+1 < len(args):
 			if answer, err = strconv.Atoi(args[i+1]); err != nil || answer < 3 {
-				fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": not an fd: "+args[i+1])
+				report.Error(remote.WatchSessionFlag + ": not an fd: " + args[i+1])
 				return 2
 			}
 			i++
 		default:
-			fmt.Fprintln(os.Stderr, "devopsy: "+remote.WatchSessionFlag+": unknown argument "+args[i])
+			report.Error(remote.WatchSessionFlag + ": unknown argument " + args[i])
 			return 2
 		}
 	}

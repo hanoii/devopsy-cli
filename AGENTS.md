@@ -151,23 +151,40 @@ How the code is written; the principles above say what it is for. Each:
 the rule, why, and where it lives.
 
 - **stdout is the result, stderr is devopsy talking.** The result:
-  compose's output, `--env`, `--vars get`, `--context-hash`, `--export`;
-  everything else (progress, notices, errors, the server scripts' `echo`
-  lines, `>&2`) on stderr. Why: pipes stay clean, and the two never
-  interleave out of order. Scripts show only at `-vv`: a session's, and
-  an argument of several lines in the "Running" notice, which otherwise
-  counts its lines (`Plan.running`).
-- **Failures and warnings say why and how to fix it** (`internal/report`):
-  `report.Fail` (`[error] <message>`, red) or `report.Warn` (`[warning]
-  <message>`, yellow), then why, one detail per line, then "To fix it:"
-  and the fix, or "To fix it, do one of these:" and each numbered; a
-  fix's commands on their own lines, never wrapped or indented. The
-  message reads as a sentence ("dev's parent, prod, has no server").
-  Why: the fix is a command to copy, whole. `report.Error` carries
-  details and fixes through wrapping; a command adds the fixes only it
-  knows. Used so far for a parent without a server, a local `--release`
-  without steps, `--releases remove` and `--destroy`'s leftovers: other
-  messages move over as they are touched.
+  compose's output, help, `--env`, `--vars get`, lists, `--context-hash`,
+  `--export`, never through `report`; everything devopsy says (progress,
+  notices, errors, prompts, the scripts' lines) on stderr. Why: pipes
+  stay clean, and the two never interleave out of order. Scripts show
+  only at `-vv`: a session's, and an argument of several lines in the
+  "running" notice, which otherwise counts its lines (`Plan.running`).
+- **Everything devopsy says goes through `internal/report`,** one line
+  format: `devopsy: ` on every line (`report.Prefix`), then the level's
+  tag (none for info, `warning: `, `error: `, `debug: ` at `-v`,
+  `trace: ` at `-vv`), details and fixes on `devopsy: | ` lines, a
+  command to copy after `$ ` (`report.Fix(text, cmds...)`): "to fix
+  it:" and the fix, or "to fix it, do one of these:" and each numbered.
+  Why: each line says by itself that it is devopsy's, among compose's,
+  Docker's and the steps' output, so coloring, logs and grep never need
+  the line before; the format changes in one place. `error` means the
+  command fails (whatever goes on is a `warning`); the caller writes the
+  words (lowercase after the prefix, names keep their case, no final
+  period, one message and its details rather than sentences in a row),
+  `report` everything else, never rewriting text. `report.Failure`
+  carries details and fixes through wrapping (`report.Fail(err,
+  more...)`); a command adds the fixes only it knows. Prompts too
+  (`Confirm`, `Input`, `ConfirmName`, `Prompt`, bold cyan), only at a
+  terminal, else the command fails with `--yes` as the fix. Scripts say
+  things through the hidden `devopsy --say <level> <message>
+  [<detail>...]` (Protocol 5), except `basePrelude`'s checks of the
+  server's devopsy and the `--ssh-keys` scripts, which need nothing of
+  it: a plain `echo` of a line built from `report` (`echoLine`).
+  `--say` fails when its write does, as `echo` does: the release relies
+  on that before its switch. `TestNothingSaysAround` fails on a
+  `"devopsy: "` literal or a stderr `Fprint` anywhere else (help
+  excepted). Rejected: `slog` (key=value attributes, not a message with
+  details and fixes), indented continuation lines (ambiguous with
+  compose's), times on lines (the logs have them; a total, when one is
+  wanted, from the local devopsy's own clock, in the message).
 - **Hints name the address as typed** (the alias, else the resolved
   address: `targetRef`, `hintAddress` in scripts). Why: the command
   works when copied, and an alias with `source:` releases only from its
@@ -220,12 +237,15 @@ the rule, why, and where it lives.
   forced (`cli.ColorForced`: `FORCE_COLOR` not `0` or `false`, or the
   internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
   in a session it would reach every tool there, which would then color
-  what scripts capture. A session's lines are colored locally as they
-  arrive (`remote.Colorize`, line-buffered, terminal writers only),
-  since coloring on the server reaches nothing: `devopsy:` lines cyan,
-  red for a failure, Compose's done steps green, steps on the way dim,
-  errors red. `remote.Color` exports `DEVOPSY_INTERNAL_COLOR` for the
-  little the server colors itself. Release logs get the raw lines. Help
+  what scripts capture. Colors go by what a line starts with, never its
+  words (`report.Paint`): devopsy's errors red, warnings yellow, info
+  cyan, debug, trace and the `| ` bar dim, a `$ ` command bold;
+  Compose's done steps green, steps on the way dim, another tool's
+  errors red. A session's lines are colored locally as they arrive
+  (`report.Colorize`, line-buffered, terminal writers only), lines
+  colored already left as they are; `remote.Color` exports
+  `DEVOPSY_INTERNAL_COLOR`, so devopsy on the server colors its own the
+  same way. Release logs get the raw lines. Help
   is colored by layout (headings end with `:`, entries start with two
   to seven spaces, `@t` magenta, `@s` yellow).
 - **A pseudo-terminal on the server, never a `-t` session** for
@@ -258,7 +278,8 @@ The section that covers each part is in parentheses.
   servers (`remote.go`, a sync's in `sync.go`; checked with `sh -n` in
   tests; GNU coreutils, `mv -T`).
 - `internal/images/` (Images, behind a `Docker` interface),
-  `internal/report/` (Conventions), `internal/complete/` (completion
+  `internal/report/` (Conventions: the format, `Paint`, `Colorize`,
+  prompts), `internal/complete/` (completion
   and the embedded bash, zsh and fish scripts), `internal/probe/`,
   `internal/update/`.
 - `e2e/`: end-to-end tests against servers in Docker (Checks).
@@ -324,7 +345,7 @@ server", "Before the switch anything cancels" and "Check everything
 before changing anything".
 
 - **The server's devopsy must speak the scripts' protocol**
-  (`remote.Protocol`, 4, reported by `--release-settings`):
+  (`remote.Protocol`, 5, reported by `--release-settings`):
   `basePrelude` refuses an older one before anything changes, for every
   command, read-only ones too, and names the upgrade. Raise it when a
   script starts calling something an older devopsy lacks, and say what
@@ -1173,7 +1194,7 @@ sync label says, with the sync's scripts. Code:
 - **On a target the server runs the same code:** `ExportScript` (shared
   release lock and exclusive `.sync-lock`, like the push: both stop and
   restore the same services; stdout through as it is, never
-  `Colorize`d) and `ImportScript` (exclusive lock, `devopsy --import
+  colorized) and `ImportScript` (exclusive lock, `devopsy --import
   <service> --yes`). The local side asks for the environment's name on
   `/dev/tty` (`confirmImport`: stdin is the data; no terminal and no
   `--yes` fails).

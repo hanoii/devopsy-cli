@@ -323,6 +323,29 @@ builds nothing itself.
 
 ### Output, secrets and debugging
 
+What a command produces goes to stdout (compose's output, `--env`,
+`--vars`, lists, `--export`'s data); everything devopsy says goes to
+stderr, every line starting with `devopsy:`, so it stands apart from what
+compose, Docker and your commands print around it, locally and from a
+server alike:
+
+```
+devopsy: releasing 20261019214911 to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
+devopsy: warning: uncommitted changes outside .devopsy/ are not released in image mode
+devopsy: error: dev's parent, prod, has no server
+devopsy: | devopsy reads a parent's server from variables only
+devopsy: | to fix it:
+devopsy: | $ devopsy @dev --sync --from @vm1:prod
+devopsy: debug: ssh -T vm1
+```
+
+After the prefix comes the level: none for what devopsy does, `warning:`
+when it goes on but something needs attention, `error:` when the command
+fails, `debug:` (`-v`) and `trace:` (`-vv`) for what it runs. Details and
+fixes follow on `| ` lines, a command to copy after `$ `. Questions start
+with `devopsy:` too, and are only asked at a terminal: without one, a
+command that would ask fails and says to add `--yes`.
+
 Secrets are opt in: `secrets:` in `config.yaml` names the variables whose
 values are secret (`[DB_PASSWORD, DATABASE_URL, "*_TOKEN"]`, `*` for any
 characters), wherever they are set: `.env`, `shared/.env`, the caller's
@@ -345,9 +368,9 @@ included: nothing else is masked, and nothing guesses from names.
   `public:` when it is not a secret (`public: [SORT_KEY]`). The names only
   ask: they never mask.
 
-`-v` (or `DEVOPSY_VERBOSE=1`) also prints the files loaded and, for
-targets, each SSH session; `-vv` (`DEVOPSY_VERBOSE=2`) also the script each
-session runs. It carries over to nested and server-side devopsy. A script
+`-v` (or `DEVOPSY_VERBOSE=1`) also prints the files loaded, what devopsy
+runs (`running 'docker compose ...'`) and, for targets, each SSH session;
+`-vv` (`DEVOPSY_VERBOSE=2`) also the script each session runs. It carries over to nested and server-side devopsy. A script
 in a command's arguments (`devopsy run --rm tool sh -c '<several lines>'`)
 shows as `<script: 12 lines>` in what devopsy says it runs, whole with
 `-vv`.

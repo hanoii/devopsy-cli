@@ -16,6 +16,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Labels for sharing facts between projects on a host, read like
@@ -345,7 +346,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 			break
 		}
 		if !waited {
-			Progress(fmt.Sprintf("devopsy: waiting up to %s for %s to run...", WaitForExporters, missing))
+			Progress(fmt.Sprintf("waiting up to %s for %s to run", WaitForExporters, missing))
 			waited = true
 		}
 		time.Sleep(2 * time.Second)
@@ -357,7 +358,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 	var lines []string
 	for _, imp := range imports {
 		if _, ok := p.env.Lookup(imp.Var); ok {
-			said = append(said, fmt.Sprintf("devopsy: %s: set by the target, not imported from %s", imp.Var, imp.Source))
+			said = append(said, fmt.Sprintf("%s: set by the target, not imported from %s", imp.Var, imp.Source))
 			continue
 		}
 		e, err := host.Resolve(imp)
@@ -366,9 +367,9 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		}
 		if !e.Found {
 			if !imp.Optional {
-				return said, fmt.Errorf("%s: %s. Start it, or set %s for this target (empty for none)", imp, e.Why(imp), imp.Var)
+				return said, &report.Failure{Msg: fmt.Sprintf("%s: %s", imp, e.Why(imp)), Fixes: []report.Remedy{report.Fix("start it"), report.Fix(fmt.Sprintf("set %s for this target (empty for none)", imp.Var))}}
 			}
-			said = append(said, fmt.Sprintf("devopsy: %s: %s, not imported (optional)", imp.Var, e.Why(imp)))
+			said = append(said, fmt.Sprintf("%s: %s, not imported (optional)", imp.Var, e.Why(imp)))
 			continue
 		}
 		if err := checkValue(e.Value); err != nil {
@@ -379,7 +380,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		if e.Project != imp.Source {
 			from += " (" + e.Project + ")"
 		}
-		said = append(said, fmt.Sprintf("devopsy: %s=%s, from %s", imp.Var, e.Value, from))
+		said = append(said, fmt.Sprintf("%s=%s, from %s", imp.Var, e.Value, from))
 	}
 	if len(lines) > 0 {
 		f, err := os.OpenFile(targetEnv, os.O_APPEND|os.O_WRONLY, 0)

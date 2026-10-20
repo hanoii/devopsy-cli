@@ -15,6 +15,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // debugTopics are what `devopsy --debug <topic>` explains.
@@ -59,7 +60,7 @@ func runDebug(cwd string, args []string, color bool) int {
 			fmt.Print(remote.ProjectSchema)
 		}
 	default:
-		cli.Fprint(os.Stderr, red, fmt.Sprintf("--debug: no topic %q: %s", topic, strings.Join(debugTopics, ", ")), color)
+		report.Error(fmt.Sprintf("--debug: no topic %q: %s", topic, strings.Join(debugTopics, ", ")))
 		return 1
 	}
 	return 0
@@ -222,7 +223,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		}
 	}
 	if len(names) == 0 {
-		cli.Fprint(os.Stderr, red, "no environments or aliases", color)
+		report.Error("no environments or aliases")
 		return 1
 	}
 
@@ -232,7 +233,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		for _, n := range names {
 			t, err := remote.DescribeTarget(projectDir, n, projectEnv)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "# %s: %v\n", n, err)
+				report.Warn(fmt.Sprintf("%s: %v", n, err))
 				continue
 			}
 			var value yaml.Node
@@ -243,7 +244,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
 				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Keep: t.Keep,
 				Parent: parent, Inherit: t.Inherit, Env: t.Env}); err != nil {
-				cli.Fprint(os.Stderr, red, err.Error(), color)
+				report.Fail(err)
 				return 1
 			}
 			out.Content = append(out.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: n}, &value)
@@ -251,7 +252,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		enc := yaml.NewEncoder(os.Stdout)
 		enc.SetIndent(2)
 		if err := enc.Encode(out); err != nil {
-			cli.Fprint(os.Stderr, red, err.Error(), color)
+			report.Fail(err)
 			return 1
 		}
 		return 0
@@ -349,7 +350,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		case a == "--show":
 			show = true
 		case strings.HasPrefix(a, "-"):
-			cli.Fprint(os.Stderr, red, "usage: devopsy --debug env [--show] [VAR...]", color)
+			report.Error("usage: devopsy --debug env [--show] [VAR...]")
 			return 1
 		default:
 			names = append(names, a)
@@ -357,7 +358,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 	}
 	projectDir, vars, secrets, err := cli.TraceEnv(cwd, os.Environ(), names)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	if show {
@@ -472,12 +473,12 @@ func wrap(text string, width int, indent string) string {
 
 func debugLabels(st style, projectDir string, color bool) int {
 	if projectDir == "" {
-		cli.Fprint(os.Stderr, red, "--debug labels: not in a devopsy project", color)
+		report.Error("--debug labels: not in a devopsy project")
 		return 1
 	}
 	labels, err := cli.DevopsyLabels(projectDir)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	fmt.Println(st.head("Labels devopsy reads, on compose services:"))
@@ -579,7 +580,7 @@ func debugHost(st style, projectDir string) {
 func debugImports(st style, color bool) int {
 	host, err := cli.Running()
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	states := host.ImportStates()
