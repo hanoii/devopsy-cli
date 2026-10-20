@@ -74,7 +74,10 @@ case "$*" in
     for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
-    for s in $(after --wait "$@"); do
+    # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
+    # depends on, too.
+    ups=$(after --wait "$@"); [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac
+    for s in $ups; do
       echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
     done ;;
@@ -1824,6 +1827,33 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "up -d --wait db") {
 		t.Errorf("a removed db created:\n%s", docker)
+	}
+}
+
+// A service labeled devopsy.sync.stop=true stays down on the child for the
+// whole sync, and after a copy that did not complete. Bug: a stream's
+// import brings its service up with a plain up, which, as Compose does,
+// starts what it depends on too: here db, stopped for the sync, comes up
+// during app's import and stays up although the copy ends partial.
+func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
+	defer s.labels("")
+	write(t, s.log+".failimport.app", "", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("app's import fails after db's (%d):\n%s", code, out)
+	}
+	if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
+		t.Errorf("db, stopped for the sync, is up on a partial copy:\n%s", out)
 	}
 }
 
