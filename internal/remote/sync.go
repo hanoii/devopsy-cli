@@ -499,6 +499,10 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + `` + releaseLock(false, false) + `cd "$base/current"
+# A sync's holder killed outright left its record: its writers end first.
+if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
+fi
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
 
