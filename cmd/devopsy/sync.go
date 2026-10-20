@@ -959,7 +959,7 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 // it. A cut export never reaches the import; its partial spool is removed
 // here on the same server, by the child's abort across servers.
 func syncStream(ctx context.Context, cwd, projectDir, name string, env []string, last bool) error {
-	spool := remote.StreamSpool(os.Getenv(remote.SyncToBaseEnv), name)
+	spool := remote.StreamSpool(os.Getenv(remote.SyncToBaseEnv), name, os.Getenv(remote.SyncIDEnv))
 	to := os.Getenv(remote.SyncToEnv)
 	report.Info("exporting " + name)
 	var err error
@@ -1588,11 +1588,11 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			report.Info(strings.Join(stopped, " ") + " stay down: the data is a partial copy until a sync completes")
 		}
 	}
-	if word != "go" {
-		spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
-		for _, f := range spools {
-			_ = os.Remove(f)
-		}
+	// Whatever the word: this sync's imports took theirs, and any other
+	// is an earlier sync's, stale.
+	spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
+	for _, f := range spools {
+		_ = os.Remove(f)
 	}
 	if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", word); err != nil {
 		code = fail("the sync capability's finish child " + word + ": " + err.Error())
@@ -1675,7 +1675,7 @@ func markWritten(base, name string) error {
 // import. The service is brought up unless it is stopped for the sync.
 // The spool goes whatever happens, an interrupt included.
 func syncImport(cwd, projectDir, base, name string, last bool, services []cli.SyncService, env []string, fail func(string) int) (code int) {
-	spool := remote.StreamSpool(base, name)
+	spool := remote.StreamSpool(base, name, os.Getenv(remote.SyncIDEnv))
 	defer os.Remove(spool)
 	ctx, stop := interruptible()
 	defer stop()

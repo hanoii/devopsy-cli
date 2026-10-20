@@ -145,9 +145,11 @@ var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync 
 // with .devopsy-sync.
 const StreamSpoolPrefix = ".devopsy-sync.stream."
 
-// StreamSpool is service's spool file in the environment directory base.
-func StreamSpool(base, service string) string {
-	return path.Join(base, StreamSpoolPrefix+service)
+// StreamSpool is service's spool file for sync id in the environment
+// directory base: one per sync, so an export that outlived its sync
+// (its push killed outright) never writes into the next one's.
+func StreamSpool(base, service, id string) string {
+	return path.Join(base, StreamSpoolPrefix+service+"."+id)
 }
 
 // SyncInheritPending is a re-sync's inherited variables, in the child's
