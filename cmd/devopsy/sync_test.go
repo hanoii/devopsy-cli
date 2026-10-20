@@ -27,7 +27,9 @@ import (
 // a start or an up), exited with FAKE_DB_DOWN, restarting with
 // FAKE_DB_RESTARTING, and copies what the rsync containers would: within one host,
 // or from the daemon's mount (remembered) across hosts. The tar
-// containers of --export and --import run tar here.
+// containers of --export and --import run tar here. FAKE_ORPHANS names
+// services the project no longer has, whose containers are left exited:
+// ps lists them, and start refuses them, as Compose does.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -66,12 +68,14 @@ case "$*" in
   *" start "*)
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
+    for s in $(after start "$@"); do case $s in app|db) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done
     for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
   *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
   *" ps --all --format json "*)
     for s in $(after json "$@"); do printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"; done ;;
   *" ps --all --format json")
-    for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done ;;
+    for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
+    for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
@@ -1744,6 +1748,30 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, zeros[:512+4096], "--import", "app"); code == 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Errorf("tar cut after a member ending in zeros (%d):\n%s", code, errs)
 	}
+	// A tar starting with a pax global header (git archive writes one,
+	// with the commit) carries storage alone: imported, as tar extracts
+	// it.
+	//
+	// Bug: tarEntries takes the global header for a member, an entry
+	// named pax_global_header that app does not mount, and refuses the
+	// tar, which tar -t (it lists no global header) and tar -x take.
+	var global bytes.Buffer
+	gw := tar.NewWriter(&global)
+	if err := gw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "0123456789abcdef"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.WriteHeader(&tar.Header{Name: "storage/new.txt", Mode: 0o644, Size: 4, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gw.Write([]byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := s.runIO(nil, global.Bytes(), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Errorf("a tar with a pax global header (%d):\n%s", code, errs)
+	}
 	s.logs()
 
 	// On a target: the same, in its current release, under its release
@@ -1853,29 +1881,68 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 	}
 }
 
-// A service labeled devopsy.sync.stop=true stays down on the child for the
-// whole sync, and after a copy that did not complete: a stream's import
-// brings its service up without what it depends on, which Compose would
-// start too (here db, stopped for the sync).
-func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
+// A record naming a service the project no longer has (stopped by a sync
+// that could not bring it back, then dropped from compose.yaml, its
+// container left exited) fails nothing: what a sync stopped comes back
+// when the project still has it.
+//
+// Bug: restoreServices starts every service the record names, and
+// Compose refuses one the project does not have (no such service): the
+// sync fails, the record stays, and every later sync fails the same way.
+// It should leave out what the project no longer has.
+func TestSyncRecordedStopGone(t *testing.T) {
 	s := newSyncSetup(t)
-	caps := filepath.Join(s.dot, "capabilities", "sync")
-	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
-	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
-	defer s.labels("")
-	write(t, s.log+".failimport.app", "", 0o644)
+	record := filepath.Join(s.root, "shop", "dev", syncState)
+	write(t, record, "stop worker\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ORPHANS=worker\n", 0o644)
+	defer os.Remove(s.log + ".shop-dev")
 	s.logs()
 	out, code := s.run(nil, "@dev", "--sync", "--yes")
-	if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
-		t.Fatalf("app's import fails after db's (%d):\n%s", code, out)
+	if code != 0 || fileExists(record) {
+		t.Errorf("a sync whose record names a service gone (%d), record left %v:\n%s", code, fileExists(record), out)
 	}
-	if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
-		t.Errorf("db, stopped for the sync, is up on a partial copy:\n%s", out)
+}
+
+// A service labeled devopsy.sync.stop=true stays down on the child for the
+// whole sync, and after a copy that did not complete: a stream's import
+// brings its service up without what it depends on, which Compose would
+// start too (here db, stopped for the sync). The same on a first release
+// that finds containers (a first one that failed left them running): db,
+// stopped by its sync, stays down.
+//
+// Bug: on a first release the import brings app up with what it depends
+// on (no --no-deps: a first release is taken for one with nothing
+// stopped), so Compose starts db, which this sync stopped, and it runs
+// on the partial copy. It should stay down, as on a later sync.
+func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		s := newSyncSetup(t)
+		caps := filepath.Join(s.dot, "capabilities", "sync")
+		write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+		write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
+		s.releaseProd(nil)
+		args := []string{"@dev", "--release"}
+		if !first {
+			if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+				t.Fatalf("release (%d):\n%s", code, out)
+			}
+			args = []string{"@dev", "--sync", "--yes"}
+		}
+		s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
+		write(t, s.log+".failimport.app", "", 0o644)
+		s.logs()
+		out, code := s.run(nil, args...)
+		if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+			t.Fatalf("first release %v: app's import fails after db's (%d):\n%s", first, code, out)
+		}
+		if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
+			t.Errorf("first release %v: db, stopped for the sync, is up on a partial copy:\n%s", first, out)
+		}
+		s.labels("")
 	}
 }
 
