@@ -553,6 +553,12 @@ exit 0
 		t.Errorf("a release on a partial copy (%v):\n%s", err, out)
 	}
 	calls(root)
+	// A sync that writes nothing (the parent's labels cover nothing now)
+	// leaves the earlier sync's partial copy as it was: the mark stays.
+	if _, errOut, err := run(root, "5", "go\n"); err == nil || current(root) != "releases/2/code" || !strings.Contains(errOut, "nothing was copied") || !fileExists(filepath.Join(root, tg.Path, SyncIncompleteFile)) {
+		t.Errorf("a sync writing nothing on a partial copy (%v), current %q:\n%s", err, current(root), errOut)
+	}
+	calls(root)
 
 	// devopsy gone before the switch (its stdin ends): the watcher
 	// cancels the release before anything of the sync runs.
