@@ -476,6 +476,13 @@ func RsyncModule(entry string) string {
 	return entry
 }
 
+// RsyncTimeout is the receiving rsync's --timeout across servers, in
+// seconds: sshd sends nothing on a quiet forward, so after a silent cut
+// between the servers the receive would otherwise wait for TCP to give
+// up, long after the holder decided, its container holding the child's
+// mnt. rsync sends keepalives while it has nothing to say.
+const RsyncTimeout = 30
+
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/, base its
@@ -487,7 +494,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string,
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
 		`copy() {
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids --timeout=" + fmt.Sprint(RsyncTimeout) + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
