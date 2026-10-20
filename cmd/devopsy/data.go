@@ -488,7 +488,7 @@ func runImport(cwd string, args []string, color bool) int {
 			// Up for its import, and down again after it if it was down.
 			down := func() error { return nil }
 			if !s.Stop {
-				down, err = upFor(ctx, cwd, name, false, false)
+				down, _, err = upFor(ctx, cwd, name, false, false)
 			}
 			if err == nil {
 				report.Info("importing " + name)

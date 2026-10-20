@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,11 +75,18 @@ case "$*" in
     for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
   *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
   *" ps --all --format json "*)
-    for s in $(after json "$@"); do printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"; done ;;
+    for s in $(after json "$@"); do
+      printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"
+      case " ${FAKE_ONEOFF:-} " in *" $s "*) printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" ;; esac
+    done ;;
+  # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
+  # listed by a name filter.
+  "ps -aq --filter name="*)
+    for c in ${FAKE_SYNC_CONTAINERS:-}; do case $c in "${4#name=}"*) echo "$c" ;; esac; done ;;
   *" ps --all --format json")
     for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
-    for s in ${FAKE_ONEOFF:-}; do printf '{"Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
+    for s in ${FAKE_ONEOFF:-}; do printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
@@ -96,7 +104,7 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
-  "run --rm --name devopsy-sync-receive-"*)
+  "run --rm --name devopsy-sync-"*"-receive --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
@@ -2305,6 +2313,20 @@ func TestClaimWrite(t *testing.T) {
 	if err := claimWrite(base); err != nil {
 		t.Errorf("second claim: %v", err)
 	}
+	// Writes record themselves in it; once the holder took it, a late one
+	// is refused and leaves nothing.
+	if err := recordWrite(base, remote.DoneLine("100.7")); err != nil || !strings.HasSuffix(readString(filepath.Join(base, remote.SyncStartedFile)), "\ndone 100.7\n") {
+		t.Errorf("record: %v %q", err, readString(filepath.Join(base, remote.SyncStartedFile)))
+	}
+	if err := os.Rename(filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordWrite(base, remote.DoneLine("100.7")); !errors.Is(err, errDecided) || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+		t.Errorf("a write after the take: %v", err)
+	}
+	if err := os.Rename(filepath.Join(base, remote.SyncTakenFile), filepath.Join(base, remote.SyncStartedFile)); err != nil {
+		t.Fatal(err)
+	}
 	// The mark names the parent that wrote, and why; a later one keeps
 	// its time and says its own why, unless told to keep it.
 	mark := filepath.Join(base, remote.SyncIncompleteFile)
@@ -2382,5 +2404,56 @@ func TestSyncFirstAbortCreatesNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "devopsy: creating") || strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait") {
 		t.Errorf("services created on an aborted first release:\n%s\n%s", out, docker)
+	}
+}
+
+// A partial copy ends whatever may still write into the child before
+// anything else is decided on its data: the record the holder took names
+// an import still running, whose devopsy is signalled (Linux's /proc says
+// it is one), whose service is stopped (what docker exec started in it
+// dies with it) and recorded, since it ran before the sync, and whose
+// one-off is removed; and the sync's own containers go, never another
+// sync's.
+func TestSyncEndWriters(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	// An import's devopsy, still running: what isSyncImport looks for is
+	// in its arguments (": " keeps sh from exec'ing sleep).
+	imp := exec.Command("sh", "-c", "sleep 30; :", "devopsy", "--sync-services", "import", "db")
+	if err := imp.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { ended <- imp.Wait() }()
+	defer func() { _ = imp.Process.Kill() }()
+	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\n", 0o644)
+	s.logs()
+	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
+	cmd.Dir = filepath.Join(dev, "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
+	out, _ := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	for _, want := range []string{"rm -f devopsy-sync-1.2-receive", "rm -f shop-dev-db-run-1", " stop db"} {
+		if !strings.Contains(docker, want) {
+			t.Errorf("missing %q:\n%s\n%s", want, out, docker)
+		}
+	}
+	if strings.Contains(docker, "devopsy-sync-9.9") {
+		t.Errorf("another sync's container removed:\n%s", docker)
+	}
+	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db") {
+		t.Errorf("the stopped db not recorded: %q", rec)
+	}
+	if _, err := os.Stat("/proc/self/cmdline"); err == nil {
+		select {
+		case <-ended:
+		case <-time.After(20 * time.Second):
+			t.Errorf("the import still runs:\n%s", out)
+		}
 	}
 }

@@ -226,7 +226,7 @@ func TestFormatReleases(t *testing.T) {
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=6\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestActivateSync(t *testing.T) {
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
 if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
@@ -413,13 +413,15 @@ if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ];
 fi
 # What the push writes into the child, as if during the copy.
 if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
+  # started claims the gate; done and other-done append the copy's last
+  # write to the record, this sync's or another's.
+  rec="$FAKE_ROOT/app/dev/.devopsy-sync.started"
   for f in $FAKE_WRITE; do
     case $f in
-      done) line=$DEVOPSY_INTERNAL_SYNC_ID ;;
-      other-done) f=done; line=123.45 ;;
-      *) line="vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" ;;
+      started) echo "vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" >"$rec" ;;
+      done) echo "done $DEVOPSY_INTERNAL_SYNC_ID" >>"$rec" ;;
+      other-done) echo "done 123.45" >>"$rec" ;;
     esac
-    echo "$line" >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"
   done
 fi
 [ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
@@ -525,7 +527,7 @@ exit 0
 		t.Fatalf("first (%v):\n%s", err, errOut)
 	}
 	calls(other)
-	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") || !fileExists(filepath.Join(other, tg.Path, SyncIncompleteFile)) {
+	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=started other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") || !fileExists(filepath.Join(other, tg.Path, SyncIncompleteFile)) {
 		t.Errorf("another sync's done (%v), current %q:\n%s", err, current(other), errOut)
 	}
 	_, errOut, err = run(root, "3", "go\n", "FAKE_WRITE=started")
@@ -535,7 +537,7 @@ exit 0
 	if got := calls(root); !strings.Contains(got, "--sync-services finish partial") || strings.Contains(got, "--release-steps restart run") || strings.Contains(got, "deploy from") {
 		t.Errorf("a partial copy, calls:\n%s", got)
 	}
-	for _, f := range []string{SyncStartedFile, SyncDoneFile} {
+	for _, f := range []string{SyncStartedFile, SyncTakenFile} {
 		if fileExists(filepath.Join(root, tg.Path, f)) {
 			t.Errorf("%s left", f)
 		}
@@ -805,7 +807,7 @@ func TestActivateImages(t *testing.T) {
 	// pull and build put the release's id in the image store, and fail
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
@@ -980,7 +982,7 @@ exit 0
 func TestImagesRemoved(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1194,7 +1196,7 @@ exit 0
 func TestBookmarksPerRef(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
@@ -1243,7 +1245,7 @@ exit 0
 func TestFetchInterrupted(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1450,7 +1452,7 @@ func fileExists(path string) bool {
 // kept stays, with its log, and older ones go.
 func TestActivatePruneFailed(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=6\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	root := t.TempDir()
@@ -1484,7 +1486,7 @@ func TestActivatePruneFailed(t *testing.T) {
 // removals left is a leftover too; removing it says what is forgotten.
 func TestLeftoverImagesRecord(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=6\\n' \"$FAKE_ROOT\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1685,7 +1687,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --images") printf 'app-prod-app\n' ;;
   "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
@@ -1819,7 +1821,7 @@ exit 0
 func TestActivateGoneAndNeighbours(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   fail) exit 3 ;;
   "-- config --images") printf 'app-prod-app\n' ;;
@@ -1856,7 +1858,7 @@ exit 0
 // whatever its run step did: a failed copy after it does not count.
 func TestStatusLastSync(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=6\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1892,7 +1894,7 @@ func TestStatusLastSync(t *testing.T) {
 func TestStepTextQuoted(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=6\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$1" in deploy|prep) printf '%s|' "$@" >>"$FAKE_ROOT/args"; echo >>"$FAKE_ROOT/args" ;; esac
 exit 0
 `)

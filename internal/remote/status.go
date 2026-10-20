@@ -40,6 +40,6 @@ cd "$base/current" && exec devopsy --status
 // files nobody settled yet.
 var partialStatus = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   printf 'partial\t%%s\n' "$(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)"
-elif [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
+elif [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   if ` + LockBusy + `; then echo syncing; else printf 'partial\t\n'; fi
 fi`
