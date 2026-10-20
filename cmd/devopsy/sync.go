@@ -1979,7 +1979,21 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 
 // psEntry is a container in docker compose ps --format json.
 type psEntry struct {
-	Service, State, Health, Status string
+	Service, State, Health, Status, Labels string
+}
+
+// oneOff reports a compose run container (a hook's run --rm): ps lists
+// it under its service, but it is not the service's container.
+func (e psEntry) oneOff() bool {
+	return strings.Contains(","+e.Labels+",", ",com.docker.compose.oneoff=True,")
+}
+
+// serviceEntries is parsePS without one-off containers: a stray run --rm
+// (an import's, still running) must not stand for its service, or a
+// stopped service would read as running and never be started again.
+func serviceEntries(out []byte) ([]psEntry, error) {
+	entries, err := parsePS(out)
+	return slices.DeleteFunc(entries, psEntry.oneOff), err
 }
 
 // parsePS reads docker compose ps --format json: one object per line, or
@@ -2015,7 +2029,7 @@ func serviceStates(cwd string) (map[string]string, error) {
 	if err := compose(cwd, &out, "ps", "--all", "--format", "json"); err != nil {
 		return nil, fmt.Errorf("docker compose ps: %w", err)
 	}
-	entries, err := parsePS(out.Bytes())
+	entries, err := serviceEntries(out.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("docker compose ps: %w", err)
 	}
@@ -2037,7 +2051,7 @@ func waitHealthy(cwd string, services []string) error {
 		if err := compose(cwd, &out, append([]string{"ps", "--all", "--format", "json"}, services...)...); err != nil {
 			return fmt.Errorf("docker compose ps: %w", err)
 		}
-		entries, err := parsePS(out.Bytes())
+		entries, err := serviceEntries(out.Bytes())
 		if err != nil {
 			return fmt.Errorf("docker compose ps: %w", err)
 		}

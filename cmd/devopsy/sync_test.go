@@ -29,7 +29,9 @@ import (
 // or from the daemon's mount (remembered) across hosts. The tar
 // containers of --export and --import run tar here. FAKE_ORPHANS names
 // services the project no longer has, whose containers are left exited:
-// ps lists them, and start refuses them, as Compose does.
+// ps lists them, and start refuses them, as Compose does. FAKE_ONEOFF
+// names services with a one-off container running (a hook's run --rm),
+// which ps lists under the service, labeled, as Compose does.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -75,7 +77,8 @@ case "$*" in
     for s in $(after json "$@"); do printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"; done ;;
   *" ps --all --format json")
     for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
-    for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done ;;
+    for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
+    for s in ${FAKE_ONEOFF:-}; do printf '{"Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
@@ -1225,6 +1228,14 @@ func TestSyncLabels(t *testing.T) {
 		docker, _ := s.logs()
 		return string(out), docker
 	}
+	// A one-off of db still running (an import's run --rm) is not db:
+	// db, stopped by the sync, starts.
+	write(t, record, "stop db\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\n", 0o644)
+	if out, docker := finish("go"); !strings.Contains(docker, "start db") {
+		t.Errorf("finish beside a one-off:\n%s\n%s", out, docker)
+	}
+	write(t, s.log+".shop-dev", "", 0o644)
 	write(t, record, "stop other\n", 0o644)
 	if out, docker := finish("go"); strings.Contains(docker, "start db") {
 		t.Errorf("finish with a record:\n%s\n%s", out, docker)
