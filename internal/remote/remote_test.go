@@ -540,8 +540,9 @@ exit 0
 			t.Errorf("%s left", f)
 		}
 	}
-	// The mark names the parent that wrote, never the sync's id.
-	if mark := readFile(filepath.Join(root, tg.Path, SyncIncompleteFile)); !strings.HasSuffix(mark, " vm1:prod\n") {
+	// The mark names the parent that wrote, never the sync's id, and why.
+	mark := readFile(filepath.Join(root, tg.Path, SyncIncompleteFile))
+	if _, from, code, why := ParseIncomplete(mark); from != "vm1:prod" || code != IncompleteCopy || !strings.Contains(why, "was cut") {
 		t.Errorf("the mark: %q", mark)
 	}
 	// Nothing but a sync runs on it.

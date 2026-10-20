@@ -1016,7 +1016,9 @@ child goes by that:
 - **All of it** (the copy completed, even if devopsy then went away or
   was interrupted): it goes on as after a success, `finish child go`,
   then the run step. A sync completes with its finish: one whose `finish
-  child go` fails leaves the child as one that did not complete.
+  child go` fails leaves the child as one that did not complete: the
+  copy is in, but the project refused it, and `--status` and every
+  refusal say so.
 
 On a first release a failure marks the release failed and leaves nothing
 current, and the next release syncs again. A failed or interrupted export

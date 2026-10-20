@@ -939,6 +939,14 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   fix), a push from it refuses (a chain), `--export` warns, and
   `--status` shows it. Labels bound the promise: only `stop=true`
   services are kept off partial data.
+- **The mark says why** (`remote.IncompleteLine`: since, parent, code,
+  why, tab separated, one line: shell reads it with `cut`, no JSON):
+  `copy` (cut), `write` (another sync's push wrote after its holder
+  decided), `settled` (a holder killed before deciding), `finish` (a
+  complete copy the project's `finish child go` refused: the sync's
+  contract is that it completes only once its finish accepts the
+  copy). A later mark keeps the first one's time and says its own why;
+  the refusals and `--status` print the why.
 - **A holder killed before deciding is settled by the next lock-taker:**
   `--sync-services settle`, run by the next sync's prepare and by
   `partialGuard`, counts its files as not completed (marked, `finish

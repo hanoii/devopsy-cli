@@ -789,7 +789,7 @@ devopsy --say info "current is now $id" || true
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	restart := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync"
+      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
       exit "$status"
     fi
     get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
@@ -1007,7 +1007,7 @@ func partialGuard(t *Target, projectName, refuse string) string {
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete ($(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)), and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync, or --release-sync"
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" "or --release-sync to release with it"
   ` + refuse + `
 fi
 `

@@ -44,11 +44,40 @@ const (
 	SyncOpenFile    = ".devopsy-sync.open"
 	SyncStartedFile = ".devopsy-sync.started"
 	SyncDoneFile    = ".devopsy-sync.done"
-	// SyncIncompleteFile marks a child whose data is a partial copy:
-	// "<UTC time> <parent's address>". Releases and rollbacks refuse,
-	// a push from it too, until a sync completes and removes it.
+	// SyncIncompleteFile marks a child whose data no sync completed on:
+	// one line, IncompleteLine. Releases and rollbacks refuse, a push
+	// from it too, until a sync completes and removes it.
 	SyncIncompleteFile = ".devopsy-sync.incomplete"
 )
+
+// Why a child is marked (SyncIncompleteFile), the line's code: a copy
+// cut, a write of another sync's that came late, a holder killed before
+// it decided (settled by the next lock-taker), or a complete copy its
+// project's finish child go refused.
+const (
+	IncompleteCopy    = "copy"
+	IncompleteWrite   = "write"
+	IncompleteSettled = "settled"
+	IncompleteFinish  = "finish"
+)
+
+// IncompleteLine is SyncIncompleteFile's content: since when (UTC, the
+// first mark's: a later one keeps it), the parent's address, the code
+// and why, for people, tab separated.
+func IncompleteLine(since, from, code, why string) string {
+	return since + "\t" + from + "\t" + code + "\t" + why + "\n"
+}
+
+// ParseIncomplete reads IncompleteLine.
+func ParseIncomplete(s string) (since, from, code, why string) {
+	f := strings.SplitN(strings.TrimRight(s, "\n"), "\t", 4)
+	f = append(f, "", "", "", "")
+	return f[0], f[1], f[2], f[3]
+}
+
+// IncompleteWhy is shell printing the mark's why and since ($base set),
+// for a message.
+const IncompleteWhy = `$(cut -f4 "$base/` + SyncIncompleteFile + `" 2>/dev/null) (since $(cut -f1 "$base/` + SyncIncompleteFile + `" 2>/dev/null) UTC)`
 
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
@@ -276,8 +305,8 @@ export ` + SyncIDEnv + `="$sync_id"
   if [ "$(cat ` + done + ` 2>/dev/null)" = "$sync_id" ]; then
     sync_word=go
   elif [ -e ` + done + ` ] || [ -e ` + started + ` ]; then
-    # Another sync's done: a push that outlived its holder wrote into
-    # this child meanwhile.
+    # Started alone: the copy was cut. Another sync's done: a push that
+    # outlived its holder wrote into this child meanwhile.
     sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
@@ -288,14 +317,20 @@ export ` + SyncIDEnv + `="$sync_id"
     go.go) ;;
     *.go) devopsy --say info "the copy had completed: going on with it" || true ;;
     *.partial)
+      # Marked before the files go: a kill in between leaves one or
+      # the other. A mark keeps the first one's time.
+      sync_since=$(cut -f1 ` + incomplete + ` 2>/dev/null) || true
+      [ -n "$sync_since" ] || sync_since=$(date -u '+%Y-%m-%d %H:%M:%S')
+      sync_from=$(cut -d' ' -f1 ` + started + ` 2>/dev/null) || true
       if [ -e ` + started + ` ]; then
         devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
+        printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
+      elif [ -e ` + done + ` ]; then
+        devopsy --say error "an earlier sync's copy wrote into this one's data after that sync ended: the services stay down until a sync completes, and ` + failed + `" || true
+        printf '%s\t%s\t` + IncompleteWrite + `\t%s\n' "$sync_since" "$` + SyncFromTargetEnv + `" "an earlier sync's copy wrote into the data after that sync had ended" >` + incomplete + ` || true
       else
         devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" || true
       fi
-      # Marked before the files go: a kill in between leaves one or
-      # the other.
-      [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cut -d' ' -f1 ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
       ;;
     *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
   esac

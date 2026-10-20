@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -132,7 +131,12 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		case "synced":
 			synced = value
 		case "partial":
-			partial = cmp.Or(value, "a sync was cut")
+			// The mark (remote.IncompleteLine), or nothing for a sync's
+			// files no holder settled yet.
+			partial = "a sync was cut"
+			if since, from, _, why := remote.ParseIncomplete(value); why != "" {
+				partial = why + " (since " + since + " UTC, from @" + from + ")"
+			}
 		case "syncing":
 			syncing = true
 		}
@@ -181,7 +185,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		if id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
-		fmt.Println(st.bad("data        from a sync that did not complete (" + partial + "): nothing runs on it until one does: " + fix))
+		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
 	}
 	fmt.Print(rest)
 	return 0
