@@ -363,3 +363,47 @@ func TestSyncImportKeepsStoppedDown(t *testing.T) {
 		t.Errorf("files, stop=true, is %s on the partial copy:\n%s", s, out)
 	}
 }
+
+// The parent starts to inherit a variable the new release requires
+// (${NEW:?}): --release-sync of its child inherits it before the copy,
+// so the release that syncs must find it. Fails: the inherited value
+// goes into the pending file only the sync reads
+// (remote.SyncInheritPending), while the release's checks before its
+// switch (--missing-vars, the image fetch) read the child's inherit.env
+// as the last sync left it, and refuse: compose requires NEW. A first
+// release, which inherits into inherit.env itself, finds it.
+func TestSyncReleaseInheritsRequired(t *testing.T) {
+	const name = "inhreq"
+	compose := `services:
+  data:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/data:/data]
+    labels: {devopsy.sync: rsync}
+`
+	dir := project(t, name, map[string]string{
+		".devopsy/.env":            "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml":     "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/compose.yaml":    compose,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+	})
+	srv(t, "mkdir -p "+name+"/prod/shared/mnt/data && echo one >"+name+"/prod/shared/mnt/data/stamp")
+	for _, env := range []string{"prod", "dev"} {
+		if out, code := op(t, dir, "devopsy @"+env+" --release"); code != 0 {
+			t.Fatalf("%s (%d):\n%s", env, code, out)
+		}
+	}
+	// prod inherits NEW to its children, and the project requires it.
+	config := "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {inherit: [NEW]}\n  dev: {parent: prod}\n"
+	compose += "    environment: {NEW: \"${NEW:?inherited from prod}\"}\n"
+	op(t, dir, "printf %s "+quote(config)+" >.devopsy/config.yaml && printf %s "+quote(compose)+" >.devopsy/compose.yaml")
+	srv(t, "echo NEW=fromprod >>"+name+"/prod/shared/.env && echo two >"+name+"/prod/shared/mnt/data/stamp")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod requiring NEW (%d):\n%s", code, out)
+	}
+	out, code := op(t, dir, "devopsy @dev --release-sync --yes")
+	got, _ := srv(t, "docker exec "+name+"-dev-data-1 printenv NEW")
+	if code != 0 || strings.TrimSpace(got) != "fromprod" || syncStamp(t, name, "dev") != "two" {
+		t.Errorf("--release-sync inheriting what the release requires (%d): NEW %q, stamp %q:\n%s", code, strings.TrimSpace(got), syncStamp(t, name, "dev"), out)
+	}
+}
