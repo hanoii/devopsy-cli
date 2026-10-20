@@ -28,6 +28,8 @@ var (
 	// one (secondServer); bin is devopsy for it.
 	server2 string
 	bin     string
+	// goarch is the daemon's architecture, which devopsy is built for.
+	goarch string
 )
 
 func TestMain(m *testing.M) {
@@ -64,7 +66,7 @@ func setUp() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	goarch := map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
+	goarch = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
 	if goarch == "" {
 		return 0, fmt.Errorf("unknown architecture %q", arch)
 	}
