@@ -26,8 +26,10 @@ const (
 	QuietBeats = 6
 	// HolderQuietBeats is a sync's holder's, 90 seconds: longer than the
 	// push's and than the operator's ssh needs to see the connection
-	// gone (KeepAlive), so a push still copying is cancelled before the
-	// holder decides.
+	// gone (KeepAlive), so a push still copying is usually cancelled
+	// before the holder decides. That order only shapes the messages:
+	// what a late write does is settled by the record the holder takes
+	// and the writers it ends (endWriters), whatever the timing.
 	HolderQuietBeats = 18
 	// DataQuietBeats is how long an upload's or an import's data may
 	// pause, 2 minutes: it carries no heartbeat, and its writer may be
