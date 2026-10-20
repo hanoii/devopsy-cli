@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -433,8 +434,9 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // changes instead of failing halfway. 1: --images; 2: --watch-session;
 // 3: --sync-services finish partial, settle, import <service> last,
 // --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
-// 5: --say.
-const Protocol = 5
+// 5: --say; 6: --sync-services prepare first, --release-steps release, a
+// sync's done holding its id.
+const Protocol = 6
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -503,7 +505,7 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 // would put the new tree inside the existing release and the old one
 // would run again.
 func UploadScript(t *Target, id string) string {
-	return prelude(t, true) + fmt.Sprintf(`rel="$base/releases/"%s
+	return prelude(t, true) + lockedGate(false) + fmt.Sprintf(`rel="$base/releases/"%s
 [ ! -e "$rel" ] || { devopsy --say error "release $(basename "$rel") exists already on $base (another release in the same second?): try again"; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
@@ -1418,7 +1420,7 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
   devopsy --say error "$base has no releases"
   exit 1
 fi
-` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + lockedGate(true) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
 img recover "$base" ${prev:+"$base/$prev"}
@@ -1540,6 +1542,37 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		cmd.Stdout = io.MultiWriter(flush[0], flush[2])
 		cmd.Stderr = io.MultiWriter(flush[1], flush[3])
 	}
+	// A gated session (WithGate) sends stdin only once the script holds
+	// the release lock: what is sent while it waits would otherwise
+	// reach a script whose operator left meanwhile.
+	if ctx.Value(gateKey{}) != nil {
+		open := make(chan struct{})
+		var once sync.Once
+		lm := &LineMarker{Prefix: LockedMarker, Found: func(string) { once.Do(func() { close(open) }) }}
+		// Outermost, so flushed first.
+		mw := lm.Writer(cmd.Stderr)
+		flush = append([]*MarkerWriter{mw}, flush...)
+		cmd.Stderr = mw
+		// An *os.File, so Wait never waits on a copy that never starts.
+		r, w, err := os.Pipe()
+		if err != nil {
+			return 1, err
+		}
+		defer r.Close()
+		src := cmd.Stdin
+		cmd.Stdin = r
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			defer w.Close()
+			select {
+			case <-open:
+				_, _ = io.Copy(w, src)
+			case <-stop:
+			case <-ctx.Done():
+			}
+		}()
+	}
 	err := cmd.Run()
 	for _, f := range flush {
 		f.Flush()
@@ -1557,6 +1590,39 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 }
 
 type noInterruptKey struct{}
+
+type gateKey struct{}
+
+// WithGate is ctx for a session whose script prints LockedMarker
+// (lockedGate) once it holds the release lock: stdin is sent only then.
+func WithGate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gateKey{}, true)
+}
+
+// LockedMarker is the line a gated script (WithGate) prints on stderr
+// once it holds the release lock. Why: a session cut while its script
+// waits for the lock (Ctrl-C, a drop) left its data in the server's pipe,
+// and the script went on with it once the lock came (a release uploaded
+// after devopsy said nothing changed, a removal done); sent only now, it
+// never comes, and the script stops on an empty or silent stdin.
+const LockedMarker = "devopsy-internal-locked"
+
+// lockedGate prints LockedMarker; with ack it then takes the "go" a
+// gated session sends (AckInput), failing without it, under
+// --stdin-guard's bound.
+func lockedGate(ack bool) string {
+	s := `printf '%s\n' "` + LockedMarker + `" >&2
+`
+	if ack {
+		s += `[ "$(devopsy ` + StdinGuardFlag + `)" = go ] || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+`
+	}
+	return s
+}
+
+// AckInput is a gated session's stdin when the script takes no data
+// (lockedGate with ack).
+const AckInput = "go\n"
 
 type switchedKey struct{}
 
@@ -1663,7 +1729,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + releaseLock(false, false) + lockedGate(true) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 img recover "$base"
 dir=
 if [ -d "$base/current" ]; then

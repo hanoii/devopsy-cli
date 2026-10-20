@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"slices"
@@ -96,7 +97,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	for i, r := range chosen {
 		ids[i] = r.ID
 	}
-	code, err = remote.SSH(t, remote.ReleasesRemoveScript(t, projectName, ids, slices.Contains(words[1:], "failed")), bytes.NewReader(nil), nil, false)
+	code, err = remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.ReleasesRemoveScript(t, projectName, ids, slices.Contains(words[1:], "failed")), strings.NewReader(remote.AckInput), nil, false, nil)
 	if err != nil {
 		report.Fail(err)
 		return 1

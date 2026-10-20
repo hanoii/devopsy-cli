@@ -615,7 +615,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Interrupted, the session ends: what the upload left (its .tmp)
 		// goes with the next release.
 		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		// Gated: the project goes once the server holds the release lock.
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		pr.Close()
 		upInterrupted := upCtx.Err() != nil
 		upStop()
 		if colored != nil {
@@ -935,7 +937,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 			return 1
 		}
 	}
-	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
+	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.DestroyScript(t, projectName), strings.NewReader(remote.AckInput), nil, false, nil)
 	if err != nil {
 		report.Fail(err)
 		return 1
