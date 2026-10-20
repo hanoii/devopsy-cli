@@ -448,7 +448,7 @@ func basePrelude(t *Target) string {
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
 settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+cmp.Or(t.Alias, t.Address, t.Host)+" --upgrade)") + `; exit 1; }
+[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `; exit 1; }
 with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
@@ -463,6 +463,15 @@ keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
 `
+}
+
+// upgradeRef names t's server for --upgrade, a server's command: the
+// alias as typed, else the server alone (<host>:).
+func upgradeRef(t *Target) string {
+	if t.Alias != "" {
+		return t.Alias
+	}
+	return t.Host + ":"
 }
 
 // hintAddress is the address a hint in a script names: the alias as
@@ -1783,11 +1792,13 @@ done
 `
 }
 
-// InstanceExistsScript exits 0 when the target's instance has a directory on
-// the server: --release asks before creating a new one.
+// InstanceExistsScript prints "yes" when the target's instance has a
+// directory on the server, else "no": --release asks before creating a
+// new one. An answer, never the exit code: a failure (an older server's
+// devopsy refusing) must stop the release, not read as a new instance.
 func InstanceExistsScript(t *Target) string {
 	dir := t.Project.Name + "/" + t.Instance
-	return "set -eu\n" + basePrelude(t) + `[ -d "$root"/` + Quote(dir) + ` ]
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$root"/` + Quote(dir) + ` ]; then echo yes; else echo no; fi
 `
 }
 

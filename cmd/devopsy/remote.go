@@ -474,11 +474,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 		// A new instance is a new site: confirm it, unless --yes.
 		if t.Instance != "" && !yes {
-			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), io.Discard, false)
+			var out bytes.Buffer
+			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false)
 			if err != nil {
 				return fail(err.Error())
 			}
 			if code != 0 {
+				return code
+			}
+			if strings.TrimSpace(out.String()) != "yes" {
 				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
 				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
 				if !atTerminal() {
