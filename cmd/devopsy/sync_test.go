@@ -64,6 +64,8 @@ case "$*" in
     # FAIL_STOP: a stop that fails partway, its services stopped.
     [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" start "*)
+    # FAIL_START: a start that fails, its services left stopped.
+    [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
   *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
   *" ps --all --format json "*)
@@ -678,6 +680,29 @@ func TestSyncAbort(t *testing.T) {
 	docker, _ = s.logs()
 	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start db") || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
 		t.Fatalf("a complete sync (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// A copy that completed, after which the parent cannot start its stopped
+// services again: the child goes on (its data is complete), but the
+// command must fail, since the parent's database is left down. Bug: the
+// holder's exit is the command's, so the sync exits 0 and only an error
+// line says the parent's services did not come back (and the parent's
+// finish hook was told abort while the child went on).
+func TestSyncParentRestoreFails(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run([]string{"FAIL_START=shop-prod"}, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db") || !strings.Contains(out, "the copy had completed: going on with it") {
+		t.Fatalf("the parent's start not tried, or the child did not go on (%d):\n%s\n%s", code, out, docker)
+	}
+	if code == 0 {
+		t.Errorf("the parent's db left down, and the sync exits 0:\n%s", out)
 	}
 }
 
