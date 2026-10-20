@@ -395,7 +395,8 @@ fi
 `, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
 # session gone then ends it; from here on it restores on its own.
 mv "$ws_armed" "$ws_armed.off" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
-rm -f "$ws_armed.off"
+# A holder its watcher ended while it waited leaves its .fired.
+rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
