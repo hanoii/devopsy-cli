@@ -296,6 +296,11 @@ func tarEntries(spool string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A pax global header (git archive writes one) is no member: tar
+		// itself skips it.
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
 		p := strings.TrimPrefix(h.Name, "./")
 		if p == "" || p == "." || p == "./" {
 			seen["."] = true

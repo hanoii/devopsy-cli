@@ -415,10 +415,11 @@ fi
 if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
   for f in $FAKE_WRITE; do
     case $f in
-      done) echo "$DEVOPSY_INTERNAL_SYNC_ID" ;;
-      other-done) f=done; echo 123.45 ;;
-      *) echo "vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" ;;
-    esac >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"
+      done) line=$DEVOPSY_INTERNAL_SYNC_ID ;;
+      other-done) f=done; line=123.45 ;;
+      *) line="vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" ;;
+    esac
+    echo "$line" >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"
   done
 fi
 [ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
@@ -517,14 +518,14 @@ exit 0
 		t.Errorf("abort after a complete copy, calls:\n%s", got)
 	}
 	// A done this sync's push never wrote (another sync's, 123.45: a push
-	// that outlived its holder finishing its copy now) decides nothing: the
-	// push failed before writing anything.
+	// that outlived its holder finishing its copy now) never makes this one
+	// go on: that push wrote into the child meanwhile, so it is partial.
 	other := t.TempDir()
 	if _, errOut, err := run(other, "1", "go\n"); err != nil {
 		t.Fatalf("first (%v):\n%s", err, errOut)
 	}
 	calls(other)
-	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") {
+	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") || !fileExists(filepath.Join(other, tg.Path, SyncIncompleteFile)) {
 		t.Errorf("another sync's done (%v), current %q:\n%s", err, current(other), errOut)
 	}
 	_, errOut, err = run(root, "3", "go\n", "FAKE_WRITE=started")

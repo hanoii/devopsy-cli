@@ -515,14 +515,18 @@ step's rules):
   races a fetch still running.
 - **What a session sends goes once its script holds the lock**
   (`remote.WithGate`, `lockedGate`): the upload, `--destroy` and
-  `--releases remove` print `LockedMarker` on stderr once they hold it,
-  and devopsy sends stdin only then (the tar, or the `go` a removal
-  reads through `--stdin-guard` before it starts). Why: a session cut
+  `--releases remove` print `LockedMarker` on stderr once they hold it
+  (the removals once they hold the image lock too), and devopsy sends
+  stdin only then (the tar, or the `go` a removal reads through
+  `--stdin-guard` before it starts). Why: a session cut
   while its script waited (Ctrl-C, a drop) left its tar in the server's
   pipe, and the script extracted it once the lock came, after devopsy
   had said nothing changed; a removal went on likewise. Now it finds an
-  empty or silent stdin and stops. Activations and holders need no gate:
-  their watcher, started past the lock, reads a closed stdin at once.
+  empty or silent stdin and stops. Activations need no gate: their
+  watcher, started past the lock, reads a closed stdin at once. A
+  sync's holder starts its watcher before the lock, armed only while it
+  waits (nothing changed yet), and disarms it once it holds the lock: a
+  session gone meanwhile ends it.
   Not gated yet: `--vars` edits and the inherit write.
 - **Only the upload creates `$base`** among the release scripts
   (outside them `--vars` edits and the inherit write do too). Why: an
@@ -665,8 +669,9 @@ interrupts" and "The server never waits on the operator for long".
   fetch is undone through `fetch_sig` at once, not at its next write, a
   build later. Without a watcher (OrbStack's own SSH) the fetch runs to
   its end. Armed: releases and rollbacks (`WatchEnv`), a release that
-  syncs always (its stdin is the answer's pipe); never a sync's holder,
-  which a SIGTERM would stop halfway through restoring.
+  syncs always (its stdin is the answer's pipe); a sync's holder only
+  while it waits for the release lock, since past it a SIGTERM would
+  stop it halfway through restoring.
 - **One rename decides between the watcher and the switch:** the script
   disarms the watcher by taking the file first (`mv` to `.off`) in
   `fetch_release`, under the image lock, before its last `fetch_sig`
