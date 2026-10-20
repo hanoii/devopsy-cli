@@ -428,6 +428,12 @@ done
 // new one exists already, so running it again finds it.
 const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e "$base" ] || mv "$base.rm.$$" "$base"; false; }; }`
 
+// ProtocolCheckEnv set to warn turns the refusal of an older server's
+// devopsy into a warning, the command going on at the operator's risk
+// (a local build ahead of the servers): passed to every session
+// (SSHStreams).
+const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
+
 // Protocol is what the scripts need from the server's devopsy, which
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
@@ -448,7 +454,15 @@ func basePrelude(t *Target) string {
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
 settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `; exit 1; }
+server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
+if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
+  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
+  else
+    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    exit 1
+  fi
+fi
 with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
@@ -1493,6 +1507,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	}
 	if TTY != "" {
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
+	}
+	if os.Getenv(ProtocolCheckEnv) == "warn" {
+		script = ProtocolCheckEnv + "=warn\n" + script
 	}
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {

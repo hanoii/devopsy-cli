@@ -925,6 +925,11 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server (%d):\n%s", code, out)
 	}
+	// DEVOPSY_PROTOCOL_CHECK=warn goes on, at the operator's risk: here to
+	// the new instance's question.
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || !strings.Contains(out, "a new instance") {
+		t.Fatalf("an older server, warned (%d):\n%s", code, out)
+	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)

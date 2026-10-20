@@ -345,11 +345,13 @@ server", "Before the switch anything cancels" and "Check everything
 before changing anything".
 
 - **The server's devopsy must speak the scripts' protocol**
-  (`remote.Protocol`, 5, reported by `--release-settings`):
+  (`remote.Protocol`, 6, reported by `--release-settings`):
   `basePrelude` refuses an older one before anything changes, for every
   command, read-only ones too, and names the upgrade. Raise it when a
   script starts calling something an older devopsy lacks, and say what
-  in its comment.
+  in its comment. `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`,
+  passed to every session) makes it a warning and goes on: the
+  operator's own risk, for a local build ahead of the servers.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
