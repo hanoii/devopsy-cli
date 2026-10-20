@@ -313,3 +313,53 @@ func TestSyncFirstReleaseAgain(t *testing.T) {
 		t.Errorf("the finish hook of a first release found: %q", finish)
 	}
 }
+
+// A stream service that depends on a stop=true one: its import brings it
+// up, and must leave the stopped service down, through the imports and,
+// when a later export fails, after the partial copy. Fails: the import's
+// up starts the service's dependencies (cmd/devopsy/sync.go, upFor:
+// "up -d --wait <service>" without --no-deps), so files, stopped for
+// the sync, runs on a partial copy.
+func TestSyncImportKeepsStoppedDown(t *testing.T) {
+	const name = "keepdown"
+	dir := project(t, name, map[string]string{
+		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/compose.yaml": `services:
+  files:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/files:/files]
+    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
+  idx:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    depends_on: [files]
+    labels: {devopsy.sync: stream}
+  zz:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    depends_on: [idx]
+    labels: {devopsy.sync: stream}
+`,
+		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ \"$1\" != zz ] || [ ! -e \"$HOME/fail-export-" + name + "\" ] || exit 3\necho dump\n",
+		".devopsy/capabilities/sync/import": "#!/bin/sh\ncat >/dev/null\n",
+	})
+	t.Cleanup(func() { srv(t, "rm -f fail-export-"+name) })
+	srv(t, "rm -f fail-export-"+name+"; mkdir -p "+name+"/prod/shared/mnt/files && echo one >"+name+"/prod/shared/mnt/files/stamp")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	srv(t, "touch fail-export-"+name)
+	out, code := op(t, dir, "devopsy @dev --sync --yes")
+	if code == 0 || !exists(t, name+"/dev/.devopsy-sync.incomplete") {
+		t.Fatalf("no partial copy (%d):\n%s", code, out)
+	}
+	if s := syncState(t, name, "dev", "files"); s != "exited" {
+		t.Errorf("files, stop=true, is %s on the partial copy:\n%s", s, out)
+	}
+}
