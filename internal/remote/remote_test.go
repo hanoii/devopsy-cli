@@ -587,9 +587,12 @@ exit 0
 	}
 	waited := make(chan error, 1)
 	go func() { waited <- gone.Wait() }()
+	// Either its watcher ends it before it holds the lock (nothing
+	// prepared), or it gets there first and finds no answer.
 	select {
 	case err := <-waited:
-		if err == nil || !strings.Contains(readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no answer from devopsy") {
+		noAnswer := strings.Contains(readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no answer from devopsy")
+		if err == nil || (!noAnswer && strings.Contains(calls(root), "--sync-services prepare")) {
 			t.Errorf("holder with its session gone (%v):\n%s", err, goneOut.String())
 		}
 	case <-time.After(30 * time.Second):

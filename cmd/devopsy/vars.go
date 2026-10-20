@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -182,7 +183,8 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 
 func editVars(t *remote.Target, script, stdin, verb string, keys []string, color bool) int {
 	var out bytes.Buffer
-	code, err := remote.SSH(t, script, strings.NewReader(stdin), &out, false)
+	// Gated: the values go once the server holds the release lock.
+	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, script, strings.NewReader(remote.GatedInput(stdin)), &out, false, nil)
 	if err != nil {
 		report.Fail(err)
 		return 1

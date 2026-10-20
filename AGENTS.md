@@ -528,8 +528,9 @@ step's rules):
   watcher, started past the lock, reads a closed stdin at once. A
   sync's holder starts its watcher before the lock, armed only while it
   waits (nothing changed yet), and disarms it once it holds the lock: a
-  session gone meanwhile ends it.
-  Not gated yet: `--vars` edits and the inherit write.
+  session gone meanwhile ends it. `--vars` edits and the inherit write
+  are gated too; their data may be empty, so it ends with `InputEnd`
+  (`GatedInput`), which `gated_read` requires and takes off.
 - **Only the upload creates `$base`** among the release scripts
   (outside them `--vars` edits and the inherit write do too). Why: an
   activation whose release went while it waited fails instead of making

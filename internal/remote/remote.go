@@ -1656,6 +1656,37 @@ func lockedGate(ack bool, undo string) string {
 // (lockedGate with ack).
 const AckInput = "go\n"
 
+// InputEnd is the line a gated session's data ends with (GatedInput):
+// data that may be empty (no variable to inherit) needs it to tell a
+// complete one from a session cut before sending anything.
+const InputEnd = "devopsy-internal-end"
+
+// GatedInput is data for gatedRead: its lines, then InputEnd.
+func GatedInput(data string) string {
+	if data != "" && !strings.HasSuffix(data, "\n") {
+		data += "\n"
+	}
+	return data + InputEnd + "\n"
+}
+
+// gatedRead defines gated_read <file>: prints LockedMarker (the lock
+// held), then reads stdin into file through --stdin-guard's bound,
+// requiring GatedInput's end line, which it takes off; without it (the
+// session gone while the script waited) it fails having written
+// nothing.
+const gatedRead = `gated_read() {
+  printf '%s\n' "` + LockedMarker + `" >&2
+  if devopsy ` + StdinGuardFlag + ` >"$1.in" && [ "$(tail -n 1 "$1.in")" = ` + InputEnd + ` ]; then
+    sed '$d' "$1.in" >"$1"
+    rm -f "$1.in"
+  else
+    rm -f "$1.in"
+    devopsy --say error "the session ended while this waited for the release lock: nothing changed"
+    exit 1
+  fi
+}
+`
+
 type switchedKey struct{}
 
 // WithSwitched is ctx for a logged session that sets switched once the

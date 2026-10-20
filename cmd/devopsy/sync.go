@@ -450,7 +450,8 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		}
 	}
 	var res bytes.Buffer
-	code, err = remote.SSHContext(ctx, c, nil, remote.InheritWriteScript(c, keys, pending), strings.NewReader(lines.String()), &res, false, nil)
+	// Gated: the variables go once the child holds its release lock.
+	code, err = remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pending), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
