@@ -1744,6 +1744,30 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, zeros[:512+4096], "--import", "app"); code == 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Errorf("tar cut after a member ending in zeros (%d):\n%s", code, errs)
 	}
+	// A tar starting with a pax global header (git archive writes one,
+	// with the commit) carries storage alone: imported, as tar extracts
+	// it.
+	//
+	// Bug: tarEntries takes the global header for a member, an entry
+	// named pax_global_header that app does not mount, and refuses the
+	// tar, which tar -t (it lists no global header) and tar -x take.
+	var global bytes.Buffer
+	gw := tar.NewWriter(&global)
+	if err := gw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "0123456789abcdef"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.WriteHeader(&tar.Header{Name: "storage/new.txt", Mode: 0o644, Size: 4, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gw.Write([]byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, errs, code := s.runIO(nil, global.Bytes(), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Errorf("a tar with a pax global header (%d):\n%s", code, errs)
+	}
 	s.logs()
 
 	// On a target: the same, in its current release, under its release
