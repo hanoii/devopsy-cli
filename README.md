@@ -1231,7 +1231,9 @@ lists them with their contracts):
     that had none: devopsy-template-drupal11's); then the release's `run`
     step runs. A failing `finish child go` fails the sync, and nothing
     runs on the child's data until a sync completes: the hook decides what
-    stays up (drupal11's stops the app). On a child's first release
+    stays up (drupal11's stops the app). devopsy restarts only what a sync
+    stopped, so what the hook stopped is still down when the next sync's
+    `finish child go` runs: the hook starts what it needs. On a child's first release
     nothing of it existed, so devopsy creates every labeled service first
     (`up -d --wait`), as the run step's `up` would a moment later: the
     hook finds them running either way. `finish child partial` also runs
