@@ -2524,8 +2524,16 @@ func TestSyncHookLeftovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pid: %v", err)
 	}
+	// Gone, or a zombie nothing reaps (a container's init may not).
+	alive := func() bool {
+		if stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+			_, rest, _ := strings.Cut(string(stat), ") ")
+			return !strings.HasPrefix(rest, "Z")
+		}
+		return syscall.Kill(pid, 0) == nil
+	}
 	deadline := time.Now().Add(5 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
+	for alive() {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("the hook's background process %d still runs", pid)
