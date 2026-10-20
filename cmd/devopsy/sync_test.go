@@ -27,7 +27,9 @@ import (
 // a start or an up), exited with FAKE_DB_DOWN, restarting with
 // FAKE_DB_RESTARTING, and copies what the rsync containers would: within one host,
 // or from the daemon's mount (remembered) across hosts. The tar
-// containers of --export and --import run tar here.
+// containers of --export and --import run tar here. FAKE_ORPHANS names
+// services the project no longer has, whose containers are left exited:
+// ps lists them, and start refuses them, as Compose does.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -66,12 +68,14 @@ case "$*" in
   *" start "*)
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
+    for s in $(after start "$@"); do case $s in app|db) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done
     for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
   *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
   *" ps --all --format json "*)
     for s in $(after json "$@"); do printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"; done ;;
   *" ps --all --format json")
-    for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done ;;
+    for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
+    for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
@@ -1874,6 +1878,32 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "up -d --wait db") {
 		t.Errorf("a removed db created:\n%s", docker)
+	}
+}
+
+// A record naming a service the project no longer has (stopped by a sync
+// that could not bring it back, then dropped from compose.yaml, its
+// container left exited) fails nothing: what a sync stopped comes back
+// when the project still has it.
+//
+// Bug: restoreServices starts every service the record names, and
+// Compose refuses one the project does not have (no such service): the
+// sync fails, the record stays, and every later sync fails the same way.
+// It should leave out what the project no longer has.
+func TestSyncRecordedStopGone(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	record := filepath.Join(s.root, "shop", "dev", syncState)
+	write(t, record, "stop worker\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ORPHANS=worker\n", 0o644)
+	defer os.Remove(s.log + ".shop-dev")
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || fileExists(record) {
+		t.Errorf("a sync whose record names a service gone (%d), record left %v:\n%s", code, fileExists(record), out)
 	}
 }
 
