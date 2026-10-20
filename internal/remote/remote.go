@@ -441,8 +441,10 @@ const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 // 3: --sync-services finish partial, settle, import <service> last,
 // --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
 // 5: --say; 6: --sync-services prepare first, --release-steps release, a
-// sync's done holding its id, a stream's spool named by it.
-const Protocol = 6
+// sync's done holding its id, a stream's spool named by it; 7: a sync's
+// record of its writers (the started file, taken by the holder, the
+// writers ended by finish partial and settle).
+const Protocol = 7
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -1026,7 +1028,7 @@ exec 4<&-
 // partial copy from a sync, which nothing runs on: only a sync completes
 // it. A holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
-	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; }; then
+	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; }; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then

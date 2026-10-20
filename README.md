@@ -1012,7 +1012,11 @@ child goes by that:
 - **Written in part** (the rsync or an import failed or was cut,
   Ctrl-C mid-copy, a connection lost): the child's data is part old, part
   the parent's, so its stopped services stay down and the run step is
-  skipped, `finish child partial`. A database copied raw would not start
+  skipped, `finish child partial`. Nothing goes on writing into it
+  first: an import still running inside its service's container (a
+  load through `docker exec`, which a cut never stops) ends with the
+  service, stopped and started again by the next sync that completes,
+  and devopsy's own copy containers go. A database copied raw would not start
   on it anyway (devopsy says which entry was cut). Nothing runs on it
   until a sync completes: releases and rollbacks refuse, the previous
   release is not restarted after a release that synced, a sync from it

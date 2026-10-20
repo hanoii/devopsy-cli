@@ -914,22 +914,42 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`claimWrite`, `ClaimWriteScript`: a rename to `SyncStartedFile`, one
   of the two wins; the same-server rsync, `SyncReceiveScript` across,
   an import in `syncImport`), so a push that outlived its connection
-  writes nothing once the holder decided. It writes `SyncDoneFile`,
-  holding the sync's id, after its last write (the rsync's when no
-  stream follows, else the last import's, `import <service> last`), on
-  the child, never through another session. Across servers the
+  writes nothing once the holder decided. The claimed file is the
+  sync's record of its writers: each import appends a `WriterLine`
+  (service, its devopsy's pid, the service's state before) before it
+  writes, and the last write appends a `DoneLine` with the sync's id
+  (the rsync's when no stream follows, else the last import's, `import
+  <service> last`), on the child, never through another session, and
+  never creating the file (`recordWrite`; the receive script checks the
+  first line first). Across servers the
   receive script removes its rsync container once the holder decided
   (a watchdog on `SyncStartedFile`): after a silent cut between the
   servers the rsync would wait for TCP to give up, and sshd sends
   nothing on a quiet forward (rsync's `--timeout` counts its own
   keepalives into the forward's local socket, so it does not help).
 - **The decision** (`syncBlock`), once the holder's read of the answer
-  ends, however it ends: its own sync's done is `go` (an `abort` after
-  it too), started alone or another sync's done (a push that outlived
-  its holder wrote meanwhile) `partial`, neither on a marked
-  environment `partial` (decided: nothing written leaves an earlier
-  sync's partial copy as it was, even when the parent's labels cover
-  nothing now), else the answer; then both files go.
+  ends, however it ends: it takes the record in one move (`mv` to
+  `SyncTakenFile`), so a writer appending after it finds no file and
+  stops. Its own sync's done line is `go` (an `abort` after it too),
+  taken without it `partial`, nothing taken on a marked environment
+  `partial` (decided: nothing written leaves an earlier sync's partial
+  copy as it was, even when the parent's labels cover nothing now),
+  else the answer; the taken record goes once finish is done.
+- **No write outlives its sync** (`endWriters`, cmd/devopsy/writers.go):
+  before a partial copy is marked (`finish partial`) or settled, what
+  the record names is ended. A write runs on past its sync when its
+  devopsy is killed outright, or inside a container, which never gets
+  the signal (an import's load through `docker exec`, a one-off `run
+  --rm`, devopsy's own rsync). So: the recorded imports' devopsy gets
+  SIGTERM (only a pid `/proc` still shows as `--sync-services import`:
+  Linux only), the sync's own containers are removed (named
+  `SyncContainerPrefix` + its id, never another sync's), the imported
+  services are stopped (the only way to end what `docker exec` started
+  in them) and, when they ran before the sync, recorded so a completing
+  sync starts them, their one-off containers removed; then the imports
+  are waited for (`writersWait`, 15 s) and killed. Decided (stop, not
+  restart): the service holds a half-loaded database, and a partial
+  copy keeps everything off its data.
 - **A partial copy keeps everything off the data:** `--sync-services
   finish partial` leaves the `stop=true` services down and writes
   `SyncIncompleteFile`; `finish go` removes it, and a failing `finish
@@ -952,11 +972,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   the refusals and `--status` print the why.
 - **A holder killed before deciding is settled by the next lock-taker:**
   `--sync-services settle`, run by the next sync's prepare and by
-  `partialGuard`, counts its files as not completed (marked, `finish
-  child partial`); a sync's files while nothing holds the lock
-  (`LockBusy`) are a leftover, a running sync is not. A late write (an
-  import running on in its container after the holder decided) is
-  settled the same way.
+  `partialGuard`, takes its record as the holder would, ends what it
+  names (`endWriters`), and counts its data as not completed (marked,
+  keeping a mark the holder wrote before dying, `finish child
+  partial`); a sync's files while nothing holds the lock (`LockBusy`)
+  are a leftover, a running sync is not.
 - **The answer comes on fd 3, never stdin:** the holder reads it from a
   fifo the watcher writes (`--answer-fd`; both ends opened before the
   watcher starts, so no open ever waits) and gives every command

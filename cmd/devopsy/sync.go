@@ -1274,7 +1274,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 		for i, d := range present {
 			report.Info("rsync mnt/" + d)
 			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
-			name := fmt.Sprintf("devopsy-sync-%d-%d", os.Getpid(), i)
+			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
 			if slices.Contains(files, d) {
 				// In place: a container bind-mounts the file's inode,
@@ -1296,7 +1296,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 			}
 		}
 		if last {
-			return markWritten(toBase, remote.SyncDoneFile)
+			return recordWrite(toBase, remote.DoneLine(os.Getenv(remote.SyncIDEnv)))
 		}
 		return nil
 	}
@@ -1509,17 +1509,25 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	// on: its data may be anything from untouched to complete, never
 	// finished by finish child go.
 	settle := func() int {
-		started, done := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncDoneFile)
-		if !fileExists(started) && !fileExists(done) {
+		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
+		if !fileExists(started) && !fileExists(taken) {
 			return 0
 		}
-		report.Info("an earlier sync into " + base + " left its files (its holder was killed, or a write came after it decided): its data counts as a partial copy")
+		report.Info("an earlier sync into " + base + " left its files (its holder was killed before it was done): its data counts as a partial copy")
 		code := 0
-		if err := markIncomplete(base, remote.IncompleteSettled, "a sync's holder ended before it decided, or a copy wrote after it did: the data may be anything from untouched to complete", false); err != nil {
+		// Taken first, as a holder deciding would: nothing appends any
+		// more, and what its record names is ended before anything else.
+		if fileExists(started) {
+			_ = os.Rename(started, taken)
+		}
+		if err := endWriters(cwd, base); err != nil {
 			code = fail(err.Error())
 		}
-		_ = os.Remove(started)
-		_ = os.Remove(done)
+		// A holder killed after marking it said why already.
+		if err := markIncomplete(base, remote.IncompleteSettled, "a sync's holder ended before it decided: the data may be anything from untouched to complete", true); err != nil {
+			code = fail(err.Error())
+		}
+		_ = os.Remove(taken)
 		_ = os.Remove(filepath.Join(base, remote.SyncOpenFile))
 		if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", "partial"); err != nil {
 			code = fail("the sync capability's finish child partial: " + err.Error())
@@ -1580,6 +1588,10 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	case "partial":
+		// Whatever may still write into the data ends first.
+		if err := endWriters(cwd, base); err != nil {
+			code = fail(err.Error())
+		}
 		// The holder marked it already, saying why.
 		if err := markIncomplete(base, remote.IncompleteCopy, "the copy did not complete", true); err != nil {
 			code = fail(err.Error())
@@ -1624,9 +1636,12 @@ func markIncomplete(base, code, why string, keep bool) error {
 		}
 	}
 	// Who wrote it: the parent the gate named (remote.SyncOpenFile's
-	// content, carried into SyncStartedFile), else this sync's.
-	started, _ := os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
-	from, _, _ := strings.Cut(strings.TrimSpace(string(started)), " ")
+	// first line, carried into the record), else this sync's.
+	record, err := os.ReadFile(filepath.Join(base, remote.SyncTakenFile))
+	if err != nil {
+		record, _ = os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
+	}
+	from, _, _ := strings.Cut(strings.TrimSpace(string(record)), " ")
 	line := remote.IncompleteLine(since, cmp.Or(from, os.Getenv(remote.SyncFromTargetEnv), "unknown"), code, why)
 	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
 		return fmt.Errorf("marking %s as a partial copy: %w", base, err)
@@ -1648,23 +1663,46 @@ func fileExists(path string) bool {
 func claimWrite(base string) error {
 	open, started := filepath.Join(base, remote.SyncOpenFile), filepath.Join(base, remote.SyncStartedFile)
 	id := os.Getenv(remote.SyncIDEnv)
-	mine := func(path string) bool {
-		data, err := os.ReadFile(path)
-		f := strings.Fields(string(data))
-		return err == nil && len(f) == 2 && f[1] == id
-	}
-	if (mine(open) && os.Rename(open, started) == nil) || mine(started) {
+	if (recordOf(open, id) && os.Rename(open, started) == nil) || recordOf(started, id) {
 		return nil
 	}
 	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)
 }
 
-// markWritten writes one of a sync's files (remote.SyncDoneFile) into
-// the child's directory base, with this sync's id (remote.SyncIDEnv): the
-// holder goes by its own sync's only.
-func markWritten(base, name string) error {
-	if err := os.WriteFile(filepath.Join(base, name), []byte(os.Getenv(remote.SyncIDEnv)+"\n"), 0o644); err != nil {
-		return fmt.Errorf("the sync's %s: %w", name, err)
+// recordOf reports whether the gate or record at path is sync id's: its
+// first line is "<from> <id>".
+func recordOf(path, id string) bool {
+	data, err := os.ReadFile(path)
+	first, _, _ := strings.Cut(string(data), "\n")
+	f := strings.Fields(first)
+	return err == nil && len(f) == 2 && f[1] == id
+}
+
+// errDecided is a write into a child whose holder decided already: its
+// record (remote.SyncStartedFile) is taken, or another sync's.
+var errDecided = errors.New("the child's side decided already: this write does not count")
+
+// recordWrite appends line (remote.WriterLine, remote.DoneLine) to the
+// sync's record in the child's directory base, never creating it: once
+// the holder took it, the write is not this sync's to make.
+func recordWrite(base, line string) error {
+	path := filepath.Join(base, remote.SyncStartedFile)
+	if !recordOf(path, os.Getenv(remote.SyncIDEnv)) {
+		return errDecided
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return errDecided
+	}
+	if err != nil {
+		return fmt.Errorf("the sync's record: %w", err)
+	}
+	_, err = f.WriteString(line + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("the sync's record: %w", err)
 	}
 	return nil
 }
@@ -1691,6 +1729,9 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		return fail(fmt.Sprintf("the spool for %s: %v", name, err))
 	}
 	defer f.Close()
+	// What the service was before the sync brought it up: running, it is
+	// recorded as the sync's to start again if a cut ends this import.
+	was := ""
 	if !s.Stop {
 		// A first release (the record says so) keeps it up, for the
 		// finish hook and the run step; otherwise one down before the
@@ -1698,24 +1739,29 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		// A first release creates what the service needs, but what the
 		// sync stopped (a retried one finds containers) stays down.
 		rec, _ := readSyncRecord(cwd)
-		down, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
+		down, state, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
 		if err != nil {
 			return fail(err.Error())
 		}
+		was = state
 		defer func() {
 			if err := down(); err != nil {
 				code = fail(err.Error())
 			}
 		}()
 	}
-	// The service's data changes from here.
+	// The service's data changes from here: claimed, and recorded, so a
+	// holder that decides while this runs ends it (endWriters).
 	if err := claimWrite(base); err != nil {
+		return fail(err.Error())
+	}
+	if err := recordWrite(base, remote.WriterLine(name, os.Getpid(), was)); err != nil {
 		return fail(err.Error())
 	}
 	if err := runSyncHook(ctx, cwd, projectDir, env, f, nil, "import", name); err != nil {
 		code = fail("the sync capability's import " + name + ": " + err.Error())
 	} else if last {
-		if err := markWritten(base, remote.SyncDoneFile); err != nil {
+		if err := recordWrite(base, remote.DoneLine(os.Getenv(remote.SyncIDEnv))); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -1727,21 +1773,22 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 // service down before stays down). keep leaves it up whatever it was (a
 // child's first release); noDeps starts none of its dependencies (a
 // sync's: one it stopped stays down through the imports).
-func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func() error, err error) {
+func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func() error, was string, err error) {
 	down = func() error { return nil }
 	states, err := serviceStates(cwd)
 	if err != nil {
-		return down, err
+		return down, "", err
 	}
+	was = states[name]
 	up := []string{"up", "-d", "--wait", name}
 	if noDeps {
 		up = []string{"up", "-d", "--wait", "--no-deps", name}
 	}
 	if err := composeContext(ctx, cwd, errOut, up...); err != nil {
-		return down, fmt.Errorf("docker compose up %s: %w", name, err)
+		return down, was, fmt.Errorf("docker compose up %s: %w", name, err)
 	}
 	if states[name] == "running" || keep {
-		return down, nil
+		return down, was, nil
 	}
 	return func() error {
 		report.Info("stopping " + name + " again: it was down before")
@@ -1749,7 +1796,7 @@ func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func(
 			return fmt.Errorf("docker compose stop: %w", err)
 		}
 		return nil
-	}, nil
+	}, was, nil
 }
 
 // compose runs docker compose args in the project at cwd, with its
@@ -1979,7 +2026,7 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 
 // psEntry is a container in docker compose ps --format json.
 type psEntry struct {
-	Service, State, Health, Status, Labels string
+	Name, Service, State, Health, Status, Labels string
 }
 
 // oneOff reports a compose run container (a hook's run --rm): ps lists
