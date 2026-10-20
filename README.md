@@ -1232,8 +1232,10 @@ lists them with their contracts):
     child's server, its service brought up first (`up -d --wait`) unless
     stopped; and `devopsy --import`.
   - `finish parent|child go|abort|partial` runs on each side once the sync
-    ended. The parent's gets `go` or `abort`: its data is never written,
-    and its stopped services are back. The child's says what the copy did
+    ended. The parent's gets `go` or `abort`, what the copy did, as the
+    child's: `go` once it completed, even when a service of the parent's
+    did not come back (that fails the command, said). Its data is never
+    written, and its stopped services are started again. The child's says what the copy did
     to its data: `go`, complete; `abort`, nothing of the parent's written;
     `partial`, written in part (Logs and failures, above). After `go` and
     `abort` devopsy has started its stopped services and waited for them

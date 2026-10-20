@@ -860,10 +860,12 @@ func runSyncPush(cwd string, color bool) int {
 
 	env := syncHookEnv(services)
 	// finish parent runs whatever happened, after the services are back,
-	// and never with the sync's context: it restores too.
-	finish := func(code int) int {
+	// and never with the sync's context: it restores too. Its word is the
+	// copy's, as the child's: go once the copy completed, even when a
+	// service here did not come back (that fails the command, said).
+	finish := func(code int, copied bool) int {
 		answer := "go"
-		if code != 0 {
+		if !copied {
 			answer = "abort"
 		}
 		if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "parent", answer); err != nil && code == 0 {
@@ -872,13 +874,13 @@ func runSyncPush(cwd string, color bool) int {
 		return code
 	}
 	if err := runSyncHook(ctx, cwd, projectDir, env, nil, nil, "prepare", "parent"); err != nil {
-		return finish(fail("the sync capability's prepare parent: " + err.Error()))
+		return finish(fail("the sync capability's prepare parent: "+err.Error()), false)
 	}
 	// On the same server, a child that decided already (its gate closed)
 	// is seen before anything stops here: the claim would refuse later.
 	if os.Getenv(remote.SyncToEnv) == "" {
 		if base := os.Getenv(remote.SyncToBaseEnv); !fileExists(filepath.Join(base, remote.SyncOpenFile)) && !fileExists(filepath.Join(base, remote.SyncStartedFile)) {
-			return finish(fail("the child's side ended already (" + base + "): nothing copied"))
+			return finish(fail("the child's side ended already ("+base+"): nothing copied"), false)
 		}
 	}
 	if err := stopServices(cwd, services); err != nil {
@@ -888,7 +890,7 @@ func runSyncPush(cwd string, color bool) int {
 		if err := restoreServices(cwd, services, false); err != nil {
 			fail(err.Error())
 		}
-		return finish(code)
+		return finish(code, false)
 	}
 	// The child's side writes remote.SyncStartedFile before its first
 	// change and SyncDoneFile after the last (the rsync's or the last
@@ -911,10 +913,11 @@ func runSyncPush(cwd string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
+	copied := code == 0
 	if err := restoreServices(cwd, services, false); err != nil {
 		code = fail(err.Error())
 	}
-	return finish(code)
+	return finish(code, copied)
 }
 
 // syncHookFile is the sync capability's action in the project at

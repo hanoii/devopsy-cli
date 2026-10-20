@@ -725,8 +725,17 @@ func TestSyncParentRestoreFails(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	s.logs()
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "finish"), "#!/bin/sh\necho \"finish $1 $2\"\n", 0o755)
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("prod with the hook (%d):\n%s", code, out)
+	}
+	s.logs()
 	out, code := s.run([]string{"FAIL_START=shop-prod"}, "@dev", "--sync", "--yes")
 	docker, _ := s.logs()
+	// Both sides hear what the copy did: it completed.
+	if !strings.Contains(out, "finish parent go") || strings.Contains(out, "finish parent abort") {
+		t.Errorf("the parent's finish word, the copy complete:\n%s", out)
+	}
 	if !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db") || !strings.Contains(out, "the copy had completed: going on with it") {
 		t.Fatalf("the parent's start not tried, or the child did not go on (%d):\n%s\n%s", code, out, docker)
 	}
