@@ -199,6 +199,9 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 	// switched, and goes back), after the answer the run step is the
 	// server's.
 	marked, answered := false, false
+	// The push's exit when it failed after a copy that completed (the
+	// parent's services not back): the child goes on, the command fails.
+	pushFailed := 0
 	var res result
 	select {
 	case res = <-done:
@@ -259,6 +262,9 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		_, _ = w.WriteString(answer)
 		w.Close()
 		answered = !interrupted && code == 0
+		if !interrupted {
+			pushFailed = code
+		}
 		if interrupted {
 			// The holder's ending is worth seeing, unless interrupted
 			// again: a copy that had completed goes on there.
@@ -294,6 +300,10 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 	if res.err != nil {
 		log.Fail(res.err)
 		partial()
+		return 1
+	}
+	if res.code == 0 && pushFailed != 0 {
+		log.Error(fmt.Sprintf("the copy into @%s had completed and it went on, but the push on @%s failed (%d): check its services", job.child.Address, job.parent.Address, pushFailed), "devopsy @"+targetRef(job.parent)+" --status shows them")
 		return 1
 	}
 	if res.code == sshLost {
@@ -1675,7 +1685,10 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		// A first release (the record says so) keeps it up, for the
 		// finish hook and the run step; otherwise one down before the
 		// sync goes down again.
-		down, err := upFor(ctx, cwd, name, recordedFirst(cwd))
+		// A first release has nothing stopped, and creates what the
+		// service needs.
+		first := recordedFirst(cwd)
+		down, err := upFor(ctx, cwd, name, first, !first)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -1702,14 +1715,19 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 // upFor brings name up (up -d --wait) for an import and returns what puts
 // it back as it was: stopped again when it was not running before (a
 // service down before stays down). keep leaves it up whatever it was (a
-// child's first release).
-func upFor(ctx context.Context, cwd, name string, keep bool) (down func() error, err error) {
+// child's first release); noDeps starts none of its dependencies (a
+// sync's: one it stopped stays down through the imports).
+func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func() error, err error) {
 	down = func() error { return nil }
 	states, err := serviceStates(cwd)
 	if err != nil {
 		return down, err
 	}
-	if err := composeContext(ctx, cwd, errOut, "up", "-d", "--wait", name); err != nil {
+	up := []string{"up", "-d", "--wait", name}
+	if noDeps {
+		up = []string{"up", "-d", "--wait", "--no-deps", name}
+	}
+	if err := composeContext(ctx, cwd, errOut, up...); err != nil {
 		return down, fmt.Errorf("docker compose up %s: %w", name, err)
 	}
 	if states[name] == "running" || keep {
@@ -1926,8 +1944,10 @@ func restoreServices(cwd string, services []cli.SyncService, create bool) error 
 		}
 	}
 	stateFile := filepath.Join(filepath.Dir(cwd), syncState)
+	// What a sync stopped comes back whatever its labels say now (an
+	// inherited variable may have changed them since a cut one).
 	if recorded {
-		stop = intersect(stop, rec.stops)
+		stop = rec.stops
 	}
 	if len(stop) > 0 {
 		exited, err := servicesIn(cwd, "exited")
