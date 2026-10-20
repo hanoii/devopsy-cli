@@ -37,10 +37,15 @@ const (
 	DataQuietBeats = 24
 )
 
-// HeartbeatEvery is the operator's beat: 5 seconds, or HeartbeatEveryEnv.
+// HeartbeatEvery is the beat devopsy sends: 5 seconds, or
+// HeartbeatEveryEnv; on a server, inside a session that gets one, that
+// session's (HeartbeatEnv), so what it passes on (the push's import on
+// another server) beats as often as the readers there count.
 func HeartbeatEvery() time.Duration {
-	if n, err := strconv.Atoi(os.Getenv(HeartbeatEveryEnv)); err == nil && n > 0 {
-		return time.Duration(n) * time.Second
+	for _, k := range []string{HeartbeatEveryEnv, HeartbeatEnv} {
+		if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
 	}
 	return 5 * time.Second
 }
