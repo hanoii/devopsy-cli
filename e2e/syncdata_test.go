@@ -200,3 +200,63 @@ func TestSyncRsyncEntries(t *testing.T) {
 		})
 	}
 }
+
+// A service mounting ./mnt itself copies all of it on a child's first
+// release, an unlabeled service's entry included (said), and what the
+// parent lacks goes. Then the child guard: with that unlabeled service
+// running on the child, a sync refuses before the parent stops
+// anything, the child's data as it was and its services back.
+func TestSyncWholeMntGuard(t *testing.T) {
+	dir := project(t, "whole", map[string]string{
+		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml": "project: whole\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/compose.yaml": `services:
+  all:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt:/all]
+    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
+  db:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/db:/db]
+`,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+	})
+	stamp := func(env string) string {
+		out, _ := srv(t, "cat whole/"+env+"/shared/mnt/db/stamp")
+		return strings.TrimSpace(out)
+	}
+	srv(t, "mkdir -p whole/prod/shared/mnt/db whole/dev/shared/mnt && echo one >whole/prod/shared/mnt/db/stamp && echo top >whole/prod/shared/mnt/top && echo extra >whole/dev/shared/mnt/extra")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	out, code := op(t, dir, "devopsy @dev --release")
+	if code != 0 || stamp("dev") != "one" || !exists(t, "whole/dev/shared/mnt/top") || exists(t, "whole/dev/shared/mnt/extra") {
+		t.Fatalf("dev's first release (%d), stamp %q, top %v, extra %v:\n%s", code, stamp("dev"), exists(t, "whole/dev/shared/mnt/top"), exists(t, "whole/dev/shared/mnt/extra"), out)
+	}
+	if !strings.Contains(out, "all copies mnt whole, db (skip: db) included") {
+		t.Errorf("no notice of what mnt whole includes:\n%s", out)
+	}
+
+	srv(t, "echo two >whole/prod/shared/mnt/db/stamp")
+	before := map[string]string{}
+	for _, p := range []string{"whole-prod", "whole-dev"} {
+		for _, s := range []string{"all", "db"} {
+			before[p+" "+s] = startedAt(t, p, s)
+		}
+	}
+	out, code = op(t, dir, "devopsy @dev --sync --yes")
+	if code == 0 || !strings.Contains(out, "do not match") || !strings.Contains(out, "the child's db is running") || stamp("dev") != "one" || exists(t, "whole/dev/.devopsy-sync.incomplete") {
+		t.Errorf("a sync over the child's running db (%d), stamp %q, marked %v:\n%s", code, stamp("dev"), exists(t, "whole/dev/.devopsy-sync.incomplete"), out)
+	}
+	for _, k := range []string{"whole-prod all", "whole-prod db", "whole-dev db"} {
+		p, s, _ := strings.Cut(k, " ")
+		if now := startedAt(t, p, s); now != before[k] {
+			t.Errorf("%s restarted (%s, was %s): nothing should stop", k, now, before[k])
+		}
+	}
+	if syncState(t, "whole", "dev", "all") != "running" || syncState(t, "whole", "prod", "all") != "running" {
+		t.Errorf("after the refusal: dev all %q, prod all %q", syncState(t, "whole", "dev", "all"), syncState(t, "whole", "prod", "all"))
+	}
+}
