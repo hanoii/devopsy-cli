@@ -407,16 +407,22 @@ func TestActivateSync(t *testing.T) {
 	fake := `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
-if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
+if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
   while [ ! -e "$FAKE_ROOT/closed" ]; do sleep 0.05; done
 fi
 # What the push writes into the child, as if during the copy.
-if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
-  for f in $FAKE_WRITE; do echo "vm1:prod 123.45" >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"; done
+if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
+  for f in $FAKE_WRITE; do
+    case $f in
+      done) echo "$DEVOPSY_INTERNAL_SYNC_ID" ;;
+      other-done) f=done; echo 123.45 ;;
+      *) echo "vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" ;;
+    esac >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"
+  done
 fi
 [ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
-[ "$*" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
+[ "${1:-} ${2:-}" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
 exit 0
 `
 	write(t, filepath.Join(bin, "devopsy"), fake)
@@ -470,7 +476,7 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, ".devopsy-sync.inherit.env")
-	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
+	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -512,15 +518,13 @@ exit 0
 	}
 	// A done this sync's push never wrote (another sync's, 123.45: a push
 	// that outlived its holder finishing its copy now) decides nothing: the
-	// push failed before writing anything. Bug: done carries no sync id and
-	// the holder never checks one, so it goes on, finish go and the run
-	// step on whatever the other copy left.
+	// push failed before writing anything.
 	other := t.TempDir()
 	if _, errOut, err := run(other, "1", "go\n"); err != nil {
 		t.Fatalf("first (%v):\n%s", err, errOut)
 	}
 	calls(other)
-	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") {
+	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") {
 		t.Errorf("another sync's done (%v), current %q:\n%s", err, current(other), errOut)
 	}
 	_, errOut, err = run(root, "3", "go\n", "FAKE_WRITE=started")

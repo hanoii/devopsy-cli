@@ -29,9 +29,10 @@ const HalfCopiedNotice = "is half copied: a database copied raw cannot start on 
 // What a sync writes into the child's directory ($base), so the child
 // knows what happened to its data whatever its answer says: the push
 // writes SyncStartedFile right before its first write into the child
-// (rsync or an import) and SyncDoneFile after its last, and the holder
-// decides from them, its answer only telling it the push ended: done
-// is go (the copy is complete), started alone partial (written in part:
+// (rsync or an import) and SyncDoneFile after its last, holding the
+// sync's id (SyncIDEnv), and the holder decides from them, its answer
+// only telling it the push ended: its own sync's done is go (the copy
+// is complete), started alone partial (written in part:
 // the stop=true services stay down, SyncIncompleteFile), neither the
 // answer (nothing written). A holder that never decided (killed) leaves
 // them for whoever takes the lock next (--sync-services settle).
@@ -228,12 +229,20 @@ func syncFinish(projectName string) string {
 // devopsy.sync.stop=true. A failure sets $status and restores what it
 // changed.
 //
+// release is an activation's: one with nothing current before it ($prev
+// empty) tells prepare it is a first release, whatever containers an
+// earlier one that failed left (an import's).
+//
 // From here until the services are restored, SIGPIPE is ignored
 // (syncRestorePipe ends that): if devopsy goes away, a write to this
 // session fails instead of killing what restores them.
-func syncPrepare(projectName string) string {
+func syncPrepare(projectName string, release bool) string {
+	call := devopsyCall(projectName, []string{"--sync-services", "prepare"}, false)
+	if release {
+		call += ` $([ -n "$prev" ] || echo first)`
+	}
 	return `trap '' PIPE
-` + devopsyCall(projectName, []string{"--sync-services", "prepare"}, false) + ` || status=$?
+` + call + ` || status=$?
 if [ "$status" != 0 ]; then
   sync_finish abort || true
   devopsy --say error "preparing the sync failed ($status)" || true
@@ -246,11 +255,16 @@ fi
 // (services stopped), the gate (SyncOpenFile) and the marker, the push's
 // end (devopsy's answer, or none), then finish with what the files say
 // was written; $status says how it went. failed says what a failure
-// means here.
-func syncBlock(projectName, failed string) string {
+// means here; release is an activation's, which may be a first release
+// (syncPrepare).
+func syncBlock(projectName, failed string, release bool) string {
 	open, started, done, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`, `"$base/`+SyncIncompleteFile+`"`
-	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-  sync_id=$(date +%s).$$
+	// The sync's id, in the gate and in what the copy's last write
+	// leaves (SyncDoneFile): a done of another sync, whose push
+	// outlived its holder, decides nothing here.
+	return syncFinish(projectName) + `sync_id=$(date +%s).$$
+export ` + SyncIDEnv + `="$sync_id"
+` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
   # rename or the unlink wins), so nothing is written into what abort
@@ -259,7 +273,7 @@ func syncBlock(projectName, failed string) string {
   # A push that went through and wrote nothing (the parent's labels
   # copy nothing) is go: no data the labels cover is partial any more.
   sync_word=abort
-  if [ -e ` + done + ` ]; then
+  if [ "$(cat ` + done + ` 2>/dev/null)" = "$sync_id" ]; then
     sync_word=go
   elif [ -e ` + started + ` ]; then
     sync_word=partial
@@ -297,7 +311,7 @@ fi
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -344,7 +358,7 @@ exec 1>&2
 devopsy --say info "syncing into $id"
 ` + o.exports(t) + `cd "$base/current"
 status=0
-` + syncBlock(projectName, "the run step does not run") + `[ "$status" = 0 ] || exit "$status"
+` + syncBlock(projectName, "the run step does not run", false) + `[ "$status" = 0 ] || exit "$status"
 `
 	if len(run) > 0 {
 		// The run step goes on whatever happens to the session, after
@@ -476,13 +490,6 @@ func RsyncModule(entry string) string {
 	return entry
 }
 
-// RsyncTimeout is the receiving rsync's --timeout across servers, in
-// seconds: sshd sends nothing on a quiet forward, so after a silent cut
-// between the servers the receive would otherwise wait for TCP to give
-// up, long after the holder decided, its container holding the child's
-// mnt. rsync sends keepalives while it has nothing to say.
-const RsyncTimeout = 30
-
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/, base its
@@ -490,11 +497,25 @@ const RsyncTimeout = 30
 // root in UtilImage, on the host's network to reach the forward.
 // SyncStartedFile goes first, and with last (no stream follows)
 // SyncDoneFile once every entry is copied.
+//
+// Once the holder decided (SyncStartedFile gone, or another sync's),
+// nothing may be written: a watchdog removes the copy's container. Why:
+// after a silent cut between the servers, the rsync otherwise waits for
+// TCP to give up, writing again if the link comes back; sshd sends
+// nothing on a quiet forward, and rsync's own --timeout counts its
+// keepalives into the forward's local socket.
 func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool) string {
+	started := Quote(path.Join(base, SyncStartedFile))
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
-		`copy() {
+		`rs_name=devopsy-sync-receive-$$
+( while sleep 2; do
+    [ "$(cut -d' ' -f2 ` + started + ` 2>/dev/null)" = ` + Quote(id) + ` ] || { docker rm -f "$rs_name"; exit 0; }
+  done ) </dev/null >/dev/null 2>&1 &
+rs_watch=$!
+trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
+copy() {
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids --timeout=" + fmt.Sprint(RsyncTimeout) + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -510,7 +531,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string,
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
 	}
 	if last {
-		script += ": >" + Quote(path.Join(base, SyncDoneFile)) + "\n"
+		script += "printf '%s\\n' " + Quote(id) + " >" + Quote(path.Join(base, SyncDoneFile)) + "\n"
 	}
 	return script
 }

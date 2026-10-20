@@ -783,7 +783,7 @@ devopsy --say info "current is now $id" || true
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
 		s += sync.exports(t) + `cd "$base/current"
-` + syncBlock(projectName, "the release does not go live") + `cd "$base"
+` + syncBlock(projectName, "the release does not go live", true) + `cd "$base"
 [ "$status" = 0 ] || failed=sync
 `
 	}
