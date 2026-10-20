@@ -652,6 +652,13 @@ done
 	for _, l := range t.Levels {
 		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
 	}
+	if sync != nil && sync.Inherit {
+		// What the sync inherits this time, in the pending file the
+		// operator wrote: the checks before the switch (prepare,
+		// --missing-vars, the images) see what the release will run
+		// with, as a first release's do in inherit.env.
+		s += "export " + InheritPendingEnv + "=\"$base\"/" + SyncInheritPending + "\n"
+	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 		// Another environment's compose project of the same name, or a

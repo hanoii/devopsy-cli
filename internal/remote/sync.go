@@ -510,7 +510,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string,
 	started := Quote(path.Join(base, SyncStartedFile))
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
 		`rs_name=devopsy-sync-receive-$$
-( while sleep 2; do
+( while sleep 1; do
     [ "$(cut -d' ' -f2 ` + started + ` 2>/dev/null)" = ` + Quote(id) + ` ] || { docker rm -f "$rs_name"; exit 0; }
   done ) </dev/null >/dev/null 2>&1 &
 rs_watch=$!
