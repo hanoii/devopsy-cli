@@ -1267,6 +1267,33 @@ func TestSyncLabels(t *testing.T) {
 	}
 }
 
+// What a sync stopped comes back when a later sync completes, as its
+// record says, whatever the labels say by then (a label from an inherited
+// variable can change in that sync). Bug: restoring starts only the
+// recorded services still labeled devopsy.sync.stop=true, so db, stopped
+// by a sync left partial, stays down after the sync that completes it,
+// and its record is gone.
+func TestSyncRestoresRecordedStops(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	if out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "db stay down") {
+		t.Fatalf("a cut copy (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_DB=rsync")
+	defer s.labels("")
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("the sync that completes it (%d):\n%s", code, out)
+	}
+	if stopped := readString(s.log + ".stopped.shop-dev"); slices.Contains(strings.Fields(stopped), "db") {
+		t.Errorf("db, stopped by the cut sync, stays down after a complete one:\n%s", out)
+	}
+}
+
 // A service the parent rsyncs that the child leaves running (stream or no
 // label there) fails the push before the parent stops anything: the child
 // restores its services; rsync on the child says running is fine.
