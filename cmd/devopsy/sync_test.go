@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -2455,5 +2456,32 @@ func TestSyncEndWriters(t *testing.T) {
 		case <-time.After(20 * time.Second):
 			t.Errorf("the import still runs:\n%s", out)
 		}
+	}
+}
+
+// A sync hook runs in the foreground: what it leaves running in the
+// background ends when it returns, said, and the hook still succeeds.
+func TestSyncHookLeftovers(t *testing.T) {
+	s := newSyncSetup(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "finish"), "#!/bin/sh\n[ \"$1 $2\" = \"child go\" ] || exit 0\nsleep 30 >/dev/null 2>&1 &\necho $! >"+pidFile+"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "left processes running: ending them") {
+		t.Fatalf("a hook leaving a process (%d):\n%s", code, out)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(readString(pidFile)))
+	if err != nil {
+		t.Fatalf("pid: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the hook's background process %d still runs", pid)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
