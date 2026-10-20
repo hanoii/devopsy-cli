@@ -511,8 +511,12 @@ rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
 # content, not times). Guarded: a session gone silently would leave tar
-# waiting, the release lock held, until TCP gives up.
-devopsy `+StdinGuardFlag+` | tar -xzmf - -C "$rel.tmp"
+# waiting, the release lock held, until TCP gives up. A failure takes the
+# .tmp along: nothing of a cut upload stays.
+if ! devopsy `+StdinGuardFlag+` | tar -xzmf - -C "$rel.tmp"; then
+  rm -rf "$rel.tmp"
+  exit 1
+fi
 # Pending until its activation switches to it: one that never gets there
 # (cut, interrupted, its operator gone) is never rolled back to nor kept.
 : >"$rel.tmp/`+PendingFile+`"
