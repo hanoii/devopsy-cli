@@ -199,11 +199,14 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		code, err := remote.SSHStreams(remote.WithoutInterrupt(holderCtx), job.child, remote.KeepAlive, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
-	// Interrupted before the marker, devopsy ends the holder's session
-	// and waits for it: before a release's switch nothing changes, and a
-	// holder restores on its own. After it, the push ends first, so
-	// nothing copies into the child once its services are back, then the
-	// holder gets abort.
+	// Interrupted before the marker, devopsy answers abort at once and
+	// closes the holder's stdin, then waits for it, as for a release:
+	// waiting for the lock, its watcher ends it; past it, it reads the
+	// abort after its prepare and restores in this session; a release
+	// before its switch is cancelled by its watcher. A second interrupt
+	// ends the session. After the marker, the push ends first, so
+	// nothing copies into the child once its services are back, then
+	// the holder gets abort.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)
@@ -222,12 +225,28 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		if release {
 			log.Error("interrupted: cancelling the release on @" + job.child.Address + ": it does not go live, and past its switch the previous release, if any, comes back")
 		} else {
-			log.Error("interrupted: ending the session on @" + job.child.Address + ", which leaves it as it was")
+			log.Error("interrupted: aborting the sync into @" + job.child.Address + ", which comes back as it was")
 		}
-		endHolder()
-		<-done
-		flush()
-		return 130
+		stopBeat()
+		_, _ = w.WriteString("abort\n")
+		w.Close()
+		slow := time.After(5 * time.Second)
+		for {
+			select {
+			case <-done:
+				flush()
+				return 130
+			case <-slow:
+				// The holder reads the abort once its prepare ends, and
+				// then restores what it stopped.
+				log.Warn("the server is cancelling it, after the step it is in, and restores what it stopped", "Ctrl-C again leaves now")
+			case <-sigs:
+				endHolder()
+				<-done
+				flush()
+				return 130
+			}
+		}
 	case found := <-marker:
 		marked = true
 		base, id, _ := strings.Cut(found, "\t")

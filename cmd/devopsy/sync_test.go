@@ -1179,6 +1179,56 @@ func TestSyncInterrupt(t *testing.T) {
 	}
 }
 
+// Interrupted before the copy (here in the child's prepare), devopsy
+// answers abort and waits, as for a release: the holder finishes in the
+// session, which shows it, nothing is copied and the child is no partial
+// copy.
+func TestSyncInterruptPrepare(t *testing.T) {
+	s := newSyncSetup(t)
+	started := filepath.Join(t.TempDir(), "started")
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\nif [ \"$1\" = child ] && [ -n \"${FAKE_STARTED:-}\" ]; then touch \"$FAKE_STARTED\"; sleep 2; fi\n", 0o755)
+	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finished $1 $2\"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@dev", "--sync", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STARTED="+started)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; ; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if i > 200 {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the prepare never started:\n%s", readString(outFile.Name()))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	out := readString(outFile.Name())
+	dev := filepath.Join(s.root, "shop", "dev")
+	if cmd.ProcessState.ExitCode() != 130 || !strings.Contains(out, "aborting the sync into @devopsy@one:dev") || !strings.Contains(out, "finished child abort") || strings.Contains(out, "copying @") || strings.Contains(out, "deploy in shop-dev") {
+		t.Fatalf("interrupt (%d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+	if strings.Contains(readString(filepath.Join(dev, ".devopsy-sync.log")), "no answer") || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Errorf("the holder lost its session, or marked dev:\n%s", readString(filepath.Join(dev, ".devopsy-sync.log")))
+	}
+}
+
 // Labels opt in: without any, nothing is copied or touched; only the
 // services labeled devopsy.sync.stop=true are stopped, and restored from
 // what was stopped.

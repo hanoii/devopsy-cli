@@ -1031,7 +1031,10 @@ child goes by that:
 
 On a first release a failure marks the release failed and leaves nothing
 current, and the next release syncs again. A failed or interrupted export
-imports nothing, and its file goes. Interrupted (Ctrl-C) during the copy,
+imports nothing, and its file goes. Interrupted (Ctrl-C) before the copy,
+devopsy tells the child's server to abort and waits, as a release does:
+it finishes the step it is in, restores what it stopped and shows it, and
+a second Ctrl-C leaves at once. Interrupted during the copy,
 devopsy ends its session to the parent's server, which stops the copy (an
 export too) and restores its own services, then tells the child's to
 finish as above. Once the copy is in and the run step runs, a Ctrl-C only
