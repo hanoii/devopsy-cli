@@ -104,3 +104,211 @@ func TestSyncAcrossDropParent(t *testing.T) {
 	})
 	op(t, "/", "pkill devopsy || true")
 }
+
+// acrossReleased is acrossProject with prod released, its data stamped
+// one, and dev released on the second server, which synced it.
+func acrossReleased(t *testing.T, name string) string {
+	t.Helper()
+	dir := acrossProject(t, name)
+	srv(t, "mkdir -p "+name+"/prod/shared/mnt/data && echo one >"+name+"/prod/shared/mnt/data/stamp")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	return dir
+}
+
+// free2 reports whether nothing holds the lock file path on the second
+// server.
+func free2(t *testing.T, path string) bool {
+	_, code := srv2(t, "flock -n "+quote(path)+" true")
+	return code == 0
+}
+
+// exists2 is exists on the second server.
+func exists2(t *testing.T, path string) bool {
+	_, code := srv2(t, "test -e "+quote(path))
+	return code == 0
+}
+
+// The operator cut silently from the child's server mid-import, the
+// parent's still reachable: devopsy sees the holder's session gone
+// (KeepAlive) and stops the push, whose import on the child's server
+// ends with the push's session to it; the holder, without an answer,
+// decides from what was written: partial, the child down and marked, the
+// parent restored.
+func TestSyncAcrossDropHolder(t *testing.T) {
+	dir := acrossReleased(t, "acrosshold")
+	srv2(t, "rm -f importing-acrosshold-dev; echo 120 >import-wait-acrosshold-dev")
+	t.Cleanup(func() { srv2(t, "rm -f import-wait-acrosshold-dev importing-acrosshold-dev") })
+	background(t, dir, fast()+" "+agent+" devopsy @dev --sync --yes", "/tmp/acrosshold.log")
+	eventually(t, time.Minute, "the import running", func() bool { return exists2(t, "importing-acrosshold-dev") })
+
+	dropHost(t, "server2")
+	eventually(t, quiet(12, 30*time.Second), "the parent restored", func() bool {
+		return lockFree(t, "acrosshold/prod/.sync-lock") && syncState(t, "acrosshold", "prod", "data") == "running"
+	})
+	if out, _ := srv2(t, "pgrep -af '[c]apability sync import' || true"); strings.TrimSpace(out) != "" {
+		t.Errorf("the import still runs on the child's server: %s", out)
+	}
+	took := eventually(t, quiet(18, 45*time.Second), "the child's decision", func() bool { return free2(t, "acrosshold/dev/.lock") })
+	t.Logf("decided %s after the parent was restored", took)
+	if !exists2(t, "acrosshold/dev/.devopsy-sync.incomplete") || srv2State(t, "acrosshold", "dev", "data") != "exited" {
+		t.Errorf("after: marked %v, dev data %q", exists2(t, "acrosshold/dev/.devopsy-sync.incomplete"), srv2State(t, "acrosshold", "dev", "data"))
+	}
+	if log, _ := op(t, "/", "cat /tmp/acrosshold.log"); !strings.Contains(log, "ended during the copy") {
+		t.Errorf("devopsy did not say the child's session ended:\n%s", log)
+	}
+	undrop(t)
+	op(t, "/", "pkill devopsy || true")
+}
+
+// throttleServer slows the server's traffic out to rate (tc's), so a
+// copy from it to the second server lasts long enough to cut.
+func throttleServer(t *testing.T, rate string) {
+	t.Helper()
+	if out, err := docker("exec", server, "tc", "qdisc", "add", "dev", "eth0", "root", "tbf", "rate", rate, "burst", "32kbit", "latency", "400ms"); err != nil {
+		t.Fatalf("throttling: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _, _ = docker("exec", server, "tc", "qdisc", "del", "dev", "eth0", "root") })
+}
+
+// receiving is what of an rsync into the second server runs there: the
+// receive script's docker run and the rsync in its container.
+func receiving(t *testing.T) string {
+	out, _ := srv2(t, "pgrep -af '[r]sync://127.0.0.1' || true")
+	return strings.TrimSpace(out)
+}
+
+// acrossRsyncCut syncs a large file into the second server, throttled,
+// cuts the copy mid-rsync with cut, and checks the end: the copy's
+// session and the receive script on the child's server gone by the time
+// the holder decides (within), which, the gate claimed, leaves the child
+// partial, down and marked, and the parent restored.
+func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func()) {
+	dir := acrossReleased(t, name)
+	srv(t, "head -c 16000000 /dev/urandom >"+name+"/prod/shared/mnt/data/big")
+	t.Cleanup(func() {
+		_, _ = docker("exec", server2, "sh", "-c", "docker ps -q --filter ancestor=devopsy-util:1 | xargs -r docker rm -f")
+	})
+	throttleServer(t, "4mbit")
+	background(t, dir, fast()+" "+agent+" devopsy @dev --sync --yes", "/tmp/"+name+".log")
+	eventually(t, time.Minute, "the rsync into the child's server", func() bool { return receiving(t) != "" })
+	time.Sleep(2 * time.Second)
+	cut()
+	took := eventually(t, within, "the child's decision", func() bool { return free2(t, name+"/dev/.lock") })
+	t.Logf("decided %s after the cut", took)
+	if r := receiving(t); r != "" {
+		t.Errorf("the receive still runs on the child's server once its holder decided:\n%s", r)
+	}
+	if !exists2(t, name+"/dev/.devopsy-sync.incomplete") || srv2State(t, name, "dev", "data") != "exited" {
+		log, _ := op(t, "/", "cat /tmp/"+name+".log")
+		t.Errorf("after: marked %v, dev data %q:\n%s", exists2(t, name+"/dev/.devopsy-sync.incomplete"), srv2State(t, name, "dev", "data"), log)
+	}
+	eventually(t, 30*time.Second, "the parent restored", func() bool {
+		return lockFree(t, name+"/prod/.sync-lock") && syncState(t, name, "prod", "data") == "running"
+	})
+	if out, _ := srv(t, "docker ps -q --filter ancestor=devopsy-util:1"); strings.TrimSpace(out) != "" {
+		t.Errorf("the parent's rsync daemon still runs: %s", out)
+	}
+}
+
+// The parent's session to the child's server for the rsync (its reverse
+// forward) killed mid-copy: the child's side sees it close.
+func TestSyncAcrossRsyncCut(t *testing.T) {
+	acrossRsyncCut(t, "acrosscut", 45*time.Second, func() {
+		if out, code := srv(t, "pkill -9 -f '[E]xitOnForwardFailure=yes'"); code != 0 {
+			t.Fatalf("killing the rsync's session (%d): %s", code, out)
+		}
+	})
+}
+
+// The two servers cut from each other silently mid-rsync: the parent's
+// ssh gives up on its keepalive (its own beat, 5 seconds: 45 seconds),
+// the push fails and the holder decides. The child's side sees nothing:
+// its receive script and rsync wait on the forward until TCP gives up
+// (minutes to hours), past the holder's decision, holding a container on
+// the child's data that nothing stops (internal/remote/sync.go,
+// SyncReceiveScript: rsync without --timeout, and sshd sends nothing on
+// a quiet forward). It should end when the copy is cut, within a bound,
+// like the parent's side does.
+func TestSyncAcrossRsyncDrop(t *testing.T) {
+	acrossRsyncCut(t, "acrossrdrop", 2*time.Minute, func() {
+		script := `ip=$(getent hosts server2 | cut -d' ' -f1) && iptables -I OUTPUT -d "$ip" -j DROP && iptables -I INPUT -s "$ip" -j DROP`
+		if out, err := docker("exec", server, "sh", "-c", script); err != nil {
+			t.Fatalf("cutting the servers: %v: %s", err, out)
+		}
+		t.Cleanup(func() {
+			_, _ = docker("exec", server, "sh", "-c", `ip=$(getent hosts server2 | cut -d' ' -f1) && iptables -D OUTPUT -d "$ip" -j DROP; iptables -D INPUT -s "$ip" -j DROP`)
+		})
+	})
+}
+
+// A CI key in an agent of its own, authorized on both servers with
+// --ssh-keys add --restricted: a sync across servers works with it (the
+// agent forwarded to the parent, the parent's reverse forward on the
+// child). With a plain restrict, sshd refuses either: devopsy names the
+// cause, and the child's data is as it was, its services back.
+func TestSyncAcrossRestrictedKey(t *testing.T) {
+	dir := acrossReleased(t, "acrossci")
+	ci := "SSH_AUTH_SOCK=/tmp/agent-ci.sock"
+	if out, code := op(t, "/", "rm -f /root/.ssh/ci-e2e /root/.ssh/ci-e2e.pub /tmp/agent-ci.sock && devopsy --ssh-keys-generate ci-e2e && ssh-agent -a /tmp/agent-ci.sock >/dev/null && "+ci+" ssh-add -q /root/.ssh/ci-e2e"); code != 0 {
+		t.Fatalf("the CI key (%d):\n%s", code, out)
+	}
+	blob, _ := op(t, "/", "cut -d' ' -f2 /root/.ssh/ci-e2e.pub")
+	blob = strings.TrimSpace(blob)
+	unauthorize := "grep -v " + quote(blob) + " ~/.ssh/authorized_keys >~/.ssh/k.tmp; cat ~/.ssh/k.tmp >~/.ssh/authorized_keys; rm -f ~/.ssh/k.tmp"
+	t.Cleanup(func() {
+		srv(t, unauthorize)
+		srv2(t, unauthorize)
+		op(t, "/", "pkill -f '[a]gent-ci.sock' || true")
+	})
+	for _, s := range []string{"@server:", "@server2:"} {
+		if out, code := op(t, "/", "devopsy "+s+" --ssh-keys add /root/.ssh/ci-e2e.pub --restricted"); code != 0 {
+			t.Fatalf("authorizing on %s (%d):\n%s", s, code, out)
+		}
+	}
+	stamp := func() string {
+		out, _ := srv2(t, "cat acrossci/dev/shared/mnt/data/stamp")
+		return strings.TrimSpace(out)
+	}
+	srv(t, "echo two >acrossci/prod/shared/mnt/data/stamp")
+	if out, code := op(t, dir, ci+" devopsy @dev --sync --yes"); code != 0 || stamp() != "two" {
+		t.Fatalf("a sync with the restricted key (%d), stamp %q:\n%s", code, stamp(), out)
+	}
+
+	// The CI key is the one line with options.
+	plain := "sed -i 's/^restrict,agent-forwarding,port-forwarding /restrict /' ~/.ssh/authorized_keys"
+	asWas := func(what string) {
+		t.Helper()
+		if stamp() != "two" || exists2(t, "acrossci/dev/.devopsy-sync.incomplete") || srv2State(t, "acrossci", "dev", "data") != "running" {
+			t.Errorf("%s: stamp %q, marked %v, dev data %q", what, stamp(), exists2(t, "acrossci/dev/.devopsy-sync.incomplete"), srv2State(t, "acrossci", "dev", "data"))
+		}
+		if !lockFree(t, "acrossci/prod/.sync-lock") || syncState(t, "acrossci", "prod", "data") != "running" {
+			t.Errorf("%s: the parent's data %q", what, syncState(t, "acrossci", "prod", "data"))
+		}
+	}
+	srv(t, "echo three >acrossci/prod/shared/mnt/data/stamp")
+
+	// The child's: no reverse forward.
+	srv2(t, plain)
+	out, code := op(t, dir, ci+" devopsy @dev --sync --yes")
+	if code == 0 || !strings.Contains(out, "refused the reverse forward") || !strings.Contains(out, "port-forwarding") {
+		t.Errorf("a plain restrict on the child's server (%d):\n%s", code, out)
+	}
+	asWas("the child's key")
+	srv2(t, unauthorize)
+	if out, code := op(t, "/", "devopsy @server2: --ssh-keys add /root/.ssh/ci-e2e.pub --restricted"); code != 0 {
+		t.Fatalf("authorizing on server2 again (%d):\n%s", code, out)
+	}
+
+	// The parent's: no agent.
+	srv(t, plain)
+	out, code = op(t, dir, ci+" devopsy @dev --sync --yes")
+	if code == 0 || !strings.Contains(out, "no SSH agent was forwarded") || !strings.Contains(out, "restrict,agent-forwarding") {
+		t.Errorf("a plain restrict on the parent's server (%d):\n%s", code, out)
+	}
+	asWas("the parent's key")
+}

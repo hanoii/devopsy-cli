@@ -323,7 +323,14 @@ func eventually(t *testing.T, within time.Duration, what string, cond func() boo
 // RST, as a laptop asleep: both directions dropped. undrop restores it.
 func dropSilently(t *testing.T) {
 	t.Helper()
-	if out, code := op(t, "/", `ip=$(getent hosts server | cut -d' ' -f1) && iptables -A OUTPUT -d "$ip" -j DROP && iptables -A INPUT -s "$ip" -j DROP`); code != 0 {
+	dropHost(t, "server")
+}
+
+// dropHost is dropSilently from one server only (server or server2),
+// the operator's sessions to the other kept.
+func dropHost(t *testing.T, host string) {
+	t.Helper()
+	if out, code := op(t, "/", `ip=$(getent hosts `+host+` | cut -d' ' -f1) && iptables -A OUTPUT -d "$ip" -j DROP && iptables -A INPUT -s "$ip" -j DROP`); code != 0 {
 		t.Fatalf("dropping (%d): %s", code, out)
 	}
 	t.Cleanup(func() { undrop(t) })
