@@ -824,8 +824,9 @@ func runSyncPush(cwd string, color bool) int {
 	}
 	conflicts, mismatches := syncConflicts(services, child), streamMismatches(services, streams, child)
 	if len(conflicts)+len(mismatches) > 0 {
-		// A label from a variable the parent's inherit: names reaches the
-		// child with --inherit, which a re-sync only runs after the copy.
+		// A label from a variable the parent's inherit: names follows in
+		// the same sync (the child reads the pending inherited file); one
+		// in the child's own shared/.env wins over it.
 		fixes := []report.Remedy{report.Fix("label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)")}
 		if len(conflicts) > 0 {
 			fixes = append(fixes, report.Fix(cli.SyncStopLabel+"=true on the child's service, to stop it for the sync"), report.Fix(cli.SyncLabel+"="+cli.SyncRsync+" on the child's service, to copy under it running"))

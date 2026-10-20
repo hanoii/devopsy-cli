@@ -762,8 +762,9 @@ and `shared/mnt` (databases as dumps).
 
 **Parent environments and syncs.** A child (`develop: {parent: prod}`)
 is a clone of its parent: its first release syncs the parent's data, and
-`devopsy @<child> --sync` does it again later, then reruns the child's
-`run` step. devopsy knows nothing of what the data is: services opt in
+`devopsy @<child> --sync` does it again later, then reruns the `run`
+step of the child's deployed release (its own config, never the
+checkout's). devopsy knows nothing of what the data is: services opt in
 with a label, `devopsy.sync`, which says how their data moves:
 
 - `devopsy.sync=rsync`: devopsy copies the entries of `.devopsy/mnt` the
@@ -979,7 +980,7 @@ devopsy @staging --import database < database.sql   # asks for staging's name (-
 `--import` spools stdin to a file first (`.devopsy-sync.stream.<service>`,
 under `.devopsy/` locally, which releases never upload; next to the
 environment on a server) and changes nothing until it is all there; a
-truncated tar (`tar -t` fails, or the end-of-archive blocks are missing),
+truncated tar (cut anywhere, or missing its end-of-archive blocks),
 or one carrying entries the service does not mount or excludes, is
 refused. A service mounting `./mnt` itself exports, and imports, all of
 `mnt`: devopsy names what else that includes. On a target, `--export`
