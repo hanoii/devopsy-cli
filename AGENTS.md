@@ -1224,8 +1224,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   upload,** so `--missing-vars` sees the values; kept on failure, since
   the next release is first again.
 - **A re-sync inherits into a pending file the sync reads in place of
-  the release's:** `$base/.devopsy-sync.inherit.env`
-  (`remote.SyncInheritPending`), named by
+  the release's:** `$base/.devopsy-sync.inherit.<sync id>.env`
+  (`remote.SyncInheritPending`; the id chosen by the operator's devopsy,
+  `newSyncID`, since the file is written before the holder runs), named by
   `DEVOPSY_INTERNAL_INHERIT_FILE` (exported by the holder, set by
   `--sync-exec`) for everything the sync runs on the child. Why: the
   child's labels follow an inherited variable in the same sync; written
@@ -1233,8 +1234,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`mv -Tf`) before restoring services, the hook and the run step;
   anything else removes it. Rejected: writing `inherit.env` in place
   with a backup restored on abort, since a holder killed outright
-  leaves the new file over the old data. A holder told none was written
-  (`SyncOptions.Inherit`) removes a stale one first.
+  leaves the new file over the old data. One per sync: two syncs of a
+  child at once (the second waiting for the lock, its file written)
+  never read or remove each other's; finish removes another's only past
+  `staleInherit` (an hour, longer than any wait for the lock).
 
 ## --export and --import
 

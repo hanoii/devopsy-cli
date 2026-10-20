@@ -650,7 +650,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0})
+			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(record.ID, code)
 			}

@@ -175,15 +175,24 @@ func StreamSpool(base, service, id string) string {
 }
 
 // SyncInheritPending is a re-sync's inherited variables, in the child's
-// environment directory ($base): written before the holder prepares, read
-// in place of shared/inherit.env by everything the sync runs on the child
-// (InheritPendingEnv), moved over it on go and removed on abort, so a
-// failed copy leaves the child's variables as they were.
-const SyncInheritPending = ".devopsy-sync.inherit.env"
+// environment directory ($base), named by the sync's id: written before
+// the holder takes the lock, read in place of shared/inherit.env by
+// everything the sync runs on the child (InheritPendingEnv), moved over it
+// on go and removed on abort, so a failed copy leaves the child's
+// variables as they were. One per sync: two syncs of a child at once never
+// read or remove each other's, and finish removes any left
+// (SyncInheritPrefix).
+func SyncInheritPending(id string) string {
+	return SyncInheritPrefix + id + ".env"
+}
 
-// SyncInheritPath is SyncInheritPending in the environment directory base.
-func SyncInheritPath(base string) string {
-	return path.Join(base, SyncInheritPending)
+// SyncInheritPrefix starts every sync's SyncInheritPending.
+const SyncInheritPrefix = ".devopsy-sync.inherit."
+
+// SyncInheritPath is sync id's SyncInheritPending in the environment
+// directory base.
+func SyncInheritPath(base, id string) string {
+	return path.Join(base, SyncInheritPending(id))
 }
 
 // InheritPendingEnv names the file devopsy reads in place of the
@@ -238,19 +247,18 @@ type SyncOptions struct {
 	// Args go to rsync (DEVOPSY_SYNC_ARGS).
 	Args []string
 	// Inherit: the operator wrote this sync's inherited variables into
-	// SyncInheritPending. Without, one left by a holder that died is
-	// stale and goes.
+	// its SyncInheritPending.
 	Inherit bool
+	// ID is the sync's, chosen by the operator's devopsy: its pending
+	// inherited variables are written before the holder runs.
+	ID string
 }
 
-// exports sets the child side's sync variables, the pending inherited
-// variables' file among them (removed when stale); t is the child.
+// exports sets the child side's sync variables, the sync's id and its
+// pending inherited variables' file among them; t is the child.
 func (o *SyncOptions) exports(t *Target) string {
-	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
-	s += "export " + InheritPendingEnv + "=\"$base\"/" + SyncInheritPending + "\n"
-	if !o.Inherit {
-		s += "rm -f \"$" + InheritPendingEnv + "\"\n"
-	}
+	s := fmt.Sprintf("export %s=%s %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")), SyncIDEnv, Quote(o.ID))
+	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
 	return s
 }
 
@@ -314,8 +322,7 @@ func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
 	// (DoneLine).
-	return syncFinish(projectName) + `sync_id=$(date +%s).$$
-export ` + SyncIDEnv + `="$sync_id"
+	return syncFinish(projectName) + `sync_id=$` + SyncIDEnv + `
 ` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
@@ -523,7 +530,9 @@ func CurrentExistsScript(t *Target) string {
 // is another sync's.
 func ClaimWriteScript(base, id string) string {
 	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
-	mine := func(f string) string { return `[ "$(head -n 1 ` + f + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]` }
+	mine := func(f string) string {
+		return `[ "$(head -n 1 ` + f + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]`
+	}
 	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
 }
 

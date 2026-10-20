@@ -1070,8 +1070,8 @@ func TestSyncInherit(t *testing.T) {
 	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 2 {
 		t.Errorf("the child's lock during a re-sync:\n%s", docker)
 	}
-	pending := filepath.Join(shop, "a", "dev", ".devopsy-sync.inherit.env")
-	if _, err := os.Stat(pending); err == nil {
+	pending := filepath.Join(shop, "a", "dev", ".devopsy-sync.inherit.*")
+	if left, _ := filepath.Glob(pending); len(left) > 0 {
 		t.Errorf("the pending file stays after a sync")
 	}
 	if got := readString(childInherit); got != "SHARED_KEY='s3'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
@@ -1082,7 +1082,7 @@ func TestSyncInherit(t *testing.T) {
 	if out, code := s.run(append(env, "FAIL_RSYNC=23"), "@devopsy@two:a/dev", "--sync", "--yes"); code == 0 || !strings.Contains(readString(childInherit), "SHARED_KEY='s3'") {
 		t.Errorf("failed re-sync (%d): %q\n%s", code, readString(childInherit), out)
 	}
-	if _, err := os.Stat(pending); err == nil {
+	if left, _ := filepath.Glob(pending); len(left) > 0 {
 		t.Errorf("the pending file stays after a failed sync: its abort removes it")
 	}
 }
@@ -2123,7 +2123,7 @@ func TestSyncInheritedLabel(t *testing.T) {
 		t.Fatalf("dev (%d):\n%s", code, out)
 	}
 	childInherit := filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")
-	pending := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.inherit.env")
+	pending := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.inherit.*")
 
 	// The parent flips its database to stream: one --sync, no --inherit.
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "FAKE_DB=stream\n", 0o600)
@@ -2132,7 +2132,7 @@ func TestSyncInheritedLabel(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "import db: dump") || readString(childInherit) != "FAKE_DB='stream'\n" {
 		t.Fatalf("flipped label (%d): %q\n%s", code, readString(childInherit), out)
 	}
-	if _, err := os.Stat(pending); err == nil {
+	if left, _ := filepath.Glob(pending); len(left) > 0 {
 		t.Errorf("the pending file stays")
 	}
 
@@ -2152,13 +2152,28 @@ func TestSyncInheritedLabel(t *testing.T) {
 		t.Fatalf("solo (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "FAKE_DB=rsync+stop\n", 0o600)
-	write(t, pending, "FAKE_DB='garbage'\n", 0o600)
+	// Another sync's (its own id), never read here, and gone once this
+	// one finishes.
+	stale := filepath.Join(s.root, "shop", "dev", remote.SyncInheritPending("1.2"))
+	write(t, stale, "FAKE_DB='garbage'\n", 0o600)
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
 	if out, code := s.run(nil, "@dev", "--sync", "--from", "solo", "--yes"); code != 0 || strings.Contains(out, "garbage") {
 		t.Errorf("stale pending (%d):\n%s", code, out)
 	}
-	if _, err := os.Stat(pending); err == nil {
+	if fileExists(stale) {
 		t.Errorf("the stale pending file stays")
 	}
+	// Another sync's that is fresh (its holder waiting for the lock) is
+	// never read or removed.
+	fresh := filepath.Join(s.root, "shop", "dev", remote.SyncInheritPending("3.4"))
+	write(t, fresh, "FAKE_DB='garbage'\n", 0o600)
+	if out, code := s.run(nil, "@dev", "--sync", "--from", "solo", "--yes"); code != 0 || strings.Contains(out, "garbage") || !fileExists(fresh) {
+		t.Errorf("another sync's fresh pending (%d):\n%s", code, out)
+	}
+	os.Remove(fresh)
 
 	// --sync-exec gives the child's devopsy the pending file, on both
 	// topologies, from the child's directory the push knows.
@@ -2168,10 +2183,10 @@ func TestSyncInheritedLabel(t *testing.T) {
 		t.Fatalf("dev with the command (%d):\n%s", code, out)
 	}
 	base := filepath.Join(s.root, "shop", "dev")
-	push := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(base, "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev", "DEVOPSY_SYNC_TO_BASE=" + base}
+	push := []string{"DEVOPSY_SYNC_TO_DIR=" + filepath.Join(base, "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev", "DEVOPSY_SYNC_TO_BASE=" + base, remote.SyncIDEnv + "=1.2"}
 	across := append([]string{"DEVOPSY_SYNC_TO=devopsy@two", "DEVOPSY_SYNC_SSH_PORT=22", "SSH_AUTH_SOCK=/tmp/agent.sock"}, push...)
 	for name, env := range map[string][]string{"same server": push, "across servers": across} {
-		if out, code := s.run(env, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+pending+"\n") {
+		if out, code := s.run(env, "--sync-exec", "inheritfile"); code != 0 || !strings.Contains(out, "file="+stale+"\n") {
 			t.Errorf("--sync-exec, %s (%d):\n%s", name, code, out)
 		}
 	}
