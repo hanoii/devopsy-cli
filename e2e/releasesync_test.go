@@ -224,7 +224,7 @@ func TestReleaseSyncDropInRunStep(t *testing.T) {
 			// session, while the run step waits.
 			time.Sleep(quiet(18, 5*time.Second))
 		} else {
-			op(t, "/", "pkill -9 ssh || true")
+			op(t, "/", "pkill -9 -x ssh || true")
 			time.Sleep(3 * time.Second)
 		}
 		srv(t, "rm -f wait-run-rsrun-dev")
