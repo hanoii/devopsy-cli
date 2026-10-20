@@ -413,9 +413,15 @@ before changing anything".
   tar only then, Locks), extracts into `releases/<id>.tmp` through
   `--stdin-guard`, writes `PendingFile` and renames it into place. An
   existing id is refused: `mv` would put the new tree inside the old
-  release, which would run again. Ids are UTC seconds (`NewRecord`), so
-  tests that release a target twice wait for a new second
-  (`spaceReleases`).
+  release, which would run again.
+- **The server names a release** (hidden `--release-id`, under the
+  lock; the upload prints it on stdout): a UTC second, or a second past
+  the newest release there when that is not earlier
+  (`remote.NextReleaseID`). Why: ids order releases (pruning,
+  rollbacks, `--releases`), and an operator's clock (the id's source
+  before) could order an older release after a newer one across
+  laptops and CI, or give two releases one id in one second. The
+  record (`RecordFile`) keeps the operator's time, for display only.
 - **Full tar streams, no rsync:** macOS ships openrsync. The progress
   line (`uploadProgress`, at a terminal only, never logged) counts the
   project's bytes as `Pack` reads them, out of `remote.Size`: the
@@ -1432,8 +1438,7 @@ Findings that are not one area's.
   check.
 - Traefik picks up a new container a few seconds after `up` returns.
 - macOS hides what Linux servers do: dash as `sh` never execs the last
-  command of `sh -c` (so a signal to it does not reach that command),
-  and two releases can land in the same second.
+  command of `sh -c` (so a signal to it does not reach that command).
 - OrbStack machines are `ProxyCommand` hosts from macOS: syncs across
   servers need hosts reachable directly (`ssh -G` without a proxy),
   like `<machine>.orb.local` with a key of your own. Their

@@ -26,7 +26,7 @@ func TestUploadProgress(t *testing.T) {
 	if strings.Count(out.String(), "uploading") != 1 {
 		t.Fatalf("drawn too often: %q", out.String())
 	}
-	if done := p.done(); !strings.HasPrefix(done, "uploaded 2.0 kB in ") {
+	if done := p.done("20261019214911"); !strings.HasPrefix(done, "uploaded 20261019214911: 2.0 kB in ") {
 		t.Fatalf("summary: %q", done)
 	}
 	if !strings.HasSuffix(out.String(), "\r\033[K") {
@@ -40,7 +40,7 @@ func TestUploadProgress(t *testing.T) {
 	// Not a terminal: nothing drawn, the summary only.
 	q := newUploadProgress(nil, false, 10)
 	q.add(10)
-	if done := q.done(); !strings.HasPrefix(done, "uploaded 10 B in ") {
+	if done := q.done("1"); !strings.HasPrefix(done, "uploaded 1: 10 B in ") {
 		t.Fatalf("summary: %q", done)
 	}
 }

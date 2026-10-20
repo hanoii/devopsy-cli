@@ -104,7 +104,7 @@ func TestPack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), TargetEnvFile: []byte("A='1'\n")}
+	extra := map[string][]byte{RecordFile: []byte(`{"mode":"x"}`), TargetEnvFile: []byte("A='1'\n")}
 	var read int64
 	if err := Pack(&buf, root, files, extra, func(n int64) { read += n }); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestPack(t *testing.T) {
 	if h := entries["code/link.php"]; h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "app.php" {
 		t.Fatalf("symlink not kept: %+v", h)
 	}
-	if contents[RecordFile] != `{"id":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
+	if contents[RecordFile] != `{"mode":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
 		t.Fatalf("contents: %q", contents)
 	}
 }
@@ -145,11 +145,31 @@ func TestPack(t *testing.T) {
 func TestNewRecord(t *testing.T) {
 	root := gitProject(t)
 	r := NewRecord(root, ModeBuild, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
-	if r.ID != "20261005120000" || r.Commit == "" || r.Branch == "" || !r.Dirty {
+	if r.Time != "2026-10-05T12:00:00Z" || r.Commit == "" || r.Branch == "" || !r.Dirty {
 		t.Fatalf("%+v", r)
 	}
 	if r := NewRecord(t.TempDir(), ModeImage, time.Now()); r.Commit != "" {
 		t.Fatalf("outside git: %+v", r)
+	}
+}
+
+// A new release is newer than every release there: the server's second,
+// or one past the newest when two land in one second or older ids came
+// from a clock ahead of it.
+func TestNextReleaseID(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 500, time.UTC)
+	for _, c := range []struct {
+		ids  []string
+		want string
+	}{
+		{nil, "20261020120000"},
+		{[]string{"20261020115959", "x.tmp", "notes"}, "20261020120000"},
+		{[]string{"20261020120000"}, "20261020120001"},
+		{[]string{"20261020120000", "20261231235959", "20261020110000"}, "20270101000000"},
+	} {
+		if got := NextReleaseID(now, c.ids); got != c.want {
+			t.Errorf("%v: %s, want %s", c.ids, got, c.want)
+		}
 	}
 }
 
@@ -165,7 +185,7 @@ func TestQuote(t *testing.T) {
 func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "it's app/prod", Mode: ModeImage}
 	scripts := map[string]string{
-		"upload":          UploadScript(tg, "20261005120000"),
+		"upload":          UploadScript(tg),
 		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{Run: []string{"deploy"}}, nil),
 		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, After: [][]string{{"warm"}}}, nil),
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
@@ -255,7 +275,7 @@ func TestPlainDirectories(t *testing.T) {
 		t.Fatalf("plain run: %v\n%s", err, out)
 	}
 	for name, script := range map[string]string{
-		"upload":   UploadScript(tg, "20261006000000"),
+		"upload":   UploadScript(tg),
 		"rollback": ActivateScript(tg, "", true, "", Phases{}, nil),
 		"releases": ReleasesScript(tg),
 	} {
@@ -1566,7 +1586,7 @@ func TestRebookmark(t *testing.T) {
 // variables stop at its end.
 func TestScriptsLockAndLinks(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
-	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
+	if s := UploadScript(tg); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
 	}
 	// The upgrade hint names an alias whatever its source: --upgrade
@@ -1580,7 +1600,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
 	// A release is pending until its switch, and cut uploads go.
-	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+	if s := UploadScript(tg); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
 		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})

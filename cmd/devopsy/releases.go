@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -176,4 +179,25 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 		}
 	}
 	return chosen, nil
+}
+
+// runReleaseID is the hidden --release-id <releases dir>, which the upload
+// runs under the release lock: the new release's id
+// (remote.NextReleaseID), on stdout.
+func runReleaseID(args []string) int {
+	if len(args) != 1 {
+		report.Error("usage: devopsy " + remote.ReleaseIDFlag + " <releases dir>")
+		return 2
+	}
+	entries, err := os.ReadDir(args[0])
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		report.Fail(err)
+		return 1
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.Name())
+	}
+	fmt.Println(remote.NextReleaseID(time.Now(), ids))
+	return 0
 }

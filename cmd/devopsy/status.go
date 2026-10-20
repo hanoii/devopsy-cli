@@ -123,7 +123,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		case "release":
 			var r remote.Record
 			id, value, _ = strings.Cut(value, "\t")
-			if json.Unmarshal([]byte(value), &r) == nil && r.ID != "" {
+			if json.Unmarshal([]byte(value), &r) == nil && r.Mode != "" {
 				record = &r
 			}
 		case "kept":
