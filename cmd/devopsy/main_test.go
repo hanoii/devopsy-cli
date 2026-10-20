@@ -917,6 +917,14 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
+	// A server whose devopsy is older refuses before anything, the new
+	// instance's question included: its refusal is no answer.
+	old := filepath.Join(tmp, "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/^protocol=.*/protocol=1/'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "oldssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+old+":$PATH exec sh -c \"$s\"\n", 0o755)
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
+		t.Fatalf("an older server (%d):\n%s", code, out)
+	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)
