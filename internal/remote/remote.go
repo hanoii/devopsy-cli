@@ -618,12 +618,15 @@ fi
 	// A rollback's steps are the restored release's, read from its own
 	// config on the server (ReleaseStepsFlag): the checkout's may have
 	// changed since. Its before steps run in the current release, as a
-	// release's do.
+	// release's do. On a pseudo-terminal like a release's (with_tty,
+	// which may run them in script's own shell: the release's code
+	// exported for that).
 	steps := func(phase string) string {
 		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
 	}
 	if rollback {
-		s += `(cd "$base/current" && ` + steps("before") + ` "$rel/` + CodeDir + `") || not_live $?
+		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
+(cd "$base/current" && with_tty ` + Quote(steps("before")+` "$rb_code"`) + `) || not_live $?
 `
 	} else if len(p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
@@ -657,7 +660,7 @@ done
 		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
 	if rollback {
-		s += `(cd "$code" && ` + steps("prepare") + `) || not_live $?
+		s += `(cd "$code" && with_tty ` + Quote(steps("prepare")) + `) || not_live $?
 `
 	}
 	for _, args := range p.Prepare {
@@ -778,7 +781,7 @@ devopsy --say info "current is now $id" || true
     get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
-    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
+    (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
@@ -855,7 +858,7 @@ fi
 `, t.Keep)
 	afterFail := `{ s=$?; devopsy --say error "an after step failed ($s): it stays live"; exit "$s"; }`
 	if rollback {
-		s += `(cd "$base/current" && ` + steps("after") + `) || ` + afterFail + "\n"
+		s += `(cd "$base/current" && with_tty ` + Quote(steps("after")) + `) || ` + afterFail + "\n"
 	}
 	for _, args := range p.After {
 		s += step("after", `"$base/current"`, args, afterFail)
