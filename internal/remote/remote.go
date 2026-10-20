@@ -1621,6 +1621,11 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		c.Flush()
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
+		// ssh killed by a signal devopsy did not send (its context's): the
+		// connection is gone as for ssh's own 255, and is said the same.
+		if ee.ExitCode() == -1 && ctx.Err() == nil {
+			return 255, nil
+		}
 		return ee.ExitCode(), nil
 	}
 	if err != nil {
@@ -1720,7 +1725,10 @@ func WithoutInterrupt(ctx context.Context) context.Context {
 // "ssh" like GIT_SSH_COMMAND, with them.
 func SSHCommand(args ...string) *exec.Cmd {
 	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
-		return exec.Command("sh", append([]string{"-c", custom + ` "$@"`, "sh"}, args...)...)
+		// exec: signals reach the command itself, never only a shell
+		// around it (a cancel would leave the session open, a kill
+		// would read as the shell's 137).
+		return exec.Command("sh", append([]string{"-c", "exec " + custom + ` "$@"`, "sh"}, args...)...)
 	}
 	return exec.Command("ssh", args...)
 }

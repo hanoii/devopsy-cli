@@ -751,7 +751,10 @@ interrupts" and "The server never waits on the operator for long".
   lost, and passes a script's own status on, so activations and holders
   never exit 255 (`NoExit255`, `followOutput`'s trap: 254 instead;
   drush on a PHP error exits 255). The operator's lost-connection
-  messages (`sshLost`) then mean what they say.
+  messages (`sshLost`) then mean what they say. An ssh killed by a
+  signal devopsy did not send reads as 255 too (`SSHStreams`), and
+  `DEVOPSY_SSH_COMMAND` runs through `exec`, so signals reach the
+  command, never only a shell around it.
 
 ### From the switch on
 
