@@ -149,7 +149,7 @@ func InheritWriteScript(t *Target, keys []string, pending bool) string {
 		file = `"$base/` + SyncInheritPending + `"`
 	}
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base is a plain directory: nothing inherits into it" >&2
+  devopsy --say error "$base is a plain directory: nothing inherits into it"
   exit 1
 fi
 ` + releaseLock(false, true) + `mkdir -p "$base/shared"

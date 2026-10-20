@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/hanoii/devopsy-cli/internal/cli"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/cli"
 
 	"golang.org/x/term"
 )
@@ -29,6 +30,7 @@ func (s style) name(t string) string { return s.wrap("\033[0;36m", t) }
 func (s style) dim(t string) string  { return s.wrap("\033[2m", t) }
 func (s style) ok(t string) string   { return s.wrap("\033[0;32m", t) }
 func (s style) warn(t string) string { return s.wrap("\033[0;33m", t) }
+func (s style) bad(t string) string  { return s.wrap("\033[0;31m", t) }
 
 // scope colors an entry's scope: targets and servers apart.
 func (s style) scope(t string) string {

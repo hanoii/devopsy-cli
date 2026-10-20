@@ -13,6 +13,7 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runStatus implements devopsy --status in a project: its containers
@@ -21,7 +22,7 @@ import (
 // URL for one. On a server, --status runs it in the current release.
 func runStatus(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	for _, a := range args {
@@ -87,7 +88,7 @@ func runStatus(cwd string, args []string, color bool) int {
 // --status prints there.
 func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	for _, a := range args {
@@ -106,7 +107,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		return code
 	}
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
-	cli.Fprint(os.Stdout, cyan, fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path), color)
+	st := styleFor(os.Stdout)
+	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
 	syncing := false
 	var record *remote.Record
@@ -179,7 +181,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		if id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
-		cli.Fprint(os.Stdout, red, "data        from a sync that did not complete ("+partial+"): nothing runs on it until one does: "+fix, color)
+		fmt.Println(st.bad("data        from a sync that did not complete (" + partial + "): nothing runs on it until one does: " + fix))
 	}
 	fmt.Print(rest)
 	return 0

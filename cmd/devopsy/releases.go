@@ -34,21 +34,21 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 			yes = true
 		default:
 			if strings.HasPrefix(a, "-") {
-				cli.Fprint(os.Stderr, red, usage, color)
+				report.Error(usage)
 				return 1
 			}
 			words = append(words, a)
 		}
 	}
 	if len(words) > 0 && (words[0] != "remove" || len(words) == 1) {
-		cli.Fprint(os.Stderr, red, usage, color)
+		report.Error(usage)
 		return 1
 	}
 
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ReleasesScript(t), bytes.NewReader(nil), &out, false)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	if code != 0 {
@@ -62,33 +62,33 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	releases := remote.ParseReleases(out.String())
 	chosen, err := chooseReleases(t, releases, words[1:])
 	if err != nil {
-		report.Fail(os.Stderr, color, err)
+		report.Fail(err)
 		return 1
 	}
 	if len(chosen) == 0 {
-		fmt.Fprintln(os.Stderr, "No failed releases: nothing to remove.")
+		report.Info("no failed releases: nothing to remove")
 		return 0
 	}
 	where := t.Host + ":" + t.Path
 	if !yes {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			report.Fail(os.Stderr, color, &report.Error{
+			report.Fail(&report.Failure{
 				Msg:   "--releases remove asks first, and there is no terminal to ask at",
-				Fixes: []string{"Add --yes:\ndevopsy @" + targetRef(t) + " --releases " + strings.Join(args, " ") + " --yes"},
+				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --releases "+strings.Join(args, " ")+" --yes")},
 			})
 			return 1
 		}
+		var lines []string
 		for _, r := range chosen {
-			fmt.Fprintln(os.Stderr, r.Line())
+			lines = append(lines, r.Line())
 		}
 		what := "this release"
 		if len(chosen) > 1 {
 			what = fmt.Sprintf("these %d releases", len(chosen))
 		}
-		fmt.Fprintf(os.Stderr, "Remove %s from %s, and the images no other release holds? Rollbacks cannot go back to them. [y/N] ", what, where)
-		line, _ := stdinReader.ReadString('\n')
-		if a := strings.TrimSpace(line); !strings.EqualFold(a, "y") && !strings.EqualFold(a, "yes") {
-			cli.Fprint(os.Stderr, red, "Nothing removed.", color)
+		report.Info(fmt.Sprintf("this removes %s from %s, and the images no other release holds: rollbacks cannot go back to them", what, where), lines...)
+		if !report.Default().Confirm(stdinReader, "remove "+what+"?") {
+			report.Error("nothing removed")
 			return 1
 		}
 	}
@@ -98,7 +98,7 @@ func runReleases(t *remote.Target, projectName string, args []string, color bool
 	}
 	code, err = remote.SSH(t, remote.ReleasesRemoveScript(t, projectName, ids, slices.Contains(words[1:], "failed")), bytes.NewReader(nil), nil, false)
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 	return code
@@ -142,27 +142,27 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 		}
 		switch {
 		case len(match) == 0:
-			return nil, &report.Error{
+			return nil, &report.Failure{
 				Msg:     fmt.Sprintf("%s has no release %s: nothing removed", t.Address, w),
-				Details: []string{"Its releases: " + strings.Join(ids, " ")},
+				Details: []string{"its releases: " + strings.Join(ids, " ")},
 			}
 		case len(match) > 1:
 			var m []string
 			for _, r := range match {
 				m = append(m, r.ID)
 			}
-			return nil, &report.Error{
+			return nil, &report.Failure{
 				Msg:     fmt.Sprintf("%s names several releases of %s: nothing removed", w, t.Address),
-				Details: []string{"It starts " + strings.Join(m, " and ") + "."},
-				Fixes:   []string{"Give more of the id."},
+				Details: []string{"it starts " + strings.Join(m, " and ")},
+				Fixes:   []report.Remedy{report.Fix("give more of the id")},
 			}
 		case match[0].Current:
-			return nil, &report.Error{
+			return nil, &report.Failure{
 				Msg:     fmt.Sprintf("release %s is the current one of %s: nothing removed", match[0].ID, t.Address),
-				Details: []string{"The release running there stays."},
-				Fixes: []string{
-					"Release again, then remove it:\ndevopsy @" + releaseRef(t) + " --release",
-					"Roll back, then remove it:\ndevopsy @" + releaseRef(t) + " --rollback",
+				Details: []string{"the release running there stays"},
+				Fixes: []report.Remedy{
+					report.Fix("release again, then remove it:", "devopsy @"+releaseRef(t)+" --release"),
+					report.Fix("roll back, then remove it:", "devopsy @"+releaseRef(t)+" --rollback"),
 				},
 			}
 		}

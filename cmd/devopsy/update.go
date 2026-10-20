@@ -14,14 +14,14 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/update"
 )
 
 // runUpgrade handles `devopsy --upgrade [tag]`.
 func runUpgrade(args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) > 1 {
@@ -55,7 +55,7 @@ func runUpgrade(args []string, color bool) int {
 		}
 		update.Remember(update.CacheFile(), tag)
 		if !update.Newer(tag, version) {
-			fmt.Fprintf(os.Stderr, "devopsy %s is the latest release.\n", version)
+			report.Info(fmt.Sprintf("devopsy %s is the latest release", version))
 			return 0
 		}
 	}
@@ -66,7 +66,7 @@ func runUpgrade(args []string, color bool) int {
 	} else if err != nil {
 		return fail(err.Error())
 	}
-	cli.Fprint(os.Stderr, cyan, fmt.Sprintf("Downloading devopsy %s...", tag), color)
+	report.Info(fmt.Sprintf("downloading devopsy %s", tag))
 	bin, err := update.Download(ctx, update.Repo, tag)
 	if err == nil {
 		err = update.Replace(tmp, exe, bin)
@@ -78,9 +78,9 @@ func runUpgrade(args []string, color bool) int {
 		return fail(err.Error())
 	}
 	if v := strings.TrimPrefix(tag, "v"); v == version {
-		fmt.Fprintf(os.Stderr, "devopsy %s reinstalled (%s).\n", v, exe)
+		report.Info(fmt.Sprintf("devopsy %s reinstalled (%s)", v, exe))
 	} else {
-		fmt.Fprintf(os.Stderr, "devopsy changed from %s to %s (%s).\n", version, v, exe)
+		report.Info(fmt.Sprintf("devopsy changed from %s to %s (%s)", version, v, exe))
 	}
 	return 0
 }
@@ -129,7 +129,7 @@ func updateNotice(color bool) {
 	if exe, err := os.Executable(); err == nil {
 		cmd = upgradeCommand(exe)
 	}
-	cli.Fprint(os.Stderr, yellow, fmt.Sprintf("devopsy %s is available (this is %s): %s", strings.TrimPrefix(latest, "v"), version, cmd), color)
+	report.Warn(fmt.Sprintf("devopsy %s is available (this is %s)", strings.TrimPrefix(latest, "v"), version), "to upgrade:", report.CmdMark+cmd)
 }
 
 // upgradeCommand is what upgrades the binary at exe: with sudo when its

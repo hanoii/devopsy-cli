@@ -7,10 +7,9 @@ import (
 	"regexp"
 	"strings"
 
-	"golang.org/x/term"
-
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runInit implements `devopsy --init [project]`: a new .devopsy/config.yaml,
@@ -19,7 +18,7 @@ import (
 // existing config is never touched: --debug schema documents every key.
 func runInit(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Error(msg)
 		return 1
 	}
 	if len(args) > 1 {
@@ -31,7 +30,7 @@ func runInit(cwd string, args []string, color bool) int {
 	}
 	file := filepath.Join(dot, remote.ConfigFile)
 	if _, err := os.Stat(file); err == nil {
-		cli.Fprint(os.Stderr, cyan, file+" exists: nothing to do. devopsy --debug schema documents every key.", color)
+		report.Info(file+" exists: nothing to do", "devopsy --debug schema documents every key")
 		return 0
 	}
 
@@ -40,13 +39,8 @@ func runInit(cwd string, args []string, color bool) int {
 	switch {
 	case len(args) == 1:
 		name = args[0]
-	case term.IsTerminal(int(os.Stdin.Fd())):
-		fmt.Fprintf(os.Stderr, "The project's name on servers (its directory and compose names) [%s]: ", suggest)
-		line, _ := stdinReader.ReadString('\n')
-		name = strings.TrimSpace(line)
-		if name == "" {
-			name = suggest
-		}
+	case atTerminal():
+		name = report.Default().Input(stdinReader, "the project's name on servers (its directory and compose names)", suggest)
 	default:
 		return fail("devopsy --init <project>: name the project when not at a terminal (" + suggest + "?)")
 	}
@@ -68,12 +62,10 @@ environments:
 	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
 		return fail(err.Error())
 	}
-	cli.Fprint(os.Stderr, cyan, "Wrote "+file+".", color)
+	then := "then release with:"
 	if _, err := os.Stat(filepath.Join(dot, "compose.yaml")); err != nil {
-		fmt.Fprintf(os.Stderr, "Add %s, then ", filepath.Join(dot, "compose.yaml"))
-	} else {
-		fmt.Fprint(os.Stderr, "Then ")
+		then = "add " + filepath.Join(dot, "compose.yaml") + ", then release with:"
 	}
-	fmt.Fprint(os.Stderr, "release with: devopsy @<server>:prod --release\n")
+	report.Info("wrote "+file, then, report.CmdMark+"devopsy @<server>:prod --release")
 	return 0
 }

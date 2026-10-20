@@ -99,7 +99,7 @@ func TestSyncServices(t *testing.T) {
 		t.Errorf("whole mnt: %s", got)
 	}
 	// Then the unlabeled and stream services' entries go too: a notice.
-	if got, want := SyncWholeNotice(services), "devopsy: all copies mnt whole, database (stream: database), plain (skip: plain), search (stream: index) included: mount mnt's entries (./mnt/database) on all instead of ./mnt, so each copies by its own label"; got != want {
+	if got, want := SyncWholeNotice(services), "all copies mnt whole, database (stream: database), plain (skip: plain), search (stream: index) included: mount mnt's entries (./mnt/database) on all instead of ./mnt, so each copies by its own label"; got != want {
 		t.Errorf("whole mnt notice:\n%s\n%s", got, want)
 	}
 	if got, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.sync":"rsync"},"volumes":[{"type":"bind","source":"`+dot+`/mnt"}]}}}`), dot); err != nil || got[0].Dirs[0] != "." || SyncDirs(got)[0] != "." {

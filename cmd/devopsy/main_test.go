@@ -138,13 +138,13 @@ func TestEndToEnd(t *testing.T) {
 	// (the show command calls devopsy show) are verbose too.
 	for _, flag := range []string{"-v", "-vv"} {
 		out, code = runDevopsy(t, sub, nil, flag, "show")
-		if code != 0 || strings.Count(out, "devopsy: project "+dot) != 2 ||
-			!strings.Contains(out, "devopsy: running '"+dot+"/commands/show'") {
+		if code != 0 || strings.Count(out, "devopsy: debug: project "+dot) != 2 ||
+			!strings.Contains(out, "devopsy: debug: running '"+dot+"/commands/show'") {
 			t.Fatalf("%s (%d):\n%s", flag, code, out)
 		}
 	}
 	out, code = runDevopsy(t, sub, []string{"DEVOPSY_VERBOSE=true"}, "ps")
-	if code != 0 || !strings.Contains(out, "devopsy: loaded "+dot+"/.env") {
+	if code != 0 || !strings.Contains(out, "devopsy: debug: loaded "+dot+"/.env") {
 		t.Fatalf("DEVOPSY_VERBOSE (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, sub, nil, "ps")
@@ -258,13 +258,13 @@ func TestUserTargets(t *testing.T) {
 
 	// devopsy's flags for servers, without a target, say so.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--rollback")
-	if code == 0 || !strings.Contains(out, "--rollback needs a target: devopsy @<target> --rollback (targets: main, vm1-traefik)") {
+	if code == 0 || !strings.Contains(out, "devopsy: error: --rollback needs a target\ndevopsy: | targets: main, vm1-traefik\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @<target> --rollback\n") {
 		t.Errorf("--rollback without a target (%d):\n%s", code, out)
 	}
 	// --release without one runs in place, from defaults:, which this
 	// project has none of.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), withHome, "--release")
-	if code == 0 || !strings.Contains(out, "[error] the project has no release steps under defaults:") || !strings.Contains(out, "devopsy @<target> --release") {
+	if code == 0 || !strings.Contains(out, "devopsy: error: the project has no release steps under defaults:") || !strings.Contains(out, "devopsy @<target> --release") {
 		t.Errorf("--release without a target (%d):\n%s", code, out)
 	}
 
@@ -340,13 +340,13 @@ func TestRemoteVerbose(t *testing.T) {
 	// true stands in for ssh: only devopsy's own output remains.
 	env := []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}
 	out, code := runDevopsy(t, project, env, "-vv", "@prod", "exec", "db", "dotenv-secret-value")
-	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server, running:") ||
+	if code != 0 || !strings.Contains(out, "devopsy: debug: ssh -T devopsy@server\ndevopsy: trace: running:\n") ||
 		!strings.Contains(out, "DEVOPSY_VERBOSE=1 COMPOSE_PROJECT_NAME=") ||
 		!strings.Contains(out, "'exec' 'db' '***'") || strings.Contains(out, "dotenv-secret-value") {
 		t.Errorf("-vv (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, project, env, "-v", "@prod", "exec", "db", "dotenv-secret-value")
-	if code != 0 || !strings.Contains(out, "devopsy: ssh -T devopsy@server\n") || strings.Contains(out, "running:") {
+	if code != 0 || !strings.Contains(out, "devopsy: debug: ssh -T devopsy@server\n") || strings.Contains(out, "running:") {
 		t.Errorf("-v (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=true", "DEVOPSY_SERVER=devopsy@server"}, "@prod", "ps")
@@ -387,7 +387,7 @@ func TestRemoteVars(t *testing.T) {
 	}
 
 	// From the project's .env, then from stdin.
-	if out, code := run("", "@prod", "--vars", "set", "REG_USER", "REG_PASSWORD"); code != 0 || !strings.Contains(out, "Set REG_USER, REG_PASSWORD in devopsy@server:"+server+"/shared/.env") {
+	if out, code := run("", "@prod", "--vars", "set", "REG_USER", "REG_PASSWORD"); code != 0 || !strings.Contains(out, "devopsy: set REG_USER, REG_PASSWORD in devopsy@server:"+server+"/shared/.env") {
 		t.Fatalf("set (%d):\n%s", code, out)
 	}
 	if out, code := run("from-stdin\n", "@prod", "--vars", "set", "TOKEN"); code != 0 {
@@ -418,7 +418,7 @@ func TestRemoteVars(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "\x1b[") {
 		t.Errorf("FORCE_COLOR: %v\n%q", err, out)
 	}
-	if out, code := run("", "@prod", "--vars", "unset", "TOKEN"); code != 0 || !strings.Contains(out, "Unset TOKEN") {
+	if out, code := run("", "@prod", "--vars", "unset", "TOKEN"); code != 0 || !strings.Contains(out, "devopsy: unset TOKEN") {
 		t.Fatalf("unset (%d):\n%s", code, out)
 	}
 	if out, code := run("", "@prod", "--vars", "get", "TOKEN"); code == 0 || !strings.Contains(out, "TOKEN is not set") {
@@ -582,7 +582,7 @@ func TestReleaseSteps(t *testing.T) {
 
 	// A variable named like a secret that secrets: does not list stops
 	// the release before anything runs, --yes or not; public: lets it go.
-	if out, code := run(nil, "@prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "SECRET looks like a secret, but `secrets:` does not list it.") || strings.Contains(out, "check target") {
+	if out, code := run(nil, "@prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "devopsy: error: SECRET looks like a secret, but secrets: does not list it\n") || strings.Contains(out, "check target") {
 		t.Fatalf("unnamed secret (%d):\n%s", code, out)
 	}
 	targets = "public: [SECRET]\n" + targets
@@ -737,8 +737,8 @@ func TestDebugTargets(t *testing.T) {
 	}
 	// --sync fails before any connection, with why and the two fixes.
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env[:1], "@h:dev", "--sync", "--yes")
-	if code == 0 || !strings.Contains(out, "[error] dev's parent, prod, has no server\ndevopsy reads a parent's server from variables only.") ||
-		!strings.Contains(out, "To fix it, do one of these:\n1. Set prod's server in .devopsy/.env, as the templates do: DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER for every environment)\n2. Sync from an address instead:\ndevopsy @h:dev --sync --from @h:prod\n") {
+	if code == 0 || !strings.Contains(out, "devopsy: error: dev's parent, prod, has no server\ndevopsy: | devopsy reads a parent's server from variables only:") ||
+		!strings.Contains(out, "devopsy: | to fix it, do one of these:\ndevopsy: | 1. set prod's server in .devopsy/.env, as the templates do: DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER for every environment)\ndevopsy: | 2. sync from an address instead:\ndevopsy: |    $ devopsy @h:dev --sync --from @h:prod\n") {
 		t.Errorf("--sync without a parent's server (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug")
@@ -918,7 +918,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
 	// A new instance asks first; without a terminal, --yes.
-	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `New instance: devopsy@server has no "b" instance of shop yet.`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
+	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)
 	}
 	out, code := run(nil, "@b/prod", "--release", "--yes")
@@ -982,7 +982,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	// Instance c has no environment left: kept, with a warning saying
 	// how; --purge removes it, also once the environment is gone. The
 	// project's stays: b is still there.
-	if !strings.Contains(out, "[warning] devopsy@server keeps "+filepath.Join(root, "shop", "c")) || !strings.Contains(out, "devopsy @devopsy@server:c/pr-12 --destroy --yes --purge") {
+	if !strings.Contains(out, "devopsy: warning: devopsy@server keeps "+filepath.Join(root, "shop", "c")) || !strings.Contains(out, "devopsy: | $ devopsy @devopsy@server:c/pr-12 --destroy --yes --purge") {
 		t.Errorf("no warning about what is left:\n%s", out)
 	}
 	if out, code := run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes", "--purge"); code != 0 || !strings.Contains(out, "removed "+filepath.Join(root, "shop", "c")) {
@@ -1152,7 +1152,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	// there; the private key never sent.
 	priv := filepath.Join(tmp, "ci-key")
 	out, code := run("", "--ssh-keys-generate", "ci-server", "--out", priv)
-	if code != 0 || !strings.Contains(out, "Made SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "private key "+priv+", public key "+priv+".pub") {
+	if code != 0 || !strings.Contains(out, "devopsy: made SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "private key "+priv+", public key "+priv+".pub") {
 		t.Fatalf("generate (%d):\n%s", code, out)
 	}
 	if _, err := os.Stat(priv); err != nil {
@@ -1168,7 +1168,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 		t.Errorf("list without a target (%d):\n%s", code, out)
 	}
 	out, code = run("", "@prod", "--ssh-keys", "add", priv+".pub", "--restricted")
-	if code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "Restricted") {
+	if code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(ci-server)") || !strings.Contains(out, "devopsy: | restricted:") {
 		t.Fatalf("add restricted (%d):\n%s", code, out)
 	}
 	if got := readString(authorized); !strings.HasPrefix(got, "restrict,agent-forwarding,port-forwarding ssh-ed25519 ") || !strings.Contains(got, " ci-server\n") || strings.Contains(got, "PRIVATE") {
@@ -1177,7 +1177,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	// add a plain key, from a file and from stdin, never twice.
 	pub := filepath.Join(tmp, "sample.pub")
 	write(t, pub, key+"\n", 0o644)
-	if out, code := run("", "@prod", "--ssh-keys", "add", pub); code != 0 || !strings.Contains(out, "Authorized SHA256:") || !strings.Contains(out, "(sample@test) for devopsy@server") || strings.Contains(out, "Restricted") {
+	if out, code := run("", "@prod", "--ssh-keys", "add", pub); code != 0 || !strings.Contains(out, "devopsy: authorized SHA256:") || !strings.Contains(out, "(sample@test) for devopsy@server") || strings.Contains(out, "restricted:") {
 		t.Fatalf("add (%d):\n%s", code, out)
 	}
 	if out, code := run(key+"\n", "@prod", "--ssh-keys", "add", "-"); code != 3 || !strings.Contains(out, "authorized already") {
@@ -1194,7 +1194,7 @@ func TestRemoteSSHKeys(t *testing.T) {
 	if out, code := run("", "@prod", "--ssh-keys", "remove", "nobody@nowhere"); code != 1 || !strings.Contains(out, "matches none") {
 		t.Errorf("remove unknown (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--ssh-keys", "remove", "sample@test"); code != 0 || !strings.Contains(out, "Removed SHA256:") || strings.Contains(readString(authorized), "sample@test") {
+	if out, code := run("", "@prod", "--ssh-keys", "remove", "sample@test"); code != 0 || !strings.Contains(out, "devopsy: removed SHA256:") || strings.Contains(readString(authorized), "sample@test") {
 		t.Errorf("remove by comment (%d):\n%s", code, out)
 	}
 	fp := strings.TrimSpace(strings.SplitN(strings.SplitN(run2(t, run, "@prod", "--ssh-keys"), "SHA256:", 2)[1], " ", 2)[0])
@@ -1267,7 +1267,7 @@ func TestLocalDestroy(t *testing.T) {
 
 	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {destroy: destroy}\nenvironments: {prod: {}}\n", 0o644)
 	out, code = runDevopsy(t, tmp, nil, "--destroy")
-	if code == 0 || strings.Contains(out, "DESTROYED") || !strings.Contains(out, "add --yes when not at a terminal") {
+	if code == 0 || strings.Contains(out, "DESTROYED") || !strings.Contains(out, "devopsy: error: nothing removed: no terminal to confirm it on") || !strings.Contains(out, "add --yes to go on without asking") {
 		t.Errorf("--destroy without --yes or a terminal (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(dir, "mnt", "db", "data"), "x", 0o644)
@@ -1359,7 +1359,7 @@ func TestReleasesRemove(t *testing.T) {
 	if got := strings.Join(releases(), " "); got != ids[2]+" "+ids[4] {
 		t.Errorf("left %s, want %s %s", got, ids[2], ids[4])
 	}
-	if out, code := run(nil, "@prod", "--releases", "remove", "failed", "--yes"); code != 0 || !strings.Contains(out, "No failed releases") {
+	if out, code := run(nil, "@prod", "--releases", "remove", "failed", "--yes"); code != 0 || !strings.Contains(out, "devopsy: no failed releases") {
 		t.Errorf("no failed releases left (%d):\n%s", code, out)
 	}
 	// Each release's line, then its images (the fake docker's output).

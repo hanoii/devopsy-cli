@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -51,7 +52,7 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 			Path:    open,
 			Args:    cmdArgs,
 			Env:     p.env.Environ(),
-			Verbose: maskAll(secrets, append(p.verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
+			Verbose: maskAll(secrets, append(p.verbose, "running '"+strings.Join(cmdArgs, " ")+"'")),
 		}, nil
 	}
 
@@ -78,7 +79,11 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 			if err == nil && len(running) == 1 {
 				service = running[0]
 			} else {
-				return nil, &ExitError{Code: 1, Msg: fmt.Sprintf("--shell: which service? Name it (devopsy --shell <service>), or label it %s=true in compose.yaml. Services: %s", ShellLabel, strings.Join(services, ", "))}
+				return nil, &ExitError{Code: 1, Err: &report.Failure{
+					Msg:     "--shell: which service?",
+					Details: []string{"services: " + strings.Join(services, ", ")},
+					Fixes:   []report.Remedy{report.Fix("name it:", "devopsy --shell <service>"), report.Fix("label it " + ShellLabel + "=true in compose.yaml")},
+				}}
 			}
 		}
 	}
@@ -91,7 +96,7 @@ func shell(p *loadedProject, args []string) (*Plan, error) {
 		run, what = command, strings.Join(command, " ")
 	}
 	plan := p.compose(append(append(append([]string{"exec"}, args...), service), run...))
-	plan.Notice = secrets.Mask(fmt.Sprintf("Running 'docker compose exec %s' (%s)...", strings.TrimSpace(strings.Join(args, " ")+" "+service), what))
+	plan.Notice = secrets.Mask(fmt.Sprintf("running 'docker compose exec %s' (%s)", strings.TrimSpace(strings.Join(args, " ")+" "+service), what))
 	plan.Verbose = maskAll(secrets, p.verbose)
 	return plan, nil
 }

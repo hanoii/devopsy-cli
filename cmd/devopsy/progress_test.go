@@ -17,30 +17,30 @@ func TestHumanBytes(t *testing.T) {
 
 func TestUploadProgress(t *testing.T) {
 	var out bytes.Buffer
-	p := newUploadProgress(&out, "", 2000)
+	p := newUploadProgress(&out, false, 2000)
 	p.add(1000)
-	if got := out.String(); !strings.Contains(got, "\r\033[KUploading 1.0 kB of 2.0 kB (50%)") {
+	if got := out.String(); !strings.Contains(got, "\r\033[Kdevopsy: uploading 1.0 kB of 2.0 kB (50%)") {
 		t.Fatalf("progress line: %q", got)
 	}
 	p.add(1000) // within progressEvery: not drawn
-	if strings.Count(out.String(), "Uploading") != 1 {
+	if strings.Count(out.String(), "uploading") != 1 {
 		t.Fatalf("drawn too often: %q", out.String())
 	}
-	if done := p.done(); !strings.HasPrefix(done, "Uploaded 2.0 kB in ") {
+	if done := p.done(); !strings.HasPrefix(done, "uploaded 2.0 kB in ") {
 		t.Fatalf("summary: %q", done)
 	}
 	if !strings.HasSuffix(out.String(), "\r\033[K") {
 		t.Fatalf("line not cleared: %q", out.String())
 	}
 	p.add(10) // after done: nothing drawn
-	if strings.Count(out.String(), "Uploading") != 1 {
+	if strings.Count(out.String(), "uploading") != 1 {
 		t.Fatalf("drawn after done: %q", out.String())
 	}
 
 	// Not a terminal: nothing drawn, the summary only.
-	q := newUploadProgress(nil, "", 10)
+	q := newUploadProgress(nil, false, 10)
 	q.add(10)
-	if done := q.done(); !strings.HasPrefix(done, "Uploaded 10 B in ") {
+	if done := q.done(); !strings.HasPrefix(done, "uploaded 10 B in ") {
 		t.Fatalf("summary: %q", done)
 	}
 }
@@ -49,12 +49,12 @@ func TestUploadProgress(t *testing.T) {
 // the progress line is not drawn again after it.
 func TestUploadProgressBefore(t *testing.T) {
 	var term, said bytes.Buffer
-	p := newUploadProgress(&term, "", 100)
+	p := newUploadProgress(&term, false, 100)
 	p.add(10)
 	_, _ = p.before(&said).Write([]byte("devopsy: upgrade it\n"))
 	p.drawn = time.Time{}
 	p.add(10)
-	if got := term.String(); !strings.HasSuffix(got, "\r\033[K") || strings.Count(got, "Uploading") != 1 || said.String() != "devopsy: upgrade it\n" {
+	if got := term.String(); !strings.HasSuffix(got, "\r\033[K") || strings.Count(got, "uploading") != 1 || said.String() != "devopsy: upgrade it\n" {
 		t.Errorf("terminal %q, said %q", got, said.String())
 	}
 }

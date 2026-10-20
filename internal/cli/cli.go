@@ -6,7 +6,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,9 +26,19 @@ const ProjectDirName = ".devopsy"
 type ExitError struct {
 	Code int
 	Msg  string
+	// Err, when set, is the error itself (a report.Failure with details
+	// and fixes), and Msg is unused.
+	Err error
 }
 
-func (e *ExitError) Error() string { return e.Msg }
+func (e *ExitError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Msg
+}
+
+func (e *ExitError) Unwrap() error { return e.Err }
 
 // Plan is the process to replace devopsy with.
 type Plan struct {
@@ -38,13 +47,13 @@ type Plan struct {
 	// Args includes argv[0].
 	Args []string
 	Env  []string
-	// Notice is printed to stderr before executing, if not empty. Secrets
-	// are masked.
+	// Notice is said at debug level (-v) before executing, if not empty.
+	// Secrets are masked.
 	Notice string
 	// NoticeFull replaces Notice with -vv, when Notice leaves a script out.
 	NoticeFull string
-	// Verbose lines are printed to stderr before Notice with -v.
-	// Secrets are masked.
+	// Verbose lines are said at debug level (-v), before Notice. Secrets
+	// are masked.
 	Verbose []string
 }
 
@@ -907,13 +916,13 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	env.Unset(CommandTargetEnv)
 	env.Set("DEVOPSY_PROJECT_DIR", projectDir)
 	env.first["DEVOPSY_PROJECT_DIR"] = []EnvDef{{Kind: EnvDevopsy, Source: "where it found " + ProjectDirName + "/", Value: projectDir}}
-	verbose := []string{"devopsy: project " + projectDir}
+	verbose := []string{"project " + projectDir}
 	load := func(file string) error {
 		if err := LoadDotenv(env, file); err != nil {
 			return err
 		}
 		if _, err := os.Stat(file); err == nil {
-			verbose = append(verbose, "devopsy: loaded "+file)
+			verbose = append(verbose, "loaded "+file)
 		}
 		return nil
 	}
@@ -1099,7 +1108,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 			Path:    custom,
 			Args:    cmdArgs,
 			Env:     env.Environ(),
-			Verbose: maskAll(secrets, append(verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
+			Verbose: maskAll(secrets, append(verbose, "running '"+strings.Join(cmdArgs, " ")+"'")),
 		}, nil
 	}
 
@@ -1133,9 +1142,9 @@ func (plan *Plan) running(secrets *Secrets) {
 			script = true
 		}
 	}
-	plan.Notice = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(short, " ")))
+	plan.Notice = secrets.Mask(fmt.Sprintf("running '%s'", strings.Join(short, " ")))
 	if script {
-		plan.NoticeFull = secrets.Mask(fmt.Sprintf("Running '%s'...", strings.Join(plan.Args, " ")))
+		plan.NoticeFull = secrets.Mask(fmt.Sprintf("running '%s'", strings.Join(plan.Args, " ")))
 	}
 }
 
@@ -1164,7 +1173,7 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 		Path:    file,
 		Args:    cmdArgs,
 		Env:     p.env.Environ(),
-		Verbose: maskAll(secrets, append(p.verbose, "devopsy: running '"+strings.Join(cmdArgs, " ")+"'")),
+		Verbose: maskAll(secrets, append(p.verbose, "running '"+strings.Join(cmdArgs, " ")+"'")),
 	}, nil
 }
 
@@ -1221,13 +1230,4 @@ func maskAll(s *Secrets, lines []string) []string {
 		out[i] = s.Mask(l)
 	}
 	return out
-}
-
-// Fprint writes msg to w, in color when color is set.
-func Fprint(w io.Writer, color string, msg string, useColor bool) {
-	if useColor && color != "" {
-		fmt.Fprintf(w, "%s%s\033[0m\n", color, msg)
-		return
-	}
-	fmt.Fprintln(w, msg)
 }

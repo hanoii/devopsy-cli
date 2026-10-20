@@ -10,12 +10,13 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/complete"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // runCompletion prints the completion script for a shell.
 func runCompletion(args []string, color bool) int {
 	if len(args) != 1 || complete.Script(args[0]) == "" {
-		cli.Fprint(os.Stderr, red, "Usage: devopsy --completion "+strings.Join(complete.Shells, "|"), color)
+		report.Error("usage: devopsy --completion " + strings.Join(complete.Shells, "|"))
 		return 1
 	}
 	fmt.Print(complete.Script(args[0]))

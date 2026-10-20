@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // imagesFlag is the hidden flag release scripts run on a server, under
@@ -98,7 +98,7 @@ func runImages(args []string, color bool) int {
 		code := 0
 		for _, r := range rest {
 			if err := s.Remove(r); err != nil {
-				cli.Fprint(os.Stderr, red, "devopsy: the images of "+filepath.Base(r)+" could not all be removed ("+err.Error()+"): the release stays for the next removal", color)
+				report.Error("the images of " + filepath.Base(r) + " could not all be removed (" + err.Error() + "): the release stays for the next removal")
 				code = 1
 			}
 		}
@@ -136,6 +136,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	cli.Fprint(os.Stderr, red, "devopsy: "+imagesFlag+" --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...", color)
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

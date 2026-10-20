@@ -15,16 +15,11 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/complete"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // Set at build time by GoReleaser.
 var version = "dev"
-
-const (
-	red    = "\033[0;31m"
-	cyan   = "\033[0;36m"
-	yellow = "\033[0;33m"
-)
 
 func main() {
 	os.Exit(run())
@@ -42,7 +37,10 @@ func run() int {
 		args = args[1:]
 	}
 	verboseLevel := cli.VerboseLevel(os.Getenv(cli.VerboseEnv))
-	verbose := verboseLevel > 0
+	// Everything devopsy says goes through report, on errOut: never a
+	// broken pipe when the session that called a server's devopsy is
+	// gone.
+	report.SetDefault(report.New(errOut, color, verboseLevel))
 
 	// These need no directory: they work anywhere, even where the working
 	// directory cannot be read (another user's, as root's is for a deploy
@@ -82,12 +80,14 @@ func run() int {
 			return runWatchSession(args[1:])
 		case remote.StdinGuardFlag:
 			return runStdinGuard()
+		case remote.SayFlag:
+			return runSay(args[1:])
 		}
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 
@@ -115,7 +115,7 @@ func run() int {
 	}
 	if args[0] == cli.CheckNamesFlag {
 		if len(args) != 2 {
-			cli.Fprint(os.Stderr, red, "devopsy: "+cli.CheckNamesFlag+" <environment directory>", color)
+			report.Error("usage: devopsy " + cli.CheckNamesFlag + " <environment directory>")
 			return 2
 		}
 		err := cli.ProjectConflict(cwd, args[1], os.Environ())
@@ -123,7 +123,7 @@ func run() int {
 			err = cli.NetworkConflicts(cwd, os.Environ())
 		}
 		if err != nil {
-			cli.Fprint(os.Stderr, red, "devopsy: "+err.Error(), color)
+			report.Fail(err)
 			return 1
 		}
 		return 0
@@ -167,11 +167,11 @@ func run() int {
 		for _, t := range remote.Targets(projectDir) {
 			names = append(names, t.Name)
 		}
-		msg := fmt.Sprintf("%s needs a target: devopsy @<target> %s", args[0], args[0])
+		var details []string
 		if len(names) > 0 {
-			msg += " (targets: " + strings.Join(names, ", ") + ")"
+			details = append(details, "targets: "+strings.Join(names, ", "))
 		}
-		cli.Fprint(os.Stderr, red, msg, color)
+		report.Fail(&report.Failure{Msg: args[0] + " needs a target", Details: details, Fixes: []report.Remedy{report.Fix("", "devopsy @<target> "+args[0])}})
 		return 1
 	}
 
@@ -187,22 +187,20 @@ func run() int {
 		fmt.Fprint(os.Stderr, styleFor(os.Stderr).help(help.Text))
 		return help.Code
 	case errors.As(err, &exitErr):
-		cli.Fprint(os.Stderr, red, exitErr.Msg, color)
+		report.Fail(exitErr)
 		return exitErr.Code
 	case err != nil:
-		cli.Fprint(os.Stderr, red, err.Error(), color)
+		report.Fail(err)
 		return 1
 	}
 
-	if verbose {
-		for _, line := range plan.Verbose {
-			cli.Fprint(os.Stderr, "", line, color)
-		}
+	for _, line := range plan.Verbose {
+		report.Debug(line)
 	}
 	path := plan.Path
 	if path == "docker" {
 		if path, err = exec.LookPath("docker"); err != nil {
-			cli.Fprint(os.Stderr, red, "docker not found in PATH", color)
+			report.Error("docker not found in PATH")
 			return 127
 		}
 	}
@@ -225,7 +223,7 @@ func run() int {
 		if verboseLevel > 1 && plan.NoticeFull != "" {
 			notice = plan.NoticeFull
 		}
-		cli.Fprint(os.Stderr, cyan, notice, color)
+		report.Debug(notice)
 	}
 	// Replace this process, so signals and the terminal go straight to the
 	// command, as with the shell version's exec.
@@ -234,7 +232,7 @@ func run() int {
 	if errors.Is(err, syscall.ENOEXEC) {
 		err = syscall.Exec("/bin/sh", append([]string{"/bin/sh"}, plan.Args...), plan.Env)
 	}
-	cli.Fprint(os.Stderr, red, fmt.Sprintf("%s: %v", plan.Args[0], err), color)
+	report.Error(fmt.Sprintf("%s: %v", plan.Args[0], err))
 	return 126
 }
 

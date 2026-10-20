@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // A release's directory, releases/<id>, holds the project as uploaded in
@@ -334,16 +335,9 @@ func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// say is a script's line that prints msg on stderr as it is: built in
-// Go, quoted, so nothing in it (a step's $VAR, a quote, $(...)) is ever
-// expanded or run on the server.
-func say(msg string) string {
-	return "echo " + Quote(msg) + " >&2\n"
-}
-
 // runningLine is the line before a step runs.
 func runningLine(args []string, phase string) string {
-	return say("devopsy: running 'devopsy " + strings.Join(args, " ") + "' (" + phase + ")")
+	return sayQuoted(report.InfoLevel, "running 'devopsy "+strings.Join(args, " ")+"' ("+phase+")")
 }
 
 func quoteAll(args []string) string {
@@ -359,7 +353,7 @@ func quoteAll(args []string) string {
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
-// colored locally as they arrive (Colorize), and ColorEnv is exported into
+// colored locally as they arrive (report.Colorize), and ColorEnv is exported into
 // every session for what the server can color itself.
 var Color bool
 
@@ -372,12 +366,9 @@ var TTY string
 // TTYEnv carries TTY to the server.
 const TTYEnv = "DEVOPSY_INTERNAL_TTY"
 
-// Trace, when set, receives each SSH command, and with TraceScripts the
-// script it runs.
-var (
-	Trace        func(string)
-	TraceScripts bool
-)
+// Trace, when set, says each SSH command at debug level (-v), and the
+// script it runs at trace level (-vv), with the project's secrets masked.
+var Trace *report.Logger
 
 // devopsyCall is the remote devopsy invocation, with the project name fixed
 // when compose.yaml has none (the release directory would name it). With
@@ -403,7 +394,7 @@ func lockWait(fd int, shared bool, what string) string {
 	if shared {
 		opt = "-s "
 	}
-	return fmt.Sprintf(`flock -n %s%d || { echo "devopsy: waiting for %s, up to 10 minutes" >&2; flock %s-w 600 %d || { echo "devopsy: %s did not end in 10 minutes" >&2; exit 75; }; }`, opt, fd, what, opt, fd, what)
+	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; exit 75; }; }`, opt, fd, what, opt, fd, what)
 }
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
@@ -412,7 +403,7 @@ func lockWait(fd int, shared bool, what string) string {
 // removed while it waited is no lock (whoever opens
 // the path next locks another file), so it opens the path again.
 func releaseLock(shared, create bool) string {
-	mk := `[ -d "$base" ] || { echo "devopsy: $base is gone" >&2; exit 1; }`
+	mk := `[ -d "$base" ] || { devopsy --say error "$base is gone"; exit 1; }`
 	if create {
 		mk = `mkdir -p "$base"`
 	}
@@ -441,8 +432,9 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // calling something an older one lacks, so it refuses before anything
 // changes instead of failing halfway. 1: --images; 2: --watch-session;
 // 3: --sync-services finish partial, settle, import <service> last,
-// --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id.
-const Protocol = 4
+// --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
+// 5: --say.
+const Protocol = 5
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -450,10 +442,11 @@ const Protocol = 4
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
 	// The detached update check would inherit the scripts' locks (fds 8
-	// and 9) and hold them while it asks GitHub.
+	// and 9) and hold them while it asks GitHub. The checks of the
+	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
-settings=$(devopsy --release-settings) || { echo "devopsy: the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)" >&2; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { echo "devopsy: the server's devopsy is older than this one needs: upgrade it (devopsy @` + cmp.Or(t.Alias, t.Address, t.Host) + ` --upgrade)" >&2; exit 1; }
+settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
+[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+cmp.Or(t.Alias, t.Address, t.Host)+" --upgrade)") + `; exit 1; }
 with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
@@ -488,11 +481,11 @@ func hintAddress(t *Target) string {
 // fails instead of making it again.
 func prelude(t *Target, create bool) string {
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base is a plain devopsy directory, not managed with releases: release and rollback do not apply" >&2
+  devopsy --say error "$base is a plain devopsy directory, not managed with releases: release and rollback do not apply"
   exit 1
 fi
 if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
-  echo "devopsy: $base/current is a directory, not a link to a release: containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root. Take them down (docker compose -p <project> down) and remove it (docker run --rm -v \"$base:/env\" alpine rm -rf /env/current), then release again" >&2
+  devopsy --say error "$base/current is a directory, not a link to a release" "containers of a failed release kept restarting and Docker recreated their bind mounts under it, as root" "take them down, remove it, then release again:" "` + report.CmdMark + `docker compose -p <project> down" "` + report.CmdMark + `docker run --rm -v \"$base:/env\" alpine rm -rf /env/current"
   exit 1
 fi
 ` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared/mnt"
@@ -511,7 +504,7 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 // would run again.
 func UploadScript(t *Target, id string) string {
 	return prelude(t, true) + fmt.Sprintf(`rel="$base/releases/"%s
-[ ! -e "$rel" ] || { echo "devopsy: release $(basename "$rel") exists already on $base (another release in the same second?): try again" >&2; exit 1; }
+[ ! -e "$rel" ] || { devopsy --say error "release $(basename "$rel") exists already on $base (another release in the same second?): try again"; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
@@ -594,8 +587,8 @@ fi
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
-		s += `id=$(img rollback-target "$base") || { echo "devopsy: no release before the current one" >&2; exit 1; }
-echo "devopsy: rolling back to $id" >&2
+		s += `id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
+devopsy --say info "rolling back to $id"
 ` + RollbackNotLive
 	} else {
 		s += "id=" + Quote(id) + "\n" + NotLive
@@ -607,7 +600,7 @@ echo "devopsy: rolling back to $id" >&2
 	}
 	s += `rel="$base/releases/$id"
 code="$rel/` + CodeDir + `"
-[ -d "$code" ] || { echo "devopsy: release $id is gone: removed while it waited for the release lock" >&2; exit 1; }
+[ -d "$code" ] || { devopsy --say error "release $id is gone: removed while it waited for the release lock"; exit 1; }
 `
 	if sync == nil && !rollback {
 		s += partialGuard(t, projectName, "not_live 1")
@@ -637,7 +630,7 @@ fi
 		for _, args := range p.Before {
 			s += step("before", `"$base/current"`, args, "not_live $?")
 		}
-		s += "else\n  echo \"devopsy: no current release: remote before steps skipped\" >&2\nfi\n"
+		s += "else\n  devopsy --say warning \"no current release: remote before steps skipped\"\nfi\n"
 	}
 	s += `# Always linked, so editing the server's .env applies without a new release.
 touch "$base/shared/.env"
@@ -723,9 +716,9 @@ done
       (umask 077; : >>"$1/` + ServerLogFile + `") || true
       exec >>"$1/` + ServerLogFile + `" 2>&1
       echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') cancel.$$"
-      echo "devopsy: the session is gone: undoing the fetch"
+      devopsy --say warning "the session is gone: undoing the fetch"
     fi
-    [ -z "$fetch_sig" ] || echo "devopsy: the images' fetch was interrupted" >&2
+    [ -z "$fetch_sig" ] || devopsy --say error "the images' fetch was interrupted"
     ` + undo + `
   fi
   image_unlock
@@ -747,7 +740,7 @@ fetch_release "$rel" || fr=$?
 # is ignored, so the write fails and set -e ends it), the marker kept for
 # img recover and current as it was. img bookmark ignores SIGPIPE, so
 # nothing died sooner.
-[ "$fr" -ne 0 ] || echo "devopsy: the images of $id are ready" >&2
+[ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready"
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 out="$rel/` + ServerLogFile + `"
@@ -768,7 +761,7 @@ exec 7<&-
 `
 	}
 	s += `make_current "releases/$id"
-echo "devopsy: current is now $id" >&2 || true
+devopsy --say info "current is now $id" || true
 `
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
@@ -779,13 +772,13 @@ echo "devopsy: current is now $id" >&2 || true
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	restart := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-      echo "devopsy: not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync" >&2
+      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync"
       exit "$status"
     fi
-    get_images "$base/$prev" || echo "devopsy: getting the images of ${prev#releases/} failed ($?): restarting it anyway" >&2
+    get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
 `
-	restart += `    echo "devopsy: restarting ${prev#releases/} with its own run step" >&2
-    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || echo "devopsy: restarting ${prev#releases/} failed too ($?): check the site" >&2
+	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
@@ -816,10 +809,10 @@ fi
   touch "$rel/` + FailedFile + `"
   if [ -n "$prev" ]; then
     make_current "$prev"
-    echo "devopsy: $failed failed ($status), current is back to ${prev#releases/}" >&2
+    devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
     rm -f "$base/current"
-    echo "devopsy: $failed failed ($status), no previous release to go back to" >&2
+    devopsy --say error "$failed failed ($status), no previous release to go back to"
   fi
   exit "$status"
 fi
@@ -828,7 +821,7 @@ fi
 		// The release it left: never counted toward keep, never rolled back
 		// to again, its log kept until pruning takes it.
 		s += `: >"$base/$prev/` + RolledBackFile + `"
-echo "devopsy: ${prev#releases/} is marked rolled back" >&2
+devopsy --say info "${prev#releases/} is marked rolled back"
 `
 	}
 	// keep: the target's or project's, else the server's, at most its
@@ -839,7 +832,7 @@ echo "devopsy: ${prev#releases/} is marked rolled back" >&2
 	s += fmt.Sprintf(`k=%d
 [ "$k" -gt 0 ] || k=$keep
 if [ "$k" -gt "$max_keep" ]; then
-  echo "devopsy: keeping $max_keep releases, this server's max_keep, not $k" >&2
+  devopsy --say warning "keeping $max_keep releases, this server's max_keep, not $k"
   k=$max_keep
 fi
 # What pruning removes (images.ToPrune): releases older than the k-th
@@ -856,11 +849,11 @@ if [ -n "$pruned" ]; then
     img prune
     image_unlock
   else
-    echo "devopsy: pruning skipped: $il_busy; the next release prunes" >&2
+    devopsy --say warning "pruning skipped: $il_busy; the next release prunes"
   fi
 fi
 `, t.Keep)
-	afterFail := `{ s=$?; echo "devopsy: an after step failed ($s): it stays live" >&2; exit "$s"; }`
+	afterFail := `{ s=$?; devopsy --say error "an after step failed ($s): it stays live"; exit "$s"; }`
 	if rollback {
 		s += `(cd "$base/current" && ` + steps("after") + `) || ` + afterFail + "\n"
 	}
@@ -997,7 +990,7 @@ func partialGuard(t *Target, projectName, refuse string) string {
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-  echo "devopsy: @` + t.Address + `'s data is from a sync that did not complete ($(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)), and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync, or --release-sync" >&2
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete ($(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)), and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync, or --release-sync"
   ` + refuse + `
 fi
 `
@@ -1024,7 +1017,7 @@ const SwitchMarker = "devopsy-internal-switch"
 // followed by the marker's tag: --log puts the server's part with that
 // tag (its LogSection line's) after it, so neither two machines' clocks
 // nor a part whose session log was never saved decide where one goes.
-const LogAnchor = "devopsy: from here, the server's own log (" + ServerLogFile + "):"
+const LogAnchor = report.Prefix + "from here, the server's own log (" + ServerLogFile + "):"
 
 // LogServerPart separates LogReadScript's two logs.
 const LogServerPart = "devopsy-internal-server-log"
@@ -1114,20 +1107,20 @@ image_lock() {
       exec 8>&-
       return 75
     fi
-    echo "devopsy: waiting for the server's images, held by $(image_holders), up to 10 minutes" >&2
+    devopsy --say info "waiting for the server's images, held by $(image_holders), up to 10 minutes"
     il_s=0
     flock -w 600 $il_opt 8 || il_s=$?
     if [ "$il_s" -ne 0 ]; then
       il_busy="the server's images are still held by $(image_holders)"
       # Above 128, a signal ended the wait (Ctrl-C), not the 10 minutes.
-      [ "$il_s" -gt 128 ] || echo "devopsy: $il_busy after 10 minutes" >&2
+      [ "$il_s" -gt 128 ] || devopsy --say error "$il_busy after 10 minutes"
       exec 8>&-
       return 75
     fi
   fi
   if [ "$1" = exclusive ] && ! docker version >/dev/null 2>&1; then
     il_busy="Docker is not answering"
-    [ "${3:-}" = now ] || echo "devopsy: $il_busy" >&2
+    [ "${3:-}" = now ] || devopsy --say warning "$il_busy"
     exec 8>&-
     return 75
   fi
@@ -1170,7 +1163,7 @@ func fetchImages(projectName, mode string) string {
 		return ""
 	}
 	return `fetch_images() {
-  echo "devopsy: ` + what + `" >&2
+  devopsy --say info "` + what + `"
   (cd "$1/` + CodeDir + `" && with_tty ` + Quote(cmd) + `)
 }
 `
@@ -1182,7 +1175,7 @@ func fetchImages(projectName, mode string) string {
 // remove failed, takes it away. $rel and $id are set.
 const NotLive = `not_live() {
   touch "$rel/` + FailedFile + `"
-  echo "devopsy: release $id not made current" >&2
+  devopsy --say error "release $id not made current"
   exit "$1"
 }
 `
@@ -1190,7 +1183,7 @@ const NotLive = `not_live() {
 // RollbackNotLive is not_live for a rollback: the release it would restore
 // stays as it was.
 const RollbackNotLive = `not_live() {
-  echo "devopsy: nothing changed: current is still ${prev#releases/}" >&2
+  devopsy --say error "nothing changed: current is still ${prev#releases/}"
   exit "$1"
 }
 `
@@ -1214,7 +1207,7 @@ func enter(t *Target) string {
 elif [ -d "$base/.devopsy" ]; then
   cd "$base"
 else
-  echo "devopsy: $base has no release and no .devopsy/ project: run 'devopsy @%s --release' first" >&2
+  devopsy --say error "$base has no release and no .devopsy/ project: run 'devopsy @%s --release' first"
   exit 1
 fi
 `, hintAddress(t))
@@ -1250,7 +1243,7 @@ func UpgradeScript(args []string) string {
 // separated. First, the project's ImagesLeftFile, each line after left.
 func ReleasesScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base is a plain devopsy directory, without releases" >&2
+  devopsy --say error "$base is a plain devopsy directory, without releases"
   exit 1
 fi
 left=`+leftPath(t)+`
@@ -1412,12 +1405,12 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
 		flag = "--gone-ok "
 	}
 	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base has no releases" >&2
+  devopsy --say error "$base has no releases"
   exit 1
 fi
 ` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-image_lock exclusive removing || { echo "devopsy: nothing removed" >&2; exit 75; }
+image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
 img recover "$base" ${prev:+"$base/$prev"}
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
@@ -1478,11 +1471,8 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
 		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
-		if TraceScripts {
-			Trace(fmt.Sprintf("devopsy: ssh %s %s, running:\n%s", opts, t.Host, strings.TrimRight(script, "\n")))
-		} else {
-			Trace(fmt.Sprintf("devopsy: ssh %s %s", opts, t.Host))
-		}
+		Trace.Debug(fmt.Sprintf("ssh %s %s", opts, t.Host))
+		Trace.Trace("running:\n" + strings.TrimRight(script, "\n"))
 	}
 
 	cmd := SSHCommand(args...)
@@ -1503,14 +1493,14 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	}
 	// The terminal gets the session's lines colored (Color); a caller's
 	// own writer (parsed output) and the log get them as they are.
-	var colored []*ColorWriter
+	var colored []*report.ColorWriter
 	term := func(f *os.File) io.Writer {
 		// Never a tty session: the user types there, and a held prompt
 		// (no newline yet) would lag; the server's tty colors it anyway.
 		if !Color || tty {
 			return f
 		}
-		c := Colorize(f)
+		c := report.Colorize(f)
 		colored = append(colored, c)
 		return c
 	}
@@ -1625,17 +1615,17 @@ func LogReadScript(t *Target, prefix string) string {
 	s := "set -eu\n" + basePrelude(t)
 	if prefix == "" {
 		s += `f=$(ls -1t "$base"/releases/*/` + LogFile + ` "$base"/releases/*/` + ServerLogFile + ` 2>/dev/null | head -n 1) || true
-[ -n "$f" ] || { echo "devopsy: no release logs in $base/releases yet" >&2; exit 1; }
+[ -n "$f" ] || { devopsy --say error "no release logs in $base/releases yet"; exit 1; }
 d=$(dirname "$f")
 `
 	} else {
 		s += fmt.Sprintf(`r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | grep -- "^"%s | sort -r | head -n 1) || true
-[ -n "$r" ] || { echo "devopsy: no release starting with "%s" in $base/releases" >&2; exit 1; }
+[ -n "$r" ] || { devopsy --say error "no release starting with "%s" in $base/releases"; exit 1; }
 d="$base/releases/$r"
-[ -f "$d/%s" ] || [ -f "$d/%s" ] || { echo "devopsy: release $r has no log" >&2; exit 1; }
+[ -f "$d/%s" ] || [ -f "$d/%s" ] || { devopsy --say error "release $r has no log"; exit 1; }
 `, Quote(prefix), Quote(prefix), LogFile, ServerLogFile)
 	}
-	return s + `echo "devopsy: the logs in $d" >&2
+	return s + `devopsy --say info "the logs in $d"
 cat "$d/` + LogFile + `" 2>/dev/null || true
 echo "` + LogServerPart + `"
 cat "$d/` + ServerLogFile + `" 2>/dev/null || true
@@ -1652,18 +1642,18 @@ cat "$d/` + ServerLogFile + `" 2>/dev/null || true
 // directory. A failure before the removal removes nothing.
 func DestroyScript(t *Target, projectName string) string {
 	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base" ]; then
-  echo "devopsy: nothing at $base" >&2
+  devopsy --say info "nothing at $base"
   exit 0
 fi
 if [ "$base" = "$root" ] || [ "$base" = / ]; then
-  echo "devopsy: refusing to remove $base" >&2
+  devopsy --say error "refusing to remove $base"
   exit 1
 fi
 if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  echo "devopsy: $base is a plain devopsy directory, not an environment with releases: remove it by hand" >&2
+  devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { echo "devopsy: $base stays as it was" >&2; exit 75; }
+` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -1673,24 +1663,24 @@ else
   [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; echo "devopsy: $base stays as it was" >&2; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; devopsy --say error "$base stays as it was"; exit "$s"; }
 else
-  echo "devopsy: no release: nothing to take down" >&2
+  devopsy --say info "no release: nothing to take down"
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
-  echo "devopsy: $base stays: its images are not all removed; run --destroy again" >&2
+  devopsy --say error "$base stays: its images are not all removed; run --destroy again"
   exit 1
 fi
 cd /
 ` + removeBase + ` || {
-  echo "devopsy: could not remove everything in $base" >&2
+  devopsy --say error "could not remove everything in $base"
   exit 1
 }
-echo "devopsy: removed $base" >&2
+devopsy --say info "removed $base"
 `
 }
 
@@ -1736,9 +1726,9 @@ func LeftoverScript(t *Target, remove bool) string {
 	act := `echo "$d"`
 	if remove {
 		act = `if [ -s "$d/` + ImagesLeftFile + `" ]; then
-  echo "devopsy: forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')" >&2
+  devopsy --say warning "forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')"
 fi
-rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" && echo "devopsy: removed $d" >&2`
+rm -f "$d/.env" "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" && devopsy --say info "removed $d"`
 	}
 	s := "set -eu\n" + basePrelude(t) + "child=.env\n"
 	for i := len(t.Levels) - 1; i >= 0; i-- {

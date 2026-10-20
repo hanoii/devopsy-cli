@@ -5,6 +5,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // uploadProgress draws a release's upload on one line of a terminal,
@@ -13,7 +15,7 @@ import (
 // total. Never logged: the release log gets done's line.
 type uploadProgress struct {
 	w      io.Writer // nil: nothing drawn (not a terminal)
-	color  string
+	color  bool
 	total  int64
 	start  time.Time
 	mu     sync.Mutex
@@ -27,7 +29,7 @@ type uploadProgress struct {
 
 const progressEvery = 100 * time.Millisecond
 
-func newUploadProgress(w io.Writer, color string, total int64) *uploadProgress {
+func newUploadProgress(w io.Writer, color bool, total int64) *uploadProgress {
 	return &uploadProgress{w: w, color: color, total: total, start: time.Now()}
 }
 
@@ -49,9 +51,9 @@ func (p *uploadProgress) add(n int64) {
 	if p.total > 0 {
 		pct = int(p.n * 100 / p.total)
 	}
-	line := fmt.Sprintf("Uploading %s of %s (%d%%), %s/s", humanBytes(p.n), humanBytes(p.total), pct, humanBytes(rate(p.n, time.Since(p.start))))
-	if p.color != "" {
-		line = p.color + line + "\033[0m"
+	line := report.Line(report.InfoLevel, fmt.Sprintf("uploading %s of %s (%d%%), %s/s", humanBytes(p.n), humanBytes(p.total), pct, humanBytes(rate(p.n, time.Since(p.start)))))
+	if p.color {
+		line = report.Paint(line)
 	}
 	fmt.Fprint(p.w, "\r\033[K"+line)
 }
@@ -89,7 +91,7 @@ func (p *uploadProgress) done() string {
 	p.mu.Lock()
 	d := p.last.Sub(p.first)
 	p.mu.Unlock()
-	return fmt.Sprintf("Uploaded %s in %s (%s/s).", humanBytes(p.total), d.Round(100*time.Millisecond), humanBytes(rate(p.total, d)))
+	return fmt.Sprintf("uploaded %s in %s (%s/s)", humanBytes(p.total), d.Round(100*time.Millisecond), humanBytes(rate(p.total, d)))
 }
 
 func rate(n int64, d time.Duration) int64 {
