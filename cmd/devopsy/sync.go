@@ -946,6 +946,17 @@ func runSyncHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	err = cmd.Run()
+	// What the hook left running in its group (a child it put in the
+	// background) ends with it: hooks run in the foreground, and nothing
+	// of one may write into a child past its sync. What it started
+	// outside its group (setsid, docker exec -d) is its own.
+	if cmd.Process != nil && syscall.Kill(-cmd.Process.Pid, 0) == nil {
+		report.Warn("the sync capability's " + strings.Join(args, " ") + " left processes running: ending them (hooks run in the foreground)")
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			err = nil
+		}
+	}
 	if ctx.Err() != nil {
 		return errors.New("interrupted")
 	}

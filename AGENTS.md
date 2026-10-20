@@ -1093,7 +1093,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   are required for a `stream` service), with that side's label lists
   (`cli.SyncLists`) and the sync's addresses and arguments in their
   environment (README). The holder's scripts (`syncPrepare`,
-  `syncFinish`) only call `--sync-services`.
+  `syncFinish`) only call `--sync-services`. Hooks run in the
+  foreground: what one leaves running in its group ends when it
+  returns, said; what it starts outside its group (`setsid`, `docker
+  exec -d`) is its own.
 - **The state record exists before anything can fail:** stopping
   records what it stops in `$base/.devopsy-sync.services` (`syncState`,
   `stop <name>` lines; `startSyncState`: the child's prepare creates it

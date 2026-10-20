@@ -1214,7 +1214,8 @@ lists them with their contracts):
   `--export` and `--import`. `prepare` and `finish` run only when their
   file is there, besides devopsy's own handling of the labels; `export`
   and `import` are required on their side when a service is `stream`
-  there, checked before anything stops.
+  there, checked before anything stops. Hooks run in the foreground:
+  what one leaves running in the background ends when it returns.
   - `prepare parent|child` runs on each side, in its current release,
     before anything is stopped there: the child's under its release lock,
     before the parent's side starts; the parent's under a shared hold of
