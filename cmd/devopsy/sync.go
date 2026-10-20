@@ -132,10 +132,10 @@ func sameHost(a, b string) bool {
 }
 
 // runSyncSession runs script, a holder (HolderScript, or ActivateScript
-// with a sync) on the child's server; once it prints the marker, the push
-// session on the parent's, then go or abort to the holder. The holder's
-// exit code is the result.
-func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) int {
+// with a sync when release) on the child's server; once it prints the
+// marker, the push session on the parent's, then go or abort to the
+// holder. The holder's exit code is the result.
+func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog, color bool) int {
 	log := report.Default().Tee(rlog.Line)
 	partial := func() {
 		log.Warn("@"+job.child.Address+" may hold a partial copy now", "devopsy @"+targetRef(job.child)+" --status says, and --sync completes it")
@@ -194,16 +194,26 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)
+	// What a lost connection leaves depends on how far the holder got:
+	// before the marker nothing copied (a release that syncs may have
+	// switched, and goes back), after the answer the run step is the
+	// server's.
+	marked, answered := false, false
 	var res result
 	select {
 	case res = <-done:
 	case <-sigs:
-		log.Error("interrupted: ending the session on @" + job.child.Address + ", which leaves it as it was")
+		if release {
+			log.Error("interrupted: cancelling the release on @" + job.child.Address + ": it does not go live, and past its switch the previous release comes back")
+		} else {
+			log.Error("interrupted: ending the session on @" + job.child.Address + ", which leaves it as it was")
+		}
 		endHolder()
 		<-done
 		flush()
 		return 130
 	case found := <-marker:
+		marked = true
 		base, id, _ := strings.Cut(found, "\t")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -248,6 +258,7 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		stopBeat()
 		_, _ = w.WriteString(answer)
 		w.Close()
+		answered = !interrupted && code == 0
 		if interrupted {
 			// The holder's ending is worth seeing, unless interrupted
 			// again: a copy that had completed goes on there.
@@ -286,7 +297,17 @@ func runSyncSession(job *syncJob, script string, rlog *releaseLog, color bool) i
 		return 1
 	}
 	if res.code == sshLost {
-		log.Error("the connection to @"+job.child.Address+" was lost: the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
+		lost := "the connection to @" + job.child.Address + " was lost"
+		switch {
+		case !marked && release:
+			log.Error(lost+" before the copy: the server cancels the release once it notices, within two minutes, and past its switch the previous release comes back", "devopsy @"+targetRef(job.child)+" --releases shows it")
+		case !marked:
+			log.Error(lost+" before the copy: the server leaves it as it was once it notices", "devopsy @"+targetRef(job.child)+" --status shows it")
+		case answered:
+			log.Error(lost+" after the copy: the run step goes on there", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+		default:
+			log.Error(lost+": the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
+		}
 	}
 	return res.code
 }
@@ -544,7 +565,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		return 1
 	}
 	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0}
-	code := runSyncSession(job, remote.HolderScript(t, projectName, o, run), rlog, color)
+	code := runSyncSession(job, remote.HolderScript(t, projectName, o, run), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))
