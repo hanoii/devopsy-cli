@@ -1462,9 +1462,10 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		report.Error(msg)
 		return 1
 	}
-	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare | finish go|abort|partial | settle | import <service> [last] | list"
+	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | list"
 	switch {
 	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle"):
+	case len(args) == 2 && args[0] == "prepare" && args[1] == "first":
 	case len(args) == 2 && args[0] == "finish" && slices.Contains([]string{"go", "abort", "partial"}, args[1]):
 	case len(args) == 2 && args[0] == "import":
 	case len(args) == 3 && args[0] == "import" && args[2] == "last":
@@ -1531,7 +1532,9 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		if err != nil {
 			return fail(err.Error())
 		}
-		if err := startSyncState(cwd, len(states) == 0); err != nil {
+		// A release with nothing current says so: a first one that
+		// failed may have left containers (an import's).
+		if err := startSyncState(cwd, len(states) == 0 || len(args) == 2); err != nil {
 			return fail(err.Error())
 		}
 		if streams, _ := cli.SyncStreamServices(services); len(streams) > 0 && !isExecutable(syncHookFile(projectDir, "import")) {
@@ -1636,10 +1639,11 @@ func claimWrite(base string) error {
 	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)
 }
 
-// markWritten writes one of a sync's files (remote.SyncStartedFile,
-// SyncDoneFile) into the child's directory base.
+// markWritten writes one of a sync's files (remote.SyncDoneFile) into
+// the child's directory base, with this sync's id (remote.SyncIDEnv): the
+// holder goes by its own sync's only.
 func markWritten(base, name string) error {
-	if err := os.WriteFile(filepath.Join(base, name), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(base, name), []byte(os.Getenv(remote.SyncIDEnv)+"\n"), 0o644); err != nil {
 		return fmt.Errorf("the sync's %s: %w", name, err)
 	}
 	return nil

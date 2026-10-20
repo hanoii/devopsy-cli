@@ -85,7 +85,7 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
-  "run --rm --network host "*)
+  "run --rm --name devopsy-sync-receive-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
@@ -284,11 +284,12 @@ func TestSyncSameHost(t *testing.T) {
 	}
 	// Order on each side: stop, copy, start (healthy); the child's around
 	// the parent's; one container copies, no daemon. app, labeled rsync
-	// alone, keeps running.
+	// alone, keeps running. A first release then creates every labeled
+	// service, whatever containers it found.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
 		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
 		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
-		"shop-prod compose", "start db", "shop-dev compose", "start db"}
+		"shop-prod compose", "start db", "shop-dev compose", "up -d --wait app db"}
 	rest := docker
 	for _, want := range order {
 		i := strings.Index(rest, want)
@@ -493,7 +494,7 @@ func TestSyncFileEntry(t *testing.T) {
 	env = append(env, "DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock")
 	out, code = s.run(env, "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "--numeric-ids --timeout=30 --inplace rsync://127.0.0.1:"} {
+	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "--numeric-ids --inplace rsync://127.0.0.1:"} {
 		if code != 0 || !strings.Contains(docker, want) {
 			t.Fatalf("across servers (%d), missing %q:\n%s\n%s", code, want, out, docker)
 		}
@@ -568,7 +569,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", "run --rm --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids --timeout=30 rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -1243,7 +1244,7 @@ func TestSyncLabels(t *testing.T) {
 	cmd := exec.Command(binary, "--sync-services", "finish")
 	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
 	cmd.Env = s.env
-	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "usage: devopsy --sync-services prepare | finish go|abort") {
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "usage: devopsy --sync-services prepare [first] | finish go|abort") {
 		t.Errorf("finish without an answer: %v\n%s", err, out)
 	}
 
