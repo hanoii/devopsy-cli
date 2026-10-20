@@ -533,7 +533,10 @@ devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 Commands on a server run part of their work in the server's devopsy
 (releases' images, for one), so it must be recent enough for yours: an
 older one stops them before anything changes and says to run `devopsy
-@<target> --upgrade`, which always works.
+@<target> --upgrade`, which always works. `DEVOPSY_PROTOCOL_CHECK=warn`
+turns that stop into a warning and goes on, at your own risk: for a
+local build ahead of the servers, when what you run may not need what
+the server's devopsy lacks.
 
 Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
 command line:
