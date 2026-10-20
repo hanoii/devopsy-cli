@@ -167,6 +167,42 @@ func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	}
 }
 
+// Ctrl-C at a terminal during the copy of a release that syncs (its
+// import running): devopsy stops the push, then answers abort; the copy
+// had started, so the release fails, current goes back, and the previous
+// release is not restarted on the partial copy: the child stays down and
+// marked, the parent restored.
+func TestReleaseSyncInterruptCopy(t *testing.T) {
+	dir := phasesProject(t, "rscopy", nil)
+	syncReleaseBoth(t, "rscopy", dir)
+	first, _ := srv(t, "readlink rscopy/dev/current")
+	srv(t, "rm -f importing-rscopy-dev deploys-rscopy-dev; echo 120 >import-wait-rscopy-dev")
+	t.Cleanup(func() { srv(t, "rm -f import-wait-rscopy-dev importing-rscopy-dev deploys-rscopy-dev") })
+	op(t, dir, "sleep 1.1")
+	inTerminal(t, dir, "devopsy @server:dev --release-sync --yes", "/tmp/rscopy")
+	eventually(t, 2*time.Minute, "the import running", func() bool { return exists(t, "importing-rscopy-dev") })
+	id := newest(t, "rscopy/dev")
+	ctrlC(t)
+	got := terminalCode(t, "/tmp/rscopy")
+	eventually(t, time.Minute, "the release's end", func() bool {
+		return lockFree(t, "rscopy/dev/.lock") && lockFree(t, "rscopy/prod/.sync-lock")
+	})
+	out, _ := op(t, "/", "cat /tmp/rscopy")
+	if got != "exit=130" || !strings.Contains(out, "stopping the copy") {
+		t.Errorf("devopsy (%s):\n%s", got, out)
+	}
+	if now, _ := srv(t, "readlink rscopy/dev/current"); now != first {
+		t.Errorf("current %s, want %s back", now, first)
+	}
+	deploys, _ := srv(t, "cat deploys-rscopy-dev 2>/dev/null")
+	if releaseState(t, "rscopy/dev", id) != "failed" || !exists(t, "rscopy/dev/.devopsy-sync.incomplete") || syncState(t, "rscopy", "dev", "data") != "exited" || strings.TrimSpace(deploys) != "" {
+		t.Errorf("release %s, marked %v, dev data %q, restarted in %q", releaseState(t, "rscopy/dev", id), exists(t, "rscopy/dev/.devopsy-sync.incomplete"), syncState(t, "rscopy", "dev", "data"), deploys)
+	}
+	if out, _ := srv(t, "pgrep -af '[c]apability sync import' || true"); strings.TrimSpace(out) != "" || syncState(t, "rscopy", "prod", "data") != "running" {
+		t.Errorf("the import still runs (%s), or prod data %q", out, syncState(t, "rscopy", "prod", "data"))
+	}
+}
+
 // A release that syncs whose session drops in its run step, after the
 // copy went: the run step goes on to its end on the server, the release
 // live on the new data, whether the connection died silently (the
