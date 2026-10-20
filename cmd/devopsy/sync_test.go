@@ -1855,6 +1855,40 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 	}
 }
 
+// A child's first release whose stream import failed leaves the stream's
+// container up (kept for the first release), and nothing current: the
+// next release is a first one again and must create every labeled service
+// before finish child go, which sanitizes through them. Bug: prepare
+// counts a first release by containers alone, so the leftover database
+// makes it a re-sync, the app is never created, and the hook runs
+// without it (a sanitizing hook finds no app, and the run step then
+// serves the parent's data as it came).
+func TestSyncFirstReleaseRetryCreates(t *testing.T) {
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport\" ]\n", 0o755)
+	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2: $(devopsy ps --services --status running | tr '\\n' ' ')\"\n", 0o755)
+	s.releaseProd(nil)
+	s.labels("FAKE_DB=stream")
+	defer s.labels("")
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_ABSENT='app db'\n", 0o644)
+	write(t, s.log+".failimport", "", 0o644)
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || s.current("dev") != "" || !strings.Contains(out, "no previous release to go back to") {
+		t.Fatalf("a first release whose import fails (%d):\n%s", code, out)
+	}
+	os.Remove(s.log + ".failimport")
+	s.logs()
+	next()
+	out, code := s.run(nil, "@dev", "--release")
+	if code != 0 || s.current("dev") == "" {
+		t.Fatalf("the first release again (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "finish child go: app db \n") {
+		t.Errorf("finish child go ran without every labeled service up:\n%s", out)
+	}
+}
+
 // A label from an inherited variable follows the parent's in the same
 // sync: the re-sync writes the parent's variables into the child's
 // pending file before its holder reads the labels, and moves it into
