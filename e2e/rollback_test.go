@@ -96,8 +96,9 @@ func TestRollbackCutBeforeSwitch(t *testing.T) {
 
 // A rollback whose run step fails marks the release it restored failed,
 // brings back the one that was current and restarts it with its own run
-// step; on a terminal, the lines of every phase show, colored. A second
-// rollback finds nothing to go back to.
+// step; on a terminal, the lines of every phase show, colored, and --log
+// puts them in the restored release's log. A second rollback finds
+// nothing to go back to.
 func TestRollbackRunFails(t *testing.T) {
 	dir := rollbackProject(t, "rbfail")
 	first, second := twoReleases(t, dir, "rbfail")
@@ -140,6 +141,16 @@ func TestRollbackRunFails(t *testing.T) {
 	}
 	if out, _ := op(t, dir, "devopsy @server:prod --releases"); !strings.Contains(out, " "+first+"  ") || !strings.Contains(out[strings.Index(out, " "+first+"  "):], "FAILED") {
 		t.Errorf("--releases:\n%s", out)
+	}
+	// The rollback's log is the restored release's, its server's part
+	// after its anchor, before its end.
+	log, _ := op(t, dir, "devopsy @server:prod --log "+first+" 2>/dev/null")
+	rolling := strings.Index(log, "rolling back to "+first)
+	anchor := strings.LastIndex(log, "from here, the server's own log")
+	restart := strings.Index(log, "restarting "+second)
+	end := strings.Index(log, "rollback exited 3")
+	if rolling < 0 || anchor < rolling || restart < anchor || end < restart {
+		t.Errorf("--log %s:\n%s", first, log)
 	}
 	if out, code := op(t, dir, "devopsy @server:prod --rollback"); code == 0 || !strings.Contains(out, "no release before the current one") {
 		t.Errorf("a second rollback (%d):\n%s", code, out)
