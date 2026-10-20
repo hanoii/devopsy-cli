@@ -1058,6 +1058,27 @@ func TestSyncInherit(t *testing.T) {
 	}
 }
 
+// --sync reruns the run step of what is deployed on the child: the
+// release's own config on the server decides, as for a rollback or a
+// restart, never the checkout, which may be another branch. Bug: the
+// holder runs the checkout's run step in the deployed release.
+func TestSyncRunStepDeployed(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	// The checkout moves on: dev's run step is another command now, which
+	// the deployed release does not have.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod, release: other}\n", 0o644)
+	write(t, filepath.Join(s.dot, "commands", "other"), "#!/bin/sh\necho \"other in $COMPOSE_PROJECT_NAME\"\n", 0o755)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "'devopsy other'") {
+		t.Errorf("the run step after a sync (%d), not the deployed release's:\n%s", code, out)
+	}
+}
+
 // Interrupted during an export, devopsy ends the push session first, then
 // aborts: the export is ended, its spool removed, both sides' stopped
 // services come back, nothing is imported and the run step does not run.
