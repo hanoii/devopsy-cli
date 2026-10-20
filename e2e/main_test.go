@@ -28,6 +28,8 @@ var (
 	// one (secondServer); bin is devopsy for it.
 	server2 string
 	bin     string
+	// goarch is the daemon's architecture, which devopsy is built for.
+	goarch string
 )
 
 func TestMain(m *testing.M) {
@@ -64,7 +66,7 @@ func setUp() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	goarch := map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
+	goarch = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
 	if goarch == "" {
 		return 0, fmt.Errorf("unknown architecture %q", arch)
 	}
@@ -213,11 +215,12 @@ func loginShell(t *testing.T, shell string) {
 
 // inTerminal starts command on the operator, in dir, on a terminal of
 // its own (script), its output in log there and its exit code, once it
-// ends, in log.code (terminalCode).
+// ends, in log.code (terminalCode). Flushed as it comes, so a test can
+// read the log while the command runs.
 func inTerminal(t *testing.T, dir, command, log string) {
 	t.Helper()
 	op(t, "/", "rm -f "+log+" "+log+".code")
-	background(t, dir, `script -qec "`+strings.ReplaceAll(command, `"`, `\"`)+`; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
+	background(t, dir, `script -qfec "`+strings.ReplaceAll(command, `"`, `\"`)+`; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
 }
 
 // terminalCode waits for inTerminal's command to end and returns
