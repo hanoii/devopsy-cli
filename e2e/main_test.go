@@ -348,6 +348,22 @@ func exists(t *testing.T, path string) bool {
 	return code == 0
 }
 
+// commitAll commits the project at dir on the operator: build mode packs
+// what git tracks.
+func commitAll(t *testing.T, dir string) {
+	t.Helper()
+	if out, code := op(t, dir, "git config --global --add safe.directory '*' && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@localhost commit -qm e2e"); code != 0 {
+		t.Fatalf("git (%d): %s", code, out)
+	}
+}
+
+// asRoot runs script as root in the server container name (server,
+// server2): what the deploy user cannot do, like giving files to 10001.
+func asRoot(t *testing.T, name, script string) (string, int) {
+	t.Helper()
+	return execIn(t, []string{"-w", "/home/devopsy", name}, script)
+}
+
 // quote quotes s for sh.
 func quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
