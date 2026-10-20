@@ -2303,11 +2303,11 @@ func TestSyncSettle(t *testing.T) {
 	}
 	dev, prod := filepath.Join(s.root, "shop", "dev"), filepath.Join(s.root, "shop", "prod")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
-	write(t, filepath.Join(dev, remote.SyncOpenFile), "devopsy@one:prod 1.2\n", 0o644)
+	write(t, filepath.Join(dev, remote.SyncOpenFile("1.2")), "devopsy@one:prod 1.2\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) || fileExists(filepath.Join(dev, remote.SyncOpenFile)) {
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) || fileExists(filepath.Join(dev, remote.SyncOpenFile("1.2"))) {
 		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
 	}
 	if _, _, code, _ := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); code != remote.IncompleteSettled {
@@ -2368,13 +2368,15 @@ func TestClaimWrite(t *testing.T) {
 	if err := claimWrite(base); err == nil {
 		t.Error("claimed with the gate closed")
 	}
-	// Another sync's gate (a write left over from an earlier one).
-	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod 200.8\n", 0o644)
+	// Another sync's gate (a write left over from an earlier one): the
+	// gate's name is the id, so the rename alone decides, with no check
+	// before it that another sync's gate could replace meanwhile.
+	write(t, filepath.Join(base, remote.SyncOpenFile("200.8")), "vm1:prod 200.8\n", 0o644)
 	if err := claimWrite(base); err == nil || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
 		t.Errorf("claimed another sync's gate: %v", err)
 	}
-	write(t, filepath.Join(base, remote.SyncOpenFile), "vm1:prod 100.7\n", 0o644)
-	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile)) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod 100.7\n" {
+	write(t, filepath.Join(base, remote.SyncOpenFile("100.7")), "vm1:prod 100.7\n", 0o644)
+	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile("100.7"))) || !fileExists(filepath.Join(base, remote.SyncOpenFile("200.8"))) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod 100.7\n" {
 		t.Errorf("first claim: %v", err)
 	}
 	// Later writes of the same sync.

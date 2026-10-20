@@ -898,7 +898,7 @@ func runSyncPush(cwd string, color bool) int {
 	// On the same server, a child that decided already (its gate closed)
 	// is seen before anything stops here: the claim would refuse later.
 	if os.Getenv(remote.SyncToEnv) == "" {
-		if base := os.Getenv(remote.SyncToBaseEnv); !fileExists(filepath.Join(base, remote.SyncOpenFile)) && !fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+		if base := os.Getenv(remote.SyncToBaseEnv); !fileExists(filepath.Join(base, remote.SyncOpenFile(os.Getenv(remote.SyncIDEnv)))) && !fileExists(filepath.Join(base, remote.SyncStartedFile)) {
 			return finish(fail("the child's side ended already ("+base+"): nothing copied"), false)
 		}
 	}
@@ -1584,7 +1584,10 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 		_ = os.Remove(taken)
-		_ = os.Remove(filepath.Join(base, remote.SyncOpenFile))
+		gates, _ := filepath.Glob(filepath.Join(base, remote.SyncOpenPrefix+"*"))
+		for _, g := range gates {
+			_ = os.Remove(g)
+		}
 		if err := runSyncHook(context.Background(), cwd, projectDir, env, nil, nil, "finish", "child", "partial"); err != nil {
 			code = fail("the sync capability's finish child partial: " + err.Error())
 		}
@@ -1702,7 +1705,7 @@ func markIncomplete(base, code, why string, keep bool) error {
 		}
 	}
 	// Who wrote it: the parent the gate named (remote.SyncOpenFile's
-	// first line, carried into the record), else this sync's.
+	// line, carried into the record), else this sync's.
 	record, err := os.ReadFile(filepath.Join(base, remote.SyncTakenFile))
 	if err != nil {
 		record, _ = os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
@@ -1721,15 +1724,15 @@ func fileExists(path string) bool {
 }
 
 // claimWrite claims the right to write into the child at base before
-// the first write: the holder's gate (remote.SyncOpenFile) of this sync
-// (remote.SyncIDEnv) renamed to remote.SyncStartedFile, one rename or
-// the holder's unlink winning, or a write of this sync claimed it
-// already. Neither: the holder decided, or the gate is another sync's,
-// and nothing may be written into it.
+// the first write: the holder's gate of this sync (remote.SyncOpenFile,
+// named by remote.SyncIDEnv) renamed to remote.SyncStartedFile, one
+// rename or the holder's unlink winning, or a write of this sync claimed
+// it already. Neither: the holder decided, and nothing may be written
+// into it.
 func claimWrite(base string) error {
-	open, started := filepath.Join(base, remote.SyncOpenFile), filepath.Join(base, remote.SyncStartedFile)
 	id := os.Getenv(remote.SyncIDEnv)
-	if (recordOf(open, id) && os.Rename(open, started) == nil) || recordOf(started, id) {
+	open, started := filepath.Join(base, remote.SyncOpenFile(id)), filepath.Join(base, remote.SyncStartedFile)
+	if (id != "" && os.Rename(open, started) == nil) || recordOf(started, id) {
 		return nil
 	}
 	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)

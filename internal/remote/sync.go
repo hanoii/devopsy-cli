@@ -41,11 +41,8 @@ const HalfCopiedNotice = "is half copied: a database copied raw cannot start on 
 // decided (killed) leaves them for whoever takes the lock next
 // (--sync-services settle), which ends the writers first.
 const (
-	// SyncOpenFile is the gate: the holder writes it (the parent's
-	// address and the sync's id) before its marker and removes it before
-	// deciding; the first write renames it to SyncStartedFile, and one
-	// that finds neither never starts.
-	SyncOpenFile    = ".devopsy-sync.open"
+	// SyncOpenPrefix and the sync's id name the gate (SyncOpenFile).
+	SyncOpenPrefix  = ".devopsy-sync.open."
 	SyncStartedFile = ".devopsy-sync.started"
 	// SyncTakenFile is SyncStartedFile once the holder decided, until its
 	// finish ended what the record names.
@@ -60,6 +57,13 @@ const (
 	// from it too, until a sync completes and removes it.
 	SyncIncompleteFile = ".devopsy-sync.incomplete"
 )
+
+// SyncOpenFile is sync id's gate: the holder writes it (the parent's
+// address and the id) before its marker and removes it before deciding;
+// the first write renames it to SyncStartedFile, and one that finds
+// neither never starts. Named by the id, so the rename alone decides: a
+// write can only ever claim its own sync's gate.
+func SyncOpenFile(id string) string { return SyncOpenPrefix + id }
 
 // WriterLine records an import in SyncStartedFile before it writes: its
 // service, the pid of the devopsy running it, and the service's state
@@ -324,7 +328,7 @@ fi
 // means here; release is an activation's, which may be a first release
 // (syncPrepare).
 func syncBlock(projectName, failed string, release bool) string {
-	open, started, taken, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
+	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
 	// (DoneLine).
 	return syncFinish(projectName) + `sync_id=$` + SyncIDEnv + `
@@ -533,14 +537,11 @@ func CurrentExistsScript(t *Target) string {
 
 // ClaimWriteScript claims the right to write into the child at base for
 // sync id, before the first write (its SyncOpenFile renamed to
-// SyncStartedFile), or fails: its holder decided already, or the gate
-// is another sync's.
+// SyncStartedFile), or fails: its holder decided already.
 func ClaimWriteScript(base, id string) string {
-	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
-	mine := func(f string) string {
-		return `[ "$(head -n 1 ` + f + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]`
-	}
-	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
+	open, started := Quote(path.Join(base, SyncOpenFile(id))), Quote(path.Join(base, SyncStartedFile))
+	mine := `[ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]`
+	return "mv -f " + open + " " + started + " 2>/dev/null || " + mine + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
 }
 
 // ParseCurrent reads CurrentExistsScript's output.

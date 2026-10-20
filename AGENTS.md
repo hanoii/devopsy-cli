@@ -920,10 +920,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 - **What the copy did decides, not the answer.** Why: an answer lost
   after a complete copy once restored the child on the parent's data
   unsanitized, and one lost mid-copy ran it on a mix.
-- **The gate:** the holder opens it before its marker (`SyncOpenFile`:
-  the parent's address and the sync's id, which the push passes on as
-  `SyncIDEnv`, so a write left from an earlier sync never claims a
-  newer gate) and closes it (`rm`) right before deciding. The child's
+- **The gate:** the holder opens it before its marker (`SyncOpenFile`,
+  named by the sync's id, which the push passes on as `SyncIDEnv`;
+  inside, the parent's address and the id) and closes it (`rm`) right
+  before deciding. Why the name: a write left from an earlier sync can
+  never claim a newer gate, and the claim is the rename alone, with no
+  check of the content before it that another gate could slip under. The child's
   side of the push claims it right before its first write
   (`claimWrite`, `ClaimWriteScript`: a rename to `SyncStartedFile`, one
   of the two wins; the same-server rsync, `SyncReceiveScript` across,

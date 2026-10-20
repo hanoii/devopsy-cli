@@ -92,8 +92,11 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
 		out, _ := srv(t, "pgrep -f '[s]leep 607' || true")
 		return strings.TrimSpace(out) == ""
 	})
-	if syncState(t, "rsfetch", "dev", "data") != "running" || exists(t, "rsfetch/dev/.devopsy-sync.open") || exists(t, "rsfetch/dev/.devopsy-sync.incomplete") {
-		t.Errorf("the sync began: dev data %q, gate %v, marked %v", syncState(t, "rsfetch", "dev", "data"), exists(t, "rsfetch/dev/.devopsy-sync.open"), exists(t, "rsfetch/dev/.devopsy-sync.incomplete"))
+	// A gate is named by its sync's id.
+	_, ls := srv(t, "ls rsfetch/dev/.devopsy-sync.open.* >/dev/null 2>&1")
+	gate := ls == 0
+	if syncState(t, "rsfetch", "dev", "data") != "running" || gate || exists(t, "rsfetch/dev/.devopsy-sync.incomplete") {
+		t.Errorf("the sync began: dev data %q, gate %v, marked %v", syncState(t, "rsfetch", "dev", "data"), gate, exists(t, "rsfetch/dev/.devopsy-sync.incomplete"))
 	}
 	if out, _ := op(t, "/", "cat /tmp/rsfetch.log"); strings.Contains(out, "finishes the sync") || !strings.Contains(out, "cancels the release") {
 		t.Errorf("devopsy does not say the release is cancelled:\n%s", out)
