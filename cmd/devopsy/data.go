@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"cmp"
 	"context"
@@ -253,31 +254,6 @@ func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb str
 	return msg
 }
 
-// spoolEndsWithZeros reports whether the file at p ends with n zero
-// bytes: a tar's end-of-archive blocks, which tar -t does not require,
-// so a tar cut at a member boundary lists fine without them.
-func spoolEndsWithZeros(p string, n int64) bool {
-	f, err := os.Open(p)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil || fi.Size() < n {
-		return false
-	}
-	buf := make([]byte, n)
-	if _, err := f.ReadAt(buf, fi.Size()-n); err != nil {
-		return false
-	}
-	for _, b := range buf {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
-}
-
 // importSpool is where --import keeps stdin until it is complete: in a
 // release, the environment directory's StreamSpool (what a sync uses);
 // locally a temporary file under .devopsy/, which releases never upload.
@@ -288,51 +264,44 @@ func importSpool(projectDir, name string) (*os.File, error) {
 	return os.CreateTemp(projectDir, remote.StreamSpoolPrefix+name+".*")
 }
 
+// errNoTarEnd is a tar without its end-of-archive blocks: cut short,
+// maybe right after a member.
+var errNoTarEnd = errors.New("no end-of-archive blocks: cut short?")
+
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
-// "." for mnt itself, as tar reads it in the util image: a truncated
-// archive fails here, before anything is emptied.
-func tarEntries(ctx context.Context, spool string) ([]string, error) {
+// "." for mnt itself: a truncated archive fails here, before anything is
+// emptied. Read here, not by tar -t, which takes a tar cut at a member
+// boundary for complete, its last member's zeros (a sparse file, a
+// database's pages) passing for the end-of-archive blocks.
+func tarEntries(spool string) ([]string, error) {
 	f, err := os.Open(spool)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	name := fmt.Sprintf("devopsy-import-%d-list", os.Getpid())
-	full := []string{"run", "--rm", "-i", "--name", name, remote.UtilImage, "tar", "-tf", "-"}
-	trace(append([]string{"docker"}, full...))
-	cmd := exec.CommandContext(ctx, "docker", full...)
-	cmd.Stdin, cmd.Stderr = f, errOut
-	// The client first: one stuck writing to a dead session's full pipe
-	// keeps dockerd from finishing the attach, and rm -f waits on it
-	// (seen: an export's container "removing" for minutes, the
-	// services it stopped down meanwhile).
-	cmd.Cancel = func() error {
-		err := cmd.Process.Kill()
-		rm, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_ = exec.CommandContext(rm, "docker", "rm", "-f", name).Run()
-		return err
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+	// archive/tar ends at its end-of-archive blocks and at a plain end
+	// of file alike; only the first leaves a read that returned data
+	// last.
+	r := &endReader{r: f}
+	tr := tar.NewReader(r)
 	seen := map[string]bool{}
-	scan := bufio.NewScanner(out)
-	scan.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scan.Scan() {
-		p := strings.TrimPrefix(scan.Text(), "./")
-		if p == "" || p == "." {
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			if r.atEOF {
+				return nil, errNoTarEnd
+			}
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		p := strings.TrimPrefix(h.Name, "./")
+		if p == "" || p == "." || p == "./" {
 			seen["."] = true
 			continue
 		}
 		seen[strings.SplitN(p, "/", 2)[0]] = true
-	}
-	if err := cmd.Wait(); err != nil {
-		return nil, err
 	}
 	if seen["."] {
 		return []string{"."}, nil
@@ -343,6 +312,19 @@ func tarEntries(ctx context.Context, spool string) ([]string, error) {
 	}
 	sort.Strings(entries)
 	return entries, nil
+}
+
+// endReader reads r and says whether its last read found the end of
+// file with nothing read.
+type endReader struct {
+	r     io.Reader
+	atEOF bool
+}
+
+func (e *endReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	e.atEOF = n == 0 && err == io.EOF
+	return n, err
 }
 
 // emptyAndExtract empties each entry the tar carries (a sync's --delete:
@@ -458,20 +440,12 @@ func runImport(cwd string, args []string, color bool) int {
 	var entries []string
 	var mnt string
 	if s.Transfer == cli.SyncRsync {
-		// The image reads the tar too: it has to be there first.
-		// Every tar writer ends with two zero blocks: without them the
-		// archive was cut, maybe right after a member, which tar -t takes.
-		if !spoolEndsWithZeros(spool, 1024) {
-			return fail("stdin is not a complete tar (no end-of-archive blocks: cut short?): nothing imported")
+		if entries, err = tarEntries(spool); err != nil {
+			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
 		}
+		// The image extracts the tar.
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
-		}
-		if entries, err = tarEntries(ctx, spool); err != nil {
-			if ctx.Err() != nil {
-				return fail("interrupted: nothing imported")
-			}
-			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
 		}
 		if !slices.Contains(s.Dirs, ".") {
 			for _, e := range entries {
