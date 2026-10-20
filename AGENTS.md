@@ -1088,8 +1088,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   waits for every service it started to be running and healthy
   (`waitHealthy`: one gone fails), and removes the record once all are
   back. Service states come from one `docker compose ps --format json`
-  (`serviceStates`, `servicesIn`); the sync tests' fake docker remembers
-  stops and starts to answer it.
+  (`serviceStates`, `servicesIn`), one-off containers left out
+  (`serviceEntries`: a hook's `run --rm` still running would read as its
+  service running, which then never started again); the sync tests'
+  fake docker remembers stops and starts to answer it.
 - **A child's first release gets every labeled service before its
   finish hook:** a release with nothing current before it (`prepare
   first`, from the activation), or no container at all when prepare

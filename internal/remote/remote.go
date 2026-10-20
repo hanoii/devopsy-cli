@@ -441,7 +441,7 @@ const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 // 3: --sync-services finish partial, settle, import <service> last,
 // --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
 // 5: --say; 6: --sync-services prepare first, --release-steps release, a
-// sync's done holding its id.
+// sync's done holding its id, a stream's spool named by it.
 const Protocol = 6
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
