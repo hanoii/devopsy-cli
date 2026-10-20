@@ -343,9 +343,11 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for
-// go or abort, finishes and runs run (the release's run step). o says
-// where from (From, the parent's address).
-func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) string {
+// go or abort, finishes and, with run, runs the run step of the release
+// (its own config's release:, --release-steps release run: what is
+// deployed decides, never the checkout). o says where from (From, the
+// parent's address).
+func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) string {
 	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
@@ -360,13 +362,13 @@ devopsy --say info "syncing into $id"
 status=0
 ` + syncBlock(projectName, "the run step does not run", false) + `[ "$status" = 0 ] || exit "$status"
 `
-	if len(run) > 0 {
+	if run {
 		// The run step goes on whatever happens to the session, after
 		// the copy: --log shows the copy's lines in their place.
 		s += `out="$base/releases/$id/` + ServerLogFile + `"
 trap '' PIPE
 ` + followOutput
-		s += runningLine(run, "run") + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
+		s += "with_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + "\n"
 	}
 	return s
 }

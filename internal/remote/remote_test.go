@@ -191,8 +191,8 @@ func TestScriptsParse(t *testing.T) {
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
 		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
 		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod"}),
-		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, []string{"deploy"}),
-		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}),
+		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, true),
+		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true),
@@ -570,7 +570,7 @@ exit 0
 	if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 		t.Fatal(err)
 	}
-	gone := exec.Command("sh", "-c", HolderScript(tg, "app-dev", opts, []string{"deploy"}))
+	gone := exec.Command("sh", "-c", HolderScript(tg, "app-dev", opts, true))
 	gone.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	var goneOut bytes.Buffer
 	gone.Stdout, gone.Stderr = &goneOut, &goneOut
@@ -688,7 +688,7 @@ exit 0
 		if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 			t.Fatal(err)
 		}
-		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}), "FAIL_PREPARE="+fail)
+		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, true), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("--sync, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
@@ -1560,7 +1560,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	}
 	// Hints in scripts name the alias as typed.
 	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Source: "~/traefik", Address: "vm1:prod", Path: "traefik/prod"}
-	if s := HolderScript(aliased, "x", &SyncOptions{}, nil); !strings.Contains(s, "devopsy @vm1-traefik --release") {
+	if s := HolderScript(aliased, "x", &SyncOptions{}, false); !strings.Contains(s, "devopsy @vm1-traefik --release") {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
 	// A release is pending until its switch, and cut uploads go.

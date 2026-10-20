@@ -204,20 +204,21 @@ func runDestroyData(cwd string, args []string, color bool) int {
 	return destroyData(filepath.Dir(projectDir), step, color)
 }
 
-// runReleaseSteps is the hidden ReleaseStepsFlag: <rollback|restart>
-// <phase> [<release>], run by ActivateScript where the phase runs. It
-// runs the phase's steps from the config of the release given (default
-// the one here), for the environment it was made for: a rollback's are
-// the restored release's rollback:, a restart's the previous release's
-// rollback: run step, else its release: one. Before and after are the
-// remote ones. The first failure ends it, with its code.
+// runReleaseSteps is the hidden ReleaseStepsFlag:
+// <rollback|restart|release> <phase> [<release>], run by ActivateScript
+// where the phase runs, and by a sync's holder (release run). It runs
+// the phase's steps from the config of the release given (default the
+// one here), for the environment it was made for: a rollback's are the
+// restored release's rollback:, a restart's the previous release's
+// rollback: run step, else its release: one, a sync's its release:
+// one. Before and after are the remote ones. The first failure ends it, with its code.
 func runReleaseSteps(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
 	}
 	if len(args) < 2 || len(args) > 3 {
-		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart before|prepare|run|after [<release>]")
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release before|prepare|run|after [<release>]")
 	}
 	kind, phase := args[0], args[1]
 	projectDir, err := cli.FindProjectDir(cwd)
@@ -241,8 +242,10 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 		if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 			steps = t.Release
 		}
+	case "release":
+		steps = t.Release
 	default:
-		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart ...")
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release ...")
 	}
 	if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 		return fail(fmt.Sprintf("the release's config gives environment %s no %s run step", t.Name, kind))
@@ -258,7 +261,7 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 	case "after":
 		list = remote.Commands(steps.After, true)
 	default:
-		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart before|prepare|run|after [<release>]")
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release before|prepare|run|after [<release>]")
 	}
 	root := filepath.Dir(projectDir)
 	for _, step := range list {

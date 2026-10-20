@@ -557,9 +557,8 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if err != nil {
 		return fail(err.Error())
 	}
-	run := remote.StepArgs(t.Release.Run)
 	if !yes {
-		if err := confirmSync(t, p, "runs 'devopsy "+strings.Join(run, " ")+"' there", "nothing synced"); err != nil {
+		if err := confirmSync(t, p, "reruns its release's run step there", "nothing synced"); err != nil {
 			report.Fail(err)
 			return 1
 		}
@@ -575,7 +574,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		return 1
 	}
 	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0}
-	code := runSyncSession(job, remote.HolderScript(t, projectName, o, run), false, rlog, color)
+	code := runSyncSession(job, remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))
