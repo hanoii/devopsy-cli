@@ -1167,7 +1167,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   bind-mounting it sees the new content (a bind mount is the file's
   inode); across servers its module is `/mnt` filtered to it.
 - **Across servers the parent's daemon serves only what is copied:**
-  one module per entry (`rsyncdConf`, `RsyncModule`: the entry's name,
+  named with the sync's id and labeled with the parent's `mnt`, so the
+  next push from the parent, holding its sync lock, removes one an
+  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`, `RsyncModule`: the entry's name,
   `mnt` for `.`), so nothing else under `mnt` can be asked for.
 - **rsync's exit 24** (files vanished during the copy) is a notice
   (`RsyncVanished`); any other failure aborts.

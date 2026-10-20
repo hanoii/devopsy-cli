@@ -1312,7 +1312,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 		return nil
 	}
 
-	id, err := dockerOut(ctx, "run", "--rm", "-d", "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.UtilImage,
+	// A daemon an earlier push left (its devopsy killed outright) goes:
+	// this push holds the parent's sync lock, so no other is serving.
+	parentLabel := "devopsy.sync.parent=" + parentMnt
+	if err := removeContainers("label=" + parentLabel); err != nil {
+		return err
+	}
+	id, err := dockerOut(ctx, "run", "--rm", "-d", "--name", remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-daemon", "--label", parentLabel, "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.UtilImage,
 		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
