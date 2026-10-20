@@ -692,7 +692,10 @@ interrupts" and "The server never waits on the operator for long".
   only help the client). So every pipe devopsy keeps as a session's
   stdin (an activation, a holder, a push, the push's import,
   `--export`) gets a zero byte every 5 seconds, and the server's
-  readers, told by `HeartbeatEnv`, take a silence for EOF. A busy
+  readers, told by `HeartbeatEnv`, take a silence for EOF. A devopsy
+  on a server beats as its own session does (`HeartbeatEvery` falls back
+  to `HeartbeatEnv`), so the push's import on another server is counted
+  in the beats it gets. A busy
   operator (a laptop asleep, Ctrl-Z) cancels too, cleanly (accepted).
 - **Quiet times are ordered:** `QuietBeats` (30 seconds),
   `HolderQuietBeats` (90, behind an answer's fifo: a holder or a
