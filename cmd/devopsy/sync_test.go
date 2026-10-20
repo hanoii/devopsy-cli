@@ -64,6 +64,8 @@ case "$*" in
     # FAIL_STOP: a stop that fails partway, its services stopped.
     [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" start "*)
+    # FAIL_START: a start that fails, its services left stopped.
+    [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"; done ;;
   *" ps --services --status running") for s in app db; do [ "$(st $s)" != running ] || echo $s; done ;;
   *" ps --all --format json "*)
@@ -72,7 +74,10 @@ case "$*" in
     for s in app db; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done ;;
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
-    for s in $(after --wait "$@"); do
+    # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
+    # depends on, too.
+    ups=$(after --wait "$@"); [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac
+    for s in $ups; do
       echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
     done ;;
@@ -681,6 +686,29 @@ func TestSyncAbort(t *testing.T) {
 	}
 }
 
+// A copy that completed, after which the parent cannot start its stopped
+// services again: the child goes on (its data is complete), but the
+// command must fail, since the parent's database is left down. Bug: the
+// holder's exit is the command's, so the sync exits 0 and only an error
+// line says the parent's services did not come back (and the parent's
+// finish hook was told abort while the child went on).
+func TestSyncParentRestoreFails(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run([]string{"FAIL_START=shop-prod"}, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db") || !strings.Contains(out, "the copy had completed: going on with it") {
+		t.Fatalf("the parent's start not tried, or the child did not go on (%d):\n%s\n%s", code, out, docker)
+	}
+	if code == 0 {
+		t.Errorf("the parent's db left down, and the sync exits 0:\n%s", out)
+	}
+}
+
 // Stream services: the parent's export spooled into the child's
 // directory, the child's import reading it once the export exited 0, in
 // depends_on order; the hooks on both sides with their side and lists;
@@ -1033,6 +1061,27 @@ func TestSyncInherit(t *testing.T) {
 	}
 }
 
+// --sync reruns the run step of what is deployed on the child: the
+// release's own config on the server decides, as for a rollback or a
+// restart, never the checkout, which may be another branch. Bug: the
+// holder runs the checkout's run step in the deployed release.
+func TestSyncRunStepDeployed(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	// The checkout moves on: dev's run step is another command now, which
+	// the deployed release does not have.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod, release: other}\n", 0o644)
+	write(t, filepath.Join(s.dot, "commands", "other"), "#!/bin/sh\necho \"other in $COMPOSE_PROJECT_NAME\"\n", 0o755)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "'devopsy other'") {
+		t.Errorf("the run step after a sync (%d), not the deployed release's:\n%s", code, out)
+	}
+}
+
 // Interrupted during an export, devopsy ends the push session first, then
 // aborts: the export is ended, its spool removed, both sides' stopped
 // services come back, nothing is imported and the run step does not run.
@@ -1215,6 +1264,33 @@ func TestSyncLabels(t *testing.T) {
 	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=pause: rsync or stream") || strings.Contains(docker, " stop ") {
 		t.Errorf("old label (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// What a sync stopped comes back when a later sync completes, as its
+// record says, whatever the labels say by then (a label from an inherited
+// variable can change in that sync). Bug: restoring starts only the
+// recorded services still labeled devopsy.sync.stop=true, so db, stopped
+// by a sync left partial, stays down after the sync that completes it,
+// and its record is gone.
+func TestSyncRestoresRecordedStops(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	if out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "db stay down") {
+		t.Fatalf("a cut copy (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_DB=rsync")
+	defer s.labels("")
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code != 0 || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("the sync that completes it (%d):\n%s", code, out)
+	}
+	if stopped := readString(s.log + ".stopped.shop-dev"); slices.Contains(strings.Fields(stopped), "db") {
+		t.Errorf("db, stopped by the cut sync, stays down after a complete one:\n%s", out)
 	}
 }
 
@@ -1663,6 +1739,15 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, two[:1024], "--import", "app"); code == 0 || !strings.Contains(errs, "no end-of-archive blocks") || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Errorf("tar cut at a member (%d):\n%s", code, errs)
 	}
+	// The same cut after a member whose data ends in zeros (a sparse file,
+	// a database's preallocated pages). Bug: its last 1024 bytes pass for
+	// the end-of-archive blocks wherever they are, and tar -t takes the cut
+	// for the end, so the entry is emptied and only what came is
+	// extracted: the rest of its files are lost.
+	zeros := tarOf(t, map[string]string{"storage/a.img": strings.Repeat("\x00", 4096), "storage/b.txt": "bbbb"})
+	if _, errs, code := s.runIO(nil, zeros[:512+4096], "--import", "app"); code == 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+		t.Errorf("tar cut after a member ending in zeros (%d):\n%s", code, errs)
+	}
 	s.logs()
 
 	// On a target: the same, in its current release, under its release
@@ -1772,6 +1857,33 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 	}
 }
 
+// A service labeled devopsy.sync.stop=true stays down on the child for the
+// whole sync, and after a copy that did not complete. Bug: a stream's
+// import brings its service up with a plain up, which, as Compose does,
+// starts what it depends on too: here db, stopped for the sync, comes up
+// during app's import and stays up although the copy ends partial.
+func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
+	defer s.labels("")
+	write(t, s.log+".failimport.app", "", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("app's import fails after db's (%d):\n%s", code, out)
+	}
+	if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
+		t.Errorf("db, stopped for the sync, is up on a partial copy:\n%s", out)
+	}
+}
+
 // Across servers, a sync cancelled during a stream's import stops the
 // import on the child, though its session outlives devopsy's ssh: the
 // pipe the push keeps open as its stdin closes, and the import ends its
@@ -1852,6 +1964,40 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")); err == nil {
 		t.Errorf("the record stays")
+	}
+}
+
+// A child's first release whose stream import failed leaves the stream's
+// container up (kept for the first release), and nothing current: the
+// next release is a first one again and must create every labeled service
+// before finish child go, which sanitizes through them. Bug: prepare
+// counts a first release by containers alone, so the leftover database
+// makes it a re-sync, the app is never created, and the hook runs
+// without it (a sanitizing hook finds no app, and the run step then
+// serves the parent's data as it came).
+func TestSyncFirstReleaseRetryCreates(t *testing.T) {
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "sync")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport\" ]\n", 0o755)
+	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2: $(devopsy ps --services --status running | tr '\\n' ' ')\"\n", 0o755)
+	s.releaseProd(nil)
+	s.labels("FAKE_DB=stream")
+	defer s.labels("")
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_ABSENT='app db'\n", 0o644)
+	write(t, s.log+".failimport", "", 0o644)
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || s.current("dev") != "" || !strings.Contains(out, "no previous release to go back to") {
+		t.Fatalf("a first release whose import fails (%d):\n%s", code, out)
+	}
+	os.Remove(s.log + ".failimport")
+	s.logs()
+	next()
+	out, code := s.run(nil, "@dev", "--release")
+	if code != 0 || s.current("dev") == "" {
+		t.Fatalf("the first release again (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "finish child go: app db \n") {
+		t.Errorf("finish child go ran without every labeled service up:\n%s", out)
 	}
 }
 
