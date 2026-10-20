@@ -50,6 +50,11 @@ const (
 	// SyncTakenFile is SyncStartedFile once the holder decided, until its
 	// finish ended what the record names.
 	SyncTakenFile = ".devopsy-sync.taken"
+	// SyncHoldingFile says a sync's holder holds the child's lock, from
+	// before its prepare to after its finish: with the lock held
+	// (SyncRunning), a sync runs. One a killed holder left counts for
+	// nothing once the lock is free.
+	SyncHoldingFile = ".devopsy-sync.holding"
 	// SyncIncompleteFile marks a child whose data no sync completed on:
 	// one line, IncompleteLine. Releases and rollbacks refuse, a push
 	// from it too, until a sync completes and removes it.
@@ -323,6 +328,7 @@ func syncBlock(projectName, failed string, release bool) string {
 	// The sync's id, in the gate and in the copy's last write
 	// (DoneLine).
 	return syncFinish(projectName) + `sync_id=$` + SyncIDEnv + `
+: >"$base/` + SyncHoldingFile + `"
 ` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
@@ -374,6 +380,7 @@ func syncBlock(projectName, failed string, release bool) string {
   fi
   rm -f ` + taken + `
 fi
+rm -f "$base/` + SyncHoldingFile + `"
 ` + syncRestorePipe
 }
 
@@ -545,6 +552,14 @@ func ParseCurrent(out string) (current, incomplete bool) {
 // IncompleteCheck prints "incomplete" when the environment's data is a
 // partial copy, $base set.
 const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then echo incomplete; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+
+// SyncRunning succeeds while a sync's holder holds the child's release
+// lock ($base set), its prepare included.
+const SyncRunning = `{ [ -e "$base/` + SyncHoldingFile + `" ] && ` + LockBusy + `; }`
+
+// SourceBusy succeeds while a sync from the environment (its push) or an
+// export of it holds its sync lock ($base set).
+const SourceBusy = `{ [ -e "$base/.sync-lock" ] && ! flock -n "$base/.sync-lock" true; } 2>/dev/null`
 
 // LockBusy succeeds while something holds the environment's release
 // lock ($base set): a sync's files are its own then, not leftovers.

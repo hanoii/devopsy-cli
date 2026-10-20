@@ -35,11 +35,18 @@ cd "$base/current" && exec devopsy --status
 `, RecordFile)
 }
 
-// partialStatus prints StatusScript's partial line: the mark's content,
-// "syncing" while a sync holds the lock with its files out, or empty for
-// files nobody settled yet.
-var partialStatus = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+// partialStatus prints StatusScript's sync lines: "syncing" while a
+// sync's holder holds the lock, "source" while a sync from it (or an
+// export) holds its sync lock, and the partial line: the mark's content,
+// or empty for a sync's files nobody settled yet.
+var partialStatus = `if ` + SyncRunning + `; then
+  echo syncing
+fi
+if ` + SourceBusy + `; then
+  echo source
+fi
+if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   printf 'partial\t%%s\n' "$(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)"
-elif [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  if ` + LockBusy + `; then echo syncing; else printf 'partial\t\n'; fi
+elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then
+  printf 'partial\t\n'
 fi`

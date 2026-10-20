@@ -103,7 +103,7 @@ func TestSyncDestroy(t *testing.T) {
 		out, _ := op(t, "/", "grep -l 'waiting for' /tmp/"+name+"-dev.log /tmp/"+name+"-prod.log | wc -l")
 		return strings.TrimSpace(out) == "2"
 	})
-	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync is copying into it") {
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync into it is running") {
 		t.Errorf("--status during the sync:\n%s", out)
 	}
 	if out, _ := op(t, dir, "devopsy @dev --releases"); true {

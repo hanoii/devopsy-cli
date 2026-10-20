@@ -502,7 +502,7 @@ devopsy @vm1:develop --sync     # replace a child's data with its parent's, run 
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.sync label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
-devopsy @vm1:prod --status       # the release there, its containers, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
