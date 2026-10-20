@@ -1750,6 +1750,21 @@ func TestExportImport(t *testing.T) {
 	}
 	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
 
+	// A stream's import that fails, not stopped for it: what it started
+	// in the service may load on, so the service is stopped (and started
+	// again, it ran before), its one-off removed, and the data said
+	// partial.
+	write(t, s.log+".shop", "FAKE_ONEOFF=db\n", 0o644)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\nexit 4\n", 0o755)
+	if _, errs, code := s.runIO(append(env, "FAKE_DB=stream"), []byte("rows\n"), "--import", "db"); code == 0 || !strings.Contains(errs, "the import of db did not complete: its data may be partial") {
+		t.Errorf("a failing import of a running stream (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f shop-db-run-1") || !strings.Contains(docker, " stop db") || strings.Index(docker, " start db") < strings.Index(docker, " stop db") {
+		t.Errorf("a failing import of a running stream, docker:\n%s", docker)
+	}
+	write(t, s.log+".shop", "", 0o644)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
+
 	// A stream down before its import is stopped again after it.
 	if _, errs, code := s.runIO(append(env, "FAKE_DB=stream", "FAKE_DB_DOWN=1"), []byte("rows\n"), "--import", "db"); code != 0 || !strings.Contains(errs, "devopsy: stopping db again: it was down before") {
 		t.Errorf("import of a stream that was down (%d):\n%s", code, errs)

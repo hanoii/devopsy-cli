@@ -1264,6 +1264,12 @@ sync label says, with the sync's scripts. Code:
   locally a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
   out of releases), refuses an empty one, and only then stops anything.
   The spool always goes.
+- **A stream's import that fails or is cut is ended** (`endImport`):
+  what it started in the service may load on (a `docker exec` never
+  gets the cut), so its one-offs go and the service, unless stopped for
+  the import already, is stopped and started again if it ran before,
+  with a warning that its data may be partial. On a target,
+  `ImportScript` settles a sync's leftover record first.
 - **On a target the server runs the same code:** `ExportScript` (shared
   release lock and exclusive `.sync-lock`, like the push: both stop and
   restore the same services; stdout through as it is, never

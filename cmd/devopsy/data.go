@@ -487,12 +487,19 @@ func runImport(cwd string, args []string, color bool) int {
 		if s.Transfer == cli.SyncStream {
 			// Up for its import, and down again after it if it was down.
 			down := func() error { return nil }
+			was := ""
 			if !s.Stop {
-				down, _, err = upFor(ctx, cwd, name, false, false)
+				down, was, err = upFor(ctx, cwd, name, false, false)
 			}
 			if err == nil {
 				report.Info("importing " + name)
 				err = runSyncHook(ctx, cwd, projectDir, syncHookEnv(services), in, nil, "import", name)
+				if err != nil {
+					// What the hook started in the service may load on.
+					if eerr := endImport(cwd, name, !s.Stop, was == "running"); eerr != nil {
+						code = fail(eerr.Error())
+					}
+				}
 				if derr := down(); derr != nil {
 					code = fail(derr.Error())
 				}

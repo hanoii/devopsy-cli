@@ -181,3 +181,44 @@ func dockerRm(names []string) error {
 	}
 	return nil
 }
+
+// endImport ends a stream's import into name that failed or was cut,
+// which may still load inside a container (a docker exec never gets the
+// cut): its one-off containers go, and the service, unless stopped for
+// the import already, is stopped, and started again when it ran before.
+// Its data may be partial: said.
+func endImport(cwd, name string, stop, wasRunning bool) error {
+	report.Warn("the import of " + name + " did not complete: its data may be partial, import it again")
+	var errs []error
+	var out bytes.Buffer
+	if err := compose(cwd, &out, "ps", "--all", "--format", "json", name); err != nil {
+		errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
+	} else if entries, err := parsePS(out.Bytes()); err != nil {
+		errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
+	} else {
+		var oneOffs []string
+		for _, e := range entries {
+			if e.Service == name && e.oneOff() {
+				oneOffs = append(oneOffs, e.Name)
+			}
+		}
+		if len(oneOffs) > 0 {
+			report.Info("removing " + strings.Join(oneOffs, " ") + ": the import may still write through it")
+			if err := dockerRm(oneOffs); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if stop {
+		report.Info("stopping " + name + ": the import may still write into it")
+		if err := compose(cwd, errOut, "stop", name); err != nil {
+			errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
+		} else if wasRunning {
+			report.Info("starting " + name + " again")
+			if err := compose(cwd, errOut, "start", name); err != nil {
+				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
