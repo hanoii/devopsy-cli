@@ -1514,7 +1514,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		report.Info("an earlier sync into " + base + " left its files (its holder was killed, or a write came after it decided): its data counts as a partial copy")
 		code := 0
-		if err := markIncomplete(base); err != nil {
+		if err := markIncomplete(base, remote.IncompleteSettled, "a sync's holder ended before it decided, or a copy wrote after it did: the data may be anything from untouched to complete", false); err != nil {
 			code = fail(err.Error())
 		}
 		_ = os.Remove(started)
@@ -1579,7 +1579,8 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	case "partial":
-		if err := markIncomplete(base); err != nil {
+		// The holder marked it already, saying why.
+		if err := markIncomplete(base, remote.IncompleteCopy, "the copy did not complete", true); err != nil {
 			code = fail(err.Error())
 		}
 		if stopped := cli.SyncStopped(services); len(stopped) > 0 {
@@ -1597,7 +1598,8 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		// A sync completes with its finish: until one does, nothing runs
 		// on what it left (the hook says what stays up).
 		if word == "go" {
-			if err := markIncomplete(base); err != nil {
+			why := "the copy completed, but the project's sync capability refused it: finish child go failed (" + err.Error() + "); a sync completes only once its finish accepts the copy, and nothing runs on the data until one does"
+			if err := markIncomplete(base, remote.IncompleteFinish, why, false); err != nil {
 				fail(err.Error())
 			}
 		}
@@ -1605,19 +1607,26 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	return code
 }
 
-// markIncomplete marks the environment at base as holding a partial
-// copy (remote.SyncIncompleteFile: when, from where), keeping an earlier
-// mark: it says since when.
-func markIncomplete(base string) error {
+// markIncomplete marks the environment at base as one no sync completed
+// on (remote.SyncIncompleteFile, remote.IncompleteLine): code and why
+// say what happened. An earlier mark gives its time (since when); keep
+// leaves it as it is.
+func markIncomplete(base, code, why string, keep bool) error {
 	path := filepath.Join(base, remote.SyncIncompleteFile)
-	if fileExists(path) {
-		return nil
+	since := time.Now().UTC().Format("2006-01-02 15:04:05")
+	if old, err := os.ReadFile(path); err == nil {
+		if keep {
+			return nil
+		}
+		if s, _, _, _ := remote.ParseIncomplete(string(old)); s != "" {
+			since = s
+		}
 	}
 	// Who wrote it: the parent the gate named (remote.SyncOpenFile's
 	// content, carried into SyncStartedFile), else this sync's.
 	started, _ := os.ReadFile(filepath.Join(base, remote.SyncStartedFile))
 	from, _, _ := strings.Cut(strings.TrimSpace(string(started)), " ")
-	line := time.Now().UTC().Format("2006-01-02 15:04:05") + " " + cmp.Or(from, os.Getenv(remote.SyncFromTargetEnv), "unknown") + "\n"
+	line := remote.IncompleteLine(since, cmp.Or(from, os.Getenv(remote.SyncFromTargetEnv), "unknown"), code, why)
 	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
 		return fmt.Errorf("marking %s as a partial copy: %w", base, err)
 	}

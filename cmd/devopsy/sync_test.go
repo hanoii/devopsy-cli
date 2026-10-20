@@ -2218,17 +2218,31 @@ func TestSyncSettle(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) || fileExists(filepath.Join(dev, remote.SyncOpenFile)) {
 		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
 	}
+	if _, _, code, _ := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); code != remote.IncompleteSettled {
+		t.Errorf("the mark of an undecided sync: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
+	}
 
 	// A partial copy is no parent.
-	write(t, filepath.Join(prod, remote.SyncIncompleteFile), "2026-10-18 00:00:00 x\n", 0o644)
+	write(t, filepath.Join(prod, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-18 00:00:00", "x", remote.IncompleteCopy, "cut"), 0o644)
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a sync from a partial copy (%d):\n%s", code, out)
 	}
 	os.Remove(filepath.Join(prod, remote.SyncIncompleteFile))
 
-	// A sync completes with its finish.
+	// A sync completes with its finish: one the project's finish child go
+	// refuses marks the child, saying so, and nothing runs on it.
 	if out, code := s.run([]string{"FAIL_FINISH=child go"}, "@dev", "--sync", "--yes"); code == 0 || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
 		t.Errorf("a failing finish child go (%d):\n%s", code, out)
+	}
+	if _, from, code, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); code != remote.IncompleteFinish || from != "devopsy@one:prod" || !strings.Contains(why, "finish child go failed") {
+		t.Errorf("the mark of a refused copy: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
+	}
+	next()
+	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "the copy completed, but the project's sync capability refused it: finish child go failed") {
+		t.Errorf("a rollback after a refused copy (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "from a sync that did not complete: the copy completed, but the project's sync capability refused it") || !strings.Contains(out, "from @devopsy@one:prod)") {
+		t.Errorf("--status after a refused copy (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
 		t.Fatalf("a sync completes it (%d):\n%s", code, out)
@@ -2277,9 +2291,15 @@ func TestClaimWrite(t *testing.T) {
 	if err := claimWrite(base); err != nil {
 		t.Errorf("second claim: %v", err)
 	}
-	// The mark names the parent that wrote.
-	if err := markIncomplete(base); err != nil || !strings.HasSuffix(readString(filepath.Join(base, remote.SyncIncompleteFile)), " vm1:prod\n") {
-		t.Errorf("mark %q (%v)", readString(filepath.Join(base, remote.SyncIncompleteFile)), err)
+	// The mark names the parent that wrote, and why; a later one keeps
+	// its time and says its own why, unless told to keep it.
+	mark := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, mark, remote.IncompleteLine("2026-10-01 00:00:00", "x", remote.IncompleteCopy, "cut"), 0o644)
+	if err := markIncomplete(base, remote.IncompleteFinish, "refused", true); err != nil || readString(mark) != "2026-10-01 00:00:00\tx\tcopy\tcut\n" {
+		t.Errorf("kept mark %q (%v)", readString(mark), err)
+	}
+	if err := markIncomplete(base, remote.IncompleteFinish, "refused", false); err != nil || readString(mark) != "2026-10-01 00:00:00\tvm1:prod\tfinish\trefused\n" {
+		t.Errorf("mark %q (%v)", readString(mark), err)
 	}
 }
 
