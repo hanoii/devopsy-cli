@@ -510,6 +510,19 @@ exit 0
 	if got := calls(root); !strings.Contains(got, "--sync-services finish go") || !strings.Contains(got, "deploy from") {
 		t.Errorf("abort after a complete copy, calls:\n%s", got)
 	}
+	// A done this sync's push never wrote (another sync's, 123.45: a push
+	// that outlived its holder finishing its copy now) decides nothing: the
+	// push failed before writing anything. Bug: done carries no sync id and
+	// the holder never checks one, so it goes on, finish go and the run
+	// step on whatever the other copy left.
+	other := t.TempDir()
+	if _, errOut, err := run(other, "1", "go\n"); err != nil {
+		t.Fatalf("first (%v):\n%s", err, errOut)
+	}
+	calls(other)
+	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") {
+		t.Errorf("another sync's done (%v), current %q:\n%s", err, current(other), errOut)
+	}
 	_, errOut, err = run(root, "3", "go\n", "FAKE_WRITE=started")
 	if err == nil || current(root) != "releases/2/code" || !strings.Contains(errOut, "the copy was cut") || !strings.Contains(errOut, "not restarting 2") {
 		t.Fatalf("a partial copy (%v), current %q:\n%s", err, current(root), errOut)
