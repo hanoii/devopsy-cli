@@ -80,6 +80,9 @@ case "$*" in
       printf '{"Service":"%s","State":"running","Health":"healthy"}\n' "$s"
       case " ${FAKE_ONEOFF:-} " in *" $s "*) printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" ;; esac
     done ;;
+  # FAKE_STALE_DAEMON: an rsync daemon an earlier push from this parent
+  # left, listed by its label.
+  "ps -aq --filter label=devopsy.sync.parent="*) echo "${FAKE_STALE_DAEMON:-}" ;;
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
@@ -555,8 +558,14 @@ func TestSyncDifferentHosts(t *testing.T) {
 	}
 	s.logs()
 
+	// A daemon an earlier push from prod left (its devopsy killed
+	// outright) goes before this push starts its own.
+	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-daemon\n", 0o644)
 	out, code := s.run(agent, "@devopsy@two:dev", "--release")
 	docker, ssh := s.logs()
+	if rm, run := strings.Index(docker, "rm -f old-daemon"), strings.Index(docker, "run --rm -d --name devopsy-sync-"); rm < 0 || run < rm {
+		t.Errorf("the stale daemon not removed before the push's own:\n%s", docker)
+	}
 	if code != 0 || !strings.Contains(out, "from devopsy@one to devopsy@two") || !strings.Contains(out, "deploy in shop-dev parent=prod devopsy@one:prod") {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
@@ -588,7 +597,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"run --rm -d -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.sync.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
