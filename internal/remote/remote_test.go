@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -169,6 +170,20 @@ func TestNextReleaseID(t *testing.T) {
 	} {
 		if got := NextReleaseID(now, c.ids); got != c.want {
 			t.Errorf("%v: %s, want %s", c.ids, got, c.want)
+		}
+	}
+}
+
+// Every file a sync leaves in an environment's directory starts with
+// .devopsy-sync., so they read as one family there.
+func TestSyncFilesPrefixed(t *testing.T) {
+	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
+	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
+		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end") + StatusScript(tg) +
+		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true)
+	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
+		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
+			t.Errorf("a sync's file not prefixed: %s", m[1])
 		}
 	}
 }
@@ -2004,7 +2019,7 @@ func TestSyncStatusLines(t *testing.T) {
 		t.Errorf("a holder holding the lock: %q", got)
 	}
 	release()
-	release = hold(".sync-lock")
+	release = hold(SyncLockFile)
 	if got := status(); got != "source" {
 		t.Errorf("a push holding the sync lock: %q", got)
 	}

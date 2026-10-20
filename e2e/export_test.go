@@ -40,7 +40,7 @@ func TestExportDropSilently(t *testing.T) {
 	})
 	dropSilently(t)
 	took := eventually(t, quiet(6, 40*time.Second), "the export cancelled, data back", func() bool {
-		_, code := srv(t, "flock -n exp/prod/.sync-lock true")
+		_, code := srv(t, "flock -n exp/prod/.devopsy-sync.lock true")
 		return code == 0 && state() == "running"
 	})
 	t.Logf("restored %s after the drop", took)
