@@ -80,7 +80,7 @@ func TestDropAfterSwitch(t *testing.T) {
 		if kill == "devopsy" {
 			op(t, "/", "pkill -9 -f '^devopsy @server' || true")
 		}
-		op(t, "/", "pkill -9 ssh || true")
+		op(t, "/", "pkill -9 -x ssh || true")
 		time.Sleep(3 * time.Second)
 		srv(t, "rm -f wait-run")
 		eventually(t, 30*time.Second, kill+": the release finished", func() bool {

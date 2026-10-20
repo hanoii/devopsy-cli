@@ -200,9 +200,8 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 	cut()
 	took := eventually(t, within, "the child's decision", func() bool { return free2(t, name+"/dev/.lock") })
 	t.Logf("decided %s after the cut", took)
-	if r := receiving(t); r != "" {
-		t.Errorf("the receive still runs on the child's server once its holder decided:\n%s", r)
-	}
+	// Within its watchdog's poll and the container's removal.
+	eventually(t, 10*time.Second, "the receive on the child's server gone once its holder decided", func() bool { return receiving(t) == "" })
 	if !exists2(t, name+"/dev/.devopsy-sync.incomplete") || srv2State(t, name, "dev", "data") != "exited" {
 		log, _ := op(t, "/", "cat /tmp/"+name+".log")
 		t.Errorf("after: marked %v, dev data %q:\n%s", exists2(t, name+"/dev/.devopsy-sync.incomplete"), srv2State(t, name, "dev", "data"), log)
