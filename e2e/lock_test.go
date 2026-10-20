@@ -247,3 +247,72 @@ func TestRemovalsCutWhileWaitingForImages(t *testing.T) {
 		}
 	}
 }
+
+// --sync cut while its holder waits for the child's release lock (Ctrl-C
+// at a terminal, its connection dropped silently) changes nothing on the
+// child once the lock is free: its stop=true services keep running, and
+// no sync hook runs there.
+//
+// Bug, the silent drop: the holder's watcher is never armed, and the
+// holder reads the session's end only after its prepare: once the lock
+// comes it stops the child's stop=true services, runs the sync
+// capability's hooks (prepare child, finish child abort) and starts the
+// services again, for a sync nobody is there for. Ctrl-C passes only
+// because the holder's first write after the lock ("syncing into") goes
+// to a closed session and ends it. It should end once it holds the lock,
+// before prepare, as the gated scripts do.
+func TestSyncCutWhileWaiting(t *testing.T) {
+	dir := phasesProject(t, "syncwait", nil)
+	syncReleaseBoth(t, "syncwait", dir)
+	started := func() string {
+		out, _ := srv(t, "docker inspect -f '{{.State.StartedAt}}' $(docker ps -aq --filter label=com.docker.compose.project=syncwait-dev --filter label=com.docker.compose.service=data)")
+		return strings.TrimSpace(out)
+	}
+	t.Cleanup(func() { srv(t, "rm -f wait-run-syncwait-dev running-syncwait-dev") })
+	for _, cut := range []string{"Ctrl-C", "a silent drop"} {
+		srv(t, "rm -f running-syncwait-dev finish.log; touch wait-run-syncwait-dev")
+		op(t, dir, "sleep 1.1")
+		// A release of dev holding its lock, in its run step.
+		background(t, dir, "devopsy @dev --release-no-sync; echo exit=$?", "/tmp/syncwaitholder.log")
+		eventually(t, time.Minute, cut+": dev's release in its run step", func() bool { return exists(t, "running-syncwait-dev") })
+		before := started()
+		if cut == "Ctrl-C" {
+			// On a terminal of its own (see TestRemovalsCutWhileWaiting).
+			if out, code := op(t, dir, "rm -f /tmp/syncwait && setsid -f script -qfec "+quote("devopsy @server:dev --sync --yes")+" /tmp/syncwait >/dev/null 2>&1 </dev/null"); code != 0 {
+				t.Fatalf("starting --sync (%d): %s", code, out)
+			}
+		} else {
+			background(t, dir, fast()+" devopsy @server:dev --sync --yes", "/tmp/syncwait")
+		}
+		eventually(t, time.Minute, cut+": the waiting line", func() bool {
+			out, _ := op(t, "/", "cat /tmp/syncwait")
+			return strings.Contains(out, "waiting for the release running on")
+		})
+		if cut == "Ctrl-C" {
+			ctrlC(t)
+		} else {
+			// Only the holder's session: the release holding the lock
+			// keeps its own.
+			dropConnection(t, "[s]yncing into")
+		}
+		eventually(t, quiet(12, 30*time.Second), cut+": devopsy's end", func() bool {
+			_, code := op(t, "/", "pgrep -f '^devopsy @server'")
+			return code != 0
+		})
+		srv(t, "rm -f wait-run-syncwait-dev")
+		eventually(t, 2*time.Minute, cut+": the release's end", func() bool {
+			out, _ := op(t, "/", "cat /tmp/syncwaitholder.log")
+			return strings.Contains(out, "exit=")
+		})
+		// Whatever the cut sync left waiting on the server has run (a
+		// holder's quiet time, with the tests' beat).
+		time.Sleep(quiet(18, 5*time.Second))
+		eventually(t, time.Minute, cut+": the lock free", func() bool { return lockFree(t, "syncwait/dev/.lock") })
+		finish, _ := srv(t, "cat finish.log 2>/dev/null")
+		if after := started(); strings.TrimSpace(finish) != "" || after != before || syncState(t, "syncwait", "dev", "data") != "running" {
+			out, _ := op(t, "/", "cat /tmp/syncwait")
+			t.Errorf("%s while it waited: finish hook %q, data started %s (was %s), data %q:\n%s", cut, finish, after, before, syncState(t, "syncwait", "dev", "data"), out)
+		}
+		undrop(t)
+	}
+}
