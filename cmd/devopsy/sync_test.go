@@ -75,8 +75,12 @@ case "$*" in
   *" up -d --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
-    # depends on, too.
-    ups=$(after --wait "$@"); [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac
+    # depends on, too, unless --no-deps.
+    ups=$(after --wait "$@")
+    case "$* " in
+      *" --no-deps "*) ups=$(after --no-deps "$@") ;;
+      *) [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac ;;
+    esac
     for s in $ups; do
       echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
@@ -779,7 +783,7 @@ func TestSyncCapability(t *testing.T) {
 		t.Fatalf("two streams (%d):\n%s", code, out)
 	}
 	inOrder("two streams", out, code, "prepare child in shop-dev rsync= stream=db app stop=db", "devopsy: stopping db", "devopsy: copying", "devopsy: stopping db", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db", "devopsy: starting db", "deploy in shop-dev")
-	if strings.Contains(docker, "up -d --wait db") || !strings.Contains(docker, "up -d --wait app") || strings.Contains(out, "rsync mnt/") {
+	if strings.Contains(docker, "--wait db") || strings.Contains(docker, "--wait --no-deps db") || !strings.Contains(docker, "up -d --wait --no-deps app") || strings.Contains(out, "rsync mnt/") {
 		t.Errorf("two streams docker:\n%s", docker)
 	}
 
@@ -1859,10 +1863,9 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 }
 
 // A service labeled devopsy.sync.stop=true stays down on the child for the
-// whole sync, and after a copy that did not complete. Bug: a stream's
-// import brings its service up with a plain up, which, as Compose does,
-// starts what it depends on too: here db, stopped for the sync, comes up
-// during app's import and stays up although the copy ends partial.
+// whole sync, and after a copy that did not complete: a stream's import
+// brings its service up without what it depends on, which Compose would
+// start too (here db, stopped for the sync).
 func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "sync")
