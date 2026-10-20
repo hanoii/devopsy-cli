@@ -16,11 +16,8 @@ var releasedID = regexp.MustCompile(`releasing ([0-9]{14}) to`)
 // cut while it waits (Ctrl-C at a terminal, its connection dropped
 // silently), it changes nothing: the release holding the lock goes live
 // as it would have, and none of the cut one's appears once the lock is
-// free. Fails on v0.44.0: the cut release's whole tar, and its end, sit
-// in the server's pipe while its upload script waits for the lock, and
-// nothing ends that script (a session without a terminal gets no signal
-// when it goes), so once the lock is free it extracts the release, left
-// INCOMPLETE, although devopsy said nothing changed.
+// free: devopsy sends the tar only once the upload holds the lock, so the
+// script finds none.
 func TestReleaseLockWait(t *testing.T) {
 	dir := dropProject(t, "lockwait")
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
@@ -137,12 +134,9 @@ func TestDestroyWaits(t *testing.T) {
 
 // --destroy and --releases remove interrupted at a terminal (Ctrl-C)
 // while they wait for the release lock remove nothing once it is free:
-// the environment, its containers and the release they named stay.
-// Fails on v0.44.0 for --releases remove: its script on the server goes
-// on waiting after the session ended, and once the lock is free removes
-// the release (--images ignores SIGPIPE, so writing to the gone session
-// stops nothing), though devopsy exited 130. --destroy only stops at its
-// first write, before anything goes.
+// the environment, its containers and the release they named stay: their
+// scripts on the server go on waiting after the session ended, then find
+// no go from devopsy.
 func TestRemovalsCutWhileWaiting(t *testing.T) {
 	dir := dropProject(t, "cutwait")
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {

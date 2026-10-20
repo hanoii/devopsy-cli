@@ -226,13 +226,9 @@ func TestSyncAcrossRsyncCut(t *testing.T) {
 
 // The two servers cut from each other silently mid-rsync: the parent's
 // ssh gives up on its keepalive (its own beat, 5 seconds: 45 seconds),
-// the push fails and the holder decides. The child's side sees nothing:
-// its receive script and rsync wait on the forward until TCP gives up
-// (minutes to hours), past the holder's decision, holding a container on
-// the child's data that nothing stops (internal/remote/sync.go,
-// SyncReceiveScript: rsync without --timeout, and sshd sends nothing on
-// a quiet forward). It should end when the copy is cut, within a bound,
-// like the parent's side does.
+// the push fails and the holder decides. The child's side sees nothing
+// of the cut (sshd sends nothing on a quiet forward): its receive script
+// removes its rsync container once the holder decided.
 func TestSyncAcrossRsyncDrop(t *testing.T) {
 	acrossRsyncCut(t, "acrossrdrop", 2*time.Minute, func() {
 		script := `ip=$(getent hosts server2 | cut -d' ' -f1) && iptables -I OUTPUT -d "$ip" -j DROP && iptables -I INPUT -s "$ip" -j DROP`

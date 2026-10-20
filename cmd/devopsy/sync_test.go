@@ -692,10 +692,7 @@ func TestSyncAbort(t *testing.T) {
 
 // A copy that completed, after which the parent cannot start its stopped
 // services again: the child goes on (its data is complete), but the
-// command must fail, since the parent's database is left down. Bug: the
-// holder's exit is the command's, so the sync exits 0 and only an error
-// line says the parent's services did not come back (and the parent's
-// finish hook was told abort while the child went on).
+// command fails, since the parent's database is left down.
 func TestSyncParentRestoreFails(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -1067,8 +1064,7 @@ func TestSyncInherit(t *testing.T) {
 
 // --sync reruns the run step of what is deployed on the child: the
 // release's own config on the server decides, as for a rollback or a
-// restart, never the checkout, which may be another branch. Bug: the
-// holder runs the checkout's run step in the deployed release.
+// restart, never the checkout, which may be another branch.
 func TestSyncRunStepDeployed(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -1273,10 +1269,8 @@ func TestSyncLabels(t *testing.T) {
 
 // What a sync stopped comes back when a later sync completes, as its
 // record says, whatever the labels say by then (a label from an inherited
-// variable can change in that sync). Bug: restoring starts only the
-// recorded services still labeled devopsy.sync.stop=true, so db, stopped
-// by a sync left partial, stays down after the sync that completes it,
-// and its record is gone.
+// variable can change in that sync): db, stopped by a sync left
+// partial, starts once a sync completes, labeled stop=true or not.
 func TestSyncRestoresRecordedStops(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -1971,11 +1965,8 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 // A child's first release whose stream import failed leaves the stream's
 // container up (kept for the first release), and nothing current: the
 // next release is a first one again and must create every labeled service
-// before finish child go, which sanitizes through them. Bug: prepare
-// counts a first release by containers alone, so the leftover database
-// makes it a re-sync, the app is never created, and the hook runs
-// without it (a sanitizing hook finds no app, and the run step then
-// serves the parent's data as it came).
+// before finish child go, which sanitizes through them, though a
+// container is there already.
 func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "sync")
