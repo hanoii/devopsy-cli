@@ -1910,26 +1910,39 @@ func TestSyncRecordedStopGone(t *testing.T) {
 // A service labeled devopsy.sync.stop=true stays down on the child for the
 // whole sync, and after a copy that did not complete: a stream's import
 // brings its service up without what it depends on, which Compose would
-// start too (here db, stopped for the sync).
+// start too (here db, stopped for the sync). The same on a first release
+// that finds containers (a first one that failed left them running): db,
+// stopped by its sync, stays down.
+//
+// Bug: on a first release the import brings app up with what it depends
+// on (no --no-deps: a first release is taken for one with nothing
+// stopped), so Compose starts db, which this sync stopped, and it runs
+// on the partial copy. It should stay down, as on a later sync.
 func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
-	s := newSyncSetup(t)
-	caps := filepath.Join(s.dot, "capabilities", "sync")
-	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
-	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
-	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
-		t.Fatalf("release (%d):\n%s", code, out)
-	}
-	s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
-	defer s.labels("")
-	write(t, s.log+".failimport.app", "", 0o644)
-	s.logs()
-	out, code := s.run(nil, "@dev", "--sync", "--yes")
-	if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
-		t.Fatalf("app's import fails after db's (%d):\n%s", code, out)
-	}
-	if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
-		t.Errorf("db, stopped for the sync, is up on a partial copy:\n%s", out)
+	for _, first := range []bool{false, true} {
+		s := newSyncSetup(t)
+		caps := filepath.Join(s.dot, "capabilities", "sync")
+		write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
+		write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$DOCKER_LOG.failimport.$1\" ]\n", 0o755)
+		s.releaseProd(nil)
+		args := []string{"@dev", "--release"}
+		if !first {
+			if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+				t.Fatalf("release (%d):\n%s", code, out)
+			}
+			args = []string{"@dev", "--sync", "--yes"}
+		}
+		s.labels("FAKE_APP=stream\nFAKE_DB=stream+stop\nFAKE_UP_DEPS=1")
+		write(t, s.log+".failimport.app", "", 0o644)
+		s.logs()
+		out, code := s.run(nil, args...)
+		if code == 0 || !strings.Contains(out, "db stay down") || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+			t.Fatalf("first release %v: app's import fails after db's (%d):\n%s", first, code, out)
+		}
+		if stopped := readString(s.log + ".stopped.shop-dev"); !slices.Contains(strings.Fields(stopped), "db") {
+			t.Errorf("first release %v: db, stopped for the sync, is up on a partial copy:\n%s", first, out)
+		}
+		s.labels("")
 	}
 }
 
