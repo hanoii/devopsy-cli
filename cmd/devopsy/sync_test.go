@@ -2500,3 +2500,23 @@ func TestSyncHookLeftovers(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// --destroy of a child whose sync's holder was killed outright (its
+// record left) ends the sync's writers before taking anything down, so
+// nothing writes into mnt while it is emptied.
+func TestDestroyEndsWriters(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--destroy", "--yes")
+	docker, _ := s.logs()
+	rm, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, " down ")
+	if code != 0 || rm < 0 || down < 0 || rm > down {
+		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
+	}
+}

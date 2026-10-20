@@ -294,6 +294,23 @@ func destroyData(cwd string, step []string, color bool) int {
 			return code
 		}
 	}
+	// A sync's record left (its holder killed outright): its writers end
+	// first, so nothing writes into mnt while it is emptied.
+	if cli.InRelease(projectDir) {
+		// In current, or a release's code (no current: a first release
+		// that failed).
+		base := filepath.Dir(root)
+		if filepath.Base(root) == remote.CodeDir {
+			base = filepath.Dir(filepath.Dir(base))
+		}
+		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
+		if fileExists(started) {
+			_ = os.Rename(started, taken)
+		}
+		if err := endWriters(root, base); err != nil {
+			return fail(err.Error() + ": nothing removed")
+		}
+	}
 	ctx, stop := interruptible()
 	defer stop()
 	report.Info("taking the containers, volumes and built images down")
