@@ -259,7 +259,7 @@ func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb str
 // locally a temporary file under .devopsy/, which releases never upload.
 func importSpool(projectDir, name string) (*os.File, error) {
 	if cli.InRelease(projectDir) {
-		return os.OpenFile(remote.StreamSpool(filepath.Dir(filepath.Dir(projectDir)), name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		return os.CreateTemp(filepath.Dir(filepath.Dir(projectDir)), remote.StreamSpoolPrefix+name+".*")
 	}
 	return os.CreateTemp(projectDir, remote.StreamSpoolPrefix+name+".*")
 }

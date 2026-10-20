@@ -781,7 +781,7 @@ with a label, `devopsy.sync`, which says how their data moves:
   on the parent is skipped, said, and the child's is left as it is.
 - `devopsy.sync=stream`: the parent's sync capability `export <service>`
   writes the service's data to stdout (a database dump), devopsy spools
-  it into a file in the child's directory (`.devopsy-sync.stream.<service>`),
+  it into a file in the child's directory (`.devopsy-sync.stream.<service>.<sync id>`),
   and only once the export exited 0 does the child's `import <service>`
   read it from stdin (a load into the child's database), the child's
   service brought up first; the file goes afterwards. A cut export never
@@ -982,7 +982,7 @@ devopsy @prod --export database > database.sql     # a backup
 devopsy @staging --import database < database.sql   # asks for staging's name (--yes in CI)
 ```
 
-`--import` spools stdin to a file first (`.devopsy-sync.stream.<service>`,
+`--import` spools stdin to a file first (`.devopsy-sync.stream.<service>.*`,
 under `.devopsy/` locally, which releases never upload; next to the
 environment on a server) and changes nothing until it is all there; a
 truncated tar (cut anywhere, or missing its end-of-archive blocks),

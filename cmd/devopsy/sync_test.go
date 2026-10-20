@@ -1232,14 +1232,17 @@ func TestSyncLabels(t *testing.T) {
 	if _, err := os.Stat(record); err == nil {
 		t.Errorf("the record stays after finish")
 	}
-	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")
+	// Spools are one per sync (its id in the name): one left at finish is
+	// stale, an earlier sync's, and goes whatever the word.
+	spool := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db.1.2")
 	write(t, spool, "partial\n", 0o600)
 	if out, docker := finish("go"); !strings.Contains(docker, "start db") {
 		t.Errorf("finish without a record:\n%s\n%s", out, docker)
 	}
-	if _, err := os.Stat(spool); err != nil {
-		t.Errorf("finish go removed a spool: %v", err)
+	if _, err := os.Stat(spool); err == nil {
+		t.Errorf("finish go left a stale spool")
 	}
+	write(t, spool, "partial\n", 0o600)
 	finish("abort")
 	if _, err := os.Stat(spool); err == nil {
 		t.Errorf("finish abort left a spool")

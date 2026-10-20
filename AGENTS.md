@@ -1057,8 +1057,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   record, the import check, the `prepare child` hook, then one `compose
   stop` of its `stop=true` services. Keep it one call: Compose orders
   them by `depends_on`, dependents first. `finish go|abort` starts them
-  and waits until healthy, `partial` leaves them down; spools are
-  removed unless `go`; then `finish child` with the word. Stopped
+  and waits until healthy, `partial` leaves them down; every spool
+  left goes (an import removes its own; one left is an earlier sync's);
+  then `finish child` with the word. Stopped
   services stay down through the imports: no app on a half-imported
   database.
 - **The parent's side** (`runSyncPush`): the checks (labels, the
@@ -1108,7 +1109,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`SyncStreamServices`: dependencies first, ties alphabetical, a cycle
   an error), the parent runs the capability's `export <service>`
   (`syncStream`) into the child's spool,
-  `$base/.devopsy-sync.stream.<service>` (`remote.StreamSpool`): on the
+  `$base/.devopsy-sync.stream.<service>.<sync id>` (`remote.StreamSpool`:
+  one per sync, so an export that outlived its push, killed outright,
+  never writes into the next sync's): on the
   same server directly, across servers through `cat >` in an SSH
   session to the child (`exportInto`). Only once the export exited 0
   does the child's `--sync-services import <service>` run. Never a
@@ -1232,8 +1235,8 @@ sync label says, with the sync's scripts. Code:
   container bind-mounts the directory's inode.
 - **stdout is the data:** `--export` refuses a terminal; `--import`
   refuses a terminal as stdin, spools it whole first (`importSpool`: in
-  a release the sync's `$base/.devopsy-sync.stream.<service>`, locally
-  a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
+  a release a temporary `$base/.devopsy-sync.stream.<service>.*`,
+  locally a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
   out of releases), refuses an empty one, and only then stops anything.
   The spool always goes.
 - **On a target the server runs the same code:** `ExportScript` (shared
