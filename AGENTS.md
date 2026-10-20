@@ -909,7 +909,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `$base` and the sync's id: the operator does not know the release
   root), taken out by a `LineMarker` on stderr. Then the push on the
   parent's (`PushScript`: shared `flock -s` on its release lock,
-  exclusive on `.sync-lock` so syncs from one parent serialize,
+  exclusive on `SyncLockFile` so syncs from one parent serialize,
   `devopsy --sync-push`), with `ForwardAgent=yes` across servers. The
   push's exit gives `go` or `abort` to the holder; the holder's exit is
   the command's, but a push that failed after a copy that completed
@@ -1295,7 +1295,7 @@ sync label says, with the sync's scripts. Code:
   with a warning that its data may be partial. On a target,
   `ImportScript` settles a sync's leftover record first.
 - **On a target the server runs the same code:** `ExportScript` (shared
-  release lock and exclusive `.sync-lock`, like the push: both stop and
+  release lock and exclusive `SyncLockFile`, like the push: both stop and
   restore the same services; stdout through as it is, never
   colorized) and `ImportScript` (exclusive lock, `devopsy --import
   <service> --yes`). The local side asks for the environment's name on

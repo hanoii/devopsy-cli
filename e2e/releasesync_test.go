@@ -182,7 +182,7 @@ func TestReleaseSyncInterruptCopy(t *testing.T) {
 	ctrlC(t)
 	got := terminalCode(t, "/tmp/rscopy")
 	eventually(t, time.Minute, "the release's end", func() bool {
-		return lockFree(t, "rscopy/dev/.lock") && lockFree(t, "rscopy/prod/.sync-lock")
+		return lockFree(t, "rscopy/dev/.lock") && lockFree(t, "rscopy/prod/.devopsy-sync.lock")
 	})
 	out, _ := op(t, "/", "cat /tmp/rscopy")
 	if got != "exit=130" || !strings.Contains(out, "stopping the copy") {

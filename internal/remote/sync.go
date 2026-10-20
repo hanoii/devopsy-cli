@@ -52,6 +52,9 @@ const (
 	// (SyncRunning), a sync runs. One a killed holder left counts for
 	// nothing once the lock is free.
 	SyncHoldingFile = ".devopsy-sync.holding"
+	// SyncLockFile is an environment's sync lock: a push from it or an
+	// export of it holds it exclusively (syncSourceLock).
+	SyncLockFile = ".devopsy-sync.lock"
 	// SyncIncompleteFile marks a child whose data no sync completed on:
 	// one line, IncompleteLine. Releases and rollbacks refuse, a push
 	// from it too, until a sync completes and removes it.
@@ -464,7 +467,7 @@ trap '' PIPE
 // environment's stop=true services, so two at once would restore them
 // under the other).
 func syncSourceLock() string {
-	return releaseLock(true, false) + `exec 8>"$base/.sync-lock"
+	return releaseLock(true, false) + `exec 8>"$base/` + SyncLockFile + `"
 ` + lockWait(8, false, "another sync from $base") + "\n"
 }
 
@@ -560,7 +563,7 @@ const SyncRunning = `{ [ -e "$base/` + SyncHoldingFile + `" ] && ` + LockBusy + 
 
 // SourceBusy succeeds while a sync from the environment (its push) or an
 // export of it holds its sync lock ($base set).
-const SourceBusy = `{ [ -e "$base/.sync-lock" ] && ! flock -n "$base/.sync-lock" true; } 2>/dev/null`
+const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/` + SyncLockFile + `" true; } 2>/dev/null`
 
 // LockBusy succeeds while something holds the environment's release
 // lock ($base set): a sync's files are its own then, not leftovers.

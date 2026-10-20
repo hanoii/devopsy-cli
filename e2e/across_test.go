@@ -100,7 +100,7 @@ func TestSyncAcrossDropParent(t *testing.T) {
 	}
 	undrop(t)
 	eventually(t, quiet(6, 30*time.Second), "the parent restored", func() bool {
-		return lockFree(t, "acrossdrop/prod/.sync-lock") && syncState(t, "acrossdrop", "prod", "data") == "running"
+		return lockFree(t, "acrossdrop/prod/.devopsy-sync.lock") && syncState(t, "acrossdrop", "prod", "data") == "running"
 	})
 	op(t, "/", "pkill devopsy || true")
 }
@@ -148,7 +148,7 @@ func TestSyncAcrossDropHolder(t *testing.T) {
 
 	dropHost(t, "server2")
 	eventually(t, quiet(12, 30*time.Second), "the parent restored", func() bool {
-		return lockFree(t, "acrosshold/prod/.sync-lock") && syncState(t, "acrosshold", "prod", "data") == "running"
+		return lockFree(t, "acrosshold/prod/.devopsy-sync.lock") && syncState(t, "acrosshold", "prod", "data") == "running"
 	})
 	if out, _ := srv2(t, "pgrep -af '[c]apability sync import' || true"); strings.TrimSpace(out) != "" {
 		t.Errorf("the import still runs on the child's server: %s", out)
@@ -207,7 +207,7 @@ func acrossRsyncCut(t *testing.T, name string, within time.Duration, cut func())
 		t.Errorf("after: marked %v, dev data %q:\n%s", exists2(t, name+"/dev/.devopsy-sync.incomplete"), srv2State(t, name, "dev", "data"), log)
 	}
 	eventually(t, 30*time.Second, "the parent restored", func() bool {
-		return lockFree(t, name+"/prod/.sync-lock") && syncState(t, name, "prod", "data") == "running"
+		return lockFree(t, name+"/prod/.devopsy-sync.lock") && syncState(t, name, "prod", "data") == "running"
 	})
 	if out, _ := srv(t, "docker ps -q --filter ancestor=devopsy-util:1"); strings.TrimSpace(out) != "" {
 		t.Errorf("the parent's rsync daemon still runs: %s", out)
@@ -281,7 +281,7 @@ func TestSyncAcrossRestrictedKey(t *testing.T) {
 		if stamp() != "two" || exists2(t, "acrossci/dev/.devopsy-sync.incomplete") || srv2State(t, "acrossci", "dev", "data") != "running" {
 			t.Errorf("%s: stamp %q, marked %v, dev data %q", what, stamp(), exists2(t, "acrossci/dev/.devopsy-sync.incomplete"), srv2State(t, "acrossci", "dev", "data"))
 		}
-		if !lockFree(t, "acrossci/prod/.sync-lock") || syncState(t, "acrossci", "prod", "data") != "running" {
+		if !lockFree(t, "acrossci/prod/.devopsy-sync.lock") || syncState(t, "acrossci", "prod", "data") != "running" {
 			t.Errorf("%s: the parent's data %q", what, syncState(t, "acrossci", "prod", "data"))
 		}
 	}
