@@ -822,7 +822,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   if any (a hook, while everything is up), then `compose --profile '*'
   down --volumes --remove-orphans --rmi local` and `mnt` emptied as
   root in `UtilImage` (a plain `docker run`: `compose run` would bring
-  the network back); then every release's images; then `removeBase`.
+  the network back), a sync's leftover record's writers ended first
+  (`endWriters`: nothing writes into `mnt` while it is emptied); then
+  every release's images; then `removeBase`.
 - **Leftover levels are asked about, never removed silently:**
   `purgeLeftovers` finds levels' directories left with only their
   `.env` (`LeftoverScript`) and removes them with `--purge` or a yes at
