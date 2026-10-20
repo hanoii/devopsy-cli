@@ -187,3 +187,63 @@ func TestRemovalsCutWhileWaiting(t *testing.T) {
 		}
 	}
 }
+
+// --releases remove and --destroy interrupted at a terminal (Ctrl-C)
+// while they wait for the server's image lock (another environment's
+// fetch holds it) remove nothing once it is free, as when they wait for
+// the release lock.
+//
+// Bug: their scripts print the locked marker, and take devopsy's go,
+// before they take the image lock: --releases remove, cut while it waits
+// for it, removes the release once the lock comes (img ignores the gone
+// session's SIGPIPE). It should find no go, as it does for the release
+// lock, and remove nothing. --destroy only stops by chance, on its first
+// write to the gone session.
+func TestRemovalsCutWhileWaitingForImages(t *testing.T) {
+	dir := dropProject(t, "cutimages")
+	for i := 0; i < 2; i++ {
+		op(t, dir, "sleep 1.1")
+		if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+			t.Fatalf("release (%d):\n%s", code, out)
+		}
+	}
+	t.Cleanup(func() { srv(t, "rm -f hold-images") })
+	for _, command := range []string{"--releases remove %s --yes", "--destroy --yes"} {
+		old, _ := srv(t, "ls cutimages/prod/releases | head -n 1")
+		old = strings.TrimSpace(old)
+		if strings.Contains(command, "%s") {
+			command = strings.Replace(command, "%s", old, 1)
+		}
+		// The image lock held shared, as a fetch on the server holds it.
+		srv(t, "touch hold-images && (nohup flock -s .devopsy-images.lock sh -c 'while [ -e hold-images ]; do sleep 0.2; done' >/dev/null 2>&1 </dev/null &)")
+		eventually(t, 30*time.Second, command+": the image lock held", func() bool { return !lockFree(t, ".devopsy-images.lock") })
+		// On a terminal of its own, out of a shell's background (see
+		// TestRemovalsCutWhileWaiting).
+		if out, code := op(t, dir, "rm -f /tmp/cutimages && setsid -f script -qfec "+quote("devopsy @server:prod "+command)+" /tmp/cutimages >/dev/null 2>&1 </dev/null"); code != 0 {
+			t.Fatalf("starting %s (%d): %s", command, code, out)
+		}
+		eventually(t, time.Minute, command+": the waiting line", func() bool {
+			out, _ := op(t, "/", "cat /tmp/cutimages")
+			return strings.Contains(out, "waiting for the server's images")
+		})
+		ctrlC(t)
+		eventually(t, 30*time.Second, command+": devopsy's end", func() bool {
+			_, code := op(t, "/", "pgrep -f '^devopsy @server'")
+			return code != 0
+		})
+		srv(t, "rm -f hold-images")
+		// Whatever the cut command left waiting on the server has run.
+		time.Sleep(3 * time.Second)
+		eventually(t, time.Minute, command+": the locks free", func() bool {
+			return lockFree(t, ".devopsy-images.lock") && lockFree(t, "cutimages/prod/.lock")
+		})
+		if !exists(t, "cutimages/prod/releases/"+old) {
+			out, _ := op(t, "/", "cat /tmp/cutimages")
+			list, _ := srv(t, "ls -la cutimages/prod cutimages/prod/releases 2>&1")
+			t.Errorf("%s, interrupted while it waited for the image lock, removed %s:\n%s\n%s", command, old, out, list)
+		}
+		if out, _ := srv(t, "docker ps --filter label=com.docker.compose.project=cutimages-prod --format '{{.State}}'"); strings.TrimSpace(out) != "running" {
+			t.Errorf("%s, interrupted while it waited for the image lock: not running: %q", command, out)
+		}
+	}
+}
