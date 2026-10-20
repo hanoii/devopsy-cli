@@ -122,8 +122,18 @@ func parentPid(pid int) int {
 	if err != nil {
 		return 0
 	}
-	_, rest, _ := strings.Cut(string(stat), ") ")
-	if f := strings.Fields(rest); len(f) > 1 {
+	return statParent(string(stat))
+}
+
+// statParent is the parent pid in a /proc/<pid>/stat line, "<pid>
+// (<command>) <state> <ppid> ...", or 0. The command may hold ") "
+// itself: the fields start after the last one.
+func statParent(stat string) int {
+	i := strings.LastIndex(stat, ") ")
+	if i < 0 {
+		return 0
+	}
+	if f := strings.Fields(stat[i+2:]); len(f) > 1 {
 		n, _ := strconv.Atoi(f[1])
 		return n
 	}
