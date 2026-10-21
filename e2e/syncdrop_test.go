@@ -29,7 +29,7 @@ func TestSyncDropBoth(t *testing.T) {
 	startSync(t, "sdboth", dir, 120)
 	dropSilently(t)
 	took := eventually(t, quiet(18, 30*time.Second), "the holder's decision", func() bool {
-		return lockFree(t, "sdboth/dev/.lock") && lockFree(t, "sdboth/prod/.sync-lock")
+		return lockFree(t, "sdboth/dev/.lock") && lockFree(t, "sdboth/prod/.devopsy-sync.lock")
 	})
 	t.Logf("decided %s after the drop", took)
 	if !exists(t, "sdboth/dev/.devopsy-sync.incomplete") || syncState(t, "sdboth", "dev", "data") != "exited" || syncState(t, "sdboth", "prod", "data") != "running" {
@@ -50,7 +50,7 @@ func TestSyncDropPush(t *testing.T) {
 	startSync(t, "sdpush", dir, 120)
 	dropConnection(t, "[-]-sync-push")
 	eventually(t, quiet(18, 30*time.Second), "the sync's end", func() bool {
-		return lockFree(t, "sdpush/dev/.lock") && lockFree(t, "sdpush/prod/.sync-lock")
+		return lockFree(t, "sdpush/dev/.lock") && lockFree(t, "sdpush/prod/.devopsy-sync.lock")
 	})
 	if !exists(t, "sdpush/dev/.devopsy-sync.incomplete") || syncState(t, "sdpush", "dev", "data") != "exited" || syncState(t, "sdpush", "prod", "data") != "running" {
 		t.Errorf("after: marked %v, dev data %q, prod data %q", exists(t, "sdpush/dev/.devopsy-sync.incomplete"), syncState(t, "sdpush", "dev", "data"), syncState(t, "sdpush", "prod", "data"))
@@ -84,14 +84,14 @@ func TestSyncKilledHolder(t *testing.T) {
 	dir := syncProject(t, "skill")
 	syncReleaseBoth(t, "skill", dir)
 	startSync(t, "skill", dir, 120)
-	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync is copying into it") {
+	if out, _ := op(t, dir, "devopsy @dev --status"); !strings.Contains(out, "a sync into it is running") {
 		t.Errorf("--status during the sync:\n%s", out)
 	}
 	if out, code := srv(t, "pkill -9 -f '[s]yncing into'"); code != 0 {
 		t.Fatalf("killing the holder (%d): %s", code, out)
 	}
 	eventually(t, time.Minute, "the locks freed", func() bool {
-		return lockFree(t, "skill/dev/.lock") && lockFree(t, "skill/prod/.sync-lock")
+		return lockFree(t, "skill/dev/.lock") && lockFree(t, "skill/prod/.devopsy-sync.lock")
 	})
 	if out, _ := srv(t, "pgrep -af '[c]apability sync import' || true"); strings.TrimSpace(out) != "" {
 		t.Errorf("the import still runs: %s", out)
@@ -133,7 +133,7 @@ func TestReleaseSyncCut(t *testing.T) {
 	eventually(t, 2*time.Minute, "the import running", func() bool { return exists(t, "importing-rscut-dev") })
 	dropConnection(t, "[-]-sync-push")
 	eventually(t, quiet(18, 40*time.Second), "the release's end", func() bool {
-		return lockFree(t, "rscut/dev/.lock") && lockFree(t, "rscut/prod/.sync-lock")
+		return lockFree(t, "rscut/dev/.lock") && lockFree(t, "rscut/prod/.devopsy-sync.lock")
 	})
 	undrop(t)
 	log, _ := op(t, "/", "sleep 1; cat /tmp/rscut.log")

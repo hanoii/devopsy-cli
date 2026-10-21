@@ -541,7 +541,6 @@ func TestReleaseSteps(t *testing.T) {
 		l, _ := os.Readlink(filepath.Join(server, "current"))
 		return l
 	}
-	next := func() { time.Sleep(1100 * time.Millisecond) } // release ids are per second
 
 	if out, code := run(nil, "@prod", "--release", "deploy"); code == 0 || !strings.Contains(out, "--release takes no command") {
 		t.Fatalf("release with a command (%d):\n%s", code, out)
@@ -610,7 +609,6 @@ func TestReleaseSteps(t *testing.T) {
 		t.Fatalf("prepare did not run: %q", data)
 	}
 
-	next()
 	write(t, filepath.Join(server, "shared", ".env"), "SECRET=generated\nNEEDED=1\n", 0o644)
 	out, code = run(nil, "@prod", "--release")
 	if code != 0 || !strings.Contains(out, "deploy --fast in") || !strings.Contains(out, "mark after") || !strings.Contains(out, "after ran at=devopsy@server:prod target=\n") {
@@ -640,19 +638,16 @@ func TestReleaseSteps(t *testing.T) {
 	// rollback:, so its release: one, whatever the checkout says now. After
 	// steps are skipped; remote before steps ran in it.
 	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
-	next()
 	out, code = run([]string{"FAIL_REMOTE=4"}, "@prod", "--release")
 	if code != 4 || !strings.Contains(out, "mark before") || !strings.Contains(out, "current is back to") || !strings.Contains(out, "with its own run step") || strings.Contains(out, "deploy --back in") || strings.Count(out, "deploy --fast in") < 2 || strings.Contains(out, "after ran") || current() != first {
 		t.Fatalf("run failure (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
 
 	// rollback: back to the release before, running its own rollback:.
-	next()
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}
 	second := current()
-	next()
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == second {
 		t.Fatalf("third release (%d):\n%s", code, out)
 	}
@@ -916,6 +911,19 @@ func TestInstancesEndToEnd(t *testing.T) {
 	}
 	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
+	}
+	// A server whose devopsy is older refuses before anything, the new
+	// instance's question included: its refusal is no answer.
+	old := filepath.Join(tmp, "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/^protocol=.*/protocol=1/'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "oldssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+old+":$PATH exec sh -c \"$s\"\n", 0o755)
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
+		t.Fatalf("an older server (%d):\n%s", code, out)
+	}
+	// DEVOPSY_PROTOCOL_CHECK=warn goes on, at the operator's risk: here to
+	// the new instance's question.
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || !strings.Contains(out, "a new instance") {
+		t.Fatalf("an older server, warned (%d):\n%s", code, out)
 	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {

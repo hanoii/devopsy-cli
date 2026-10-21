@@ -330,7 +330,7 @@ compose, Docker and your commands print around it, locally and from a
 server alike:
 
 ```
-devopsy: releasing 20261019214911 to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
+devopsy: releasing to vm1:prod (vm1:shop/prod): 5 files, 6.4 kB, image
 devopsy: warning: uncommitted changes outside .devopsy/ are not released in image mode
 devopsy: error: dev's parent, prod, has no server
 devopsy: | devopsy reads a parent's server from variables only
@@ -502,7 +502,7 @@ devopsy @vm1:develop --sync     # replace a child's data with its parent's, run 
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.sync label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
-devopsy @vm1:prod --status       # the release there, its containers, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -533,7 +533,10 @@ devopsy @vm1 --upgrade           # the server's devopsy, as the deploy user
 Commands on a server run part of their work in the server's devopsy
 (releases' images, for one), so it must be recent enough for yours: an
 older one stops them before anything changes and says to run `devopsy
-@<target> --upgrade`, which always works.
+@<target> --upgrade`, which always works. `DEVOPSY_PROTOCOL_CHECK=warn`
+turns that stop into a warning and goes on, at your own risk: for a
+local build ahead of the servers, when what you run may not need what
+the server's devopsy lacks.
 
 Steps, in `release:` and `rollback:`, run in phases. Each is a devopsy
 command line:
@@ -598,7 +601,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   is restarted with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its own images back, so its
   containers are the previous release's again. Data changes, like database
-  updates, are the project's to undo.
+  updates, are the project's to undo. A first release has nothing to go
+  back to: it takes down what it started (`down`, volumes and `mnt`
+  kept), after writing their last log lines to its log, so `--log`
+  shows why the app stopped, and `--status` says the release failed.
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed
@@ -713,8 +719,10 @@ Two modes, `mode:` in the config:
   goes live: build and push them first, like a local before step.
 
 A release says how much it uploads, shows the upload's progress on one
-line while it runs (on a terminal only: CI gets none), then its size and
-time, which the release log keeps.
+line while it runs (on a terminal only: CI gets none), then its id, size
+and time, which the release log keeps. The server names it: its own UTC
+second, always later than every release already there, so releases from
+laptops and CI with different clocks stay in order.
 
 On the server, an environment holds `releases/`, `current` and `shared/`.
 Each release is a directory, `releases/<id>/`, with the project as
@@ -762,8 +770,9 @@ and `shared/mnt` (databases as dumps).
 
 **Parent environments and syncs.** A child (`develop: {parent: prod}`)
 is a clone of its parent: its first release syncs the parent's data, and
-`devopsy @<child> --sync` does it again later, then reruns the child's
-`run` step. devopsy knows nothing of what the data is: services opt in
+`devopsy @<child> --sync` does it again later, then reruns the `run`
+step of the child's deployed release (its own config, never the
+checkout's). devopsy knows nothing of what the data is: services opt in
 with a label, `devopsy.sync`, which says how their data moves:
 
 - `devopsy.sync=rsync`: devopsy copies the entries of `.devopsy/mnt` the
@@ -777,7 +786,7 @@ with a label, `devopsy.sync`, which says how their data moves:
   on the parent is skipped, said, and the child's is left as it is.
 - `devopsy.sync=stream`: the parent's sync capability `export <service>`
   writes the service's data to stdout (a database dump), devopsy spools
-  it into a file in the child's directory (`.devopsy-sync.stream.<service>`),
+  it into a file in the child's directory (`.devopsy-sync.stream.<service>.<sync id>`),
   and only once the export exited 0 does the child's `import <service>`
   read it from stdin (a load into the child's database), the child's
   service brought up first; the file goes afterwards. A cut export never
@@ -830,7 +839,9 @@ keeps its own secrets.
 A project without any labeled service, or whose labeled services have
 nothing to copy, syncs nothing ("nothing to sync"): the parent's
 `prepare` and `finish` do not run, and the child's `run` step still
-runs.
+runs. On a child whose data is from a sync that did not complete, it
+completes nothing: the earlier copy's data is still there, and the sync
+fails.
 
 Each side reads the labels from its own release, so they can differ: a
 variable in the label (`devopsy.sync=${SYNC_DATABASE:-rsync}`) that the
@@ -976,10 +987,10 @@ devopsy @prod --export database > database.sql     # a backup
 devopsy @staging --import database < database.sql   # asks for staging's name (--yes in CI)
 ```
 
-`--import` spools stdin to a file first (`.devopsy-sync.stream.<service>`,
+`--import` spools stdin to a file first (`.devopsy-sync.stream.<service>.*`,
 under `.devopsy/` locally, which releases never upload; next to the
 environment on a server) and changes nothing until it is all there; a
-truncated tar (`tar -t` fails, or the end-of-archive blocks are missing),
+truncated tar (cut anywhere, or missing its end-of-archive blocks),
 or one carrying entries the service does not mount or excludes, is
 refused. A service mounting `./mnt` itself exports, and imports, all of
 `mnt`: devopsy names what else that includes. On a target, `--export`
@@ -1006,7 +1017,11 @@ child goes by that:
 - **Written in part** (the rsync or an import failed or was cut,
   Ctrl-C mid-copy, a connection lost): the child's data is part old, part
   the parent's, so its stopped services stay down and the run step is
-  skipped, `finish child partial`. A database copied raw would not start
+  skipped, `finish child partial`. Nothing goes on writing into it
+  first: an import still running inside its service's container (a
+  load through `docker exec`, which a cut never stops) ends with the
+  service, stopped and started again by the next sync that completes,
+  and devopsy's own copy containers go. A database copied raw would not start
   on it anyway (devopsy says which entry was cut). Nothing runs on it
   until a sync completes: releases and rollbacks refuse, the previous
   release is not restarted after a release that synced, a sync from it
@@ -1015,11 +1030,16 @@ child goes by that:
 - **All of it** (the copy completed, even if devopsy then went away or
   was interrupted): it goes on as after a success, `finish child go`,
   then the run step. A sync completes with its finish: one whose `finish
-  child go` fails leaves the child as one that did not complete.
+  child go` fails leaves the child as one that did not complete: the
+  copy is in, but the project refused it, and `--status` and every
+  refusal say so.
 
 On a first release a failure marks the release failed and leaves nothing
 current, and the next release syncs again. A failed or interrupted export
-imports nothing, and its file goes. Interrupted (Ctrl-C) during the copy,
+imports nothing, and its file goes. Interrupted (Ctrl-C) before the copy,
+devopsy tells the child's server to abort and waits, as a release does:
+it finishes the step it is in, restores what it stopped and shows it, and
+a second Ctrl-C leaves at once. Interrupted during the copy,
 devopsy ends its session to the parent's server, which stops the copy (an
 export too) and restores its own services, then tells the child's to
 finish as above. Once the copy is in and the run step runs, a Ctrl-C only
@@ -1202,7 +1222,8 @@ lists them with their contracts):
   `--export` and `--import`. `prepare` and `finish` run only when their
   file is there, besides devopsy's own handling of the labels; `export`
   and `import` are required on their side when a service is `stream`
-  there, checked before anything stops.
+  there, checked before anything stops. Hooks run in the foreground:
+  what one leaves running in the background ends when it returns.
   - `prepare parent|child` runs on each side, in its current release,
     before anything is stopped there: the child's under its release lock,
     before the parent's side starts; the parent's under a shared hold of
@@ -1219,8 +1240,10 @@ lists them with their contracts):
     child's server, its service brought up first (`up -d --wait`) unless
     stopped; and `devopsy --import`.
   - `finish parent|child go|abort|partial` runs on each side once the sync
-    ended. The parent's gets `go` or `abort`: its data is never written,
-    and its stopped services are back. The child's says what the copy did
+    ended. The parent's gets `go` or `abort`, what the copy did, as the
+    child's: `go` once it completed, even when a service of the parent's
+    did not come back (that fails the command, said). Its data is never
+    written, and its stopped services are started again. The child's says what the copy did
     to its data: `go`, complete; `abort`, nothing of the parent's written;
     `partial`, written in part (Logs and failures, above). After `go` and
     `abort` devopsy has started its stopped services and waited for them
@@ -1230,7 +1253,9 @@ lists them with their contracts):
     that had none: devopsy-template-drupal11's); then the release's `run`
     step runs. A failing `finish child go` fails the sync, and nothing
     runs on the child's data until a sync completes: the hook decides what
-    stays up (drupal11's stops the app). On a child's first release
+    stays up (drupal11's stops the app). devopsy restarts only what a sync
+    stopped, so what the hook stopped is still down when the next sync's
+    `finish child go` runs: the hook starts what it needs. On a child's first release
     nothing of it existed, so devopsy creates every labeled service first
     (`up -d --wait`), as the run step's `up` would a moment later: the
     hook finds them running either way. `finish child partial` also runs

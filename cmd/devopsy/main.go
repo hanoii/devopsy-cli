@@ -80,6 +80,8 @@ func run() int {
 			return runWatchSession(args[1:])
 		case remote.StdinGuardFlag:
 			return runStdinGuard()
+		case remote.ReleaseIDFlag:
+			return runReleaseID(args[1:])
 		case remote.SayFlag:
 			return runSay(args[1:])
 		}

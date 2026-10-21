@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -110,21 +109,25 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
-	syncing := false
+	syncing, source := false, false
 	var record *remote.Record
 	id := ""
 	for _, line := range strings.Split(header, "\n") {
 		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
 		switch key {
 		case "none":
-			fmt.Println("release     none: not released yet")
+			if value != "" {
+				fmt.Printf("release     none: %s failed, devopsy @%s --log shows why\n", value, targetRef(t))
+			} else {
+				fmt.Println("release     none: not released yet")
+			}
 			id = ""
 		case "plain":
 			fmt.Println("release     none: a plain devopsy directory")
 		case "release":
 			var r remote.Record
 			id, value, _ = strings.Cut(value, "\t")
-			if json.Unmarshal([]byte(value), &r) == nil && r.ID != "" {
+			if json.Unmarshal([]byte(value), &r) == nil && r.Mode != "" {
 				record = &r
 			}
 		case "kept":
@@ -132,9 +135,16 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		case "synced":
 			synced = value
 		case "partial":
-			partial = cmp.Or(value, "a sync was cut")
+			// The mark (remote.IncompleteLine), or nothing for a sync's
+			// files no holder settled yet.
+			partial = "a sync was cut"
+			if since, from, _, why := remote.ParseIncomplete(value); why != "" {
+				partial = why + " (since " + since + " UTC, from @" + from + ")"
+			}
 		case "syncing":
 			syncing = true
+		case "source":
+			source = true
 		}
 	}
 	if id != "" {
@@ -174,14 +184,17 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		fmt.Println(line)
 	}
 	if syncing {
-		fmt.Println("data        a sync is copying into it")
+		fmt.Println("data        a sync into it is running")
+	}
+	if source {
+		fmt.Println("data        a sync or an export from it is running")
 	}
 	if partial != "" {
 		fix := "devopsy @" + targetRef(t) + " --sync"
 		if id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
-		fmt.Println(st.bad("data        from a sync that did not complete (" + partial + "): nothing runs on it until one does: " + fix))
+		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
 	}
 	fmt.Print(rest)
 	return 0

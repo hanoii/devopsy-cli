@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"cmp"
 	"fmt"
 	"path"
 	"regexp"
@@ -27,27 +28,90 @@ import (
 const HalfCopiedNotice = "is half copied: a database copied raw cannot start on it until the next sync completes it"
 
 // What a sync writes into the child's directory ($base), so the child
-// knows what happened to its data whatever its answer says: the push
-// writes SyncStartedFile right before its first write into the child
-// (rsync or an import) and SyncDoneFile after its last, and the holder
-// decides from them, its answer only telling it the push ended: done
-// is go (the copy is complete), started alone partial (written in part:
-// the stop=true services stay down, SyncIncompleteFile), neither the
-// answer (nothing written). A holder that never decided (killed) leaves
-// them for whoever takes the lock next (--sync-services settle).
+// knows what happened to its data whatever its answer says: the push's
+// first write into the child (rsync or an import) claims the gate,
+// SyncStartedFile, which then records the writers: each import appends
+// a WriterLine before it writes, and the last write appends a DoneLine.
+// The holder decides by taking that record in one move (SyncTakenFile):
+// a writer appending after it finds no file and stops. Its own sync's
+// done is go (the copy is complete), taken without it partial (written
+// in part: the stop=true services stay down, SyncIncompleteFile, and
+// whatever still writes is ended, --sync-services finish partial),
+// nothing taken the answer (nothing written). A holder that never
+// decided (killed) leaves them for whoever takes the lock next
+// (--sync-services settle), which ends the writers first.
 const (
-	// SyncOpenFile is the gate: the holder writes it (the parent's
-	// address) before its marker and removes it before deciding; the
-	// first write renames it to SyncStartedFile, and one that finds
-	// neither never starts.
-	SyncOpenFile    = ".devopsy-sync.open"
+	// SyncOpenPrefix and the sync's id name the gate (SyncOpenFile).
+	SyncOpenPrefix  = ".devopsy-sync.open."
 	SyncStartedFile = ".devopsy-sync.started"
-	SyncDoneFile    = ".devopsy-sync.done"
-	// SyncIncompleteFile marks a child whose data is a partial copy:
-	// "<UTC time> <parent's address>". Releases and rollbacks refuse,
-	// a push from it too, until a sync completes and removes it.
+	// SyncTakenFile is SyncStartedFile once the holder decided, until its
+	// finish ended what the record names.
+	SyncTakenFile = ".devopsy-sync.taken"
+	// SyncHoldingFile says a sync's holder holds the child's lock, from
+	// before its prepare to after its finish: with the lock held
+	// (SyncRunning), a sync runs. One a killed holder left counts for
+	// nothing once the lock is free.
+	SyncHoldingFile = ".devopsy-sync.holding"
+	// SyncLockFile is an environment's sync lock: a push from it or an
+	// export of it holds it exclusively (syncSourceLock).
+	SyncLockFile = ".devopsy-sync.lock"
+	// SyncIncompleteFile marks a child whose data no sync completed on:
+	// one line, IncompleteLine. Releases and rollbacks refuse, a push
+	// from it too, until a sync completes and removes it.
 	SyncIncompleteFile = ".devopsy-sync.incomplete"
 )
+
+// SyncOpenFile is sync id's gate: the holder writes it (the parent's
+// address and the id) before its marker and removes it before deciding;
+// the first write renames it to SyncStartedFile, and one that finds
+// neither never starts. Named by the id, so the rename alone decides: a
+// write can only ever claim its own sync's gate.
+func SyncOpenFile(id string) string { return SyncOpenPrefix + id }
+
+// WriterLine records an import in SyncStartedFile before it writes: its
+// service, the pid of the devopsy running it, and the service's state
+// before (running: stopped to end a cut import, it is recorded for the
+// next completing sync to start).
+func WriterLine(service string, pid int, was string) string {
+	return fmt.Sprintf("writer import %s %d %s", service, pid, cmp.Or(was, "none"))
+}
+
+// SyncContainerPrefix starts the names of the containers a sync runs to
+// write into a child (rsync, on one server or across two), then the
+// sync's id: what --sync-services finish partial and settle remove.
+const SyncContainerPrefix = "devopsy-sync-"
+
+// DoneLine records the copy's last write in SyncStartedFile.
+func DoneLine(id string) string {
+	return "done " + id
+}
+
+// Why a child is marked (SyncIncompleteFile), the line's code: a copy
+// cut, a holder killed before it decided (settled by the next
+// lock-taker), or a complete copy its project's finish child go refused.
+const (
+	IncompleteCopy    = "copy"
+	IncompleteSettled = "settled"
+	IncompleteFinish  = "finish"
+)
+
+// IncompleteLine is SyncIncompleteFile's content: since when (UTC, the
+// first mark's: a later one keeps it), the parent's address, the code
+// and why, for people, tab separated.
+func IncompleteLine(since, from, code, why string) string {
+	return since + "\t" + from + "\t" + code + "\t" + why + "\n"
+}
+
+// ParseIncomplete reads IncompleteLine.
+func ParseIncomplete(s string) (since, from, code, why string) {
+	f := strings.SplitN(strings.TrimRight(s, "\n"), "\t", 4)
+	f = append(f, "", "", "", "")
+	return f[0], f[1], f[2], f[3]
+}
+
+// IncompleteWhy is shell printing the mark's why and since ($base set),
+// for a message.
+const IncompleteWhy = `$(cut -f4 "$base/` + SyncIncompleteFile + `" 2>/dev/null) (since $(cut -f1 "$base/` + SyncIncompleteFile + `" 2>/dev/null) UTC)`
 
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
@@ -115,21 +179,32 @@ var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync 
 // with .devopsy-sync.
 const StreamSpoolPrefix = ".devopsy-sync.stream."
 
-// StreamSpool is service's spool file in the environment directory base.
-func StreamSpool(base, service string) string {
-	return path.Join(base, StreamSpoolPrefix+service)
+// StreamSpool is service's spool file for sync id in the environment
+// directory base: one per sync, so an export that outlived its sync
+// (its push killed outright) never writes into the next one's.
+func StreamSpool(base, service, id string) string {
+	return path.Join(base, StreamSpoolPrefix+service+"."+id)
 }
 
 // SyncInheritPending is a re-sync's inherited variables, in the child's
-// environment directory ($base): written before the holder prepares, read
-// in place of shared/inherit.env by everything the sync runs on the child
-// (InheritPendingEnv), moved over it on go and removed on abort, so a
-// failed copy leaves the child's variables as they were.
-const SyncInheritPending = ".devopsy-sync.inherit.env"
+// environment directory ($base), named by the sync's id: written before
+// the holder takes the lock, read in place of shared/inherit.env by
+// everything the sync runs on the child (InheritPendingEnv), moved over it
+// on go and removed on abort, so a failed copy leaves the child's
+// variables as they were. One per sync: two syncs of a child at once never
+// read or remove each other's, and finish removes any left
+// (SyncInheritPrefix).
+func SyncInheritPending(id string) string {
+	return SyncInheritPrefix + id + ".env"
+}
 
-// SyncInheritPath is SyncInheritPending in the environment directory base.
-func SyncInheritPath(base string) string {
-	return path.Join(base, SyncInheritPending)
+// SyncInheritPrefix starts every sync's SyncInheritPending.
+const SyncInheritPrefix = ".devopsy-sync.inherit."
+
+// SyncInheritPath is sync id's SyncInheritPending in the environment
+// directory base.
+func SyncInheritPath(base, id string) string {
+	return path.Join(base, SyncInheritPending(id))
 }
 
 // InheritPendingEnv names the file devopsy reads in place of the
@@ -184,19 +259,18 @@ type SyncOptions struct {
 	// Args go to rsync (DEVOPSY_SYNC_ARGS).
 	Args []string
 	// Inherit: the operator wrote this sync's inherited variables into
-	// SyncInheritPending. Without, one left by a holder that died is
-	// stale and goes.
+	// its SyncInheritPending.
 	Inherit bool
+	// ID is the sync's, chosen by the operator's devopsy: its pending
+	// inherited variables are written before the holder runs.
+	ID string
 }
 
-// exports sets the child side's sync variables, the pending inherited
-// variables' file among them (removed when stale); t is the child.
+// exports sets the child side's sync variables, the sync's id and its
+// pending inherited variables' file among them; t is the child.
 func (o *SyncOptions) exports(t *Target) string {
-	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")))
-	s += "export " + InheritPendingEnv + "=\"$base\"/" + SyncInheritPending + "\n"
-	if !o.Inherit {
-		s += "rm -f \"$" + InheritPendingEnv + "\"\n"
-	}
+	s := fmt.Sprintf("export %s=%s %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")), SyncIDEnv, Quote(o.ID))
+	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
 	return s
 }
 
@@ -228,12 +302,20 @@ func syncFinish(projectName string) string {
 // devopsy.sync.stop=true. A failure sets $status and restores what it
 // changed.
 //
+// release is an activation's: one with nothing current before it ($prev
+// empty) tells prepare it is a first release, whatever containers an
+// earlier one that failed left (an import's).
+//
 // From here until the services are restored, SIGPIPE is ignored
 // (syncRestorePipe ends that): if devopsy goes away, a write to this
 // session fails instead of killing what restores them.
-func syncPrepare(projectName string) string {
+func syncPrepare(projectName string, release bool) string {
+	call := devopsyCall(projectName, []string{"--sync-services", "prepare"}, false)
+	if release {
+		call += ` $([ -n "$prev" ] || echo first)`
+	}
 	return `trap '' PIPE
-` + devopsyCall(projectName, []string{"--sync-services", "prepare"}, false) + ` || status=$?
+` + call + ` || status=$?
 if [ "$status" != 0 ]; then
   sync_finish abort || true
   devopsy --say error "preparing the sync failed ($status)" || true
@@ -246,58 +328,73 @@ fi
 // (services stopped), the gate (SyncOpenFile) and the marker, the push's
 // end (devopsy's answer, or none), then finish with what the files say
 // was written; $status says how it went. failed says what a failure
-// means here.
-func syncBlock(projectName, failed string) string {
-	open, started, done, incomplete := `"$base/`+SyncOpenFile+`"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncDoneFile+`"`, `"$base/`+SyncIncompleteFile+`"`
-	return syncFinish(projectName) + syncPrepare(projectName) + `if [ "$status" = 0 ]; then
-  sync_id=$(date +%s).$$
+// means here; release is an activation's, which may be a first release
+// (syncPrepare).
+func syncBlock(projectName, failed string, release bool) string {
+	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
+	// The sync's id, in the gate and in the copy's last write
+	// (DoneLine).
+	return syncFinish(projectName) + `sync_id=$` + SyncIDEnv + `
+: >"$base/` + SyncHoldingFile + `"
+` + syncPrepare(projectName, release) + `if [ "$status" = 0 ]; then
   printf '%s %s\n' "$` + SyncFromTargetEnv + `" "$sync_id" >` + open + `
 ` + syncWait() + `  # Closed first: a write that has not claimed it never starts (one
   # rename or the unlink wins), so nothing is written into what abort
   # restores.
   rm -f ` + open + `
+  # The writers' record taken in one move: a write appending after it
+  # finds no file and stops.
+  mv -f ` + started + ` ` + taken + ` 2>/dev/null || true
   # A push that went through and wrote nothing (the parent's labels
   # copy nothing) is go: no data the labels cover is partial any more.
   sync_word=abort
-  if [ -e ` + done + ` ]; then
+  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null; then
     sync_word=go
-  elif [ -e ` + started + ` ]; then
+  elif [ -e ` + taken + ` ]; then
+    # Written in part: the copy was cut.
+    sync_word=partial
+  elif [ -e ` + incomplete + ` ]; then
+    # Nothing written over an earlier sync's partial copy, whatever the
+    # answer: only a sync that writes completes it.
     sync_word=partial
   elif [ "$reply" = go ]; then
     sync_word=go
-  elif [ -e ` + incomplete + ` ]; then
-    sync_word=partial
   fi
   case "$reply.$sync_word" in
     go.go) ;;
     *.go) devopsy --say info "the copy had completed: going on with it" || true ;;
     *.partial)
-      if [ -e ` + started + ` ]; then
-        devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
-      else
-        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until one does, and ` + failed + `" || true
-      fi
       # Marked before the files go: a kill in between leaves one or
-      # the other.
-      [ -e ` + incomplete + ` ] || printf '%s %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$(cut -d' ' -f1 ` + started + ` 2>/dev/null)" >` + incomplete + ` || true
+      # the other. A mark keeps the first one's time.
+      sync_since=$(cut -f1 ` + incomplete + ` 2>/dev/null) || true
+      [ -n "$sync_since" ] || sync_since=$(date -u '+%Y-%m-%d %H:%M:%S')
+      sync_from=$(head -n 1 ` + taken + ` 2>/dev/null | cut -d' ' -f1) || true
+      if [ -e ` + taken + ` ]; then
+        devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
+        printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
+      else
+        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, fix the child's entries or labels by hand, or --destroy it and release it again" || true
+      fi
       ;;
     *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
   esac
-  rm -f ` + started + ` ` + done + `
+  # finish partial ends what the record names, then it goes.
   if [ "$sync_word" = go ]; then
     sync_finish go || status=$?
   else
     sync_finish "$sync_word" || true
     status=1
   fi
+  rm -f ` + taken + `
 fi
+rm -f "$base/` + SyncHoldingFile + `"
 ` + syncRestorePipe
 }
 
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -329,30 +426,39 @@ var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for
-// go or abort, finishes and runs run (the release's run step). o says
-// where from (From, the parent's address).
-func HolderScript(t *Target, projectName string, o *SyncOptions, run []string) string {
+// go or abort, finishes and, with run, runs the run step of the release
+// (its own config's release:, --release-steps release run: what is
+// deployed decides, never the checkout). o says where from (From, the
+// parent's address).
+func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) string {
 	s := "set -eu\n" + NoExit255 + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not managed with releases: nothing to sync into"
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + watchSession(true, false) + releaseLock(false, false) + `# A child's first release failing while this waited takes current away.
+`, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
+# session gone then ends it; from here on it restores on its own. With a
+# heartbeat, disarmed only on the session's next byte (waitBeat): a
+# session that went silent while this waited ends it too, never noticed
+# only once the services are stopped.
+` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
+rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
+# A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 exec 1>&2
 devopsy --say info "syncing into $id"
 ` + o.exports(t) + `cd "$base/current"
 status=0
-` + syncBlock(projectName, "the run step does not run") + `[ "$status" = 0 ] || exit "$status"
+` + syncBlock(projectName, "the run step does not run", false) + `[ "$status" = 0 ] || exit "$status"
 `
-	if len(run) > 0 {
+	if run {
 		// The run step goes on whatever happens to the session, after
 		// the copy: --log shows the copy's lines in their place.
 		s += `out="$base/releases/$id/` + ServerLogFile + `"
 trap '' PIPE
 ` + followOutput
-		s += runningLine(run, "run") + "with_tty " + Quote(devopsyCall(projectName, run, false)) + "\n"
+		s += "with_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + "\n"
 	}
 	return s
 }
@@ -363,7 +469,7 @@ trap '' PIPE
 // environment's stop=true services, so two at once would restore them
 // under the other).
 func syncSourceLock() string {
-	return releaseLock(true, false) + `exec 8>"$base/.sync-lock"
+	return releaseLock(true, false) + `exec 8>"$base/` + SyncLockFile + `"
 ` + lockWait(8, false, "another sync from $base") + "\n"
 }
 
@@ -384,7 +490,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
+` + syncSourceLock() + `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi
@@ -416,6 +522,10 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + `` + releaseLock(false, false) + `cd "$base/current"
+# A sync's holder killed outright left its record: its writers end first.
+if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
+fi
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
 }
 
@@ -432,12 +542,11 @@ func CurrentExistsScript(t *Target) string {
 
 // ClaimWriteScript claims the right to write into the child at base for
 // sync id, before the first write (its SyncOpenFile renamed to
-// SyncStartedFile), or fails: its holder decided already, or the gate
-// is another sync's.
+// SyncStartedFile), or fails: its holder decided already.
 func ClaimWriteScript(base, id string) string {
-	open, started := Quote(path.Join(base, SyncOpenFile)), Quote(path.Join(base, SyncStartedFile))
-	mine := func(f string) string { return `[ "$(cut -d' ' -f2 ` + f + ` 2>/dev/null)" = ` + Quote(id) + ` ]` }
-	return "{ " + mine(open) + " && mv -f " + open + " " + started + " 2>/dev/null; } || " + mine(started) + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
+	open, started := Quote(path.Join(base, SyncOpenFile(id))), Quote(path.Join(base, SyncStartedFile))
+	mine := `[ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]`
+	return "mv -f " + open + " " + started + " 2>/dev/null || " + mine + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
 }
 
 // ParseCurrent reads CurrentExistsScript's output.
@@ -448,7 +557,15 @@ func ParseCurrent(out string) (current, incomplete bool) {
 
 // IncompleteCheck prints "incomplete" when the environment's data is a
 // partial copy, $base set.
-const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then echo incomplete; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then echo incomplete; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+
+// SyncRunning succeeds while a sync's holder holds the child's release
+// lock ($base set), its prepare included.
+const SyncRunning = `{ [ -e "$base/` + SyncHoldingFile + `" ] && ` + LockBusy + `; }`
+
+// SourceBusy succeeds while a sync from the environment (its push) or an
+// export of it holds its sync lock ($base set).
+const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/` + SyncLockFile + `" true; } 2>/dev/null`
 
 // LockBusy succeeds while something holds the environment's release
 // lock ($base set): a sync's files are its own then, not leftovers.
@@ -482,12 +599,28 @@ func RsyncModule(entry string) string {
 // directory), from the daemon's module of that name (RsyncModule), as
 // root in UtilImage, on the host's network to reach the forward.
 // SyncStartedFile goes first, and with last (no stream follows)
-// SyncDoneFile once every entry is copied.
+// a DoneLine once every entry is copied.
+//
+// Once the holder decided (SyncStartedFile gone, or another sync's),
+// nothing may be written: a watchdog removes the copy's container. Why:
+// after a silent cut between the servers, the rsync otherwise waits for
+// TCP to give up, writing again if the link comes back; sshd sends
+// nothing on a quiet forward, and rsync's own --timeout counts its
+// keepalives into the forward's local socket.
 func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool) string {
+	started := Quote(path.Join(base, SyncStartedFile))
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
-		`copy() {
+		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
+mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
+( while sleep 1; do
+    mine || { docker rm -f "$rs_name"; exit 0; }
+  done ) </dev/null >/dev/null 2>&1 &
+rs_watch=$!
+trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
+copy() {
+  mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -503,7 +636,11 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string,
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
 	}
 	if last {
-		script += ": >" + Quote(path.Join(base, SyncDoneFile)) + "\n"
+		// Appended to the record, never created: once the holder took it,
+		// the copy is not this sync's to complete. (A take between the
+		// check and the append leaves a record of this line alone, which
+		// the next lock-taker settles.)
+		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
 }

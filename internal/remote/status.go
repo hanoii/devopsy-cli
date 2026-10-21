@@ -3,7 +3,8 @@ package remote
 import "fmt"
 
 // StatusScript prints what the server knows about a target, for --status:
-// "plain" for a plain devopsy directory, "none" for an unreleased one,
+// "plain" for a plain devopsy directory, "none" for an unreleased one
+// (with the newest release's id when it failed),
 // else tab-separated header lines (release <id> <record JSON>, kept <n>,
 // synced <time or empty>, partial <when and from> when a sync left its
 // data a partial copy), then "---" and, from the current release,
@@ -16,7 +17,13 @@ func StatusScript(t *Target) string {
 fi
 cur=$(readlink "$base/current" 2>/dev/null || true)
 if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
-  echo none
+  # The newest release when it failed: a first one that did not go live.
+  r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | sort | tail -n 1) || true
+  if [ -n "$r" ] && [ -e "$base/releases/$r/`+FailedFile+`" ]; then
+    printf 'none\t%%s\n' "$r"
+  else
+    echo none
+  fi
   `+partialStatus+`
   exit 0
 fi
@@ -35,11 +42,18 @@ cd "$base/current" && exec devopsy --status
 `, RecordFile)
 }
 
-// partialStatus prints StatusScript's partial line: the mark's content,
-// "syncing" while a sync holds the lock with its files out, or empty for
-// files nobody settled yet.
-var partialStatus = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+// partialStatus prints StatusScript's sync lines: "syncing" while a
+// sync's holder holds the lock, "source" while a sync from it (or an
+// export) holds its sync lock, and the partial line: the mark's content,
+// or empty for a sync's files nobody settled yet.
+var partialStatus = `if ` + SyncRunning + `; then
+  echo syncing
+fi
+if ` + SourceBusy + `; then
+  echo source
+fi
+if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   printf 'partial\t%%s\n' "$(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)"
-elif [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; then
-  if ` + LockBusy + `; then echo syncing; else printf 'partial\t\n'; fi
+elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then
+  printf 'partial\t\n'
 fi`

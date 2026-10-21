@@ -345,11 +345,13 @@ server", "Before the switch anything cancels" and "Check everything
 before changing anything".
 
 - **The server's devopsy must speak the scripts' protocol**
-  (`remote.Protocol`, 5, reported by `--release-settings`):
+  (`remote.Protocol`, 6, reported by `--release-settings`):
   `basePrelude` refuses an older one before anything changes, for every
   command, read-only ones too, and names the upgrade. Raise it when a
   script starts calling something an older devopsy lacks, and say what
-  in its comment.
+  in its comment. `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`,
+  passed to every session) makes it a warning and goes on: the
+  operator's own risk, for a local build ahead of the servers.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -380,8 +382,9 @@ before changing anything".
 - **Steps of what is deployed come from the server** (principle "What
   is deployed decides on the server"): a rollback's (hidden
   `--release-steps rollback <phase> [<release>]`, `runReleaseSteps`),
-  the restart after a failed run and `--destroy`'s step (`destroyStep`)
-  are read from the release's own `config.yaml`, its environment from
+  the restart after a failed run, the run step a `--sync` reruns
+  (`--release-steps release run`) and `--destroy`'s step
+  (`destroyStep`) are read from the release's own `config.yaml`, its environment from
   `devopsy-target.env` (`ReleaseEnvironment`). A release's steps come
   from the checkout, which is what is uploaded; a rollback's local
   before and after steps stay the checkout's.
@@ -406,12 +409,19 @@ before changing anything".
   (`RoleHoldersScript`), a new instance, which asks
   (`InstanceExistsScript`, `--yes`), and a child's sync (Syncs).
 - **A release is a new directory, never a changed one:** `UploadScript`
-  takes the release lock, extracts into `releases/<id>.tmp` through
+  takes the release lock, says so (`LockedMarker`: devopsy sends the
+  tar only then, Locks), extracts into `releases/<id>.tmp` through
   `--stdin-guard`, writes `PendingFile` and renames it into place. An
   existing id is refused: `mv` would put the new tree inside the old
-  release, which would run again. Ids are UTC seconds (`NewRecord`), so
-  tests that release a target twice wait for a new second
-  (`spaceReleases`).
+  release, which would run again.
+- **The server names a release** (hidden `--release-id`, under the
+  lock; the upload prints it on stdout): a UTC second, or a second past
+  the newest release there when that is not earlier
+  (`remote.NextReleaseID`). Why: ids order releases (pruning,
+  rollbacks, `--releases`), and an operator's clock (the id's source
+  before) could order an older release after a newer one across
+  laptops and CI, or give two releases one id in one second. The
+  record (`RecordFile`) keeps the operator's time, for display only.
 - **Full tar streams, no rsync:** macOS ships openrsync. The progress
   line (`uploadProgress`, at a terminal only, never logged) counts the
   project's bytes as `Pack` reads them, out of `remote.Size`: the
@@ -449,7 +459,13 @@ step's rules):
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
-   is no rollback target until released again).
+   is no rollback target until released again). A first release, with
+   nothing to restart, takes down what it started (`firstDown`: its
+   containers' logs into the server's log first, then `down
+   --remove-orphans`, volumes and `mnt` kept, never a stop: `restart:
+   always` would bring a container back with Docker, its bind mounts
+   through the gone `current` made again as root's) and leaves nothing
+   current; `--status` names it failed.
 10. A rollback marks the release it left (`RolledBackFile`).
 11. Pruning to `keep` (`img to-prune`, `img remove-releases`), then
     remote after steps (a failure is reported, the release stays
@@ -511,6 +527,27 @@ step's rules):
   under it, and a second release's upload waits for the first's
   activation. A fetch's children inherit the lock, so a recovery never
   races a fetch still running.
+- **What a session sends goes once its script holds the lock**
+  (`remote.WithGate`, `lockedGate`): the upload, `--destroy` and
+  `--releases remove` print `LockedMarker` on stderr once they hold it
+  (the removals once they hold the image lock too), and devopsy sends
+  stdin only then (the tar, or the `go` a removal reads through
+  `--stdin-guard` before it starts). Why: a session cut
+  while its script waited (Ctrl-C, a drop) left its tar in the server's
+  pipe, and the script extracted it once the lock came, after devopsy
+  had said nothing changed; a removal went on likewise. Now it finds an
+  empty or silent stdin and stops. Activations need no gate: their
+  watcher, started past the lock, reads a closed stdin at once. A
+  sync's holder starts its watcher before the lock, armed only while it
+  waits (nothing changed yet), and disarms it once it holds the lock: a
+  session gone meanwhile ends it. With a heartbeat, the disarm waits for
+  the session's next byte (`<armed>.next`), which devopsy sends at once
+  on the holder's `BeatMarker` (`waitBeat`), so a live session goes on in a
+  round trip and one that went silent during the wait ends it too,
+  before anything stops, rather than once its quiet time comes after
+  the lock. `--vars` edits and the inherit write
+  are gated too; their data may be empty, so it ends with `InputEnd`
+  (`GatedInput`), which `gated_read` requires and takes off.
 - **Only the upload creates `$base`** among the release scripts
   (outside them `--vars` edits and the inherit write do too). Why: an
   activation whose release went while it waited fails instead of making
@@ -652,12 +689,22 @@ interrupts" and "The server never waits on the operator for long".
   fetch is undone through `fetch_sig` at once, not at its next write, a
   build later. Without a watcher (OrbStack's own SSH) the fetch runs to
   its end. Armed: releases and rollbacks (`WatchEnv`), a release that
-  syncs always (its stdin is the answer's pipe); never a sync's holder,
-  which a SIGTERM would stop halfway through restoring.
+  syncs always (its stdin is the answer's pipe); a sync's holder only
+  while it waits for the release lock, since past it a SIGTERM would
+  stop it halfway through restoring.
 - **One rename decides between the watcher and the switch:** the script
   disarms the watcher by taking the file first (`mv` to `.off`) in
   `fetch_release`, under the image lock, before its last `fetch_sig`
   check, so a SIGTERM never lands past a switch.
+- **The switch waits for a byte from the session:** with a heartbeat,
+  the disarm takes the file to `.next`, prints `BeatMarker` and goes on
+  once the watcher sees the session's next byte (`waitBeat`), which
+  devopsy sends at once on the marker (`WithBeat`): a round trip. Why:
+  the watcher starts past the lock and counts its quiet time from
+  there, so a session that died silently during the lock wait or
+  shortly before a quick fetch saw its release go live; now a silent
+  session waits until the quiet time ends it, as gone, and nothing
+  goes live. The holder past its lock wait does the same.
 - **When the watcher won, the undo writes to a file,** `ServerLogFile`
   (a `cancel.<pid>` part, which `--log` shows at the end): nobody reads
   the session, and a write to one whose buffers are full would block
@@ -671,7 +718,10 @@ interrupts" and "The server never waits on the operator for long".
   only help the client). So every pipe devopsy keeps as a session's
   stdin (an activation, a holder, a push, the push's import,
   `--export`) gets a zero byte every 5 seconds, and the server's
-  readers, told by `HeartbeatEnv`, take a silence for EOF. A busy
+  readers, told by `HeartbeatEnv`, take a silence for EOF. A devopsy
+  on a server beats as its own session does (`HeartbeatEvery` falls back
+  to `HeartbeatEnv`), so the push's import on another server is counted
+  in the beats it gets. A busy
   operator (a laptop asleep, Ctrl-Z) cancels too, cleanly (accepted).
 - **Quiet times are ordered:** `QuietBeats` (30 seconds),
   `HolderQuietBeats` (90, behind an answer's fifo: a holder or a
@@ -730,7 +780,10 @@ interrupts" and "The server never waits on the operator for long".
   lost, and passes a script's own status on, so activations and holders
   never exit 255 (`NoExit255`, `followOutput`'s trap: 254 instead;
   drush on a PHP error exits 255). The operator's lost-connection
-  messages (`sshLost`) then mean what they say.
+  messages (`sshLost`) then mean what they say. An ssh killed by a
+  signal devopsy did not send reads as 255 too (`SSHStreams`), and
+  `DEVOPSY_SSH_COMMAND` runs through `exec`, so signals reach the
+  command, never only a shell around it.
 
 ### From the switch on
 
@@ -801,7 +854,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   if any (a hook, while everything is up), then `compose --profile '*'
   down --volumes --remove-orphans --rmi local` and `mnt` emptied as
   root in `UtilImage` (a plain `docker run`: `compose run` would bring
-  the network back); then every release's images; then `removeBase`.
+  the network back), a sync's leftover record's writers ended first
+  (`endWriters`: nothing writes into `mnt` while it is emptied); then
+  every release's images; then `removeBase`.
 - **Leftover levels are asked about, never removed silently:**
   `purgeLeftovers` finds levels' directories left with only their
   `.env` (`LeftoverScript`) and removes them with `--purge` or a yes at
@@ -852,7 +907,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `current` or `none`, then `incomplete` on a partial copy: one extra
   session on every release of a child), `--release-sync` (any
   release), never `--release-no-sync`, and `@<child> --sync`, which
-  asks for the name like `--destroy` and reruns `run`.
+  asks for the name like `--destroy` and reruns the deployed release's
+  `run` (`--release-steps release run`, never the checkout's).
 - **`--from <address>`** (`@` optional) on `--release`, `--release-sync`
   and `--sync` copies from that address instead of `ParentTarget`,
   `ParentErr` ignored: a child's only, and on `--release` only a first
@@ -873,33 +929,63 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `$base` and the sync's id: the operator does not know the release
   root), taken out by a `LineMarker` on stderr. Then the push on the
   parent's (`PushScript`: shared `flock -s` on its release lock,
-  exclusive on `.sync-lock` so syncs from one parent serialize,
+  exclusive on `SyncLockFile` so syncs from one parent serialize,
   `devopsy --sync-push`), with `ForwardAgent=yes` across servers. The
   push's exit gives `go` or `abort` to the holder; the holder's exit is
-  the command's.
+  the command's, but a push that failed after a copy that completed
+  (the parent's services not back) fails it too.
 - **Both ssh processes ignore SIGINT** (`remote.WithoutInterrupt`): a
   terminal's Ctrl-C reaches the whole foreground group, and a `-T` ssh
   quits on it, so devopsy alone ends them, in order.
 - **What the copy did decides, not the answer.** Why: an answer lost
   after a complete copy once restored the child on the parent's data
   unsanitized, and one lost mid-copy ran it on a mix.
-- **The gate:** the holder opens it before its marker (`SyncOpenFile`:
-  the parent's address and the sync's id, which the push passes on as
-  `SyncIDEnv`, so a write left from an earlier sync never claims a
-  newer gate) and closes it (`rm`) right before deciding. The child's
+- **The gate:** the holder opens it before its marker (`SyncOpenFile`,
+  named by the sync's id, which the push passes on as `SyncIDEnv`;
+  inside, the parent's address and the id) and closes it (`rm`) right
+  before deciding. Why the name: a write left from an earlier sync can
+  never claim a newer gate, and the claim is the rename alone, with no
+  check of the content before it that another gate could slip under. The child's
   side of the push claims it right before its first write
   (`claimWrite`, `ClaimWriteScript`: a rename to `SyncStartedFile`, one
   of the two wins; the same-server rsync, `SyncReceiveScript` across,
   an import in `syncImport`), so a push that outlived its connection
-  writes nothing once the holder decided. It writes `SyncDoneFile`
-  after its last write (the rsync's when no stream follows, else the
-  last import's, `import <service> last`), on the child, never through
-  another session.
+  writes nothing once the holder decided. The claimed file is the
+  sync's record of its writers: each import appends a `WriterLine`
+  (service, its devopsy's pid, the service's state before) before it
+  writes, and the last write appends a `DoneLine` with the sync's id
+  (the rsync's when no stream follows, else the last import's, `import
+  <service> last`), on the child, never through another session, and
+  never creating the file (`recordWrite`; the receive script checks the
+  first line first). Across servers the
+  receive script removes its rsync container once the holder decided
+  (a watchdog on `SyncStartedFile`): after a silent cut between the
+  servers the rsync would wait for TCP to give up, and sshd sends
+  nothing on a quiet forward (rsync's `--timeout` counts its own
+  keepalives into the forward's local socket, so it does not help).
 - **The decision** (`syncBlock`), once the holder's read of the answer
-  ends, however it ends: done is `go` (an `abort` after it too),
-  started alone `partial`, neither the answer (`go` with nothing
-  written clears an earlier mark too; `abort` on a marked environment
-  stays `partial`); then both files go.
+  ends, however it ends: it takes the record in one move (`mv` to
+  `SyncTakenFile`), so a writer appending after it finds no file and
+  stops. Its own sync's done line is `go` (an `abort` after it too),
+  taken without it `partial`, nothing taken on a marked environment
+  `partial` (decided: nothing written leaves an earlier sync's partial
+  copy as it was, even when the parent's labels cover nothing now),
+  else the answer; the taken record goes once finish is done.
+- **No write outlives its sync** (`endWriters`, cmd/devopsy/writers.go):
+  before a partial copy is marked (`finish partial`) or settled, what
+  the record names is ended. A write runs on past its sync when its
+  devopsy is killed outright, or inside a container, which never gets
+  the signal (an import's load through `docker exec`, a one-off `run
+  --rm`, devopsy's own rsync). So: the recorded imports' devopsy gets
+  SIGTERM (only a pid `/proc` still shows as `--sync-services import`:
+  Linux only), the sync's own containers are removed (named
+  `SyncContainerPrefix` + its id, never another sync's), the imported
+  services are stopped (the only way to end what `docker exec` started
+  in them) and, when they ran before the sync, recorded so a completing
+  sync starts them, their one-off containers removed; then the imports
+  are waited for (`writersWait`, 15 s) and killed. Decided (stop, not
+  restart): the service holds a half-loaded database, and a partial
+  copy keeps everything off its data.
 - **A partial copy keeps everything off the data:** `--sync-services
   finish partial` leaves the `stop=true` services down and writes
   `SyncIncompleteFile`; `finish go` removes it, and a failing `finish
@@ -912,13 +998,21 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   fix), a push from it refuses (a chain), `--export` warns, and
   `--status` shows it. Labels bound the promise: only `stop=true`
   services are kept off partial data.
+- **The mark says why** (`remote.IncompleteLine`: since, parent, code,
+  why, tab separated, one line: shell reads it with `cut`, no JSON):
+  `copy` (cut), `write` (another sync's push wrote after its holder
+  decided), `settled` (a holder killed before deciding), `finish` (a
+  complete copy the project's `finish child go` refused: the sync's
+  contract is that it completes only once its finish accepts the
+  copy). A later mark keeps the first one's time and says its own why;
+  the refusals and `--status` print the why.
 - **A holder killed before deciding is settled by the next lock-taker:**
   `--sync-services settle`, run by the next sync's prepare and by
-  `partialGuard`, counts its files as not completed (marked, `finish
-  child partial`); a sync's files while nothing holds the lock
-  (`LockBusy`) are a leftover, a running sync is not. A late write (an
-  import running on in its container after the holder decided) is
-  settled the same way.
+  `partialGuard`, takes its record as the holder would, ends what it
+  names (`endWriters`), and counts its data as not completed (marked,
+  keeping a mark the holder wrote before dying, `finish child
+  partial`); a sync's files while nothing holds the lock (`LockBusy`)
+  are a leftover, a running sync is not.
 - **The answer comes on fd 3, never stdin:** the holder reads it from a
   fifo the watcher writes (`--answer-fd`; both ends opened before the
   watcher starts, so no open ever waits) and gives every command
@@ -932,9 +1026,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   prepare until the services are restored it ignores SIGPIPE, and it
   restores before it reports.
 - **An interrupt stops the push first, then lets the holder decide**
-  (SIGINT, SIGTERM in `runSyncSession`): before the marker devopsy ends
-  the holder's session (`endHolder`) and waits for it (a release that
-  syncs is cancelled by its watcher, a holder restores on its own);
+  (SIGINT, SIGTERM in `runSyncSession`): before the marker devopsy writes
+  `abort`, closes the holder's stdin and waits, as for a release (the
+  watcher, armed during the lock wait or before a release's switch,
+  ends it; past that the holder reads the abort after its prepare and
+  restores in the session, so the operator sees how it ends), saying so
+  after 5 seconds, and a second one ends the session (`endHolder`);
   after it, the push's ssh gets SIGTERM (`remote.SSHContext`, SIGKILL
   after `SSHKillDelay`) and is waited for, then the holder gets `abort`
   and finishes as the files say: exit 130, or 0 when the copy had
@@ -968,7 +1065,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   other value an error (`live`, `pause`, `stop`, `custom` went, with
   `push` and `flush`: no migration). Nothing labeled, or nothing to
   copy (no entries, no streams): "nothing to sync", success, the
-  parent's hooks skipped, and the run step still runs.
+  parent's hooks skipped, and the run step still runs, unless the child
+  is marked (it stays so).
 - **`devopsy.sync.stop=true|false`** (`SyncStopLabel`, default false,
   ignored without `devopsy.sync`) stops the service on both sides for
   the whole sync, a stream included. On the parent that is downtime for
@@ -1018,8 +1116,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   record, the import check, the `prepare child` hook, then one `compose
   stop` of its `stop=true` services. Keep it one call: Compose orders
   them by `depends_on`, dependents first. `finish go|abort` starts them
-  and waits until healthy, `partial` leaves them down; spools are
-  removed unless `go`; then `finish child` with the word. Stopped
+  and waits until healthy, `partial` leaves them down; every spool
+  left goes (an import removes its own; one left is an earlier sync's);
+  then `finish child` with the word. Stopped
   services stay down through the imports: no app on a half-imported
   database.
 - **The parent's side** (`runSyncPush`): the checks (labels, the
@@ -1033,7 +1132,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   are required for a `stream` service), with that side's label lists
   (`cli.SyncLists`) and the sync's addresses and arguments in their
   environment (README). The holder's scripts (`syncPrepare`,
-  `syncFinish`) only call `--sync-services`.
+  `syncFinish`) only call `--sync-services`. Hooks run in the
+  foreground: what one leaves running in its group ends when it
+  returns, said; what it starts outside its group (`setsid`, `docker
+  exec -d`) is its own.
 - **The state record exists before anything can fail:** stopping
   records what it stops in `$base/.devopsy-sync.services` (`syncState`,
   `stop <name>` lines; `startSyncState`: the child's prepare creates it
@@ -1041,18 +1143,24 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   record means restore every `stop=true` service, one down on purpose
   included. One left by an earlier sync that could not restore is kept
   and added to (`syncRecord`, rewritten whole).
-- **Restoring brings back only the recorded services,** from container
-  state (exited), so it also recovers after an interrupted sync, and a
+- **Restoring brings back only the recorded services,** whatever their
+  labels say now (an inherited variable may have changed them since a
+  cut sync), from container state (exited), so it also recovers after an interrupted sync, and a
   service down before the sync (a maintenance stop) stays down. It
   waits for every service it started to be running and healthy
   (`waitHealthy`: one gone fails), and removes the record once all are
   back. Service states come from one `docker compose ps --format json`
-  (`serviceStates`, `servicesIn`); the sync tests' fake docker remembers
-  stops and starts to answer it.
+  (`serviceStates`, `servicesIn`), one-off containers left out
+  (`serviceEntries`: a hook's `run --rm` still running would read as its
+  service running, which then never started again); the sync tests'
+  fake docker remembers stops and starts to answer it.
 - **A child's first release gets every labeled service before its
-  finish hook:** no container at all when prepare started is a `first`
-  line in the record (a stream's import creates its container before
-  finish looks; a later sync that finds containers drops it). Before
+  finish hook:** a release with nothing current before it (`prepare
+  first`, from the activation), or no container at all when prepare
+  started, is a `first` line in the record (a stream's import creates
+  its container before finish looks, and a first release killed
+  before its `firstDown` may have left one; a later sync that finds
+  containers drops it). Before
   the hook every labeled service is created in one `up -d --wait`,
   since the hook sanitizes through them (drupal11's needs the app:
   without it, prod's passwords reached a child), and a stream imported
@@ -1066,13 +1174,16 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`SyncStreamServices`: dependencies first, ties alphabetical, a cycle
   an error), the parent runs the capability's `export <service>`
   (`syncStream`) into the child's spool,
-  `$base/.devopsy-sync.stream.<service>` (`remote.StreamSpool`): on the
+  `$base/.devopsy-sync.stream.<service>.<sync id>` (`remote.StreamSpool`:
+  one per sync, so an export that outlived its push, killed outright,
+  never writes into the next sync's): on the
   same server directly, across servers through `cat >` in an SSH
   session to the child (`exportInto`). Only once the export exited 0
   does the child's `--sync-services import <service>` run. Never a
   pipe into the import: a cut export never reaches it.
-- **The import:** the service brought up (`upFor`) unless `stop=true`
-  (down again after if it was down), `import <service>` with the spool
+- **The import:** the service brought up (`upFor`, `--no-deps` but on
+  a first release: Compose would start a dependency the sync stopped)
+  unless `stop=true` (down again after if it was down), `import <service>` with the spool
   as stdin, the spool removed whatever happens. Its stdin is a pipe the
   push keeps open, so across servers the session's end, which a remote
   process never gets as a signal, cancels it too.
@@ -1094,7 +1205,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   bind-mounting it sees the new content (a bind mount is the file's
   inode); across servers its module is `/mnt` filtered to it.
 - **Across servers the parent's daemon serves only what is copied:**
-  one module per entry (`rsyncdConf`, `RsyncModule`: the entry's name,
+  named with the sync's id and labeled with the parent's `mnt`, so the
+  next push from the parent, holding its sync lock, removes one an
+  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`, `RsyncModule`: the entry's name,
   `mnt` for `.`), so nothing else under `mnt` can be asked for.
 - **rsync's exit 24** (files vanished during the copy) is a notice
   (`RsyncVanished`); any other failure aborts.
@@ -1130,8 +1243,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 - **Hidden flags** (dispatched in `main.go` before anything else):
   `--sync-push`, `--sync-exec <devopsy args>` (both need the push's
   `DEVOPSY_SYNC_TO_DIR` and `DEVOPSY_SYNC_TO_PROJECT`) and
-  `--sync-services prepare | finish go|abort|partial | settle | import
-  <service> [last] | list` (`runSyncServices`). `DEVOPSY_SYNC_ARGS`
+  `--sync-services prepare [first] | finish go|abort|partial | settle |
+  import <service> [last] | list` (`runSyncServices`). `DEVOPSY_SYNC_ARGS`
   (space-joined, split like `StepArgs`) go to rsync, and to the hooks
   to read.
 
@@ -1149,8 +1262,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   upload,** so `--missing-vars` sees the values; kept on failure, since
   the next release is first again.
 - **A re-sync inherits into a pending file the sync reads in place of
-  the release's:** `$base/.devopsy-sync.inherit.env`
-  (`remote.SyncInheritPending`), named by
+  the release's:** `$base/.devopsy-sync.inherit.<sync id>.env`
+  (`remote.SyncInheritPending`; the id chosen by the operator's devopsy,
+  `newSyncID`, since the file is written before the holder runs), named by
   `DEVOPSY_INTERNAL_INHERIT_FILE` (exported by the holder, set by
   `--sync-exec`) for everything the sync runs on the child. Why: the
   child's labels follow an inherited variable in the same sync; written
@@ -1158,8 +1272,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`mv -Tf`) before restoring services, the hook and the run step;
   anything else removes it. Rejected: writing `inherit.env` in place
   with a backup restored on abort, since a holder killed outright
-  leaves the new file over the old data. A holder told none was written
-  (`SyncOptions.Inherit`) removes a stale one first.
+  leaves the new file over the old data. One per sync: two syncs of a
+  child at once (the second waiting for the lock, its file written)
+  never read or remove each other's; finish removes another's only past
+  `staleInherit` (an hour, longer than any wait for the lock).
 
 ## --export and --import
 
@@ -1178,21 +1294,29 @@ sync label says, with the sync's scripts. Code:
   service mounting `./mnt` itself carries all of `mnt`, said
   (`wholeMntNotice`).
 - **An rsync import checks the whole tar before changing anything**
-  (`tarEntries`): a truncated tar fails `tar -t`; the spool must end
-  with two zero blocks, which every tar writer adds and `tar -t` does
-  not require; entries the service does not mount are refused, an
+  (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
+  so does one without its end-of-archive blocks, which every tar
+  writer adds: `tar -t` takes a tar cut at a member boundary for
+  complete, and the last member's own zeros (a sparse file, a
+  database's pages) pass a check of the spool's last bytes; entries the service does not mount are refused, an
   excluded one by its label. Then each carried entry is emptied, never
   removed (for `.`, every entry's contents and the files beside them),
   and extracted with `--overwrite`. Why never removed: a running
   container bind-mounts the directory's inode.
 - **stdout is the data:** `--export` refuses a terminal; `--import`
   refuses a terminal as stdin, spools it whole first (`importSpool`: in
-  a release the sync's `$base/.devopsy-sync.stream.<service>`, locally
-  a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
+  a release a temporary `$base/.devopsy-sync.stream.<service>.*`,
+  locally a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
   out of releases), refuses an empty one, and only then stops anything.
   The spool always goes.
+- **A stream's import that fails or is cut is ended** (`endImport`):
+  what it started in the service may load on (a `docker exec` never
+  gets the cut), so its one-offs go and the service, unless stopped for
+  the import already, is stopped and started again if it ran before,
+  with a warning that its data may be partial. On a target,
+  `ImportScript` settles a sync's leftover record first.
 - **On a target the server runs the same code:** `ExportScript` (shared
-  release lock and exclusive `.sync-lock`, like the push: both stop and
+  release lock and exclusive `SyncLockFile`, like the push: both stop and
   restore the same services; stdout through as it is, never
   colorized) and `ImportScript` (exclusive lock, `devopsy --import
   <service> --yes`). The local side asks for the environment's name on
@@ -1247,7 +1371,11 @@ Smaller features, each with the rule an agent must keep.
   a table, then the `status` capability's `show`. With a target,
   `StatusScript` prints header lines from the server's files (the
   record, live releases kept, the last copy from the session logs'
-  `SyncCopied` lines, a partial or running sync from `partialStatus`),
+  `SyncCopied` lines, a partial or running sync from `partialStatus`:
+  "syncing" while a holder holds the child's lock, from its holding file
+  on, its prepare included, `SyncRunning`; "source" while a push or an
+  export holds the parent's sync lock, `SourceBusy`; `--releases` marks
+  the current release SYNCING the same way),
   `---`, then `devopsy --status` in the current release; the operator
   formats the header and prints the rest as it came.
 - **`--ssh-keys` edits only the deploy user's own
@@ -1333,8 +1461,7 @@ Findings that are not one area's.
   check.
 - Traefik picks up a new container a few seconds after `up` returns.
 - macOS hides what Linux servers do: dash as `sh` never execs the last
-  command of `sh -c` (so a signal to it does not reach that command),
-  and two releases can land in the same second.
+  command of `sh -c` (so a signal to it does not reach that command).
 - OrbStack machines are `ProxyCommand` hosts from macOS: syncs across
   servers need hosts reachable directly (`ssh -G` without a proxy),
   like `<machine>.orb.local` with a key of your own. Their
@@ -1376,7 +1503,7 @@ script there). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
 ```sh
-go test -tags e2e -count=1 -v -timeout 25m ./e2e   # E2E_KEEP=1 keeps the containers
+go test -tags e2e -count=1 -v -timeout 40m ./e2e   # E2E_KEEP=1 keeps the containers
 E2E_BEAT=5 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # the real timeouts
 ```
 
