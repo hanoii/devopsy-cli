@@ -1313,8 +1313,10 @@ sync label says, with the sync's scripts. Code:
   the service's entries of `mnt` (exclude honored, file entries
   included) made in `UtilImage` as root with `--numeric-owner`.
   `stop=true` stops the service around either and restores it
-  (`stopFor`), interrupts included. A `stream` import of a service not
-  stopped brings it up and down again if it was down (`upFor`). A
+  (`stopFor`), interrupts and a stop that failed included (it may have
+  stopped it all the same). A `stream` import of a service not stopped
+  brings it up and down again if it was down (`upFor`), an `up` that
+  failed too. A
   service mounting `./mnt` itself carries all of `mnt`, said
   (`wholeMntNotice`).
 - **An rsync import checks the whole tar before changing anything**
@@ -1322,8 +1324,14 @@ sync label says, with the sync's scripts. Code:
   so does one without its end-of-archive blocks, which every tar
   writer adds: `tar -t` takes a tar cut at a member boundary for
   complete, and the last member's own zeros (a sparse file, a
-  database's pages) pass a check of the spool's last bytes; entries the service does not mount are refused, an
-  excluded one by its label. Then each carried entry is emptied, never
+  database's pages) pass a check of the spool's last bytes; entries the
+  service does not mount are refused, an excluded one by its label, and
+  so is a member that reaches out of its entry (`tarMember`): a `..` or
+  absolute path, a link out of `mnt`, a top-level entry that is no
+  directory or file, and a link into another entry unless the tar
+  carries all of `mnt`. Why: GNU tar extracted those through to another
+  entry, refused them only once the entries were emptied, or (`../x`
+  into `.`) emptied the container's root. Then each carried entry is emptied, never
   removed (for `.`, every entry's contents and the files beside them),
   and extracted with `--overwrite`. Why never removed: a running
   container bind-mounts the directory's inode.

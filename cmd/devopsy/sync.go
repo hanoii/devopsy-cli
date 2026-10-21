@@ -1835,7 +1835,11 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		rec, _ := readSyncRecord(cwd)
 		down, state, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
 		if err != nil {
-			return fail(err.Error())
+			code := fail(err.Error())
+			if err := down(); err != nil {
+				fail(err.Error())
+			}
+			return code
 		}
 		was = state
 		defer func() {
@@ -1878,19 +1882,21 @@ func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func(
 	if noDeps {
 		up = []string{"up", "-d", "--wait", "--no-deps", name}
 	}
+	if states[name] != "running" && !keep {
+		down = func() error {
+			report.Info("stopping " + name + " again: it was down before")
+			if err := compose(cwd, errOut, "stop", name); err != nil {
+				return fmt.Errorf("docker compose stop: %w", err)
+			}
+			return nil
+		}
+	}
+	// An up that fails may have started it all the same (unhealthy, or
+	// late): down then too.
 	if err := composeContext(ctx, cwd, errOut, up...); err != nil {
 		return down, was, fmt.Errorf("docker compose up %s: %w", name, err)
 	}
-	if states[name] == "running" || keep {
-		return down, was, nil
-	}
-	return func() error {
-		report.Info("stopping " + name + " again: it was down before")
-		if err := compose(cwd, errOut, "stop", name); err != nil {
-			return fmt.Errorf("docker compose stop: %w", err)
-		}
-		return nil
-	}, was, nil
+	return down, was, nil
 }
 
 // compose runs docker compose args in the project at cwd, with its

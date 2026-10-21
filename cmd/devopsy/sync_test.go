@@ -1794,6 +1794,70 @@ func TestExportImport(t *testing.T) {
 	if m := spools(s.dot); len(m) > 0 {
 		t.Errorf("spools left: %v", m)
 	}
+	// A tar whose members reach past the entries it names is refused
+	// before anything is emptied, as one naming a foreign entry is. GNU
+	// tar (the util image's, checked on alpine 3.22) extracts each of
+	// these through to another entry, or refuses it only after the
+	// entries were emptied, or empties the container's root:
+	//
+	// - storage/../db/x: tar refuses the member ("contains '..'") once
+	//   mnt/storage is emptied: the data gone, nothing imported.
+	// - storage as a symlink to db, then storage/x: tar removes the
+	//   emptied mnt/storage (a running container keeps the inode it
+	//   bind-mounts), links it to db and writes db/x.
+	// - storage/h a hard link to db/secret, then storage/h: --overwrite
+	//   writes through the link, into db's file.
+	// - ../x for a service mounting mnt whole: tarEntries lists "..",
+	//   which nothing checks then, and the emptying step runs on
+	//   /mnt/.., the container's root, mnt included: all of it gone.
+	//
+	// Bug: tarEntries keeps only each member's first path component and
+	// never looks at link targets or member types, and with "." nothing
+	// is checked at all. FAIL_TAR keeps the fake from touching files: what
+	// counts is that the import's container never runs.
+	member := func(tw *tar.Writer, h *tar.Header, data string) {
+		h.Mode, h.Size = 0o644, int64(len(data))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reaching := func(members func(tw *tar.Writer)) []byte {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		members(tw)
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	for _, c := range []struct {
+		name  string
+		mount string
+		tar   []byte
+	}{
+		{"storage/../db/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/../db/x", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+		{"storage a symlink to db", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage", Typeflag: tar.TypeSymlink, Linkname: "db"}, "")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+		{"storage/h a hard link to db/secret", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeLink, Linkname: "db/secret"}, "")
+			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+		{"../x into mnt whole", "", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "../x", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+	} {
+		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")
+		if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
+			t.Errorf("a tar reaching out of its entries, %s (%d), the import's container ran:\n%s", c.name, code, errs)
+		}
+	}
 	// Unlabeled, unknown: refused.
 	if _, errs, code := s.runIO([]string{"FAKE_APP=none"}, nil, "--export", "app"); code == 0 || !strings.Contains(errs, "app has no devopsy.sync label") {
 		t.Errorf("unlabeled (%d):\n%s", code, errs)
@@ -1842,6 +1906,23 @@ func TestExportImport(t *testing.T) {
 	}
 	write(t, filepath.Join(caps, "import"), "#!/bin/sh\n{ echo \"import $1 into $COMPOSE_PROJECT_NAME\"; cat; } > \"$FAKE_IMPORTED\"\n", 0o755)
 
+	// A stop that fails partway (FAIL_STOP: db stopped all the same, as
+	// when Ctrl-C reaches docker compose stop, whose request the daemon
+	// carries out) still brings db back: an export or an import that
+	// stopped it restores it, whatever happened.
+	//
+	// Bug: stopFor returns its no-op restore with the stop's error, so
+	// db stays down after a failed --export or --import.
+	for _, args := range [][]string{{"--export", "db"}, {"--import", "db"}} {
+		_, errs, code := s.runIO(append(stopped, "FAIL_STOP=shop"), []byte("rows\n"), args...)
+		if docker, _ := s.logs(); code == 0 || !strings.Contains(docker, " stop db") || !strings.Contains(docker, " start db") {
+			t.Errorf("%s after a stop that failed (%d), db left down:\n%s\n%s", args[0], code, errs, docker)
+		}
+		// The fake's memory of what is stopped: db running again for what
+		// follows.
+		os.Remove(s.log + ".stopped.shop")
+	}
+
 	// A stream's import that fails, not stopped for it: what it started
 	// in the service may load on, so the service is stopped (and started
 	// again, it ran before), its one-off removed, and the data said
@@ -1863,6 +1944,18 @@ func TestExportImport(t *testing.T) {
 	}
 	if docker, _ := s.logs(); !strings.Contains(docker, "up -d --wait db") || strings.Index(docker, " stop db") < strings.Index(docker, "up -d --wait db") {
 		t.Errorf("down stream import:\n%s", docker)
+	}
+	// Its up failing (FAIL_UP: docker compose up -d --wait, whose
+	// container Compose started and left running, unhealthy or late)
+	// stops it again too: it was down before, and nothing was imported.
+	//
+	// Bug: upFor returns its no-op down with the up's error, so a
+	// service down on purpose is left running after a failed import.
+	if _, errs, code := s.runIO(append(env, "FAKE_DB=stream", "FAKE_DB_DOWN=1", "FAIL_UP=shop"), []byte("rows\n"), "--import", "db"); code == 0 {
+		t.Errorf("import of a stream that was down, its up failing (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "up -d --wait db") || strings.Index(docker, " stop db") < strings.Index(docker, "up -d --wait db") {
+		t.Errorf("a stream down before its import, its up failing, left up:\n%s", docker)
 	}
 
 	// A tar cut right after a member lists fine, but has no end blocks:

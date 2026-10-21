@@ -623,3 +623,22 @@ func TestVerboseLevel(t *testing.T) {
 		}
 	}
 }
+
+// DotenvLine writes a line compose's parser reads back as the value it
+// was given: --vars set, inherit and devopsy-target.env write with it,
+// and every devopsy command on the server reads those files.
+//
+// Bug: a value without a quote or a newline is written single-quoted as
+// it is, and compose's parser takes a backslash before the closing quote
+// for an escaped quote: K='x\' is "unterminated quoted value", so a
+// password ending in a backslash, set with --vars set, breaks the
+// environment's shared/.env for every command (--vars included).
+func TestDotenvLineRoundTrip(t *testing.T) {
+	for _, v := range []string{"", "a b", " lead", "trail ", "a #b", "$HOME", `a\nb`, "it's", "a\nb", `"`, "'", `x\`, `\`, `x\\`} {
+		line := DotenvLine("K", v)
+		got, err := dotenv.UnmarshalWithLookup(line+"\n", func(string) (string, bool) { return "looked up", true })
+		if err != nil || got["K"] != v {
+			t.Errorf("%q: %s reads back as %q (%v)", v, line, got["K"], err)
+		}
+	}
+}
