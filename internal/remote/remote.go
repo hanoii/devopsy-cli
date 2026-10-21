@@ -482,7 +482,7 @@ base="$root"/` + Quote(t.Path) + `
 // --release-settings in $settings. Its lines are a plain echo: the
 // server's devopsy may lack --say.
 func serverCheck(ref string) string {
-	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
+	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy @"+ref+" --upgrade)") + `; exit 1; }
 server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
 if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
   if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
