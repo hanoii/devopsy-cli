@@ -722,7 +722,13 @@ interrupts" and "The server never waits on the operator for long".
   there, so a session that died silently during the lock wait or
   shortly before a quick fetch saw its release go live; now a silent
   session waits until the quiet time ends it, as gone, and nothing
-  goes live. The holder past its lock wait does the same.
+  goes live. The holder past its lock wait does the same. Only a zero
+  byte before any answer disarms: an answer that early is an abort,
+  devopsy interrupted before a sync's marker, with the session's end
+  right behind it (its bytes once disarmed a release that syncs, which
+  then switched). `prelude` removes a watcher's file only once its
+  script is gone (`kill -0` on the pid in its name): a holder arms its
+  own before it waits for the lock.
 - **When the watcher won, the undo writes to a file,** `ServerLogFile`
   (a `cancel.<pid>` part, which `--log` shows at the end): nobody reads
   the session, and a write to one whose buffers are full would block
