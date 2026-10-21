@@ -327,7 +327,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			defer heartbeat(w)()
 			var switched atomic.Bool
 			go func() {
-				code, err := remote.SSHContext(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+				code, err := remote.SSHContext(remote.WithBeat(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 				done <- result{code, err}
 			}()
 			var res result

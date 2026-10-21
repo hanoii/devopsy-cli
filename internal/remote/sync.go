@@ -124,13 +124,6 @@ const SyncCopied = report.Prefix + "copied the data from @"
 // to be written.
 const SyncMarker = report.Prefix + "ready for sync in "
 
-// HolderLockedMarker is the line a holder prints (stderr) once it holds
-// the release lock, its watcher waiting for the session's next byte
-// before it disarms: devopsy answers it with a byte at once, so a live
-// session goes on in a round trip, where the next heartbeat would take up
-// to a beat, and a silent one still ends it.
-const HolderLockedMarker = report.Prefix + "holding the release lock"
-
 // SyncIDEnv carries the sync's id, from the holder's marker, to the
 // push and the child's side of its writes: a write claims the gate
 // only when it names this sync (ClaimWriteScript), so one left over
@@ -445,19 +438,10 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
 `, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
 # session gone then ends it; from here on it restores on its own. With a
-# heartbeat, disarmed only by the session's next byte, which devopsy sends
-# on the marker at once: a session that went silent while this waited
-# ends it too, at its quiet time, never noticed only once the services
-# are stopped.
-if [ -n "${` + HeartbeatEnv + `:-}" ]; then
-  mv "$ws_armed" "$ws_armed.next" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
-  printf '%s\n' "` + HolderLockedMarker + `" >&2
-  while [ -e "$ws_armed.next" ]; do sleep 0.2; done
-  [ -e "$ws_armed.off" ] || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
-else
-  mv "$ws_armed" "$ws_armed.off" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
-fi
-# A holder its watcher ended while it waited leaves its .fired.
+# heartbeat, disarmed only on the session's next byte (waitBeat): a
+# session that went silent while this waited ends it too, never noticed
+# only once the services are stopped.
+` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
 rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }

@@ -542,7 +542,7 @@ step's rules):
   waits (nothing changed yet), and disarms it once it holds the lock: a
   session gone meanwhile ends it. With a heartbeat, the disarm waits for
   the session's next byte (`<armed>.next`), which devopsy sends at once
-  on the holder's `HolderLockedMarker`, so a live session goes on in a
+  on the holder's `BeatMarker` (`waitBeat`), so a live session goes on in a
   round trip and one that went silent during the wait ends it too,
   before anything stops, rather than once its quiet time comes after
   the lock. `--vars` edits and the inherit write
@@ -696,6 +696,15 @@ interrupts" and "The server never waits on the operator for long".
   disarms the watcher by taking the file first (`mv` to `.off`) in
   `fetch_release`, under the image lock, before its last `fetch_sig`
   check, so a SIGTERM never lands past a switch.
+- **The switch waits for a byte from the session:** with a heartbeat,
+  the disarm takes the file to `.next`, prints `BeatMarker` and goes on
+  once the watcher sees the session's next byte (`waitBeat`), which
+  devopsy sends at once on the marker (`WithBeat`): a round trip. Why:
+  the watcher starts past the lock and counts its quiet time from
+  there, so a session that died silently during the lock wait or
+  shortly before a quick fetch saw its release go live; now a silent
+  session waits until the quiet time ends it, as gone, and nothing
+  goes live. The holder past its lock wait does the same.
 - **When the watcher won, the undo writes to a file,** `ServerLogFile`
   (a `cancel.<pid>` part, which `--log` shows at the end): nobody reads
   the session, and a write to one whose buffers are full would block

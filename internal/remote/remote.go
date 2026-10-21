@@ -757,10 +757,12 @@ done
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
-  # fetch is undone like one interrupted. Past this, the release goes on.
-  if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
-    fetch_sig=1
-  fi
+  # fetch is undone like one interrupted. With a heartbeat, only on the
+  # session's next byte (waitBeat): a session that went silent shortly
+  # before never sees its release go live. Past this, the release goes
+  # on.
+  if [ -n "${watch_pid:-}" ]; then
+` + waitBeat("fetch_sig=1") + `  fi
   # The watcher fired: nobody reads the session, whose buffers may be
   # full, and a write there would block the undo with the lock held.
   ws_gone=
@@ -1623,6 +1625,16 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		cmd.Stdout = io.MultiWriter(flush[0], flush[2])
 		cmd.Stderr = io.MultiWriter(flush[1], flush[3])
 	}
+	// A session whose script asks for a byte (BeatMarker, WithBeat) gets
+	// one at once on its stdin: the server's watcher disarms on it, so a
+	// live session goes on in a round trip. Taken out of both the
+	// terminal's and the log's lines.
+	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
+		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) { _, _ = w.Write([]byte{0}) }}
+		mw := lm.Writer(cmd.Stderr)
+		flush = append([]*MarkerWriter{mw}, flush...)
+		cmd.Stderr = mw
+	}
 	// A gated session (WithGate) sends stdin only once the script holds
 	// the release lock: what is sent while it waits would otherwise
 	// reach a script whose operator left meanwhile.
@@ -1743,6 +1755,44 @@ const gatedRead = `gated_read() {
 `
 
 type switchedKey struct{}
+
+type beatKey struct{}
+
+// WithBeat is ctx for a session whose stdin devopsy writes through w, the
+// pipe it keeps open with a heartbeat: a BeatMarker line the script
+// prints is answered with a byte on w at once.
+func WithBeat(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, beatKey{}, w)
+}
+
+// BeatMarker is the line a script prints on stderr when its watcher waits
+// for the session's next byte before it disarms (<armed>.next): past a
+// sync holder's lock wait, and right before a release's switch. Why: a
+// live session and one that died silently look the same until a byte
+// comes, and the next heartbeat would take up to a beat; devopsy answers
+// the marker at once, so only a silent session waits, until its quiet
+// time ends it as gone. Once per session.
+const BeatMarker = "devopsy-internal-beat"
+
+// waitBeat takes the watcher's armed file to <armed>.next, asks for a byte
+// (BeatMarker) and waits until the watcher disarms it on the session's next
+// byte (.off) or takes it as gone (.fired, its SIGTERM on the way), then
+// runs gone in the second case, and when the watcher had fired already.
+// Without a heartbeat, the plain disarm. $ws_armed set.
+func waitBeat(gone string) string {
+	return `if [ -n "${` + HeartbeatEnv + `:-}" ]; then
+  if mv "$ws_armed" "$ws_armed.next" 2>/dev/null; then
+    printf '%s\n' "` + BeatMarker + `" >&2
+    while [ -e "$ws_armed.next" ]; do sleep 0.2; done
+    [ -e "$ws_armed.off" ] || ` + gone + `
+  else
+    ` + gone + `
+  fi
+elif ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
+  ` + gone + `
+fi
+`
+}
 
 // WithSwitched is ctx for a logged session that sets switched once the
 // script printed SwitchMarker: its release went live, whatever the

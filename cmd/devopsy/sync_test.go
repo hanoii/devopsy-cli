@@ -166,6 +166,12 @@ case "$s" in *"ready for sync in"*) if [ -n "${FAKE_HOLDER_DIE:-}" ]; then
   # dash runs the inner sh as a child instead of exec'ing it: kill both.
   pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 255
 fi ;; esac
+# FAKE_SILENT: an activation's session stays open and sends nothing, as
+# one whose connection died without a FIN: a fifo opened both ways.
+case "$s" in *DEVOPSY_INTERNAL_WATCH=1*) if [ -n "${FAKE_SILENT:-}" ]; then
+  mkfifo "$SSH_LOG.silent.$$" && exec 7<>"$SSH_LOG.silent.$$" && rm -f "$SSH_LOG.silent.$$"
+  exec sh -c "$s" <&7
+fi ;; esac
 case "$opts" in *" -R "*) [ -z "${FAKE_NO_FORWARD:-}" ] || { echo "Error: remote port forwarding failed for listen port 1" >&2; exit 255; } ;; esac
 exec sh -c "$s"
 `
@@ -271,20 +277,31 @@ func readString(path string) string {
 // services labeled devopsy.sync.stop=true stopped on both sides, one
 // container copying, then deploy on the parent's data. Later releases do not, unless --sync; --sync
 // resyncs.
-// A holder that holds the lock waits for its session's next byte before
-// it disarms its watcher, and devopsy answers its marker with one at once:
-// the sync goes on in a round trip, not at the next beat (30 seconds
-// here), and the marker never shows.
-func TestSyncHolderLockedAnswered(t *testing.T) {
+// A watcher about to disarm waits for its session's next byte, which
+// devopsy sends at once on the script's BeatMarker: a release goes live
+// and a sync's holder goes on past its lock in a round trip, not at the
+// next beat (30 seconds here), and the marker never shows. A session
+// silent by then (its connection died just before the switch, the watcher
+// not counting its quiet time yet) never sees its release go live.
+func TestBeatMarkerAnswered(t *testing.T) {
 	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
-		t.Fatalf("release (%d):\n%s", code, out)
-	}
 	start := time.Now()
-	out, code := s.run([]string{remote.HeartbeatEveryEnv + "=30"}, "@dev", "--sync", "--yes")
-	if took := time.Since(start); code != 0 || took > 20*time.Second || strings.Contains(out, remote.HolderLockedMarker) {
-		t.Fatalf("sync (%d) in %s:\n%s", code, took, out)
+	out, code := s.run([]string{remote.HeartbeatEveryEnv + "=1", "FAKE_SILENT=1"}, "@prod", "--release")
+	logs, _ := filepath.Glob(filepath.Join(s.root, "shop", "prod", "releases", "*", remote.ServerLogFile))
+	server := ""
+	if len(logs) == 1 {
+		server = readString(logs[0])
+	}
+	if took := time.Since(start); code != 130 || s.current("prod") != "" || took < 5*time.Second || !strings.Contains(server, "the session is gone: undoing the fetch") {
+		t.Fatalf("a silent session's release (%d) in %s, current %q:\n%s\nserver's log:\n%s", code, took, s.current("prod"), out, server)
+	}
+	beat := []string{remote.HeartbeatEveryEnv + "=30"}
+	for _, args := range [][]string{{"@prod", "--release"}, {"@dev", "--release-no-sync"}, {"@dev", "--sync", "--yes"}} {
+		start := time.Now()
+		out, code := s.run(beat, args...)
+		if took := time.Since(start); code != 0 || took > 20*time.Second || strings.Contains(out, remote.BeatMarker) {
+			t.Fatalf("%v (%d) in %s:\n%s", args, code, took, out)
+		}
 	}
 }
 
