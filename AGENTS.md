@@ -369,7 +369,8 @@ before changing anything".
   after the parent's services stopped. `DEVOPSY_PROTOCOL_CHECK=warn`
   (`ProtocolCheckEnv`, exported to every session, so a push passes it
   on) makes either refusal a warning and goes on: the operator's own
-  risk, for a local build ahead of the servers.
+  risk, for a local build ahead of the servers. A server with no
+  `features=` is older than 8, so only the protocol's warning shows.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -534,7 +535,12 @@ step's rules):
   arguments:** `--vars`, `--vars-instance` and `--vars-project` (one
   file each, so flags, not options of `--vars`; `internal/remote/vars.go`)
   edit keys in place under the release lock, since deploy commands
-  write secrets too.
+  write secrets too. A key's lines are all of its value, quoted over
+  several lines, and `KEY: value`, which compose's parser reads as
+  `KEY=value`. The result goes into place in one rename beside what a
+  link points to, with the file's mode, so no command reads it empty or
+  cut (a `cat` into it truncated it first); a file of another user's is
+  written over in place. Inherited values are written under `umask 077`.
 
 ### Locks
 
@@ -728,7 +734,10 @@ interrupts" and "The server never waits on the operator for long".
   right behind it (its bytes once disarmed a release that syncs, which
   then switched). `prelude` removes a watcher's file only once its
   script is gone (`kill -0` on the pid in its name): a holder arms its
-  own before it waits for the lock.
+  own before it waits for the lock. A watcher that never answers
+  (killed outright) cannot hold a script: `waitBeat` gives up two beats
+  past the longest quiet time, takes the file itself and goes the way
+  of a session gone.
 - **When the watcher won, the undo writes to a file,** `ServerLogFile`
   (a `cancel.<pid>` part, which `--log` shows at the end): nobody reads
   the session, and a write to one whose buffers are full would block
@@ -1334,7 +1343,10 @@ sync label says, with the sync's scripts. Code:
   into `.`) emptied the container's root. Then each carried entry is emptied, never
   removed (for `.`, every entry's contents and the files beside them),
   and extracted with `--overwrite`. Why never removed: a running
-  container bind-mounts the directory's inode.
+  container bind-mounts the directory's inode. An entry that is a
+  symlink is refused both ways: tar carries only the link (an export
+  that succeeded empty), and the image's `/mnt` never reaches its
+  target.
 - **stdout is the data:** `--export` refuses a terminal; `--import`
   refuses a terminal as stdin, spools it whole first (`importSpool`: in
   a release a temporary `$base/.devopsy-sync.stream.<service>.*`,

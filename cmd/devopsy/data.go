@@ -86,6 +86,18 @@ func stopFor(cwd string, s cli.SyncService) (restore func() error, err error) {
 	return restore, nil
 }
 
+// symlinkEntry is the first of entries of mnt that is a symlink: tar
+// carries only the link, and the util image mounts mnt alone, so what
+// it points to is out of reach.
+func symlinkEntry(mnt string, entries []string) string {
+	for _, e := range entries {
+		if fi, err := os.Lstat(filepath.Join(mnt, e)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return e
+		}
+	}
+	return ""
+}
+
 // dataMnt is the project's mnt, its link resolved (on servers it is
 // shared/mnt): what the util image mounts.
 func dataMnt(projectDir string) (string, error) {
@@ -188,6 +200,9 @@ func runExport(cwd string, args []string, color bool) int {
 		}
 		if len(entries) == 0 {
 			return fail("nothing to export: " + name + " bind-mounts nothing that exists under .devopsy/mnt")
+		}
+		if e := symlinkEntry(mnt, entries); e != "" {
+			return fail("mnt/" + e + " is a symlink: a tar would carry only the link: make it a directory, mounting what it points to there, to export it")
 		}
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
@@ -526,6 +541,9 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 		if mnt, err = dataMnt(projectDir); err != nil {
 			return fail("the project's mnt: " + err.Error())
+		}
+		if e := symlinkEntry(mnt, entries); e != "" {
+			return fail("mnt/" + e + " is a symlink: the import would not reach what it points to: make it a directory, mounting that there, to import into it: nothing imported")
 		}
 		if slices.Contains(entries, ".") {
 			if msg := wholeMntNotice(services, s, mnt, "replaces"); msg != "" {
