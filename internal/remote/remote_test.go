@@ -254,7 +254,7 @@ func TestScriptsParse(t *testing.T) {
 func TestFeaturesCoverScripts(t *testing.T) {
 	have := " " + FeaturesList() + " "
 	for name, s := range allScripts() {
-		for _, f := range Needs(s) {
+		for _, f := range flagsCalled(s) {
 			if !strings.Contains(have, " "+f+" ") {
 				t.Errorf("%s calls devopsy --%s, which is no feature (featureFlags)", name, f)
 			}
