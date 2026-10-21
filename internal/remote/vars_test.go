@@ -66,6 +66,26 @@ func TestVarsScripts(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("set\n got %q\nwant %q", got, want)
 	}
+	// A value over several lines, in double quotes, as compose's parser
+	// reads it (a certificate written by hand): set and unset replace or
+	// drop all of its lines, and a line inside it is no key.
+	//
+	// Bug: the edit goes line by line, so set replaces only CERT's first
+	// line and keeps the rest (the file no longer parses: `-----END"`
+	// opens a quote), and set A takes the A=inside line of NOTE's value
+	// for A, dropping the real A=old as a duplicate.
+	multi := filepath.Join(root, "multi", "shared", ".env")
+	tm := &Target{Name: "prod", Host: "h", Path: "multi"}
+	write(t, multi, "B=keep\nCERT=\"-----BEGIN\nabc\n-----END\"\nNOTE=\"first\nA=inside\"\nA=old\n")
+	runVarsScript(t, VarsSetScript(tm, nil), "CERT='new'\nA='new a'\n")
+	if got, _ := os.ReadFile(multi); string(got) != "B=keep\nCERT='new'\nNOTE=\"first\nA=inside\"\nA='new a'\n" {
+		t.Errorf("set over a value of several lines:\n%s", got)
+	}
+	write(t, multi, "B=keep\nCERT=\"-----BEGIN\nabc\n-----END\"\n")
+	runVarsScript(t, VarsUnsetScript(tm, nil), "CERT\n")
+	if got, _ := os.ReadFile(multi); string(got) != "B=keep\n" {
+		t.Errorf("unset of a value of several lines:\n%s", got)
+	}
 	// A session cut before its end line (gone while the script waited for
 	// the lock, its values sent before) changes nothing.
 	if out, err := runVarsRaw(t, VarsSetScript(tg, nil), "A='cut'\n"); err == nil || !strings.Contains(out, "nothing changed") {
