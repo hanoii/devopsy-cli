@@ -540,7 +540,10 @@ step's rules):
   watcher, started past the lock, reads a closed stdin at once. A
   sync's holder starts its watcher before the lock, armed only while it
   waits (nothing changed yet), and disarms it once it holds the lock: a
-  session gone meanwhile ends it. `--vars` edits and the inherit write
+  session gone meanwhile ends it. With a heartbeat, the disarm waits for
+  the session's next byte (`<armed>.next`, within a beat), so a session
+  that went silent during the wait ends it too, before anything stops,
+  rather than once its quiet time comes after the lock. `--vars` edits and the inherit write
   are gated too; their data may be empty, so it ends with `InputEnd`
   (`GatedInput`), which `gated_read` requires and takes off.
 - **Only the upload creates `$base`** among the release scripts

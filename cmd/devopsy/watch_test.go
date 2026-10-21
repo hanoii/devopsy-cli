@@ -83,6 +83,29 @@ func TestWatchHeartbeat(t *testing.T) {
 	if got := readString(answer); got != "go\n" {
 		t.Errorf("answer %q", got)
 	}
+
+	// A holder past its lock wait asks to be disarmed at the next byte
+	// (.next): a beat disarms it, a silence still signals the script.
+	os.Remove(armed + ".off")
+	os.Remove(armed + ".fired")
+	write(t, armed+".next", "", 0o644)
+	cmd, w = watch(`--heartbeat 1 --armed "` + armed + `"`)
+	_, _ = w.Write([]byte{0})
+	time.Sleep(300 * time.Millisecond)
+	if fileExists(armed+".next") || !fileExists(armed+".off") {
+		t.Errorf("a beat did not disarm it: next %v, off %v", fileExists(armed+".next"), fileExists(armed+".off"))
+	}
+	w.Close()
+	if !ended(cmd, 10*time.Second) || fileExists(armed+".fired") {
+		t.Errorf("signalled once disarmed")
+	}
+	os.Remove(armed + ".off")
+	write(t, armed+".next", "", 0o644)
+	cmd, w = watch(`--heartbeat 1 --armed "` + armed + `"`)
+	if !ended(cmd, 10*time.Second) || fileExists(armed+".next") || !fileExists(armed+".fired") {
+		t.Errorf("silence after the lock wait: next %v, fired %v", fileExists(armed+".next"), fileExists(armed+".fired"))
+	}
+	w.Close()
 }
 
 // The upload's guard passes data through and fails on a silence.

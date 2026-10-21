@@ -437,8 +437,17 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
 `, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
-# session gone then ends it; from here on it restores on its own.
-mv "$ws_armed" "$ws_armed.off" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+# session gone then ends it; from here on it restores on its own. With a
+# heartbeat, disarmed only by the session's next byte (within a beat): a
+# session that went silent while this waited ends it too, at its quiet
+# time, never noticed only once the services are stopped.
+if [ -n "${` + HeartbeatEnv + `:-}" ]; then
+  mv "$ws_armed" "$ws_armed.next" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+  while [ -e "$ws_armed.next" ]; do sleep 0.2; done
+  [ -e "$ws_armed.off" ] || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+else
+  mv "$ws_armed" "$ws_armed.off" 2>/dev/null || { devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }
+fi
 # A holder its watcher ended while it waited leaves its .fired.
 rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 # A child's first release failing while this waited takes current away.
