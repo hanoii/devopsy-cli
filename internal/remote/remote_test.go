@@ -785,6 +785,97 @@ exit 0
 	}
 }
 
+// A sync's holder arms its watcher before it waits for the child's
+// release lock, so its file is there while a release holds that lock; a
+// release that takes the lock meanwhile (the activation after its upload,
+// another release's upload) must leave it alone: the holder's session is
+// alive, and once the lock comes the sync goes on.
+//
+// Bug: prelude removes "$base"/.devopsy-watch.* once it holds the lock,
+// as stale, the waiting holder's armed file included; the holder, once it
+// holds the lock, finds it gone, takes that for its watcher having fired,
+// and ends with "the session ended while this waited for the release
+// lock" although its operator is there.
+func TestHolderArmedThroughRelease(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+echo "$*" >> "$FAKE_ROOT/calls"
+exit 0
+`)
+	fakeImageTools(t, bin)
+	// The holder's release lock is busy until $FAKE_ROOT/free exists;
+	// everything else's is free.
+	write(t, filepath.Join(bin, "flock"), `#!/bin/sh
+if [ -n "${FAKE_WAIT:-}" ]; then
+  case " $* " in
+    *" -n 9 ") exit 1 ;;
+    *" -w 600 9 ") : >"$FAKE_ROOT/waiting"; while [ ! -e "$FAKE_ROOT/free" ]; do sleep 0.05; done ;;
+  esac
+fi
+exit 0
+`)
+	if err := os.Chmod(filepath.Join(bin, "flock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
+	root := t.TempDir()
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+
+	holder := exec.Command("sh", "-c", HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true))
+	holder.Env = append(env, "FAKE_WAIT=1")
+	// The operator's pipe, open for as long as the holder runs, the
+	// answer in it.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	holder.Stdin = r
+	var out bytes.Buffer
+	holder.Stdout, holder.Stderr = &out, &out
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	_, _ = w.WriteString("go\n")
+	done := make(chan error, 1)
+	go func() { done <- holder.Wait() }()
+	for i := 0; !fileExists(filepath.Join(root, "waiting")); i++ {
+		if i > 400 {
+			_ = holder.Process.Kill()
+			t.Fatalf("the holder never waited for the lock:\n%s", out.String())
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if armed, _ := filepath.Glob(filepath.Join(base, ".devopsy-watch.*")); len(armed) != 1 {
+		t.Fatalf("the holder's watcher is not armed: %v", armed)
+	}
+
+	// A release takes the lock meanwhile (its prelude), then frees it.
+	release := exec.Command("sh", "-c", prelude(tg, false)+"echo released\n")
+	release.Env = env
+	if o, err := release.CombinedOutput(); err != nil || !strings.Contains(string(o), "released") {
+		t.Fatalf("the release's prelude (%v):\n%s", err, o)
+	}
+	write(t, filepath.Join(root, "free"), "")
+
+	select {
+	case err := <-done:
+		if err != nil || strings.Contains(out.String(), "the session ended while this waited") || !strings.Contains(readFile(filepath.Join(root, "calls")), "--sync-services prepare") {
+			t.Errorf("the holder, its session alive, after a release took the lock (%v):\n%s", err, out.String())
+		}
+	case <-time.After(30 * time.Second):
+		_ = holder.Process.Kill()
+		t.Fatalf("the holder hangs:\n%s", out.String())
+	}
+}
+
 func readFile(path string) string {
 	data, _ := os.ReadFile(path)
 	return string(data)
