@@ -433,17 +433,23 @@ const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e
 // (SSHStreams).
 const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 
-// Protocol is what the scripts need from the server's devopsy, which
-// --release-settings reports (protocol=): raise it when a script starts
-// calling something an older one lacks, so it refuses before anything
-// changes instead of failing halfway. 1: --images; 2: --watch-session;
+// Protocol is what every script needs from the server's devopsy, which
+// --release-settings reports (protocol=): raise it only for a change
+// every script depends on (the prelude, --say), or a format both sides
+// share that no script's text shows; a script calling something new needs
+// a feature instead (featureFlags, namedFeatures), so an older server
+// still runs the rest.
+// Either way it refuses before anything changes instead of failing
+// halfway. 1: --images; 2: --watch-session;
 // 3: --sync-services finish partial, settle, import <service> last,
 // --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
 // 5: --say; 6: --sync-services prepare first, --release-steps release, a
 // sync's done holding its id, a stream's spool named by it; 7: a sync's
 // record of its writers (the started file, taken by the holder, the
-// writers ended by finish partial and settle), --release-id.
-const Protocol = 7
+// writers ended by finish partial and settle), --release-id, a
+// watcher's disarm on the session's next byte (<armed>.next); 8:
+// features= in --release-settings.
+const Protocol = 8
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -461,6 +467,20 @@ if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
     ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
   else
     ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    exit 1
+  fi
+fi
+# What this script calls that the server's devopsy lacks (Needs).
+server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
+missing=
+for f in ${` + needsEnv + `:-}; do
+  case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
+done
+if [ -n "$missing" ]; then
+  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
+  else
+    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing): upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
     exit 1
   fi
 fi
@@ -1300,7 +1320,10 @@ fi
 
 // RunScript runs args in the current release, or in a plain directory.
 func RunScript(t *Target, projectName string, args []string) string {
-	return "set -eu\n" + enter(t) + devopsyCall(projectName, args, true) + "\n"
+	// The operator's own arguments, through "$@": never read as the
+	// script's needs (Needs), since a server's devopsy that lacks one
+	// says so itself.
+	return "set -eu\n" + enter(t) + "set -- " + quoteAll(args) + "\n" + devopsyCall(projectName, nil, true) + `"$@"` + "\n"
 }
 
 // ShellScript opens the user's login shell where commands run: the current
@@ -1563,6 +1586,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
 		script = ProtocolCheckEnv + "=warn\n" + script
 	}
+	script = WithNeeds(script)
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
 		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
