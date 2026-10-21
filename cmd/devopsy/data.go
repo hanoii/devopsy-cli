@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -69,17 +70,20 @@ func stopFor(cwd string, s cli.SyncService) (restore func() error, err error) {
 	if !slices.Contains(up, s.Name) {
 		return restore, nil
 	}
-	report.Info("stopping " + s.Name)
-	if err := compose(cwd, errOut, "stop", s.Name); err != nil {
-		return restore, fmt.Errorf("docker compose stop: %w", err)
-	}
-	return func() error {
+	// A stop that fails may have stopped it all the same (Ctrl-C reaching
+	// compose while the daemon carries it out): restored either way.
+	restore = func() error {
 		report.Info("starting " + s.Name)
 		if err := compose(cwd, errOut, "start", s.Name); err != nil {
 			return fmt.Errorf("docker compose start: %w", err)
 		}
 		return waitHealthy(cwd, []string{s.Name})
-	}, nil
+	}
+	report.Info("stopping " + s.Name)
+	if err := compose(cwd, errOut, "stop", s.Name); err != nil {
+		return restore, fmt.Errorf("docker compose stop: %w", err)
+	}
+	return restore, nil
 }
 
 // dataMnt is the project's mnt, its link resolved (on servers it is
@@ -285,6 +289,7 @@ func tarEntries(spool string) ([]string, error) {
 	r := &endReader{r: f}
 	tr := tar.NewReader(r)
 	seen := map[string]bool{}
+	across := ""
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -306,10 +311,20 @@ func tarEntries(spool string) ([]string, error) {
 			seen["."] = true
 			continue
 		}
-		seen[strings.SplitN(p, "/", 2)[0]] = true
+		top, crosses, err := tarMember(h, p)
+		if err != nil {
+			return nil, err
+		}
+		seen[top] = true
+		if crosses != "" && across == "" {
+			across = crosses
+		}
 	}
 	if seen["."] {
 		return []string{"."}, nil
+	}
+	if across != "" {
+		return nil, fmt.Errorf("%w: %s", errOutside, across)
 	}
 	var entries []string
 	for e := range seen {
@@ -317,6 +332,51 @@ func tarEntries(spool string) ([]string, error) {
 	}
 	sort.Strings(entries)
 	return entries, nil
+}
+
+// errOutside is a tar whose members reach out of the entries of mnt
+// they are in: GNU tar extracts some through to another entry or out of
+// mnt, refuses others only after the entries were emptied, and a link
+// in place of an entry removes the directory a container bind-mounts.
+var errOutside = errors.New("a member reaches out of its entry")
+
+// tarMember checks a member (p, its name without ./) stays in its
+// top-level entry of mnt, and returns that entry. A path or a link out
+// of mnt, and a top-level entry that is no directory or file, are
+// errOutside; a link into another entry is crosses, refused unless the
+// tar carries all of mnt (".").
+func tarMember(h *tar.Header, p string) (top, crosses string, err error) {
+	outside := func() (string, string, error) { return "", "", fmt.Errorf("%w: %s", errOutside, h.Name) }
+	if path.IsAbs(p) || slices.Contains(strings.Split(p, "/"), "..") {
+		return outside()
+	}
+	clean := path.Clean(p)
+	top, _, nested := strings.Cut(clean, "/")
+	if !nested && h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeGNUSparse {
+		return outside()
+	}
+	var target string
+	switch h.Typeflag {
+	case tar.TypeSymlink:
+		if path.IsAbs(h.Linkname) {
+			return outside()
+		}
+		target = path.Clean(path.Join(path.Dir(clean), h.Linkname))
+	case tar.TypeLink:
+		if path.IsAbs(h.Linkname) || slices.Contains(strings.Split(h.Linkname, "/"), "..") {
+			return outside()
+		}
+		target = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
+	default:
+		return top, "", nil
+	}
+	if target == ".." || strings.HasPrefix(target, "../") {
+		return outside()
+	}
+	if t, _, _ := strings.Cut(target, "/"); t != top {
+		return top, h.Name + " links into " + t, nil
+	}
+	return top, "", nil
 }
 
 // endReader reads r and says whether its last read found the end of
@@ -445,7 +505,9 @@ func runImport(cwd string, args []string, color bool) int {
 	var entries []string
 	var mnt string
 	if s.Transfer == cli.SyncRsync {
-		if entries, err = tarEntries(spool); err != nil {
+		if entries, err = tarEntries(spool); errors.Is(err, errOutside) {
+			return fail("the tar " + err.Error() + ": nothing imported")
+		} else if err != nil {
 			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
 		}
 		// The image extracts the tar.
@@ -500,9 +562,10 @@ func runImport(cwd string, args []string, color bool) int {
 						code = fail(eerr.Error())
 					}
 				}
-				if derr := down(); derr != nil {
-					code = fail(derr.Error())
-				}
+			}
+			// An up that failed may have started it all the same.
+			if derr := down(); derr != nil {
+				code = fail(derr.Error())
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")

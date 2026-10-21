@@ -88,7 +88,8 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // varsEdit rewrites $file with awk. For set, stdin has the new KEY=value
 // lines: an existing key's first line is replaced in place, later duplicates
 // dropped, and new keys appended, in order. For unset, stdin has the keys,
-// one per line, and their lines are dropped. Comments, blank lines and
+// one per line, and their lines are dropped. A quoted value over several
+// lines (compose's parser reads them) is its key's, all of it. Comments, blank lines and
 // everything else stay as they are. Releases take the release lock, so this
 // never interleaves with a deploy writing its own secrets. stdin is gated
 // (gated_read): devopsy sends it once the lock is held.
@@ -99,21 +100,32 @@ fi
 umask 077
 [ -f "$file" ] || : > "$file"
 gated_read "$file.vars"
-awk -v mode=%s '
+awk -v mode=%s -v sq="'" '
+  # closes: s has quote q unescaped, which ends a quoted value.
+  function closes(s, q) { gsub(/\\\\/, "", s); gsub("\\\\" q, "", s); return index(s, q) > 0 }
   NR == FNR {
     k = $0; sub(/=.*/, "", k)
     if (mode == "set") { line[k] = $0; order[++n] = k } else { drop[k] = 1 }
     next
   }
+  # A quoted value goes on until its quote closes: those lines belong to
+  # its key, and none is a key itself.
+  q != "" {
+    if (!skip) print
+    if (closes($0, q)) q = ""
+    next
+  }
   {
     k = $0; sub(/^[ \t]*(export[ \t]+)?/, "", k); sub(/[ \t]*=.*/, "", k)
-    if ($0 ~ /=/ && (k in drop)) next
-    if ($0 ~ /=/ && (k in line)) {
+    skip = 0
+    if ($0 ~ /=/ && (k in drop)) skip = 1
+    else if ($0 ~ /=/ && (k in line)) {
       if (!(k in done)) print line[k]
       done[k] = 1
-      next
-    }
-    print
+      skip = 1
+    } else print
+    v = $0; sub(/^[^=]*=[ \t]*/, "", v); c = substr(v, 1, 1)
+    if ($0 ~ /=/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) q = c
   }
   END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print line[order[i]] }
 ' "$file.vars" "$file" > "$file.tmp"
