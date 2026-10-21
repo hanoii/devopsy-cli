@@ -244,9 +244,10 @@ func LoadDotenv(env *Env, file string) error {
 
 // DotenvLine formats KEY=value so compose's .env parser reads value back
 // unchanged, on one line: single quotes, or double quotes with escapes when
-// the value has a single quote or a newline.
+// the value has a single quote, a newline or a backslash (single-quoted,
+// one before the closing quote escapes it: 'x\' never ends).
 func DotenvLine(k, v string) string {
-	if !strings.ContainsAny(v, "'\n") {
+	if !strings.ContainsAny(v, "'\n\\") {
 		return k + "='" + v + "'"
 	}
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "\n", `\n`)
