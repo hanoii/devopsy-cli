@@ -32,7 +32,7 @@ conflicts with one is a design question for the user, not a detail.
   changes rather than work around a design. No migration code: older
   files and syntax just stop working, with an error that says what to
   do; a breaking change is marked (`feat!`, `fix!`); a protocol bump
-  (`remote.Protocol`) means upgrading the servers. A 1.0.0 is when
+  or a new feature means upgrading the servers. A 1.0.0 is when
   this gets a compatibility promise.
 - **devopsy replaces itself with what it runs** (`syscall.Exec`). Why:
   signals, the terminal and exit codes belong to that command, so
@@ -77,8 +77,8 @@ conflicts with one is a design question for the user, not a detail.
 - **What is deployed decides on the server.** A rollback's and a
   restart's steps come from the release's own config there (Steps), the
   rules for images run as the server's devopsy (`--images`, Images),
-  and a protocol number makes an older server refuse before anything
-  changes (`Protocol`). Why: a laptop's checkout may be another branch
+  and an older server refuses before anything changes what needs what
+  it lacks (`Protocol`, features). Why: a laptop's checkout may be another branch
   or another version; the server's state is the truth. Cost: every
   server's devopsy must keep up (`devopsy @<server> --upgrade`).
 - **Before the switch anything cancels; after it nothing interrupts.**
@@ -344,14 +344,25 @@ one. Governed by "Push over SSH", "What is deployed decides on the
 server", "Before the switch anything cancels" and "Check everything
 before changing anything".
 
-- **The server's devopsy must speak the scripts' protocol**
-  (`remote.Protocol`, 6, reported by `--release-settings`):
-  `basePrelude` refuses an older one before anything changes, for every
-  command, read-only ones too, and names the upgrade. Raise it when a
-  script starts calling something an older devopsy lacks, and say what
-  in its comment. `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`,
-  passed to every session) makes it a warning and goes on: the
-  operator's own risk, for a local build ahead of the servers.
+- **The server's devopsy must have what a script calls:** a number for
+  broad changes, features for narrow ones, both reported by
+  `--release-settings` (`protocol=`, `features=`) and checked by
+  `basePrelude` before anything changes, read-only commands too, naming
+  the upgrade. `remote.Protocol` (8) is for what every script depends
+  on (the prelude, `--say`) or a format both sides share that no
+  script's text shows: say what in its comment. Anything else is a
+  feature: every devopsy flag a script calls (`featureFlags`) and named
+  behaviors of one that came later (`namedFeatures`, found by what the
+  script calls). A script's needs are read from its own text (`Needs`,
+  sent in front of it by `SSHStreams`), so they never drift, and
+  `TestFeaturesCoverScripts` fails on a flag no feature lists. Why: one
+  number gated every command, so a sync-only bump stopped releases and
+  `--status` on servers that could run them; an older server now
+  refuses only what needs what it lacks, by name. The parent's sessions
+  to a child (`SyncExecScript`, `SyncReceiveScript`) carry no prelude
+  and are not checked. `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`,
+  passed to every session) makes either refusal a warning and goes on:
+  the operator's own risk, for a local build ahead of the servers.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
