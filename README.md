@@ -535,7 +535,9 @@ Commands on a server run part of their work in the server's devopsy
 older one stops a command that needs what it lacks before anything
 changes, says what that is, and says to run `devopsy @<target>
 --upgrade`, which always works. Commands that need nothing new still
-run. `DEVOPSY_PROTOCOL_CHECK=warn`
+run. A sync across servers checks the child's devopsy against the
+parent's the same way, before the parent stops anything.
+`DEVOPSY_PROTOCOL_CHECK=warn`
 turns that stop into a warning and goes on, at your own risk: for a
 local build ahead of the servers, when what you run may not need what
 the server's devopsy lacks.

@@ -358,11 +358,16 @@ before changing anything".
   `TestFeaturesCoverScripts` fails on a flag no feature lists. Why: one
   number gated every command, so a sync-only bump stopped releases and
   `--status` on servers that could run them; an older server now
-  refuses only what needs what it lacks, by name. The parent's sessions
-  to a child (`SyncExecScript`, `SyncReceiveScript`) carry no prelude
-  and are not checked. `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`,
-  passed to every session) makes either refusal a warning and goes on:
-  the operator's own risk, for a local build ahead of the servers.
+  refuses only what needs what it lacks, by name. Across servers the
+  parent's devopsy, which may be newer than the operator's, checks the
+  child's the same way (`serverCheck`) on every session it opens there
+  (`ChildCheck`, `childSSHArgs`), the first one (the look at the
+  child's services) for the needs of all of them (`childNeeds`,
+  `SyncNeedsEnv`): an import or the receive refusing on its own came
+  after the parent's services stopped. `DEVOPSY_PROTOCOL_CHECK=warn`
+  (`ProtocolCheckEnv`, exported to every session, so a push passes it
+  on) makes either refusal a warning and goes on: the operator's own
+  risk, for a local build ahead of the servers.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -1431,7 +1436,8 @@ Smaller features, each with the rule an agent must keep.
   from running it again.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
-  `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`):
+  `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
+  `SYNC_NEEDS`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
   names.
