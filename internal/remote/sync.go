@@ -3,6 +3,7 @@ package remote
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"path"
 	"regexp"
 	"slices"
@@ -242,6 +243,10 @@ const (
 	SyncRsyncEnv  = "DEVOPSY_SYNC_RSYNC"
 	SyncStreamEnv = "DEVOPSY_SYNC_STREAM"
 	SyncStopEnv   = "DEVOPSY_SYNC_STOP"
+	// SyncNeedsEnv is, for --sync-exec, what the sync's later sessions
+	// to the child need of its devopsy (remote.Needs), space-separated:
+	// checked on the first (ChildCheck).
+	SyncNeedsEnv = "DEVOPSY_INTERNAL_SYNC_NEEDS"
 	// SyncWatchEnv tells --sync-push that its stdin stays open for as
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
@@ -643,6 +648,29 @@ copy() {
 		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
+}
+
+// ChildCheck is script for a session the parent's devopsy opens to the
+// child's server (across servers), behind serverCheck: the child's
+// devopsy refuses unless it has what script needs and extra, the needs of
+// the sync's later sessions there, which the first one (the push's look
+// at the child's services, SyncNeedsEnv) carries, so it refuses before
+// the parent stops anything. address is the child's, for the upgrade
+// hint, which names its server.
+func ChildCheck(address, script string, extra []string) string {
+	needs := Needs(script)
+	for _, n := range extra {
+		if !slices.Contains(needs, n) {
+			needs = append(needs, n)
+		}
+	}
+	slices.Sort(needs)
+	check := needsEnv + "=" + Quote(strings.Join(needs, " ")) + "\n"
+	if os.Getenv(ProtocolCheckEnv) == "warn" {
+		check = ProtocolCheckEnv + "=warn\n" + check
+	}
+	server, _, _ := strings.Cut(address, ":")
+	return check + serverCheck(server+":") + script
 }
 
 // SyncExecScript runs devopsy args in the child's current release (toDir

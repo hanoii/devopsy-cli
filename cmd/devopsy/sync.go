@@ -855,7 +855,7 @@ func runSyncPush(cwd string, color bool) int {
 	// What the rsync would change under a running service of the child,
 	// left running by its own labels, and a stream the child would not
 	// import, are mismatches, not a sync: refused before anything stops.
-	child, err := childServices(ctx)
+	child, err := childServices(ctx, childNeeds(dirs, streams))
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -1080,15 +1080,18 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 }
 
 // childSSHArgs are ssh's arguments for a session from the parent's
-// server to the child's (to) running script: -o option, remote.ChildSSH,
-// remote.KeepAlive, -T, extra, the sync's port; traced, script aside.
-func childSSHArgs(to, script, option string, extra ...string) []string {
+// server to the child's (to) running script behind the check of the
+// child's devopsy (remote.ChildCheck, needs the later sessions'): -o
+// option, remote.ChildSSH, remote.KeepAlive, -T, extra, the sync's port;
+// traced, script aside.
+func childSSHArgs(to, script string, needs []string, option string, extra ...string) []string {
 	args := append(append([]string{"-o", option}, remote.ChildSSH...), remote.KeepAlive...)
 	args = append(append(args, "-T"), extra...)
 	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
 		args = append(args, "-p", p)
 	}
 	trace(append([]string{"ssh"}, append(args, to)...))
+	script = remote.ChildCheck(os.Getenv(remote.SyncToTargetEnv), script, needs)
 	return append(args, to, "sh -c "+remote.Quote(script))
 }
 
@@ -1096,7 +1099,7 @@ func childSSHArgs(to, script, option string, extra ...string) []string {
 // the child's server (to), by cat in an SSH session the forwarded agent
 // opens. Both must succeed.
 func exportInto(ctx context.Context, cwd, projectDir, name string, env []string, to, spool string) error {
-	sshArgs := childSSHArgs(to, "umask 077; cat > "+remote.Quote(spool), "ClearAllForwardings=yes")
+	sshArgs := childSSHArgs(to, "umask 077; cat > "+remote.Quote(spool), nil, "ClearAllForwardings=yes")
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
@@ -1120,6 +1123,26 @@ func exportInto(ctx context.Context, cwd, projectDir, name string, env []string,
 	return exported
 }
 
+// childNeeds is what the sync's later sessions to the child's server
+// need of its devopsy (remote.Needs): the imports' and, with entries to
+// copy, the receive's, checked on the first session (childServices), so
+// a child's devopsy older than this one refuses before anything stops.
+func childNeeds(dirs, streams []string) []string {
+	toDir, toProject := os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv)
+	script := ""
+	for i, name := range streams {
+		args := []string{cli.SyncServicesFlag, "import", name}
+		if i == len(streams)-1 {
+			args = append(args, "last")
+		}
+		script += remote.SyncExecScript(toDir, toProject, nil, args)
+	}
+	if len(dirs) > 0 {
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0)
+	}
+	return remote.Needs(script)
+}
+
 // childService is a line of the child's --sync-services list: a service,
 // its label there (rsync, stream or skip), whether it is stopped during
 // a sync, its containers' state (running, exited..., none without one, ""
@@ -1131,8 +1154,9 @@ type childService struct {
 }
 
 // childServices asks the child's release for its services, through
-// --sync-exec, after it prepared them.
-func childServices(ctx context.Context) ([]childService, error) {
+// --sync-exec, after it prepared them: across servers the sync's first
+// session there, which checks the child's devopsy for needs too.
+func childServices(ctx context.Context, needs []string) ([]childService, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -1140,6 +1164,7 @@ func childServices(ctx context.Context) ([]childService, error) {
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
+	cmd.Env = append(os.Environ(), remote.SyncNeedsEnv+"="+strings.Join(needs, " "))
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("listing the child's services: %w", err)
 	}
@@ -1392,7 +1417,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last), "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1486,7 +1511,7 @@ func runSyncExec(args []string, color bool) int {
 	}
 	if to := os.Getenv(remote.SyncToEnv); to != "" {
 		remote.Verbose = cli.VerboseLevel(os.Getenv(cli.VerboseEnv)) > 0
-		sshArgs := childSSHArgs(to, remote.SyncExecScript(toDir, toProject, syncExecEnv(), args), "ClearAllForwardings=yes")
+		sshArgs := childSSHArgs(to, remote.SyncExecScript(toDir, toProject, syncExecEnv(), args), strings.Fields(os.Getenv(remote.SyncNeedsEnv)), "ClearAllForwardings=yes")
 		cmd := remote.SSHCommand(sshArgs...)
 		err := syscall.Exec(cmd.Path, cmd.Args, os.Environ())
 		return fail(err.Error())

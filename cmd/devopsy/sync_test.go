@@ -155,6 +155,9 @@ case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 # its stdin closing tells it the session is gone. A background job's
 # stdin is /dev/null before its own redirections apply (dash), hence fd 3.
 exec 3<&0
+# FAKE_CHILD_PATH: the parent's sessions to the child (ChildSSH) find its
+# devopsy there first.
+case "$opts" in *BatchMode=yes*) [ -z "${FAKE_CHILD_PATH:-}" ] || PATH="$FAKE_CHILD_PATH:$PATH" ;; esac
 case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
 # FAKE_IMPORT_DETACH: the same for a stream's import session.
 case "$s" in *sync-services*import*) if [ -n "${FAKE_IMPORT_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
@@ -620,6 +623,18 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("vanished files across servers (%d):\n%s", code, out)
 	}
 	s.logs()
+
+	// A child's devopsy older than the parent's (lacking --say, which
+	// only the receive calls) refuses on the push's first session there,
+	// the look at its services, before the parent stops or copies
+	// anything.
+	lacks := filepath.Join(t.TempDir(), "lacks")
+	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ say / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	out, code = s.run(append(agent, "FAKE_CHILD_PATH="+lacks), "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (say): upgrade it (devopsy @devopsy@two: --upgrade)") || !strings.Contains(out, "listing the child's services") || strings.Contains(docker, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.Contains(docker, "rsync://") {
+		t.Fatalf("a child lacking what the push needs (%d):\n%s\n%s", code, out, docker)
+	}
 
 	// --sync-exec across servers keeps its session alive too.
 	execEnv := append(agent, "DEVOPSY_SYNC_TO=devopsy@two", "DEVOPSY_SYNC_SSH_PORT=22", "DEVOPSY_SYNC_TO_DIR="+filepath.Join(s.root, "shop", "dev", "current", ".devopsy"), "DEVOPSY_SYNC_TO_PROJECT=shop-dev")
