@@ -920,6 +920,15 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server (%d):\n%s", code, out)
 	}
+	// Older still, without --release-settings: the hint upgrades the
+	// server's devopsy too, never the local one (Conventions: hints work
+	// when copied).
+	ancient := filepath.Join(tmp, "ancient")
+	write(t, filepath.Join(ancient, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then echo 'devopsy: error: unknown flag --release-settings' >&2; exit 1; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "ancientssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+ancient+":$PATH exec sh -c \"$s\"\n", 0o755)
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "ancientssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "upgrade it (devopsy @devopsy@server: --upgrade)") {
+		t.Fatalf("a server without --release-settings (%d):\n%s", code, out)
+	}
 	// DEVOPSY_PROTOCOL_CHECK=warn goes on, at the operator's risk: here to
 	// the new instance's question.
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || !strings.Contains(out, "a new instance") {
