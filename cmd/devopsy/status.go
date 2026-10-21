@@ -116,7 +116,11 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
 		switch key {
 		case "none":
-			fmt.Println("release     none: not released yet")
+			if value != "" {
+				fmt.Printf("release     none: %s failed, devopsy @%s --log shows why\n", value, targetRef(t))
+			} else {
+				fmt.Println("release     none: not released yet")
+			}
 			id = ""
 		case "plain":
 			fmt.Println("release     none: a plain devopsy directory")

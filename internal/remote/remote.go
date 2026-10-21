@@ -880,7 +880,7 @@ fi
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
-    rm -f "$base/current"
+` + firstDown(projectName) + `    rm -f "$base/current"
     devopsy --say error "$failed failed ($status), no previous release to go back to"
   fi
   exit "$status"
@@ -930,6 +930,20 @@ fi
 		s += step("after", `"$base/current"`, args, afterFail)
 	}
 	return s
+}
+
+// firstDown takes down what a failed first release started (its run step,
+// a sync's import), where a later release's restart of the previous one
+// would replace it: with nothing current, nothing else would. Its logs go
+// first, into the server's log, since the down takes them with the
+// containers; volumes and mnt stay, like the release's directory. Never a
+// stop: a stopped container with restart: always starts again with
+// Docker, and its bind mounts through current, gone, would come back as
+// root's directories (prelude refuses a current that is one).
+func firstDown(projectName string) string {
+	return `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false) + `) || true
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "down", "--remove-orphans"}, false) + `) || devopsy --say warning "taking down what the release started failed ($?): it may still run"
+`
 }
 
 // followOutput runs where a script must go on whatever happens to its

@@ -3,7 +3,8 @@ package remote
 import "fmt"
 
 // StatusScript prints what the server knows about a target, for --status:
-// "plain" for a plain devopsy directory, "none" for an unreleased one,
+// "plain" for a plain devopsy directory, "none" for an unreleased one
+// (with the newest release's id when it failed),
 // else tab-separated header lines (release <id> <record JSON>, kept <n>,
 // synced <time or empty>, partial <when and from> when a sync left its
 // data a partial copy), then "---" and, from the current release,
@@ -16,7 +17,13 @@ func StatusScript(t *Target) string {
 fi
 cur=$(readlink "$base/current" 2>/dev/null || true)
 if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
-  echo none
+  # The newest release when it failed: a first one that did not go live.
+  r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | sort | tail -n 1) || true
+  if [ -n "$r" ] && [ -e "$base/releases/$r/`+FailedFile+`" ]; then
+    printf 'none\t%%s\n' "$r"
+  else
+    echo none
+  fi
   `+partialStatus+`
   exit 0
 fi

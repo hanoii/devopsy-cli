@@ -40,7 +40,7 @@ echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
 # FAKE_ABSENT names services without a container (a first release),
-# until an up creates them.
+# until an up creates them and a down removes them again.
 absent() {
   ! grep -qx "$1" "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" 2>/dev/null || return 1
   case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1
@@ -65,6 +65,7 @@ case "$*" in
     printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"volumes":[{"type":"bind","source":"%s/mnt/db"}]}},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-rsync}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-rsync+stop}")" "$dir" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
+  *" down "*) rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" ;;
   *" stop "*)
     after stop "$@" >> "$stopped"
     # FAIL_STOP: a stop that fails partway, its services stopped.
@@ -1991,7 +1992,7 @@ func TestSyncRecordedStopGone(t *testing.T) {
 // whole sync, and after a copy that did not complete: a stream's import
 // brings its service up without what it depends on, which Compose would
 // start too (here db, stopped for the sync). The same on a first release
-// that finds containers (a first one that failed left them running): db,
+// that finds containers (a first one killed before its down left them): db,
 // stopped by its sync, stays down.
 //
 // Bug: on a first release the import brings app up with what it depends
@@ -2109,11 +2110,11 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 	}
 }
 
-// A child's first release whose stream import failed leaves the stream's
-// container up (kept for the first release), and nothing current: the
-// next release is a first one again and must create every labeled service
-// before finish child go, which sanitizes through them, though a
-// container is there already.
+// A child's first release whose stream import failed takes down what it
+// started (the stream's container), its logs into the server's log first,
+// and leaves nothing current, which --status says: the next release is a
+// first one again and must create every labeled service before finish
+// child go, which sanitizes through them.
 func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "sync")
@@ -2127,6 +2128,14 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 	write(t, s.log+".failimport", "", 0o644)
 	if out, code := s.run(nil, "@dev", "--release"); code == 0 || s.current("dev") != "" || !strings.Contains(out, "no previous release to go back to") {
 		t.Fatalf("a first release whose import fails (%d):\n%s", code, out)
+	}
+	compose := "shop-dev compose -f " + filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml") + " --profile * "
+	if docker, _ := s.logs(); !strings.Contains(docker, compose+"logs --no-color --tail 100\n"+compose+"down --remove-orphans\n") {
+		t.Errorf("the failed first release's containers stay:\n%s", docker)
+	}
+	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || len(entries) != 1 || !strings.Contains(out, "release     none: "+entries[0].Name()+" failed, devopsy @devopsy@one:dev --log shows why") {
+		t.Errorf("--status after a failed first release (%d):\n%s", code, out)
 	}
 	os.Remove(s.log + ".failimport")
 	s.logs()
