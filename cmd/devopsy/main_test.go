@@ -913,9 +913,10 @@ func TestInstancesEndToEnd(t *testing.T) {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
 	// A server whose devopsy is older refuses before anything, the new
-	// instance's question included: its refusal is no answer.
+	// instance's question included: its refusal is no answer. Older than
+	// 8, it reports no features.
 	old := filepath.Join(tmp, "old")
-	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/^protocol=.*/protocol=1/'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed -e 's/^protocol=.*/protocol=1/' -e '/^features=/d'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	write(t, filepath.Join(bin, "oldssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+old+":$PATH exec sh -c \"$s\"\n", 0o755)
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh")}, "@b/prod", "--release"); code == 0 || !strings.Contains(out, "older than this one needs: upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server (%d):\n%s", code, out)
@@ -931,7 +932,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	}
 	// DEVOPSY_PROTOCOL_CHECK=warn goes on, at the operator's risk: here to
 	// the new instance's question.
-	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || !strings.Contains(out, "a new instance") {
+	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || strings.Contains(out, "lacks what this needs") || !strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server, warned (%d):\n%s", code, out)
 	}
 	// A server whose devopsy lacks a feature (here --release-id, which

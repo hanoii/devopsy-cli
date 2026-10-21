@@ -99,6 +99,8 @@ var varsEdit = strings.ReplaceAll(gatedRead, "%", "%%") + `if [ -z "$plain" ]; t
 fi
 umask 077
 [ -f "$file" ] || : > "$file"
+# What a link points to: the result goes beside it.
+t=$(readlink -f "$file")
 gated_read "$file.vars"
 awk -v mode=%s -v sq="'" '
   # closes: s has quote q unescaped, which ends a quoted value.
@@ -116,22 +118,30 @@ awk -v mode=%s -v sq="'" '
     next
   }
   {
-    k = $0; sub(/^[ \t]*(export[ \t]+)?/, "", k); sub(/[ \t]*=.*/, "", k)
+    # KEY=value, or KEY: value, which the compose parser reads alike.
+    k = $0; sub(/^[ \t]*(export[ \t]+)?/, "", k); sub(/[ \t]*[=:].*/, "", k)
     skip = 0
-    if ($0 ~ /=/ && (k in drop)) skip = 1
-    else if ($0 ~ /=/ && (k in line)) {
+    if ($0 ~ /[=:]/ && (k in drop)) skip = 1
+    else if ($0 ~ /[=:]/ && (k in line)) {
       if (!(k in done)) print line[k]
       done[k] = 1
       skip = 1
     } else print
-    v = $0; sub(/^[^=]*=[ \t]*/, "", v); c = substr(v, 1, 1)
-    if ($0 ~ /=/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) q = c
+    v = $0; sub(/^[^=:]*[=:][ \t]*/, "", v); c = substr(v, 1, 1)
+    if ($0 ~ /[=:]/ && (c == "\"" || c == sq) && !closes(substr(v, 2), c)) q = c
   }
   END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print line[order[i]] }
-' "$file.vars" "$file" > "$file.tmp"
-# cat, not mv: keeps the file's owner and mode.
-cat "$file.tmp" > "$file"
-rm -f "$file.vars" "$file.tmp"
+' "$file.vars" "$file" > "$t.tmp"
+# Into place in one rename, with the file's mode, so nothing reads it
+# empty or cut; one owned by another user is written over in place (the
+# deploy user cannot give a file away).
+if [ -O "$t" ]; then
+  chmod "$(stat -c %%a "$t" 2>/dev/null || stat -f %%Lp "$t")" "$t.tmp"
+  mv -f "$t.tmp" "$t"
+else
+  cat "$t.tmp" > "$t"
+fi
+rm -f "$file.vars" "$t.tmp"
 printf '%%s\n' "$file"
 `
 
@@ -168,11 +178,13 @@ func InheritWriteScript(t *Target, keys []string, pendingID string) string {
 fi
 ` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
 file=` + file + `
+# The parent's secrets: never readable by others, on their way either.
+umask 077
 gated_read "$file.tmp"
 chmod 600 "$file.tmp"
 mv -f "$file.tmp" "$file"
 [ ! -f "$base/shared/.env" ] || for k in ` + quoteAll(keys) + `; do
-  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$k[[:space:]]*=" "$base/shared/.env" && echo "$k" || true
+  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$k[[:space:]]*[=:]" "$base/shared/.env" && echo "$k" || true
 done
 `
 }

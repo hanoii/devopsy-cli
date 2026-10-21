@@ -1769,6 +1769,26 @@ func TestExportImport(t *testing.T) {
 	if !slices.Contains(names, "storage/old.txt") {
 		t.Errorf("tar members: %v", names)
 	}
+	// An entry that is a symlink here is refused both ways, before
+	// anything stops: tar carries only the link (an export that succeeds
+	// empty), and the image's /mnt never reaches its target.
+	real := filepath.Join(mnt, "storage.real")
+	if err := os.Rename(filepath.Join(mnt, "storage"), real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("storage.real", filepath.Join(mnt, "storage")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--export", "app"}, {"--import", "app"}} {
+		_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), args...)
+		if docker, _ := s.logs(); code == 0 || !strings.Contains(errs, "mnt/storage is a symlink") || strings.Contains(docker, "run --rm --name devopsy-") || strings.Contains(docker, " stop ") {
+			t.Errorf("%s of a symlinked entry (%d):\n%s\n%s", args[0], code, errs, docker)
+		}
+	}
+	os.Remove(filepath.Join(mnt, "storage"))
+	if err := os.Rename(real, filepath.Join(mnt, "storage")); err != nil {
+		t.Fatal(err)
+	}
 	// Its import empties the entries the tar carries, then extracts.
 	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Fatalf("--import rsync (%d):\n%s", code, errs)
