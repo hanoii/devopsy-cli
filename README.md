@@ -601,7 +601,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   is restarted with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its own images back, so its
   containers are the previous release's again. Data changes, like database
-  updates, are the project's to undo.
+  updates, are the project's to undo. A first release has nothing to go
+  back to: it takes down what it started (`down`, volumes and `mnt`
+  kept), after writing their last log lines to its log, so `--log`
+  shows why the app stopped, and `--status` says the release failed.
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed

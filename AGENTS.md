@@ -459,7 +459,13 @@ step's rules):
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
-   is no rollback target until released again).
+   is no rollback target until released again). A first release, with
+   nothing to restart, takes down what it started (`firstDown`: its
+   containers' logs into the server's log first, then `down
+   --remove-orphans`, volumes and `mnt` kept, never a stop: `restart:
+   always` would bring a container back with Docker, its bind mounts
+   through the gone `current` made again as root's) and leaves nothing
+   current; `--status` names it failed.
 10. A rollback marks the release it left (`RolledBackFile`).
 11. Pruning to `keep` (`img to-prune`, `img remove-releases`), then
     remote after steps (a failure is reported, the release stays
@@ -1138,8 +1144,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   finish hook:** a release with nothing current before it (`prepare
   first`, from the activation), or no container at all when prepare
   started, is a `first` line in the record (a stream's import creates
-  its container before finish looks, and a first release that failed
-  may have left one; a later sync that finds containers drops it). Before
+  its container before finish looks, and a first release killed
+  before its `firstDown` may have left one; a later sync that finds
+  containers drops it). Before
   the hook every labeled service is created in one `up -d --wait`,
   since the hook sanitizes through them (drupal11's needs the app:
   without it, prod's passwords reached a child), and a stream imported
