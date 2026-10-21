@@ -109,12 +109,12 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
 }
 
 // Ctrl-C at a terminal after a release that syncs went current, before
-// its copy began (the child's sync prepare running): the session ends,
-// the sync gets no answer and aborts, and the release fails: current goes
-// back to the previous release, restarted with its own run step.
-// devopsy says the release does not go live, never that the session
-// leaves it as it was: a release that syncs prints the sync's marker
-// after its switch.
+// its copy began (the child's sync prepare running): devopsy answers
+// abort and waits, saying so, while the prepare finishes; the sync aborts
+// and the release fails: current goes back to the previous release,
+// restarted with its own run step, all in the session. devopsy says the
+// release does not go live, never that the session leaves it as it was:
+// a release that syncs prints the sync's marker after its switch.
 func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	dir := phasesProject(t, "rsint", nil)
 	syncReleaseBoth(t, "rsint", dir)
@@ -130,8 +130,12 @@ func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 		t.Fatalf("not switched yet: %s", now)
 	}
 	ctrlC(t)
-	got := terminalCode(t, "/tmp/rsint")
+	eventually(t, time.Minute, "devopsy waiting for the cancel", func() bool {
+		out, _ := op(t, "/", "cat /tmp/rsint")
+		return strings.Contains(out, "the server is cancelling it")
+	})
 	srv(t, "rm -f wait-prepare-rsint-dev")
+	got := terminalCode(t, "/tmp/rsint")
 	eventually(t, time.Minute, "the release's end", func() bool { return lockFree(t, "rsint/dev/.lock") })
 	out, _ := op(t, "/", "cat /tmp/rsint")
 	t.Logf("devopsy (%s):\n%s", got, out)
@@ -151,7 +155,9 @@ func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	if exists(t, "rsint/dev/.devopsy-sync.incomplete") || strings.TrimSpace(finish) != "child abort" {
 		t.Errorf("marked %v, finish %q", exists(t, "rsint/dev/.devopsy-sync.incomplete"), finish)
 	}
-	if log, _ := srv(t, "cat rsint/dev/.devopsy-sync.log rsint/dev/releases/"+id+"/devopsy-log-server 2>/dev/null"); !strings.Contains(log, "no answer from devopsy") || !strings.Contains(log, "current is back to "+firstID) {
+	// The abort was an answer: the holder restored in the session, never
+	// into the sync's log.
+	if log, _ := srv(t, "cat rsint/dev/.devopsy-sync.log rsint/dev/releases/"+id+"/devopsy-log-server 2>/dev/null"); strings.Contains(log, "no answer from devopsy") || !strings.Contains(log, "current is back to "+firstID) {
 		t.Errorf("the server's logs:\n%s", log)
 	}
 
@@ -159,7 +165,7 @@ func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	if got != "exit=130" {
 		t.Errorf("devopsy: %s", got)
 	}
-	if strings.Contains(out, "leaves it as it was") || !strings.Contains(out, "does not go live") {
+	if strings.Contains(out, "leaves it as it was") || !strings.Contains(out, "does not go live") || !strings.Contains(out, "current is back to "+firstID) {
 		t.Errorf("devopsy says the child is left as it was, not that the release does not go live:\n%s", out)
 	}
 }
