@@ -25,9 +25,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -266,7 +268,6 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 
 // Record is what a release remembers about where it came from.
 type Record struct {
-	ID     string `json:"id"`
 	Mode   string `json:"mode"`
 	Time   string `json:"time"`
 	By     string `json:"by"`
@@ -278,7 +279,6 @@ type Record struct {
 // NewRecord describes a release made now from projectRoot.
 func NewRecord(projectRoot, mode string, now time.Time) Record {
 	r := Record{
-		ID:   now.UTC().Format("20060102150405"),
 		Mode: mode,
 		Time: now.UTC().Format(time.RFC3339),
 		By:   Whoami(),
@@ -427,14 +427,23 @@ done
 // new one exists already, so running it again finds it.
 const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e "$base" ] || mv "$base.rm.$$" "$base"; false; }; }`
 
+// ProtocolCheckEnv set to warn turns the refusal of an older server's
+// devopsy into a warning, the command going on at the operator's risk
+// (a local build ahead of the servers): passed to every session
+// (SSHStreams).
+const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
+
 // Protocol is what the scripts need from the server's devopsy, which
 // --release-settings reports (protocol=): raise it when a script starts
 // calling something an older one lacks, so it refuses before anything
 // changes instead of failing halfway. 1: --images; 2: --watch-session;
 // 3: --sync-services finish partial, settle, import <service> last,
 // --stdin-guard, --watch-session --heartbeat; 4: a sync's gate tied to its id;
-// 5: --say.
-const Protocol = 5
+// 5: --say; 6: --sync-services prepare first, --release-steps release, a
+// sync's done holding its id, a stream's spool named by it; 7: a sync's
+// record of its writers (the started file, taken by the holder, the
+// writers ended by finish partial and settle), --release-id.
+const Protocol = 7
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
 // (--release-settings: its user-level config's releases:) and $base to the
@@ -446,7 +455,15 @@ func basePrelude(t *Target) string {
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
 settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
-[ "$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null || { ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+cmp.Or(t.Alias, t.Address, t.Host)+" --upgrade)") + `; exit 1; }
+server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
+if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
+  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
+  else
+    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    exit 1
+  fi
+fi
 with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
@@ -461,6 +478,15 @@ keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
 `
+}
+
+// upgradeRef names t's server for --upgrade, a server's command: the
+// alias as typed, else the server alone (<host>:).
+func upgradeRef(t *Target) string {
+	if t.Alias != "" {
+		return t.Alias
+	}
+	return t.Host + ":"
 }
 
 // hintAddress is the address a hint in a script names: the alias as
@@ -498,24 +524,56 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 `
 }
 
-// UploadScript extracts a release from stdin. An id taken already (a
-// second release of the target within the same second) is refused: mv
-// would put the new tree inside the existing release and the old one
-// would run again.
-func UploadScript(t *Target, id string) string {
-	return prelude(t, true) + fmt.Sprintf(`rel="$base/releases/"%s
-[ ! -e "$rel" ] || { devopsy --say error "release $(basename "$rel") exists already on $base (another release in the same second?): try again"; exit 1; }
+// UploadScript extracts a release from stdin, under the release lock,
+// and prints its id on stdout, its only output there: chosen by the
+// server's devopsy (ReleaseIDFlag), never the operator's clock.
+func UploadScript(t *Target) string {
+	return prelude(t, true) + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+rel="$base/releases/$id"
+[ ! -e "$rel" ] || { devopsy --say error "release $id exists already on $base"; exit 1; }
 rm -rf "$rel.tmp"
 mkdir -p "$rel.tmp"
 # -m: extraction time, not archive times (clock skew warnings; builds use
 # content, not times). Guarded: a session gone silently would leave tar
-# waiting, the release lock held, until TCP gives up.
-devopsy `+StdinGuardFlag+` | tar -xzmf - -C "$rel.tmp"
+# waiting, the release lock held, until TCP gives up. A failure takes the
+# .tmp along: nothing of a cut upload stays.
+if ! devopsy ` + StdinGuardFlag + ` | tar -xzmf - -C "$rel.tmp"; then
+  rm -rf "$rel.tmp"
+  exit 1
+fi
 # Pending until its activation switches to it: one that never gets there
 # (cut, interrupted, its operator gone) is never rolled back to nor kept.
-: >"$rel.tmp/`+PendingFile+`"
+: >"$rel.tmp/` + PendingFile + `"
 mv "$rel.tmp" "$rel"
-`, Quote(id))
+echo "$id"
+`
+}
+
+// ReleaseIDFlag is the hidden devopsy flag that prints a new release's
+// id (NextReleaseID) for the releases in a directory (Protocol 7).
+const ReleaseIDFlag = "--release-id"
+
+// ReleaseIDFormat is a release id: a UTC second, 20261019214911.
+var ReleaseIDFormat = regexp.MustCompile(`^[0-9]{14}$`)
+
+const releaseIDLayout = "20060102150405"
+
+// NextReleaseID is a new release's id: now's second, or a second past the
+// newest of ids when that is not earlier. Why: ids order releases (pruning,
+// rollbacks, --releases), so a release is always newer than every one
+// there, whether two land in one second or older ids came from another
+// clock (an operator's, before the server chose them).
+func NextReleaseID(now time.Time, ids []string) string {
+	next := now.UTC().Truncate(time.Second)
+	for _, id := range ids {
+		if !ReleaseIDFormat.MatchString(id) {
+			continue
+		}
+		if t, err := time.Parse(releaseIDLayout, id); err == nil && !t.Before(next) {
+			next = t.Add(time.Second)
+		}
+	}
+	return next.Format(releaseIDLayout)
 }
 
 // Phases are the remote parts of a release's or rollback's steps, as
@@ -618,12 +676,16 @@ fi
 	// A rollback's steps are the restored release's, read from its own
 	// config on the server (ReleaseStepsFlag): the checkout's may have
 	// changed since. Its before steps run in the current release, as a
-	// release's do.
+	// release's do. On a pseudo-terminal like a release's (with_tty,
+	// which may run them in script's own shell: the release's code
+	// exported for that).
 	steps := func(phase string) string {
 		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
 	}
 	if rollback {
-		s += `(cd "$base/current" && ` + steps("before") + ` "$rel/` + CodeDir + `") || not_live $?
+		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
+(cd "$base/current" && with_tty ` + Quote(steps("before")+` "$rb_code"`) + `) || not_live $?
+unset rb_code
 `
 	} else if len(p.Before) > 0 {
 		s += "if [ -n \"$prev\" ]; then\n"
@@ -649,6 +711,13 @@ done
 	for _, l := range t.Levels {
 		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
 	}
+	if sync != nil && sync.Inherit {
+		// What the sync inherits this time, in the pending file the
+		// operator wrote: the checks before the switch (prepare,
+		// --missing-vars, the images) see what the release will run
+		// with, as a first release's do in inherit.env.
+		s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(sync.ID)) + "\n"
+	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
 		// Another environment's compose project of the same name, or a
@@ -657,7 +726,7 @@ done
 		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
 	if rollback {
-		s += `(cd "$code" && ` + steps("prepare") + `) || not_live $?
+		s += `(cd "$code" && with_tty ` + Quote(steps("prepare")) + `) || not_live $?
 `
 	}
 	for _, args := range p.Prepare {
@@ -688,10 +757,12 @@ done
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
-  # fetch is undone like one interrupted. Past this, the release goes on.
-  if [ -n "${watch_pid:-}" ] && ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
-    fetch_sig=1
-  fi
+  # fetch is undone like one interrupted. With a heartbeat, only on the
+  # session's next byte (waitBeat): a session that went silent shortly
+  # before never sees its release go live. Past this, the release goes
+  # on.
+  if [ -n "${watch_pid:-}" ]; then
+` + waitBeat("fetch_sig=1") + `  fi
   # The watcher fired: nobody reads the session, whose buffers may be
   # full, and a write there would block the undo with the lock held.
   ws_gone=
@@ -772,18 +843,18 @@ devopsy --say info "current is now $id" || true
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	restart := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync"
+      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
       exit "$status"
     fi
     get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
-    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
+    (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
 		s += sync.exports(t) + `cd "$base/current"
-` + syncBlock(projectName, "the release does not go live") + `cd "$base"
+` + syncBlock(projectName, "the release does not go live", true) + `cd "$base"
 [ "$status" = 0 ] || failed=sync
 `
 	}
@@ -811,7 +882,7 @@ fi
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
-    rm -f "$base/current"
+` + firstDown(projectName) + `    rm -f "$base/current"
     devopsy --say error "$failed failed ($status), no previous release to go back to"
   fi
   exit "$status"
@@ -855,12 +926,26 @@ fi
 `, t.Keep)
 	afterFail := `{ s=$?; devopsy --say error "an after step failed ($s): it stays live"; exit "$s"; }`
 	if rollback {
-		s += `(cd "$base/current" && ` + steps("after") + `) || ` + afterFail + "\n"
+		s += `(cd "$base/current" && with_tty ` + Quote(steps("after")) + `) || ` + afterFail + "\n"
 	}
 	for _, args := range p.After {
 		s += step("after", `"$base/current"`, args, afterFail)
 	}
 	return s
+}
+
+// firstDown takes down what a failed first release started (its run step,
+// a sync's import), where a later release's restart of the previous one
+// would replace it: with nothing current, nothing else would. Its logs go
+// first, into the server's log, since the down takes them with the
+// containers; volumes and mnt stay, like the release's directory. Never a
+// stop: a stopped container with restart: always starts again with
+// Docker, and its bind mounts through current, gone, would come back as
+// root's directories (prelude refuses a current that is one).
+func firstDown(projectName string) string {
+	return `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false) + `) || true
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "down", "--remove-orphans"}, false) + `) || devopsy --say warning "taking down what the release started failed ($?): it may still run"
+`
 }
 
 // followOutput runs where a script must go on whatever happens to its
@@ -986,11 +1071,11 @@ exec 4<&-
 // partial copy from a sync, which nothing runs on: only a sync completes
 // it. A holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
-	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncDoneFile + `" ]; }; then
+	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; }; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete ($(cat "$base/` + SyncIncompleteFile + `" 2>/dev/null)), and nothing runs on it until one does: devopsy @` + hintAddress(t) + ` --sync, or --release-sync"
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" "or --release-sync to release with it"
   ` + refuse + `
 fi
 `
@@ -1252,6 +1337,7 @@ left=`+leftPath(t)+`
 [ ! -s "$left" ] || awk -v t="$(printf '\t')" '{ print "left" t $0 }' "$left"
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
+syncing=; if `+SyncRunning+`; then syncing=1; fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A pending release is under way while its activation holds its
@@ -1268,6 +1354,8 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     # A release cut off mid-fetch is failed too, recovered or not.
     { [ -e "$base/releases/$r/`+FailedFile+`" ] || [ -e "$base/releases/$r/`+FetchingFile+`" ]; } && f=failed
     [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
+    # The current release, while a sync into it runs.
+    [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
   fi
   # Names only: the ids after a tab stay on the server.
   i=
@@ -1288,6 +1376,8 @@ type Release struct {
 	// Incomplete: uploaded, never made current, nothing running it now
 	// (PendingFile); InProgress: the same while a release runs.
 	Incomplete, InProgress bool
+	// Syncing: current, while a sync into it runs (SyncRunning).
+	Syncing bool
 	// Images are the names it runs (ImagesFile): what a rollback to it
 	// restores, and what removing it may free.
 	Images []string
@@ -1303,7 +1393,7 @@ func ParseReleases(out string) []Release {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back",
-			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress"}
+			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1343,6 +1433,8 @@ func (r Release) Line() string {
 		status = "  INCOMPLETE"
 	case r.InProgress:
 		status = "  IN PROGRESS"
+	case r.Syncing:
+		status = "  SYNCING"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
@@ -1408,10 +1500,10 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
   devopsy --say error "$base has no releases"
   exit 1
 fi
-` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
-img recover "$base" ${prev:+"$base/$prev"}
+` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
 # Every id checked first (gone, current: nothing removed), then each with
 # its images (images.RemoveReleases).
 rr=0
@@ -1467,6 +1559,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	}
 	if TTY != "" {
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
+	}
+	if os.Getenv(ProtocolCheckEnv) == "warn" {
+		script = ProtocolCheckEnv + "=warn\n" + script
 	}
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
@@ -1530,6 +1625,47 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		cmd.Stdout = io.MultiWriter(flush[0], flush[2])
 		cmd.Stderr = io.MultiWriter(flush[1], flush[3])
 	}
+	// A session whose script asks for a byte (BeatMarker, WithBeat) gets
+	// one at once on its stdin: the server's watcher disarms on it, so a
+	// live session goes on in a round trip. Taken out of both the
+	// terminal's and the log's lines.
+	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
+		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) { _, _ = w.Write([]byte{0}) }}
+		mw := lm.Writer(cmd.Stderr)
+		flush = append([]*MarkerWriter{mw}, flush...)
+		cmd.Stderr = mw
+	}
+	// A gated session (WithGate) sends stdin only once the script holds
+	// the release lock: what is sent while it waits would otherwise
+	// reach a script whose operator left meanwhile.
+	if ctx.Value(gateKey{}) != nil {
+		open := make(chan struct{})
+		var once sync.Once
+		lm := &LineMarker{Prefix: LockedMarker, Found: func(string) { once.Do(func() { close(open) }) }}
+		// Outermost, so flushed first.
+		mw := lm.Writer(cmd.Stderr)
+		flush = append([]*MarkerWriter{mw}, flush...)
+		cmd.Stderr = mw
+		// An *os.File, so Wait never waits on a copy that never starts.
+		r, w, err := os.Pipe()
+		if err != nil {
+			return 1, err
+		}
+		defer r.Close()
+		src := cmd.Stdin
+		cmd.Stdin = r
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			defer w.Close()
+			select {
+			case <-open:
+				_, _ = io.Copy(w, src)
+			case <-stop:
+			case <-ctx.Done():
+			}
+		}()
+	}
 	err := cmd.Run()
 	for _, f := range flush {
 		f.Flush()
@@ -1538,6 +1674,11 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		c.Flush()
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
+		// ssh killed by a signal devopsy did not send (its context's): the
+		// connection is gone as for ssh's own 255, and is said the same.
+		if ee.ExitCode() == -1 && ctx.Err() == nil {
+			return 255, nil
+		}
 		return ee.ExitCode(), nil
 	}
 	if err != nil {
@@ -1548,7 +1689,110 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 
 type noInterruptKey struct{}
 
+type gateKey struct{}
+
+// WithGate is ctx for a session whose script prints LockedMarker
+// (lockedGate) once it holds the release lock: stdin is sent only then.
+func WithGate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gateKey{}, true)
+}
+
+// LockedMarker is the line a gated script (WithGate) prints on stderr
+// once it holds the release lock. Why: a session cut while its script
+// waits for the lock (Ctrl-C, a drop) left its data in the server's pipe,
+// and the script went on with it once the lock came (a release uploaded
+// after devopsy said nothing changed, a removal done); sent only now, it
+// never comes, and the script stops on an empty or silent stdin.
+const LockedMarker = "devopsy-internal-locked"
+
+// lockedGate prints LockedMarker; with ack it then takes the "go" a
+// gated session sends (AckInput), under --stdin-guard's bound, and
+// without it runs undo (a lock to give back) and fails. A removal takes
+// it once it holds every lock it waits for, the image lock included.
+func lockedGate(ack bool, undo string) string {
+	s := `printf '%s\n' "` + LockedMarker + `" >&2
+`
+	if ack {
+		s += `lg_ack=$(devopsy ` + StdinGuardFlag + `) && [ "$lg_ack" = go ] || { ` + undo + `devopsy --say error "the session ended while this waited for the locks: nothing changed"; exit 1; }
+`
+	}
+	return s
+}
+
+// AckInput is a gated session's stdin when the script takes no data
+// (lockedGate with ack).
+const AckInput = "go\n"
+
+// InputEnd is the line a gated session's data ends with (GatedInput):
+// data that may be empty (no variable to inherit) needs it to tell a
+// complete one from a session cut before sending anything.
+const InputEnd = "devopsy-internal-end"
+
+// GatedInput is data for gatedRead: its lines, then InputEnd.
+func GatedInput(data string) string {
+	if data != "" && !strings.HasSuffix(data, "\n") {
+		data += "\n"
+	}
+	return data + InputEnd + "\n"
+}
+
+// gatedRead defines gated_read <file>: prints LockedMarker (the lock
+// held), then reads stdin into file through --stdin-guard's bound,
+// requiring GatedInput's end line, which it takes off; without it (the
+// session gone while the script waited) it fails having written
+// nothing.
+const gatedRead = `gated_read() {
+  printf '%s\n' "` + LockedMarker + `" >&2
+  if devopsy ` + StdinGuardFlag + ` >"$1.in" && [ "$(tail -n 1 "$1.in")" = ` + InputEnd + ` ]; then
+    sed '$d' "$1.in" >"$1"
+    rm -f "$1.in"
+  else
+    rm -f "$1.in"
+    devopsy --say error "the session ended while this waited for the release lock: nothing changed"
+    exit 1
+  fi
+}
+`
+
 type switchedKey struct{}
+
+type beatKey struct{}
+
+// WithBeat is ctx for a session whose stdin devopsy writes through w, the
+// pipe it keeps open with a heartbeat: a BeatMarker line the script
+// prints is answered with a byte on w at once.
+func WithBeat(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, beatKey{}, w)
+}
+
+// BeatMarker is the line a script prints on stderr when its watcher waits
+// for the session's next byte before it disarms (<armed>.next): past a
+// sync holder's lock wait, and right before a release's switch. Why: a
+// live session and one that died silently look the same until a byte
+// comes, and the next heartbeat would take up to a beat; devopsy answers
+// the marker at once, so only a silent session waits, until its quiet
+// time ends it as gone. Once per session.
+const BeatMarker = "devopsy-internal-beat"
+
+// waitBeat takes the watcher's armed file to <armed>.next, asks for a byte
+// (BeatMarker) and waits until the watcher disarms it on the session's next
+// byte (.off) or takes it as gone (.fired, its SIGTERM on the way), then
+// runs gone in the second case, and when the watcher had fired already.
+// Without a heartbeat, the plain disarm. $ws_armed set.
+func waitBeat(gone string) string {
+	return `if [ -n "${` + HeartbeatEnv + `:-}" ]; then
+  if mv "$ws_armed" "$ws_armed.next" 2>/dev/null; then
+    printf '%s\n' "` + BeatMarker + `" >&2
+    while [ -e "$ws_armed.next" ]; do sleep 0.2; done
+    [ -e "$ws_armed.off" ] || ` + gone + `
+  else
+    ` + gone + `
+  fi
+elif ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
+  ` + gone + `
+fi
+`
+}
 
 // WithSwitched is ctx for a logged session that sets switched once the
 // script printed SwitchMarker: its release went live, whatever the
@@ -1572,7 +1816,10 @@ func WithoutInterrupt(ctx context.Context) context.Context {
 // "ssh" like GIT_SSH_COMMAND, with them.
 func SSHCommand(args ...string) *exec.Cmd {
 	if custom := os.Getenv("DEVOPSY_SSH_COMMAND"); custom != "" {
-		return exec.Command("sh", append([]string{"-c", custom + ` "$@"`, "sh"}, args...)...)
+		// exec: signals reach the command itself, never only a shell
+		// around it (a cancel would leave the session open, a kill
+		// would read as the shell's 137).
+		return exec.Command("sh", append([]string{"-c", "exec " + custom + ` "$@"`, "sh"}, args...)...)
 	}
 	return exec.Command("ssh", args...)
 }
@@ -1653,8 +1900,8 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + `` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
-img recover "$base"
+` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
   dir="$base/current"
@@ -1701,11 +1948,13 @@ done
 `
 }
 
-// InstanceExistsScript exits 0 when the target's instance has a directory on
-// the server: --release asks before creating a new one.
+// InstanceExistsScript prints "yes" when the target's instance has a
+// directory on the server, else "no": --release asks before creating a
+// new one. An answer, never the exit code: a failure (an older server's
+// devopsy refusing) must stop the release, not read as a new instance.
 func InstanceExistsScript(t *Target) string {
 	dir := t.Project.Name + "/" + t.Instance
-	return "set -eu\n" + basePrelude(t) + `[ -d "$root"/` + Quote(dir) + ` ]
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$root"/` + Quote(dir) + ` ]; then echo yes; else echo no; fi
 `
 }
 

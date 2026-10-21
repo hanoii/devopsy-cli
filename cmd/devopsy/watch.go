@@ -27,8 +27,13 @@ import (
 // release before its switch (fetch_sig). The script disarms it by taking
 // the file first, right before its switch: one rename or the other
 // succeeds, never both, so a SIGTERM never lands past a switch the
-// script went on with. A file, not a signal: one sent before this
-// process could handle it would kill it, and with it a sync's answer.
+// script went on with. A sync's holder, past its lock wait, renames it
+// to <file>.next instead: disarm at the next byte, which a live session
+// sends within a beat, so a session that went silent while the holder
+// waited is still taken for gone before anything changes (the next byte
+// renames it to <file>.off, the silence takes it as the armed file). A
+// file, not a signal: one sent before this process could handle it would
+// kill it, and with it a sync's answer.
 // Nothing is sent once the script is gone (this process is no longer its
 // child). With --heartbeat, devopsy sends a zero byte every few seconds
 // (remote.HeartbeatEnv), never passed on: that many seconds without a
@@ -79,6 +84,9 @@ func runWatchSession(args []string) int {
 		out = os.NewFile(uintptr(answer), "answer")
 	}
 	_, _ = readQuiet(os.Stdin, quiet, func(b []byte) error {
+		if armed != "" {
+			_ = os.Rename(armed+".next", armed+".off")
+		}
 		if b = bytes.ReplaceAll(b, []byte{0}, nil); len(b) > 0 && out != nil {
 			_, _ = out.Write(b)
 		}
@@ -92,9 +100,10 @@ func runWatchSession(args []string) int {
 	}
 	if os.Getppid() != pid {
 		os.Remove(armed)
+		os.Remove(armed + ".next")
 		return 0
 	}
-	if os.Rename(armed, armed+".fired") != nil {
+	if os.Rename(armed, armed+".fired") != nil && os.Rename(armed+".next", armed+".fired") != nil {
 		// The script took it: disarmed.
 		return 0
 	}
@@ -122,8 +131,18 @@ func parentPid(pid int) int {
 	if err != nil {
 		return 0
 	}
-	_, rest, _ := strings.Cut(string(stat), ") ")
-	if f := strings.Fields(rest); len(f) > 1 {
+	return statParent(string(stat))
+}
+
+// statParent is the parent pid in a /proc/<pid>/stat line, "<pid>
+// (<command>) <state> <ppid> ...", or 0. The command may hold ") "
+// itself: the fields start after the last one.
+func statParent(stat string) int {
+	i := strings.LastIndex(stat, ") ")
+	if i < 0 {
+		return 0
+	}
+	if f := strings.Fields(stat[i+2:]); len(f) > 1 {
 		n, _ := strconv.Atoi(f[1])
 		return n
 	}

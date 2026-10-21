@@ -87,10 +87,7 @@ func TestTerminalRelease(t *testing.T) {
 		".devopsy/Dockerfile":      "FROM busybox:1.37\nRUN echo built\n",
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})
-	// Build mode packs what git tracks.
-	if out, code := op(t, dir, "git config --global --add safe.directory '*' && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@localhost commit -qm e2e"); code != 0 {
-		t.Fatalf("git (%d): %s", code, out)
-	}
+	commitAll(t, dir)
 	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/tty")
 	code := terminalCode(t, "/tmp/tty")
 	out, _ := op(t, "/", "cat /tmp/tty")

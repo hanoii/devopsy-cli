@@ -90,13 +90,15 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 // dropped, and new keys appended, in order. For unset, stdin has the keys,
 // one per line, and their lines are dropped. Comments, blank lines and
 // everything else stay as they are. Releases take the release lock, so this
-// never interleaves with a deploy writing its own secrets.
-var varsEdit = `if [ -z "$plain" ]; then
+// never interleaves with a deploy writing its own secrets. stdin is gated
+// (gated_read): devopsy sends it once the lock is held.
+// (fmt.Sprintf takes it: gatedRead's printf escaped.)
+var varsEdit = strings.ReplaceAll(gatedRead, "%", "%%") + `if [ -z "$plain" ]; then
   ` + releaseLock(false, true) + `  mkdir -p "$(dirname "$file")"
 fi
 umask 077
 [ -f "$file" ] || : > "$file"
-cat > "$file.vars"
+gated_read "$file.vars"
 awk -v mode=%s '
   NR == FNR {
     k = $0; sub(/=.*/, "", k)
@@ -137,24 +139,24 @@ func VarsUnsetScript(t *Target, level *Level) string {
 // server's instance and project files.
 const InheritFile = "inherit.env"
 
-// InheritWriteScript writes the KEY=value lines on stdin as the target's
+// InheritWriteScript writes the KEY=value lines on stdin (gated:
+// GatedInput, sent once the lock is held) as the target's
 // InheritFile, under its release lock, and prints the names among the
 // keys given that the child's own shared/.env also sets: those win over
-// what was just written. With pending, a re-sync's: into
-// SyncInheritPending instead, which the sync reads and moves into place
-// on go.
-func InheritWriteScript(t *Target, keys []string, pending bool) string {
+// what was just written. With pendingID, a re-sync's: into that sync's
+// SyncInheritPending instead, which it reads and moves into place on go.
+func InheritWriteScript(t *Target, keys []string, pendingID string) string {
 	file := `"$base/shared/` + InheritFile + `"`
-	if pending {
-		file = `"$base/` + SyncInheritPending + `"`
+	if pendingID != "" {
+		file = `"$base"/` + Quote(SyncInheritPending(pendingID))
 	}
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain directory: nothing inherits into it"
   exit 1
 fi
-` + releaseLock(false, true) + `mkdir -p "$base/shared"
+` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
 file=` + file + `
-cat > "$file.tmp"
+gated_read "$file.tmp"
 chmod 600 "$file.tmp"
 mv -f "$file.tmp" "$file"
 [ ! -f "$base/shared/.env" ] || for k in ` + quoteAll(keys) + `; do

@@ -26,8 +26,10 @@ const (
 	QuietBeats = 6
 	// HolderQuietBeats is a sync's holder's, 90 seconds: longer than the
 	// push's and than the operator's ssh needs to see the connection
-	// gone (KeepAlive), so a push still copying is cancelled before the
-	// holder decides.
+	// gone (KeepAlive), so a push still copying is usually cancelled
+	// before the holder decides. That order only shapes the messages:
+	// what a late write does is settled by the record the holder takes
+	// and the writers it ends (endWriters), whatever the timing.
 	HolderQuietBeats = 18
 	// DataQuietBeats is how long an upload's or an import's data may
 	// pause, 2 minutes: it carries no heartbeat, and its writer may be
@@ -35,10 +37,15 @@ const (
 	DataQuietBeats = 24
 )
 
-// HeartbeatEvery is the operator's beat: 5 seconds, or HeartbeatEveryEnv.
+// HeartbeatEvery is the beat devopsy sends: 5 seconds, or
+// HeartbeatEveryEnv; on a server, inside a session that gets one, that
+// session's (HeartbeatEnv), so what it passes on (the push's import on
+// another server) beats as often as the readers there count.
 func HeartbeatEvery() time.Duration {
-	if n, err := strconv.Atoi(os.Getenv(HeartbeatEveryEnv)); err == nil && n > 0 {
-		return time.Duration(n) * time.Second
+	for _, k := range []string{HeartbeatEveryEnv, HeartbeatEnv} {
+		if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
 	}
 	return 5 * time.Second
 }

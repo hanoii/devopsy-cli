@@ -28,6 +28,8 @@ var (
 	// one (secondServer); bin is devopsy for it.
 	server2 string
 	bin     string
+	// goarch is the daemon's architecture, which devopsy is built for.
+	goarch string
 )
 
 func TestMain(m *testing.M) {
@@ -64,7 +66,7 @@ func setUp() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	goarch := map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
+	goarch = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}[strings.TrimSpace(arch)]
 	if goarch == "" {
 		return 0, fmt.Errorf("unknown architecture %q", arch)
 	}
@@ -213,11 +215,12 @@ func loginShell(t *testing.T, shell string) {
 
 // inTerminal starts command on the operator, in dir, on a terminal of
 // its own (script), its output in log there and its exit code, once it
-// ends, in log.code (terminalCode).
+// ends, in log.code (terminalCode). Flushed as it comes, so a test can
+// read the log while the command runs.
 func inTerminal(t *testing.T, dir, command, log string) {
 	t.Helper()
 	op(t, "/", "rm -f "+log+" "+log+".code")
-	background(t, dir, `script -qec "`+strings.ReplaceAll(command, `"`, `\"`)+`; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
+	background(t, dir, `script -qfec "`+strings.ReplaceAll(command, `"`, `\"`)+`; echo exit=\$? >`+log+`.code" `+log, "/dev/null")
 }
 
 // terminalCode waits for inTerminal's command to end and returns
@@ -323,7 +326,14 @@ func eventually(t *testing.T, within time.Duration, what string, cond func() boo
 // RST, as a laptop asleep: both directions dropped. undrop restores it.
 func dropSilently(t *testing.T) {
 	t.Helper()
-	if out, code := op(t, "/", `ip=$(getent hosts server | cut -d' ' -f1) && iptables -A OUTPUT -d "$ip" -j DROP && iptables -A INPUT -s "$ip" -j DROP`); code != 0 {
+	dropHost(t, "server")
+}
+
+// dropHost is dropSilently from one server only (server or server2),
+// the operator's sessions to the other kept.
+func dropHost(t *testing.T, host string) {
+	t.Helper()
+	if out, code := op(t, "/", `ip=$(getent hosts `+host+` | cut -d' ' -f1) && iptables -A OUTPUT -d "$ip" -j DROP && iptables -A INPUT -s "$ip" -j DROP`); code != 0 {
 		t.Fatalf("dropping (%d): %s", code, out)
 	}
 	t.Cleanup(func() { undrop(t) })
@@ -339,6 +349,22 @@ func exists(t *testing.T, path string) bool {
 	t.Helper()
 	_, code := srv(t, "test -e "+quote(path))
 	return code == 0
+}
+
+// commitAll commits the project at dir on the operator: build mode packs
+// what git tracks.
+func commitAll(t *testing.T, dir string) {
+	t.Helper()
+	if out, code := op(t, dir, "git config --global --add safe.directory '*' && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@localhost commit -qm e2e"); code != 0 {
+		t.Fatalf("git (%d): %s", code, out)
+	}
+}
+
+// asRoot runs script as root in the server container name (server,
+// server2): what the deploy user cannot do, like giving files to 10001.
+func asRoot(t *testing.T, name, script string) (string, int) {
+	t.Helper()
+	return execIn(t, []string{"-w", "/home/devopsy", name}, script)
 }
 
 // quote quotes s for sh.

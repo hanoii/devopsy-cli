@@ -327,7 +327,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			defer heartbeat(w)()
 			var switched atomic.Bool
 			go func() {
-				code, err := remote.SSHContext(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+				code, err := remote.SSHContext(remote.WithBeat(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 				done <- result{code, err}
 			}()
 			var res result
@@ -474,11 +474,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 		// A new instance is a new site: confirm it, unless --yes.
 		if t.Instance != "" && !yes {
-			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), io.Discard, false)
+			var out bytes.Buffer
+			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false)
 			if err != nil {
 				return fail(err.Error())
 			}
 			if code != 0 {
+				return code
+			}
+			if strings.TrimSpace(out.String()) != "yes" {
 				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
 				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
 				if !atTerminal() {
@@ -583,8 +587,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		if err != nil {
 			return stop(err)
 		}
-		log.Info(fmt.Sprintf("releasing %s to %s (%s:%s): %d files, %s, %s",
-			record.ID, t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
+		log.Info(fmt.Sprintf("releasing to %s (%s:%s): %d files, %s, %s",
+			t.Address, t.Host, t.Path, len(files), humanBytes(size), src))
 		if t.Mode == remote.ModeImage && record.Dirty && remote.DirtyOutsideDevopsy(projectRoot) {
 			log.Warn(fmt.Sprintf("uncommitted changes outside .devopsy/ are not released in image mode: images come from the registry (DEVOPSY_RELEASE_COMMIT=%s)",
 				record.Commit[:min(10, len(record.Commit))]))
@@ -615,7 +619,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Interrupted, the session ends: what the upload left (its .tmp)
 		// goes with the next release.
 		upCtx, upStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(upCtx), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, record.ID), pr, nil, progress.before(errOut), false, rlog)
+		// Gated: the project goes once the server holds the release lock.
+		// The server names the release (remote.UploadScript), on stdout.
+		var idOut bytes.Buffer
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t), pr, &idOut, progress.before(errOut), false, rlog)
+		id := strings.TrimSpace(idOut.String())
+		pr.Close()
 		upInterrupted := upCtx.Err() != nil
 		upStop()
 		if colored != nil {
@@ -626,8 +635,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			log.Error("interrupted during the upload: nothing changed on @" + t.Address)
 			return 130
 		}
+		if err == nil && code == 0 && !remote.ReleaseIDFormat.MatchString(id) {
+			err = fmt.Errorf("the server named no release (%q): its devopsy may be older than this one", id)
+		}
 		if err == nil && code == 0 {
-			log.Info(progress.done())
+			log.Info(progress.done(id))
 		}
 		if err != nil || code != 0 {
 			if err != nil {
@@ -639,21 +651,21 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return code
 		}
 		if job == nil {
-			if code := session(remote.ActivateScript(t, record.ID, false, projectName, phases, nil)); code != 0 {
-				return save(record.ID, code)
+			if code := session(remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
+				return save(id, code)
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := remote.ActivateScript(t, record.ID, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0})
-			if code := runSyncSession(job, script, rlog, color); code != 0 {
-				return save(record.ID, code)
+			script := remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
+			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
+				return save(id, code)
 			}
 		}
 		if code := local("after", remote.Commands(steps.After, false), commit); code != 0 {
 			log.Error(fmt.Sprintf("an after step failed (%d): the release stays", code))
-			return save(record.ID, 1)
+			return save(id, 1)
 		}
-		return save(record.ID, 0)
+		return save(id, 0)
 
 	default:
 		// A local command that needs an address runs locally, given it as
@@ -935,7 +947,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 			return 1
 		}
 	}
-	code, err := remote.SSH(t, remote.DestroyScript(t, projectName), bytes.NewReader(nil), nil, false)
+	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.DestroyScript(t, projectName), strings.NewReader(remote.AckInput), nil, false, nil)
 	if err != nil {
 		report.Fail(err)
 		return 1

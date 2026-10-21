@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -104,7 +105,7 @@ func TestPack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	extra := map[string][]byte{RecordFile: []byte(`{"id":"x"}`), TargetEnvFile: []byte("A='1'\n")}
+	extra := map[string][]byte{RecordFile: []byte(`{"mode":"x"}`), TargetEnvFile: []byte("A='1'\n")}
 	var read int64
 	if err := Pack(&buf, root, files, extra, func(n int64) { read += n }); err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestPack(t *testing.T) {
 	if h := entries["code/link.php"]; h == nil || h.Typeflag != tar.TypeSymlink || h.Linkname != "app.php" {
 		t.Fatalf("symlink not kept: %+v", h)
 	}
-	if contents[RecordFile] != `{"id":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
+	if contents[RecordFile] != `{"mode":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
 		t.Fatalf("contents: %q", contents)
 	}
 }
@@ -145,11 +146,45 @@ func TestPack(t *testing.T) {
 func TestNewRecord(t *testing.T) {
 	root := gitProject(t)
 	r := NewRecord(root, ModeBuild, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
-	if r.ID != "20261005120000" || r.Commit == "" || r.Branch == "" || !r.Dirty {
+	if r.Time != "2026-10-05T12:00:00Z" || r.Commit == "" || r.Branch == "" || !r.Dirty {
 		t.Fatalf("%+v", r)
 	}
 	if r := NewRecord(t.TempDir(), ModeImage, time.Now()); r.Commit != "" {
 		t.Fatalf("outside git: %+v", r)
+	}
+}
+
+// A new release is newer than every release there: the server's second,
+// or one past the newest when two land in one second or older ids came
+// from a clock ahead of it.
+func TestNextReleaseID(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 500, time.UTC)
+	for _, c := range []struct {
+		ids  []string
+		want string
+	}{
+		{nil, "20261020120000"},
+		{[]string{"20261020115959", "x.tmp", "notes"}, "20261020120000"},
+		{[]string{"20261020120000"}, "20261020120001"},
+		{[]string{"20261020120000", "20261231235959", "20261020110000"}, "20270101000000"},
+	} {
+		if got := NextReleaseID(now, c.ids); got != c.want {
+			t.Errorf("%v: %s, want %s", c.ids, got, c.want)
+		}
+	}
+}
+
+// Every file a sync leaves in an environment's directory starts with
+// .devopsy-sync., so they read as one family there.
+func TestSyncFilesPrefixed(t *testing.T) {
+	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
+	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
+		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end") + StatusScript(tg) +
+		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true)
+	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
+		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
+			t.Errorf("a sync's file not prefixed: %s", m[1])
+		}
 	}
 }
 
@@ -165,7 +200,7 @@ func TestQuote(t *testing.T) {
 func TestScriptsParse(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "it's app/prod", Mode: ModeImage}
 	scripts := map[string]string{
-		"upload":          UploadScript(tg, "20261005120000"),
+		"upload":          UploadScript(tg),
 		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{Run: []string{"deploy"}}, nil),
 		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, After: [][]string{{"warm"}}}, nil),
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
@@ -177,8 +212,8 @@ func TestScriptsParse(t *testing.T) {
 		"vars set":        VarsSetScript(tg, nil),
 		"vars unset":      VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}),
 		"inherit read":    InheritReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}),
-		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, false),
-		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, true),
+		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
+		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
 		"keys read":       KeysReadScript(),
 		"status":          StatusScript(tg),
 		"keys add":        KeysAddScript(),
@@ -189,10 +224,10 @@ func TestScriptsParse(t *testing.T) {
 		"role holders":    RoleHoldersScript(tg, "proxy"),
 		"root shell":      RootShellScript(&Target{Host: "h"}),
 		"upgrade":         UpgradeScript([]string{"v1.2.3"}),
-		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}}),
-		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod"}),
-		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true}, []string{"deploy"}),
-		"holder stale":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}),
+		"activate+sync":   ActivateScript(tg, "20261005120000", false, "app", Phases{Prepare: [][]string{{"secrets"}}, Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", Args: []string{"--exclude=it's"}, ID: "1.2"}),
+		"sync only":       ActivateScript(tg, "20261005120000", false, "app", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2"}),
+		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true, ID: "1.2"}, true),
+		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true),
@@ -226,7 +261,7 @@ func TestFormatReleases(t *testing.T) {
 func fakeDevopsy(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=5\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
+	fake := "#!/bin/sh\n" + sayCase() + "if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"${FAKE_ROOT:-/nowhere}\"; exit; fi\necho \"ran in $PWD: $*\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +290,7 @@ func TestPlainDirectories(t *testing.T) {
 		t.Fatalf("plain run: %v\n%s", err, out)
 	}
 	for name, script := range map[string]string{
-		"upload":   UploadScript(tg, "20261006000000"),
+		"upload":   UploadScript(tg),
 		"rollback": ActivateScript(tg, "", true, "", Phases{}, nil),
 		"releases": ReleasesScript(tg),
 	} {
@@ -405,18 +440,27 @@ func TestActivateSync(t *testing.T) {
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 echo "$* from=${DEVOPSY_SYNC_FROM_TARGET:-} to=${DEVOPSY_SYNC_TO_TARGET:-} args=${DEVOPSY_SYNC_ARGS:-}${DEVOPSY_INTERNAL_INHERIT_FILE:+ file=$DEVOPSY_INTERNAL_INHERIT_FILE}" >> "$FAKE_ROOT/calls"
-if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
+if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_HANGUP:-}" ]; then
   echo PREPARING >&2
   while [ ! -e "$FAKE_ROOT/closed" ]; do sleep 0.05; done
 fi
 # What the push writes into the child, as if during the copy.
-if [ "$*" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
-  for f in $FAKE_WRITE; do echo "vm1:prod 123.45" >"$FAKE_ROOT/app/dev/.devopsy-sync.$f"; done
+if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; then
+  # started claims the gate; done and other-done append the copy's last
+  # write to the record, this sync's or another's.
+  rec="$FAKE_ROOT/app/dev/.devopsy-sync.started"
+  for f in $FAKE_WRITE; do
+    case $f in
+      started) echo "vm1:prod $DEVOPSY_INTERNAL_SYNC_ID" >"$rec" ;;
+      done) echo "done $DEVOPSY_INTERNAL_SYNC_ID" >>"$rec" ;;
+      other-done) echo "done 123.45" >>"$rec" ;;
+    esac
+  done
 fi
 [ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
-[ "$*" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
+[ "${1:-} ${2:-}" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
 exit 0
 `
 	write(t, filepath.Join(bin, "devopsy"), fake)
@@ -424,7 +468,7 @@ exit 0
 	fakeImageTools(t, bin)
 	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev"}
 	phases := Phases{Run: []string{"deploy"}}
-	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}}
+	opts := &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, ID: "1.2"}
 	run := func(root, id, stdin string, extra ...string) (stdout, stderr string, err error) {
 		t.Helper()
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
@@ -469,8 +513,8 @@ exit 0
 	}
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
-	file := " file=" + filepath.Join(base, ".devopsy-sync.inherit.env")
-	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
+	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
+	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -510,6 +554,17 @@ exit 0
 	if got := calls(root); !strings.Contains(got, "--sync-services finish go") || !strings.Contains(got, "deploy from") {
 		t.Errorf("abort after a complete copy, calls:\n%s", got)
 	}
+	// A done this sync's push never wrote (another sync's, 123.45: a push
+	// that outlived its holder finishing its copy now) never makes this one
+	// go on: that push wrote into the child meanwhile, so it is partial.
+	other := t.TempDir()
+	if _, errOut, err := run(other, "1", "go\n"); err != nil {
+		t.Fatalf("first (%v):\n%s", err, errOut)
+	}
+	calls(other)
+	if _, errOut, err := run(other, "2", "abort\n", "FAKE_WRITE=started other-done"); err == nil || current(other) != "releases/1/code" || strings.Contains(errOut, "the copy had completed") || !fileExists(filepath.Join(other, tg.Path, SyncIncompleteFile)) {
+		t.Errorf("another sync's done (%v), current %q:\n%s", err, current(other), errOut)
+	}
 	_, errOut, err = run(root, "3", "go\n", "FAKE_WRITE=started")
 	if err == nil || current(root) != "releases/2/code" || !strings.Contains(errOut, "the copy was cut") || !strings.Contains(errOut, "not restarting 2") {
 		t.Fatalf("a partial copy (%v), current %q:\n%s", err, current(root), errOut)
@@ -517,13 +572,14 @@ exit 0
 	if got := calls(root); !strings.Contains(got, "--sync-services finish partial") || strings.Contains(got, "--release-steps restart run") || strings.Contains(got, "deploy from") {
 		t.Errorf("a partial copy, calls:\n%s", got)
 	}
-	for _, f := range []string{SyncStartedFile, SyncDoneFile} {
+	for _, f := range []string{SyncStartedFile, SyncTakenFile} {
 		if fileExists(filepath.Join(root, tg.Path, f)) {
 			t.Errorf("%s left", f)
 		}
 	}
-	// The mark names the parent that wrote, never the sync's id.
-	if mark := readFile(filepath.Join(root, tg.Path, SyncIncompleteFile)); !strings.HasSuffix(mark, " vm1:prod\n") {
+	// The mark names the parent that wrote, never the sync's id, and why.
+	mark := readFile(filepath.Join(root, tg.Path, SyncIncompleteFile))
+	if _, from, code, why := ParseIncomplete(mark); from != "vm1:prod" || code != IncompleteCopy || !strings.Contains(why, "was cut") {
 		t.Errorf("the mark: %q", mark)
 	}
 	// Nothing but a sync runs on it.
@@ -532,6 +588,12 @@ exit 0
 	plain.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	if out, err := plain.CombinedOutput(); err == nil || !strings.Contains(string(out), "did not complete") || current(root) != "releases/2/code" || !fileExists(filepath.Join(root, tg.Path, "releases", "4", FailedFile)) {
 		t.Errorf("a release on a partial copy (%v):\n%s", err, out)
+	}
+	calls(root)
+	// A sync that writes nothing (the parent's labels cover nothing now)
+	// leaves the earlier sync's partial copy as it was: the mark stays.
+	if _, errOut, err := run(root, "5", "go\n"); err == nil || current(root) != "releases/2/code" || !strings.Contains(errOut, "nothing was copied") || !fileExists(filepath.Join(root, tg.Path, SyncIncompleteFile)) {
+		t.Errorf("a sync writing nothing on a partial copy (%v), current %q:\n%s", err, current(root), errOut)
 	}
 	calls(root)
 
@@ -553,7 +615,7 @@ exit 0
 	if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 		t.Fatal(err)
 	}
-	gone := exec.Command("sh", "-c", HolderScript(tg, "app-dev", opts, []string{"deploy"}))
+	gone := exec.Command("sh", "-c", HolderScript(tg, "app-dev", opts, true))
 	gone.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	var goneOut bytes.Buffer
 	gone.Stdout, gone.Stderr = &goneOut, &goneOut
@@ -562,9 +624,12 @@ exit 0
 	}
 	waited := make(chan error, 1)
 	go func() { waited <- gone.Wait() }()
+	// Either its watcher ends it before it holds the lock (nothing
+	// prepared), or it gets there first and finds no answer.
 	select {
 	case err := <-waited:
-		if err == nil || !strings.Contains(readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no answer from devopsy") {
+		noAnswer := strings.Contains(readFile(filepath.Join(root, tg.Path, ".devopsy-sync.log")), "no answer from devopsy")
+		if err == nil || (!noAnswer && strings.Contains(calls(root), "--sync-services prepare")) {
 			t.Errorf("holder with its session gone (%v):\n%s", err, goneOut.String())
 		}
 	case <-time.After(30 * time.Second):
@@ -587,11 +652,11 @@ exit 0
 
 	// A re-sync's pending inherited variables: read by the sync (the
 	// variable names them), moved into shared/inherit.env on go and linked
-	// into the release, removed on abort; a stale one, from a sync that
-	// wrote none this time, goes before the sync reads anything.
+	// into the release, removed on abort; another sync's (its own id) is
+	// never read.
 	root = t.TempDir()
 	base = filepath.Join(root, tg.Path)
-	pending := filepath.Join(base, ".devopsy-sync.inherit.env")
+	pending := filepath.Join(base, SyncInheritPending("1.2"))
 	opts.Inherit = true
 	write(t, pending, "SYNC_DB='stream'\n")
 	if _, errOut, err := run(root, "1", "go\n"); err != nil {
@@ -614,9 +679,9 @@ exit 0
 		t.Errorf("abort: pending %v, shared %q", err, readFile(filepath.Join(base, "shared", "inherit.env")))
 	}
 	opts.Inherit = false
-	write(t, pending, "STALE=1\n")
+	write(t, filepath.Join(base, SyncInheritPending("9.9")), "STALE=1\n")
 	if _, errOut, err := run(root, "3", "go\n"); err != nil || readFile(filepath.Join(base, "shared", "inherit.env")) != "SYNC_DB='stream'\n" {
-		t.Errorf("stale pending (%v): %q\n%s", err, readFile(filepath.Join(base, "shared", "inherit.env")), errOut)
+		t.Errorf("another sync's pending (%v): %q\n%s", err, readFile(filepath.Join(base, "shared", "inherit.env")), errOut)
 	}
 	if got := calls(root); !strings.Contains(got, "--sync-services prepare from=vm1:prod to=vm2:dev args=-v file="+pending) {
 		t.Errorf("the pending file's variable:\n%s", got)
@@ -662,7 +727,7 @@ exit 0
 	for _, fail := range []string{"0", "3"} {
 		root := t.TempDir()
 		write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod"}), "FAIL_PREPARE="+fail)
+		hangup(root, ActivateScript(tg, "1", false, "app-dev", phases, &SyncOptions{From: "vm1:prod", ID: "1.2"}), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("release, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
@@ -671,7 +736,7 @@ exit 0
 		if err := os.Symlink("releases/1/code", filepath.Join(root, tg.Path, "current")); err != nil {
 			t.Fatal(err)
 		}
-		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod"}, []string{"deploy"}), "FAIL_PREPARE="+fail)
+		hangup(root, HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true), "FAIL_PREPARE="+fail)
 		if got := calls(root); !strings.Contains(got, "--sync-services finish") || strings.Contains(got, "deploy") {
 			t.Errorf("--sync, session gone, prepare exits %s: calls:\n%s", fail, got)
 		}
@@ -777,7 +842,7 @@ func TestActivateImages(t *testing.T) {
 	// pull and build put the release's id in the image store, and fail
 	// when told. The fake docker's store is a file per tag.
 	fake := `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
@@ -952,10 +1017,11 @@ exit 0
 func TestImagesRemoved(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
+  "--stdin-guard") exec cat ;;
   "-- config --images") printf 'registry/app:%s\nmariadb:11\n' "$TAG" ;;
   "-- pull") echo "$IMG" >"$FAKE_ROOT/images/registry_app:$TAG"; echo "$IMG" >"$FAKE_ROOT/images/mariadb:11" ;;
 esac
@@ -970,6 +1036,8 @@ exit 0
 		t.Helper()
 		cmd := exec.Command("sh", "-c", script)
 		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		// The ack a gated removal takes once it holds the lock.
+		cmd.Stdin = strings.NewReader(AckInput)
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
@@ -1163,7 +1231,7 @@ exit 0
 func TestBookmarksPerRef(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
@@ -1212,7 +1280,7 @@ exit 0
 func TestFetchInterrupted(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
@@ -1419,7 +1487,7 @@ func fileExists(path string) bool {
 // kept stays, with its log, and older ones go.
 func TestActivatePruneFailed(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=5\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	// flock, mv -T, a fake docker, and the real --images.
 	fakeImageTools(t, bin)
 	root := t.TempDir()
@@ -1453,7 +1521,7 @@ func TestActivatePruneFailed(t *testing.T) {
 // removals left is a leftover too; removing it says what is forgotten.
 func TestLeftoverImagesRecord(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=5\\n' \"$FAKE_ROOT\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1533,7 +1601,7 @@ func TestRebookmark(t *testing.T) {
 // variables stop at its end.
 func TestScriptsLockAndLinks(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
-	if s := UploadScript(tg, "1"); !strings.Contains(s, `exec 9>"$base/.lock"`) {
+	if s := UploadScript(tg); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
 	}
 	// The upgrade hint names an alias whatever its source: --upgrade
@@ -1543,11 +1611,11 @@ func TestScriptsLockAndLinks(t *testing.T) {
 	}
 	// Hints in scripts name the alias as typed.
 	aliased := &Target{Name: "prod", Alias: "vm1-traefik", Source: "~/traefik", Address: "vm1:prod", Path: "traefik/prod"}
-	if s := HolderScript(aliased, "x", &SyncOptions{}, nil); !strings.Contains(s, "devopsy @vm1-traefik --release") {
+	if s := HolderScript(aliased, "x", &SyncOptions{}, false); !strings.Contains(s, "devopsy @vm1-traefik --release") {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
 	// A release is pending until its switch, and cut uploads go.
-	if s := UploadScript(tg, "1"); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+	if s := UploadScript(tg); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
 		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
@@ -1654,7 +1722,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	}
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   "-- config --images") printf 'app-prod-app\n' ;;
   "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
@@ -1788,7 +1856,7 @@ exit 0
 func TestActivateGoneAndNeighbours(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   fail) exit 3 ;;
   "-- config --images") printf 'app-prod-app\n' ;;
@@ -1825,7 +1893,7 @@ exit 0
 // whatever its run step did: a failed copy after it does not count.
 func TestStatusLastSync(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=5\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1861,7 +1929,7 @@ func TestStatusLastSync(t *testing.T) {
 func TestStepTextQuoted(t *testing.T) {
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
-if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=5\n' "$FAKE_ROOT"; exit; fi
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=7\n' "$FAKE_ROOT"; exit; fi
 case "$1" in deploy|prep) printf '%s|' "$@" >>"$FAKE_ROOT/args"; echo >>"$FAKE_ROOT/args" ;; esac
 exit 0
 `)
@@ -1915,5 +1983,49 @@ func TestIncompleteCheckBusy(t *testing.T) {
 	write(t, filepath.Join(base, SyncIncompleteFile), "x\n")
 	if got := check(); got != "incomplete" {
 		t.Errorf("marked: %q", got)
+	}
+}
+
+// --status's sync lines: "syncing" while a sync's holder holds the
+// child's lock (its holding file there), never for a holder killed
+// outright once the lock is free; "source" while a sync from it (or an
+// export) holds its sync lock. --releases marks the current release.
+func TestSyncStatusLines(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("needs flock")
+	}
+	base := t.TempDir()
+	status := func() string {
+		out, _ := exec.Command("sh", "-c", "base="+Quote(base)+"\n"+strings.ReplaceAll(partialStatus, "%%", "%")).CombinedOutput()
+		return strings.TrimSpace(string(out))
+	}
+	hold := func(lock string) func() {
+		t.Helper()
+		write(t, filepath.Join(base, lock), "")
+		// One process holds it: killed, the lock goes.
+		h := exec.Command("sh", "-c", `exec 9>"$1"; flock 9; exec sleep 5`, "sh", filepath.Join(base, lock))
+		if err := h.Start(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(300 * time.Millisecond)
+		return func() { _ = h.Process.Kill(); _ = h.Wait() }
+	}
+	write(t, filepath.Join(base, SyncHoldingFile), "")
+	if got := status(); got != "" {
+		t.Errorf("a holder's file, the lock free: %q", got)
+	}
+	release := hold(".lock")
+	if got := status(); got != "syncing" {
+		t.Errorf("a holder holding the lock: %q", got)
+	}
+	release()
+	release = hold(SyncLockFile)
+	if got := status(); got != "source" {
+		t.Errorf("a push holding the sync lock: %q", got)
+	}
+	release()
+	rs := ParseReleases("20261020000000\tcurrent\tsyncing\t\t{}\n")
+	if len(rs) != 1 || !rs[0].Syncing || !strings.HasSuffix(rs[0].Line(), "  SYNCING") {
+		t.Errorf("a syncing release: %+v %q", rs, rs[0].Line())
 	}
 }

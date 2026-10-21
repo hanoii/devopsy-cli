@@ -15,11 +15,22 @@ var varsRoot = os.TempDir()
 // a no-op flock (macOS has none).
 func runVarsScript(t *testing.T, script, stdin string) string {
 	t.Helper()
+	// As devopsy sends it, gated: the lines, then the end line.
+	out, err := runVarsRaw(t, script, GatedInput(stdin))
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, script)
+	}
+	return strings.ReplaceAll(out, LockedMarker+"\n", "")
+}
+
+// runVarsRaw runs script with stdin as given.
+func runVarsRaw(t *testing.T, script, stdin string) (string, error) {
+	t.Helper()
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	settings := "#!/bin/sh\n" + sayCase() + "printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=5\\n' \"$FAKE_ROOT\"\n"
+	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=7\\n' \"$FAKE_ROOT\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -27,10 +38,7 @@ func runVarsScript(t *testing.T, script, stdin string) string {
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + varsRoot}
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v\n%s\n%s", err, out, script)
-	}
-	return string(out)
+	return string(out), err
 }
 
 func TestVarsScripts(t *testing.T) {
@@ -57,6 +65,14 @@ func TestVarsScripts(t *testing.T) {
 	want := "# secrets\nA='new a'\nB=keep\nC='new c'\n\nD='d'\n"
 	if string(got) != want {
 		t.Fatalf("set\n got %q\nwant %q", got, want)
+	}
+	// A session cut before its end line (gone while the script waited for
+	// the lock, its values sent before) changes nothing.
+	if out, err := runVarsRaw(t, VarsSetScript(tg, nil), "A='cut'\n"); err == nil || !strings.Contains(out, "nothing changed") {
+		t.Errorf("a cut set (%v):\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(file); string(got) != want {
+		t.Errorf("a cut set changed the file: %q", got)
 	}
 
 	runVarsScript(t, VarsUnsetScript(tg, nil), "A\nD\nMISSING\n")

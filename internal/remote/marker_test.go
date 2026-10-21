@@ -3,6 +3,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,5 +133,21 @@ func TestSSHSwitchMarker(t *testing.T) {
 	}
 	if l := log.String(); !strings.Contains(l, "before\n"+LogAnchor+" t1\n") || strings.Contains(l, "after") {
 		t.Errorf("logged session's log: %q", l)
+	}
+}
+
+// An ssh killed by a signal devopsy did not send reads as ssh's own lost
+// connection (255), through DEVOPSY_SSH_COMMAND too: what explains a lost
+// connection explains it.
+func TestSSHKilled(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nkill -9 $$\n")
+	if err := os.Chmod(filepath.Join(bin, "fakessh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVOPSY_SSH_COMMAND", filepath.Join(bin, "fakessh")+" -o X=1")
+	code, err := SSHStreams(context.Background(), &Target{Host: "h"}, nil, "true", strings.NewReader(""), io.Discard, io.Discard, false, nil)
+	if err != nil || code != 255 {
+		t.Errorf("ssh killed: %d %v", code, err)
 	}
 }

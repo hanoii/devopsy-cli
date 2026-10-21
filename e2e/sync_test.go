@@ -51,7 +51,12 @@ func TestSyncPartial(t *testing.T) {
 // witness) and a stream one (db), whose import waits as long as
 // ~/import-wait-<compose project> says, and hooks that log.
 func syncProject(t *testing.T, name string) string {
-	return project(t, name, map[string]string{
+	return syncProjectWith(t, name, nil)
+}
+
+// syncProjectWith is syncProject with files added or replaced.
+func syncProjectWith(t *testing.T, name string, files map[string]string) string {
+	base := map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
 		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
 		".devopsy/compose.yaml": `services:
@@ -69,7 +74,11 @@ func syncProject(t *testing.T, name string) string {
 		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
 		".devopsy/capabilities/sync/import": "#!/bin/sh\n: >\"$HOME/importing-$COMPOSE_PROJECT_NAME\"\nsleep \"$(cat \"$HOME/import-wait-$COMPOSE_PROJECT_NAME\" 2>/dev/null || echo 0)\"\ncat >/dev/null\n",
 		".devopsy/capabilities/sync/finish": "#!/bin/sh\necho \"$1 $2\" >>\"$HOME/finish.log\"\n",
-	})
+	}
+	for p, content := range files {
+		base[p] = content
+	}
+	return project(t, name, base)
 }
 
 // syncReleaseBoth releases prod, its data stamped one, then dev, which
@@ -96,14 +105,10 @@ func syncState(t *testing.T, name, env, service string) string {
 }
 
 // A child left partial, then a sync with nothing to copy (the parent's
-// labels now skip every service): the push succeeds, yet the child
-// stays partial, its services down, and no sync can complete it until
-// the parent copies something again or the mark goes by hand. Fails on
-// v0.42.0: the holder counts an earlier mark as partial whatever the
-// answer (internal/remote/sync.go, syncBlock: "elif [ -e started ] ||
-// [ -e incomplete ]" before "[ "$reply" = go ]"), and a push with
-// nothing to copy writes neither file (runSyncPush's "nothing to sync"
-// returns). Possibly by design: then the hint should say so.
+// labels now skip every service): decided, nothing written leaves the
+// earlier partial copy as it was, so the sync fails, the child stays
+// marked with its services down, and devopsy says what to do (fix the
+// labels or entries by hand, or --destroy and release again).
 func TestSyncNothingToCopy(t *testing.T) {
 	dir := project(t, "nothing", map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
@@ -130,7 +135,7 @@ func TestSyncNothingToCopy(t *testing.T) {
 		t.Fatalf("no partial copy (%d):\n%s", code, out)
 	}
 	srv(t, "rm -f fail-export; printf 'SYNC_DATA=\\nSYNC_DB=\\n' >>nothing/prod/shared/.env")
-	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code != 0 || exists(t, "nothing/dev/.devopsy-sync.incomplete") {
+	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") || syncState(t, "nothing", "dev", "data") != "exited" || !strings.Contains(out, "nothing was copied, and the data is still an earlier sync's") || !strings.Contains(out, "--destroy it and release it again") {
 		t.Errorf("a sync with nothing to copy (%d): marked %v, data %q:\n%s", code, exists(t, "nothing/dev/.devopsy-sync.incomplete"), syncState(t, "nothing", "dev", "data"), out)
 	}
 }
