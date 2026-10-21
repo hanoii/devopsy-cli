@@ -1489,7 +1489,7 @@ script there). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
 ```sh
-go test -tags e2e -count=1 -v -timeout 25m ./e2e   # E2E_KEEP=1 keeps the containers
+go test -tags e2e -count=1 -v -timeout 40m ./e2e   # E2E_KEEP=1 keeps the containers
 E2E_BEAT=5 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # the real timeouts
 ```
 

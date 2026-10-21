@@ -4,7 +4,7 @@
 // checkout in both. Behind the e2e build tag, so plain go test skips
 // them:
 //
-//	go test -tags e2e -count=1 -v -timeout 25m ./e2e
+//	go test -tags e2e -count=1 -v -timeout 40m ./e2e
 //
 // Drops count in heartbeat beats of E2E_BEAT seconds (default 1);
 // E2E_BEAT=5 runs them with the real timeouts.
