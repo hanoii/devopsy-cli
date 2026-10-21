@@ -460,31 +460,7 @@ func basePrelude(t *Target) string {
 	// and 9) and hold them while it asks GitHub. The checks of the
 	// server's devopsy say so with a plain echo: it may lack --say.
 	return `export DEVOPSY_NO_UPDATE_CHECK=1
-settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
-server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
-if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
-  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
-  else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
-    exit 1
-  fi
-fi
-# What this script calls that the server's devopsy lacks (Needs).
-server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
-missing=
-for f in ${` + needsEnv + `:-}; do
-  case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
-done
-if [ -n "$missing" ]; then
-  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
-    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway: upgrade it (devopsy @"+upgradeRef(t)+" --upgrade)") + `
-  else
-    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing): upgrade it (devopsy @"+upgradeRef(t)+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
-    exit 1
-  fi
-fi
-with_tty() {
+` + serverCheck(upgradeRef(t)) + `with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
   if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
@@ -497,6 +473,39 @@ root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
+`
+}
+
+// serverCheck refuses a server's devopsy older than Protocol, or lacking
+// a feature the script needs ($devopsy_needs, WithNeeds), before anything
+// else, naming @ref in the upgrade hint, and leaves its
+// --release-settings in $settings. Its lines are a plain echo: the
+// server's devopsy may lack --say.
+func serverCheck(ref string) string {
+	return `settings=$(devopsy --release-settings) || { ` + echoLine(report.ErrorLevel, "the server's devopsy cannot tell its release settings: upgrade it (devopsy --upgrade)") + `; exit 1; }
+server_protocol=$(printf '%s\n' "$settings" | sed -n 's/^protocol=//p')
+if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
+  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy speaks protocol ${server_protocol:-unknown}, older than this one's "+strconv.Itoa(Protocol)+": going on anyway ("+ProtocolCheckEnv+"=warn), and what it lacks may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+  else
+    ` + echoLine(report.ErrorLevel, "the server's devopsy is older than this one needs: upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    exit 1
+  fi
+fi
+# What this script calls that the server's devopsy lacks (Needs).
+server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
+missing=
+for f in ${` + needsEnv + `:-}; do
+  case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
+done
+if [ -n "$missing" ]; then
+  if [ "${` + ProtocolCheckEnv + `:-}" = warn ]; then
+    ` + echoLine(report.WarnLevel, "the server's devopsy lacks what this needs ($missing): going on anyway ("+ProtocolCheckEnv+"=warn), and it may fail halfway: upgrade it (devopsy @"+ref+" --upgrade)") + `
+  else
+    ` + echoLine(report.ErrorLevel, "the server's devopsy lacks what this needs ($missing): upgrade it (devopsy @"+ref+" --upgrade), or set "+ProtocolCheckEnv+"=warn to go on at your own risk") + `
+    exit 1
+  fi
+fi
 `
 }
 
@@ -1584,7 +1593,9 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		script = TTYEnv + "=" + Quote(TTY) + "; export " + TTYEnv + "\n" + script
 	}
 	if os.Getenv(ProtocolCheckEnv) == "warn" {
-		script = ProtocolCheckEnv + "=warn\n" + script
+		// Exported: a push checks the child's devopsy the same way
+		// (ChildCheck).
+		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
 	script = WithNeeds(script)
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
