@@ -2159,3 +2159,32 @@ func TestSyncStatusLines(t *testing.T) {
 		t.Errorf("a syncing release: %+v %q", rs, rs[0].Line())
 	}
 }
+
+// A watcher killed outright (SIGKILL, the OOM killer) never takes the
+// .next it was asked to: the script waits past every quiet time, then
+// takes the session for gone itself, and goes the cancel way, rather
+// than waiting for good with its locks held.
+func TestWaitBeatWithoutWatcher(t *testing.T) {
+	dir := t.TempDir()
+	script := "set -eu\nws_armed=" + Quote(filepath.Join(dir, ".devopsy-watch.1")) + "\n: >\"$ws_armed\"\n" +
+		waitBeat(`{ echo gone; exit 3; }`) + "echo went on\n"
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), HeartbeatEnv+"=1")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(40 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("still waiting for a watcher that is gone:\n%s", out.String())
+	}
+	if code := cmd.ProcessState.ExitCode(); code != 3 || strings.Contains(out.String(), "went on") || !fileExists(filepath.Join(dir, ".devopsy-watch.1.fired")) {
+		t.Errorf("without a watcher (%d), fired %v:\n%s", code, fileExists(filepath.Join(dir, ".devopsy-watch.1.fired")), out.String())
+	}
+}

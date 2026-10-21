@@ -86,6 +86,14 @@ func TestVarsScripts(t *testing.T) {
 	if got, _ := os.ReadFile(multi); string(got) != "B=keep\n" {
 		t.Errorf("unset of a value of several lines:\n%s", got)
 	}
+	// compose's parser reads KEY: value as KEY=value: such a line is the
+	// key's too.
+	write(t, multi, "A: old\nB=keep\nC: x=y\n")
+	runVarsScript(t, VarsUnsetScript(tm, nil), "A\n")
+	runVarsScript(t, VarsSetScript(tm, nil), "C='new'\n")
+	if got, _ := os.ReadFile(multi); string(got) != "B=keep\nC='new'\n" {
+		t.Errorf("KEY: value lines:\n%s", got)
+	}
 	// A session cut before its end line (gone while the script waited for
 	// the lock, its values sent before) changes nothing.
 	if out, err := runVarsRaw(t, VarsSetScript(tg, nil), "A='cut'\n"); err == nil || !strings.Contains(out, "nothing changed") {
@@ -160,5 +168,80 @@ func TestVarsScripts(t *testing.T) {
 	}
 	if s, ok := ConfigSecrets([]byte("project: x\nnewer_key: 1\nsecrets: [A, \"*_KEY\"]\n")); !ok || strings.Join(s, " ") != "A *_KEY" {
 		t.Fatalf("ConfigSecrets: %q %v", s, ok)
+	}
+}
+
+// The inherited variables (the parent's secrets) are never readable by
+// others on their way into place: before, they sat 644 in the
+// temporary files until the chmod.
+func TestInheritWriteMode(t *testing.T) {
+	root, bin := t.TempDir(), t.TempDir()
+	tg := &Target{Name: "dev", Host: "h", Path: "app/dev"}
+	in := filepath.Join(root, "app", "dev", "shared", InheritFile+".tmp.in")
+	modes := filepath.Join(root, "modes")
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	// The guard copies stdin, then says what mode its output has.
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln \""+in+"\" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
+	for _, f := range []string{"flock", "devopsy"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", "-c", "umask 022\n"+InheritWriteScript(tg, []string{"A"}, ""))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	cmd.Stdin = strings.NewReader(GatedInput("A='secret'\n"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(readFile(modes)); got != "-rw-------" {
+		t.Errorf("the inherited values on their way: %q", got)
+	}
+}
+
+// An edit that fails while it writes the result never leaves the file
+// empty or cut (cat into it truncated it first), and the file keeps its
+// mode, and a link stays a link.
+func TestVarsEditInPlace(t *testing.T) {
+	root, bin := t.TempDir(), t.TempDir()
+	tg := &Target{Name: "prod", Host: "h", Path: "app/prod"}
+	shared := filepath.Join(root, "app", "prod", "shared")
+	real := filepath.Join(root, "app", "prod", "real.env")
+	write(t, real, "A='old'\n")
+	if err := os.Chmod(real, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(shared, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
+	// cat fails on the edit's result, as a full disk would.
+	write(t, filepath.Join(bin, "cat"), "#!/bin/sh\ncase \"$*\" in *.tmp) exit 1 ;; esac\nexec /bin/cat \"$@\"\n")
+	for _, f := range []string{"flock", "devopsy", "cat"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", "-c", VarsSetScript(tg, nil))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	cmd.Stdin = strings.NewReader(GatedInput("A='new'\n"))
+	out, _ := cmd.CombinedOutput()
+	if got := readFile(real); got != "A='old'\n" && got != "A='new'\n" {
+		t.Errorf("the file after an edit that failed writing: %q\n%s", got, out)
+	}
+	// Without the failing cat: the edit lands, mode and link kept.
+	os.Remove(filepath.Join(bin, "cat"))
+	cmd = exec.Command("sh", "-c", VarsSetScript(tg, nil))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	cmd.Stdin = strings.NewReader(GatedInput("A='new'\n"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	fi, err := os.Lstat(filepath.Join(shared, ".env"))
+	if rfi, _ := os.Stat(real); err != nil || fi.Mode()&os.ModeSymlink == 0 || readFile(real) != "A='new'\n" || rfi.Mode().Perm() != 0o640 {
+		t.Errorf("the edit: link %v, %q, mode %v", fi.Mode(), readFile(real), rfi.Mode())
 	}
 }

@@ -492,10 +492,11 @@ if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
     exit 1
   fi
 fi
-# What this script calls that the server's devopsy lacks (Needs).
+# What this script calls that the server's devopsy lacks (Needs). One
+# that reports no features is older than 8, said above already.
 server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
 missing=
-for f in ${` + needsEnv + `:-}; do
+[ "$server_features" = "  " ] || for f in ${` + needsEnv + `:-}; do
   case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
 done
 if [ -n "$missing" ]; then
@@ -1817,12 +1818,17 @@ const BeatMarker = "devopsy-internal-beat"
 // (BeatMarker) and waits until the watcher disarms it on the session's next
 // byte (.off) or takes it as gone (.fired, its SIGTERM on the way), then
 // runs gone in the second case, and when the watcher had fired already.
-// Without a heartbeat, the plain disarm. $ws_armed set.
+// Without a heartbeat, the plain disarm. $ws_armed set. A watcher that
+// never answers (killed outright) is taken for a session gone once every
+// quiet time is past, two beats more: the script takes the file itself,
+// so one that wakes late cannot signal it.
 func waitBeat(gone string) string {
 	return `if [ -n "${` + HeartbeatEnv + `:-}" ]; then
   if mv "$ws_armed" "$ws_armed.next" 2>/dev/null; then
     printf '%s\n' "` + BeatMarker + `" >&2
-    while [ -e "$ws_armed.next" ]; do sleep 0.2; done
+    ws_n=$(( ${` + HeartbeatEnv + `} * ` + strconv.Itoa(HolderQuietBeats+2) + ` * 5 ))
+    while [ -e "$ws_armed.next" ] && [ "$ws_n" -gt 0 ]; do sleep 0.2; ws_n=$((ws_n - 1)); done
+    mv "$ws_armed.next" "$ws_armed.fired" 2>/dev/null || true
     [ -e "$ws_armed.off" ] || ` + gone + `
   else
     ` + gone + `
