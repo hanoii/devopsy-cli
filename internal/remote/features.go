@@ -1,0 +1,78 @@
+package remote
+
+import (
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// featureFlags and namedFeatures are what a script may need from the
+// server's devopsy beyond Protocol: every devopsy flag a script calls, by
+// its name (release-id for --release-id), and named behaviors of a flag
+// that came later. The server's devopsy reports its own in
+// --release-settings (features=), and a script's prelude refuses only on
+// one it needs and the server lacks, naming it (basePrelude): an older
+// server still runs every command that needs nothing new. Protocol stays
+// for what every script depends on (the prelude itself, --say).
+//
+// A script's needs are found in its text (Needs), so they never drift
+// from what it calls; TestFeaturesCoverScripts fails on a flag a script
+// calls that is not listed here.
+var featureFlags = []string{
+	"check-names", "destroy-data", "export", "images", "import",
+	"missing-vars", "prepare-release", "release-id", "release-settings",
+	"release-steps", "say", "status", "stdin-guard", "sync-push",
+	"sync-services", "upgrade", "watch-session",
+}
+
+// namedFeatures are behaviors of a flag that came after it, each found
+// in a script by what it calls (for example a new word of
+// --sync-services): add one when a script starts calling it, rather than
+// raising Protocol.
+var namedFeatures = []struct {
+	Name string
+	Uses *regexp.Regexp
+}{}
+
+// flagUse finds a devopsy flag a script calls, quoted or not (inside
+// with_tty's quotes too).
+var flagUse = regexp.MustCompile(`devopsy[ '\\]{1,8}--([a-z][a-z-]*)`)
+
+// FeaturesList is the features this devopsy has, space-separated, for
+// --release-settings.
+func FeaturesList() string {
+	names := append([]string{}, featureFlags...)
+	for _, f := range namedFeatures {
+		names = append(names, f.Name)
+	}
+	slices.Sort(names)
+	return strings.Join(names, " ")
+}
+
+// Needs is the features script calls, sorted: its devopsy flags, then the
+// named features it uses.
+func Needs(script string) []string {
+	var needs []string
+	for _, m := range flagUse.FindAllStringSubmatch(script, -1) {
+		if !slices.Contains(needs, m[1]) {
+			needs = append(needs, m[1])
+		}
+	}
+	for _, f := range namedFeatures {
+		if f.Uses.MatchString(script) && !slices.Contains(needs, f.Name) {
+			needs = append(needs, f.Name)
+		}
+	}
+	slices.Sort(needs)
+	return needs
+}
+
+// needsEnv names, for basePrelude's check, what the script needs: set by
+// SSHStreams in front of every script it sends.
+const needsEnv = "devopsy_needs"
+
+// WithNeeds is script with its needs (Needs) in front, for the prelude's
+// check.
+func WithNeeds(script string) string {
+	return needsEnv + "=" + Quote(strings.Join(Needs(script), " ")) + "\n" + script
+}
