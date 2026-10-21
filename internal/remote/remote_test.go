@@ -789,13 +789,10 @@ exit 0
 // release lock, so its file is there while a release holds that lock; a
 // release that takes the lock meanwhile (the activation after its upload,
 // another release's upload) must leave it alone: the holder's session is
-// alive, and once the lock comes the sync goes on.
-//
-// Bug: prelude removes "$base"/.devopsy-watch.* once it holds the lock,
-// as stale, the waiting holder's armed file included; the holder, once it
-// holds the lock, finds it gone, takes that for its watcher having fired,
-// and ends with "the session ended while this waited for the release
-// lock" although its operator is there.
+// alive, and once the lock comes the sync goes on. Once prelude removed
+// every watcher's file as stale, the waiting holder's included, and the
+// holder then took its watcher for fired: "the session ended while this
+// waited for the release lock", its operator there.
 func TestHolderArmedThroughRelease(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
