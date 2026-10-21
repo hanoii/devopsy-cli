@@ -925,6 +925,19 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || !strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server, warned (%d):\n%s", code, out)
 	}
+	// A server whose devopsy lacks a feature (here --release-id, which
+	// only the upload calls) refuses only what needs it, naming it, and
+	// runs the rest.
+	lacks := filepath.Join(tmp, "lacks")
+	write(t, filepath.Join(lacks, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ release-id / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "lacksssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+lacks+":$PATH exec sh -c \"$s\"\n", 0o755)
+	lacking := []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "lacksssh")}
+	if out, code := run(lacking, "@b/prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (release-id): upgrade it (devopsy @devopsy@server: --upgrade)") || strings.Contains(out, "uploaded") {
+		t.Fatalf("a server lacking a feature (%d):\n%s", code, out)
+	}
+	if out, code := run(lacking, "@devopsy@server", "--environments"); code != 0 || strings.Contains(out, "lacks") {
+		t.Fatalf("a server lacking a feature, what does not need it (%d):\n%s", code, out)
+	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)
