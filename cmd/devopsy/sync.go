@@ -172,12 +172,17 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		colored = append(colored, o, e)
 		out, errOut = o, e
 	}
-	// The marker comes on stderr: holders print on one stream.
+	// The marker comes on stderr: holders print on one stream. Before it,
+	// the holder says it holds the release lock, answered with a byte at
+	// once: its watcher disarms on the session's next one.
 	marker := make(chan string, 1)
 	lm := &remote.LineMarker{Prefix: remote.SyncMarker, Found: func(rest string) { marker <- rest }}
-	mwErr := lm.Writer(errOut)
+	locked := &remote.LineMarker{Prefix: remote.HolderLockedMarker, Found: func(string) { _, _ = w.Write([]byte{0}) }}
+	mwSync := lm.Writer(errOut)
+	mwErr := locked.Writer(mwSync)
 	flush := func() {
 		mwErr.Flush()
+		mwSync.Flush()
 		for _, c := range colored {
 			c.Flush()
 		}

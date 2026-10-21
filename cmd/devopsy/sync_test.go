@@ -205,10 +205,7 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,
-		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log,
-		// A beat a second: a holder past its lock waits for the next one.
-		// KeepAlive follows it (ServerAliveInterval, 3 beats).
-		remote.HeartbeatEveryEnv + "=1"}
+		"SSH_LOG=" + s.sshLog, "DOCKER_LOG=" + s.log}
 	return s
 }
 
@@ -274,6 +271,23 @@ func readString(path string) string {
 // services labeled devopsy.sync.stop=true stopped on both sides, one
 // container copying, then deploy on the parent's data. Later releases do not, unless --sync; --sync
 // resyncs.
+// A holder that holds the lock waits for its session's next byte before
+// it disarms its watcher, and devopsy answers its marker with one at once:
+// the sync goes on in a round trip, not at the next beat (30 seconds
+// here), and the marker never shows.
+func TestSyncHolderLockedAnswered(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	start := time.Now()
+	out, code := s.run([]string{remote.HeartbeatEveryEnv + "=30"}, "@dev", "--sync", "--yes")
+	if took := time.Since(start); code != 0 || took > 20*time.Second || strings.Contains(out, remote.HolderLockedMarker) {
+		t.Fatalf("sync (%d) in %s:\n%s", code, took, out)
+	}
+}
+
 func TestSyncSameHost(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -562,19 +576,19 @@ func TestSyncDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -o ServerAliveInterval=3 -o ServerAliveCountMax=3 -T devopsy@one") {
+	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
 	// The parent's sessions to the child: never the forwarded agent, no
 	// password prompt, and a short connect timeout.
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=3 -o ServerAliveCountMax=3 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Every session of the release keeps itself alive: the upload, the
 	// holder, the push, the push's look at the child's services
 	// (--sync-exec), the receive, and the log's save.
-	keep := "-o ServerAliveInterval=3 -o ServerAliveCountMax=3"
+	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
@@ -840,7 +854,7 @@ func TestSyncCapability(t *testing.T) {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=3 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 3 {
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 3 {
 		t.Errorf("the child's list, the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {
