@@ -49,13 +49,29 @@ func FeaturesList() string {
 	return strings.Join(names, " ")
 }
 
-// Needs is the features script calls, sorted: its devopsy flags, then the
-// named features it uses.
+// flagsCalled is every flag script puts after a devopsy, once each, in
+// order: devopsy's own, and compose's that a step or the operator's
+// command starts with (--profile web up).
+func flagsCalled(script string) []string {
+	var flags []string
+	for _, m := range flagUse.FindAllStringSubmatch(script, -1) {
+		if !slices.Contains(flags, m[1]) {
+			flags = append(flags, m[1])
+		}
+	}
+	return flags
+}
+
+// Needs is the features script calls, sorted: its devopsy flags that are
+// features (never compose's, which no devopsy reports: a step starting
+// with one would be refused everywhere), then the named features it uses.
+// TestFeaturesCoverScripts checks devopsy's own scripts call no flag
+// outside featureFlags.
 func Needs(script string) []string {
 	var needs []string
-	for _, m := range flagUse.FindAllStringSubmatch(script, -1) {
-		if !slices.Contains(needs, m[1]) {
-			needs = append(needs, m[1])
+	for _, f := range flagsCalled(script) {
+		if slices.Contains(featureFlags, f) {
+			needs = append(needs, f)
 		}
 	}
 	for _, f := range namedFeatures {

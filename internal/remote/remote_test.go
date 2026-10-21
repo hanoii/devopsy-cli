@@ -254,7 +254,7 @@ func TestScriptsParse(t *testing.T) {
 func TestFeaturesCoverScripts(t *testing.T) {
 	have := " " + FeaturesList() + " "
 	for name, s := range allScripts() {
-		for _, f := range Needs(s) {
+		for _, f := range flagsCalled(s) {
 			if !strings.Contains(have, " "+f+" ") {
 				t.Errorf("%s calls devopsy --%s, which is no feature (featureFlags)", name, f)
 			}
@@ -263,6 +263,21 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	// The operator's own command is no need of the script's.
 	if got := Needs(RunScript(&Target{Path: "app/prod"}, "app", []string{"--env"})); slices.Contains(got, "env") {
 		t.Errorf("a command's own flag read as a need: %v", got)
+	}
+	// Nor is a word of it after a service named devopsy (compose's
+	// logs devopsy --follow).
+	if got := Needs(RunScript(&Target{Path: "app/prod"}, "app", []string{"logs", "devopsy", "--follow"})); slices.Contains(got, "follow") {
+		t.Errorf("a command's own argument read as a need: %v", got)
+	}
+	// Nor the project's steps: compose flags may go first (--profile web
+	// up -d), and a release of them must not need --profile of the
+	// server's devopsy, which no devopsy reports: every server would
+	// refuse it.
+	steps := ActivateScript(&Target{Name: "prod", Host: "h", Path: "app/prod"}, "20261005120000", false, "app", Phases{Before: [][]string{{"--profile", "tools", "run", "--rm", "jq"}}, Prepare: [][]string{{"--env-file", "x", "config"}}, Run: []string{"--profile", "web", "up", "-d"}}, nil)
+	for _, f := range Needs(steps) {
+		if !strings.Contains(have, " "+f+" ") {
+			t.Errorf("a release step's own flag read as a need: --%s", f)
+		}
 	}
 	// Quoted, inside with_tty's quotes too; once each.
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {

@@ -351,7 +351,9 @@ before changing anything".
   the upgrade. `remote.Protocol` (8) is for what every script depends
   on (the prelude, `--say`) or a format both sides share that no
   script's text shows: say what in its comment. Anything else is a
-  feature: every devopsy flag a script calls (`featureFlags`) and named
+  feature: every devopsy flag a script calls (`featureFlags`; compose's
+  flags, which a step or the operator's command may start with, as in
+  `--profile web up`, are none: no devopsy reports them) and named
   behaviors of one that came later (`namedFeatures`, found by what the
   script calls). A script's needs are read from its own text (`Needs`,
   sent in front of it by `SSHStreams`), so they never drift, and
