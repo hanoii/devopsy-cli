@@ -28,8 +28,9 @@ import (
 // the file first, right before its switch: one rename or the other
 // succeeds, never both, so a SIGTERM never lands past a switch the
 // script went on with. A sync's holder, past its lock wait, renames it
-// to <file>.next instead: disarm at the next byte, which a live session
-// sends within a beat, so a session that went silent while the holder
+// to <file>.next instead: disarm at the next zero byte (a beat, or
+// devopsy's answer to remote.BeatMarker; never once an answer came, an
+// abort), which a live session sends within a beat, so a session that went silent while the holder
 // waited is still taken for gone before anything changes (the next byte
 // renames it to <file>.off, the silence takes it as the armed file). A
 // file, not a signal: one sent before this process could handle it would
@@ -83,10 +84,20 @@ func runWatchSession(args []string) int {
 	if answer >= 0 {
 		out = os.NewFile(uintptr(answer), "answer")
 	}
+	// Only a zero byte before any answer disarms at the next byte: a beat,
+	// or devopsy's answer to remote.BeatMarker. An answer that early is an
+	// abort (devopsy interrupted before a sync's marker), the session's
+	// end right behind it, and a beat written after it says nothing more.
+	answered := false
 	_, _ = readQuiet(os.Stdin, quiet, func(b []byte) error {
-		if armed != "" {
+		live := b
+		if i := bytes.IndexFunc(b, func(r rune) bool { return r != 0 }); i >= 0 {
+			live = b[:i]
+		}
+		if armed != "" && !answered && len(live) > 0 {
 			_ = os.Rename(armed+".next", armed+".off")
 		}
+		answered = answered || len(live) < len(b)
 		if b = bytes.ReplaceAll(b, []byte{0}, nil); len(b) > 0 && out != nil {
 			_, _ = out.Write(b)
 		}

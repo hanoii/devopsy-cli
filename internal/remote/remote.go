@@ -544,10 +544,14 @@ if [ -d "$base/current" ] && [ ! -L "$base/current" ]; then
   exit 1
 fi
 ` + releaseLock(false, create) + `mkdir -p "$base/releases" "$base/shared/mnt"
-# An upload cut off leaves its .tmp, a watcher its file: none runs while
-# the lock is held.
+# An upload cut off leaves its .tmp, none running while the lock is held.
+# A watcher's file goes with its script: a sync's holder arms its own
+# before it waits for this lock.
 rm -rf "$base"/releases/*.tmp
-rm -f "$base"/.devopsy-watch.*
+for ws_f in "$base"/.devopsy-watch.*; do
+  ws_p=${ws_f##*/.devopsy-watch.}
+  [ ! -e "$ws_f" ] || kill -0 "${ws_p%%.*}" 2>/dev/null || rm -f "$ws_f"
+done
 # make_current releases/<id>: current points at its code.
 make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$base/current.new" "$base/current"; }
 `
