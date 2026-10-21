@@ -106,6 +106,27 @@ func TestWatchHeartbeat(t *testing.T) {
 		t.Errorf("silence after the lock wait: next %v, fired %v", fileExists(armed+".next"), fileExists(armed+".fired"))
 	}
 	w.Close()
+
+	// devopsy interrupted before the sync's marker writes abort and closes
+	// the session's stdin (runSyncSession): the session is going, so a
+	// script waiting for the next byte (a holder past its lock, a release
+	// that syncs right before its switch) is signalled, never disarmed by
+	// the abort's bytes. Only devopsy's answer to BeatMarker, a zero byte,
+	// says the session is there.
+	// Bug: any byte disarms .next, the abort's too: a release that syncs,
+	// interrupted in that round trip, switches (then the abort fails its
+	// sync and brings the previous release back, restarting it), and a
+	// holder goes on to stop the child's services for a sync nobody wants.
+	os.Remove(armed + ".fired")
+	write(t, armed+".next", "", 0o644)
+	cmd, w = watch(`--heartbeat 5 --answer-fd 5 --armed "` + armed + `"`)
+	_, _ = w.Write([]byte("abort\n"))
+	w.Close()
+	if !ended(cmd, 10*time.Second) || fileExists(armed+".off") || !fileExists(armed+".fired") {
+		t.Errorf("abort then EOF while it waited for the next byte: off %v, fired %v", fileExists(armed+".off"), fileExists(armed+".fired"))
+	}
+	os.Remove(armed + ".off")
+	os.Remove(armed + ".fired")
 }
 
 // The upload's guard passes data through and fails on a silence.
