@@ -423,7 +423,9 @@ before changing anything".
 ### Upload
 
 - **Everything that can be checked locally or in a short session is
-  checked before uploading:** secret-like names
+  checked before uploading:** the files first (`remote.Files`: build
+  mode's list is `git ls-files`, so outside a repository it fails before
+  any session), secret-like names
   (`confirmUnnamedSecrets`), a role another compose project holds
   (`RoleHoldersScript`), a new instance, which asks
   (`InstanceExistsScript`, `--yes`), and a child's sync (Syncs).
@@ -441,6 +443,12 @@ before changing anything".
   before) could order an older release after a newer one across
   laptops and CI, or give two releases one id in one second. The
   record (`RecordFile`) keeps the operator's time, for display only.
+- **Files go with git's modes** (`Pack`: 0755 with any executable
+  bit, else 0644), never the checkout's. Why: a checkout's modes are
+  whatever wrote it, which git never shows (ddev's Mutagen writes 0600
+  files to the host), and a 0600 Caddyfile bind-mounted into a container
+  running as 10001 crash-looped it (decided 2026-10-22). Directories get
+  the server's umask from `tar`.
 - **Full tar streams, no rsync:** macOS ships openrsync. The progress
   line (`uploadProgress`, at a terminal only, never logged) counts the
   project's bytes as `Pack` reads them, out of `remote.Size`: the

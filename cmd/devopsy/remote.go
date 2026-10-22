@@ -438,6 +438,16 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return save("", 0)
 		}
 
+		// What the release uploads, listed before any session: build mode's
+		// list is git's, so outside a repository it fails here, not after
+		// the checks on the server.
+		projectRoot := filepath.Dir(projectDir)
+		files, err := remote.Files(projectRoot, t.Mode)
+		if err != nil {
+			report.Fail(err, report.Fix("make it one, or release .devopsy/ only and pull images (mode: image):", "git init "+projectRoot))
+			return 1
+		}
+
 		// Variables named like secrets that secrets: does not list: the
 		// compose files' and the environment's env:, asked about before
 		// anything runs.
@@ -554,11 +564,6 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 
-		projectRoot := filepath.Dir(projectDir)
-		files, err := remote.Files(projectRoot, t.Mode)
-		if err != nil {
-			return fail(err.Error())
-		}
 		record := remote.NewRecord(projectRoot, t.Mode, time.Now())
 		commit := record.Commit
 		if v := t.Env["DEVOPSY_RELEASE_COMMIT"]; v != "" {

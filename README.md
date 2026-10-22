@@ -718,12 +718,19 @@ Two modes, `mode:` in the config:
 
 - **build** mode (default) uploads the project as git sees it, uncommitted
   changes included, and builds on the server, before the release goes
-  live.
+  live. It needs a git repository: git's ignore rules decide what goes
+  (`vendor/`, dumps and local secrets stay behind).
 - **image** mode uploads `.devopsy/` only; images come from a registry. Tag
   them with the commit,
   `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`, so rollbacks
   run their own image. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
+
+Image mode needs no git: without it the release just has no commit.
+Either way files arrive with git's modes, whatever the checkout's: 0755
+when executable, else 0644 (a checkout synced by ddev's Mutagen has 0600
+files, which a container running as another user cannot read). A mode a
+project needs is set in its image (`COPY --chmod`) or by its `deploy`.
 
 A release says how much it uploads, shows the upload's progress on one
 line while it runs (on a terminal only: CI gets none), then its id, size

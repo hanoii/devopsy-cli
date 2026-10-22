@@ -120,7 +120,7 @@ func Files(projectRoot, mode string) ([]string, error) {
 		cmd.Dir = projectRoot
 		out, err := cmd.Output()
 		if err != nil {
-			return nil, fmt.Errorf("build mode needs a git repository at %s: %w", projectRoot, err)
+			return nil, fmt.Errorf("build mode uploads the files git lists, and %s is in no git repository: nothing changed", projectRoot)
 		}
 		for _, f := range strings.Split(string(out), "\x00") {
 			if f == "" {
@@ -200,8 +200,13 @@ func (p progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// Pack writes files (from Files) as a gzipped tar to w, keeping modes and
-// symlinks.
+// Pack writes files (from Files) as a gzipped tar to w, keeping symlinks.
+// Modes are git's, whatever the checkout's: 0755 for a file with any
+// executable bit, else 0644. Why: a release must not depend on who made
+// it, and a checkout's modes can be anything git does not track (ddev's
+// Mutagen writes 0600 files to the host): a bind-mounted file a container
+// reads as another user (10001) failed then. A mode a project needs is
+// its image's (COPY --chmod) or its deploy's.
 // extra are generated files, path: content, added after the project's.
 // progress, when set, gets the bytes of the project's files as they are
 // read: through a pipe, what the reader at its end has taken, up to Size.
@@ -226,6 +231,12 @@ func Pack(w io.Writer, projectRoot string, files []string, extra map[string][]by
 		}
 		hdr.Name = path.Join(CodeDir, filepath.ToSlash(rel))
 		hdr.Uname, hdr.Gname, hdr.Uid, hdr.Gid = "", "", 0, 0
+		if fi.Mode().IsRegular() {
+			hdr.Mode = 0o644
+			if fi.Mode()&0o111 != 0 {
+				hdr.Mode = 0o755
+			}
+		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
