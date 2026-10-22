@@ -912,7 +912,7 @@ fi
 	}
 	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
-  if [ -n "$prev" ]; then
+` + failureReport(projectName) + `  if [ -n "$prev" ]; then
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
@@ -968,17 +968,60 @@ fi
 	return s
 }
 
+// failureReport says, after a failed run or sync, what the release's
+// containers were left as, before anything replaces them: the restart of
+// the previous release recreates every container whose image or config
+// differs, and a failed first release takes them all down (firstDown),
+// so their state, health checks and logs would go with them, and --log
+// would only say that something failed. It goes where the script's
+// output goes, the server's log from the switch on: one detail line per
+// container, then, for each one neither running and healthy nor exited
+// 0 (a one-shot init's), its last health checks (Docker keeps five) and
+// its last 100 log lines. A function, so set -- only changes its own
+// arguments.
+func failureReport(projectName string) string {
+	ps := devopsyCall(projectName, []string{"--", "--profile", "*", "ps", "-a", "--format", "{{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}"}, false)
+	logs := devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false)
+	health := Quote(`{{if .State.Health}}{{range .State.Health.Log}}{{.End.Format "15:04:05"}} exit {{.ExitCode}}: {{json .Output}}{{println}}{{end}}{{end}}`)
+	return `  failure_report() {
+    fr_ps=$(cd "$base/current" && ` + ps + `) || fr_ps=
+    fr_bad= fr_badc=
+    set --
+    while read -r fr_name fr_svc fr_state fr_code fr_health; do
+      [ -n "$fr_svc" ] || continue
+      if [ "$fr_state" = running ]; then
+        set -- "$@" "$fr_svc: running${fr_health:+, $fr_health}"
+        case $fr_health in ''|healthy) continue ;; esac
+      else
+        set -- "$@" "$fr_svc: $fr_state ($fr_code)"
+        [ "$fr_code" != 0 ] || continue
+      fi
+      fr_bad="$fr_bad $fr_svc" fr_badc="$fr_badc $fr_name"
+    done <<FR_EOF
+$fr_ps
+FR_EOF
+    [ $# = 0 ] || devopsy --say info "the containers as the failed $failed left them:" "$@" || true
+    for fr_c in $fr_badc; do
+      fr_h=$(docker inspect -f ` + health + ` "$fr_c" 2>/dev/null) || fr_h=
+      [ -z "$fr_h" ] || devopsy --say info "the last health checks of $fr_c:" "$fr_h" || true
+    done
+    [ -z "$fr_bad" ] || { devopsy --say info "the last logs of$fr_bad:" || true; (cd "$base/current" && ` + logs + ` $fr_bad) || true; }
+  }
+  failure_report
+`
+}
+
 // firstDown takes down what a failed first release started (its run step,
 // a sync's import), where a later release's restart of the previous one
-// would replace it: with nothing current, nothing else would. Its logs go
-// first, into the server's log, since the down takes them with the
-// containers; volumes and mnt stay, like the release's directory. Never a
-// stop: a stopped container with restart: always starts again with
-// Docker, and its bind mounts through current, gone, would come back as
-// root's directories (prelude refuses a current that is one).
+// would replace it: with nothing current, nothing else would. What they
+// were left as went first, into the server's log (failureReport), since
+// the down takes it with the containers; volumes and mnt stay, like the
+// release's directory. Never a stop: a stopped container with restart:
+// always starts again with Docker, and its bind mounts through current,
+// gone, would come back as root's directories (prelude refuses a current
+// that is one).
 func firstDown(projectName string) string {
-	return `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false) + `) || true
-    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "down", "--remove-orphans"}, false) + `) || devopsy --say warning "taking down what the release started failed ($?): it may still run"
+	return `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--", "--profile", "*", "down", "--remove-orphans"}, false) + `) || devopsy --say warning "taking down what the release started failed ($?): it may still run"
 `
 }
 
