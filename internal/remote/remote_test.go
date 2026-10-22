@@ -98,8 +98,15 @@ func TestFilesBuildMode(t *testing.T) {
 	}
 }
 
+// Pack carries git's modes, whatever the checkout's: a 0600 file (ddev's
+// Mutagen writes those) as 0644, an executable one as 0755.
 func TestPack(t *testing.T) {
 	root := gitProject(t)
+	for name, mode := range map[string]os.FileMode{"app.php": 0o600, "src/lib.php": 0o664, ".devopsy/commands/deploy": 0o700} {
+		if err := os.Chmod(filepath.Join(root, name), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	files, err := Files(root, ModeBuild)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +147,11 @@ func TestPack(t *testing.T) {
 	}
 	if contents[RecordFile] != `{"mode":"x"}` || contents[TargetEnvFile] != "A='1'\n" || contents["code/app.php"] != "<?php\n" {
 		t.Fatalf("contents: %q", contents)
+	}
+	for name, want := range map[string]int64{"code/app.php": 0o644, "code/src/lib.php": 0o644, "code/.devopsy/commands/deploy": 0o755, "code/.devopsy/compose.yaml": 0o644} {
+		if h := entries[name]; h == nil || h.Mode != want {
+			t.Errorf("%s: mode %o, want %o", name, h.Mode, want)
+		}
 	}
 }
 

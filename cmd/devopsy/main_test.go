@@ -879,6 +879,29 @@ esac
 	}
 }
 
+// Build mode uploads what git lists: outside a repository a release fails
+// before any session, the role check's included, and says how to fix it.
+func TestReleaseBuildModeNeedsGit(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(tmp, "app")
+	dot := filepath.Join(project, ".devopsy")
+	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: x\n    labels: [devopsy.role=proxy]\n", 0o644)
+	write(t, filepath.Join(dot, "config.yaml"), "project: app\nenvironments:\n prod:\n  release: deploy\n", 0o644)
+	bin := t.TempDir()
+	sshLog := filepath.Join(tmp, "ssh.log")
+	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\necho \"$*\" >> "+sshLog+"\n", 0o755)
+	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "GIT_CEILING_DIRECTORIES=" + tmp}, "@devopsy@server:prod", "--release")
+	if code == 0 || !strings.Contains(out, "devopsy: error: build mode uploads the files git lists, and "+project+" is in no git repository: nothing changed\n") || !strings.Contains(out, "$ git init "+project) {
+		t.Errorf("a build-mode release outside git (%d):\n%s", code, out)
+	}
+	if data, _ := os.ReadFile(sshLog); len(data) != 0 {
+		t.Errorf("sessions opened before the failure:\n%s", data)
+	}
+}
+
 // Instances, the server's release root, the project's .env, --environments and
 // --destroy, with an ssh that runs the scripts here.
 func TestInstancesEndToEnd(t *testing.T) {
