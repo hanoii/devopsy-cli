@@ -601,14 +601,17 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   or pull stops, and the release is marked failed. A drop the server
   never hears of leaves it marked fetching until the next release,
   `--destroy` or `--releases remove` marks it failed.
-- **When `run` fails,** `current` goes back to the previous release, which
+- **When `run` fails,** devopsy first says what the release's containers
+  were left as, into the release's log too, so `--log` shows why: each
+  container's state and health, then, for every one neither running and
+  healthy nor exited 0, its last health checks and its last 100 log
+  lines. Then `current` goes back to the previous release, which
   is restarted with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its own images back, so its
   containers are the previous release's again. Data changes, like database
   updates, are the project's to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
-  kept), after writing their last log lines to its log, so `--log`
-  shows why the app stopped, and `--status` says the release failed.
+  kept), and `--status` says the release failed.
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed

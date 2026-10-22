@@ -473,15 +473,20 @@ step's rules):
    here, so a full disk fails the release before it goes live.
 8. `PendingFile` removed, `make_current`, the sync of a release that
    syncs, `followOutput` (From the switch on), the run step.
-9. A failed run or sync: `FailedFile`, `current` back, the previous
+9. A failed run or sync: `FailedFile`, what the release's containers
+   were left as into the server's log (`failureReport`: each one's
+   state and health, then the health checks and last logs of those
+   neither running and healthy nor exited 0; decided: the restart
+   recreates every container whose image or config changed, a tag
+   rebuilt upstream included, so their evidence went with them and
+   `--log` only said "unhealthy"), `current` back, the previous
    release restarted with its own images (`get_images`) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
    is no rollback target until released again). A first release, with
-   nothing to restart, takes down what it started (`firstDown`: its
-   containers' logs into the server's log first, then `down
-   --remove-orphans`, volumes and `mnt` kept, never a stop: `restart:
+   nothing to restart, takes down what it started (`firstDown`, after
+   the report: `down --remove-orphans`, volumes and `mnt` kept, never a stop: `restart:
    always` would bring a container back with Docker, its bind mounts
    through the gone `current` made again as root's) and leaves nothing
    current; `--status` names it failed.

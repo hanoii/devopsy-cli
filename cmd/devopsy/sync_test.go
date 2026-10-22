@@ -2273,7 +2273,8 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 }
 
 // A child's first release whose stream import failed takes down what it
-// started (the stream's container), its logs into the server's log first,
+// started (the stream's container), what it was left as into the
+// server's log first,
 // and leaves nothing current, which --status says: the next release is a
 // first one again and must create every labeled service before finish
 // child go, which sanitizes through them.
@@ -2292,7 +2293,7 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 		t.Fatalf("a first release whose import fails (%d):\n%s", code, out)
 	}
 	compose := "shop-dev compose -f " + filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml") + " --profile * "
-	if docker, _ := s.logs(); !strings.Contains(docker, compose+"logs --no-color --tail 100\n"+compose+"down --remove-orphans\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, compose+"ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n"+compose+"down --remove-orphans\n") {
 		t.Errorf("the failed first release's containers stay:\n%s", docker)
 	}
 	entries, _ := os.ReadDir(filepath.Join(s.root, "shop", "dev", "releases"))
