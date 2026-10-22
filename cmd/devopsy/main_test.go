@@ -639,20 +639,22 @@ func TestReleaseSteps(t *testing.T) {
 	// steps are skipped; remote before steps ran in it.
 	// Before going back, what the failed release's containers were left as
 	// goes into the server's log: each one's state, then the health checks
-	// and logs of those neither running and healthy nor exited 0.
+	// and logs of those neither running and healthy nor exited 0 (a
+	// restarting one, whatever its last exit code).
 	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
-	out, code = run([]string{"FAIL_REMOTE=4", `FAKE_PS=app-prod-web-1 web running 0 unhealthy\napp-prod-db-1 db running 0 healthy\napp-prod-init-1 init exited 0 \napp-prod-cron-1 cron exited 2 \n`, `FAKE_HEALTH=18:15:01 exit 1: "connection refused\\n"`}, "@prod", "--release")
+	out, code = run([]string{"FAIL_REMOTE=4", `FAKE_PS=app-prod-web-1 web running 0 unhealthy\napp-prod-db-1 db running 0 healthy\napp-prod-init-1 init exited 0 \napp-prod-cron-1 cron exited 2 \napp-prod-worker-1 worker restarting 0 \n`, `FAKE_HEALTH=18:15:01 exit 1: "connection refused\\n"`}, "@prod", "--release")
 	if code != 4 || !strings.Contains(out, "mark before") || !strings.Contains(out, "current is back to") || !strings.Contains(out, "with its own run step") || strings.Contains(out, "deploy --back in") || strings.Count(out, "deploy --fast in") < 2 || strings.Contains(out, "after ran") || current() != first {
 		t.Fatalf("run failure (%d), current %s, want %s:\n%s", code, current(), first, out)
 	}
-	report := "devopsy: the containers as the failed run left them:\ndevopsy: | web: running, unhealthy\ndevopsy: | db: running, healthy\ndevopsy: | init: exited (0)\ndevopsy: | cron: exited (2)\n" +
+	report := "devopsy: the containers as the failed run left them:\ndevopsy: | web: running, unhealthy\ndevopsy: | db: running, healthy\ndevopsy: | init: exited (0)\ndevopsy: | cron: exited (2)\ndevopsy: | worker: restarting (0)\n" +
 		"devopsy: the last health checks of app-prod-web-1:\ndevopsy: | 18:15:01 exit 1: \"connection refused\\n\" app-prod-web-1\n" +
 		"devopsy: the last health checks of app-prod-cron-1:\ndevopsy: | 18:15:01 exit 1: \"connection refused\\n\" app-prod-cron-1\n" +
-		"devopsy: the last logs of web cron:\n[compose]"
-	if i := strings.Index(out, report); i < 0 || !strings.Contains(out[i:], "[--profile][*][logs][--no-color][--tail][100][web][cron]\n") || i > strings.Index(out, "current is back to") {
+		"devopsy: the last health checks of app-prod-worker-1:\ndevopsy: | 18:15:01 exit 1: \"connection refused\\n\" app-prod-worker-1\n" +
+		"devopsy: the last logs of web cron worker:\n[compose]"
+	if i := strings.Index(out, report); i < 0 || !strings.Contains(out[i:], "[--profile][*][logs][--no-color][--tail][100][web][cron][worker]\n") || i > strings.Index(out, "current is back to") {
 		t.Errorf("what the failed run left, before going back:\n%s", out)
 	}
-	if out, code := run(nil, "@prod", "--log"); code != 0 || !strings.Contains(out, "devopsy: | cron: exited (2)") || !strings.Contains(out, "[logs][--no-color][--tail][100][web][cron]") {
+	if out, code := run(nil, "@prod", "--log"); code != 0 || !strings.Contains(out, "devopsy: | cron: exited (2)") || !strings.Contains(out, "[logs][--no-color][--tail][100][web][cron][worker]") {
 		t.Errorf("--log of the failed run (%d):\n%s", code, out)
 	}
 

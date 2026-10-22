@@ -977,7 +977,8 @@ fi
 // output goes, the server's log from the switch on: one detail line per
 // container, then, for each one neither running and healthy nor exited
 // 0 (a one-shot init's), its last health checks (Docker keeps five) and
-// its last 100 log lines. A function, so set -- only changes its own
+// its last 100 log lines. A restarting container shows its last exit
+// code, 0 too when what it runs exits cleanly: still a failure. A function, so set -- only changes its own
 // arguments.
 func failureReport(projectName string) string {
 	ps := devopsyCall(projectName, []string{"--", "--profile", "*", "ps", "-a", "--format", "{{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}"}, false)
@@ -994,7 +995,7 @@ func failureReport(projectName string) string {
         case $fr_health in ''|healthy) continue ;; esac
       else
         set -- "$@" "$fr_svc: $fr_state ($fr_code)"
-        [ "$fr_code" != 0 ] || continue
+        case $fr_state:$fr_code in exited:0|created:0) continue ;; esac
       fi
       fr_bad="$fr_bad $fr_svc" fr_badc="$fr_badc $fr_name"
     done <<FR_EOF
