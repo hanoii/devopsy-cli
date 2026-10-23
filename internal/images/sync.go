@@ -1,6 +1,7 @@
 package images
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -163,6 +164,14 @@ func (s *Set) SyncCheck(rel, data string) error {
 func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
+	// A release recorded by an older devopsy names no services: which
+	// one runs a database cannot be told, so its image could not follow
+	// the data. Released again first.
+	if len(ps) > 0 && len(es) > 0 && es[0].Service == "" {
+		s.sayAll(report.ErrorLevel, "the child's release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing changed", nil,
+			report.Fix("release the child first, with the sync if you want it:", "devopsy @"+cmp.Or(s.Address, "<child>")+" --release-sync"))
+		return nil, ErrRefused
+	}
 	var refused, refusedRefs []string
 	var mine []entry
 	for _, e := range es {

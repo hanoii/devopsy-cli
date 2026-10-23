@@ -1313,3 +1313,20 @@ func TestParentDataBounded(t *testing.T) {
 		t.Errorf("%d history lines sent, want %d with the newest", n, ParentHistoryLines)
 	}
 }
+
+// A child whose release an older devopsy recorded (no service column)
+// cannot tell which service runs a database: a sync refuses before
+// anything stops, naming the release that fixes it.
+func TestSyncOldChildListing(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	dev.release(false, db118)
+	os.WriteFile(filepath.Join(dev.e.rel(dev.cur), ListFile), []byte("mariadb:11.8\tI1\n"), 0o644)
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy @vm1:dev --release-sync") {
+		t.Errorf("an old listing (%v):\n%s", err, out.String())
+	}
+}
