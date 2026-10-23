@@ -698,3 +698,19 @@ func TestDotenvLineRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// compose's restart starts containers too, and Docker makes a missing
+// bind source then, as root (checked with Compose on Docker 29: an entry
+// removed while the service was stopped came back on restart), so it
+// readies the owned entries locally as start does (review of 2026-10-23,
+// round 3: restart is not among startingCommands).
+func TestBuildStartsRestart(t *testing.T) {
+	root := project(t, "p", map[string]string{"compose.yaml": minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n"})
+	plan, err := build(root, []string{"restart"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Starts {
+		t.Errorf("restart: Starts false, so Docker makes a missing owned entry root's")
+	}
+}
