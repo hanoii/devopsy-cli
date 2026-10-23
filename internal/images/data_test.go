@@ -1354,3 +1354,32 @@ func TestSyncOldParentListing(t *testing.T) {
 		t.Errorf("a sync from a parent an older devopsy released (%v): the child's database runs %s on data mariadb:11.8 at I2 wrote, want I2 or a refusal\n%s", err, dev.runs("database"), out.String())
 	}
 }
+
+// Bug: a release holds a pulled data service as its reference's
+// repository spells it (docker.io/library/mariadb@sha256:...), a
+// rollback or a restart as the history keeps Docker's digest
+// (mariadb@sha256:...): the same image under another image: and
+// devopsy.digest, which Compose's config hash covers, so the database is
+// recreated (stopped and started) by a rollback that keeps its image,
+// where S24 keeps the very container.
+func TestDataRollbackKeepsContainerFullName(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	db := dbSvc("docker.io/library/mariadb:11.8")
+	d.publish("docker.io/library/mariadb:11.8", "I1")
+	r1, _ := m.release(false, appSvc, db)
+	d.publish("docker.io/library/mariadb:11.8", "I2")
+	r2, err := m.release(false, appSvc, db)
+	if err != nil || m.runs("database") != "I2" {
+		m.fail("r2 (%v): %s", err, m.runs("database"))
+	}
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r2), false); err != nil {
+		m.fail("rollback: %v", err)
+	}
+	h1, h2 := holdsIn(m.e.rel(r1))["database"], holdsIn(m.e.rel(r2))["database"]
+	l1, l2 := labelsIn(m.e.rel(r1))["database"], labelsIn(m.e.rel(r2))["database"]
+	if h1 != h2 || l1 != l2 {
+		t.Errorf("the rollback keeps I2 but changes the database's image: %q to %q and its label %q to %q: Compose recreates it", h2, h1, l2, l1)
+	}
+}
