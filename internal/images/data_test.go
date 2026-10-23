@@ -1409,3 +1409,32 @@ func TestSyncYesThenOwnSeriesRefused(t *testing.T) {
 		t.Errorf("dev's release on mariadb:11.4 after the sync (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8\n%s", err, dev.runs("database"), out.String())
 	}
 }
+
+// Bug: Restore takes a service the target release builds for an own
+// image whatever the release it leaves ran, so a rollback across a
+// switch from a database the project built (FROM mariadb:11.4) to a
+// pulled one (mariadb:11.8, let through with --yes) puts the 11.4 build
+// back on data 11.8 ran, saying nothing, and img ran then records it:
+// the release left had it as a pulled data service with a history,
+// which a flipped data label keeps (o.Kind or a.Kind), a flipped
+// build: does not (rule 1; plan, part 8: "whatever the target's
+// reference").
+func TestDataRollbackFromBuiltDatabase(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	r1, err := m.release(false, appSvc, built)
+	if err != nil {
+		m.fail("r1: %v", err)
+	}
+	d.publish("mariadb:11.8", "I2")
+	if _, err := m.release(true, appSvc, db118); err != nil || m.runs("database") != "I2" {
+		m.fail("r2 --yes (%v): %s", err, m.runs("database"))
+	}
+	out.Reset()
+	err = m.rollback(r1)
+	if err == nil && m.runs("database") != "I2" {
+		t.Errorf("the rollback to the built database runs %s (r1's own build) on data mariadb:11.8 at I2 ran, want I2 or a refusal; history %v\n%s", m.runs("database"), m.history("database"), out.String())
+	}
+}
