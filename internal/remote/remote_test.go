@@ -2766,6 +2766,41 @@ func TestSyncImagesOrder(t *testing.T) {
 	order(activate, images.SyncImagesEnv+"=", "img record", "make_current", "img sync-done", "sync_finish go")
 }
 
+// oldParentDocker is a Docker no call reaches: ParentData answers an old
+// listing before asking Docker anything.
+type oldParentDocker struct{ images.Docker }
+
+// Bug: ParentData's "old" line (a parent's release an older devopsy
+// recorded, which the child must refuse: release the parent first) never
+// reaches the child: ParseParentData keeps only image and ran lines from
+// ParentCheckScript's output. The holder then gets no parent images and
+// checks nothing, and the push, recomputing ParentData, finds a checksum
+// other than the empty data's and refuses with "data images changed
+// since the sync started ... sync again", every sync, never saying what
+// fixes it.
+func TestParseParentDataKeepsOldParent(t *testing.T) {
+	base := t.TempDir()
+	rel := filepath.Join(base, "releases", "20261023000000")
+	if err := os.MkdirAll(rel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, images.ListFile), []byte("mariadb:11.8\tI2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set := &images.Set{Docker: oldParentDocker{}, Name: "app-prod", Out: io.Discard, List: func(string) ([]images.Service, error) {
+		return []images.Service{{Name: "database", Ref: "mariadb:11.8", Data: true, Method: images.DataMnt}}, nil
+	}}
+	data := set.ParentData(base, rel)
+	if !strings.HasPrefix(data, "old\t") {
+		t.Fatalf("ParentData of an old listing: %q", data)
+	}
+	// As ParentCheckScript prints it: CurrentExistsScript's lines, then
+	// img data's.
+	if got := ParseParentData("current\n" + data); got != data {
+		t.Errorf("the parent's data images the operator passes on: %q, want %q (img data printed it): the child never refuses the old parent, and the push's checksum never matches", got, data)
+	}
+}
+
 // Bug: every script that defines img() passes --mode and --address to
 // devopsy --images, options a devopsy without data-images refuses (its
 // --images takes "--mode" for its action: usage, exit 2), yet --destroy's
