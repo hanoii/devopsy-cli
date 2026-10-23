@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1935,12 +1936,15 @@ func TestExportImport(t *testing.T) {
 	// An entry its labels own goes to its owner once extracted, before
 	// the import counts as complete (a tar made anywhere carries its
 	// maker's owners), in a container that mounts that entry alone: the
-	// extracting one mounts all of mnt, and the service may run.
-	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") {
-		t.Fatalf("--import of an owned entry (%d):\n%s", code, errs)
-	}
-	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker) || !strings.Contains(docker, `-exec chown -h "$2" {} +`) {
-		t.Errorf("an owned import:\n%s", docker)
+	// extracting one mounts all of mnt, and the service may run. Not on
+	// macOS, as before up (review of 2026-10-23, round 2): Docker
+	// Desktop's file sharing may refuse the chown, and any container user
+	// writes the Mac's files anyway.
+	_, errs, code = s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app")
+	docker, _ = s.logs()
+	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker)
+	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") {
+		t.Errorf("--import of an owned entry (%d), the owners' container %v:\n%s\n%s", code, owners, errs, docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,
 	// changes nothing.
