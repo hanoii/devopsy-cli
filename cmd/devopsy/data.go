@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -361,6 +362,7 @@ func tarEntries(spool string) ([]tarEntry, error) {
 	tr := tar.NewReader(r)
 	seen := map[string]*tarEntry{}
 	dirs := map[string]bool{}
+	var links tarLinks
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -388,6 +390,7 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		if strings.TrimSuffix(p, "/") != path.Clean(p) {
 			return nil, fmt.Errorf("%w: %s is no plain path (tar -C mnt -cf - <entry>... writes them)", errMember, h.Name)
 		}
+		links.add(h, path.Clean(p))
 		e := seen[top]
 		if e == nil {
 			e = &tarEntry{name: top}
@@ -405,12 +408,148 @@ func tarEntries(spool string) ([]tarEntry, error) {
 			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
 		}
 	}
+	if err := links.check(); err != nil {
+		return nil, err
+	}
 	var entries []tarEntry
 	for _, e := range seen {
 		entries = append(entries, *e)
 	}
 	slices.SortFunc(entries, func(a, b tarEntry) int { return strings.Compare(a.name, b.name) })
 	return entries, nil
+}
+
+// tarLinks are the members of an import's tar as links see them, for a
+// check of the whole tar once it is read (check): tarMember judges each
+// link's target alone, lexically, which is right only while no
+// component of the way is a link. storage/x -> . plus storage/w ->
+// x/x/../../etc/shadow is storage/etc/shadow to path.Clean, and
+// /etc/shadow on the host (review of 2026-10-23, round 4).
+type tarLinks struct {
+	// names counts the members of each name (clean, without ./).
+	names map[string]int
+	// symlinks are the symbolic links, name to target; hard the hard
+	// links, name to target.
+	symlinks, hard map[string]string
+	// header is a member's name as the tar writes it, for messages.
+	header map[string]string
+}
+
+// add records the member h, its name clean.
+func (l *tarLinks) add(h *tar.Header, clean string) {
+	if l.names == nil {
+		l.names, l.symlinks, l.hard, l.header = map[string]int{}, map[string]string{}, map[string]string{}, map[string]string{}
+	}
+	l.names[clean]++
+	switch h.Typeflag {
+	case tar.TypeSymlink:
+		l.symlinks[clean] = h.Linkname
+	case tar.TypeLink:
+		l.hard[clean] = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
+	default:
+		return
+	}
+	l.header[clean] = h.Name
+}
+
+// maxLinks is how many links a target's walk follows (check): Linux's
+// own limit for one path, so a longer chain is one the kernel would not
+// follow either.
+const maxLinks = 40
+
+// check refuses links that lead out of their entry once the tar's own
+// links are followed, so a link out of mnt is refused however it is
+// written (errOutside):
+//
+//   - a member below a symbolic link of the tar (storage/x/f with
+//     storage/x a link), and a link with another member of its name: a
+//     tar writes neither (tar never descends into a link), and then
+//     every member's name is where it lands, which the walk relies on;
+//   - a symbolic link whose target, walked component by component from
+//     the link's directory and through every link of the tar on the way,
+//     as the kernel resolves it, leaves its entry at any point (a ..
+//     above it: storage/a -> ../storage/b too, which goes through mnt),
+//     or follows more than maxLinks links (a loop included);
+//   - a hard link whose target is below a link, or is a symbolic link
+//     itself: GNU tar links the symbolic link, whose relative target
+//     then leads elsewhere from the hard link's directory.
+//
+// A relative link within its entry (storage/a -> sub/f, storage/sub/b ->
+// ../f, storage/self -> .) passes. A component the tar does not carry is
+// a directory to the walk: the entry is emptied before the extraction,
+// so only the tar's links are there (what a running service makes there
+// itself is its own).
+func (l *tarLinks) check() error {
+	under := func(name string) string {
+		for i := range len(name) {
+			if _, ok := l.symlinks[name[:i]]; ok && name[i] == '/' {
+				return name[:i]
+			}
+		}
+		return ""
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.names)) {
+		if link := under(name); link != "" {
+			return fmt.Errorf("%w: %s is below the link %s", errOutside, name, l.header[link])
+		}
+		if _, ok := l.symlinks[name]; ok && l.names[name] > 1 {
+			return fmt.Errorf("%w: %s is a link and another member of the same name", errOutside, l.header[name])
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.symlinks)) {
+		dir := strings.Split(path.Dir(name), "/")
+		hops := 0
+		if _, err := l.walk(dir, l.symlinks[name], &hops); err != nil {
+			return fmt.Errorf("%w: %s, whose target %s", errOutside, l.header[name], err)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.hard)) {
+		target := l.hard[name]
+		if link := under(target); link != "" {
+			return fmt.Errorf("%w: %s is a hard link below the link %s", errOutside, l.header[name], l.header[link])
+		}
+		if _, ok := l.symlinks[target]; ok {
+			return fmt.Errorf("%w: %s is a hard link to the link %s", errOutside, l.header[name], l.header[target])
+		}
+	}
+	return nil
+}
+
+// walk follows target from the directory dir (its components, its entry
+// first) as the kernel would, through the tar's symbolic links, its last
+// component's too, and returns where it leads. It fails when
+// the way leaves the entry (a .. above it, an absolute target) or
+// follows more than maxLinks links, hops counting them.
+func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error) {
+	if path.IsAbs(target) {
+		return nil, errors.New("is absolute")
+	}
+	at := slices.Clone(dir)
+	for _, c := range strings.Split(target, "/") {
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if len(at) <= 1 {
+				return nil, fmt.Errorf("leads out of mnt/%s", at[0])
+			}
+			at = at[:len(at)-1]
+			continue
+		}
+		at = append(at, c)
+		link, ok := l.symlinks[strings.Join(at, "/")]
+		if !ok {
+			continue
+		}
+		if *hops++; *hops > maxLinks {
+			return nil, fmt.Errorf("follows more than %d links", maxLinks)
+		}
+		var err error
+		if at, err = l.walk(at[:len(at)-1], link, hops); err != nil {
+			return nil, err
+		}
+	}
+	return at, nil
 }
 
 // errOutside is a tar whose members reach out of the entries of mnt
