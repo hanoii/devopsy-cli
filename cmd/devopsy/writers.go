@@ -14,12 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // writersWait is how long endWriters waits for the imports it signalled
-// before killing them: runSyncHook's own WaitDelay, and some.
+// before killing them: runDataHook's own WaitDelay, and some.
 var writersWait = 15 * time.Second
 
 // endWriters ends whatever the sync's record (remote.SyncTakenFile, in
@@ -30,12 +31,14 @@ var writersWait = 15 * time.Second
 // import's load through docker exec, a one-off run --rm, devopsy's own
 // rsync. So, in order: the recorded imports' devopsy (SIGTERM, only a
 // process still a devopsy import), the sync's own containers (by name,
-// remote.SyncContainerPrefix and its id), the imported services
-// (stopped: the only way to end what docker exec started in them; one
-// running before the sync is recorded, so the next completing sync
-// starts it) and their one-off containers (removed); then the imports
-// are waited for, and killed after writersWait.
-func endWriters(cwd, base string) error {
+// remote.SyncContainerPrefix and its id), the imported services and
+// those depending on them (services, cli.WithDependents; stopped: the
+// only way to end what docker exec started in them; one running before
+// the sync is recorded, so the next completing sync starts it, and a
+// dependent stopped here is) and their one-off containers (removed);
+// then the imports are waited for, and killed after writersWait. Without
+// services (labels it could not read) only the imported ones stop, said.
+func endWriters(cwd, base string, services []cli.SyncService) error {
 	data, err := os.ReadFile(filepath.Join(base, remote.SyncTakenFile))
 	if err != nil {
 		return nil
@@ -43,7 +46,7 @@ func endWriters(cwd, base string) error {
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	first := strings.Fields(lines[0])
 	var pids []int
-	var services []string
+	var imported []string
 	was := map[string]string{}
 	for _, l := range lines[1:] {
 		f := strings.Fields(l)
@@ -53,10 +56,17 @@ func endWriters(cwd, base string) error {
 		if pid, err := strconv.Atoi(f[3]); err == nil {
 			pids = append(pids, pid)
 		}
-		if !slices.Contains(services, f[2]) {
-			services = append(services, f[2])
+		if !slices.Contains(imported, f[2]) {
+			imported = append(imported, f[2])
 		}
 		was[f[2]] = f[4]
+	}
+	// What depends on an imported service stops with it.
+	stopping := imported
+	if len(imported) > 0 && services == nil {
+		report.Warn("the project's labels could not be read: stopping only " + strings.Join(imported, " ") + ", not what depends on them")
+	} else if len(imported) > 0 {
+		stopping = cli.StoppedNames(cli.WithDependents(services, imported, "imported"))
 	}
 	var errs []error
 	for _, pid := range pids {
@@ -70,9 +80,9 @@ func endWriters(cwd, base string) error {
 			errs = append(errs, err)
 		}
 	}
-	if len(services) > 0 {
+	if len(stopping) > 0 {
 		var out bytes.Buffer
-		if err := compose(cwd, &out, append([]string{"ps", "--all", "--format", "json"}, services...)...); err != nil {
+		if err := compose(cwd, &out, append([]string{"ps", "--all", "--format", "json"}, stopping...)...); err != nil {
 			errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
 		} else if entries, err := parsePS(out.Bytes()); err != nil {
 			errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
@@ -80,9 +90,11 @@ func endWriters(cwd, base string) error {
 			var stop, oneOffs []string
 			for _, e := range entries {
 				switch {
-				case !slices.Contains(services, e.Service):
+				case !slices.Contains(stopping, e.Service):
 				case e.oneOff():
-					oneOffs = append(oneOffs, e.Name)
+					if slices.Contains(imported, e.Service) {
+						oneOffs = append(oneOffs, e.Name)
+					}
 				case e.State == "running" || e.State == "restarting":
 					if !slices.Contains(stop, e.Service) {
 						stop = append(stop, e.Service)
@@ -96,7 +108,14 @@ func endWriters(cwd, base string) error {
 				}
 			}
 			if len(stop) > 0 {
-				report.Info("stopping " + strings.Join(stop, " ") + ": an import into it may still write; a sync that completes starts it again")
+				report.Info("stopping " + strings.Join(stop, " ") + ": an import may still write; a sync that completes starts them again")
+				// What depends on an imported service was running when
+				// stopped here: recorded.
+				for _, s := range stop {
+					if !slices.Contains(imported, s) {
+						was[s] = "running"
+					}
+				}
 				if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
 					errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
 				} else if err := recordStops(cwd, stop, was); err != nil {
@@ -113,8 +132,8 @@ func endWriters(cwd, base string) error {
 }
 
 // recordStops adds to the sync's record (syncState) the services it
-// stopped that ran before the sync, so a completing sync starts them; a
-// service the import brought up stays down, as it was.
+// stopped that ran before the sync (was), so a completing sync starts
+// them; a service the import brought up stays down, as it was.
 func recordStops(cwd string, stopped []string, was map[string]string) error {
 	rec, _ := readSyncRecord(cwd)
 	for _, s := range stopped {
@@ -167,7 +186,7 @@ func removeContainers(filter string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	report.Info("removing the sync's containers " + strings.Join(ids, " ") + ": they may still write")
+	report.Info("removing the containers " + strings.Join(ids, " ") + ": they may still write")
 	return dockerRm(ids)
 }
 
@@ -182,24 +201,43 @@ func dockerRm(names []string) error {
 	return nil
 }
 
-// endImport ends a stream's import into name that failed or was cut,
-// which may still load inside a container (a docker exec never gets the
-// cut): its one-off containers go, and the service, unless stopped for
-// the import already, is stopped, and started again when it ran before.
-// Its data may be partial: said.
-func endImport(cwd, name string, stop, wasRunning bool) error {
-	report.Warn("the import of " + name + " did not complete: its data may be partial, import it again")
+// endImport ends an import into name that failed or was cut, which may
+// still write (a docker exec never gets the cut, a killed devopsy's
+// container extracts on): name's one-off containers and the project's
+// import containers (remote.ImportContainerPrefix) go, and name and what
+// depends on it (cli.WithDependents) are stopped where they run, never
+// started again: the data may be partial. With record (on a target) what
+// it stops is recorded (syncState), name only when wasRunning (it ran
+// before the import: a service down on purpose stays so). It returns
+// what it stopped.
+func endImport(cwd, name string, services []cli.SyncService, record, wasRunning bool) ([]string, error) {
 	var errs []error
+	closure := cli.StoppedNames(cli.WithDependents(services, []string{name}, "imported"))
+	if !slices.Contains(closure, name) {
+		closure = append([]string{name}, closure...)
+	}
+	if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+$"); err != nil {
+		errs = append(errs, err)
+	}
+	var stop []string
 	var out bytes.Buffer
-	if err := compose(cwd, &out, "ps", "--all", "--format", "json", name); err != nil {
+	if err := compose(cwd, &out, append([]string{"ps", "--all", "--format", "json"}, closure...)...); err != nil {
 		errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
 	} else if entries, err := parsePS(out.Bytes()); err != nil {
 		errs = append(errs, fmt.Errorf("docker compose ps: %w", err))
 	} else {
 		var oneOffs []string
 		for _, e := range entries {
-			if e.Service == name && e.oneOff() {
-				oneOffs = append(oneOffs, e.Name)
+			switch {
+			case !slices.Contains(closure, e.Service):
+			case e.oneOff():
+				if e.Service == name {
+					oneOffs = append(oneOffs, e.Name)
+				}
+			case e.State == "running" || e.State == "restarting":
+				if !slices.Contains(stop, e.Service) {
+					stop = append(stop, e.Service)
+				}
 			}
 		}
 		if len(oneOffs) > 0 {
@@ -209,16 +247,88 @@ func endImport(cwd, name string, stop, wasRunning bool) error {
 			}
 		}
 	}
-	if stop {
-		report.Info("stopping " + name + ": the import may still write into it")
-		if err := compose(cwd, errOut, "stop", name); err != nil {
+	if len(stop) > 0 {
+		report.Info("stopping " + strings.Join(stop, " ") + ": the import may still write, and its data may be partial")
+		if err := compose(cwd, errOut, append([]string{"stop"}, stop...)...); err != nil {
 			errs = append(errs, fmt.Errorf("docker compose stop: %w", err))
-		} else if wasRunning {
-			report.Info("starting " + name + " again")
-			if err := compose(cwd, errOut, "start", name); err != nil {
-				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
+		} else if record {
+			was := map[string]string{}
+			for _, s := range stop {
+				if s != name || wasRunning {
+					was[s] = "running"
+				}
+			}
+			if err := recordStops(cwd, stop, was); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
-	return errors.Join(errs...)
+	return stop, errors.Join(errs...)
+}
+
+// endLeftoverImport ends what an import of name a killed devopsy left may
+// still write, before anything else under the release lock (a retry of
+// it, --resolved, a sync's prepare): the hook's process group the record
+// names (its writer lines, SIGTERM, only while /proc shows the data
+// capability's import there, then SIGKILL after writersWait), then
+// endImport, recording what it stops. A reboot ended it all already.
+func endLeftoverImport(cwd, base string, services []cli.SyncService, name string) error {
+	rec, _ := readSyncRecord(cwd)
+	var alive []int
+	for _, pgid := range rec.writers {
+		if isDataImport(pgid) {
+			report.Info(fmt.Sprintf("ending the import of %s a devopsy killed outright left (process group %d)", name, pgid))
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
+			alive = append(alive, pgid)
+		}
+	}
+	deadline := time.Now().Add(writersWait)
+	for len(alive) > 0 {
+		alive = slices.DeleteFunc(alive, func(p int) bool { return !isDataImport(p) })
+		if len(alive) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			for _, p := range alive {
+				report.Warn(fmt.Sprintf("the import (process group %d) did not end: killing it", p))
+				_ = syscall.Kill(-p, syscall.SIGKILL)
+			}
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if len(rec.writers) > 0 {
+		if err := recordWriter(cwd, 0, false); err != nil {
+			return err
+		}
+	}
+	_, err := endImport(cwd, name, services, true, true)
+	return err
+}
+
+// isDataImport reports whether pid is still the data capability's import
+// (the hook's script, or the devopsy about to exec it): a pid recorded
+// long ago may be another process's now. Linux's /proc only.
+func isDataImport(pid int) bool {
+	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	args := strings.Split(string(cmdline), "\x00")
+	hook := "capabilities/" + cli.DataCapability + "/import"
+	return slices.ContainsFunc(args, func(a string) bool { return strings.HasSuffix(a, hook) }) ||
+		slices.Contains(args, "--capability") && slices.Contains(args, cli.DataCapability) && slices.Contains(args, "import")
+}
+
+// recordWriter adds the import hook's process group (pgid, add) to the
+// record (syncState), or with add false removes every writer line: the
+// next lock-taker ends a hook a killed devopsy left by it.
+func recordWriter(cwd string, pgid int, add bool) error {
+	rec, _ := readSyncRecord(cwd)
+	if add {
+		rec.writers = append(rec.writers, pgid)
+	} else {
+		rec.writers = nil
+	}
+	return rec.write(cwd)
 }

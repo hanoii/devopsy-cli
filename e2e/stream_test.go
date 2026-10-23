@@ -8,10 +8,10 @@ import (
 )
 
 // sqliteProject is a project with prod and dev, its child, whose two
-// services hold real SQLite databases moved by the sync capability as
-// dumps (devopsy.sync=stream): db runs during a sync (its export and
+// services hold real SQLite databases moved by the data capability as
+// dumps (devopsy.data=stream): db runs during a sync (its export and
 // import exec into it), app depends on it and is stopped for the sync
-// (devopsy.sync.stop=true: its scripts use run --rm). An export fails
+// (devopsy.data.stop=own: its scripts use run --rm). An export fails
 // halfway, after part of its dump, while ~/fail-export-<service> exists;
 // each import appends its service to ~/imports-<compose project>.
 func sqliteProject(t *testing.T, name string) string {
@@ -24,18 +24,18 @@ func sqliteProject(t *testing.T, name string) string {
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/db:/data]
-    labels: {devopsy.sync: stream}
+    labels: {devopsy.data: stream}
   app:
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/app:/data]
     depends_on: [db]
-    labels: {devopsy.sync: stream, devopsy.sync.stop: "true"}
+    labels: {devopsy.data: stream, devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/export": `#!/bin/sh
+		".devopsy/capabilities/data/export": `#!/bin/sh
 set -eu
-case " $DEVOPSY_SYNC_STOP " in
+case " $DEVOPSY_DATA_STOP " in
   *" $1 "*) dump="devopsy run --rm --no-deps -T $1 sqlite3 /data/app.db .dump" ;;
   *) dump="devopsy exec -T $1 sqlite3 /data/app.db .dump" ;;
 esac
@@ -45,11 +45,11 @@ if [ -e "$HOME/fail-export-$1" ]; then
 fi
 exec $dump </dev/null
 `,
-		".devopsy/capabilities/sync/import": `#!/bin/sh
+		".devopsy/capabilities/data/import": `#!/bin/sh
 set -eu
 echo "$1" >>"$HOME/imports-$COMPOSE_PROJECT_NAME"
 load='rm -f /data/new.db && sqlite3 -bail /data/new.db && mv /data/new.db /data/app.db'
-case " $DEVOPSY_SYNC_STOP " in
+case " $DEVOPSY_DATA_STOP " in
   *" $1 "*) exec devopsy run --rm --no-deps -T "$1" sh -c "$load" ;;
 esac
 exec devopsy exec -T "$1" sh -c "$load"
@@ -78,7 +78,7 @@ func startedAt(t *testing.T, p, service string) string {
 // Real databases synced as dumps: a child's first release imports them
 // in depends_on order (db before app, against the alphabet), each into
 // its own service; a sync replaces the child's rows with the parent's,
-// stopping only the stop=true service on both sides; an export that
+// stopping only the own service on both sides; an export that
 // fails halfway through its dump leaves the child's database as it was
 // and its spool gone; and --export piped into --import moves one
 // environment's database into another's.
@@ -111,7 +111,7 @@ func TestSyncStreamDatabase(t *testing.T) {
 		t.Errorf("dev after its first release: db %q, app %q", syncState(t, name, "dev", "db"), syncState(t, name, "dev", "app"))
 	}
 
-	// A sync: the child's own rows go, the parent's come; app, stop=true,
+	// A sync: the child's own rows go, the parent's come; app, own,
 	// restarted on both sides, db on neither.
 	sql("prod", "db", "insert into t values('db2')")
 	sql("prod", "app", "insert into t values('app2')")
@@ -127,7 +127,7 @@ func TestSyncStreamDatabase(t *testing.T) {
 	}
 	for _, p := range []string{name + "-prod", name + "-dev"} {
 		if now := startedAt(t, p, "db"); now != before[p+" db"] {
-			t.Errorf("%s's db restarted (%s, was %s): it is not stop=true", p, now, before[p+" db"])
+			t.Errorf("%s's db restarted (%s, was %s): it is not own", p, now, before[p+" db"])
 		}
 		if now := startedAt(t, p, "app"); now == before[p+" app"] || syncState(t, name, strings.TrimPrefix(p, name+"-"), "app") != "running" {
 			t.Errorf("%s's app not stopped and started again for the sync: %s, %q", p, now, syncState(t, name, strings.TrimPrefix(p, name+"-"), "app"))

@@ -488,9 +488,9 @@ func debugLabels(st style, projectDir string, color bool) int {
 		{cli.RoleLabel + "=<name>", "a role only one compose project per host holds, checked at --release"},
 		{cli.ExportPrefix + "<KEY>=<value>", "a fact for other projects, read from running containers"},
 		{cli.ImportPrefix + "<VAR>=<role or project>/<KEY>[?]", "at --release, into target.env unless the target sets VAR; ? if optional"},
-		{cli.SyncLabel + "=rsync|stream", "in a sync, --export and --import: its mounts under mnt rsynced, a tar of them for --export (rsync), or the sync capability's export and import (stream); without it, neither copied nor touched"},
-		{cli.SyncStopLabel + "=true|false", "stopped for the whole sync on both sides, and around --export and --import (default false)"},
-		{cli.SyncExcludeLabel + "=<entry>[,<entry>...]", "entries of mnt an rsync service mounts that its copy leaves out"},
+		{cli.DataLabel + "=mnt|stream|none", "its data, in a sync, --export and --import: its mounts under mnt (rsynced, a tar for --export), or the data capability's export and import (stream); none, or no label, no data: neither copied nor touched"},
+		{cli.DataStopLabel + "=never|own|import|always", "when it is stopped while data moves: never (the default), while its own data is exported or imported, while any data is imported, or for every copy; what depends on a stopped service stops with it"},
+		{cli.DataExcludeLabel + "=<entry>[,<entry>...]", "entries of mnt a mnt service mounts that its copies leave out"},
 	} {
 		fmt.Printf("  %s\n      %s\n", st.name(l[0]), l[1])
 	}

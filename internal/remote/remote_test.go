@@ -213,7 +213,8 @@ func TestQuote(t *testing.T) {
 func allScripts() map[string]string {
 	tg := &Target{Name: "prod", Host: "h", Path: "it's app/prod", Mode: ModeImage}
 	return map[string]string{
-		"upload":          UploadScript(tg),
+		"upload":          UploadScript(tg, false),
+		"upload sync":     UploadScript(tg, true),
 		"activate":        ActivateScript(tg, "20261005120000", false, "", Phases{Run: []string{"deploy"}}, nil),
 		"activate+cmd":    ActivateScript(tg, "20261005120000", false, "app", Phases{Before: [][]string{{"x"}}, Prepare: [][]string{{"secrets"}}, Run: []string{"deploy", "a b"}, After: [][]string{{"warm"}}}, nil),
 		"rollback+cmd":    ActivateScript(tg, "", true, "", Phases{Run: []string{"up", "-d"}}, nil),
@@ -242,13 +243,44 @@ func allScripts() map[string]string {
 		"holder":          HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", Args: []string{"-v"}, Inherit: true, ID: "1.2"}, true),
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
-		"current":         CurrentExistsScript(tg),
+		"current":         CurrentExistsScript(tg, nil),
+		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataLabelsFeature}),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true),
 		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, false),
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncArgsEnv: "--x 'y'", SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
+		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
 		"export":          ExportScript(tg, "app-prod", "it's db"),
 		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n"),
+		"resolved check":  ResolvedCheckScript(tg),
+		"resolved":        ResolvedScript(tg, "app-prod", "it's db"),
+	}
+}
+
+// The devopsy.data labels are a named feature: exactly the scripts that
+// read labels need it (an older devopsy reads them as none), so an older
+// server refuses those before anything changes, and runs the rest:
+// settle, which every activation calls, stays out.
+func TestDataLabelsFeature(t *testing.T) {
+	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder plain", "import", "push", "resolved", "sync only"}
+	for name, s := range allScripts() {
+		got := slices.Contains(Needs(s), DataLabelsFeature)
+		if got != slices.Contains(need, name) {
+			t.Errorf("%s needs %s: %v", name, DataLabelsFeature, got)
+		}
+	}
+	// A project's remote step calling --export, rendered inside with_tty's
+	// quotes, reads labels too; settle alone does not.
+	steps := ActivateScript(&Target{Name: "prod", Host: "h", Path: "app/prod"}, "20261005120000", false, "app", Phases{Before: [][]string{{"--export", "db"}}, Run: []string{"deploy"}}, nil)
+	if !slices.Contains(Needs(steps), DataLabelsFeature) {
+		t.Errorf("a step calling --export: %v", Needs(steps))
+	}
+	if got := Needs("devopsy '--sync-services' 'settle'"); slices.Contains(got, DataLabelsFeature) {
+		t.Errorf("settle: %v", got)
+	}
+	// The parent's check carries the push's needs.
+	if s := CurrentExistsScript(&Target{Path: "app/prod"}, Needs(PushScript(&Target{Path: "app/prod"}, "app-prod", nil))); !strings.Contains(s, needsEnv+`="${`+needsEnv+`:-} `) || !strings.Contains(s, DataLabelsFeature) {
+		t.Errorf("the parent's check:\n%s", s)
 	}
 }
 
@@ -291,9 +323,13 @@ func TestFeaturesCoverScripts(t *testing.T) {
 			t.Errorf("a release step's own flag read as a need: --%s", f)
 		}
 	}
-	// Quoted, inside with_tty's quotes too; once each.
+	// Quoted, inside with_tty's quotes too; once each; the data labels'
+	// feature by what reads them, quoted or not.
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
+	}
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", "sync-services"}) {
+		t.Errorf("needs, quoted: %v", got)
 	}
 }
 
@@ -344,7 +380,7 @@ func TestPlainDirectories(t *testing.T) {
 		t.Fatalf("plain run: %v\n%s", err, out)
 	}
 	for name, script := range map[string]string{
-		"upload":   UploadScript(tg),
+		"upload":   UploadScript(tg, false),
 		"rollback": ActivateScript(tg, "", true, "", Phases{}, nil),
 		"releases": ReleasesScript(tg),
 	} {
@@ -1744,7 +1780,7 @@ func TestRebookmark(t *testing.T) {
 // variables stop at its end.
 func TestScriptsLockAndLinks(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
-	if s := UploadScript(tg); !strings.Contains(s, `exec 9>"$base/.lock"`) {
+	if s := UploadScript(tg, false); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
 	}
 	// The upgrade hint names an alias whatever its source: --upgrade
@@ -1758,7 +1794,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 		t.Errorf("hint without the alias:\n%s", s)
 	}
 	// A release is pending until its switch, and cut uploads go.
-	if s := UploadScript(tg); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
+	if s := UploadScript(tg, false); !strings.Contains(s, `: >"$rel.tmp/`+PendingFile+`"`) || !strings.Contains(s, `rm -rf "$base"/releases/*.tmp`) {
 		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
@@ -2124,7 +2160,7 @@ func TestIncompleteCheckBusy(t *testing.T) {
 		t.Errorf("a sync running: %q", got)
 	}
 	write(t, filepath.Join(base, SyncIncompleteFile), "x\n")
-	if got := check(); got != "incomplete" {
+	if got := check(); got != "incomplete\tx" {
 		t.Errorf("marked: %q", got)
 	}
 }
@@ -2199,5 +2235,116 @@ func TestWaitBeatWithoutWatcher(t *testing.T) {
 	}
 	if code := cmd.ProcessState.ExitCode(); code != 3 || strings.Contains(out.String(), "went on") || !fileExists(filepath.Join(dir, ".devopsy-watch.1.fired")) {
 		t.Errorf("without a watcher (%d), fired %v:\n%s", code, fileExists(filepath.Join(dir, ".devopsy-watch.1.fired")), out.String())
+	}
+}
+
+// An import's mark refuses what runs on its data with its own words and
+// ways out (the service, --import again, --resolved; --sync only on a
+// child), never only --sync, which a target without a parent cannot do:
+// a release before its upload (no tar asked for, no release left), an
+// activation, a push from it; an import of another service, or any import
+// over a sync's mark, before devopsy reads stdin. A release that syncs
+// goes on: the sync is a way out.
+func TestImportMarkRefusals(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; exit; fi\necho \"ran: $*\"\n")
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	for _, f := range []string{"devopsy", "flock"} {
+		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Address: "vm1:prod", Host: "vm1", Path: "app/prod"}
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if err := os.Symlink("releases/1/"+CodeDir, filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	mark := filepath.Join(base, SyncIncompleteFile)
+	run := func(script, stdin string) (string, error) {
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	importMark := IncompleteLine("2026-10-22 10:00:00", "db", IncompleteImport, "it failed or was cut after its first write: its data may be partial")
+	write(t, mark, importMark)
+	wantImport := []string{"the import of db into @vm1:prod did not complete", "devopsy: | $ devopsy @vm1:prod --import db < <file>", "devopsy: | $ devopsy @vm1:prod --import db --resolved"}
+	for name, script := range map[string]string{
+		"upload":   UploadScript(tg, false),
+		"activate": ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil),
+		"push":     PushScript(tg, "app-prod", nil),
+	} {
+		out, err := run(script, "")
+		if err == nil || strings.Contains(out, "--sync") || strings.Contains(out, LockedMarker) || strings.Contains(out, "ran: --sync-push") {
+			t.Errorf("%s over an import's mark (%v):\n%s", name, err, out)
+		}
+		for _, w := range wantImport {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s over an import's mark, missing %q:\n%s", name, w, out)
+			}
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(base, "releases")); len(entries) != 1 {
+		t.Errorf("a refused upload left a release: %v", entries)
+	}
+	// On a child, a sync is a way out too; a release that syncs goes on to
+	// its upload.
+	child := &Target{Name: "prod", Address: "vm1:prod", Host: "vm1", Path: "app/prod", Parent: "live"}
+	if out, _ := run(UploadScript(child, false), ""); !strings.Contains(out, "devopsy: | $ devopsy @vm1:prod --sync") {
+		t.Errorf("a child's upload:\n%s", out)
+	}
+	if out, _ := run(UploadScript(tg, true), ""); !strings.Contains(out, LockedMarker) {
+		t.Errorf("an upload that syncs:\n%s", out)
+	}
+	// Imports: only db's own, before stdin is read.
+	if out, err := run(ImportScript(tg, "app-prod", "files", "END"), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "the import of db into @vm1:prod did not complete, and only db can be imported until one does: nothing imported") || !strings.Contains(out, "--import db --resolved") {
+		t.Errorf("another service's import (%v):\n%s", err, out)
+	}
+	if out, err := run(ImportScript(tg, "app-prod", "db", "END"), "data"); err != nil || !strings.Contains(out, "ran: --import db --yes") {
+		t.Errorf("its own import (%v):\n%s", err, out)
+	}
+	if fileExists(filepath.Join(base, SyncImportingFile)) {
+		t.Errorf("the holding file stayed")
+	}
+	// A sync's mark: only a sync.
+	write(t, mark, IncompleteLine("2026-10-22 10:00:00", "vm1:live", IncompleteCopy, "the copy was cut"))
+	if out, err := run(ImportScript(tg, "app-prod", "db", "END"), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "only a sync completes it: nothing imported") || !strings.Contains(out, "$ devopsy @vm1:prod --sync") {
+		t.Errorf("an import over a sync's mark (%v):\n%s", err, out)
+	}
+	if out, err := run(UploadScript(tg, false), ""); err == nil || !strings.Contains(out, "data is from a sync that did not complete") || !strings.Contains(out, "--sync") {
+		t.Errorf("an upload over a sync's mark (%v):\n%s", err, out)
+	}
+
+	// What reads the mark without the lock: the mark parsed, an import
+	// running only while its holding file is there with the lock held
+	// (never for another holder of the lock), the server's features.
+	write(t, mark, importMark)
+	cur := ParseCurrent("current\nincomplete\t" + importMark + "importing\n" + DataLabelsFeature + "\n")
+	if !cur.Current || !cur.Importing || !cur.DataLabels || !cur.Mark.IsImport() || cur.Mark.From != "db" {
+		t.Errorf("parsed: %+v %+v", cur, cur.Mark)
+	}
+	if cur := ParseCurrent("none\nincomplete\n"); cur.Current || cur.Mark == nil || cur.Mark.Code != "" || cur.Mark.IsImport() {
+		t.Errorf("a sync's files without a mark: %+v", cur)
+	}
+	busy := func(locked bool) string {
+		write(t, filepath.Join(bin, "flock"), map[bool]string{true: "#!/bin/sh\nexit 1\n", false: "#!/bin/sh\nexit 0\n"}[locked])
+		out, _ := run("base="+Quote(base)+"\nif "+ImportRunning+"; then echo importing; fi\n", "")
+		return out
+	}
+	write(t, filepath.Join(base, ".lock"), "")
+	if busy(true) != "" {
+		t.Errorf("another holder of the lock read as an import")
+	}
+	write(t, filepath.Join(base, SyncImportingFile), "")
+	if busy(false) != "" || busy(true) != "importing\n" {
+		t.Errorf("an import's holding file")
+	}
+	os.Remove(filepath.Join(base, SyncImportingFile))
+	write(t, filepath.Join(base, SyncStateFile), "stop db\nstop app\nwriter 123\n")
+	if out, err := run(ResolvedCheckScript(tg), ""); err != nil || out != "mark\t"+importMark+"stop db\nstop app\n" {
+		t.Errorf("--resolved's check (%v): %q", err, out)
 	}
 }
