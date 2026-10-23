@@ -525,6 +525,17 @@ func TestSyncFirstReleaseCreatesSet(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devopsy: creating app db worker") || strings.Index(out, "devopsy: creating app db worker") > strings.Index(out, "finish child go") || !strings.Contains(docker, " up -d --wait app db worker\n") {
 		t.Errorf("first release (%d):\n%s\n%s", code, out, docker)
 	}
+
+	// A worker in a profile that is not up (COMPOSE_PROFILES unset): an
+	// up naming it starts it all the same, so it is not created, as the
+	// run step's up would not: stops leave such a service as it is too.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
+	write(t, s.log+".shop-fresh", "FAKE_APP=-+import\nFAKE_DB=mnt+own\nFAKE_WORKER=none\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run(nil, "@fresh", "--release")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || !strings.Contains(docker, " up -d --wait app db\n") {
+		t.Errorf("first release, worker in an inactive profile (%d):\n%s\n%s", code, out, docker)
+	}
 }
 
 // The hooks' DEVOPSY_DATA_STOP is what the operation stops on their side
