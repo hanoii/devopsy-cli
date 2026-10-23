@@ -615,15 +615,10 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 // says an import runs (ImportRunning).
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, hintAddress(t)) + releaseLock(false, false) + `cd "$base/current"
+`, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
 trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
-# A sync's holder killed outright left its record: its writers end first,
-# and it becomes a sync's mark, which the check below sees.
-if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
-fi
-if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   if [ "$im_code" != ` + IncompleteImport + ` ]; then
@@ -637,27 +632,41 @@ fi
 export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
 }
 
+// settleLeftover settles a sync's holder killed outright: its record's
+// writers end first, and its data becomes a sync's mark (replacing an
+// import's), which the checks after it see. Under the release lock.
+func settleLeftover(projectName string) string {
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
+fi
+`
+}
+
 // ResolvedCheckScript is --import <service> --resolved's first session,
-// read-only: "importing" while an import holds the lock, the mark's line
-// ("mark", a tab and the line) and the record's "stop <service>" lines
-// (SyncStateFile), for the operator's prompt. It never waits for the lock.
+// read-only: "importing" while an import holds the lock, "settle" for
+// a sync's files no holder decided on (the next lock-taker makes them a
+// sync's mark), the mark's line ("mark", a tab and the line) and the
+// record's "stop <service>" lines (SyncStateFile), for the operator's
+// prompt. It never waits for the lock.
 func ResolvedCheckScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
 if ` + ImportRunning + `; then echo importing; fi
+if { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then echo settle; fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then printf 'mark\t%s\n' "$(cat "$base/` + SyncIncompleteFile + `")"; fi
 grep '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null || true
 `
 }
 
 // ResolvedScript is --import <service> --resolved's second session: under
-// the release lock, devopsy --import <service> --resolved --yes in the
+// the release lock, a killed holder's sync settled first (its mark is a
+// sync's then), devopsy --import <service> --resolved --yes in the
 // current release, which checks the mark again, ends a writer a killed
 // devopsy left, starts what the import kept down and only then removes
 // the mark and the record.
 func ResolvedScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
 ` + releaseLock(false, false) + `cd "$base/current"
-` + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, true) + "\n"
+` + settleLeftover(projectName) + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, true) + "\n"
 }
 
 // SyncStateFile is the record of what a sync or an import stopped, in the
