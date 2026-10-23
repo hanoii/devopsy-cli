@@ -2314,6 +2314,43 @@ func TestExportImport(t *testing.T) {
 	os.Remove(s.log + ".shop-prod")
 }
 
+// An mnt import refuses a link out of mnt that goes through another link
+// of the tar (review of 2026-10-23, round 4): storage/x -> . never
+// descends, so each x/.. pair that path.Clean cancels climbs one
+// directory for real. tarMember judges storage/w's target lexically,
+// storage/etc/shadow, inside its entry, and the import goes on; GNU tar
+// extracts both links (checked in devopsy-util:2, one container mounting
+// storage alone), and on the server `realpath shared/mnt/storage/w` is
+// /etc/shadow: a link out of mnt, which the import says it refuses, left
+// root's in the entry for whatever follows it on the host (Docker
+// resolves a bind's source there, and a bind below an entry nobody owns
+// is allowed). FAIL_TAR keeps the fake from touching files: what counts
+// is that the import's container never runs.
+func TestImportLinkOutThroughLink(t *testing.T) {
+	s := newSyncSetup(t)
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	for _, h := range []*tar.Header{
+		{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0o777},
+		{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow", Mode: 0o777},
+	} {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=/storage"}, b.Bytes(), "--import", "app")
+	if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
+		t.Errorf("a tar with a link out of mnt through another link (%d), the import's container ran:\n%s", code, errs)
+	}
+	if !strings.Contains(errs, "devopsy: error: the tar has a member ") || !strings.Contains(errs, ": nothing imported") {
+		t.Errorf("a tar with a link out of mnt through another link, not said so:\n%s", errs)
+	}
+}
+
 // waitFile waits for a file to exist, up to 10 seconds.
 func waitFile(t *testing.T, path, what string, out func() string) {
 	t.Helper()
