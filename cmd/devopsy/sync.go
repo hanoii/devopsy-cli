@@ -857,14 +857,26 @@ func runSyncPush(cwd string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if mark != "" && !copiesService(projectDir, services, streams, mark) {
-		ref := os.Getenv(remote.SyncToTargetEnv)
-		var fixes []report.Remedy
-		for _, f := range remote.ImportFixes(ref, mark, false) {
-			fixes = append(fixes, report.Fix(f[0], f[1]))
+	if mark != "" {
+		var childDirs []string
+		for _, c := range child {
+			if c.Name == mark {
+				childDirs = c.Dirs
+			}
 		}
-		report.Fail(&report.Failure{Msg: "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed", Fixes: fixes})
-		return 1
+		if missing, ok := copiesService(projectDir, services, streams, mark, childDirs); !ok {
+			ref := os.Getenv(remote.SyncToTargetEnv)
+			var fixes []report.Remedy
+			for _, f := range remote.ImportFixes(ref, mark, false) {
+				fixes = append(fixes, report.Fix(f[0], f[1]))
+			}
+			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
+			if len(missing) > 0 {
+				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy ./mnt/" + strings.Join(missing, ", ./mnt/") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
+			}
+			report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
+			return 1
+		}
 	}
 	if !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) {
 		report.Info("nothing to sync: no service has data (" + cli.DataLabel + ")")
@@ -965,23 +977,35 @@ func runSyncPush(cwd string, color bool) int {
 	return finish(code, copied)
 }
 
-// copiesService reports whether this side's copy writes service on the
-// child: a stream among streams, or a mnt service with an entry that
-// exists here (syncRsync skips a missing one, and the copy of the others
-// would still complete).
-func copiesService(projectDir string, services []cli.SyncService, streams []string, service string) bool {
-	s, ok := cli.SyncFind(services, service)
+// copiesService reports whether this side's copy writes all of service
+// on the child: a stream among streams, or a mnt service whose every
+// entry the child mounts (childDirs, from its list; this side's own
+// entries without them) this side copies and has (syncRsync skips a
+// missing one, and the copy of the others would complete, leaving what
+// a cut import half wrote there). missing are the entries it lacks.
+func copiesService(projectDir string, services []cli.SyncService, streams []string, service string, childDirs []string) (missing []string, ok bool) {
+	s, found := cli.SyncFind(services, service)
 	switch {
-	case !ok || !s.HasData:
-		return false
+	case !found || !s.HasData:
+		return nil, false
 	case s.Transfer == cli.DataStream:
-		return slices.Contains(streams, service)
+		return nil, slices.Contains(streams, service)
 	}
 	mnt, err := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
 	if err != nil {
-		return false
+		return nil, false
 	}
-	return slices.ContainsFunc(s.Dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })
+	copied := cli.SyncDirs(services)
+	want := childDirs
+	if len(want) == 0 {
+		want = s.Dirs
+	}
+	for _, d := range want {
+		if !(slices.Equal(copied, []string{"."}) || slices.Contains(copied, d)) || !fileExists(filepath.Join(mnt, d)) {
+			missing = append(missing, d)
+		}
+	}
+	return missing, len(want) > 0 && len(missing) == 0
 }
 
 // dataHookFile is the data capability's action in the project at

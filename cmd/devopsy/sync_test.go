@@ -35,6 +35,7 @@ import (
 // ps lists them, and start refuses them, as Compose does. FAKE_ONEOFF
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
+// FAKE_APP_MOUNT2 is a second entry app mounts (/cache).
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -76,9 +77,11 @@ st() {
 }
 # services after a compose command (stop, start, up -d --wait).
 after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at" ] && w=1; done; }
+app2=
+[ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-mnt}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-mnt}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   *" down "*) rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" ;;
