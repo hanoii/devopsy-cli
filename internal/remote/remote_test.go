@@ -2946,3 +2946,32 @@ exit 0
 		t.Errorf("SIGTERM during img names (exit %d): release 2 still pulled and built (fetched: %q):\n%s", code, readFile(filepath.Join(root, "fetched")), buf.String())
 	}
 }
+
+// Bug: the parent's data images ride inlined in the child's script,
+// which ssh runs as one argument of sh -c, capped by Linux at 128KiB
+// (MAX_ARG_STRLEN); ParentData bounds each service's history
+// (images.ParentHistoryLines) but not their sum, so a parent with four
+// pulled data services from its own registry (mariadb, redis, solr,
+// elasticsearch on floating tags, a weekly patch each for two years)
+// makes every sync's holder, and every release that syncs, fail to
+// start on the child's server ("Argument list too long").
+func TestSyncScriptsFitOneArgument(t *testing.T) {
+	var b strings.Builder
+	for i, svc := range []string{"database", "redis", "solr", "search"} {
+		ref := "registry.example.com/mirror/" + []string{"mariadb:11.8", "redis:8", "solr:9", "elasticsearch:8.19"}[i]
+		repo := ref[:strings.LastIndex(ref, ":")]
+		fmt.Fprintf(&b, "image\t%s\t%s\tsha256:%064x\t%s@sha256:%064x\n", svc, ref, i, repo, i)
+		for n := 0; n < images.ParentHistoryLines; n++ {
+			fmt.Fprintf(&b, "ran\t%d\t%s\tran\t%s\tsha256:%064x\t%s@sha256:%064x\n", 1761200000+n, svc, ref, n, repo, n)
+		}
+	}
+	tg := &Target{Name: "dev", Address: "vm1:dev", Path: "shop/dev", Mode: ModeBuild}
+	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: b.String()}
+	const max = 128 * 1024
+	if n := len(WithNeeds(HolderScript(tg, "shop-dev", o, true))); n >= max {
+		t.Errorf("the holder's script is %d bytes, over the %d one argument takes", n, max)
+	}
+	if n := len(WithNeeds(ActivateScript(tg, "20261023000000", false, "shop-dev", Phases{Run: []string{"deploy"}}, o))); n >= max {
+		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, max)
+	}
+}
