@@ -316,6 +316,18 @@ func TestImportLeftoverWriter(t *testing.T) {
 	if !s.mark().IsImport() || !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+"\n") {
 		t.Fatalf("after a kill: mark %+v, record %q:\n%s", s.mark(), s.record(), errs)
 	}
+	// A recorded group that is another environment's import now (its
+	// pid reused after a reboot): left alone.
+	other := exec.Command("sh", "-c", "sleep 30; :", "/srv/shop/staging/current/.devopsy/capabilities/data/import")
+	other.Env = []string{"COMPOSE_PROJECT_NAME=shop-staging", "PATH=" + os.Getenv("PATH")}
+	other.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	otherEnded := make(chan error, 1)
+	go func() { otherEnded <- other.Wait() }()
+	defer func() { _ = syscall.Kill(-other.Process.Pid, syscall.SIGKILL) }()
+	write(t, filepath.Join(s.base, syncState), s.record()+"writer "+strconv.Itoa(other.Process.Pid)+"\n", 0o644)
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123 devopsy-import-shop-prod-eu-9'\n", 0o644)
 	s.logs()
 	os.Remove(wait)
@@ -337,6 +349,32 @@ func TestImportLeftoverWriter(t *testing.T) {
 				t.Errorf("the leftover hook still runs:\n%s", out)
 			}
 		}
+	}
+	select {
+	case <-otherEnded:
+		t.Errorf("another environment's import, its group recorded, was ended:\n%s", out)
+	default:
+	}
+
+	// db down before: brought up for the import, killed with it, it is
+	// stopped again and never started by what resolves it.
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_DB_DOWN=1\n", 0o644)
+	cmd, errs = s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	waitFile(t, wait, "the second import's hook", errs.String)
+	hook, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
+	server, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
+	defer func() { _ = syscall.Kill(-hook, syscall.SIGKILL) }()
+	_ = syscall.Kill(server, syscall.SIGKILL)
+	_ = cmd.Wait()
+	if !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+" down\n") {
+		t.Fatalf("a killed import of a db down before: record %q:\n%s", s.record(), errs)
+	}
+	os.Remove(wait)
+	s.logs()
+	_, out, code = s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(docker, " start db") || !slices.Contains(s.stopped(), "db") {
+		t.Errorf("resolved after a killed import of a db down before (%d), stopped %v:\n%s\n%s", code, s.stopped(), out, docker)
 	}
 }
 

@@ -420,7 +420,10 @@ func releaseLock(shared, create bool) string {
 	}
 	// /dev/fd names the open file on Linux, not on macOS (where -ef is
 	// always false): checked on the file just opened, compared after the
-	// wait only where it can, so the loop never spins.
+	// wait only where it can, so the loop never spins. Holding the lock,
+	// no import or sync's holder runs: their holding files are a shell
+	// killed outright's (a reboot), which would read as running whenever
+	// anything holds the lock.
 	return `while :; do
   ` + mk + `
   exec 9>"$base/.lock"
@@ -428,6 +431,7 @@ func releaseLock(shared, create bool) string {
   ` + lockWait(9, shared, "the release running on $base") + `
   if [ -z "$rl_check" ] || [ /dev/fd/9 -ef "$base/.lock" ]; then break; fi
 done
+if [ -e "$base/` + SyncImportingFile + `" ] || [ -e "$base/` + SyncHoldingFile + `" ]; then rm -f "$base/` + SyncImportingFile + `" "$base/` + SyncHoldingFile + `"; fi
 `
 }
 

@@ -814,6 +814,8 @@ on each side from its own release.
 entries of `mnt` it mounts that are not copied through it anyway: an
 access log next to the site's files (`./mnt/logs`). On `stream` and
 `none` it is ignored, so a variable can flip the method and keep it.
+The entries a `mnt` service mounts cannot have whitespace in their
+names: copies refuse them.
 
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:

@@ -1044,8 +1044,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   devopsy is killed outright, or inside a container, which never gets
   the signal (an import's load through `docker exec`, a one-off `run
   --rm`, devopsy's own rsync). So: the recorded imports' devopsy gets
-  SIGTERM (only a pid `/proc` still shows as `--sync-services import`:
-  Linux only), the sync's own containers are removed (named
+  SIGTERM (only a pid `/proc` still shows as `--sync-services import`
+  in the child's directory, `isSyncImport`: a pid reused after a reboot
+  may be another environment's import; Linux only), the sync's own containers are removed (named
   `SyncContainerPrefix` + its id, never another sync's), the imported
   services are stopped (the only way to end what `docker exec` started
   in them) and, when they ran before the sync, recorded so a completing
@@ -1202,7 +1203,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   comma or space separated) drops entries from a mnt service's `Dirs`
   at parse time, so every consumer (copy, guard, list) agrees. On
   `stream` and `none` it is ignored, not validated, so a variable can
-  flip the method and keep it.
+  flip the method and keep it. A mnt service's entry with whitespace in
+  its name is refused: the child's list, exclude and rsync modules name
+  entries split by spaces (decided over a new list format).
 - **A `.` entry (`./mnt` itself) subsumes the rest,** other services'
   entries included: `--sync-push` says so (`SyncWholeNotice`, yellow
   when the operator's terminal takes colors, `ColorEnv` passed with the
@@ -1520,8 +1523,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   every lock-taker waited 600 s and failed. Unlike a fetch's children,
   an import's leftover writer is ended explicitly by the next
   lock-taker (`endLeftoverImport`: the record's writer groups, SIGTERM
-  while `/proc` shows the data capability's import, then SIGKILL; the
-  import containers; `endImport`), run by an import of that service,
+  while `/proc` shows the data capability's import started with this
+  environment's `COMPOSE_PROJECT_NAME`, `isDataImport`, then SIGKILL;
+  the import containers; `endImport`, recording the imported service
+  only when it ran before the import: a writer line ends ` down` when
+  `upFor` brought it up), run by an import of that service,
   `--resolved` and a child's prepare; `--destroy-data` removes the
   containers too (not Compose's: `down --remove-orphans` leaves them).
 - **While an import's mark is there, only its service can be
@@ -1548,7 +1554,9 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   lock, removed on its way out; `ImportRunning`), never `LockBusy`
   alone: any holder of the lock would read as an import. Never in a
   script holding the lock itself, where `LockBusy` is always true:
-  holding it, it knows none runs.
+  holding it, it knows none runs, so `releaseLock` removes a holding
+  file a shell killed outright left (the import's and a sync holder's
+  alike), which would read as running whenever anything holds the lock.
 - **A release of a marked environment refuses before its upload,
   without a new session:** `UploadScript` checks the mark under the
   lock before `LockedMarker`, so no tar is sent and no release is left;
