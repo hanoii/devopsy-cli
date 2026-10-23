@@ -1542,3 +1542,34 @@ func TestSyncMirrorRollbackHoldsLocalDigest(t *testing.T) {
 		}
 	}
 }
+
+// Bug: after a --sync --yes held a child on another series (mariadb:11.4)
+// on the parent's image (11.8), the child's listing records the parent's
+// image as its own, so the next sync, without --yes, passes its check
+// (the child "runs" the parent's image) and SyncDone, finding that the
+// child ran that very image, adds a history line naming it as
+// mariadb:11.4: the child's next release on mariadb:11.4 then passes as
+// the same name moving forward, an 11.4 image on data 11.8 wrote (rule
+// 1), what TestSyncYesThenOwnSeriesRefused refuses after one sync.
+func TestSyncTwiceThenOwnSeriesRefused(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.4", "I4")
+	dev.release(false, dbSvc("mariadb:11.4"))
+	d.publish("mariadb:11.8", "P8")
+	prod.release(false, db118)
+	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
+		t.Fatalf("--sync --yes (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// A second sync from prod, which still runs P8.
+	if err := syncInto(t, prod, dev, false); err != nil || dev.runs("database") != "P8" {
+		t.Fatalf("the second sync (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// mariadb:11.4 moves on upstream; dev's next release, still on it.
+	d.publish("mariadb:11.4", "I5")
+	out.Reset()
+	if _, err := dev.release(false, dbSvc("mariadb:11.4")); !errors.Is(err, ErrRefused) || dev.runs("database") != "P8" {
+		t.Errorf("dev's release on mariadb:11.4 after two syncs (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8 (history %v)\n%s", err, dev.runs("database"), readHistory(dev.base()), out.String())
+	}
+}
