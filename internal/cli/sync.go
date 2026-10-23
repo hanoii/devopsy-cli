@@ -156,6 +156,11 @@ type SyncService struct {
 	// tree outside mnt, relative to the tree: they live in the release,
 	// and go with the next one (CheckMounts refuses them).
 	TreeBinds []string
+	// WholeMnt is whether it mounts ./mnt whole writable, which a service
+	// without data or an owner may as far as parsing goes, and
+	// CheckMounts refuses: it would write every entry, which the child
+	// guard and the stop sets never see.
+	WholeMnt bool
 }
 
 // Active reports whether s is in a profile that is up, profiles being
@@ -333,6 +338,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				if cs.Owner != "" && !v.ReadOnly {
 					return nil, fmt.Errorf("service %s: %s=%s mounts ./mnt whole writable: mount its entries (./mnt/<name>), each for what it holds", name, MntOwnerLabel, cs.Owner)
 				}
+				cs.WholeMnt = cs.WholeMnt || !v.ReadOnly
 				continue
 			}
 			if d != "" && !v.ReadOnly && !slices.Contains(cs.Writable, d) {
@@ -433,16 +439,24 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 
 // CheckMounts refuses, before a release goes live, the mounts whose data
 // would not be what the labels say (services as SyncServices read them,
-// so ./mnt whole is refused already): a writable bind mount from inside
-// the project's tree outside mnt, which goes with the next release; a
-// service labeled DataMnt that copies no entry of mnt, which a sync
-// would take for nothing to copy; an MntOwnerLabel on one that mounts no
-// entry writable; and an entry two owners write (MntOwners).
+// so ./mnt whole as data or an owner's is refused already): ./mnt whole
+// mounted writable by any other service, which writes every entry while
+// the child guard and the stop sets see none of it (read-only, a tool,
+// it is ignored); a writable bind mount from inside the project's tree
+// outside mnt, which goes with the next release; a service labeled
+// DataMnt that copies no entry of mnt (none mounted, or all excluded),
+// which a sync would take for nothing to copy; an MntOwnerLabel on one
+// that mounts no entry writable; and an entry two owners write
+// (MntOwners).
 func CheckMounts(services []SyncService) error {
 	var bad []string
 	var fixes []report.Remedy
-	tree, data, owner := false, false, false
+	tree, data, owner, whole := false, false, false, false
 	for _, s := range services {
+		if s.WholeMnt {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt whole writable: it would write every entry, and no sync or import sees it there", s.Name))
+			whole = true
+		}
 		for _, b := range s.TreeBinds {
 			bad = append(bad, fmt.Sprintf("%s mounts ./%s writable: it is in the release, and the next one replaces it", s.Name, b))
 			tree = true
@@ -471,6 +485,9 @@ func CheckMounts(services []SyncService) error {
 	}
 	if owner {
 		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
+	}
+	if whole {
+		fixes = append(fixes, report.Fix("mount the entries it writes (./mnt/<name>), or ./mnt read-only (:ro)"))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }

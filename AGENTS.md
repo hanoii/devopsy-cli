@@ -976,14 +976,19 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   come from its variables): a writable bind from the project's tree
   outside `mnt` (`TreeBinds`, links resolved, so `shared/`'s are out of
   it: it goes with the next release), `devopsy.data=mnt` copying no
-  entry or an owner of no writable entry (a sync said "nothing to
-  sync" and a child's first release went live on empty data), and two
-  owners on one entry. Not checkable, so documented: named volumes and
+  entry (none mounted, or all excluded) or an owner of no writable
+  entry (a sync said "nothing to sync" and a child's first release went
+  live on empty data), two owners on one entry, and `./mnt` whole
+  mounted writable by any service (`WholeMnt`, below). Not checkable, so documented: named volumes and
   absolute paths. A compose config that cannot be read is no refusal,
   as for `--check-names`.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
-  as a `mnt` service's or an owned writable mount, ignored on any other
-  (a read-only tool), so nothing downstream sees `.`. Why: no project
+  as a `mnt` service's or an owned writable mount, writable on any other
+  by the mounts check, and ignored read-only (a tool), so nothing
+  downstream sees `.`. Why the check: such a service writes every entry,
+  and once its mount was no entry the child guard no longer saw it
+  (review of 2026-10-23: a sync rsynced under a running file manager).
+  Why no entry: no project
   needs it, it gave every entry one owner and carried every service's
   data, and its special cases (a sync's notice, the module `mnt`, an
   import emptying every entry, links between entries allowed) caused a

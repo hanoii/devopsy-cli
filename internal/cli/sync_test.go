@@ -261,14 +261,19 @@ func TestCheckMounts(t *testing.T) {
 		}
 		return CheckMounts(parsed)
 	}
-	if err := check(`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `]}`); err != nil {
-		t.Errorf("read-only tree mounts, shared/'s links, mnt and absolute paths: %v", err)
+	if err := check(`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
+		t.Errorf("read-only tree mounts, shared/'s links, mnt, absolute paths, mnt whole read-only: %v", err)
 	}
 	for services, want := range map[string]string{
-		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                      "app mounts ./src writable: it is in the release, and the next one replaces it",
-		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                   "app mounts ./.devopsy/cache/x writable",
-		`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `]}`:       "app is labeled devopsy.data=mnt and copies no entry of mnt",
-		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`: "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
+		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                             "app mounts ./src writable: it is in the release, and the next one replaces it",
+		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                          "app mounts ./.devopsy/cache/x writable",
+		`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app is labeled devopsy.data=mnt and copies no entry of mnt",
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                        "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
+		`"app":{"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app is labeled devopsy.data=mnt and copies no entry of mnt",
+		// A writable tool over all of mnt, which the child guard missed
+		// once its mount was no entry (review of 2026-10-23): a sync
+		// rsynced under it running.
+		`"files":{"volumes":[` + bind(dot+"/mnt", false) + `]}`: "files mounts ./mnt whole writable: it would write every entry, and no sync or import sees it there",
 	} {
 		err := check(services)
 		if err == nil || err.Error() != "the mounts check refuses the release: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {
