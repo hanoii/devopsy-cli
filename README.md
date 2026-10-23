@@ -935,7 +935,8 @@ a half-imported database, and after a copy that did not complete too
 (below). A child's first release creates, before `finish child go`, its
 services with data and its side's set (an `import` app without data, an
 unlabeled app depending on an `own` database), so the hook can sanitize
-through them. A lock held by something else is announced ("waiting for the
+through them; one in a profile that is not up (`COMPOSE_PROFILES`) stays
+uncreated, as the run step's `up` would leave it. A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 

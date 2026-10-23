@@ -563,6 +563,23 @@ func TestSyncFirstReleaseCreatesSet(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || !strings.Contains(docker, " up -d --wait app db\n") {
 		t.Errorf("first release, worker in an inactive profile (%d):\n%s\n%s", code, out, docker)
 	}
+
+	// With its profile up it is created; streamed in an inactive one, it
+	// is up for its import only.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  on: {parent: prod}\n  streamed: {parent: prod}\n", 0o644)
+	write(t, s.log+".shop-on", "FAKE_APP=-+import\nFAKE_DB=mnt+own\nFAKE_WORKER=none\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run([]string{"COMPOSE_PROFILES=web,tools"}, "@on", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db worker\n") {
+		t.Errorf("first release, worker in an active profile (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_APP=-+import\nFAKE_DB=mnt\nFAKE_WORKER=stream")
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "data", "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(s.dot, "capabilities", "data", "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	write(t, s.log+".shop-streamed", "FAKE_APP=-+import\nFAKE_DB=mnt\nFAKE_WORKER=stream\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run(nil, "@streamed", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || !strings.Contains(out, "stopping worker again") {
+		t.Errorf("first release, a stream worker in an inactive profile (%d):\n%s", code, out)
+	}
 }
 
 // The hooks' DEVOPSY_DATA_STOP is what the operation stops on their side
