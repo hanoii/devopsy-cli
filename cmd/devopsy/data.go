@@ -349,9 +349,22 @@ func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb str
 // locally a temporary file under .devopsy/, which releases never upload.
 func importSpool(projectDir, name string) (*os.File, error) {
 	if cli.InRelease(projectDir) {
-		return os.CreateTemp(filepath.Dir(filepath.Dir(projectDir)), remote.StreamSpoolPrefix+name+".*")
+		base := filepath.Dir(filepath.Dir(projectDir))
+		removeSpools(base, name)
+		return os.CreateTemp(base, remote.StreamSpoolPrefix+name+".*")
 	}
 	return os.CreateTemp(projectDir, remote.StreamSpoolPrefix+name+".*")
+}
+
+// removeSpools removes the service's spools in the environment at base:
+// one an import or a sync killed outright left (a whole dump), which
+// nothing else ever removes. Under the release lock, where none is in
+// use.
+func removeSpools(base, name string) {
+	spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+name+".*"))
+	for _, f := range spools {
+		_ = os.Remove(f)
+	}
 }
 
 // errNoTarEnd is a tar without its end-of-archive blocks: cut short,
@@ -843,6 +856,7 @@ func runResolved(cwd, name string) int {
 	if err := endLeftoverImport(cwd, base, services, name); err != nil {
 		return fail(err.Error())
 	}
+	removeSpools(base, name)
 	if err := restoreServices(cwd, services, false, nil); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
 		return 1
@@ -1121,7 +1135,10 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 	}
 	done := make(chan result, 1)
 	go func() {
-		code, err := remote.SSHStreams(remote.WithoutInterrupt(ctx), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end), r, nil, mw, false, nil)
+		// Gated: the data goes once the script holds the release lock,
+		// so a session cut while it waits leaves an empty stdin there,
+		// and nothing stops.
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end), r, nil, mw, false, nil)
 		done <- result{code, err}
 	}()
 	var res result
@@ -1140,6 +1157,9 @@ wait:
 			} else if first {
 				report.Error("interrupted: nothing imported into @" + t.Address + ", and what was stopped there comes back")
 				closeIn()
+				// What the pipe holds already never goes either: a script
+				// still waiting for the lock then reads an empty stdin.
+				r.Close()
 			} else {
 				kill()
 			}
@@ -1191,7 +1211,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	}
 	var mark *remote.Incomplete
 	var down []string
-	importing := false
+	importing, settle := false, false
 	for _, line := range strings.Split(out.String(), "\n") {
 		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
 		if k, v, ok := strings.Cut(key, " "); ok && k == "stop" {
@@ -1201,6 +1221,8 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		switch key {
 		case "importing":
 			importing = true
+		case "settle":
+			settle = true
 		case "mark":
 			mark = remote.ParseMark(value)
 		}
@@ -1210,7 +1232,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return fail("an import into @" + t.Address + " still runs: nothing resolved (devopsy @" + targetRef(t) + " --status shows it)")
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
-	case !mark.IsImport():
+	case !mark.IsImport() || settle:
 		report.Fail(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync")}})
 		return 1
 	case mark.From != name:
@@ -1218,11 +1240,19 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return 1
 	}
 	if !yes {
-		left := name + " was left stopped"
-		if others := slices.DeleteFunc(slices.Clone(down), func(s string) bool { return s == name }); len(others) > 0 {
+		// What the record holds is what starts: the imported service only
+		// when it ran before the import.
+		left := "nothing was left stopped"
+		others := slices.DeleteFunc(slices.Clone(down), func(s string) bool { return s == name })
+		switch {
+		case slices.Contains(down, name) && len(others) > 0:
 			left = name + " was left stopped with " + joinAnd(others)
-		} else if !slices.Contains(down, name) {
-			left = "nothing was left stopped"
+		case slices.Contains(down, name):
+			left = name + " was left stopped"
+		case len(others) == 1:
+			left = others[0] + " was left stopped"
+		case len(others) > 1:
+			left = joinAnd(others) + " were left stopped"
 		}
 		what := fmt.Sprintf("the import of %s into %s did not complete; %s: this starts them on the data the import left", name, confirmWord(t), left)
 		if err := typeToGoOn(what, confirmWord(t), "nothing resolved", false); err != nil {
