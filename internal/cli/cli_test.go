@@ -175,6 +175,21 @@ func TestBuildStarts(t *testing.T) {
 		// (review of 2026-10-23, round 4: dryRun took it for compose's).
 		{ownedRoot, "run --rm a composer update --dry-run", true},
 		{ownedRoot, "--profile x run --rm a sh --dry-run", true},
+		// Before the service it is compose's, and so is it anywhere
+		// after the other commands, up to a -- (each checked with Compose
+		// 5.5, by the containers left); a flag's value is never one, and
+		// the last one says, as compose parses a bool flag.
+		{ownedRoot, "run --rm --dry-run a sh", false},
+		{ownedRoot, "run --rm -e X --dry-run a sh", false},
+		{ownedRoot, "run --rm --name --dry-run a sh", true},
+		{ownedRoot, "run --rm --entrypoint=sh -u 1 --dry-run=true a", false},
+		{ownedRoot, "up -d a --dry-run", false},
+		{ownedRoot, "up -d a -- --dry-run", true},
+		{ownedRoot, "up --exit-code-from --dry-run", true},
+		{ownedRoot, "up --dry-run=0 -d", true},
+		{ownedRoot, "up --dry-run=T -d", false},
+		{ownedRoot, "--dry-run up --dry-run=false", true},
+		{ownedRoot, "restart a --dry-run", false},
 		// restart starts containers too, and Docker makes a missing bind
 		// source then, as root (checked with Compose on Docker 29: an
 		// entry removed while the service was stopped came back on

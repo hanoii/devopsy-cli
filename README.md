@@ -837,7 +837,8 @@ never makes one there, so it is the host's root's):
   below: Docker Desktop's file sharing may refuse the chown);
 - **a reset**, once it emptied `mnt`;
 - **locally**, before `up`, `start`, `restart`, `run`, `create`,
-  `watch` and `scale` (not with `--dry-run`): an owned entry missing is created,
+  `watch` and `scale` (not with compose's `--dry-run`; one after `run`'s
+  service is the container's command's, which starts): an owned entry missing is created,
   and on Linux an entry whose directory is not its owner's is given
   away, scanned whole; one whose directory is
   its owner's is never scanned, since this runs before every such
