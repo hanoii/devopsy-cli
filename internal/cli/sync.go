@@ -6,9 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -38,8 +38,29 @@ const DataExcludeLabel = "devopsy.data.exclude"
 // from user: (changing that must not silently change the data's owner).
 const MntOwnerLabel = "devopsy.mnt.owner"
 
-// ownerValue is MntOwnerLabel's syntax.
-var ownerValue = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
+// maxOwnerID is the largest uid or gid MntOwnerLabel takes: a uid_t
+// holds 32 bits, and its largest value, 4294967295, is chown's -1 ("leave
+// as is"), which coreutils refuses.
+const maxOwnerID = 1<<32 - 2
+
+// parseOwner reads MntOwnerLabel's value, <uid>:<gid> in decimal numbers
+// up to maxOwnerID, and returns it normalized (010001 is 10001), so
+// owners compare as numbers and every script and list says them alike.
+func parseOwner(v string) (string, bool) {
+	uid, gid, ok := strings.Cut(v, ":")
+	var ids [2]uint64
+	for i, n := range []string{uid, gid} {
+		if !ok || n == "" || strings.Trim(n, "0123456789") != "" {
+			return "", false
+		}
+		id, err := strconv.ParseUint(n, 10, 64)
+		if err != nil || id > maxOwnerID {
+			return "", false
+		}
+		ids[i] = id
+	}
+	return fmt.Sprintf("%d:%d", ids[0], ids[1]), true
+}
 
 // How a service's data moves, DataLabel's values.
 const (
@@ -283,10 +304,11 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			}
 		}
 		if v, ok := s.Labels[MntOwnerLabel]; ok {
-			if !ownerValue.MatchString(v) {
-				return nil, fmt.Errorf("service %s: %s=%s: <uid>:<gid> in numbers, like 10001:10001 (names cannot be resolved from the host; a variable left unset?)", name, MntOwnerLabel, v)
+			owner, ok := parseOwner(v)
+			if !ok {
+				return nil, fmt.Errorf("service %s: %s=%s: <uid>:<gid> in numbers from 0 to %d, like 10001:10001 (names cannot be resolved from the host; a variable left unset?)", name, MntOwnerLabel, v, maxOwnerID)
 			}
-			cs.Owner = v
+			cs.Owner = owner
 		}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" {

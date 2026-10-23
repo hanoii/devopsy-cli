@@ -197,10 +197,28 @@ func TestMntOwners(t *testing.T) {
 		`"devopsy.mnt.owner":""`:          "service x: devopsy.mnt.owner=: <uid>:<gid> in numbers",
 		`"devopsy.mnt.owner":"10001"`:     "service x: devopsy.mnt.owner=10001: <uid>:<gid>",
 		`"devopsy.mnt.owner":"10001:app"`: "service x: devopsy.mnt.owner=10001:app: <uid>:<gid>",
+		`"devopsy.mnt.owner":"+1:1"`:      "service x: devopsy.mnt.owner=+1:1: <uid>:<gid> in numbers from 0 to 4294967294",
+		// Owners no uid_t holds, which find and chown refuse after the
+		// switch (review of 2026-10-23), and chown's -1.
+		`"devopsy.mnt.owner":"4294967296:0"`:           "service x: devopsy.mnt.owner=4294967296:0: <uid>:<gid> in numbers from 0 to 4294967294",
+		`"devopsy.mnt.owner":"0:4294967296"`:           "devopsy.mnt.owner=0:4294967296: <uid>:<gid>",
+		`"devopsy.mnt.owner":"4294967295:4294967295"`:  "devopsy.mnt.owner=4294967295:4294967295: <uid>:<gid>",
+		`"devopsy.mnt.owner":"99999999999999999999:1"`: "devopsy.mnt.owner=99999999999999999999:1: <uid>:<gid>",
 	} {
 		if _, err := parse(`"x":{"labels":{` + label + `}}`); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", label, err)
 		}
+	}
+	// Owners are numbers: 010001 is 10001, one owner, said alike.
+	services, err = parse(`"app":{"labels":{"devopsy.mnt.owner":"010001:0010001"},"volumes":[` + bind("mnt/logs", false) + `]},
+"worker":{"labels":{"devopsy.mnt.owner":"10001:10001"},"volumes":[` + bind("mnt/logs", false) + `]},
+"root":{"labels":{"devopsy.mnt.owner":"0:00"},"volumes":[` + bind("mnt/top", false) + `]},
+"max":{"labels":{"devopsy.mnt.owner":"4294967294:4294967294"},"volumes":[` + bind("mnt/max", false) + `]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owners, err := MntOwners(services); err != nil || fmt.Sprint(owners) != "map[logs:10001:10001 max:4294967294:4294967294 top:0:0]" {
+		t.Errorf("owners as numbers: %v %v", owners, err)
 	}
 	// mnt whole: refused writable with an owner, ignored read-only.
 	if _, err := parse(`"x":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind("mnt", false) + `]}`); err == nil || !strings.Contains(err.Error(), "service x: devopsy.mnt.owner=1:1 mounts ./mnt whole writable") {

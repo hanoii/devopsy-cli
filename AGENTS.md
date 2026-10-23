@@ -936,7 +936,11 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   started as root for its mounts (an entrypoint's chown, an `init`
   service) and files from elsewhere (an import, a sync, an upload by
   hand) left a non-root app unable to write. Numbers only (names cannot
-  be resolved from the host). A read-only mount claims nothing (a log
+  be resolved from the host), from 0 to 4294967294 and normalized
+  (`parseOwner`), so owners compare as numbers and every script and the
+  child's list say them alike. Why the range: past a `uid_t`'s 32 bits,
+  or 4294967295 (chown's -1), an owner passed the checks before the
+  switch and failed in `find` and `chown` after it. A read-only mount claims nothing (a log
   reader); two owners on one entry are an error, an unlabeled writer of
   an owned entry is none (a tool sharing it). Explicit, never from
   `user:` (decided): changing that must not silently change the data's

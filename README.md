@@ -799,8 +799,8 @@ services:
       devopsy.mnt.owner: "${APP_UID:-10001}:${APP_UID:-10001}"
 ```
 
-`devopsy.mnt.owner=<uid>:<gid>`, numbers only (names cannot be resolved
-from the host), covers every entry of `mnt` the service mounts writable,
+`devopsy.mnt.owner=<uid>:<gid>`, numbers from 0 to 4294967294 (names
+cannot be resolved from the host; `010001` is `10001`), covers every entry of `mnt` the service mounts writable,
 in any profile; a read-only mount (`:ro`, a log reader) claims none, and
 an entry no service owns stays as it is, the deploy user's (right for
 what is written from the host). It is never taken from `user:`, so
