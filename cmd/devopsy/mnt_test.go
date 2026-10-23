@@ -57,7 +57,7 @@ func TestMntOwnersRelease(t *testing.T) {
 func TestCheckMountsRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	out, code := s.run([]string{"FAKE_APP_MOUNT=/../cache"}, "@prod", "--release")
-	if code == 0 || s.current("prod") != "" || strings.Contains(out, "deploy in") || !strings.Contains(out, "devopsy: error: the release's mounts do not hold their data as its labels say: it does not go live") || !strings.Contains(out, "app mounts ./.devopsy/cache writable: it is in the release, and the next one replaces it") || !strings.Contains(out, "not made current") {
+	if code == 0 || s.current("prod") != "" || strings.Contains(out, "deploy in") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release: it does not go live") || !strings.Contains(out, "app mounts ./.devopsy/cache writable: it is in the release, and the next one replaces it") || !strings.Contains(out, "not made current") {
 		t.Errorf("a writable mount in the release (%d), current %q:\n%s", code, s.current("prod"), out)
 	}
 }

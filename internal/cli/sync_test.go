@@ -253,7 +253,7 @@ func TestCheckMounts(t *testing.T) {
 		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`: "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
 	} {
 		err := check(services)
-		if err == nil || err.Error() != "the release's mounts do not hold their data as its labels say: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {
+		if err == nil || err.Error() != "the mounts check refuses the release: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {
 			t.Errorf("%s: %v %q", services, err, report.Details(err))
 		}
 	}
