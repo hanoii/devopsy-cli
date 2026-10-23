@@ -324,6 +324,12 @@ func TestImportLeftoverWriter(t *testing.T) {
 	if code != 0 || s.mark() != nil || !strings.Contains(docker, "rm -f devopsy-import-shop-prod-123\n") || strings.Contains(docker, "shop-prod-eu-9") {
 		t.Errorf("the next import (%d), mark %+v:\n%s\n%s", code, s.mark(), out, docker)
 	}
+	// The killed import's spool (a whole dump, in the environment's
+	// directory) goes with the next import of its service: only a sync's
+	// finish removed spools, and nothing else ever would.
+	if spools, _ := filepath.Glob(filepath.Join(s.base, remote.StreamSpoolPrefix+"*")); len(spools) > 0 {
+		t.Errorf("the killed import's spool is left after the next import: %v", spools)
+	}
 	// Gone, or a zombie nothing reaps (a container's init may not).
 	if runtime.GOOS == "linux" {
 		if stat, err := os.ReadFile("/proc/" + strconv.Itoa(hook) + "/stat"); err == nil {
@@ -376,6 +382,72 @@ func TestImportResolved(t *testing.T) {
 	}
 	if m := s.mark(); m == nil || m.Code != remote.IncompleteCopy {
 		t.Errorf("an import removed a sync's mark: %+v", m)
+	}
+	// An import's mark with the files of a sync's holder killed before it
+	// decided (a sync into the marked environment, cut): the data is partly
+	// a sync's, which only a sync completes. An import settles them first
+	// and refuses; --resolved must not clear the import's mark and start
+	// everything over them, with --status then saying a sync was cut and
+	// nothing runs on it.
+	write(t, filepath.Join(s.base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "db", remote.IncompleteImport, "it failed or was cut after its first write: its data may be partial"), 0o644)
+	write(t, filepath.Join(s.base, syncState), "stop app\n", 0o644)
+	write(t, filepath.Join(s.base, remote.SyncStartedFile), "devopsy@one:live 1.2\nwriter import db 999 running\n", 0o644)
+	s.logs()
+	_, out, code = s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || s.mark() == nil || !strings.Contains(out, "--sync") || strings.Contains(docker, " start ") {
+		t.Errorf("--resolved over a killed holder's sync files (%d), mark %+v:\n%s\n%s", code, s.mark(), out, docker)
+	}
+}
+
+// --resolved's prompt names what the record holds, which is what starts:
+// a service down before the import (brought up for it, stopped again by
+// the failure, never recorded) is not among them, and the prompt must
+// not say it was left stopped and starts now.
+func TestImportResolvedPromptRecord(t *testing.T) {
+	s := newImportSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_DB_DOWN=1\n", 0o644)
+	if _, out, code := s.runIO(append(s.env, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || !s.mark().IsImport() || s.record() != "stop app\nstop worker\n" {
+		t.Fatalf("a failing import of a db down before (%d), record %q:\n%s", code, s.record(), out)
+	}
+	_, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved")
+	if code == 0 || !strings.Contains(out, "nothing resolved: no terminal to confirm it on") {
+		t.Fatalf("without --yes (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "db was left stopped") || !strings.Contains(out, "app and worker") {
+		t.Errorf("the prompt claims db was left stopped and starts, but the record holds app and worker only:\n%s", out)
+	}
+}
+
+// An import whose session ends while its script waits for the release
+// lock (Ctrl-C, a drop) changes nothing once the lock comes: like the
+// upload's, what the session sent is not acted on (nothing stopped, no
+// bounce of the import set), after devopsy said nothing was imported.
+func TestImportCutWhileWaitingForLock(t *testing.T) {
+	s := newImportSetup(t)
+	// A release lock held by another session: flock -n 9 fails and the
+	// wait lasts until the busy file goes.
+	busy := filepath.Join(s.tmp, "busy")
+	write(t, busy, "", 0o644)
+	write(t, filepath.Join(filepath.Dir(s.root), "bin", "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\nif [ -e \"$FAKE_LOCK_BUSY\" ]; then\n  case \"$*\" in\n    '-n 9') exit 1 ;;\n    '-w 600 9') while [ -e \"$FAKE_LOCK_BUSY\" ]; do sleep 0.1; done ;;\n  esac\nfi\nexit 0\n", 0o755)
+	cmd, errs := s.start([]string{"FAKE_LOCK_BUSY=" + busy}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	for start := time.Now(); !strings.Contains(errs.String(), "waiting for the release running on"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the import never waited for the lock:\n%s", errs)
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	for start := time.Now(); !strings.Contains(errs.String(), "interrupted: nothing imported into @devopsy@one:prod"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the interrupt was not taken:\n%s", errs)
+		}
+	}
+	s.logs()
+	os.Remove(busy)
+	_ = s.wait(cmd, errs, "the interrupted import")
+	docker, _ := s.logs()
+	if fileExists(s.imported) || s.mark() != nil || strings.Contains(docker, " stop ") || strings.Contains(docker, " up -d ") || strings.Contains(docker, " start ") {
+		t.Errorf("after the lock came, the cut import acted on what the session had sent (imported %v, mark %+v):\n%s\n%s", fileExists(s.imported), s.mark(), errs, docker)
 	}
 }
 
