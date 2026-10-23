@@ -1756,6 +1756,13 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			}
 		}
 		dependentNotices(cwd, services, data, set)
+		// What is down already is an earlier sync's or import's: a sync
+		// that writes nothing leaves it so, and starts only its own.
+		rec, _ := readSyncRecord(cwd)
+		rec.held = slices.Clone(rec.stops)
+		if err := rec.write(cwd); err != nil {
+			return fail(err.Error())
+		}
 		if err := stopServices(cwd, set); err != nil {
 			return fail(err.Error())
 		}
@@ -1788,9 +1795,16 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 		// The holder marked it already, saying why, when the copy wrote;
-		// when it wrote nothing the mark stays as it was, an import's too.
+		// when it wrote nothing the mark stays as it was, an import's too,
+		// and what this sync stopped comes back: only what was down
+		// before stays down.
 		if readMark(base) == nil {
 			if err := markIncomplete(base, "", remote.IncompleteCopy, "the copy did not complete", false); err != nil {
+				code = fail(err.Error())
+			}
+		}
+		if !fileExists(filepath.Join(base, remote.SyncTakenFile)) {
+			if err := restoreOwnStops(cwd); err != nil {
 				code = fail(err.Error())
 			}
 		}
@@ -2145,11 +2159,15 @@ const syncFirst = "first"
 
 // syncRecord is the record a sync or an import keeps (syncState):
 // whether a sync started on a child's first release (no container at
-// all: syncFirst), the services it stopped ("stop <name>" lines) and an
-// import's hook while it runs ("writer <process group>").
+// all: syncFirst), the services it stopped ("stop <name>" lines), those
+// of them already down when a sync's prepare stopped more ("held
+// <name>": an earlier sync's or import's, which a sync that writes
+// nothing leaves down) and an import's hook while it runs ("writer
+// <process group>").
 type syncRecord struct {
 	first   bool
 	stops   []string
+	held    []string
 	writers []int
 }
 
@@ -2166,6 +2184,8 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 			rec.first = true
 		case action == "stop" && name != "" && !slices.Contains(rec.stops, name):
 			rec.stops = append(rec.stops, name)
+		case action == "held" && name != "" && !slices.Contains(rec.held, name):
+			rec.held = append(rec.held, name)
 		case action == "writer":
 			if pgid, err := strconv.Atoi(name); err == nil {
 				rec.writers = append(rec.writers, pgid)
@@ -2183,6 +2203,9 @@ func (rec syncRecord) write(cwd string) error {
 	}
 	for _, name := range rec.stops {
 		b.WriteString("stop " + name + "\n")
+	}
+	for _, name := range rec.held {
+		b.WriteString("held " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
 		b.WriteString("writer " + strconv.Itoa(pgid) + "\n")
@@ -2206,6 +2229,33 @@ func (rec syncRecord) write(cwd string) error {
 func startSyncState(cwd string, first bool) error {
 	rec, _ := readSyncRecord(cwd)
 	rec.first = first
+	return rec.write(cwd)
+}
+
+// restoreOwnStops starts what a sync that wrote nothing stopped itself
+// (the record's stops it does not hold) and keeps the rest recorded.
+func restoreOwnStops(cwd string) error {
+	rec, ok := readSyncRecord(cwd)
+	if !ok {
+		return nil
+	}
+	own := slices.DeleteFunc(slices.Clone(rec.stops), func(name string) bool { return slices.Contains(rec.held, name) })
+	if len(own) > 0 {
+		exited, err := servicesIn(cwd, "exited")
+		if err != nil {
+			return err
+		}
+		if start := intersect(own, exited); len(start) > 0 {
+			report.Info("starting " + strings.Join(start, " ") + ": nothing was written into their data")
+			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+				return fmt.Errorf("docker compose start: %w", err)
+			}
+			if err := waitHealthy(cwd, start); err != nil {
+				return err
+			}
+		}
+	}
+	rec.stops, rec.held = rec.held, nil
 	return rec.write(cwd)
 }
 
