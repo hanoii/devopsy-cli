@@ -499,6 +499,7 @@ devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) a
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
 devopsy @vm1:develop --sync     # replace a child's data with its parent's, run its run step
+devopsy @vm1:develop --reset    # start a child over: all its data goes, then a sync as on its first release
 devopsy @vm1:develop --release-sync       # a release and the parent's data in one go (--release-no-sync: never)
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.data label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
@@ -1003,6 +1004,24 @@ environment of the project instead of the parent: an address, as after
 `--` goes to rsync, and to the data capability's actions as
 `DEVOPSY_SYNC_ARGS`.
 
+**Starting a child over:** `devopsy @develop --reset` (same options as
+`--sync`) is a sync that first throws away everything a sync leaves on
+the child: every container of every profile, its named volumes, and
+every entry of `shared/mnt`, the ones no label copies included (logs,
+an unlabeled service's files). The parent's data then goes in as on a
+first release, the services with data are created before `finish
+child go`, and the run step starts the rest. The release, its images
+and the child's `shared/.env` (its secrets) stay. It is the way out of
+data nothing else fixes: a sync or an import that did not complete, a
+half-written entry the parent does not have. Everything a sync checks
+comes first, and the child is wiped only at the copy's first write, so
+a parent that refuses or cannot be reached leaves it as it was; cut
+after that, the child is down and marked, as after a sync cut
+mid-copy, until a sync or a reset completes. A parent with no data to
+copy refuses. Children only: an environment without a parent starts
+over with `--destroy` and a release. It asks for the environment's name,
+like `--sync`.
+
 **Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
 `defaults:`) names variables its children get, whatever the labels say
 about the data: read from the parent's `shared/.env`, instance `.env` and
@@ -1108,7 +1127,8 @@ environment is marked and what devopsy stopped stays down.
   only then removes the mark; on a child, a `--sync` that copies all of
   that service (every entry the child's service mounts: one the parent
   lacks would keep what the import half wrote, so the sync refuses
-  first, naming it); or `--resolved`, below. The next import, or `--resolved`,
+  first, naming it) or a `--reset`, which starts it over from its
+  parent; or `--resolved`, below. The next import, or `--resolved`,
   first ends a load a killed devopsy left running. `--destroy` still
   works, its `destroy:` step running with what the import kept down
   still down.
@@ -1156,7 +1176,7 @@ child goes by that:
   until a sync completes: releases and rollbacks refuse, the previous
   release is not restarted after a release that synced, a sync from it
   refuses, and `--status` says so. `--sync` (or `--release-sync`)
-  completes it.
+  completes it, or `--reset` starts it over.
 - **All of it** (the copy completed, even if devopsy then went away or
   was interrupted): it goes on as after a success, `finish child go`,
   then the run step. A sync completes with its finish: one whose `finish

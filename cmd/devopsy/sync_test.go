@@ -45,6 +45,7 @@ for a; do last2=${last:-}; last=$a; done
 # until an up creates them and a down removes them again.
 absent() {
   ! grep -qx "$1" "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" 2>/dev/null || return 1
+  ! grep -qx "$1" "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}" 2>/dev/null || return 0
   case " ${FAKE_ABSENT:-} " in *" $1 "*) return 0 ;; esac; return 1
 }
 # lab: <data>[+<stop>] as labels, - for no devopsy.data, none for no
@@ -84,7 +85,8 @@ case "$*" in
     printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-mnt}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
-  *" down "*) rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}" ;;
+  # down removes every container, until an up creates them again.
+  *" down "*) rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; for s in $svcs; do echo "$s"; done > "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}" ;;
   *" stop "*)
     # FAKE_STOP_WAIT: a stop that takes until $FAKE_STOP_WAIT.go exists.
     if [ -n "${FAKE_STOP_WAIT:-}" ]; then : >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
@@ -159,6 +161,9 @@ case "$*" in
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
+  "run --rm --name devopsy-destroy-"*)
+    for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
+    find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; --numeric-owner) shift; break ;; esac; shift; done
@@ -2650,23 +2655,23 @@ func TestTrimSyncLog(t *testing.T) {
 func TestClaimWrite(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv(remote.SyncIDEnv, "100.7")
-	if err := claimWrite(base); err == nil {
+	if _, err := claimWrite(base); err == nil {
 		t.Error("claimed with the gate closed")
 	}
 	// Another sync's gate (a write left over from an earlier one): the
 	// gate's name is the id, so the rename alone decides, with no check
 	// before it that another sync's gate could replace meanwhile.
 	write(t, filepath.Join(base, remote.SyncOpenFile("200.8")), "vm1:prod 200.8\n", 0o644)
-	if err := claimWrite(base); err == nil || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
+	if _, err := claimWrite(base); err == nil || fileExists(filepath.Join(base, remote.SyncStartedFile)) {
 		t.Errorf("claimed another sync's gate: %v", err)
 	}
 	write(t, filepath.Join(base, remote.SyncOpenFile("100.7")), "vm1:prod 100.7\n", 0o644)
-	if err := claimWrite(base); err != nil || fileExists(filepath.Join(base, remote.SyncOpenFile("100.7"))) || !fileExists(filepath.Join(base, remote.SyncOpenFile("200.8"))) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod 100.7\n" {
+	if first, err := claimWrite(base); err != nil || !first || fileExists(filepath.Join(base, remote.SyncOpenFile("100.7"))) || !fileExists(filepath.Join(base, remote.SyncOpenFile("200.8"))) || readString(filepath.Join(base, remote.SyncStartedFile)) != "vm1:prod 100.7\n" {
 		t.Errorf("first claim: %v", err)
 	}
-	// Later writes of the same sync.
-	if err := claimWrite(base); err != nil {
-		t.Errorf("second claim: %v", err)
+	// Later writes of the same sync: not the first (a reset wipes once).
+	if first, err := claimWrite(base); err != nil || first {
+		t.Errorf("second claim: %v, first %v", err, first)
 	}
 	// Writes record themselves in it; once the holder took it, a late one
 	// is refused and leaves nothing.

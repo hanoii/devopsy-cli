@@ -55,6 +55,8 @@ type syncJob struct {
 	// id is the sync's (remote.SyncIDEnv), chosen here: its pending
 	// inherited variables are written before the holder runs.
 	id string
+	// reset wipes the child at the copy's first write (--reset).
+	reset bool
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -71,7 +73,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, args []string, reset bool) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -84,7 +86,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syn
 	if c.Release == nil || len(remote.StepArgs(c.Release.Run)) == 0 {
 		return nil, errors.New(missingSteps(c, "release"))
 	}
-	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args, id: newSyncID()}
+	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args, id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
 	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
@@ -109,7 +111,11 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string) (*syn
 	// session already open, before the holder stops anything on the
 	// child or a first release uploads.
 	var out bytes.Buffer
-	code, err := remote.SSH(p, remote.CurrentExistsScript(p, remote.Needs(remote.PushScript(p, job.parentName, nil))), bytes.NewReader(nil), &out, false)
+	var pushEnv map[string]string
+	if reset {
+		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
+	}
+	code, err := remote.SSH(p, remote.CurrentExistsScript(p, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +390,9 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 		remote.SyncWatchEnv:      "1",
 		remote.HeartbeatEnv:      fmt.Sprint(int(remote.HeartbeatEvery().Seconds())),
 	}
+	if job.reset {
+		env[remote.SyncResetEnv] = "1"
+	}
 	if color {
 		env[remote.ColorEnv] = "1"
 	}
@@ -562,12 +571,16 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 // runSync implements devopsy @<child> --sync [--from @<address>] [--yes]
 // [-- args...]: the parent's data into the child's current release, then
 // its run step.
-func runSync(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string, color bool) int {
+func runSync(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, reset bool, args []string, color bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " --sync [--from @<address>] [--yes] [-- <rsync args>...]"
+	flag := "--sync"
+	if reset {
+		flag = "--reset"
+	}
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--yes] [-- <rsync args>...]"
 	yes, from := false, ""
 	var rsyncArgs []string
 	for i := 0; i < len(args); i++ {
@@ -589,7 +602,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	}
 	p := t.ParentTarget
 	if from == "" && t.ParentErr != nil {
-		report.Fail(t.ParentErr, report.Fix("sync from an address instead:", "devopsy @"+targetRef(t)+" --sync --from "+parentGuess(t)))
+		report.Fail(t.ParentErr, report.Fix("sync from an address instead:", "devopsy @"+targetRef(t)+" "+flag+" --from "+parentGuess(t)))
 		return 1
 	}
 	if from != "" {
@@ -598,12 +611,16 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, rsyncArgs)
+	job, err := syncPreflight(t, p, projectName, rsyncArgs, reset)
 	if err != nil {
 		return fail(err.Error())
 	}
 	if !yes {
-		if err := confirmSync(t, p, "reruns its release's run step there", "nothing synced"); err != nil {
+		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
+		if reset {
+			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), confirmWord(t), "nothing reset", false)
+		}
+		if err := confirm; err != nil {
 			report.Fail(err)
 			return 1
 		}
@@ -611,7 +628,11 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 
 	rlog := newReleaseLog("sync", t)
 	log := report.Default().Tee(rlog.Line)
-	log.Info(fmt.Sprintf("syncing @%s into @%s (%s:%s)", p.Address, t.Address, t.Host, t.Path))
+	verb := "syncing"
+	if reset {
+		verb = "resetting from"
+	}
+	log.Info(fmt.Sprintf("%s @%s into @%s (%s:%s)", verb, p.Address, t.Address, t.Host, t.Path))
 	// The parent's variables first, into the child's pending file: the
 	// holder reads its labels from them; on go they move into place.
 	if err := inheritVars(context.Background(), job, rlog, color, true); err != nil {
@@ -803,7 +824,7 @@ func syncEnv(flag string) (toDir, toProject string, err error) {
 // services bind-mount rsynced, each stream service exported into a spool
 // in the child's directory and imported there, the stopped services
 // started again, and finish parent go|abort.
-func runSyncPush(cwd string, color bool) int {
+func runSyncPush(cwd string, args []string, color bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
@@ -811,6 +832,15 @@ func runSyncPush(cwd string, color bool) int {
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
+	switch {
+	case len(args) == 1 && args[0] == "reset":
+		// The child's first write wipes it first: this side's own, and
+		// the child's devopsy's (its imports) through --sync-exec.
+		os.Setenv(remote.SyncResetEnv, "1")
+	case len(args) > 0:
+		return fail("usage: devopsy " + cli.SyncPushFlag + " [reset]")
+	}
+	reset := os.Getenv(remote.SyncResetEnv) != ""
 	if to := os.Getenv(remote.SyncToEnv); to != "" && os.Getenv("SSH_AUTH_SOCK") == "" {
 		host, _ := os.Hostname()
 		return fail(fmt.Sprintf("no SSH agent was forwarded to %s: a restricted key refuses it (authorize it with `restrict,agent-forwarding,port-forwarding`, or use a key without restrictions), and so does sshd with AllowAgentForwarding no", host))
@@ -857,7 +887,9 @@ func runSyncPush(cwd string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if mark != "" {
+	// A reset wipes the child whatever its mark: completed, it starts
+	// over from this side's data.
+	if mark != "" && !reset {
 		var childDirs []string
 		for _, c := range child {
 			if c.Name == mark {
@@ -878,6 +910,11 @@ func runSyncPush(cwd string, color bool) int {
 			return 1
 		}
 	}
+	nothing := !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) || len(dirs) == 0 && len(streams) == 0
+	if nothing && reset {
+		// It would only empty the child: --destroy and a release do that.
+		return fail("the parent has no data to start the child over from (no service labeled " + cli.DataLabel + " with entries of mnt or a stream): nothing reset")
+	}
 	if !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) {
 		report.Info("nothing to sync: no service has data (" + cli.DataLabel + ")")
 		return 0
@@ -893,7 +930,13 @@ func runSyncPush(cwd string, color bool) int {
 	if msg := cli.SyncWholeNotice(services); msg != "" {
 		report.Warn(msg)
 	}
-	conflicts, mismatches := syncConflicts(services, child), streamMismatches(services, streams, child)
+	// A reset takes the child's services down before it copies: none
+	// runs under the copy.
+	var conflicts []string
+	if !reset {
+		conflicts = syncConflicts(services, child)
+	}
+	mismatches := streamMismatches(services, streams, child)
 	if len(conflicts)+len(mismatches) > 0 {
 		// A label from a variable the parent's inherit: names follows in
 		// the same sync (the child reads the pending inherited file); one
@@ -1215,7 +1258,10 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0)
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0, wipeScript())
+	}
+	if os.Getenv(remote.SyncResetEnv) != "" {
+		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
 	}
 	needs := remote.Needs(script)
 	if !slices.Contains(needs, remote.DataLabelsFeature) {
@@ -1437,8 +1483,14 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 			return fmt.Errorf("the child's mnt: %w", err)
 		}
 		toBase := os.Getenv(remote.SyncToBaseEnv)
-		if err := claimWrite(toBase); err != nil {
+		first, err := claimWrite(toBase)
+		if err != nil {
 			return err
+		}
+		if first && os.Getenv(remote.SyncResetEnv) != "" {
+			if err := wipeChild(ctx); err != nil {
+				return err
+			}
 		}
 		for i, d := range present {
 			report.Info("rsync mnt/" + d)
@@ -1511,7 +1563,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1544,13 +1596,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -1652,9 +1704,9 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		report.Error(msg)
 		return 1
 	}
-	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | list"
+	usage := "usage: devopsy " + cli.SyncServicesFlag + " prepare [first] | finish go|abort|partial | settle | import <service> [last] | list | wipe"
 	switch {
-	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle"):
+	case len(args) == 1 && (args[0] == "prepare" || args[0] == "list" || args[0] == "settle" || args[0] == "wipe"):
 	case len(args) == 2 && args[0] == "prepare" && args[1] == "first":
 	case len(args) == 2 && args[0] == "finish" && slices.Contains([]string{"go", "abort", "partial"}, args[1]):
 	case len(args) == 2 && args[0] == "import":
@@ -1698,6 +1750,12 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		return 0
 	case "import":
 		return syncImport(cwd, projectDir, base, args[1], len(args) == 3, services, set, env, fail)
+	case "wipe":
+		signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
+		if err := wipeData(cwd, projectDir, base); err != nil {
+			return fail(err.Error())
+		}
+		return 0
 	}
 	// A session gone is no reason to die halfway: the holder restores
 	// what this stopped.
@@ -1912,16 +1970,44 @@ func fileExists(path string) bool {
 // claimWrite claims the right to write into the child at base before
 // the first write: the holder's gate of this sync (remote.SyncOpenFile,
 // named by remote.SyncIDEnv) renamed to remote.SyncStartedFile, one
-// rename or the holder's unlink winning, or a write of this sync claimed
-// it already. Neither: the holder decided, and nothing may be written
-// into it.
-func claimWrite(base string) error {
+// rename or the holder's unlink winning (first: this is the sync's
+// first write, which a reset wipes before), or a write of this sync
+// claimed it already. Neither: the holder decided, and nothing may be
+// written into it.
+func claimWrite(base string) (first bool, err error) {
 	id := os.Getenv(remote.SyncIDEnv)
 	open, started := filepath.Join(base, remote.SyncOpenFile(id)), filepath.Join(base, remote.SyncStartedFile)
-	if (id != "" && os.Rename(open, started) == nil) || recordOf(started, id) {
-		return nil
+	if id != "" && os.Rename(open, started) == nil {
+		return true, nil
 	}
-	return fmt.Errorf("the child's side ended already (%s): nothing copied", base)
+	if recordOf(started, id) {
+		return false, nil
+	}
+	return false, fmt.Errorf("the child's side ended already (%s): nothing copied", base)
+}
+
+// wipeScript is the receive script's wipe of the child for a reset
+// (remote.SyncResetEnv), "" for a sync.
+func wipeScript() string {
+	if os.Getenv(remote.SyncResetEnv) == "" {
+		return ""
+	}
+	return remote.SyncExecScript(os.Getenv(remote.SyncToDirEnv), os.Getenv(remote.SyncToProjectEnv), syncExecEnv(), []string{cli.SyncServicesFlag, "wipe"})
+}
+
+// wipeChild runs the child's --sync-services wipe on this server
+// (--sync-exec), right after a reset's first claim.
+func wipeChild(ctx context.Context) error {
+	self, err := os.Executable()
+	if err != nil {
+		self = "devopsy"
+	}
+	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "wipe")
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("wiping the child: %w: it holds a partial copy now", err)
+	}
+	return nil
 }
 
 // recordOf reports whether the gate or record at path is sync id's: its
@@ -1984,6 +2070,19 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		return fail(fmt.Sprintf("the spool for %s: %v", name, err))
 	}
 	defer f.Close()
+	// A reset's first write wipes the child before anything is brought up
+	// for this import.
+	if os.Getenv(remote.SyncResetEnv) != "" {
+		first, err := claimWrite(base)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if first {
+			if err := wipeData(cwd, projectDir, base); err != nil {
+				return fail(err.Error())
+			}
+		}
+	}
 	// What the service was before the sync brought it up: running, it is
 	// recorded as the sync's to start again if a cut ends this import.
 	was := ""
@@ -2011,7 +2110,7 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	}
 	// The service's data changes from here: claimed, and recorded, so a
 	// holder that decides while this runs ends it (endWriters).
-	if err := claimWrite(base); err != nil {
+	if _, err := claimWrite(base); err != nil {
 		return fail(err.Error())
 	}
 	if err := recordWrite(base, remote.WriterLine(name, os.Getpid(), was)); err != nil {
@@ -2261,6 +2360,33 @@ func (rec syncRecord) write(cwd string) error {
 func startSyncState(cwd string, first bool) error {
 	rec, _ := readSyncRecord(cwd)
 	rec.first = first
+	return rec.write(cwd)
+}
+
+// wipeData takes the child at cwd (base its directory) down for a
+// reset, right after the reset's first claim: what an import a killed
+// devopsy left may still extract, every container of every profile and
+// the named volumes, every entry of mnt emptied as root; its shared/.env
+// and its release, images included, stay. The record then says first
+// release, nothing stopped: finish go creates the services with data
+// and the child side's set, and the run step the rest.
+func wipeData(cwd, projectDir, base string) error {
+	who := base
+	if to := os.Getenv(remote.SyncToTargetEnv); to != "" {
+		who = "@" + to
+	}
+	report.Info("resetting " + who + ": every container and volume goes and mnt is emptied; its shared/.env stays")
+	if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+$"); err != nil {
+		return err
+	}
+	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
+		return fmt.Errorf("docker compose down: %w", err)
+	}
+	if err := emptyMnt(context.Background(), projectDir); err != nil {
+		return err
+	}
+	rec, _ := readSyncRecord(cwd)
+	rec.first, rec.stops, rec.held = true, nil, nil
 	return rec.write(cwd)
 }
 

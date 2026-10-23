@@ -661,6 +661,18 @@ func TestDataLabelsOlderServer(t *testing.T) {
 	if out, code := run("@dev", "--release-no-sync"); code != 0 || strings.Contains(out, "lacks") {
 		t.Errorf("a release that does not sync (%d):\n%s", code, out)
 	}
+	// One lacking only --reset's feature: a reset refuses before anything
+	// stops (an older parent would sync without wiping), a sync goes on.
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ResetFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	s.logs()
+	out, code := run("@dev", "--reset", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ResetFeature) || strings.Contains(docker, " stop ") || strings.Contains(docker, " down ") {
+		t.Errorf("a reset on a server without it (%d):\n%s\n%s", code, out, docker)
+	}
+	if out, _ := run("@dev", "--sync", "--yes"); strings.Contains(out, "lacks") || !strings.Contains(out, "copying @devopsy@one:prod") {
+		t.Errorf("a sync on a server without reset:\n%s", out)
+	}
 }
 
 // A child's first release creates, before its finish hook, the services
@@ -773,5 +785,61 @@ func TestRestoreSurvivesCtrlC(t *testing.T) {
 	_ = cmd.Wait()
 	if stopped := strings.Fields(readString(s.log + ".stopped.shop")); len(stopped) > 0 {
 		t.Errorf("left down after a Ctrl-C during the restore: %v\n%s", stopped, errs.String())
+	}
+}
+
+// --reset starts a child over from its parent: everything a sync checks
+// first, then at the copy's first write every container and volume goes
+// and mnt is emptied (entries the labels do not copy included), the copy
+// goes in as on a first release, the services with data are created and
+// the run step runs; any mark goes once it completes. A parent that
+// refuses, or has nothing to copy, wipes nothing; an environment without
+// a parent, and no terminal without --yes, refuse.
+func TestSyncReset(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	write(t, filepath.Join(s.mnt("dev"), "storage", "old.txt"), "dev\n", 0o644)
+	write(t, filepath.Join(s.mnt("dev"), "logs", "access.log"), "dev\n", 0o644)
+	kept := func() bool { return fileExists(filepath.Join(s.mnt("dev"), "logs", "access.log")) }
+	if out, code := s.run(nil, "@prod", "--reset", "--yes"); code == 0 || !strings.Contains(out, "is not a child") {
+		t.Errorf("a reset of an environment without a parent (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@dev", "--reset"); code == 0 || !strings.Contains(out, "nothing reset") || !strings.Contains(out, "throws away all of @devopsy@one:dev's data") || !kept() {
+		t.Errorf("a reset without --yes away from a terminal (%d):\n%s", code, out)
+	}
+	// The child's db a stream the parent copies raw: refused by the push
+	// before its first write, nothing wiped.
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || strings.Contains(docker, " down ") || !kept() {
+		t.Errorf("a reset the parent refuses (%d):\n%s\n%s", code, out, docker)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP=none\nFAKE_DB=none\n", 0o644)
+	os.Remove(s.log + ".shop-dev")
+	out, code = s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "the parent has no data to start the child over from") || strings.Contains(docker, " down ") || !kept() {
+		t.Errorf("a reset from a parent without data (%d):\n%s\n%s", code, out, docker)
+	}
+	os.Remove(s.log + ".shop-prod")
+
+	// Over an import's mark, which it clears.
+	if _, errs, code := s.runIO([]string{"FAIL_TAR=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@dev", "--import", "app", "--yes"); code == 0 || !readMark(dev).IsImport() {
+		t.Fatalf("a failing import into dev (%d):\n%s", code, errs)
+	}
+	s.logs()
+	out, code = s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readMark(dev) != nil || fileExists(filepath.Join(dev, syncState)) || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" --profile * down --volumes --remove-orphans\n") || !strings.Contains(docker, " up -d --wait app db\n") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(out, "devopsy: resetting @devopsy@one:dev: every container and volume goes and mnt is emptied; its shared/.env stays\n") {
+		t.Errorf("a reset (%d), mark %+v:\n%s\n%s", code, readMark(dev), out, docker)
+	}
+	if kept() || fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
+		t.Errorf("after the reset, dev's mnt is not prod's:\n%s", out)
 	}
 }

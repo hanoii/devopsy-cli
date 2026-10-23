@@ -195,8 +195,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
-	case "--sync":
-		return runSync(t, projectDir, projectEnv, projectName, args[1:], color)
+	case "--sync", "--reset":
+		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 
 	case "--inherit":
 		return runInherit(t, projectName, args[1:], color)
@@ -532,7 +532,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			// completes it (the activation checks again); a sync is one
 			// of the ways out of an import's too.
 			if cur.Mark != nil && !syncs {
-				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync")}
+				reset := remote.ResetFix(releaseRef(t))
+				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync"), report.Fix(reset[0], reset[1])}
 				msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
 				if cur.Mark.IsImport() {
 					msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
@@ -571,7 +572,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					} else if t.ParentErr != nil {
 						return failParent(t, color, args[0])
 					}
-					if job, err = syncPreflight(t, p, projectName, nil); err != nil {
+					if job, err = syncPreflight(t, p, projectName, nil, false); err != nil {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
