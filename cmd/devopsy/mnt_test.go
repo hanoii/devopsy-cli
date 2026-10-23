@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -461,5 +463,36 @@ func TestMntOwnersLocalLinkedEntry(t *testing.T) {
 	docker, _ := s.logs()
 	if code != 0 || !strings.Contains(docker, "compose -f "+compose+" up -d") {
 		t.Errorf("up with a linked owned entry (%d) never ran compose:\n%s\n%s", code, out, docker)
+	}
+}
+
+// An mnt import refuses device nodes (review of 2026-10-23, round 3):
+// GNU tar as root makes them in shared/mnt on the host, where bind mounts
+// are not nodev, and the owners' step then gives one to the entry's
+// owner, the app's UID. A block device of the server's disk (b 8 0), mode
+// 0666 in the tar, is the raw disk for any user on the host, the deploy
+// user's root-equivalent made plain root. The member reaches out of its
+// entry as surely as a link to ../ does; a tar of an entry never needs
+// one (a FIFO or a socket neither).
+func TestImportRefusesDevices(t *testing.T) {
+	for _, typ := range []byte{tar.TypeBlock, tar.TypeChar} {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for _, h := range []*tar.Header{
+			{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "storage/disk", Typeflag: typ, Mode: 0o666, Devmajor: 8, Devminor: 0},
+		} {
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		spool := filepath.Join(t.TempDir(), "spool")
+		write(t, spool, b.String(), 0o600)
+		if entries, err := tarEntries(spool); err == nil {
+			t.Errorf("a tar with a device node (type %q) below its entry passes: %v", typ, entries)
+		}
 	}
 }
