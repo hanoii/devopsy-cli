@@ -1928,16 +1928,17 @@ func TestExportImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED= -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n") || !strings.Contains(docker, "done\n sh storage\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED= -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n") || !strings.Contains(docker, "own_paths ${OWNED:-}\n sh storage\n") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// An entry its labels own goes to its owner once extracted, in the
 	// same container, before the import counts as complete: a tar made
-	// anywhere carries its maker's owners.
-	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: then giving mnt/storage to 10001:10001") {
+	// anywhere carries its maker's owners. A bind source below it the
+	// tar lacks is made, its owner's.
+	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001", "FAKE_APP_MOUNT2=/storage/files"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: then giving mnt/storage to 10001:10001\n") {
 		t.Fatalf("--import of an owned entry (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, `chown_entry "${eo%=*}" "${eo##*=}"`) || !strings.Contains(docker, `-execdir chown -h "$2" {} +`) {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001\nstorage/files=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "own_paths ${OWNED:-}") || !strings.Contains(docker, `-execdir chown -h "$2" {} +`) {
 		t.Errorf("an owned import:\n%s", docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,

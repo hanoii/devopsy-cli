@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -45,45 +46,65 @@ const chownEntry = `chown_entry() {
 }
 `
 
-// ownEntries is the util container's script: each argument
-// <entry>=<uid>:<gid> created when missing (0755, as Docker would, its
-// owner's) and scanned whole (chownEntry). An entry's name has no
-// whitespace, an owner no =.
-const ownEntries = "set -eu\n" + chownEntry + `for eo; do
-  e=${eo%=*} o=${eo##*=}
-  if [ ! -e "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
-    mkdir -m 0755 "/mnt/$e"
-  fi
-  chown_entry "$e" "$o"
-done
+// ownPaths is a shell function: each argument <path>=<uid>:<gid>, a
+// path of /mnt (an entry, or a bind source below one), has each of its
+// directories missing made (0755, as Docker would) and given to its
+// owner, never past a symbolic link; then each entry among them (a path
+// without /) is scanned whole (chownEntry). An owner has no =.
+const ownPaths = `own_paths() {
+  for po; do
+    o=${po##*=} d=/mnt rest=${po%=*}/
+    while [ -n "$rest" ]; do
+      d=$d/${rest%%/*} rest=${rest#*/}
+      [ ! -L "$d" ] || break
+      if [ ! -e "$d" ]; then
+        mkdir -m 0755 "$d"
+        chown -h "$o" "$d"
+      fi
+    done
+  done
+  for po; do
+    case ${po%=*} in */*) ;; *) chown_entry "${po%=*}" "${po##*=}" ;; esac
+  done
+}
 `
 
-// ownerArgs are owners as ownEntries' arguments, sorted, and the line
-// that says them.
-func ownerArgs(owners map[string]string) (args []string, line string) {
-	for e, o := range owners {
-		args = append(args, e+"="+o)
+// ownEntries is the util container's script for owned paths, its
+// arguments (ownPaths).
+const ownEntries = "set -eu\n" + chownEntry + ownPaths + `own_paths "$@"
+`
+
+// ownerArgs are owned paths (path to owner: entries, and bind sources
+// below them) as ownEntries' arguments, sorted, and the line that says
+// them: the entries, and the paths below an entry not among them.
+func ownerArgs(owned map[string]string) (args []string, line string) {
+	paths := slices.Sorted(maps.Keys(owned))
+	for _, p := range paths {
+		args = append(args, p+"="+owned[p])
 	}
-	sort.Strings(args)
 	var parts []string
 	for _, a := range args {
-		e, o, _ := strings.Cut(a, "=")
-		parts = append(parts, "mnt/"+e+" to "+o)
+		i := strings.LastIndex(a, "=")
+		p, o := a[:i], a[i+1:]
+		if e, _, below := strings.Cut(p, "/"); below && owned[e] != "" {
+			continue
+		}
+		parts = append(parts, "mnt/"+p+" to "+o)
 	}
 	return args, "giving " + strings.Join(parts, ", ")
 }
 
-// ownMnt creates the owned entries of mnt (resolved: on servers
-// shared/mnt) missing and gives each to its owner, in one util container
-// named name, without a network.
-func ownMnt(ctx context.Context, mnt string, owners map[string]string, name string) error {
-	if len(owners) == 0 {
+// ownMnt makes the owned paths of mnt (resolved: on servers shared/mnt)
+// missing and gives the entries among them to their owners, scanned
+// whole, in one util container named name, without a network.
+func ownMnt(ctx context.Context, mnt string, owned map[string]string, name string) error {
+	if len(owned) == 0 {
 		return nil
 	}
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	args, line := ownerArgs(owners)
+	args, line := ownerArgs(owned)
 	report.Info(line)
 	run := append([]string{"--network", "none", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", ownEntries, "sh"}, args...)
 	if err := dockerRun(ctx, name, run...); err != nil {
@@ -92,18 +113,22 @@ func ownMnt(ctx context.Context, mnt string, owners map[string]string, name stri
 	return nil
 }
 
-// projectOwners are the owners of the entries of the project at cwd's
-// mnt, from its labels (every profile), and its mnt resolved.
-func projectOwners(cwd string) (owners map[string]string, mnt string, err error) {
+// projectOwners are the owned paths of the project at cwd's mnt, path to
+// owner, from its labels (every profile): each owned entry
+// (cli.MntOwners), and each bind source below one (cli.OwnedPaths), so
+// Docker never makes a part of it root's. And its mnt resolved.
+func projectOwners(cwd string) (owned map[string]string, mnt string, err error) {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		return nil, "", err
 	}
-	if owners, err = cli.MntOwners(services); err != nil || len(owners) == 0 {
-		return owners, "", err
+	owned, err = cli.MntOwners(services)
+	if err != nil || len(owned) == 0 {
+		return owned, "", err
 	}
+	maps.Copy(owned, cli.OwnedPaths(services, owned))
 	mnt, err = dataMnt(projectDir)
-	return owners, mnt, err
+	return owned, mnt, err
 }
 
 // runMntOwners implements the hidden --mnt-owners, run by an activation
@@ -158,13 +183,15 @@ func runCheckMounts(cwd string, args []string) int {
 	return 0
 }
 
-// localMnt readies the owned entries of mnt before compose starts
-// anything locally (up, start, run, create): each missing one is
-// created, and on Linux one whose top directory is not its owner's is
-// given away in a util container, only then: no scan, which would run
-// before every such command. On macOS the top is never checked: Docker
-// Desktop and OrbStack let any container user write the Mac's files, and
-// show them the owner Docker asks for, whatever the Mac says.
+// localMnt readies the owned paths of mnt before compose starts
+// anything locally (up, start, run, create): each missing one (an entry,
+// a bind source below one) is made, and on Linux an entry whose top
+// directory is not its owner's is given away in a util container, only
+// then, and scanned whole there: an entry whose top is right is never
+// scanned, since that would run before every such command. On macOS the
+// top is never checked: Docker Desktop and OrbStack let any container
+// user write the Mac's files, and show them the owner Docker asks for,
+// whatever the Mac says.
 func localMnt(cwd string) error {
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil || len(owners) == 0 {
@@ -181,7 +208,8 @@ func localMnt(cwd string) error {
 			}
 		case err != nil:
 			wrong[e] = o
-		case runtime.GOOS != "darwin":
+		case runtime.GOOS != "darwin" && !strings.Contains(e, "/"):
+			// A bind source below an entry is only made when missing.
 			if st, ok := fi.Sys().(*syscall.Stat_t); ok && fmt.Sprintf("%d:%d", st.Uid, st.Gid) != o {
 				wrong[e] = o
 			}
