@@ -1581,7 +1581,7 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"mnt"}}}}' "$DB" ;;
-  "-- pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
+  "-- --profile * pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
 esac
 exit 0
 `)
