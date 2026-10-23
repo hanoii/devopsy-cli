@@ -509,7 +509,8 @@ func dataRandom(t *testing.T, seed int64) {
 	for _, m := range envs {
 		m.e.set.Left = left
 	}
-	refs := []string{"mariadb:11.8", "mariadb:11", "mariadb:11.8.9", "mirror.example/mariadb:11.8"}
+	// mariadb:11.8 also spelled in full: a hold must never depend on it.
+	refs := []string{"mariadb:11.8", "mariadb:11", "mariadb:11.8.9", "mirror.example/mariadb:11.8", "docker.io/library/mariadb:11.8"}
 	img := 0
 	var pushed []string
 	push := func(ref string) {
@@ -524,6 +525,12 @@ func dataRandom(t *testing.T, seed int64) {
 	for _, r := range refs {
 		push(r)
 	}
+	// pulledData says whether an environment's current release runs its
+	// database as a pulled data service.
+	pulledData := func(m *sim) bool {
+		e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"})
+		return ok && e.Kind == KindData
+	}
 	var log []string
 	check := func(step string) {
 		t.Helper()
@@ -532,7 +539,9 @@ func dataRandom(t *testing.T, seed int64) {
 			if m.cur == "" {
 				continue
 			}
-			if got := m.runs("database"); got != "" {
+			// A database the project builds is its own image, not checked
+			// (S56): it rolls back exactly.
+			if got := m.runs("database"); got != "" && pulledData(m) {
 				if last, ok := readHistory(m.base()).last("database"); ok && got != last.ID {
 					t.Fatalf("after %v: %s's database runs %s, its data's newest is %s\n%s", log, m.e.set.Name, got, last.ID, out.String())
 				}
@@ -552,13 +561,54 @@ func dataRandom(t *testing.T, seed int64) {
 	}
 	// Each environment builds its own app, named after its compose project.
 	var m *sim
+	// Now and then the project builds its database (FROM mariadb): an own
+	// image, not checked (S56), but never one a rollback puts back on data
+	// a newer pulled image ran.
 	svcs := func() []Service {
-		return []Service{{Name: "app", Ref: m.e.set.Name + "-app", Build: true}, dbSvc(refs[rng.Intn(len(refs))]), proxySvc}
+		db := dbSvc(refs[rng.Intn(len(refs))])
+		if rng.Intn(6) == 0 {
+			db = Service{Name: "database", Ref: m.e.set.Name + "-database", Build: true, Data: true, Method: DataMnt}
+		}
+		return []Service{{Name: "app", Ref: m.e.set.Name + "-app", Build: true}, db, proxySvc}
 	}
 	d.publish("caddy:2-alpine", "C1")
 	for step := 0; step < 40; step++ {
 		m = envs[rng.Intn(2)]
-		switch op := rng.Intn(10); op {
+		switch op := rng.Intn(12); op {
+		case 10: // a complete mnt import: the history starts over from what runs
+			if m.cur == "" {
+				continue
+			}
+			if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
+				t.Fatalf("after %v: import: %v\n%s", log, err, out.String())
+			}
+			check(m.e.set.Name + " import")
+		case 11: // a run step failing, its restart's images not restored (img hold)
+			if m.cur == "" {
+				continue
+			}
+			prev := m.cur
+			id := m.e.release(svcs()...)
+			m.e.set.SaveNames(m.e.rel(id))
+			m.fetch(m.e.svcs[id])
+			if err := m.e.set.Record(m.e.rel(id), m.e.rel(prev)); err != nil {
+				m.e.set.Undo(m.e.rel(id), m.e.rel(prev), false)
+				os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
+				check(m.e.set.Name + " refused " + id)
+				continue
+			}
+			m.cur = id
+			m.activation = true
+			m.up()
+			m.e.set.Ran(m.base(), m.e.rel(id))
+			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
+			if err := m.e.set.HoldData(m.base(), m.e.rel(prev)); err != nil {
+				t.Fatalf("after %v: hold: %v\n%s", log, err, out.String())
+			}
+			m.cur = prev
+			m.activation = true
+			m.up()
+			check(m.e.set.Name + " failed run, held " + id)
 		case 8, 9: // a sync of the other environment's data into this one
 			other := envs[0]
 			if other == m {
@@ -572,7 +622,7 @@ func dataRandom(t *testing.T, seed int64) {
 				before := m.runs("database")
 				m.e.set.SyncCheck(m.e.rel(m.cur), data)
 				m.up()
-				if m.runs("database") != before {
+				if pulledData(m) && m.runs("database") != before {
 					t.Fatalf("after %v: an aborted sync moved %s's database", log, m.e.set.Name)
 				}
 				check(m.e.set.Name + " sync aborted")
@@ -582,7 +632,7 @@ func dataRandom(t *testing.T, seed int64) {
 			if err != nil && !errors.Is(err, ErrRefused) {
 				t.Fatalf("after %v: sync: %v\n%s", log, err, out.String())
 			}
-			if err == nil && m.runs("database") != other.runs("database") {
+			if err == nil && pulledData(m) && pulledData(other) && m.runs("database") != other.runs("database") {
 				t.Fatalf("after %v: %s's database runs %s after a sync from %s, which runs %s", log, m.e.set.Name, m.runs("database"), other.e.set.Name, other.runs("database"))
 			}
 			check(m.e.set.Name + " sync")
@@ -646,7 +696,7 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			before := map[string]string{}
 			for n, i := range d.names {
-				if !isBookmark(n) && !strings.HasSuffix(n, "-app:latest") {
+				if !isBookmark(n) && !strings.HasSuffix(n, "-app:latest") && !strings.HasSuffix(n, "-database:latest") {
 					before[n] = i
 				}
 			}
