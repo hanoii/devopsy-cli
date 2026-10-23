@@ -66,8 +66,9 @@ type Plan struct {
 // startingCommands are compose's commands that start or create
 // containers, whose bind mounts Docker creates when missing, as root:
 // watch starts the services first (unless --no-up), scale creates
-// containers.
-var startingCommands = []string{"up", "start", "run", "create", "watch", "scale"}
+// containers, restart starts them again (an entry removed while they
+// were stopped comes back root's).
+var startingCommands = []string{"up", "start", "restart", "run", "create", "watch", "scale"}
 
 // composeValueFlags are compose's global flags that take a value as the
 // next argument.
