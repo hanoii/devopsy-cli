@@ -1756,6 +1756,13 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			}
 		}
 		dependentNotices(cwd, services, data, set)
+		// What is down already is an earlier sync's or import's: a sync
+		// that writes nothing leaves it so, and starts only its own.
+		rec, _ := readSyncRecord(cwd)
+		rec.held = slices.Clone(rec.stops)
+		if err := rec.write(cwd); err != nil {
+			return fail(err.Error())
+		}
 		if err := stopServices(cwd, set); err != nil {
 			return fail(err.Error())
 		}
@@ -1788,9 +1795,16 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 		// The holder marked it already, saying why, when the copy wrote;
-		// when it wrote nothing the mark stays as it was, an import's too.
+		// when it wrote nothing the mark stays as it was, an import's too,
+		// and what this sync stopped comes back: only what was down
+		// before stays down.
 		if readMark(base) == nil {
 			if err := markIncomplete(base, "", remote.IncompleteCopy, "the copy did not complete", false); err != nil {
+				code = fail(err.Error())
+			}
+		}
+		if !fileExists(filepath.Join(base, remote.SyncTakenFile)) {
+			if err := restoreOwnStops(cwd); err != nil {
 				code = fail(err.Error())
 			}
 		}
@@ -1951,12 +1965,12 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	was := ""
 	if !slices.Contains(cli.StoppedNames(set), name) {
 		// A first release (the record says so) keeps it up, for the
-		// finish hook and the run step; otherwise one down before the
-		// sync goes down again.
+		// finish hook and the run step, unless it is in a profile that is
+		// not up; otherwise one down before the sync goes down again.
 		// A first release creates what the service needs, but what the
 		// sync stopped (a retried one finds containers) stays down.
 		rec, _ := readSyncRecord(cwd)
-		down, state, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
+		down, state, err := upFor(ctx, cwd, name, rec.first && s.Active(composeProfiles(cwd)), !rec.first || len(rec.stops) > 0)
 		if err != nil {
 			code := fail(err.Error())
 			if err := down(); err != nil {
@@ -2050,6 +2064,21 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 	return cmd.Run()
 }
 
+// composeProfiles is COMPOSE_PROFILES as compose sees it in the project
+// at cwd: the caller's, else the project's .env.
+func composeProfiles(cwd string) string {
+	plan, err := cli.Build(cwd, []string{"--", "ps"}, os.Environ())
+	if err != nil {
+		return ""
+	}
+	for _, kv := range plan.Env {
+		if v, ok := strings.CutPrefix(kv, "COMPOSE_PROFILES="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
 // composeServices lists the services docker compose ps prints for args.
 // servicesIn are the services whose container is in one of states
 // (serviceStates: one docker compose ps), sorted.
@@ -2130,11 +2159,15 @@ const syncFirst = "first"
 
 // syncRecord is the record a sync or an import keeps (syncState):
 // whether a sync started on a child's first release (no container at
-// all: syncFirst), the services it stopped ("stop <name>" lines) and an
-// import's hook while it runs ("writer <process group>").
+// all: syncFirst), the services it stopped ("stop <name>" lines), those
+// of them already down when a sync's prepare stopped more ("held
+// <name>": an earlier sync's or import's, which a sync that writes
+// nothing leaves down) and an import's hook while it runs ("writer
+// <process group>").
 type syncRecord struct {
 	first   bool
 	stops   []string
+	held    []string
 	writers []int
 }
 
@@ -2151,6 +2184,8 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 			rec.first = true
 		case action == "stop" && name != "" && !slices.Contains(rec.stops, name):
 			rec.stops = append(rec.stops, name)
+		case action == "held" && name != "" && !slices.Contains(rec.held, name):
+			rec.held = append(rec.held, name)
 		case action == "writer":
 			if pgid, err := strconv.Atoi(name); err == nil {
 				rec.writers = append(rec.writers, pgid)
@@ -2168,6 +2203,9 @@ func (rec syncRecord) write(cwd string) error {
 	}
 	for _, name := range rec.stops {
 		b.WriteString("stop " + name + "\n")
+	}
+	for _, name := range rec.held {
+		b.WriteString("held " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
 		b.WriteString("writer " + strconv.Itoa(pgid) + "\n")
@@ -2194,6 +2232,33 @@ func startSyncState(cwd string, first bool) error {
 	return rec.write(cwd)
 }
 
+// restoreOwnStops starts what a sync that wrote nothing stopped itself
+// (the record's stops it does not hold) and keeps the rest recorded.
+func restoreOwnStops(cwd string) error {
+	rec, ok := readSyncRecord(cwd)
+	if !ok {
+		return nil
+	}
+	own := slices.DeleteFunc(slices.Clone(rec.stops), func(name string) bool { return slices.Contains(rec.held, name) })
+	if len(own) > 0 {
+		exited, err := servicesIn(cwd, "exited")
+		if err != nil {
+			return err
+		}
+		if start := intersect(own, exited); len(start) > 0 {
+			report.Info("starting " + strings.Join(start, " ") + ": nothing was written into their data")
+			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+				return fmt.Errorf("docker compose start: %w", err)
+			}
+			if err := waitHealthy(cwd, start); err != nil {
+				return err
+			}
+		}
+	}
+	rec.stops, rec.held = rec.held, nil
+	return rec.write(cwd)
+}
+
 // healthyTimeout is how long restoreServices waits for a started service.
 const healthyTimeout = 5 * time.Minute
 
@@ -2214,7 +2279,8 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 	// unlabeled app following its own database, an import app without
 	// data), the closure because up creates dependencies but never
 	// dependents. Created with one up, as the run step's up would a
-	// moment later; only then: a service without a container in a
+	// moment later, so not in a profile that is not up (an up naming one
+	// starts it); only then: a service without a container in a
 	// project that has others was removed on purpose. The record says so
 	// (imports created some since); without one, no containers.
 	rec, recorded := readSyncRecord(cwd)
@@ -2229,8 +2295,9 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 	var created []string
 	if first && create {
 		children := cli.StoppedNames(cli.DataStops(services, cli.SyncChild, ""))
+		profiles := composeProfiles(cwd)
 		for _, s := range services {
-			if s.HasData || slices.Contains(children, s.Name) {
+			if (s.HasData || slices.Contains(children, s.Name)) && s.Active(profiles) {
 				created = append(created, s.Name)
 			}
 		}
