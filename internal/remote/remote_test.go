@@ -303,6 +303,24 @@ func TestMntOwnerFeature(t *testing.T) {
 	}
 }
 
+// A sync copies no device node or FIFO into the child's mnt, as an mnt
+// import extracts none (errMember in cmd/devopsy): rsync -a is -D, and as
+// root in UtilImage it makes them on the child's host, where bind mounts
+// are not nodev, and --chown then gives them to the entry's owner, a
+// block device of the server's disk the raw disk for that UID. Checked
+// in devopsy-util:2: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
+// copied by RsyncCopy with --chown=10001:10001, land as `brw-r--r--
+// 10001 10001 8, 0 disk` and `prw-r--r-- 10001 10001 fifo` (review of
+// 2026-10-23, round 4). Both paths, the same server's and the receive
+// script, copy with RsyncCopy.
+func TestRsyncCopySkipsDevices(t *testing.T) {
+	devices := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-devices")
+	specials := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-specials")
+	if devices || specials {
+		t.Errorf("RsyncCopy %q copies device nodes (%v) and FIFOs or sockets (%v): rsync -a includes -D", RsyncCopy, devices, specials)
+	}
+}
+
 // The receive's rsync gives an entry the child owns to its owner
 // (--chown), and keeps the others' (--numeric-ids).
 func TestSyncReceiveOwners(t *testing.T) {
