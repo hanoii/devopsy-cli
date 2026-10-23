@@ -99,7 +99,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@vm1:b/st"}, []string{"@vm1:b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--destroy", "--sync", "--inherit", "--export", "--import", "--env", "--vars", "--vars-instance", "--vars-project", "--status", "--shell", "--shell-host", "--environments", "--debug", "--ssh-keys", "--ssh-config", "--upgrade", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--destroy", "--sync", "--reset", "--inherit", "--export", "--import", "--env", "--vars", "--vars-instance", "--vars-project", "--status", "--shell", "--shell-host", "--environments", "--debug", "--ssh-keys", "--ssh-config", "--upgrade", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", ""}, []string{"remove", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", "remove", ""}, []string{"failed", "--yes", "--help"}, nil, DirectiveNoFileComp},
@@ -113,6 +113,7 @@ func TestComplete(t *testing.T) {
 		{[]string{"@prod", "--release", "deploy", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sy"}, []string{"--sync"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--sync", ""}, []string{"--from", "--yes", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--reset", ""}, []string{"--from", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		// --from takes an address, offered as the first word's, aliases
 		// aside, and always with its @.
 		{[]string{"@prod", "--sync", "--from", ""}, []string{"@prod", "@staging"}, nil, DirectiveNoFileComp},

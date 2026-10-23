@@ -192,7 +192,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end") + StatusScript(tg) +
-		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true)
+		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true, "")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
 			t.Errorf("a sync's file not prefixed: %s", m[1])
@@ -245,8 +245,9 @@ func allScripts() map[string]string {
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataLabelsFeature}),
-		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true),
-		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, false),
+		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true, ""),
+		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
+		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, false, ""),
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncArgsEnv: "--x 'y'", SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
@@ -281,6 +282,25 @@ func TestDataLabelsFeature(t *testing.T) {
 	// The parent's check carries the push's needs.
 	if s := CurrentExistsScript(&Target{Path: "app/prod"}, Needs(PushScript(&Target{Path: "app/prod"}, "app-prod", nil))); !strings.Contains(s, needsEnv+`="${`+needsEnv+`:-} `) || !strings.Contains(s, DataLabelsFeature) {
 		t.Errorf("the parent's check:\n%s", s)
+	}
+}
+
+// A reset needs its feature on both servers: the parent's push wipes at
+// its first write (an older one would sync without wiping), the child's
+// devopsy runs the wipe. A sync needs neither.
+func TestResetFeature(t *testing.T) {
+	tg := &Target{Path: "app/prod"}
+	for name, s := range allScripts() {
+		if name != "receive reset" && slices.Contains(Needs(s), ResetFeature) {
+			t.Errorf("%s needs %s", name, ResetFeature)
+		}
+	}
+	push := PushScript(tg, "app-prod", map[string]string{SyncResetEnv: "1", SyncIDEnv: "1.2"})
+	if !slices.Contains(Needs(push), ResetFeature) || strings.Contains(push, SyncResetEnv) || !strings.Contains(push, "'--sync-push' 'reset'") {
+		t.Errorf("a reset's push: %v\n%s", Needs(push), push)
+	}
+	if got := Needs(allScripts()["receive reset"]); !slices.Contains(got, ResetFeature) {
+		t.Errorf("a reset's receive: %v", got)
 	}
 }
 

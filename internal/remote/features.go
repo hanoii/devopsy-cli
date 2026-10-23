@@ -39,7 +39,14 @@ var namedFeatures = []struct {
 	// which every activation calls (partialGuard), and which tolerates
 	// labels it cannot read.
 	{DataLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
+	// --reset: the parent's push wipes the child at its first write,
+	// through the child's --sync-services wipe. An older parent would
+	// sync without wiping, an older child refuse the word.
+	{ResetFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push[ '\\]{1,8}reset\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}wipe\b`)},
 }
+
+// ResetFeature is --reset's named feature.
+const ResetFeature = "reset"
 
 // DataLabelsFeature is the devopsy.data labels' named feature.
 const DataLabelsFeature = "data-labels"

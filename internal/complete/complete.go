@@ -335,7 +335,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(Result{Candidates: []Candidate{{"failed", "every failed release", GroupDevopsy}, {"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
-	case "--sync":
+	case "--sync", "--reset":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)
 		}
