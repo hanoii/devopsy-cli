@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/cli"
 )
 
 // Review 2026-10-23 (container hardening): a rollback reads the restored
@@ -115,5 +118,29 @@ func TestReviewStartsIncludedInAComment(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") {
 		t.Errorf("labels read for a project without the label, its compose file saying \"included\":\n%s", docker)
+	}
+}
+
+// Review 2026-10-23: the child guard no longer sees a service that
+// mounts ./mnt whole. Without data or an owner such a mount is ignored
+// now (parseSyncServices drops "."), so the child's list names no entry
+// for it, and a sync rsyncs storage under it while it runs, writable:
+// before this change "." was its entry and syncConflicts refused ("mnt/.
+// would change under it"). The guard's rule is "a child service mounting
+// a copied entry is running and not mnt there" (AGENTS.md, Labels and
+// the child guard); a writable tool over all of mnt (a file manager, a
+// backup agent) mounts every copied entry. The README's exception is
+// only for a read-only tool.
+func TestReviewChildGuardMntWhole(t *testing.T) {
+	dot := filepath.Join(t.TempDir(), "code", ".devopsy")
+	child, err := cli.ParseSyncServices([]byte(`{"services":{"files":{"volumes":[{"type":"bind","source":"`+dot+`/mnt","target":"/data"}]}}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := fmt.Sprintf("%s\t%s\trunning\t%s\t%s\n", child[0].Name, syncListLabel(child[0]), strings.Join(child[0].Dirs, " "), listOwners(child[0]))
+	got, _ := parseChildServices(list)
+	parent := []cli.SyncService{{Name: "app", Transfer: cli.DataMnt, Dirs: []string{"storage"}, HasData: true}}
+	if conflicts := syncConflicts(parent, got); len(conflicts) == 0 {
+		t.Errorf("the child's files runs, mounting ./mnt whole writable, and the sync would rsync storage under it: no conflict (its list line %q)", list)
 	}
 }
