@@ -39,13 +39,31 @@ func (s *Set) ParentData(base, rel string) string {
 		return ""
 	}
 	copied := map[string]bool{}
+	pulled := false
 	for _, svc := range svcs {
 		copied[svc.Name] = svc.Method == DataMnt
+		pulled = pulled || (svc.Method == DataMnt && !svc.Build && !svc.own(s.Mode))
 	}
-	for _, e := range readList(rel) {
-		if e.Kind != KindData || !copied[e.Service] {
-			continue
+	es := readList(rel)
+	// A release an older devopsy recorded names no services: which one
+	// runs a database cannot be told, so the child's side refuses.
+	if pulled && len(es) > 0 && es[0].Service == "" {
+		return "old\t" + filepath.Base(rel) + "\n"
+	}
+	var data []entry
+	for _, e := range es {
+		if e.Kind == KindData && copied[e.Service] {
+			data = append(data, e)
 		}
+	}
+	// Each service's newest lines only, ParentHistoryLines in all (10 at
+	// least each): the parent's images ride in a variable inlined in the
+	// child's script, one argument, which Linux caps at 128KB.
+	lines := ParentHistoryLines
+	if len(data) > 0 {
+		lines = max(10, ParentHistoryLines/len(data))
+	}
+	for _, e := range data {
 		img := Image{}
 		ref := e.Ref
 		if cs == nil {
@@ -68,12 +86,9 @@ func (s *Set) ParentData(base, rel string) string {
 			continue
 		}
 		fmt.Fprintf(&b, "image\t%s\t%s\t%s\t%s\n", e.Service, ref, img.ID, strings.Join(img.Digests, " "))
-		// Its newest lines only: the parent's images ride in a variable
-		// inlined in the child's script, one argument, which Linux caps at
-		// 128KB.
 		w := h.window(e.Service)
-		if len(w) > ParentHistoryLines {
-			w = w[len(w)-ParentHistoryLines:]
+		if len(w) > lines {
+			w = w[len(w)-lines:]
 		}
 		for _, r := range w {
 			b.WriteString("ran\t" + r.line())
@@ -82,10 +97,11 @@ func (s *Set) ParentData(base, rel string) string {
 	return b.String()
 }
 
-// ParentHistoryLines is how many of its newest history lines per service
-// ParentData carries: an image that ran before them is not known as one
-// the parent's data moved past, only as one it never ran under its name
-// (refused the same, but for a name it ran under).
+// ParentHistoryLines is how many of their newest history lines, in all,
+// ParentData carries for the services it lists (10 at least each): an
+// image that ran before them is not known as one the parent's data moved
+// past, only as one it never ran under its name (refused the same, but
+// for a name it ran under).
 const ParentHistoryLines = 100
 
 // Sum is a ParentData's checksum.
@@ -115,6 +131,8 @@ func parseParentData(data string) map[string]*parentImage {
 	for _, line := range strings.Split(data, "\n") {
 		kind, rest, _ := strings.Cut(line, "\t")
 		switch kind {
+		case "old":
+			ps[""] = &parentImage{Ref: rest}
 		case "image":
 			f := strings.Split(rest, "\t")
 			if len(f) < 3 {
@@ -167,6 +185,11 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 	// A release recorded by an older devopsy names no services: which
 	// one runs a database cannot be told, so its image could not follow
 	// the data. Released again first.
+	if old := ps[""]; old != nil {
+		s.sayAll(report.ErrorLevel, "the parent's release "+old.Ref+" predates devopsy's record of each service's image: nothing changed", nil,
+			report.Fix("release the parent first, then sync"))
+		return nil, ErrRefused
+	}
 	if len(ps) > 0 && len(es) > 0 && es[0].Service == "" {
 		s.sayAll(report.ErrorLevel, "the child's release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing changed", nil,
 			report.Fix("release the child first, with the sync if you want it:", "devopsy @"+cmp.Or(s.Address, "<child>")+" --release-sync"))
@@ -253,7 +276,7 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 // with, and a child's server may reach only its mirror.
 func (s *Set) localHold(e entry, p *parentImage) string {
 	for _, d := range p.Image.Digests {
-		mine := repoOf(e.Ref) + "@" + digestOf(d)
+		mine := repoKey(e.Ref) + "@" + digestOf(d)
 		if _, err := s.Docker.Inspect(mine); err == nil {
 			return mine
 		}
@@ -319,7 +342,14 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 		if !known {
 			w = append(w, ranOn(e.Service, Ran, p.Ref, p.Image, s.now()))
 		}
-		if last := w[len(w)-1]; last.is(p.Image) && familiar(last.Ref) != familiar(e.Ref) {
+		mine := Image{ID: e.ID}
+		if i, err := s.Docker.Inspect(e.ID); err == nil {
+			mine = i
+		}
+		// Only when the child ran the very image under its name (a
+		// mirror): another series --yes let through stays one its data
+		// never ran.
+		if last := w[len(w)-1]; last.is(p.Image) && last.is(mine) && familiar(last.Ref) != familiar(e.Ref) {
 			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: last.Digests})
 		}
 		w[0].How = SyncedFrom + from

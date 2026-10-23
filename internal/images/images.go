@@ -413,12 +413,15 @@ func (s *Set) entryOf(svc Service, ref string) entry {
 	return e
 }
 
-// digestIn is img's registry digest for ref's repository, as a name
-// (<repository>@sha256:...); "" without one.
+// digestIn is img's registry digest for ref's repository, as a name,
+// spelled as Docker shows it (mariadb@sha256:..., not
+// docker.io/library/mariadb@...): every hold written the same way, so a
+// rollback holding the same image never changes the reference compose
+// sees, which would recreate the container; "" without one.
 func digestIn(img Image, ref string) string {
 	for _, d := range img.Digests {
 		if repoKey(d) == repoKey(ref) {
-			return repoOf(ref) + "@" + digestOf(d)
+			return repoKey(ref) + "@" + digestOf(d)
 		}
 	}
 	return ""

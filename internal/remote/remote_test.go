@@ -2961,17 +2961,18 @@ func TestSyncScriptsFitOneArgument(t *testing.T) {
 		ref := "registry.example.com/mirror/" + []string{"mariadb:11.8", "redis:8", "solr:9", "elasticsearch:8.19"}[i]
 		repo := ref[:strings.LastIndex(ref, ":")]
 		fmt.Fprintf(&b, "image\t%s\t%s\tsha256:%064x\t%s@sha256:%064x\n", svc, ref, i, repo, i)
-		for n := 0; n < images.ParentHistoryLines; n++ {
+		// The most images.Set.ParentData sends for four services.
+		for n := 0; n < max(10, images.ParentHistoryLines/4); n++ {
 			fmt.Fprintf(&b, "ran\t%d\t%s\tran\t%s\tsha256:%064x\t%s@sha256:%064x\n", 1761200000+n, svc, ref, n, repo, n)
 		}
 	}
 	tg := &Target{Name: "dev", Address: "vm1:dev", Path: "shop/dev", Mode: ModeBuild}
 	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: b.String()}
-	const max = 128 * 1024
-	if n := len(WithNeeds(HolderScript(tg, "shop-dev", o, true))); n >= max {
-		t.Errorf("the holder's script is %d bytes, over the %d one argument takes", n, max)
+	const limit = 128 * 1024
+	if n := len(WithNeeds(HolderScript(tg, "shop-dev", o, true))); n >= limit {
+		t.Errorf("the holder's script is %d bytes, over the %d one argument takes", n, limit)
 	}
-	if n := len(WithNeeds(ActivateScript(tg, "20261023000000", false, "shop-dev", Phases{Run: []string{"deploy"}}, o))); n >= max {
-		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, max)
+	if n := len(WithNeeds(ActivateScript(tg, "20261023000000", false, "shop-dev", Phases{Run: []string{"deploy"}}, o))); n >= limit {
+		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, limit)
 	}
 }

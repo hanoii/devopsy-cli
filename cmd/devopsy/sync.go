@@ -2660,11 +2660,17 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 			errs = append(errs, err)
 		}
 		start := intersect(stop, exited)
-		// A service whose image devopsy's compose file changed since its
-		// container was made (a sync took over the parent's image) is
-		// made again, with no other: compose start would run the old
-		// image on the new data.
-		recreate := intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+		// On a complete copy (create: finish go), a service whose image
+		// devopsy's compose file changed since its container was made (a
+		// sync took over the parent's image) is made again, with no
+		// other: compose start would run the old image on the new data.
+		// Never otherwise: an abort in a release that syncs restores the
+		// child's own data, which the release's images, not live, must
+		// not touch (the release goes back).
+		var recreate []string
+		if create {
+			recreate = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+		}
 		if len(recreate) > 0 {
 			report.Info("recreating " + strings.Join(recreate, " ") + " on the image its data now needs")
 			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, recreate...)...); err != nil {

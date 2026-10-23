@@ -1612,13 +1612,27 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   mirror). The child's history ends with a line naming the image as the
   child does, so its own name moving forward needs no `--yes`; a parent
   that drifted back to an image its history has adds no line (the
-  newest stays the newest, as on the parent). `ParentData` sends each
-  service's newest 100 lines (`ParentHistoryLines`): it rides in the
+  newest stays the newest, as on the parent). `ParentData` sends at
+  most 100 history lines in all (`ParentHistoryLines`): it rides in the
   child's script, one argument, capped at 128KB on Linux. A release that
   syncs, refused by the parent's check, puts its names back like any
   refusal. `--sync --yes` reaches the holder (`imagesYes`), and the
   parent's images are unset with the sync's variables before the run
   step.
+- **And the third:** only `finish go` makes services again on the
+  parent's image (`restoreServices`' create): an abort in a release that
+  syncs restores the child's own data, which the release's images, never
+  live, must not touch. The line naming the image as the child does is
+  added only when the child ran that very image (a mirror), never for
+  another series `--yes` let through. A parent's release recorded by an
+  older devopsy sends `old`, and the child refuses (release the parent
+  first), as for the child's own. A rollback keeps a pulled data service
+  of the release it leaves on its data's newest image even where the
+  target builds that service. `ParentHistoryLines` is the total (10 at
+  least per service). Holds and labels are spelled as Docker shows
+  digests (`repoKey`), so holding the same image never changes the
+  reference compose sees. A signal during `img names` stops the fetch
+  before it pulls.
 
 ### Streams
 

@@ -70,9 +70,26 @@ func (s *Set) Restore(target, against string, fetched bool) error {
 		a, haveAg := match(ag, probe)
 		st := step{svc: svc}
 		own := svc.own(s.Mode)
-		data := !own && ((svc.Data && !svc.Build) || o.Kind == KindData || a.Kind == KindData)
+		// A pulled data service in the release it leaves stays one, even
+		// where the target builds it or never pulls it: its data ran the
+		// pulled image, which an unordered own image must not replace.
+		data := (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
 		switch {
-		case own:
+		case data && own && !haveHistory(h, svc.Name):
+			// Nothing known ran on its data: as the target builds it.
+			st.kind = KindOwn
+			if fetched {
+				break
+			}
+			i := indexOf(old, o)
+			if !haveOld || o.ID == "" || i < 0 {
+				return s.gone(tid, svc)
+			}
+			if _, err := s.Docker.ID(names[i]); err != nil {
+				return s.gone(tid, svc)
+			}
+			st.retag = names[i]
+		case own && !data:
 			st.kind = KindOwn
 			if fetched {
 				break
@@ -355,4 +372,9 @@ func (s *Set) Recover(base, prev string) {
 		}
 		os.Remove(m)
 	}
+}
+
+func haveHistory(h history, svc string) bool {
+	_, ok := h.last(svc)
+	return ok
 }

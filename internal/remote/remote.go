@@ -858,7 +858,7 @@ done
 	// A rollback: its images restored against the release it leaves
 	// (img restore), fetched again only when an image it builds is gone
 	// (exit 1). A signal during either (img ignores it) skips the fetch.
-	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
+	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
 	if rollback {
 		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
 	}
