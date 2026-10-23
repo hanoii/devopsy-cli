@@ -341,7 +341,10 @@ func TestMntOwnersLocal(t *testing.T) {
 	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: mnt/storage is a symbolic link: devopsy leaves it and what it points to as they are") || strings.Contains(docker, "devopsy-owners-") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
 		t.Errorf("up with a linked owned entry (%d):\n%s\n%s", code, out, docker)
 	}
-	os.RemoveAll(filepath.Join(s.dot, "mnt"))
+	os.Remove(filepath.Join(s.dot, "mnt", "storage"))
+	if err := os.Mkdir(filepath.Join(s.dot, "mnt", "storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if runtime.GOOS == "darwin" {
 		return
 	}
