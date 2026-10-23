@@ -1033,8 +1033,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   stops. Its own sync's done line is `go` (an `abort` after it too),
   taken without it `partial`, nothing taken on a marked environment
   `partial` (decided: nothing written leaves an earlier sync's partial
-  copy as it was, even when the parent's labels cover nothing now),
-  else the answer; the taken record goes once finish is done.
+  copy as it was, even when the parent's labels cover nothing now, and
+  only it: `finish partial` starts again what this sync stopped,
+  `restoreOwnStops`, so only what was down at its prepare, the
+  record's `held` lines, stays down), else the answer; the taken record goes once finish is done.
 - **No write outlives its sync** (`endWriters`, cmd/devopsy/writers.go):
   before a partial copy is marked (`finish partial`) or settled, what
   the record names is ended. A write runs on past its sync when its
@@ -1279,7 +1281,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   import or `--resolved`, whose mark and record are written together),
   one down on purpose included. One left by an earlier sync or import
   that could not restore is kept and added to (`syncRecord`, rewritten
-  whole, `writer <pgid>` lines kept).
+  whole, `writer <pgid>` lines kept), what it holds already marked
+  `held <name>` by the next prepare.
 - **Restoring brings back only the recorded services,** whatever their
   labels say now (an inherited variable may have changed them since a
   cut sync), from container state (exited), so it also recovers after an interrupted sync, and a
@@ -1301,7 +1304,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   the hook those services are created in one `up -d --wait`: the ones
   with data and the child side's set by labels, without the running
   filter (an unlabeled app following its `own` database, an `import`
-  app without data), since `up` creates dependencies but never
+  app without data), but not in a profile that is not up
+  (`SyncService.Active`, `COMPOSE_PROFILES`: an `up` naming a service
+  starts it whatever its profiles; a stream's import brings one up for
+  itself only), since `up` creates dependencies but never
   dependents, and the hook sanitizes through them (drupal11's needs the app:
   without it, prod's passwords reached a child), and a stream imported
   then stays up. Only on go: an aborted first sync creates nothing.

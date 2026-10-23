@@ -59,10 +59,12 @@ lab() {
 }
 stopped="$DOCKER_LOG.stopped.${COMPOSE_PROJECT_NAME:-}"
 # FAKE_WORKER: a third service, worker, depending on db, labeled so
-# (none for no label).
+# (none for no label); FAKE_WORKER_PROFILE puts it in that profile.
 svcs="app db${FAKE_WORKER:+ worker}"
 worker=
-[ -z "${FAKE_WORKER:-}" ] || worker=$(printf ',"worker":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}}}' "$(lab "$FAKE_WORKER")")
+wprofile=
+[ -z "${FAKE_WORKER_PROFILE:-}" ] || wprofile=$(printf ',"profiles":["%s"]' "$FAKE_WORKER_PROFILE")
+[ -z "${FAKE_WORKER:-}" ] || worker=$(printf ',"worker":{"labels":%s%s,"depends_on":{"db":{"condition":"service_started"}}}' "$(lab "$FAKE_WORKER")" "$wprofile")
 # st: a service's container state, none without one.
 st() {
   if absent "$1"; then echo none

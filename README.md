@@ -935,7 +935,8 @@ a half-imported database, and after a copy that did not complete too
 (below). A child's first release creates, before `finish child go`, its
 services with data and its side's set (an `import` app without data, an
 unlabeled app depending on an `own` database), so the hook can sanitize
-through them. A lock held by something else is announced ("waiting for the
+through them; one in a profile that is not up (`COMPOSE_PROFILES`) stays
+uncreated, as the run step's `up` would leave it. A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
@@ -1136,8 +1137,9 @@ child goes by that:
 - **Nothing written** (a prepare or a check failed, the parent's stop
   failed, the first export failed with nothing to rsync): its stopped
   services come back, `finish child abort`, and the run step is
-  skipped. On data an earlier sync left partial, it stays partial
-  (below).
+  skipped. On data an earlier sync or an import left partial, it stays
+  partial (below), and what was down for it stays down; what this sync
+  stopped comes back.
 - **Written in part** (the rsync or an import failed or was cut,
   Ctrl-C mid-copy, a connection lost): the child's data is part old, part
   the parent's, so its stopped services stay down and the run step is

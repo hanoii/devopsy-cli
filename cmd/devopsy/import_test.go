@@ -463,6 +463,33 @@ func TestSyncOverImportMark(t *testing.T) {
 	}
 }
 
+// A sync over an import's mark that writes nothing (refused: the parent
+// does not copy the service) leaves what the import stopped down, and
+// only that: the push says nothing changed, so a service the sync's own
+// prepare stopped, whose data the import never touched (db, own), runs
+// again, as it did before the sync.
+func TestSyncRefusedOverImportMark(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	write(t, s.log+".shop-dev", "FAKE_APP=mnt+import\n", 0o644)
+	if _, errs, code := s.runIO([]string{"FAIL_TAR=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@dev", "--import", "app", "--yes"); code == 0 || readMark(dev) == nil || readMark(dev).From != "app" {
+		t.Fatalf("a failing import of app into dev (%d), mark %+v:\n%s", code, readMark(dev), errs)
+	}
+	if stopped := strings.Fields(readString(s.log + ".stopped.shop-dev")); slices.Contains(stopped, "db") || !slices.Contains(stopped, "app") {
+		t.Fatalf("after the import: stopped %v", stopped)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP=none\n", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+	if code == 0 || !strings.Contains(out, "the parent does not copy app") || !readMark(dev).IsImport() || slices.Contains(stopped, "db") || !slices.Contains(stopped, "app") {
+		t.Errorf("a refused sync over app's import mark (%d), stopped %v:\n%s", code, stopped, out)
+	}
+}
+
 // The data labels are a feature: a server's devopsy without it reads them
 // as no label, so what reads them refuses before anything changes, with
 // the upgrade line (an export, a sync: the parent's check, before the
@@ -524,6 +551,34 @@ func TestSyncFirstReleaseCreatesSet(t *testing.T) {
 	docker, _ := s.logs()
 	if code != 0 || !strings.Contains(out, "devopsy: creating app db worker") || strings.Index(out, "devopsy: creating app db worker") > strings.Index(out, "finish child go") || !strings.Contains(docker, " up -d --wait app db worker\n") {
 		t.Errorf("first release (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// A worker in a profile that is not up (COMPOSE_PROFILES unset): an
+	// up naming it starts it all the same, so it is not created, as the
+	// run step's up would not: stops leave such a service as it is too.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
+	write(t, s.log+".shop-fresh", "FAKE_APP=-+import\nFAKE_DB=mnt+own\nFAKE_WORKER=none\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run(nil, "@fresh", "--release")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || !strings.Contains(docker, " up -d --wait app db\n") {
+		t.Errorf("first release, worker in an inactive profile (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// With its profile up it is created; streamed in an inactive one, it
+	// is up for its import only.
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  on: {parent: prod}\n  streamed: {parent: prod}\n", 0o644)
+	write(t, s.log+".shop-on", "FAKE_APP=-+import\nFAKE_DB=mnt+own\nFAKE_WORKER=none\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run([]string{"COMPOSE_PROFILES=web,tools"}, "@on", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db worker\n") {
+		t.Errorf("first release, worker in an active profile (%d):\n%s", code, out)
+	}
+	s.labels("FAKE_APP=-+import\nFAKE_DB=mnt\nFAKE_WORKER=stream")
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "data", "export"), "#!/bin/sh\necho dump\n", 0o755)
+	write(t, filepath.Join(s.dot, "capabilities", "data", "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	write(t, s.log+".shop-streamed", "FAKE_APP=-+import\nFAKE_DB=mnt\nFAKE_WORKER=stream\nFAKE_WORKER_PROFILE=tools\nFAKE_ABSENT='app db worker'\n", 0o644)
+	out, code = s.run(nil, "@streamed", "--release")
+	if code != 0 || !strings.Contains(out, "devopsy: creating app db\n") || !strings.Contains(out, "stopping worker again") {
+		t.Errorf("first release, a stream worker in an inactive profile (%d):\n%s", code, out)
 	}
 }
 

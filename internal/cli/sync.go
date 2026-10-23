@@ -101,6 +101,24 @@ type SyncService struct {
 	HasData        bool
 	DependsOn      []string
 	Restart        string
+	// Profiles are the service's compose profiles: none means always on.
+	Profiles []string
+}
+
+// Active reports whether s is in a profile that is up, profiles being
+// what COMPOSE_PROFILES names (comma separated, * for all): an up naming
+// a service starts it whatever its profiles, so devopsy leaves out those
+// a plain up would.
+func (s SyncService) Active(profiles string) bool {
+	if len(s.Profiles) == 0 {
+		return true
+	}
+	for _, p := range strings.Split(profiles, ",") {
+		if p = strings.TrimSpace(p); p == "*" || slices.Contains(s.Profiles, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ComposeConfig prints the project's compose configuration as JSON, every
@@ -153,6 +171,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			Labels    map[string]string          `json:"labels"`
 			DependsOn map[string]json.RawMessage `json:"depends_on"`
 			Restart   string                     `json:"restart"`
+			Profiles  []string                   `json:"profiles"`
 			Volumes   []struct {
 				Type   string `json:"type"`
 				Source string `json:"source"`
@@ -173,7 +192,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				return nil, fmt.Errorf("service %s: %s=%s: that label is now %s", name, o.label, v, o.now)
 			}
 		}
-		cs := SyncService{Name: name, Transfer: DataNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart}
+		cs := SyncService{Name: name, Transfer: DataNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
 		data, labeled := s.Labels[DataLabel]
 		if labeled {
 			// An empty value is an error: a variable left unset by accident
