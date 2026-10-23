@@ -1301,7 +1301,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   the hook those services are created in one `up -d --wait`: the ones
   with data and the child side's set by labels, without the running
   filter (an unlabeled app following its `own` database, an `import`
-  app without data), since `up` creates dependencies but never
+  app without data), but not in a profile that is not up
+  (`SyncService.Active`, `COMPOSE_PROFILES`: an `up` naming a service
+  starts it whatever its profiles; a stream's import brings one up for
+  itself only), since `up` creates dependencies but never
   dependents, and the hook sanitizes through them (drupal11's needs the app:
   without it, prod's passwords reached a child), and a stream imported
   then stays up. Only on go: an aborted first sync creates nothing.

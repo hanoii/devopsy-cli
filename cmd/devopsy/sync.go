@@ -1951,12 +1951,12 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	was := ""
 	if !slices.Contains(cli.StoppedNames(set), name) {
 		// A first release (the record says so) keeps it up, for the
-		// finish hook and the run step; otherwise one down before the
-		// sync goes down again.
+		// finish hook and the run step, unless it is in a profile that is
+		// not up; otherwise one down before the sync goes down again.
 		// A first release creates what the service needs, but what the
 		// sync stopped (a retried one finds containers) stays down.
 		rec, _ := readSyncRecord(cwd)
-		down, state, err := upFor(ctx, cwd, name, rec.first, !rec.first || len(rec.stops) > 0)
+		down, state, err := upFor(ctx, cwd, name, rec.first && s.Active(composeProfiles(cwd)), !rec.first || len(rec.stops) > 0)
 		if err != nil {
 			code := fail(err.Error())
 			if err := down(); err != nil {
@@ -2048,6 +2048,21 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	return cmd.Run()
+}
+
+// composeProfiles is COMPOSE_PROFILES as compose sees it in the project
+// at cwd: the caller's, else the project's .env.
+func composeProfiles(cwd string) string {
+	plan, err := cli.Build(cwd, []string{"--", "ps"}, os.Environ())
+	if err != nil {
+		return ""
+	}
+	for _, kv := range plan.Env {
+		if v, ok := strings.CutPrefix(kv, "COMPOSE_PROFILES="); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // composeServices lists the services docker compose ps prints for args.
@@ -2214,7 +2229,8 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 	// unlabeled app following its own database, an import app without
 	// data), the closure because up creates dependencies but never
 	// dependents. Created with one up, as the run step's up would a
-	// moment later; only then: a service without a container in a
+	// moment later, so not in a profile that is not up (an up naming one
+	// starts it); only then: a service without a container in a
 	// project that has others was removed on purpose. The record says so
 	// (imports created some since); without one, no containers.
 	rec, recorded := readSyncRecord(cwd)
@@ -2229,8 +2245,9 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 	var created []string
 	if first && create {
 		children := cli.StoppedNames(cli.DataStops(services, cli.SyncChild, ""))
+		profiles := composeProfiles(cwd)
 		for _, s := range services {
-			if s.HasData || slices.Contains(children, s.Name) {
+			if (s.HasData || slices.Contains(children, s.Name)) && s.Active(profiles) {
 				created = append(created, s.Name)
 			}
 		}

@@ -60,7 +60,7 @@ func TestSyncServices(t *testing.T) {
 		// logs excluded by its label.
 		{Name: "app", Transfer: DataMnt, Stop: StopImport, StopLabeled: true, Dirs: []string{"storage"}, HasData: true, DependsOn: []string{"database"}, Restart: "always"},
 		{Name: "database", Transfer: DataStream, Stop: StopNever, StopLabeled: true, Dirs: []string{"database"}, HasData: true},
-		{Name: "goaccess", Transfer: DataMnt, Stop: StopNever, Dirs: []string{"report"}, HasData: true},
+		{Name: "goaccess", Transfer: DataMnt, Stop: StopNever, Dirs: []string{"report"}, HasData: true, Profiles: []string{"tools"}},
 		{Name: "mntnot", Transfer: DataNone, Stop: StopNever},
 		{Name: "plain", Transfer: DataNone, Stop: StopNever, StopLabeled: true, Dirs: []string{"plain"}},
 		{Name: "search", Transfer: DataStream, Stop: StopOwn, StopLabeled: true, Dirs: []string{"index"}, HasData: true, DependsOn: []string{"database"}},
@@ -71,8 +71,16 @@ func TestSyncServices(t *testing.T) {
 	}
 	for i, s := range services {
 		w := want[i]
-		if s.Name != w.Name || s.Transfer != w.Transfer || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") {
+		if s.Name != w.Name || s.Transfer != w.Transfer || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") || strings.Join(s.Profiles, ",") != strings.Join(w.Profiles, ",") {
 			t.Errorf("%d: %+v, want %+v", i, s, w)
+		}
+	}
+	// A service in a profile is up only with it (COMPOSE_PROFILES).
+	goaccess, _ := SyncFind(services, "goaccess")
+	app, _ := SyncFind(services, "app")
+	for profiles, want := range map[string]bool{"": false, "web": false, "web, tools": true, "*": true} {
+		if goaccess.Active(profiles) != want || !app.Active(profiles) {
+			t.Errorf("active with %q: goaccess %v, app %v", profiles, goaccess.Active(profiles), app.Active(profiles))
 		}
 	}
 	if got := strings.Join(SyncDirs(services), ","); got != "report,storage" {
