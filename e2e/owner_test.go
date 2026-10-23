@@ -100,13 +100,16 @@ func TestOwnerSyncAcross(t *testing.T) {
 }
 
 // An --import of a tar carrying 1000-owned files lands as the entry's
-// owner's.
+// owner's. Its members named ./data/..., as tar -cf - . or ./data
+// writes them: the entry's own container extracts only its members, by
+// the names the archive gives it, which the util image's GNU tar matches
+// literally (data alone would find nothing).
 func TestOwnerImport(t *testing.T) {
 	dir := ownedProject(t, "ownimport", nil)
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	out, code := op(t, dir, "t=$(mktemp -d) && mkdir -p $t/data/sub && echo imported >$t/data/sub/file && chown -R 1000:1000 $t/data && tar -C $t -cf - --numeric-owner data | devopsy @prod --import data --yes")
+	out, code := op(t, dir, "t=$(mktemp -d) && mkdir -p $t/data/sub && echo imported >$t/data/sub/file && chown -R 1000:1000 $t/data && tar -C $t -cf - --numeric-owner ./data | devopsy @prod --import data --yes")
 	got, _ := srv(t, "cat ownimport/prod/shared/mnt/data/sub/file")
 	if code != 0 || strings.TrimSpace(got) != "imported" {
 		t.Fatalf("import (%d), file %q:\n%s", code, got, out)
