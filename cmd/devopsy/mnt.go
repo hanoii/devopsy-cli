@@ -172,9 +172,10 @@ const mntOwnersRestored = "restored"
 // activation in the new release before its switch, after its prepare
 // steps and --missing-vars (cli.CheckMounts). A compose configuration
 // that cannot be read is no refusal, as for --check-names: the release's
-// up says what is wrong with it. With an entry owned, it also readies
-// the util image the owners' step runs after the switch, so a registry
-// down refuses the release instead of failing it there.
+// up says what is wrong with it. With an entry owned, it also refuses an
+// owned path that is or goes through a symbolic link (ownedLinks), and
+// readies the util image the owners' step runs after the switch, so a
+// registry down refuses the release instead of failing it there.
 func runCheckMounts(cwd string, args []string) int {
 	if len(args) > 0 {
 		report.Error(cli.CheckMountsFlag + " takes nothing")
@@ -194,7 +195,7 @@ func runCheckMounts(cwd string, args []string) int {
 		err = cli.CheckMounts(services)
 	}
 	if err == nil {
-		err = checkOwned(services)
+		err = checkOwned(projectDir, services)
 	}
 	if err != nil {
 		report.Fail(err)
@@ -203,13 +204,54 @@ func runCheckMounts(cwd string, args []string) int {
 	return 0
 }
 
-// checkOwned readies the util image when the project owns any entry.
-func checkOwned(services []cli.SyncService) error {
+// checkOwned refuses owned paths of mnt through a symbolic link, and
+// readies the util image, when the project owns any entry.
+func checkOwned(projectDir string, services []cli.SyncService) error {
 	owned, err := cli.MntOwners(services)
 	if err != nil || len(owned) == 0 {
 		return err
 	}
+	maps.Copy(owned, cli.OwnedPaths(services, owned))
+	mnt, err := dataMnt(projectDir)
+	if err != nil {
+		return err
+	}
+	if links := ownedLinks(mnt, owned); len(links) > 0 {
+		var details []string
+		for _, l := range links {
+			details = append(details, "mnt/"+l+" is a symbolic link")
+		}
+		return &report.Failure{
+			Msg:     "an owned entry of mnt goes through a symbolic link: Docker would mount what it points to, and devopsy give that to the entry's owner: the release does not go live",
+			Details: details,
+			Fixes:   []report.Remedy{report.Fix("make each a directory of its own in shared/mnt, moving what it points to there")},
+		}
+	}
 	return ensureUtilImage(context.Background())
+}
+
+// ownedLinks are the paths of mnt, among owned's and their parents
+// below mnt, that are symbolic links, sorted.
+func ownedLinks(mnt string, owned map[string]string) []string {
+	var links []string
+	for p := range owned {
+		parts := strings.Split(p, "/")
+		for i := range parts {
+			q := strings.Join(parts[:i+1], "/")
+			fi, err := os.Lstat(filepath.Join(mnt, q))
+			if err != nil {
+				break
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				if !slices.Contains(links, q) {
+					links = append(links, q)
+				}
+				break
+			}
+		}
+	}
+	slices.Sort(links)
+	return links
 }
 
 // localMnt readies the owned paths of mnt before compose starts

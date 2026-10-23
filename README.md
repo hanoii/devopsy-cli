@@ -856,7 +856,14 @@ the secrets its compose file requires), the mounts check refuses
   read: it would carry every other service's data and give them one
   owner. Mounted writable by any other service too: it would write
   every entry, and no sync or import sees it there. Read-only (a tool
-  reading every entry), devopsy ignores it.
+  reading every entry), devopsy ignores it;
+- an owned entry, or a path below one a service mounts, that is a
+  symbolic link in `shared/mnt`: Docker would mount what it points to,
+  and devopsy give that to the owner.
+
+With an entry owned, it also builds `devopsy-util` when the server lacks
+it, so a registry that cannot be reached refuses the release before it
+goes live.
 
 Named volumes and absolute paths are not checked. `--destroy` empties
 `shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and

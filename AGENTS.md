@@ -1000,8 +1000,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   release), `devopsy.data=mnt` copying no entry (none mounted, or all
   excluded) or an owner of no writable entry (a sync said "nothing to
   sync" and a child's first release went live on empty data), two
-  owners on one entry, and `./mnt` whole mounted writable by any
-  service (`WholeMnt`, below). With an entry owned it readies `UtilImage`
+  owners on one entry, `./mnt` whole mounted writable by any service
+  (`WholeMnt`, below), and an owned path that is or goes through a
+  symbolic link in `shared/mnt` (`ownedLinks`: Docker would mount what
+  it points to, for the owners' step to give away; the util container
+  itself never follows one, so rollbacks, which run no check, need
+  none). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: named volumes and absolute paths. A compose config that
