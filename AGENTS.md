@@ -583,11 +583,12 @@ step's rules):
   activation. A fetch's children inherit the lock, so a recovery never
   races a fetch still running.
 - **What a session sends goes once its script holds the lock**
-  (`remote.WithGate`, `lockedGate`): the upload, `--destroy` and
-  `--releases remove` print `LockedMarker` on stderr once they hold it
-  (the removals once they hold the image lock too), and devopsy sends
-  stdin only then (the tar, or the `go` a removal reads through
-  `--stdin-guard` before it starts). Why: a session cut
+  (`remote.WithGate`, `lockedGate`): the upload, `--import`,
+  `--destroy` and `--releases remove` print `LockedMarker` on stderr
+  once they hold it (the removals once they hold the image lock too),
+  and devopsy sends stdin only then (the tar, an import's data, or the
+  `go` a removal reads through `--stdin-guard` before it starts); an
+  import interrupted before drops what its pipe holds too. Why: a session cut
   while its script waited (Ctrl-C, a drop) left its tar in the server's
   pipe, and the script extracted it once the lock came, after devopsy
   had said nothing changed; a removal went on likewise. Now it finds an
@@ -1465,7 +1466,10 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   a release a temporary `$base/.devopsy-sync.stream.<service>.*`,
   locally a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
   out of releases), refuses an empty one, and only then stops anything.
-  The spool always goes.
+  The spool always goes, and one a devopsy killed outright left goes
+  with the next import of its service or `--resolved` (`removeSpools`:
+  nothing else would remove a dump-sized file on an environment never
+  synced).
 - **The first write** is devopsy asking Docker to start the writer (the
   import hook, or the util container): checked against its context
   right before; from then on the import counts as written, a Docker
@@ -1556,10 +1560,13 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
 - **`--import <service> --resolved`** (`runResolved`,
   `runRemoteResolved`): the way out when the dump itself cannot
   complete. A read-only session (`ResolvedCheckScript`, never waiting on
-  the lock) refuses there (no mark, another service's, a sync's, an
-  import running); a prompt names what starts (the record's `stop`
-  lines) and asks for the full name; a second session under the lock
-  checks again, ends a leftover writer, starts the record and only then
+  the lock) refuses there (no mark, another service's, a sync's, a
+  killed holder's sync files, which make it a sync's, an import
+  running); a prompt names what starts (the record's `stop` lines,
+  the imported service only when it ran before) and asks for the full
+  name; a second session under the lock settles a killed holder's sync
+  (`settleLeftover`, as `ImportScript` does), checks again, ends a
+  leftover writer, starts the record and only then
   removes the mark and the record. On the server it is `devopsy
   --import <service> --resolved --yes` (`ResolvedScript`), so the
   `data-labels` regexp gates it. Not locally (decided): nothing there
