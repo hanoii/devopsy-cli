@@ -1,2 +1,5 @@
 dist/
 /devopsy
+
+# Worktrees for parallel work
+/.worktrees/
