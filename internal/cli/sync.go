@@ -250,8 +250,10 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	if err := json.Unmarshal(out, &config); err != nil {
 		return nil, fmt.Errorf("docker compose config: %w", err)
 	}
+	// Resolved as far as it exists, as each source is below: a mnt not
+	// made yet is still where the sources resolve to.
 	mnts := []string{filepath.Join(projectDir, "mnt")}
-	if r, err := filepath.EvalSymlinks(mnts[0]); err == nil && r != mnts[0] {
+	if r := resolvePath(mnts[0]); r != mnts[0] {
 		mnts = append(mnts, r)
 	}
 	// The project's tree, its links resolved: on servers a release's
