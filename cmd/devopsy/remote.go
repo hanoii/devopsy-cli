@@ -514,24 +514,48 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		var job *syncJob
 		if t.Parent != "" {
 			var out bytes.Buffer
-			code, err := remote.SSH(t, remote.CurrentExistsScript(t), bytes.NewReader(nil), &out, false)
+			code, err := remote.SSH(t, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false)
 			if err != nil {
 				return fail(err.Error())
 			}
 			if code != 0 {
 				return code
 			}
-			current, incomplete := remote.ParseCurrent(out.String())
+			cur := remote.ParseCurrent(out.String())
+			current := cur.Current
 			first := !current
+			syncs := !noSync && (syncFlag || first)
+			if cur.Importing {
+				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, releaseRef(t)))
+			}
 			// A partial copy from a sync is never run on: only a sync
-			// completes it (the activation checks again).
-			if incomplete && (noSync || (current && !syncFlag)) {
+			// completes it (the activation checks again); a sync is one
+			// of the ways out of an import's too.
+			if cur.Mark != nil && !syncs {
 				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync")}
-				if !current {
+				msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
+				if cur.Mark.IsImport() {
+					msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
+					fixes = nil
+					for _, f := range remote.ImportFixes(releaseRef(t), cur.Mark.From, true) {
+						fixes = append(fixes, report.Fix(f[0], f[1]))
+					}
+				} else if !current {
 					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
 				}
-				report.Fail(&report.Failure{Msg: fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address), Fixes: fixes})
+				report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
 				return 1
+			}
+			// A sync reads the data labels, which an older devopsy takes
+			// for none: refused here, before the upload; a release that
+			// does not sync goes on.
+			if syncs && !cur.DataLabels {
+				msg := "the server's devopsy lacks what this needs (" + remote.DataLabelsFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
+				if os.Getenv(remote.ProtocolCheckEnv) != "warn" {
+					report.Fail(&report.Failure{Msg: msg + ", or set " + remote.ProtocolCheckEnv + "=warn to go on at your own risk: nothing changed"})
+					return 1
+				}
+				report.Warn(msg + ": going on anyway (" + remote.ProtocolCheckEnv + "=warn), and it may fail halfway")
 			}
 			if !noSync {
 				if from != "" && !syncFlag && !first {
@@ -627,7 +651,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Gated: the project goes once the server holds the release lock.
 		// The server names the release (remote.UploadScript), on stdout.
 		var idOut bytes.Buffer
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t), pr, &idOut, progress.before(errOut), false, rlog)
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
 		id := strings.TrimSpace(idOut.String())
 		pr.Close()
 		upInterrupted := upCtx.Err() != nil
@@ -947,7 +971,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
 		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)", t.Name, where),
-			t.Name, "nothing removed", false); err != nil {
+			confirmWord(t), "nothing removed", false); err != nil {
 			report.Fail(err)
 			return 1
 		}

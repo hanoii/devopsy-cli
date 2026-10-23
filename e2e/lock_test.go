@@ -250,12 +250,12 @@ func TestRemovalsCutWhileWaitingForImages(t *testing.T) {
 
 // --sync cut while its holder waits for the child's release lock (Ctrl-C
 // at a terminal, its connection dropped silently) changes nothing on the
-// child once the lock is free: its stop=true services keep running, and
+// child once the lock is free: its own services keep running, and
 // no sync hook runs there.
 //
 // Bug, the silent drop: the holder's watcher is never armed, and the
 // holder reads the session's end only after its prepare: once the lock
-// comes it stops the child's stop=true services, runs the sync
+// comes it stops the child's own services, runs the sync
 // capability's hooks (prepare child, finish child abort) and starts the
 // services again, for a sync nobody is there for. Ctrl-C passes only
 // because the holder's first write after the lock ("syncing into") goes

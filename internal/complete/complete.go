@@ -148,7 +148,7 @@ func Complete(cwd string, words []string, environ []string) Result {
 	case first == "--env":
 		return showFlag(words, cur)
 	case first == "--export" || first == "--import":
-		return dataFlags(words, cur)
+		return dataFlags(words, cur, false)
 	case first == "--completion":
 		if len(words) == 2 {
 			var r Result
@@ -172,12 +172,16 @@ func Complete(cwd string, words []string, environ []string) Result {
 
 // dataFlags completes --export and --import: a service, which
 // completion leaves to the user (its label may come from a variable only
-// compose resolves), then --yes for --import, and --help first.
-func dataFlags(words []string, cur string) Result {
+// compose resolves), then --yes for --import, and on a target
+// (onTarget) --resolved, and --help first.
+func dataFlags(words []string, cur string, onTarget bool) Result {
 	given := words[1 : len(words)-1]
 	list := []Candidate{{"--help", "what it moves, and how", GroupDevopsy}}
 	if words[0] == "--import" {
 		list = append(list, Candidate{"--yes", "on a target, do not ask for the environment's name", GroupDevopsy})
+		if onTarget {
+			list = append(list, Candidate{"--resolved", "accept the data an import that did not complete left, start what it kept down", GroupDevopsy})
+		}
 	}
 	r := Result{Directive: DirectiveNoFileComp}
 	for _, c := range list {
@@ -335,7 +339,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)
 		}
-		// After --, rsync's (or the sync capability's) arguments.
+		// After --, rsync's (or the data capability's) arguments.
 		given := words[1 : len(words)-1]
 		if slices.Contains(given, "--") {
 			return none
@@ -389,7 +393,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 	case "--env":
 		return showFlag(words, cur)
 	case "--export", "--import":
-		return dataFlags(words, cur)
+		return dataFlags(words, cur, true)
 	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--help", "-h":
 		return none
 	case "--":

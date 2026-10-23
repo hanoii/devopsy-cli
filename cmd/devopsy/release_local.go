@@ -307,7 +307,14 @@ func destroyData(cwd string, step []string, color bool) int {
 		if fileExists(started) {
 			_ = os.Rename(started, taken)
 		}
-		if err := endWriters(root, base); err != nil {
+		// Destroy takes everything down anyway: no closure.
+		if err := endWriters(root, base, []cli.SyncService{}); err != nil {
+			return fail(err.Error() + ": nothing removed")
+		}
+		// An import a killed devopsy left may still extract into mnt
+		// (not Compose's, so down --remove-orphans leaves it), and its
+		// files as root would fail the removal of $base.
+		if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(root) + "-[0-9]+$"); err != nil {
 			return fail(err.Error() + ": nothing removed")
 		}
 	}

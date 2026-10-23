@@ -137,7 +137,7 @@ conflicts with one is a design question for the user, not a detail.
   capability), sanitize copies (`finish`), hold visitors during a
   deploy, and put project-specific behavior in `.devopsy/commands/`.
   Small per-project choices are compose labels (`devopsy.shell`,
-  roles, `devopsy.sync`); capabilities are for behavior a label cannot
+  roles, `devopsy.data`); capabilities are for behavior a label cannot
   express, and a new one only when a second use needs it. Why: devopsy
   stays small and every project can differ. Cost: templates carry the
   conventions (devopsy-template-*), and devopsy only reports facts to
@@ -272,7 +272,7 @@ The section that covers each part is in parentheses.
 - `internal/cli/`: finds the project, loads `.env` and decides what to
   run (`Build` returns a `Plan`; it only runs helpers, like the `env`
   capability, never the command); `cli.Flags`; roles (`roles.go`);
-  capabilities; the `devopsy.sync` labels (`sync.go`).
+  capabilities; the `devopsy.data` labels and their stop sets (`sync.go`).
 - `internal/remote/`: config and targets (`config.go`), the schemas
   (`schema.go`), packing a release, and the POSIX `sh` scripts run on
   servers (`remote.go`, a sync's in `sync.go`; checked with `sh -n` in
@@ -371,6 +371,24 @@ before changing anything".
   on) makes either refusal a warning and goes on: the operator's own
   risk, for a local build ahead of the servers. A server with no
   `features=` is older than 8, so only the protocol's warning shows.
+- **The data labels are a named feature, `data-labels`, not a
+  protocol bump:** an older devopsy reads `devopsy.data` as no label (a
+  parent's "nothing to sync" that a holder takes for `go`: a child's
+  first release live on empty data), so every script that reads labels
+  needs it: `--sync-push`, `--export`, `--import` (and `--resolved`
+  through it), `--sync-services prepare|finish|import|list`, quoted or
+  inside `with_tty`'s quotes (a project's remote step calling
+  `--export` is gated, rightly). Not `settle`, which every activation
+  calls (`partialGuard`) and which only warns on labels it cannot read.
+  A bump would refuse every release, `--status` and `--log` on a server
+  lacking only the labels. What refuses before anything changes: the
+  parent's `CurrentExistsScript` carries the push's needs (`extra`,
+  before the holder stops the child's set); the child's prints whether
+  its server has the feature, and the operator refuses only a release
+  that will sync (one that does not goes on); `childNeeds` always adds
+  it, so the child's first session refuses for all of them. Not
+  detected: a project command running `devopsy --export` itself (it
+  fails loudly, without the upgrade line).
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -1033,7 +1051,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   restart): the service holds a half-loaded database, and a partial
   copy keeps everything off its data.
 - **A partial copy keeps everything off the data:** `--sync-services
-  finish partial` leaves the `stop=true` services down and writes
+  finish partial` leaves what the child's side stopped down (the
+  record's `stop` lines) and writes
   `SyncIncompleteFile`; `finish go` removes it, and a failing `finish
   child go` writes it (a sync completes with its finish; the hook
   decides what stays up). While it is there `partialGuard` refuses a
@@ -1042,8 +1061,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   operator refuses before uploading (`--release-no-sync` included: a
   sync is the fix, `--release-sync` when the sync itself needs a code
   fix), a push from it refuses (a chain), `--export` warns, and
-  `--status` shows it. Labels bound the promise: only `stop=true`
-  services are kept off partial data.
+  `--status` shows it. Labels bound the promise: only what the child's
+  side stopped is kept off partial data.
 - **The mark says why** (`remote.IncompleteLine`: since, parent, code,
   why, tab separated, one line: shell reads it with `cut`, no JSON):
   `copy` (cut), `write` (another sync's push wrote after its holder
@@ -1093,7 +1112,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   SIGINT, SIGTERM, SIGHUP or SIGPIPE, cancels it: the same-host rsync
   container is removed (`dockerRun`: killing the docker client leaves
   the container copying), the `-R` session ends, a running export (its
-  own process group, `runSyncHook`) and import get SIGTERM, spools go,
+  own process group, `runDataHook`) and import get SIGTERM, spools go,
   no export starts, and the parent's services are restored. From then
   on `errOut` also appends to the parent's `$base/.devopsy-sync.log`
   (`quietWriter.keep`). What runs inside a container on its own (an
@@ -1106,27 +1125,81 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Labels and the child guard
 
-- **Labels opt in:** `devopsy.sync=rsync|stream` (`cli.SyncLabel`); no
-  label or an empty value is `skip` (neither copied nor touched), any
-  other value an error (`live`, `pause`, `stop`, `custom` went, with
-  `push` and `flush`: no migration). Nothing labeled, or nothing to
-  copy (no entries, no streams): "nothing to sync", success, the
-  parent's hooks skipped, and the run step still runs, unless the child
-  is marked (it stays so).
-- **`devopsy.sync.stop=true|false`** (`SyncStopLabel`, default false,
-  ignored without `devopsy.sync`) stops the service on both sides for
-  the whole sync, a stream included. On the parent that is downtime for
-  the copy: the project's choice, a stream without it the alternative.
+- **One set of labels for every copy** (`internal/cli/sync.go`):
+  `devopsy.data=mnt|stream|none` (`cli.DataLabel`), `devopsy.data.exclude`
+  and `devopsy.data.stop=never|own|import|always` (`DataStopLabel`),
+  for syncs, `--export`/`--import` and later snapshots. Why: one boolean,
+  `devopsy.sync.stop=true`, answered three questions (down while its own
+  data is copied? while any data is imported? for every copy?), so
+  `--import database` of a dump left the app serving during the load,
+  and a child's app ran while its database was reloaded. `mnt`, not
+  `rsync` (only the transport) or `files` (reads as `./mnt/files`).
+- **Values:** no label is no data, like `none`; an empty value is an
+  error (decided: a variable left unset by accident must fail, not stop
+  copying; `none` turns copying off). `stop` defaults to `never` for
+  both methods (every stop is visible in compose.yaml), applies to
+  services without data too (an app needing `import`), and `never` is
+  accepted explicitly (a variable sets it; it silences the dependents
+  notice). `own` without any `devopsy.data` label is an error (it would
+  never stop); with `none` it is ignored (a variable chose `none`).
+  The labels before these, their old values (`rsync`, `files`, `skip`)
+  and anything left in `.devopsy/capabilities/sync/` are errors naming
+  what replaces them, only where labels are read (`parseSyncServices`,
+  `SyncServices`), never in `Build`: a rollback to an older release, or
+  the restart after a failed one, runs a plain `up`.
+- **The stop set is a pure function** (`cli.DataStops`: the operation,
+  `ExportOne`, `ImportOne`, `SyncParent`, `SyncChild`, and the services
+  in, the set with each one's why out). The table in the README is the
+  spec; `own` and `import` overlap only on the service's own import
+  (decided: no `own,import`, a list later if a use appears), and the
+  values are not a scale (`import` on a raw database exports it
+  running, a corrupt copy). An operation over every service takes the
+  union, under one stop and one start (decided over a per-service
+  window: one record, one restore, Compose ordering one `stop`).
+- **Dependents follow, everywhere devopsy stops something:** the
+  services whose `depends_on` reaches a stopped one, transitively, every
+  edge (`required: false`, and Compose's implicit `network_mode:
+  service:`, `links`, `volumes_from`, which its config lists under
+  `depends_on`: pinned by a fixture), computed by devopsy
+  (`cli.WithDependents`), never left to Compose's `stop`: the record,
+  the hooks' lists and the restore need the full set. The closure
+  first, then only what runs is stopped and recorded, so a database
+  down already still stops its running app, and a dependent down or in
+  an inactive profile stays as it was. That includes the stops that end
+  a cut write (`endWriters`, `endImport`). devopsy says what it stops
+  and why (`cli.StoppingLine`). Rejected: stopping dependents of an
+  imported service with no `import` value (implicit; an import of the
+  app's own storage still needs a label).
+- **One invariant for stream scripts:** a service in the set is down
+  (`DEVOPSY_DATA_STOP` says so); a stream service not in it is up for
+  its import (`upFor`, always `--no-deps` for `--import`: a retry's set
+  is empty, since nothing runs, so "only with a set" would start a
+  half-imported dependency; a sync keeps `!rec.first || len(rec.stops)
+  > 0`). No exception for streams, a dependent's included: a script
+  needing its server refuses.
+- **A running dependent without a stop label is named** on `--import` and
+  a child's prepare (`cli.UnlabeledDependents`, filtered by what runs):
+  the worker writing to a streamed database is what authors miss. The
+  child's prepare does not know what the parent copies, so it names the
+  dependents of any of its data services (an approximation, decided:
+  the list carries no `depends_on`).
+- **The child stops before it knows what is copied** (accepted: knowing
+  first costs a session per sync): with nothing to copy, its `import`
+  services were down for seconds.
 - **No `pause`:** `docker pause` flushes nothing (rsync sees what the
   kernel has, not a paused process's buffers), and Traefik 3.7 drops a
   paused container's router the next time it reads the containers
   (devopsy-traefik's AGENTS.md); a stopped routed container loses it at
-  once (404). Consistency comes from `stop=true` or a stream's dump.
-- **`devopsy.sync.rsync.exclude`** (`SyncExcludeLabel`, entries of
-  `mnt`, comma or space separated) drops entries from an rsync
-  service's `Dirs` at parse time, so every consumer (copy, guard, list)
-  agrees. On a `stream` service it is ignored, not validated, so a
-  variable can flip `rsync`/`stream` and keep it.
+  once (404). Consistency comes from a stop or a stream's dump.
+- **`restart: always` defeats "stays down":** Docker starts such a
+  container whenever its daemon starts, so a reboot brings a kept-down
+  app back on half a database. A notice names one in a kept-down set
+  (`restartAlwaysNotice`); the templates use `unless-stopped`.
+- **`devopsy.data.exclude`** (`DataExcludeLabel`, entries of `mnt`,
+  comma or space separated) drops entries from a mnt service's `Dirs`
+  at parse time, so every consumer (copy, guard, list) agrees. On
+  `stream` and `none` it is ignored, not validated, so a variable can
+  flip the method and keep it.
 - **A `.` entry (`./mnt` itself) subsumes the rest,** other services'
   entries included: `--sync-push` says so (`SyncWholeNotice`, yellow
   when the operator's terminal takes colors, `ColorEnv` passed with the
@@ -1136,13 +1209,17 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   child for `--sync-services list` (through `--sync-exec`, one more
   session across servers) and refuses (`syncConflicts`) when a child
   service mounting a copied entry is running or restarting and not
-  `rsync` there (a `stop=true` one is stopped already), and
+  `mnt` there (one the child stopped is down already), and
   (`streamMismatches`) when a parent `stream` service is not `stream`
   on the child, whose import would refuse it after the rsync, or a
-  child `stream` service is `rsync` on the parent. A label from an
+  child `stream` service is `mnt` on the parent. A stop word differing
+  between the sides is named (`stopMismatches`). A label from an
   inherited variable cannot lag (the child reads the pending file,
   inherit below); one in the child's own `shared/.env` can still
-  differ. The list's format is on `runSyncServices`.
+  differ. The list (`runSyncServices`): per service `name`, `<method>+<stop
+  word>`, state, entries, tab separated, then `!import\t<service>` for
+  an import's mark (`listMark`); only a devopsy with `data-labels`
+  reads it, from a child checked for it.
 - **Rejected for these labels:** a `push` script with helpers (it only
   works from the parent's server to the child's, never for a file, a
   laptop or a relay; `export` and `import` give the same freedom and
@@ -1154,13 +1231,20 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   completeness the project's again; fine for a project that wants
   dumps on disk anyway); an `--export` that never stops a service (the
   scripts are written for the label: a `run --rm` export against a
-  live service fails or copies inconsistent files).
+  live service fails or copies inconsistent files); one boolean for the
+  three questions; stopping others from inside the import script
+  (devopsy would not record, restore or keep down what it stopped); a
+  per-service stop window in syncs; `files` as the method's name; an
+  empty `devopsy.data` to turn copying off; splitting the capability
+  into `sync` (prepare, finish) and `data` (export, import).
 
 ### Order and state
 
 - **The child's side** (`--sync-services prepare`): `settle`, the state
-  record, the import check, the `prepare child` hook, then one `compose
-  stop` of its `stop=true` services. Keep it one call: Compose orders
+  record, an import's leftover writer ended (`endLeftoverImport`, when
+  its mark is there: a sync never streams into a database still
+  loading), the import check, the `prepare child` hook, then one
+  `compose stop` of its set (`cli.DataStops`, `SyncChild`). Keep it one call: Compose orders
   them by `depends_on`, dependents first. `finish go|abort` starts them
   and waits until healthy, `partial` leaves them down; every spool
   left goes (an import removes its own; one left is an earlier sync's);
@@ -1168,16 +1252,21 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   services stay down through the imports: no app on a half-imported
   database.
 - **The parent's side** (`runSyncPush`): the checks (labels, the
-  `export` script when a service is `stream`, the child guard, the util
-  image) before anything, then `prepare parent`, on the same server a
+  child's import mark (below), the `export` script when a service is
+  `stream`, the child guard, the util image) before anything, then `prepare parent`, on the same server a
   refusal when the child's gate is gone already (its holder decided),
   stop, rsync, streams, start (healthy), `finish parent go|abort`. A
   failing prepare aborts before its side stops anything.
-- **Hooks run from Go** (`runSyncHook`, `--capability sync ...` in its
+- **Hooks run from Go** (`runDataHook`, `--capability data ...` in its
   own process group), only where their file is (`export` and `import`
   are required for a `stream` service), with that side's label lists
-  (`cli.SyncLists`) and the sync's addresses and arguments in their
-  environment (README). The holder's scripts (`syncPrepare`,
+  and the operation's set (`cli.DataLists`, `dataHookEnv`:
+  `DEVOPSY_DATA_STOP` from labels at prepare, export, import and
+  `finish ... go|abort`, from the record at `finish child partial` and
+  `settle`, what is down then) and the sync's addresses and arguments
+  in their environment (README). One `data` capability, not a split:
+  one concept, named like its labels, and snapshots will want
+  `prepare` and `finish` too. The holder's scripts (`syncPrepare`,
   `syncFinish`) only call `--sync-services`. Hooks run in the
   foreground: what one leaves running in its group ends when it
   returns, said; what it starts outside its group (`setsid`, `docker
@@ -1186,9 +1275,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   records what it stops in `$base/.devopsy-sync.services` (`syncState`,
   `stop <name>` lines; `startSyncState`: the child's prepare creates it
   before its hook, `stopServices` before its first `ps`). Why: no
-  record means restore every `stop=true` service, one down on purpose
-  included. One left by an earlier sync that could not restore is kept
-  and added to (`syncRecord`, rewritten whole).
+  record means restore the side's whole set (a sync's; nothing for an
+  import or `--resolved`, whose mark and record are written together),
+  one down on purpose included. One left by an earlier sync or import
+  that could not restore is kept and added to (`syncRecord`, rewritten
+  whole, `writer <pgid>` lines kept).
 - **Restoring brings back only the recorded services,** whatever their
   labels say now (an inherited variable may have changed them since a
   cut sync), from container state (exited), so it also recovers after an interrupted sync, and a
@@ -1200,15 +1291,18 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`serviceEntries`: a hook's `run --rm` still running would read as its
   service running, which then never started again); the sync tests'
   fake docker remembers stops and starts to answer it.
-- **A child's first release gets every labeled service before its
-  finish hook:** a release with nothing current before it (`prepare
+- **A child's first release gets its data services and its side's set
+  before its finish hook:** a release with nothing current before it (`prepare
   first`, from the activation), or no container at all when prepare
   started, is a `first` line in the record (a stream's import creates
   its container before finish looks, and a first release killed
   before its `firstDown` may have left one; a later sync that finds
   containers drops it). Before
-  the hook every labeled service is created in one `up -d --wait`,
-  since the hook sanitizes through them (drupal11's needs the app:
+  the hook those services are created in one `up -d --wait`: the ones
+  with data and the child side's set by labels, without the running
+  filter (an unlabeled app following its `own` database, an `import`
+  app without data), since `up` creates dependencies but never
+  dependents, and the hook sanitizes through them (drupal11's needs the app:
   without it, prod's passwords reached a child), and a stream imported
   then stays up. Only on go: an aborted first sync creates nothing.
   Never otherwise: a missing service was removed on purpose.
@@ -1229,7 +1323,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   pipe into the import: a cut export never reaches it.
 - **The import:** the service brought up (`upFor`, `--no-deps` but on
   a first release: Compose would start a dependency the sync stopped)
-  unless `stop=true` (down again after if it was down), `import <service>` with the spool
+  unless the child's side stopped it (down again after if it was down), `import <service>` with the spool
   as stdin, the spool removed whatever happens. Its stdin is a pipe the
   push keeps open, so across servers the session's end, which a remote
   process never gets as a signal, cancels it too.
@@ -1325,23 +1419,23 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ## --export and --import
 
-One labeled service's data to stdout or from stdin, moved the way its
-sync label says, with the sync's scripts. Code:
-`cmd/devopsy/data.go`, scope `[@t]`.
+One service's data to stdout or from stdin, moved the way its data
+label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
+`writers.go`, scope `[@t]`.
 
-- **The label decides how, and it is the contract:** an unlabeled
-  service is refused. `stream`: the capability's `export` and `import`
-  (`runSyncHook`, the lists in their environment). `rsync`: a tar of
+- **The label decides how, and it is the contract:** a service without
+  data is refused. `stream`: the capability's `export` and `import`
+  (`runDataHook`, the lists in their environment). `mnt`: a tar of
   the service's entries of `mnt` (exclude honored, file entries
-  included) made in `UtilImage` as root with `--numeric-owner`.
-  `stop=true` stops the service around either and restores it
-  (`stopFor`), interrupts and a stop that failed included (it may have
-  stopped it all the same). A `stream` import of a service not stopped
-  brings it up and down again if it was down (`upFor`), an `up` that
-  failed too. A
+  included) made in `UtilImage` as root with `--numeric-owner`. The
+  set (`cli.DataStops`, `ExportOne` or `ImportOne`) is stopped around
+  either and restored (`stopSet`), interrupts and a stop that failed
+  included (it may have stopped them all the same) up to the first
+  write. A `stream` import of a service not stopped brings it up alone
+  and down again if it was down (`upFor`), an `up` that failed too. A
   service mounting `./mnt` itself carries all of `mnt`, said
   (`wholeMntNotice`).
-- **An rsync import checks the whole tar before changing anything**
+- **An mnt import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
   writer adds: `tar -t` takes a tar cut at a member boundary for
@@ -1366,25 +1460,121 @@ sync label says, with the sync's scripts. Code:
   locally a temporary `.devopsy/.devopsy-sync.stream.*`, which `excluded` keeps
   out of releases), refuses an empty one, and only then stops anything.
   The spool always goes.
-- **A stream's import that fails or is cut is ended** (`endImport`):
-  what it started in the service may load on (a `docker exec` never
-  gets the cut), so its one-offs go and the service, unless stopped for
-  the import already, is stopped and started again if it ran before,
-  with a warning that its data may be partial. On a target,
-  `ImportScript` settles a sync's leftover record first.
+- **The first write** is devopsy asking Docker to start the writer (the
+  import hook, or the util container): checked against its context
+  right before; from then on the import counts as written, a Docker
+  error that started nothing included. Before it a failure restores
+  the set; from it a failure ends the write (`endImport`, with the
+  closure: one-offs, the project's `ImportContainerPrefix` containers,
+  the service and its dependents stopped) and keeps the set down, the
+  imported service stopped and recorded too when it ran before (one
+  rule with a sync's `endWriters`, "stop, not restart"). Locally no
+  mark and no record (a release in place has nothing to guard): the
+  error names what it left down and `devopsy start`. Decided over
+  restoring after a failure, with or without a mark: drupal11's import
+  drops the database first, so a cut dump served an empty site.
+- **On a target, the mark and the record go first** ("on a target" is
+  `cli.InRelease`): the record (`stopSet` with record, the sync's
+  `syncState`) at the stop, before stopping (a devopsy killed between
+  the stop and the byte leaves it, and the next import, `--resolved`
+  or sync restores it; a restore before the first write puts it back as
+  it was); the mark (`IncompleteImport`, its second field the service:
+  `markIncomplete`'s `from`) right before the writer; a `writer <pgid>`
+  line once the hook runs. A complete import restores the record's
+  `stop` lines (`restoreServices`, not `stopSet`'s set, empty on a
+  retry) and only once all are healthy removes the mark (still its own:
+  `clearImportMark`) and the record; a start that fails keeps both. On
+  a complete retry `upFor`'s `down()` is skipped for a service in the
+  record. Rejected: a mark written only on failure (a devopsy killed or
+  a server rebooted mid-load would leave none).
+- **The byte before the first write:** the local side sends the data,
+  the end line with a nonce (`ImportEndEnv`; a session cut halfway
+  reaches the server as a plain EOF) and keeps stdin open; the server
+  finds the line inside the stream (`spoolUntil`), prints
+  `remote.ImportMarker` and waits, bounded (`dataQuiet`), for one byte
+  (`awaitByte`), which the operator's devopsy sends on the marker unless
+  interrupted. Why: once the end line came nothing reads stdin, and a
+  session lost between the spool and the first write is only noticed
+  through SIGPIPE, asynchronously. No byte: restored, nothing imported.
+  From the byte on nothing from the session interrupts (the rule after
+  a release's switch): `signal.Ignore` of SIGPIPE, SIGHUP and SIGINT
+  (only dropping `interruptible`'s `Notify` would let Go's runtime kill
+  devopsy on the next write to the gone fd 2), `errOut.keep` to
+  `$base/.devopsy-sync.log`, the import's own result deciding. A
+  Ctrl-C after the marker says the import goes on, a second ends the
+  session. Rejected: a session lost during the load cancelling it.
+- **The writer does not hold the release lock:** devopsy sets fds 8 and
+  9 close-on-exec (`syscall.CloseOnExec`) so the hook and the util
+  container's client get neither; devopsy keeps them to its end. Why:
+  after a SIGKILLed devopsy the orphaned load held the lock to its end,
+  every lock-taker waited 600 s and failed. Unlike a fetch's children,
+  an import's leftover writer is ended explicitly by the next
+  lock-taker (`endLeftoverImport`: the record's writer groups, SIGTERM
+  while `/proc` shows the data capability's import, then SIGKILL; the
+  import containers; `endImport`), run by an import of that service,
+  `--resolved` and a child's prepare; `--destroy-data` removes the
+  containers too (not Compose's: `down --remove-orphans` leaves them).
+- **While an import's mark is there, only its service can be
+  imported** (`ImportScript`, in shell under the lock after its
+  `settle`, before devopsy reads stdin, and again in Go), and any
+  import refuses on a sync's mark. Why: two partial services would need
+  a rule for every combination, and an import's mark over a sync's
+  would lift the guard off its partial copy. A sync's mark replaces an
+  import's, never the reverse (`markIncomplete`: `keep` keeps a sync's
+  only; the holder's `copy` line writes over it; `finish partial`
+  keeps any mark when nothing was written), so from then on only a sync
+  clears it. A sync clears an import's mark only by copying that
+  service: the push refuses before stopping anything on the parent
+  otherwise (`copiesService`: data, a stream, or a mnt entry that exists
+  there), and a sync whose parent writes nothing stays partial. Every
+  reader of the mark branches on its code (`markRefusal`,
+  `partialGuard`, the restart skip, `PushScript`, `syncBlock`,
+  `--status`, `--export`'s warning, `syncPreflight`, the operator's
+  release check, `UploadScript`) and says "the import of <service> did
+  not complete" with its ways out (`remote.ImportFixes`), `--sync` only
+  on a child: the real user is a prod without a parent.
+- **"Importing" is the holding file with the lock held**
+  (`SyncImportingFile`, written by `ImportScript` once it holds the
+  lock, removed on its way out; `ImportRunning`), never `LockBusy`
+  alone: any holder of the lock would read as an import. Never in a
+  script holding the lock itself, where `LockBusy` is always true:
+  holding it, it knows none runs.
+- **A release of a marked environment refuses before its upload,
+  without a new session:** `UploadScript` checks the mark under the
+  lock before `LockedMarker`, so no tar is sent and no release is left;
+  only what `partialGuard` would (a release that syncs goes on). Rejected:
+  one more session per release (accepted cost: its local `before` steps
+  run first). Children keep `CurrentExistsScript`, which prints the
+  mark's line (`remote.ParseCurrent`), "incomplete" alone for a killed
+  holder's files.
+- **`--import <service> --resolved`** (`runResolved`,
+  `runRemoteResolved`): the way out when the dump itself cannot
+  complete. A read-only session (`ResolvedCheckScript`, never waiting on
+  the lock) refuses there (no mark, another service's, a sync's, an
+  import running); a prompt names what starts (the record's `stop`
+  lines) and asks for the full name; a second session under the lock
+  checks again, ends a leftover writer, starts the record and only then
+  removes the mark and the record. On the server it is `devopsy
+  --import <service> --resolved --yes` (`ResolvedScript`), so the
+  `data-labels` regexp gates it. Not locally (decided): nothing there
+  tells a failed import's stops from deliberate ones. Rejected names:
+  `--accept`, `--force` (`mariadb --force`), `--continue`, `--fake`,
+  `--clear`, `--repair`.
+- **Prompts ask for the full name** (`confirmWord`: `t.Path`,
+  `<project>/[<instance>/]<environment>`), never the service, which the
+  prompt's text names: `--destroy`, `--sync`, `--import`, `--resolved`;
+  a local `--destroy` keeps the project's name.
+- **The restore's compose calls run in their own process group**
+  (`compose`, not `composeContext`): a terminal's Ctrl-C reaches the
+  whole foreground group, and the larger sets would be left down
+  without a word.
 - **On a target the server runs the same code:** `ExportScript` (shared
   release lock and exclusive `SyncLockFile`, like the push: both stop and
-  restore the same services; stdout through as it is, never
-  colorized) and `ImportScript` (exclusive lock, `devopsy --import
-  <service> --yes`). The local side asks for the environment's name on
-  `/dev/tty` (`confirmImport`: stdin is the data; no terminal and no
-  `--yes` fails).
-- **A remote import needs an end line to count as complete:** the local
-  side sends stdin and, only after a clean EOF, an end line with a
-  random nonce (`ImportEndEnv`); the server requires the line and takes
-  it off. Why: a session cut halfway reaches the server as a plain EOF.
-  A pipe from a failed export still looks complete: README says to go
-  through a file for what matters.
+  restore services; stdout through as it is, never colorized) and
+  `ImportScript` (exclusive lock, `devopsy --import <service> --yes`,
+  not exec'd: its holding file goes on its way out). The local side
+  asks on `/dev/tty` (`confirmImport`: stdin is the data; no terminal
+  and no `--yes` fails).
 
 ## Roles, exports and imports
 

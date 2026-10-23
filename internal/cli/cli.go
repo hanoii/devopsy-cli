@@ -340,7 +340,7 @@ machine: the parent's server copies into the child's.
 
   environments:
     prod:
-      inherit: [SYNC_DATABASE]   # variables every child gets
+      inherit: [DATA_DATABASE]   # variables every child gets
     dev:
       parent: prod
 
@@ -348,37 +348,48 @@ machine: the parent's server copies into the child's.
                     (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
   -- args...        DEVOPSY_SYNC_ARGS: rsync's arguments (--exclude=cache),
-                    and the sync capability's to read
+                    and the data capability's to read
 
 Services opt in, with labels on compose services, read by each side from
-its own release:
+its own release. A sync is an export of every service with data on the
+parent and an import of each on the child:
 
-  devopsy.sync=rsync   its entries of .devopsy/mnt rsynced (rsync -a
+  devopsy.data=mnt     its entries of .devopsy/mnt rsynced (rsync -a
                        --delete --numeric-ids, as root in devopsy's own
                        image, devopsy-util, built on each server)
-  devopsy.sync=stream  the parent's sync capability's export writes it to
+  devopsy.data=stream  the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
                        database dumped and loaded)
-  (no label)           neither copied nor touched
-  devopsy.sync.stop=true
-                       stopped on both sides for the whole sync, a clean
-                       shutdown (a database's files); default false: a
-                       running service is copied as it is
-  devopsy.sync.rsync.exclude=<entry>[,<entry>...]
-                       entries of mnt an rsync service mounts that are not
+  devopsy.data=none    no data (as without the label): neither copied nor
+                       touched
+  devopsy.data.exclude=<entry>[,<entry>...]
+                       entries of mnt a mnt service mounts that are not
                        copied through it anyway (an access log)
+  devopsy.data.stop=never|own|import|always
+                       when it is stopped, for the whole sync: never (the
+                       default); own, while its own data moves (a
+                       database copied as files: on both sides); import,
+                       while any data is imported (an app: on the child);
+                       always, on both sides. own and import are not
+                       nested: always is both. What depends_on a stopped
+                       service stops with it.
 
 What runs where:
   - the child's server, under its release lock: the prepare child hook,
-    its stop=true services stopped, then it waits for the copy; after
-    it, they start (and become healthy), the finish child hook runs,
-    then the run step. A failed copy restores them and skips the run
-    step.
+    its own, import and always services stopped with what depends on
+    them, then it waits for the copy; after it, they start (and become
+    healthy), the finish child hook runs, then the run step. A failed
+    copy restores them and skips the run step; one cut halfway keeps
+    them down until a sync completes.
   - the parent's server, under a shared hold of its lock (its releases
-    wait): prepare parent, its stop=true services stopped, the rsync,
-    each stream (export, then the child's import: its service brought
-    up first unless stopped), its services started, finish parent.
+    wait): prepare parent, its own and always services stopped with what
+    depends on them, the rsync, each stream (export, then the child's
+    import: its service brought up first unless stopped), its services
+    started, finish parent.
+
+The child stops its set before it knows what the parent copies: with
+nothing to copy, its import services were down for a few seconds.
 
 Without any labeled service there is nothing to sync; the run step still
 runs.
@@ -398,7 +409,7 @@ instance's or the project's .env); names are printed, never values. On a
 re-sync they go to a pending file the sync reads (labels from them follow
 the parent's at once) and replace shared/inherit.env once the copy is in.
 
-The sync capability (capabilities/sync): prepare and finish on both
+The data capability (capabilities/data): prepare and finish on both
 sides, export on the parent's and import on the child's for the stream
 services (devopsy --debug capabilities). Asks for the environment's name,
 unless --yes. The log goes with the current release: devopsy @<target>
@@ -406,56 +417,78 @@ unless --yes. The log goes with the current release: devopsy @<target>
 `,
 	"--export": `Usage: devopsy [@<target>] --export <service>
 
-Writes a service's data to stdout, the way its devopsy.sync label says;
+Writes a service's data to stdout, the way its devopsy.data label says;
 everything devopsy says goes to stderr. With a target, in its current
 release on the server, under a shared hold of its release lock (a
 release waits) and its sync lock (a sync from it waits), the data coming
 through SSH.
 
-  devopsy.sync=stream   the sync capability's export <service> (a dump)
-  devopsy.sync=rsync    a tar of the entries of .devopsy/mnt it mounts
-                        (devopsy.sync.rsync.exclude honored), made as root
-                        in devopsy-util with numeric owners and modes. A
-                        service mounting ./mnt itself exports all of it,
-                        other services' and excluded entries included
-                        (devopsy says which)
-  devopsy.sync.stop=true  stopped around it, started again afterwards
+  devopsy.data=stream  the data capability's export <service> (a dump)
+  devopsy.data=mnt     a tar of the entries of .devopsy/mnt it mounts
+                       (devopsy.data.exclude honored), made as root in
+                       devopsy-util with numeric owners and modes. A
+                       service mounting ./mnt itself exports all of it,
+                       other services' and excluded entries included
+                       (devopsy says which)
 
-A service without the label is refused. --import reads what --export
-writes, so data goes from one environment to another without a project
-command:
+Stopped meanwhile, then started again: the service when it is labeled
+devopsy.data.stop=own or always, every always service, and what depends
+on those (devopsy says what and why). An export of a database labeled
+own, copied as files, stops its app too.
+
+A service without data is refused. --import reads what --export writes,
+so data goes from one environment to another without a project command:
 
   devopsy @prod --export database | devopsy --import database
   devopsy @prod --export storage > storage.tar
   devopsy --export database > database.sql
 `,
 	"--import": `Usage: devopsy [@<target>] --import <service> [--yes]
+       devopsy @<target> --import <service> --resolved [--yes]
 
 Replaces a service's data with stdin, what --export wrote, the way its
-devopsy.sync label says. stdin goes to a file first (under .devopsy/
+devopsy.data label says. stdin goes to a file first (under .devopsy/
 locally, next to the environment on a server); only once it is all there
 does anything change, and the file is removed afterwards.
 
-  devopsy.sync=stream   the sync capability's import <service> reads it,
-                        with the service brought up first unless stopped
-                        (and down again after it if it was down)
-  devopsy.sync=rsync    a tar: each entry of mnt it carries is emptied,
-                        then extracted as root in devopsy-util, owners and
-                        modes as they were; the service may run meanwhile.
-                        A truncated tar, or one carrying entries the
-                        service does not mount, changes nothing; one of
-                        ./mnt itself replaces all of mnt (devopsy says so)
-  devopsy.sync.stop=true  stopped around it, started again afterwards
+  devopsy.data=stream  the data capability's import <service> reads it,
+                       with the service brought up first (--no-deps)
+                       unless stopped, and down again after if it was
+  devopsy.data=mnt     a tar: each entry of mnt it carries is emptied,
+                       then extracted as root in devopsy-util, owners and
+                       modes as they were. A truncated tar, or one
+                       carrying entries the service does not mount,
+                       changes nothing; one of ./mnt itself replaces all
+                       of mnt (devopsy says so)
 
-With a target, asks for the environment's name on the terminal first
-(--yes skips it, and is required without a terminal), then imports under
-its release lock; a session cut halfway imports nothing. A pipe cannot
-tell an export that failed halfway from one that ended, so a stream
-imports what it got (a tar is checked): when the export can fail, export
-to a file, check its exit code, then import that.
+Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
+import or always, every import and always service (an app, a worker),
+and what depends on those (devopsy says what and why, and names a
+running service depending on it without a stop label).
+
+Nothing is replaced until the data has fully arrived. A failure before
+the import starts brings back what was stopped. From then on, on a
+target, the environment is marked: a failure keeps what was stopped
+down, the service and what depends on it too, and nothing runs on it (no
+release, rollback or restart) until an import of that service completes;
+no other service can be imported meanwhile. When the data itself cannot
+complete (an error near the end of a dump), --resolved accepts it as it
+is: it asks for the environment's full name and starts what the import
+kept down. Locally devopsy keeps no mark: the error says what it left
+down.
+
+With a target, asks for the environment's full name (<project>/
+[<instance>/]<environment>) on the terminal first (--yes skips it, and
+is required without a terminal), then imports under its release lock; a
+session cut before the import starts imports nothing, and once it
+started the import goes on on the server. A pipe cannot tell an export
+that failed halfway from one that ended, so a stream imports what it got
+(a tar is checked): when the export can fail, export to a file, check
+its exit code, then import that.
 
   devopsy @prod --export database | devopsy --import database
   devopsy @staging --import database --yes < database.sql
+  devopsy @staging --import database --resolved
 `,
 	"--inherit": `Usage: devopsy @<target> --inherit
 
@@ -467,7 +500,7 @@ file; its server's instance and project .env come below it.
 
   environments:
     prod:
-      inherit: [SYNC_DATABASE, DB_PASSWORD]
+      inherit: [DATA_DATABASE, DB_PASSWORD]
     dev:
       parent: prod
 `,

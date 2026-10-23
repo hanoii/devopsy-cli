@@ -6,8 +6,8 @@ import "fmt"
 // "plain" for a plain devopsy directory, "none" for an unreleased one
 // (with the newest release's id when it failed),
 // else tab-separated header lines (release <id> <record JSON>, kept <n>,
-// synced <time or empty>, partial <when and from> when a sync left its
-// data a partial copy), then "---" and, from the current release,
+// synced <time or empty>, partial <the mark> when a sync or an import
+// left its data partial), then "---" and, from the current release,
 // devopsy --status there: the containers and the project's own lines.
 func StatusScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
@@ -43,11 +43,15 @@ cd "$base/current" && exec devopsy --status
 }
 
 // partialStatus prints StatusScript's sync lines: "syncing" while a
-// sync's holder holds the lock, "source" while a sync from it (or an
-// export) holds its sync lock, and the partial line: the mark's content,
-// or empty for a sync's files nobody settled yet.
+// sync's holder holds the lock, "importing" while an import does,
+// "source" while a sync from it (or an export) holds its sync lock, and
+// the partial line: the mark's content, or empty for a sync's files
+// nobody settled yet. A sync is checked first: a --release-sync of an
+// import-marked child reads "syncing".
 var partialStatus = `if ` + SyncRunning + `; then
   echo syncing
+elif ` + ImportRunning + `; then
+  echo importing
 fi
 if ` + SourceBusy + `; then
   echo source

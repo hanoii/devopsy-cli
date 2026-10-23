@@ -64,16 +64,16 @@ func syncProjectWith(t *testing.T, name string, files map[string]string) string 
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
+    labels: {devopsy.data: mnt, devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.sync: stream}
+    labels: {devopsy.data: stream}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
-		".devopsy/capabilities/sync/import": "#!/bin/sh\n: >\"$HOME/importing-$COMPOSE_PROJECT_NAME\"\nsleep \"$(cat \"$HOME/import-wait-$COMPOSE_PROJECT_NAME\" 2>/dev/null || echo 0)\"\ncat >/dev/null\n",
-		".devopsy/capabilities/sync/finish": "#!/bin/sh\necho \"$1 $2\" >>\"$HOME/finish.log\"\n",
+		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
+		".devopsy/capabilities/data/import": "#!/bin/sh\n: >\"$HOME/importing-$COMPOSE_PROJECT_NAME\"\nsleep \"$(cat \"$HOME/import-wait-$COMPOSE_PROJECT_NAME\" 2>/dev/null || echo 0)\"\ncat >/dev/null\n",
+		".devopsy/capabilities/data/finish": "#!/bin/sh\necho \"$1 $2\" >>\"$HOME/finish.log\"\n",
 	}
 	for p, content := range files {
 		base[p] = content
@@ -105,7 +105,7 @@ func syncState(t *testing.T, name, env, service string) string {
 }
 
 // A child left partial, then a sync with nothing to copy (the parent's
-// labels now skip every service): decided, nothing written leaves the
+// labels now give every service no data): decided, nothing written leaves the
 // earlier partial copy as it was, so the sync fails, the child stays
 // marked with its services down, and devopsy says what to do (fix the
 // labels or entries by hand, or --destroy and release again).
@@ -118,15 +118,15 @@ func TestSyncNothingToCopy(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.sync: "${SYNC_DATA-rsync}", devopsy.sync.stop: "true"}
+    labels: {devopsy.data: "${SYNC_DATA-mnt}", devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.sync: "${SYNC_DB-stream}"}
+    labels: {devopsy.data: "${SYNC_DB-stream}"}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
-		".devopsy/capabilities/sync/import": "#!/bin/sh\ncat >/dev/null\n",
+		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
+		".devopsy/capabilities/data/import": "#!/bin/sh\ncat >/dev/null\n",
 	})
 	t.Cleanup(func() { srv(t, "rm -f fail-export") })
 	syncReleaseBoth(t, "nothing", dir)
@@ -134,8 +134,58 @@ func TestSyncNothingToCopy(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") {
 		t.Fatalf("no partial copy (%d):\n%s", code, out)
 	}
-	srv(t, "rm -f fail-export; printf 'SYNC_DATA=\\nSYNC_DB=\\n' >>nothing/prod/shared/.env")
+	srv(t, "rm -f fail-export; printf 'SYNC_DATA=none\\nSYNC_DB=none\\n' >>nothing/prod/shared/.env")
 	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") || syncState(t, "nothing", "dev", "data") != "exited" || !strings.Contains(out, "nothing was copied, and the data is still an earlier sync's") || !strings.Contains(out, "--destroy it and release it again") {
 		t.Errorf("a sync with nothing to copy (%d): marked %v, data %q:\n%s", code, exists(t, "nothing/dev/.devopsy-sync.incomplete"), syncState(t, "nothing", "dev", "data"), out)
+	}
+}
+
+// drupal11's shape with real Compose: a database copied as files
+// (devopsy.data=mnt, own) and an app without labels that depends on it,
+// condition: service_healthy. A sync stops both on each side, in one
+// compose stop, and starts both again through the healthcheck; an export
+// of the database stops its app too, and an import brings both back.
+func TestSyncDependents(t *testing.T) {
+	dir := project(t, "deps", map[string]string{
+		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml": "project: deps\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/compose.yaml": `services:
+  data:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/data:/data]
+    healthcheck: {test: [CMD, "true"], interval: 1s, timeout: 2s, retries: 3}
+    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+  app:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    depends_on: {data: {condition: service_healthy}}
+`,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+	})
+	syncReleaseBoth(t, "deps", dir)
+	srv(t, "echo two >deps/prod/shared/mnt/data/stamp")
+	out, code := op(t, dir, "devopsy @dev --sync --yes")
+	if code != 0 || strings.Count(out, "stopping data (own), app (depends on data)") != 2 || syncStamp(t, "deps", "dev") != "two" {
+		t.Fatalf("a sync (%d), stamp %q:\n%s", code, syncStamp(t, "deps", "dev"), out)
+	}
+	for _, env := range []string{"prod", "dev"} {
+		for _, s := range []string{"data", "app"} {
+			if st := syncState(t, "deps", env, s); st != "running" {
+				t.Errorf("after the sync, %s's %s is %q", env, s, st)
+			}
+		}
+	}
+	srv(t, "echo three >deps/prod/shared/mnt/data/stamp")
+	out, code = op(t, dir, "devopsy @prod --export data >/tmp/deps-data.tar && devopsy @dev --import data --yes </tmp/deps-data.tar")
+	if code != 0 || strings.Count(out, "stopping data (own), app (depends on data)") != 2 || syncStamp(t, "deps", "dev") != "three" || exists(t, "deps/dev/.devopsy-sync.incomplete") {
+		t.Fatalf("an export and an import (%d), stamp %q:\n%s", code, syncStamp(t, "deps", "dev"), out)
+	}
+	for _, env := range []string{"prod", "dev"} {
+		for _, s := range []string{"data", "app"} {
+			if st := syncState(t, "deps", env, s); st != "running" {
+				t.Errorf("after the import, %s's %s is %q", env, s, st)
+			}
+		}
 	}
 }
