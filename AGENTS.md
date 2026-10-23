@@ -509,7 +509,8 @@ step's rules):
 8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
    destroying and removing; before the sync of a release that syncs,
    after `followOutput` otherwise, and in a rollback from the restored
-   release's labels: a failure is the run step's), the sync of a
+   release's labels, `--mnt-owners restored`, where labels this devopsy
+   cannot read only warn: a failure is the run step's), the sync of a
    release that syncs, `followOutput` (From the switch on), the run
    step.
 9. A failed run or sync: `FailedFile`, what the release's containers
@@ -520,7 +521,7 @@ step's rules):
    rebuilt upstream included, so their evidence went with them and
    `--log` only said "unhealthy"), `current` back, the previous
    release restarted with its own images (`get_images`), owners
-   (`--mnt-owners`, a failure only said) and run step
+   (`--mnt-owners restored`, a failure only said) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
@@ -968,7 +969,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   not write has the wrong owner deep under a correct top; measured 0.24
   s warm, 0.75 s cold for 500,000 files; fallback for huge trees: `-type
   d` only), and rollbacks and the restart after a failed run from the
-  restored release's labels; a sync's rsync, `--chown` per entry from
+  restored release's labels (`--mnt-owners restored`: labels this
+  devopsy cannot read there, names from before a change, `./mnt` whole,
+  a compose error, are a warning and nothing is given away, for the
+  reason rollbacks never check roles or imports; review of 2026-10-23,
+  a rollback to a release with `devopsy.sync` labels failed; a chown
+  failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
   the child's labels (Syncs); an `mnt` import, in its extracting
   container (`emptyAndExtract`, `OWNED`); a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `run` and `create`

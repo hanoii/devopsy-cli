@@ -131,19 +131,29 @@ func projectOwners(cwd string) (owned map[string]string, mnt string, err error) 
 	return owned, mnt, err
 }
 
-// runMntOwners implements the hidden --mnt-owners, run by an activation
-// in current right after its switch (a rollback's and a restart's too,
-// from the restored release's own labels): every owned entry created
-// when missing and scanned whole. A failure is a failed run step.
+// runMntOwners implements the hidden --mnt-owners [restored], run by an
+// activation in current right after its switch: every owned entry
+// created when missing and scanned whole. A failure is a failed run
+// step. restored is a rollback's and the restart's after a failed run,
+// from the restored release's own labels: labels that cannot be read
+// there (names from before a change, ./mnt whole, a compose error) are a
+// warning and nothing is given away, as rollbacks never check roles or
+// imports: a rollback must not fail exactly when it is needed. A chown
+// failing on labels that were read still fails it.
 func runMntOwners(cwd string, args []string) int {
-	if len(args) > 0 {
-		report.Error(cli.MntOwnersFlag + " takes nothing")
+	restored := len(args) == 1 && args[0] == mntOwnersRestored
+	if len(args) > 0 && !restored {
+		report.Error(cli.MntOwnersFlag + " takes nothing, or " + mntOwnersRestored)
 		return 2
 	}
 	// Short and needed whole: a gone session is no reason to stop
 	// halfway.
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
 	owners, mnt, err := projectOwners(cwd)
+	if err != nil && restored {
+		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", err.Error())
+		return 0
+	}
 	if err == nil {
 		err = ownMnt(context.Background(), mnt, owners, fmt.Sprintf("devopsy-owners-%s-%d", composeName(cwd), os.Getpid()))
 	}
@@ -153,6 +163,10 @@ func runMntOwners(cwd string, args []string) int {
 	}
 	return 0
 }
+
+// mntOwnersRestored is --mnt-owners' word for a restored release
+// (runMntOwners).
+const mntOwnersRestored = "restored"
 
 // runCheckMounts implements the hidden --check-mounts, run by an
 // activation in the new release before its switch (cli.CheckMounts). A

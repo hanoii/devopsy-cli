@@ -20,6 +20,8 @@ import (
 // (--chown), from the child's labels only.
 func TestMntOwnersRelease(t *testing.T) {
 	s := newSyncSetup(t)
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
 	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/storage/files/cache\n", 0o644)
 	out, code := s.run(nil, "@prod", "--release")
 	docker, _ := s.logs()
@@ -52,6 +54,25 @@ func TestMntOwnersRelease(t *testing.T) {
 	docker, _ = s.logs()
 	if code != 0 || !strings.Contains(docker, "rsync -a --delete --numeric-ids --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/db/ /dst/db/\n") || strings.Contains(docker, "20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// A rollback gives owners by the restored release's labels; labels
+	// this devopsy cannot read there (here a name from before
+	// devopsy.data) only warn, nothing given away: a rollback never fails
+	// for them, as it never checks roles or imports (review of
+	// 2026-10-23: it failed, and current went back).
+	first := s.current("prod")
+	s.releaseProd(nil)
+	if s.current("prod") == first {
+		t.Fatalf("second release did not go live")
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP=old\n", 0o644)
+	out, code = s.run(nil, "@prod", "--rollback")
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") {
+		t.Errorf("a rollback to a release with older labels (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
+		t.Errorf("owners given away by labels that cannot be read:\n%s", docker)
 	}
 }
 

@@ -814,8 +814,12 @@ network, never following a symbolic link:
   (0755) and given to its owner, and so is each bind source below one
   (`./mnt/storage/files`, which Docker would make root's), then every
   owned entry is scanned whole, so what devopsy did not write (an upload
-  by hand, data from before the label) gets its owner too. A failure
-  fails the release as its run step would: the previous one comes back;
+  by hand, data from before the label) gets its owner too; a file a
+  running service removes meanwhile is no failure. A failure fails the
+  release as its run step would: the previous one comes back. In a
+  rollback or a restart, labels that cannot be read (names from before
+  a change, a compose error) are only a warning, nothing given away: a
+  rollback never fails for its release's labels;
 - **a sync**: an entry the child owns lands as the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files are;
 - **an `--import`** of a `mnt` service: what it extracted goes to its
