@@ -583,6 +583,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   and the two projects' containers would reach each other by service
   name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
   another project, join its network as `external`.
+- **The mounts check:** a writable bind mount in the release's tree, data
+  or an owner with no entry of `mnt`, an entry with two owners, `./mnt`
+  whole as data, fail the release before `prepare` ("Data and mounts",
+  below).
+- **The owners:** right after the switch, before a sync and the run
+  step, the entries of `mnt` the labels own are created when missing and
+  given to their owners (`devopsy.mnt.owner`, "Data and mounts"); a
+  failure fails the release as its run step would.
 - **The variables check:** after `prepare`, devopsy checks that every
   variable compose requires (`${VAR:?message}`) is set there, env capability
   included. A missing one fails the release before it goes live, listing the
@@ -766,9 +774,8 @@ down and that directory removed, saying how.
 **Data and mounts.** `.devopsy/mnt/` is devopsy's one data directory:
 releases never upload it, and on servers it is a link to `shared/mnt`, one
 per environment, so data outlives releases, rollbacks and pruning. Bind
-mount from it (`./mnt/<name>:/path`). A bind mount from anywhere else in
-`.devopsy/` lives in the release: the next release replaces it, and your
-local copy is uploaded with each release. The alternatives:
+mount its entries (`./mnt/<name>:/path`), one per concern (`storage`,
+`database`, `logs`), never `./mnt` whole. The alternatives:
 
 - **Named volumes** survive releases too (the compose project name stays
   the same) and take the ownership of the image's directory; `down
@@ -776,13 +783,73 @@ local copy is uploaded with each release. The alternatives:
 - **Absolute paths** work, but devopsy knows nothing of them: keeping,
   backing up and removing them is the project's.
 
-`shared/mnt` starts empty and belongs to the deploy user, and Docker
-creates a missing bind-mount directory as root. A container running as
-non-root from the start cannot write there, and the deploy user cannot
-give it away: start as root and fix ownership in the entrypoint, or give
-the directory away in a one-shot `init` service running as root.
-`--destroy` empties it as root in `devopsy-util`. Back up `shared/.env`
-and `shared/mnt` (databases as dumps).
+`shared/mnt` starts empty and belongs to the deploy user, Docker creates
+a missing bind mount's directory as root, and devopsy copies owners
+exactly (rsync and tar as root, numeric ids): a container running as
+non-root from its first process could not write there, nor write what
+an import or a sync brought in with another machine's owners. So a
+service says who owns the entries it writes:
+
+```yaml
+services:
+  app:
+    user: "${APP_UID:-10001}:${APP_UID:-10001}"
+    volumes: [./mnt/storage:/app/storage, ./mnt/logs:/app/logs]
+    labels:
+      devopsy.mnt.owner: "${APP_UID:-10001}:${APP_UID:-10001}"
+```
+
+`devopsy.mnt.owner=<uid>:<gid>`, numbers only (names cannot be resolved
+from the host), covers every entry of `mnt` the service mounts writable,
+in any profile; a read-only mount (`:ro`, a log reader) claims none, and
+an entry no service owns stays as it is, the deploy user's (right for
+what is written from the host). It is never taken from `user:`, so
+changing that never silently changes the data's owner: a variable keeps
+the two alike. devopsy applies it, as root in `devopsy-util` without a
+network, never following a symbolic link:
+
+- **a release**, right after its switch (before a sync and the run
+  step), and a rollback and the restart after a failed run, from the
+  restored release's own labels: each owned entry missing is created
+  (0755) and given to its owner, then every owned entry is scanned
+  whole, so what devopsy did not write (an upload by hand, data from
+  before the label) gets its owner too. A failure fails the release as
+  its run step would: the previous one comes back;
+- **a sync**: an entry the child owns lands as the child's owner, by the
+  child's labels (`rsync --chown`), whatever the parent's files are;
+- **an `--import`** of a `mnt` service: what it extracted goes to its
+  owner before the import completes;
+- **a reset**, once it emptied `mnt`;
+- **locally**, before `up`, `start`, `run` and `create`: an owned entry
+  missing is created, and on Linux one whose directory is not its
+  owner's is given away (no scan: it runs before every such command). On
+  macOS, Docker Desktop and OrbStack let any container user write the
+  Mac's files, so only the directory is made.
+
+Two services whose owners differ on one entry are refused; one without
+the label may write an owned entry (a tool sharing it). A stream's
+import writes as the service's own user, and owners persist through
+restarts and reboots.
+
+Before a release goes live, the mounts check refuses (nothing changes):
+
+- a writable bind mount from inside the project's tree outside `mnt`
+  (`./src:/app`, `./cache:/cache` in `.devopsy/`): it lives in the
+  release, and the next one replaces it. Read-only ones, configuration
+  shipped with the release, are fine, and so are files from `shared/`
+  linked into it;
+- `devopsy.data=mnt` or `devopsy.mnt.owner` on a service that mounts no
+  entry of `mnt` (writable, for the owner): a sync would copy nothing of
+  it, and a child's first release go live on empty data;
+- one entry written by services with different owners;
+- `./mnt` whole as a data or owned entry, refused wherever labels are
+  read: it would carry every other service's data and give them one
+  owner. A service without data may still mount it (a read-only tool),
+  which devopsy ignores.
+
+Named volumes and absolute paths are not checked. `--destroy` empties
+`shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and
+`shared/mnt` (databases as dumps).
 
 **Data and its labels.** Everything devopsy does with data is an export
 (a read) or an import (a replacement), of one service or of all of them
@@ -790,15 +857,17 @@ at once: `--export <service>` and `--import <service>` (below) move one;
 a sync (a child's data from its parent's, below) exports every service
 with data on the parent and imports each on the child. devopsy knows
 nothing of what the data is: compose labels say it, three of them, read
-on each side from its own release.
+on each side from its own release (and `devopsy.mnt.owner`, above, says
+whose its files are).
 
 `devopsy.data` says the service has data and how it moves:
 
 - `devopsy.data=mnt`: the entries of `.devopsy/mnt` the service
   bind-mounts (`./mnt/files` gives `files`; a file, `./mnt/app.ini`,
-  itself; `./mnt` itself, all of it). A sync rsyncs them (`rsync -a
+  itself; never `./mnt` whole, refused). A sync rsyncs them (`rsync -a
   --delete --numeric-ids`, the child's copy equal to the parent's,
-  owners and modes included); `--export` and `--import` move them as a
+  owners and modes included, but an entry the child owns, as its owner's:
+  `devopsy.mnt.owner`, above); `--export` and `--import` move them as a
   tar. Both as root in `devopsy-util`.
 - `devopsy.data=stream`: the data capability's `export <service>` writes
   it to stdout (a database dump), and its `import <service>` reads it
@@ -944,8 +1013,9 @@ release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
 The rsync runs as root in `devopsy-util`, devopsy's own image (alpine with
-rsync and tar; it replaced `devopsy-rsync`, which `docker image rm
-devopsy-rsync:2` removes), built on each server the first time, so
+rsync and GNU tar, find and chown; it replaced `devopsy-rsync`, which
+`docker image rm devopsy-rsync:2` removes, and `devopsy-util:1`, which
+`docker image rm devopsy-util:1` removes), built on each server the first time, so
 ownership and the deploy user's permissions do not matter. **On one
 server**, one container copies between the two directories, without SSH,
 and a stream is written into the child's directory directly. **Across
@@ -1070,7 +1140,8 @@ writes a service's data to stdout, and `devopsy [@<target>] --import
 through the capability's `export` and `import`, a `mnt` service as a tar
 of its entries of `mnt` (made and extracted as root in `devopsy-util`,
 numeric owners and modes kept; an import empties each entry the tar
-carries first, as a sync's `--delete` does). What its stop labels say is
+carries first, as a sync's `--delete` does, and an entry its labels own
+given to its owner once extracted). What its stop labels say is
 stopped around either (an export: the service if `own` or `always`, every
 `always` one; an import: the service if `own`, `import` or `always`, every
 `import` and `always` one; with what depends on them), and comes back
@@ -1091,8 +1162,8 @@ under `.devopsy/` locally, which releases never upload; next to the
 environment on a server) and changes nothing until it is all there; a
 truncated tar (cut anywhere, or missing its end-of-archive blocks),
 or one carrying entries the service does not mount or excludes, is
-refused. A service mounting `./mnt` itself exports, and imports, all of
-`mnt`: devopsy names what else that includes. On a target, `--export`
+refused, and so is one carrying `mnt` itself (`./`: make it with `tar -C
+mnt -cf - <entry>...`), or a member reaching out of its entry. On a target, `--export`
 holds the release lock shared and the environment's sync lock (a sync from
 it waits), `--import` the release lock, and asks for the environment's
 full name on the terminal unless `--yes` (stdin is the data); one silent
