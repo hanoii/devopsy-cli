@@ -599,6 +599,18 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 		t.Errorf("a refused sync over app's import mark (%d), stopped %v:\n%s", code, stopped, out)
 	}
 
+	// A sync whose child prepare fails (its hook refuses, before it stops
+	// anything) writes nothing either: what the import stopped stays
+	// down, as the mark says.
+	hook := filepath.Join(dev, "current", ".devopsy", "capabilities", "data", "prepare")
+	write(t, hook, "#!/bin/sh\n[ \"$1\" != child ] || { echo 'prepare child refuses'; exit 3; }\n", 0o755)
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	stopped = strings.Fields(readString(s.log + ".stopped.shop-dev"))
+	if code == 0 || !strings.Contains(out, "prepare child refuses") || !readMark(dev).IsImport() || !slices.Contains(stopped, "app") {
+		t.Errorf("a sync whose prepare failed over app's import mark (%d), stopped %v:\n%s", code, stopped, out)
+	}
+	os.Remove(hook)
+
 	// The parent copies app, but not all of it: the child's app mounts
 	// cache too, which the parent lacks, so what the import half wrote
 	// there would stay. Refused, naming it; with it, the sync clears the
@@ -610,6 +622,12 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	if code == 0 || !strings.Contains(out, "the parent does not copy ./mnt/cache, which the child's app mounts: a sync completes it only by copying all of it: nothing changed") || !readMark(dev).IsImport() {
 		t.Errorf("a sync copying part of app (%d):\n%s", code, out)
+	}
+	// The case --reset is the way out of (a half-written entry the
+	// parent lacks): the refusal on the marked child says so, as every
+	// refusal on a marked child does (remote.ResetFix).
+	if !strings.Contains(out, "$ devopsy @devopsy@one:dev --reset") {
+		t.Errorf("the refusal of a sync copying part of app does not offer --reset:\n%s", out)
 	}
 	write(t, filepath.Join(prodMnt, "cache", "c"), "prod\n", 0o644)
 	write(t, s.log+".shop-prod", "FAKE_APP=mnt+import\nFAKE_APP_MOUNT2=/cache\n", 0o644)
@@ -841,5 +859,35 @@ func TestSyncReset(t *testing.T) {
 	}
 	if kept() || fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
 		t.Errorf("after the reset, dev's mnt is not prod's:\n%s", out)
+	}
+	// The wipe's emptying of mnt is the sync's own write: its container
+	// is named by the sync's id, as its rsync's are, so a holder that
+	// decides while it runs (the session cut mid-wipe) ends it
+	// (endWriters), and it never deletes what a later sync copies.
+	for _, l := range strings.Split(docker, "\n") {
+		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name "+remote.SyncContainerPrefix) {
+			t.Errorf("the wipe empties mnt in a container no holder ends: %s", l)
+		}
+	}
+}
+
+// A reset whose parent has none of the entries its labels name (a prod
+// that never wrote its storage) copies nothing, so no write ever claims
+// the child: it must not report a reset done with the child's data
+// untouched (the help: all of it goes).
+func TestSyncResetNothingPresent(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.mnt("dev"), "storage", "old.txt"), "dev\n", 0o644)
+	os.RemoveAll(filepath.Join(s.mnt("prod"), "storage"))
+	os.RemoveAll(filepath.Join(s.mnt("prod"), "db"))
+	s.logs()
+	out, code := s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ := s.logs()
+	if code == 0 && fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) {
+		t.Errorf("a reset that wiped nothing succeeded (%d), down: %v:\n%s\n%s", code, strings.Contains(docker, " down "), out, docker)
 	}
 }

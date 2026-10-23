@@ -480,7 +480,7 @@ func syncBlock(projectName, failed string, release bool) string {
       elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         devopsy --say error "nothing was copied, and the data is still from an import of $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes that service, and ` + failed + `" || true
       else
-        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, fix the child's entries or labels by hand, or --destroy it and release it again" || true
+        devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, start the child over from it:" "` + report.CmdMark + `devopsy @$` + SyncToTargetEnv + ` --reset" || true
       fi
       ;;
     *) devopsy --say error "the copy from the parent failed before writing anything: restoring what was stopped, and ` + failed + `" || true ;;
