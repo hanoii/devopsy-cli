@@ -107,8 +107,8 @@ func syncState(t *testing.T, name, env, service string) string {
 // A child left partial, then a sync with nothing to copy (the parent's
 // labels now give every service no data): decided, nothing written leaves the
 // earlier partial copy as it was, so the sync fails, the child stays
-// marked with its services down, and devopsy says what to do (fix the
-// labels or entries by hand, or --destroy and release again).
+// marked with its services down, and devopsy says what to do (start
+// it over from the parent: --reset).
 func TestSyncNothingToCopy(t *testing.T) {
 	dir := project(t, "nothing", map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
@@ -135,7 +135,7 @@ func TestSyncNothingToCopy(t *testing.T) {
 		t.Fatalf("no partial copy (%d):\n%s", code, out)
 	}
 	srv(t, "rm -f fail-export; printf 'SYNC_DATA=none\\nSYNC_DB=none\\n' >>nothing/prod/shared/.env")
-	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") || syncState(t, "nothing", "dev", "data") != "exited" || !strings.Contains(out, "nothing was copied, and the data is still an earlier sync's") || !strings.Contains(out, "--destroy it and release it again") {
+	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") || syncState(t, "nothing", "dev", "data") != "exited" || !strings.Contains(out, "nothing was copied, and the data is still an earlier sync's") || !strings.Contains(out, "$ devopsy @server:dev --reset") {
 		t.Errorf("a sync with nothing to copy (%d): marked %v, data %q:\n%s", code, exists(t, "nothing/dev/.devopsy-sync.incomplete"), syncState(t, "nothing", "dev", "data"), out)
 	}
 }
