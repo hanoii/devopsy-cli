@@ -1266,3 +1266,30 @@ func TestSyncReleaseRefusalPutsNamesBack(t *testing.T) {
 		t.Errorf("stage's client runs %s after dev's refused release, want I1 (mariadb:11.8 is %s)\n%s", got, d.names["mariadb:11.8"], out.String())
 	}
 }
+
+// Bug: SyncDone gives the child the parent's history under the parent's
+// references, so a child whose reference differs from the parent's for
+// the very same image (S74: its own mirror) finds, at its next release,
+// its unchanged reference "never ran on its data": the mirror's tag
+// moving forward needs --yes after every sync, where a tag moving under
+// an unchanged reference needs nothing (decision 6).
+func TestSyncChildKeepsItsReference(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	mirror := dbSvc("mirror.example/mariadb:11.8")
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	dev.release(false, mirror)
+	if err := syncInto(t, prod, dev, false); err != nil || dev.runs("database") != "I2" {
+		t.Fatalf("the sync (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// The mirror's tag moves forward; dev releases, its reference as it
+	// always was.
+	d.publish("mirror.example/mariadb:11.8", "I3")
+	out.Reset()
+	if _, err := dev.release(false, mirror); err != nil || dev.runs("database") != "I3" {
+		t.Errorf("dev's next release on its unchanged reference (%v): runs %s, want I3\n%s", err, dev.runs("database"), out.String())
+	}
+}
