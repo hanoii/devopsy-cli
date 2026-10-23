@@ -239,6 +239,9 @@ for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
 # Which sessions carried the operator's --yes for the images' checks.
 case "$s" in *DEVOPSY_INTERNAL_IMAGES_YES=1*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
+
+# FAKE_SSH_SCRIPTS: each session's script there too, after a line ----.
+[ -z "${FAKE_SSH_SCRIPTS:-}" ] || printf -- '----\n%s\n' "$s" >> "$FAKE_SSH_SCRIPTS"
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
 # FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
@@ -1269,6 +1272,34 @@ func TestSyncRunStepDeployed(t *testing.T) {
 	out, code := s.run(nil, "@dev", "--sync", "--yes")
 	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "'devopsy other'") {
 		t.Errorf("the run step after a sync (%d), not the deployed release's:\n%s", code, out)
+	}
+}
+
+// Bug: --sync --yes, the fix SyncCheck's refusal names, never reaches the
+// holder's img sync-check: runSync builds HolderScript without imagesYes,
+// unlike a release's activation, so a child the parent's data never ran
+// (S53, S54) is refused again, whatever the operator says.
+func TestSyncYesReachesHolder(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	if out, code := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("--sync --yes (%d):\n%s", code, out)
+	}
+	holder := ""
+	for _, sc := range strings.Split(readString(scripts), "----\n") {
+		if strings.Contains(sc, "img sync-check") {
+			holder = sc
+		}
+	}
+	if holder == "" {
+		t.Fatalf("no holder session:\n%s", readString(scripts))
+	}
+	if !strings.Contains(holder, remote.ImagesYesEnv+"=1") {
+		t.Errorf("the holder's img sync-check does not get --yes (%s): --sync --yes refuses what it says --yes lets through", remote.ImagesYesEnv)
 	}
 }
 
