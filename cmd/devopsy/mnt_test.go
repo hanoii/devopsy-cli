@@ -85,10 +85,13 @@ func TestMntOwnersReset(t *testing.T) {
 // made, and on Linux one not its owner's is given away in a util
 // container, only then; on macOS (Docker Desktop, OrbStack) ownership is
 // never checked. A command that starts nothing, or a project whose
-// compose files cannot carry the label, reads no labels.
+// compose files cannot carry the label, reads no labels: its YAML keys
+// are read, never its comments (every template's say "included"
+// somewhere, which once made every local up pay a compose config).
 func TestMntOwnersLocal(t *testing.T) {
 	s := newSyncSetup(t)
 	compose := filepath.Join(s.dot, "compose.yaml")
+	write(t, compose, "# Every request's headers included; extends: nothing.\n"+readString(compose)+"    # devopsy.mnt.owner is not here\n    environment: {A: b} # nor devopsy.mnt.owner\n", 0o644)
 	owned := []string{"FAKE_APP_OWNER=10001:10001"}
 	if out, code := s.run(owned, "up", "-d"); code != 0 {
 		t.Fatalf("up (%d):\n%s", code, out)
@@ -96,7 +99,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") || fileExists(filepath.Join(s.dot, "mnt", "storage")) {
 		t.Errorf("labels read for a project without the label:\n%s", docker)
 	}
-	write(t, compose, readString(compose)+"# devopsy.mnt.owner on app\n", 0o644)
+	write(t, compose, readString(compose)+"    labels: [devopsy.mnt.owner=10001:10001]\n", 0o644)
 	if out, code := s.run(owned, "ps"); code != 0 {
 		t.Fatalf("ps (%d):\n%s", code, out)
 	}

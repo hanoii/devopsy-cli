@@ -963,8 +963,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   the child's labels (Syncs); an `mnt` import, in its extracting
   container (`emptyAndExtract`, `OWNED`); a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `run` and `create`
-  (`Plan.Starts`, only when the compose files mention the label or
-  include or extend others: no compose config for every command), only
+  (`Plan.Starts`, only when the compose files' YAML has the label or an
+  `include:` or `extends:` key, comments left out: no compose config for
+  every command, and every template's comments say "included"), only
   missing entries made and, on Linux, a wrong top given away, no scan;
   macOS never checks (Docker Desktop and OrbStack let any container user
   write the Mac's files and show them the owner Docker asks for). Not a

@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -88,15 +87,31 @@ func composeCommand(args []string) string {
 // mayOwnMnt reports whether the compose files the plan passes (after -f)
 // may carry MntOwnerLabel: the label, or a file they include or extend.
 // Read as text, so a project without the label pays no compose config
-// before every command.
+// before every command: YAML's keys only, comments left out (every
+// template's say "included" somewhere).
 func mayOwnMnt(args []string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] != "-f" {
 			continue
 		}
 		data, err := os.ReadFile(args[i+1])
-		if err == nil && (bytes.Contains(data, []byte(MntOwnerLabel)) || bytes.Contains(data, []byte("include")) || bytes.Contains(data, []byte("extends"))) {
-			return true
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			// A comment starts a line or follows a blank.
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			for _, c := range []string{" #", "\t#"} {
+				if i := strings.Index(line, c); i >= 0 {
+					line = line[:i]
+				}
+			}
+			if strings.Contains(line, MntOwnerLabel) || strings.HasPrefix(line, "include:") || strings.HasPrefix(line, "extends:") {
+				return true
+			}
 		}
 	}
 	return false
