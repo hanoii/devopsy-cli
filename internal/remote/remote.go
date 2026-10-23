@@ -786,14 +786,6 @@ done
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
-		// Another environment's compose project of the same name, or a
-		// network the project names that another project owns already:
-		// they would share it (cli.ProjectConflict, cli.NetworkConflicts).
-		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
-		// Mounts whose data would not be what the labels say: a writable
-		// one in the release's tree, data or an owner with no entry, an
-		// entry with two owners (cli.CheckMounts).
-		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts"}, false) + ") || not_live 1\n"
 	}
 	if rollback {
 		s += `(cd "$code" && with_tty ` + Quote(steps("prepare")) + `) || not_live $?
@@ -803,6 +795,21 @@ done
 		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
+	if !rollback {
+		// The checks reading compose's configuration, which fails while a
+		// required variable is unset: after the prepare steps that make
+		// them (a first release's secrets) and --missing-vars, or they
+		// would pass unchecked. Another environment's compose project of
+		// the same name, or a network the project names that another
+		// project owns already: they would share it (cli.ProjectConflict,
+		// cli.NetworkConflicts).
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
+		// Mounts whose data would not be what the labels say: a writable
+		// one in the release's tree, data or an owner with no entry, an
+		// entry with two owners, ./mnt whole writable (cli.CheckMounts);
+		// and the util image the owners' step needs after the switch.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts"}, false) + ") || not_live 1\n"
+	}
 	// fetch_release: the release's images under the shared lock,
 	// undone before the lock goes on a failure or a signal, so no
 	// removal comes in between: a new release's own images are

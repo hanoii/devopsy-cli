@@ -838,7 +838,9 @@ the label may write an owned entry (a tool sharing it). A stream's
 import writes as the service's own user, and owners persist through
 restarts and reboots.
 
-Before a release goes live, the mounts check refuses (nothing changes):
+Before a release goes live, after its `prepare` steps (which may make
+the secrets its compose file requires), the mounts check refuses
+(nothing changes):
 
 - a writable bind mount from inside the project's tree outside `mnt`
   (`./src:/app`, `./cache:/cache` in `.devopsy/`): it lives in the

@@ -155,6 +155,10 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
+  # FAKE_NO_UTIL: the util image missing; FAIL_UTIL_BUILD: its build
+  # failing, as with a registry down.
+  "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
+  "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
   # The owners' container: the entries it is given made, as it would.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners "*)
     [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS"

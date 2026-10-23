@@ -77,12 +77,38 @@ func TestMntOwnersRelease(t *testing.T) {
 }
 
 // The mounts check refuses before the switch: nothing goes live, nothing
-// runs (the refusals themselves: internal/cli's TestCheckMounts).
+// runs (the refusals themselves: internal/cli's TestCheckMounts). It
+// runs after the prepare steps, which may make the secrets compose
+// requires (review of 2026-10-23: before them, compose config failed on
+// a first release and the check passed it unchecked). With an entry
+// owned, it readies the util image the owners' step needs after the
+// switch.
 func TestCheckMountsRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	out, code := s.run([]string{"FAKE_APP_MOUNT=/../cache"}, "@prod", "--release")
 	if code == 0 || s.current("prod") != "" || strings.Contains(out, "deploy in") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release: it does not go live") || !strings.Contains(out, "app mounts ./.devopsy/cache writable: it is in the release, and the next one replaces it") || !strings.Contains(out, "not made current") {
 		t.Errorf("a writable mount in the release (%d), current %q:\n%s", code, s.current("prod"), out)
+	}
+
+	// A prepare step makes the secret compose requires (drupal11's and
+	// the registry's ${DB_PASSWORD:?}): the check still sees the mount.
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, readString(config)+"  secret: {release: {prepare: [secrets], run: deploy}}\n", 0o644)
+	write(t, filepath.Join(s.dot, "commands", "secrets"), "#!/bin/sh\n## Description: generates the secrets\ngrep -q '^SECRET=' \"$DEVOPSY_PROJECT_DIR/.env\" 2>/dev/null || echo SECRET=generated >> \"$DEVOPSY_PROJECT_DIR/.env\"\n", 0o755)
+	// compose config fails while SECRET is unset, as for ${SECRET:?}.
+	write(t, s.log+".shop-secret", "FAKE_APP_MOUNT=/../cache\ncase \"$*\" in *\" config --format json\") [ -n \"${SECRET:-}\" ] || { echo 'required variable SECRET is missing a value' >&2; exit 1; } ;; esac\n", 0o644)
+	out, code = s.run(nil, "@secret", "--release")
+	if code == 0 || s.current("secret") != "" || !strings.Contains(out, "app mounts ./.devopsy/cache writable") {
+		t.Errorf("a first release whose prepare makes its secrets (%d), current %q:\n%s", code, s.current("secret"), out)
+	}
+
+	// The util image missing and its build failing (a registry down):
+	// refused before the switch, not failed after it.
+	write(t, s.log+".shop-slow", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	out, code = s.run([]string{"FAKE_NO_UTIL=1", "FAIL_UTIL_BUILD=1"}, "@slow", "--release")
+	docker, _ := s.logs()
+	if code == 0 || s.current("slow") != "" || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "not made current") || strings.Contains(docker, "devopsy-owners-") {
+		t.Errorf("no util image (%d), current %q:\n%s\n%s", code, s.current("slow"), out, docker)
 	}
 }
 
