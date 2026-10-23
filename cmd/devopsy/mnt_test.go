@@ -36,12 +36,23 @@ func TestMntOwnersRelease(t *testing.T) {
 	write(t, compose, readString(compose)+"    labels: [devopsy.mnt.owner=10001:10001]\n", 0o644)
 	deploy := filepath.Join(s.dot, "commands", "deploy")
 	write(t, deploy, readString(deploy)+"exec devopsy up -d\n", 0o755)
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
+	// Leftovers of an owners' step a devopsy killed outright left go
+	// first, this project's only, and so does one under the very name
+	// this one's would take (its pid reused: docker run would refuse
+	// the name). Review of 2026-10-23, round 3.
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache FAKE_SAME_NAME=1 FAKE_OWNERS_CONTAINERS='devopsy-owners-shop-prod-99-0 devopsy-owners-shop-prod-1-99-0 devopsy-owners-shop-prod-eu-9-0'\n", 0o644)
 	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "storage"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	out, code := s.run(nil, "@prod", "--release")
 	docker, _ := s.logs()
+	if !strings.Contains(docker, "rm -f devopsy-owners-shop-prod-99-0\n") || strings.Contains(docker, "-1-99-0") || strings.Contains(docker, "-eu-9-0") {
+		t.Errorf("an owners' step's leftovers:\n%s", docker)
+	}
+	if m := regexp.MustCompile(`rm -f (devopsy-owners-shop-prod-[0-9]+-1)\n`).FindStringSubmatchIndex(docker); m == nil || !strings.Contains(docker[m[1]:], "run --rm --name "+docker[m[2]:m[3]]+" ") {
+		t.Errorf("a leftover under the owners' container's own name not removed before it runs:\n%s", docker)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
 	switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/cache to 10001:10001, mnt/storage to 10001:10001"), strings.Index(out, "deploy in shop-prod")
 	if code != 0 || switched < 0 || giving < switched || deployed < giving {
 		t.Fatalf("release (%d):\n%s", code, out)

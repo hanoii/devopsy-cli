@@ -1765,7 +1765,20 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   only when it ran before the import: a writer line ends ` down` when
   `upFor` brought it up), run by an import of that service,
   `--resolved` and a child's prepare; `--destroy-data` removes the
-  containers too (not Compose's: `down --remove-orphans` leaves them).
+  containers too (not Compose's: `down --remove-orphans` leaves them),
+  and an owners' step's (`ownersContainers`).
+- **Containers named after devopsy's pid** (an import's extracting and
+  owners' ones, a release's and a local command's owners' ones,
+  `<ownersPrefix><compose name>-<pid>-<n>`) are started through
+  `dockerRunFresh`, which removes a container of that very name first:
+  only a devopsy killed outright whose pid this one reuses can have
+  left one, still running (`--rm` removes it once it ends), and docker
+  run would refuse the name (review of 2026-10-23, round 3). On a
+  server the next lock-taker removes the rest: an import's by
+  `importContainers` (above), a release's owners' by
+  `ownersContainers` in `--mnt-owners` before it scans, and both in
+  `--destroy-data`. Locally nothing holds a lock, so only the name's
+  own is removed: another terminal's owners' step may be running.
 - **While an import's mark is there, only its service can be
   imported** (`ImportScript`, in shell under the lock after its
   `settle`, before devopsy reads stdin, and again in Go), and any

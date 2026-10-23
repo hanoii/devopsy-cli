@@ -5,10 +5,12 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -96,11 +98,35 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, name strin
 		if err != nil {
 			return err
 		}
-		if err := dockerRun(ctx, fmt.Sprintf("%s-%d", name, i), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
+		if err := dockerRunFresh(ctx, fmt.Sprintf("%s-%d", name, i), nil, "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
 			return fmt.Errorf("giving mnt/%s to %s (%s): %w", e, owned[e], cli.MntOwnerLabel, err)
 		}
 	}
 	return nil
+}
+
+// dockerRunFresh is dockerRunIO, stdout errOut, for a container named
+// after devopsy's pid (ownMnt's, extractEntries'): a container of that
+// name can only be a leftover of a devopsy killed outright whose pid this
+// one reuses, still running (--rm removes it only once it ends), and
+// docker run would refuse the name. It goes first.
+func dockerRunFresh(ctx context.Context, name string, stdin io.Reader, args ...string) error {
+	if err := removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$"); err != nil {
+		return err
+	}
+	return dockerRunIO(ctx, name, stdin, nil, args...)
+}
+
+// ownersPrefix starts the names of the owners' containers of a release's
+// switch and of a local command (ownMnt): it, the compose project,
+// devopsy's pid and -<n>.
+const ownersPrefix = "devopsy-owners-"
+
+// ownersContainers is docker ps' filter for the owners' containers of
+// the project at cwd (ownersPrefix), never another compose project's:
+// shop-prod-1's start shop-prod- too, then three numbers, not two.
+func ownersContainers(cwd string) string {
+	return "name=^/?" + ownersPrefix + composeName(cwd) + "-[0-9]+-[0-9]+$"
 }
 
 // makeEntry makes the entry e of mnt when missing, 0755 whatever the
@@ -181,8 +207,14 @@ func runMntOwners(cwd string, args []string) int {
 		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", err.Error())
 		return 0
 	}
+	// Under the release lock no other owners' step of this environment
+	// runs: what one a devopsy killed outright left may still chown, and
+	// goes before this one scans again.
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, fmt.Sprintf("devopsy-owners-%s-%d", composeName(cwd), os.Getpid()))
+		err = removeContainers(ownersContainers(cwd))
+	}
+	if err == nil {
+		err = ownMnt(context.Background(), mnt, owners, fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()))
 	}
 	if err != nil {
 		report.Fail(err)
@@ -329,5 +361,5 @@ func localMnt(cwd string) error {
 			}
 		}
 	}
-	return ownMnt(context.Background(), mnt, wrong, fmt.Sprintf("devopsy-owners-%s-%d", composeName(cwd), os.Getpid()))
+	return ownMnt(context.Background(), mnt, wrong, fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()))
 }

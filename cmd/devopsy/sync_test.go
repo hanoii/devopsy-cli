@@ -126,10 +126,18 @@ case "$*" in
   # left, listed by its label.
   "ps -aq --filter label=devopsy.data.parent="*) echo "${FAKE_STALE_DAEMON:-}" ;;
   # FAKE_IMPORT_CONTAINERS: containers an --import left
-  # (devopsy-import-<compose project>-<pid>[-owners-<n>]), listed by its
-  # name filter, a regular expression, as Docker's.
-  "ps -aq --filter name=^/?devopsy-import-"*)
-    for c in ${FAKE_IMPORT_CONTAINERS:-}; do ! printf '%s\n' "$c" | grep -Eq -- "${4#name=}" || echo "$c"; done ;;
+  # (devopsy-import-<compose project>-<pid>-extract|owners-<n>), and
+  # FAKE_OWNERS_CONTAINERS an owners' step's
+  # (devopsy-owners-<compose project>-<pid>-<n>), listed by a name filter,
+  # a regular expression, as Docker's. FAKE_SAME_NAME: a filter naming
+  # one container exactly finds it, as one a killed devopsy whose pid
+  # this one reuses left.
+  "ps -aq --filter name=^/?devopsy-"*)
+    f=${4#name=}
+    case $f in
+      *'[0-9]'*) for c in ${FAKE_IMPORT_CONTAINERS:-} ${FAKE_OWNERS_CONTAINERS:-}; do ! printf '%s\n' "$c" | grep -Eq -- "$f" || echo "$c"; done ;;
+      *) [ -z "${FAKE_SAME_NAME:-}" ] || { f=${f#^/?}; echo "${f%\$}"; } ;;
+    esac ;;
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
@@ -3004,13 +3012,14 @@ func TestDestroyEndsWriters(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42-extract-0\nFAKE_OWNERS_CONTAINERS=devopsy-owners-shop-dev-42-0\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@dev", "--destroy", "--yes")
 	docker, _ := s.logs()
-	// And an --import's container a killed devopsy left: not Compose's.
-	rm, rmImport, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42"), strings.Index(docker, " down ")
-	if code != 0 || rm < 0 || rmImport < 0 || down < 0 || rm > down || rmImport > down {
+	// And an --import's container a killed devopsy left, and an owners'
+	// step's: not Compose's.
+	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
+	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
 	}
 }

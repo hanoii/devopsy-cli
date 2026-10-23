@@ -318,6 +318,10 @@ func destroyData(cwd string, step []string, color bool) int {
 		if err := removeContainers(importContainers(root)); err != nil {
 			return fail(err.Error() + ": nothing removed")
 		}
+		// And an owners' step's, which would chown in it as root.
+		if err := removeContainers(ownersContainers(root)); err != nil {
+			return fail(err.Error() + ": nothing removed")
+		}
 	}
 	ctx, stop := interruptible()
 	defer stop()
