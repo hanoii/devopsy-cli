@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -265,16 +266,29 @@ var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "C
 
 // UtilImage is devopsy's own image for what needs root on a host's files,
 // built there from UtilDockerfile when missing: syncs' rsync, the tar of
-// --export and --import, emptying mnt on --destroy. Its tag changes with
-// the Dockerfile: hosts never rebuild an image they have. It was
-// devopsy-rsync until October 2026: hosts keep that one until removed.
+// --export and --import, emptying mnt on --destroy, giving owners. Once
+// older than UtilImageMaxAge it is built again, its base pulled and
+// nothing cached (devopsy --util-image, wherever it is used): it runs as
+// root on the data and serves rsync across servers, so its base floats
+// on alpine:3 and gets its fixes within a week. Its tag changes with the
+// Dockerfile's packages. It was devopsy-rsync until October 2026, then
+// devopsy-util:1: hosts keep those until removed.
 const UtilImage = "devopsy-util:2"
+
+// UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
+const UtilImageMaxAge = 7 * 24 * time.Hour
+
+// UtilImageFlag is the hidden flag that gets UtilImage ready on a host:
+// built when missing, rebuilt when older than UtilImageMaxAge. Scripts
+// call it before using the image (the receive script of a sync across
+// servers); devopsy's own commands do the same in Go.
+const UtilImageFlag = "--util-image"
 
 // UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
 // tar, find and chown, not busybox's: tar's --numeric-owner and
 // --overwrite, find's -user and -group with numbers and -exec ... +,
 // chown -h, as documented.
-var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar findutils coreutils"}
+var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils"}
 
 // RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
 // server or across two: everything, owners as numbers, and what the
@@ -794,11 +808,6 @@ const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/`
 // lock ($base set): a sync's files are its own then, not leftovers.
 const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 2>/dev/null`
 
-// buildUtilImage builds UtilImage when the host lacks it.
-func buildUtilImage() string {
-	return "docker image inspect " + Quote(UtilImage) + " >/dev/null 2>&1 || { devopsy --say info \"building " + UtilImage + "\"; printf '%s\\n' " + quoteAll(UtilDockerfile) + " | docker build -q -t " + Quote(UtilImage) + " - >/dev/null; }\n"
-}
-
 // RsyncVanished is rsync's exit code when files vanished between its scan
 // and their copy: what a live service does to its own temporary files.
 // The copy is complete without them, so both paths say so and go on.
@@ -831,7 +840,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owner
 		open := Quote(path.Join(base, SyncOpenFile(id)))
 		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + claim +
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
 ( while sleep 1; do
@@ -913,7 +922,12 @@ func SyncExecScript(toDir, toProject string, env map[string]string, args []strin
 }
 
 // BuildUtilImageArgs are docker's arguments to build UtilImage from its
-// Dockerfile on stdin.
-func BuildUtilImageArgs() []string {
+// Dockerfile on stdin; refresh pulls its base and caches nothing, for
+// the rebuild of an image older than UtilImageMaxAge (with the cache,
+// apk's layer would stay as it was).
+func BuildUtilImageArgs(refresh bool) []string {
+	if refresh {
+		return []string{"build", "-q", "--pull", "--no-cache", "-t", UtilImage, "-"}
+	}
 	return []string{"build", "-q", "-t", UtilImage, "-"}
 }

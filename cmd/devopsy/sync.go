@@ -793,19 +793,64 @@ func dockerOut(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// ensureUtilImage builds devopsy's util image on this host when missing.
+// ensureUtilImage gets devopsy's util image ready on this host: built
+// when missing, which fails what needs it when the build does; rebuilt,
+// its base pulled and nothing cached, once older than
+// remote.UtilImageMaxAge, so what runs as root on the data gets alpine's
+// fixes. A rebuild that fails only warns: the image there still works,
+// and a registry out of reach must not stop a sync, an import or
+// --destroy; the next use tries again. Two at once on a host are
+// harmless: a build tags the image only once complete, and the image a
+// rebuild replaced is removed without -f, so one a container still runs
+// stays.
 func ensureUtilImage(ctx context.Context) error {
-	if exec.CommandContext(ctx, "docker", "image", "inspect", remote.UtilImage).Run() == nil {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}} {{.Created}}", remote.UtilImage).Output()
+	if err != nil {
+		report.Info("building " + remote.UtilImage)
+		if err := buildUtilImage(ctx, false); err != nil {
+			return fmt.Errorf("building %s: %w", remote.UtilImage, err)
+		}
 		return nil
 	}
-	report.Info("building " + remote.UtilImage)
-	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs()...)
-	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
-	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("building %s: %w", remote.UtilImage, err)
+	id, created, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	// A date Docker writes otherwise counts as old: a rebuild too many
+	// costs a minute, never a stale image.
+	if t, err := time.Parse(time.RFC3339Nano, created); err == nil && time.Since(t) < remote.UtilImageMaxAge {
+		return nil
+	}
+	report.Info("updating " + remote.UtilImage + ", built over a week ago")
+	if err := buildUtilImage(ctx, true); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		report.Warn("updating "+remote.UtilImage+" failed: going on with the one there", err.Error())
+		return nil
+	}
+	now, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Output()
+	if now := strings.TrimSpace(string(now)); err == nil && id != "" && now != "" && now != id {
+		// Untagged now; a container still running it keeps it.
+		_ = exec.CommandContext(ctx, "docker", "image", "rm", id).Run()
 	}
 	return nil
+}
+
+// buildUtilImage builds remote.UtilImage from its Dockerfile, refresh as
+// remote.BuildUtilImageArgs says.
+func buildUtilImage(ctx context.Context, refresh bool) error {
+	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs(refresh)...)
+	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
+	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
+	return cmd.Run()
+}
+
+// runUtilImage is the hidden remote.UtilImageFlag: ensureUtilImage, for
+// a script about to use the image.
+func runUtilImage() int {
+	if err := ensureUtilImage(context.Background()); err != nil {
+		report.Fail(err)
+		return 1
+	}
+	return 0
 }
 
 // syncEnv reads the sync's variables in a push: the child's directory and

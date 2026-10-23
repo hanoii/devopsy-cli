@@ -84,6 +84,8 @@ func run() int {
 			return runReleaseID(args[1:])
 		case remote.SayFlag:
 			return runSay(args[1:])
+		case remote.UtilImageFlag:
+			return runUtilImage()
 		}
 	}
 

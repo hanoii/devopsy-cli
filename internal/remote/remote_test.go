@@ -386,6 +386,11 @@ func TestFeaturesCoverScripts(t *testing.T) {
 			}
 		}
 	}
+	// The receive script gets the util image ready on the child's server
+	// before using it, which an older devopsy there lacks.
+	if got := Needs(SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"db"}, nil, nil, nil, true, "")); !slices.Contains(got, "util-image") {
+		t.Errorf("receive script needs: %v", got)
+	}
 	// The operator's own command is no need of the script's.
 	if got := Needs(RunScript(&Target{Path: "app/prod"}, "app", []string{"--env"})); slices.Contains(got, "env") {
 		t.Errorf("a command's own flag read as a need: %v", got)

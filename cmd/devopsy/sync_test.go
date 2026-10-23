@@ -38,7 +38,8 @@ import (
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
 // FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
-// is app's devopsy.mnt.owner, FAKE_DB_OWNER db's.
+// is app's devopsy.mnt.owner, FAKE_DB_OWNER db's. devopsy-util is there
+// and fresh unless FAKE_UTIL_* say otherwise (below).
 const syncFakeDocker = `#!/bin/sh
 # devopsy's own compose file (images.ComposeFile) is left out of the log:
 # the tests here match the project's compose commands.
@@ -168,10 +169,18 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
-  # FAKE_NO_UTIL: the util image missing; FAIL_UTIL_BUILD: its build
-  # failing, as with a registry down.
-  "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
-  "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
+  # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
+  # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
+  # keeps its Dockerfile and makes sha256:new, built now.
+  "image inspect -f "*)
+    [ -z "${FAKE_UTIL_MISSING:-}" ] || exit 1
+    id=sha256:old; c=${FAKE_UTIL_CREATED:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+    [ ! -e "$DOCKER_LOG.util" ] || { id=sha256:new; c=$(date -u +%Y-%m-%dT%H:%M:%SZ); }
+    case $4 in *Created*) echo "$id $c" ;; *) echo "$id" ;; esac ;;
+  "build "*)
+    cat >"$DOCKER_LOG.dockerfile"
+    [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "pull failed" >&2; exit 1; }
+    : >"$DOCKER_LOG.util" ;;
   # The owners' containers, one per entry (devopsy made it).
   # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
@@ -695,6 +704,11 @@ func TestSyncDifferentHosts(t *testing.T) {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
+	}
+	// Both servers get the util image ready before using it: the push
+	// in Go, the receive script through devopsy --util-image.
+	if n := strings.Count(docker, "image inspect -f {{.Id}} {{.Created}} devopsy-util:2\n"); n != 2 {
+		t.Errorf("the util image checked %d times, want 2 (push, receive):\n%s", n, docker)
 	}
 	// Vanished files across servers: the receive script goes on too.
 	s.logs()
@@ -3135,5 +3149,49 @@ func TestDestroyEndsWriters(t *testing.T) {
 	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
 	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// devopsy --util-image, which every use of the util image goes through
+// (in Go, or from a script): built when missing, a failure failing;
+// rebuilt with its base pulled and no cache once older than a week, the
+// image it replaced removed (never with -f), a failure only warning.
+func TestUtilImage(t *testing.T) {
+	s := newSyncSetup(t)
+	df := s.log + ".dockerfile"
+	built := func() string { b, _ := os.ReadFile(s.log + ".util"); os.Remove(s.log + ".util"); return string(b) }
+
+	out, code := s.run(nil, "--util-image")
+	docker, _ := s.logs()
+	if code != 0 || strings.Contains(docker, " build ") || strings.Contains(out, "devopsy-util") {
+		t.Errorf("fresh (%d):\n%s\n%s", code, out, docker)
+	}
+
+	old := []string{"FAKE_UTIL_CREATED=2026-10-01T10:00:00.123456789Z"}
+	out, code = s.run(old, "--util-image")
+	docker, _ = s.logs()
+	built()
+	if dockerfile, _ := os.ReadFile(df); code != 0 || !strings.Contains(out, "updating devopsy-util:2, built over a week ago") ||
+		!strings.Contains(docker, " build -q --pull --no-cache -t devopsy-util:2 -\n") || !strings.Contains(docker, " image rm sha256:old\n") ||
+		string(dockerfile) != "FROM alpine:3\nRUN apk add --no-cache rsync tar findutils coreutils\n" {
+		t.Errorf("a week old (%d):\n%s\n%s\n%s", code, out, docker, dockerfile)
+	}
+
+	out, code = s.run(append(old, "FAIL_UTIL_BUILD=1"), "--util-image")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "warning: updating devopsy-util:2 failed: going on with the one there") || strings.Contains(docker, " image rm ") {
+		t.Errorf("a failed rebuild (%d):\n%s\n%s", code, out, docker)
+	}
+
+	missing := []string{"FAKE_UTIL_MISSING=1"}
+	out, code = s.run(missing, "--util-image")
+	docker, _ = s.logs()
+	built()
+	if code != 0 || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(docker, " build -q -t devopsy-util:2 -\n") || strings.Contains(docker, " image rm ") {
+		t.Errorf("missing (%d):\n%s\n%s", code, out, docker)
+	}
+	out, code = s.run(append(missing, "FAIL_UTIL_BUILD=1"), "--util-image")
+	if code != 1 || !strings.Contains(out, "error: building devopsy-util:2: exit status 1") {
+		t.Errorf("missing, its build failing (%d):\n%s", code, out)
 	}
 }

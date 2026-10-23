@@ -23,7 +23,7 @@ var featureFlags = []string{
 	"import", "missing-vars", "mnt-owners", "prepare-release",
 	"release-id", "release-settings", "release-steps", "say", "status",
 	"stdin-guard", "sync-push", "sync-services", "upgrade",
-	"watch-session",
+	"util-image", "watch-session",
 }
 
 // namedFeatures are behaviors of a flag that came after it, each found

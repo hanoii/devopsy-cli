@@ -1591,8 +1591,23 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   own gets `--chown=<uid>:<gid>` (`syncRsync`, the receive script's
   options), from the child's list: the child's owner for every file
   written, whatever the parent's are (a parent whose files were wrong,
-  an upload by hand there). Bump the tag whenever the Dockerfile changes: hosts never
-  rebuild an image they have.
+  an upload by hand there). Bump the tag whenever the Dockerfile's
+  packages change: a host keeps an image of the old ones until it is a
+  week old.
+- **The util image floats on `alpine:3` and is rebuilt weekly**
+  (`ensureUtilImage`, before every use; scripts call the hidden
+  `--util-image`, a feature): older than `UtilImageMaxAge`, `build
+  --pull --no-cache`, then the image it replaced removed without `-f`
+  (a container still running it keeps it). Why: it runs as root on the
+  data and serves rsync across servers, and was built once per host and
+  never again (decided 2026-10-23: patches reach every floating image).
+  A rebuild that fails warns and goes on with the image there (a
+  registry out of reach never stops a sync, an import or `--destroy`);
+  a missing one that fails to build fails, as before. Two at once on a
+  host are harmless: a tag moves only when a build completes. One
+  implementation, in Go: the receive script once built it in shell, and
+  a weekly check there would need GNU `date` (macOS runs the scripts in
+  tests); an older child refuses the sync, naming the upgrade.
 - **Entries are the top-level entries of `mnt` that `rsync` services
   bind-mount** (`docker compose --profile '*' config`, lexical and
   resolved paths); one missing on the parent is

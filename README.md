@@ -1113,11 +1113,14 @@ uncreated, as the run step's `up` would leave it. A lock held by something else 
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
-The rsync runs as root in `devopsy-util`, devopsy's own image (alpine with
-rsync and GNU tar, find and chown; it replaced `devopsy-rsync`, which
-`docker image rm devopsy-rsync:2` removes, and `devopsy-util:1`, which
-`docker image rm devopsy-util:1` removes), built on each server the first time, so
-ownership and the deploy user's permissions do not matter. **On one
+The rsync runs as root in `devopsy-util`, devopsy's own image (alpine 3
+with rsync and GNU tar, find and chown; it replaced `devopsy-rsync` and
+`devopsy-util:1`, which `docker image rm devopsy-rsync:2 devopsy-util:1`
+removes), built on each server the first time, so ownership and the
+deploy user's permissions do not matter. Wherever it is used, an image a
+week old is built again, its base pulled, so what runs as root on your
+data gets alpine's fixes; a rebuild that fails (the registry out of
+reach) warns and goes on with the image there. **On one
 server**, one container copies between the two directories, without SSH,
 and a stream is written into the child's directory directly. **Across
 servers**, the parent's server starts an rsync daemon (read-only, serving
