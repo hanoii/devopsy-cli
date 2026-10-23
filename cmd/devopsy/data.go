@@ -530,7 +530,7 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 			return err
 		}
 		run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
-		err = dockerRunIO(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, nil, run...)
+		err = dockerRunFresh(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, run...)
 		in.Close()
 		if err != nil {
 			return fmt.Errorf("extracting mnt/%s: %w", e.name, err)
