@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -35,7 +36,9 @@ import (
 // ps lists them, and start refuses them, as Compose does. FAKE_ONEOFF
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
-// FAKE_APP_MOUNT2 is a second entry app mounts (/cache).
+// FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
+// is app's devopsy.mnt.owner; the owners' containers make the entries
+// they are given.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -78,11 +81,16 @@ st() {
 }
 # services after a compose command (stop, start, up -d --wait).
 after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at" ] && w=1; done; }
+# FAKE_APP_OWNER: app's devopsy.mnt.owner.
+applab=$(lab "${FAKE_APP:-mnt}")
+if [ -n "${FAKE_APP_OWNER:-}" ]; then
+  case $applab in '{}') applab="{\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; *) applab="${applab%\}},\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; esac
+fi
 app2=
 [ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-mnt}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   # down removes every container, until an up creates them again.
@@ -147,6 +155,11 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
+  # The owners' container: the entries it is given made, as it would.
+  "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners "*)
+    [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS"
+    while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
+    for eo; do mkdir -p "$dst/${eo%=*}"; done ;;
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
@@ -176,7 +189,7 @@ case "$*" in
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
-    for e; do if [ "$e" = . ]; then find "$dst" -mindepth 2 -maxdepth 2 -exec rm -rf {} +; find "$dst" -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +; elif [ -d "$dst/$e" ] && [ ! -L "$dst/$e" ]; then find "$dst/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done
+    for e; do if [ -d "$dst/$e" ] && [ ! -L "$dst/$e" ]; then find "$dst/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done
     exec tar -C "$dst" -xf - ;;
 esac
 exit 0
@@ -374,8 +387,8 @@ func TestSyncSameHost(t *testing.T) {
 	// alone, keeps running. A first release then creates every labeled
 	// service, whatever containers it found.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:2 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:2 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "shop-dev compose", "up -d --wait app db"}
 	rest := docker
 	for _, want := range order {
@@ -570,7 +583,7 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy-util:1 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy-util:2 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -658,7 +671,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:2 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -669,6 +682,16 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("vanished files across servers (%d):\n%s", code, out)
 	}
 	s.logs()
+	// An entry the child's labels own (its list says so) lands as its
+	// owner's (--chown), whatever the parent's files are; the rest keep
+	// theirs.
+	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	out, code = s.run(agent, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	os.Remove(s.log + ".shop-dev")
+	if code != 0 || !regexp.MustCompile(`--numeric-ids --chown=10001:10001 rsync://127\.0\.0\.1:[0-9]+/storage/ /mnt/storage/`).MatchString(docker) || !regexp.MustCompile(`--numeric-ids rsync://127\.0\.0\.1:[0-9]+/db/ /mnt/db/`).MatchString(docker) {
+		t.Errorf("an owned entry across servers (%d):\n%s\n%s", code, out, docker)
+	}
 
 	// A child's devopsy older than the parent's (lacking --say, which
 	// only the receive calls) refuses on the push's first session there,
@@ -1436,17 +1459,12 @@ func TestSyncLabels(t *testing.T) {
 		t.Errorf("finish without an answer: %v\n%s", err, out)
 	}
 
-	// An app mounting mnt whole copies the unlabeled db's entry too: a
-	// notice.
+	// An app labeled mnt mounting mnt whole is refused where labels are
+	// read, before anything stops: mnt whole is no entry.
 	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: warning: app copies mnt whole, db (no data: db) included: mount mnt's entries (./mnt/db) on app instead of ./mnt, so each copies by its own label") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
-		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
-	}
-	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--sync", "--yes")
-	s.logs()
-	if code != 0 || strings.Contains(out, "copies mnt whole") {
-		t.Errorf("notice for an rsync db under mnt whole (%d):\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "service app: devopsy.data=mnt mounts ./mnt whole: mount its entries (./mnt/<name>)") || strings.Contains(docker, " stop ") || strings.Contains(docker, "rsync") {
+		t.Errorf("mnt whole (%d):\n%s\n%s", code, out, docker)
 	}
 	// A value devopsy does not know is an error, before anything stops;
 	// so is a label from before devopsy.data on the child alone: its
@@ -1869,7 +1887,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:1 tar -C /mnt -cf - --numeric-owner storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:2 tar -C /mnt -cf - --numeric-owner storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -1910,8 +1928,17 @@ func TestExportImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-util:1 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED= -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n") || !strings.Contains(docker, "done\n sh storage\n") {
 		t.Errorf("rsync import:\n%s", docker)
+	}
+	// An entry its labels own goes to its owner once extracted, in the
+	// same container, before the import counts as complete: a tar made
+	// anywhere carries its maker's owners.
+	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: then giving mnt/storage to 10001:10001") {
+		t.Fatalf("--import of an owned entry (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, `chown_entry "${eo%=*}" "${eo##*=}"`) || !strings.Contains(docker, `-exec chown -h "$2" {} +`) {
+		t.Errorf("an owned import:\n%s", docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,
 	// changes nothing.
@@ -1983,8 +2010,13 @@ func TestExportImport(t *testing.T) {
 			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeLink, Linkname: "db/secret"}, "")
 			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeReg}, "evil\n")
 		})},
-		{"../x into mnt whole", "", reaching(func(tw *tar.Writer) {
+		{"../x", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "../x", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+		// mnt itself: its owner and mode are no entry's.
+		{"./", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "./", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "./storage/x", Typeflag: tar.TypeReg}, "fine\n")
 		})},
 	} {
 		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")

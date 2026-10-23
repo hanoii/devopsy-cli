@@ -255,13 +255,6 @@ func runExport(cwd string, args []string, color bool) int {
 			return fail("the project's mnt: " + err.Error())
 		}
 		for _, d := range s.Dirs {
-			if d == "." {
-				entries = []string{"."}
-				if msg := wholeMntNotice(services, s, mnt, "carries"); msg != "" {
-					report.Warn(msg)
-				}
-				break
-			}
 			if _, err := os.Lstat(filepath.Join(mnt, d)); err != nil {
 				report.Info("mnt/" + d + " does not exist: skipped")
 				continue
@@ -309,41 +302,6 @@ func runExport(cwd string, args []string, color bool) int {
 	return code
 }
 
-// wholeMntNotice says what a tar of a service mounting mnt itself
-// carries (verb) beyond its label: every entry of mnt, other services'
-// and its excluded ones included, as SyncWholeNotice does for syncs.
-// Empty when mnt holds nothing.
-func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb string) string {
-	var entries []string
-	if list, err := os.ReadDir(mnt); err == nil {
-		for _, e := range list {
-			entries = append(entries, e.Name())
-		}
-	}
-	if len(entries) == 0 {
-		return ""
-	}
-	var others []string
-	for _, o := range services {
-		if o.Name == s.Name {
-			continue
-		}
-		for _, d := range o.Dirs {
-			if d != "." {
-				others = append(others, o.Name+"'s "+d+" ("+cmp.Or(map[string]string{cli.DataNone: "no data"}[o.Transfer], o.Transfer)+")")
-			}
-		}
-	}
-	for _, d := range s.Excluded {
-		others = append(others, d+" (its "+cli.DataExcludeLabel+")")
-	}
-	msg := fmt.Sprintf("%s mounts mnt whole, so the tar %s all of it (%s)", s.Name, verb, strings.Join(entries, ", "))
-	if len(others) > 0 {
-		msg += ": " + strings.Join(others, ", ") + " included"
-	}
-	return msg
-}
-
 // importSpool is where --import keeps stdin until it is complete: in a
 // release, the environment directory's StreamSpool (what a sync uses);
 // locally a temporary file under .devopsy/, which releases never upload.
@@ -371,9 +329,9 @@ func removeSpools(base, name string) {
 // maybe right after a member.
 var errNoTarEnd = errors.New("no end-of-archive blocks: cut short?")
 
-// tarEntries lists the top-level entries of mnt the tar in spool carries,
-// "." for mnt itself: a truncated archive fails here, before anything is
-// emptied. Read here, not by tar -t, which takes a tar cut at a member
+// tarEntries lists the top-level entries of mnt the tar in spool carries:
+// a truncated archive fails here, before anything is emptied, and so does
+// one carrying mnt itself (./), whose owner and mode are no entry's. Read here, not by tar -t, which takes a tar cut at a member
 // boundary for complete, its last member's zeros (a sparse file, a
 // database's pages) passing for the end-of-archive blocks.
 func tarEntries(spool string) ([]string, error) {
@@ -388,7 +346,6 @@ func tarEntries(spool string) ([]string, error) {
 	r := &endReader{r: f}
 	tr := tar.NewReader(r)
 	seen := map[string]bool{}
-	across := ""
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -407,23 +364,13 @@ func tarEntries(spool string) ([]string, error) {
 		}
 		p := strings.TrimPrefix(h.Name, "./")
 		if p == "" || p == "." || p == "./" {
-			seen["."] = true
-			continue
+			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
 		}
-		top, crosses, err := tarMember(h, p)
+		top, err := tarMember(h, p)
 		if err != nil {
 			return nil, err
 		}
 		seen[top] = true
-		if crosses != "" && across == "" {
-			across = crosses
-		}
-	}
-	if seen["."] {
-		return []string{"."}, nil
-	}
-	if across != "" {
-		return nil, fmt.Errorf("%w: %s", errOutside, across)
 	}
 	var entries []string
 	for e := range seen {
@@ -441,11 +388,10 @@ var errOutside = errors.New("a member reaches out of its entry")
 
 // tarMember checks a member (p, its name without ./) stays in its
 // top-level entry of mnt, and returns that entry. A path or a link out
-// of mnt, and a top-level entry that is no directory or file, are
-// errOutside; a link into another entry is crosses, refused unless the
-// tar carries all of mnt (".").
-func tarMember(h *tar.Header, p string) (top, crosses string, err error) {
-	outside := func() (string, string, error) { return "", "", fmt.Errorf("%w: %s", errOutside, h.Name) }
+// of its entry (into another entry too), and a top-level entry that is
+// no directory or file, are errOutside.
+func tarMember(h *tar.Header, p string) (top string, err error) {
+	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
 	if path.IsAbs(p) || slices.Contains(strings.Split(p, "/"), "..") {
 		return outside()
 	}
@@ -467,15 +413,15 @@ func tarMember(h *tar.Header, p string) (top, crosses string, err error) {
 		}
 		target = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
 	default:
-		return top, "", nil
+		return top, nil
 	}
 	if target == ".." || strings.HasPrefix(target, "../") {
 		return outside()
 	}
 	if t, _, _ := strings.Cut(target, "/"); t != top {
-		return top, h.Name + " links into " + t, nil
+		return "", fmt.Errorf("%w: %s links into %s", errOutside, h.Name, t)
 	}
-	return top, "", nil
+	return top, nil
 }
 
 // endReader reads r and says whether its last read found the end of
@@ -493,19 +439,21 @@ func (e *endReader) Read(p []byte) (int, error) {
 
 // emptyAndExtract empties each entry the tar carries (a sync's --delete:
 // what the source does not have goes) and extracts it, as root in the
-// rsync image so owners and modes come as they were. Directories are
+// util image so owners and modes come as they were, then gives each
+// owned entry it extracted to its owner (OWNED: <entry>=<uid>:<gid>,
+// space separated, chownEntry), before the import counts as complete:
+// a tar made anywhere carries its maker's owners. Directories are
 // emptied, never removed, and files overwritten in place: a running
 // container bind-mounts their inodes.
-const emptyAndExtract = `set -eu
-for e; do
-  if [ "$e" = . ]; then
-    find /mnt -mindepth 2 -maxdepth 2 -exec rm -rf {} +
-    find /mnt -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +
-  elif [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
+const emptyAndExtract = "set -eu\n" + chownEntry + `for e; do
+  if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
     find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   fi
 done
-exec tar -C /mnt -xf - --numeric-owner --overwrite
+tar -C /mnt -xf - --numeric-owner --overwrite
+for eo in ${OWNED:-}; do
+  chown_entry "${eo%=*}" "${eo##*=}"
+done
 `
 
 // runImport implements devopsy --import <service> [--yes] [--resolved]:
@@ -550,6 +498,11 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	if s.Transfer == cli.DataStream && !isExecutable(dataHookFile(projectDir, "import")) {
 		return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/import", name, cli.DataLabel, cli.DataStream, cli.DataCapability))
+	}
+	// What an mnt import extracts goes to its owner.
+	owners, err := cli.MntOwners(services)
+	if err != nil {
+		return fail(err.Error() + ": nothing imported")
 	}
 	// On a target the import keeps a mark and a record next to the
 	// release (none locally: a release in place has nothing to guard).
@@ -637,14 +590,12 @@ func runImport(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
-		if !slices.Contains(s.Dirs, ".") {
-			for _, e := range entries {
-				switch {
-				case slices.Contains(s.Excluded, e):
-					return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
-				case !slices.Contains(s.Dirs, e):
-					return fail(fmt.Sprintf("the tar carries mnt/%s, which %s does not bind-mount (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none")))
-				}
+		for _, e := range entries {
+			switch {
+			case slices.Contains(s.Excluded, e):
+				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
+			case !slices.Contains(s.Dirs, e):
+				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s does not bind-mount (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none")))
 			}
 		}
 		if mnt, err = dataMnt(projectDir); err != nil {
@@ -652,11 +603,6 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 		if e := symlinkEntry(mnt, entries); e != "" {
 			return fail("mnt/" + e + " is a symlink: the import would not reach what it points to: make it a directory, mounting that there, to import into it: nothing imported")
-		}
-		if slices.Contains(entries, ".") {
-			if msg := wholeMntNotice(services, s, mnt, "replaces"); msg != "" {
-				report.Warn(msg)
-			}
 		}
 	}
 
@@ -728,7 +674,17 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
-			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
+			owned := map[string]string{}
+			for _, e := range entries {
+				if o := owners[e]; o != "" {
+					owned[e] = o
+				}
+			}
+			args, line := ownerArgs(owned)
+			if len(args) > 0 {
+				report.Info("then " + line)
+			}
+			run := append([]string{"-i", "-e", "OWNED=" + strings.Join(args, " "), "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
 			err = dockerRunIO(ctx, fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()), in2, nil, run...)
 		}
 	}

@@ -267,11 +267,13 @@ var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "C
 // --export and --import, emptying mnt on --destroy. Its tag changes with
 // the Dockerfile: hosts never rebuild an image they have. It was
 // devopsy-rsync until October 2026: hosts keep that one until removed.
-const UtilImage = "devopsy-util:1"
+const UtilImage = "devopsy-util:2"
 
 // UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
-// tar, not busybox's: --numeric-owner and --overwrite as documented.
-var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar"}
+// tar, find and chown, not busybox's: tar's --numeric-owner and
+// --overwrite, find's -user and -group with numbers and -exec ... +,
+// chown -h, as documented.
+var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar findutils coreutils"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
@@ -789,20 +791,13 @@ const RsyncVanished = 24
 // RsyncVanishedNotice follows "rsync mnt/<entry>: " on both paths.
 const RsyncVanishedNotice = "some files vanished during the copy (a running service removed them), the rest is copied"
 
-// RsyncModule is the daemon's module for an entry of mnt: its name, and
-// mnt for `.` (all of it).
-func RsyncModule(entry string) string {
-	if entry == "." {
-		return "mnt"
-	}
-	return entry
-}
-
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/, base its
-// directory), from the daemon's module of that name (RsyncModule), as
-// root in UtilImage, on the host's network to reach the forward.
+// directory), from the daemon's module of that name, as
+// root in UtilImage, on the host's network to reach the forward: owners
+// kept (--numeric-ids), or the child's for an entry it owns (owners,
+// --chown).
 // SyncStartedFile goes first, and with last (no stream follows)
 // a DoneLine once every entry is copied.
 //
@@ -812,7 +807,7 @@ func RsyncModule(entry string) string {
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, args []string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
 	if wipe != "" {
@@ -838,11 +833,16 @@ copy() {
 }
 `
 	for _, d := range dirs {
-		src, dst, opts := RsyncModule(d)+"/", d+"/", ""
+		src, dst, opts := d+"/", d+"/", ""
 		if slices.Contains(files, d) {
 			// A file: its module serves it alone, into mnt, and in place
 			// (a container bind-mounts the file's inode).
 			src, dst, opts = d+"/"+d, "", "--inplace"
+		}
+		if o := owners[d]; o != "" {
+			// The child's owner for every file written (its labels,
+			// from its list).
+			opts = strings.TrimSpace(opts + " --chown=" + o)
 		}
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
 	}
