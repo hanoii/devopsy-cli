@@ -825,7 +825,7 @@ network, never following a symbolic link:
 - **an `--import`** of a `mnt` service: what it extracted goes to its
   owner before the import completes, the bind sources below it made;
 - **a reset**, once it emptied `mnt`;
-- **locally**, before `up`, `start`, `run` and `create`: an owned entry
+- **locally**, before `up`, `start`, `run`, `create`, `watch` and `scale`: an owned entry
   missing is created, and each bind source below one, and on Linux an
   entry whose directory is not its owner's is given away, scanned whole;
   one whose directory is its owner's is never scanned, since this runs

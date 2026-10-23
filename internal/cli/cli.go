@@ -55,15 +55,17 @@ type Plan struct {
 	// Verbose lines are said at debug level (-v), before Notice. Secrets
 	// are masked.
 	Verbose []string
-	// Starts is set for a compose command that starts containers (up,
-	// start, run, create) in a project whose compose files may carry
+	// Starts is set for a compose command that starts containers
+	// (startingCommands) in a project whose compose files may carry
 	// MntOwnerLabel: the caller readies mnt's owned entries first.
 	Starts bool
 }
 
-// startingCommands are compose's commands that start containers, whose
-// bind mounts Docker creates when missing, as root.
-var startingCommands = []string{"up", "start", "run", "create"}
+// startingCommands are compose's commands that start or create
+// containers, whose bind mounts Docker creates when missing, as root:
+// watch starts the services first (unless --no-up), scale creates
+// containers.
+var startingCommands = []string{"up", "start", "run", "create", "watch", "scale"}
 
 // composeValueFlags are compose's global flags that take a value as the
 // next argument.

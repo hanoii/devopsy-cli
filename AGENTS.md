@@ -982,7 +982,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
   the child's labels (Syncs); an `mnt` import, in its extracting
   container (`emptyAndExtract`, `OWNED`); a reset, after `emptyMnt`;
-  locally before compose's `up`, `start`, `run` and `create`
+  locally before compose's `up`, `start`, `run`, `create`, `watch`
+  and `scale`
   (`Plan.Starts`, only when the compose files' YAML has the label or an
   `include:` or `extends:` key, comments left out: no compose config for
   every command, and every template's comments say "included"), only
