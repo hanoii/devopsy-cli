@@ -1293,3 +1293,23 @@ func TestSyncChildKeepsItsReference(t *testing.T) {
 		t.Errorf("dev's next release on its unchanged reference (%v): runs %s, want I3\n%s", err, dev.runs("database"), out.String())
 	}
 }
+
+// A parent's history sent to a child is its newest lines only, whatever
+// its length: it rides in one argument.
+func TestParentDataBounded(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I0")
+	m.release(false, db118)
+	var b strings.Builder
+	for i := 0; i < 3*ParentHistoryLines; i++ {
+		b.WriteString(ran{Time: int64(i), Service: "database", How: Ran, Ref: "mariadb:11.8", ID: fmt.Sprintf("X%d", i), Digests: []string{fmt.Sprintf("mariadb@X%d", i)}}.line())
+	}
+	b.WriteString(ran{Time: 9999, Service: "database", How: Ran, Ref: "mariadb:11.8", ID: "I0", Digests: []string{"mariadb@I0"}}.line())
+	os.WriteFile(historyPath(m.base()), []byte(b.String()), 0o644)
+	data := m.e.set.ParentData(m.base(), m.e.rel(m.cur))
+	if n := strings.Count(data, "\nran\t"); n != ParentHistoryLines || !strings.Contains(data, "\tI0\t") {
+		t.Errorf("%d history lines sent, want %d with the newest", n, ParentHistoryLines)
+	}
+}

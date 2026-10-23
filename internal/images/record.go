@@ -110,7 +110,11 @@ func (s *Set) Record(rel, prev string) error {
 	// A release that syncs: the parent's data must take the child's
 	// images, checked against what the release fetched.
 	if s.SyncData != "" {
-		return s.SyncCheck(rel, s.SyncData)
+		refs, err := s.syncCheck(rel, s.SyncData, "--release --yes")
+		if errors.Is(err, ErrRefused) {
+			s.putNamesBack(rel, es, refs)
+		}
+		return err
 	}
 	return nil
 }

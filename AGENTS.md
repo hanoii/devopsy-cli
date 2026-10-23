@@ -1601,6 +1601,24 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   data, the finish hook first. Only `mnt` copies: a stream goes through
   the child's own image. A complete `mnt` `--import` or `--resolved`
   starts the service's history over (`Imported`).
+- **Details the second review settled:** only `devopsy.data=mnt`
+  services, as the parent's config resolves it now, are in
+  `ParentData` (a stream, `none` or an unlabeled service copies no
+  files). The holder checks and pulls while its watcher is still armed,
+  so an abort or a session gone during a long pull stops nothing. The
+  parent's image is held by its digest in the child's own repository
+  when the child's server has it there (`localHold`: Docker finds a
+  digest only under the repository named, and a child may reach only its
+  mirror). The child's history ends with a line naming the image as the
+  child does, so its own name moving forward needs no `--yes`; a parent
+  that drifted back to an image its history has adds no line (the
+  newest stays the newest, as on the parent). `ParentData` sends each
+  service's newest 100 lines (`ParentHistoryLines`): it rides in the
+  child's script, one argument, capped at 128KB on Linux. A release that
+  syncs, refused by the parent's check, puts its names back like any
+  refusal. `--sync --yes` reaches the holder (`imagesYes`), and the
+  parent's images are unset with the sync's variables before the run
+  step.
 
 ### Streams
 

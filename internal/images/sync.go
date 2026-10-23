@@ -67,12 +67,25 @@ func (s *Set) ParentData(base, rel string) string {
 			continue
 		}
 		fmt.Fprintf(&b, "image\t%s\t%s\t%s\t%s\n", e.Service, ref, img.ID, strings.Join(img.Digests, " "))
-		for _, r := range h.window(e.Service) {
+		// Its newest lines only: the parent's images ride in a variable
+		// inlined in the child's script, one argument, which Linux caps at
+		// 128KB.
+		w := h.window(e.Service)
+		if len(w) > ParentHistoryLines {
+			w = w[len(w)-ParentHistoryLines:]
+		}
+		for _, r := range w {
 			b.WriteString("ran\t" + r.line())
 		}
 	}
 	return b.String()
 }
+
+// ParentHistoryLines is how many of its newest history lines per service
+// ParentData carries: an image that ran before them is not known as one
+// the parent's data moved past, only as one it never ran under its name
+// (refused the same, but for a name it ran under).
+const ParentHistoryLines = 100
 
 // Sum is a ParentData's checksum.
 func Sum(data string) string {
@@ -141,9 +154,16 @@ func (p *parentImage) hold() string {
 // The parent's image is pulled by its digest when missing (never trusted
 // from a local name, which may be anything), refused when it cannot be.
 func (s *Set) SyncCheck(rel, data string) error {
+	_, err := s.syncCheck(rel, data, "--sync --yes")
+	return err
+}
+
+// syncCheck is SyncCheck, returning the names of the images it refused;
+// again is how to run it again with --yes.
+func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
-	var refused []string
+	var refused, refusedRefs []string
 	var mine []entry
 	for _, e := range es {
 		p := ps[e.Service]
@@ -151,6 +171,7 @@ func (s *Set) SyncCheck(rel, data string) error {
 			continue
 		}
 		mine = append(mine, e)
+		n := len(refused)
 		img := Image{ID: e.ID}
 		if i, err := s.Docker.Inspect(e.ID); err == nil {
 			img = i
@@ -169,23 +190,26 @@ func (s *Set) SyncCheck(rel, data string) error {
 				refused = append(refused, fmt.Sprintf("%s: %s (%s) never ran on the parent's data, which last ran %s as %s", e.Service, e.Ref, shownEntry(e), last.shown(), p.Ref))
 			}
 		}
+		if len(refused) > n {
+			refusedRefs = append(refusedRefs, e.Ref)
+		}
 	}
 	if len(refused) > 0 && !s.Yes {
-		yes := "--sync --yes"
+		yes := again
 		if s.Address != "" {
 			yes = "devopsy @" + s.Address + " " + yes
 		}
 		s.sayAll(report.ErrorLevel, "the child runs images the parent's data never ran, or moved past: nothing changed", refused,
 			report.Fix("release the child with the parent's image (the same name), then sync, or release it with the sync (--release-sync)"),
 			report.Fix("or, knowing the data takes it, sync anyway: the child runs the parent's image after the copy:", yes))
-		return ErrRefused
+		return refusedRefs, ErrRefused
 	}
 	if len(refused) > 0 {
 		s.sayAll(report.WarnLevel, "--yes: syncing anyway, the child held on the parent's images after the copy:", refused)
 	}
 	var extra []entry
 	for _, e := range mine {
-		hold := ps[e.Service].hold()
+		hold := s.localHold(e, ps[e.Service])
 		if hold == "" {
 			continue
 		}
@@ -193,14 +217,14 @@ func (s *Set) SyncCheck(rel, data string) error {
 			if err := s.Docker.Pull(hold); err != nil {
 				s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: the parent's image %s could not be pulled here: nothing changed", e.Service, hold), []string{err.Error()},
 					report.Fix("the child's server needs the registry's image the parent's data last ran"))
-				return ErrRefused
+				return nil, ErrRefused
 			}
 			s.say(report.InfoLevel, "%s: pulled the parent's image %s", e.Service, hold)
 		}
 		extra = append(extra, s.entryOf(Service{Name: syncPrefix + e.Service, Ref: hold}, hold))
 	}
 	if len(extra) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Bookmarked as rel's at once: an image pulled by digest has no other
 	// name a removal would take, nor anything that keeps it until the copy.
@@ -210,7 +234,22 @@ func (s *Set) SyncCheck(rel, data string) error {
 			kept = append(kept, e)
 		}
 	}
-	return s.keep(rel, append(kept, extra...))
+	return nil, s.keep(rel, append(kept, extra...))
+}
+
+// localHold is the name to hold e's service on the parent's image by: a
+// digest of it in the child's own repository when this server has it
+// there (a mirror of its own, which keeps digests), else in the
+// parent's. Docker finds a digest only in the repository it is named
+// with, and a child's server may reach only its mirror.
+func (s *Set) localHold(e entry, p *parentImage) string {
+	for _, d := range p.Image.Digests {
+		mine := repoOf(e.Ref) + "@" + digestOf(d)
+		if _, err := s.Docker.Inspect(mine); err == nil {
+			return mine
+		}
+	}
+	return p.hold()
 }
 
 // syncPrefix names a listing's entry for a parent's image a sync got for
@@ -242,7 +281,7 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 			out = append(out, e)
 			continue
 		}
-		hold := p.hold()
+		hold := s.localHold(e, p)
 		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
 		n.Kind, n.Digest = KindData, hold
 		if n.ID == "" {
@@ -257,11 +296,23 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 				kept = append(kept, r)
 			}
 		}
-		w := p.History.window(e.Service)
-		if len(w) == 0 || !w[len(w)-1].is(p.Image) {
+		// The image that wrote the data is added when the parent's history
+		// lacks it (a parent with none); one that drifted back to an
+		// image its history has stays out, as it does on the parent, so
+		// the newest stays the newest. The last line names the image as
+		// the child does (its mirror, its pin), so the child's own name
+		// moving forward needs nothing.
+		w := append(history{}, p.History.window(e.Service)...)
+		known := false
+		for _, r := range w {
+			known = known || r.is(p.Image)
+		}
+		if !known {
 			w = append(w, ranOn(e.Service, Ran, p.Ref, p.Image, s.now()))
 		}
-		w = append(history{}, w...)
+		if last := w[len(w)-1]; last.is(p.Image) && familiar(last.Ref) != familiar(e.Ref) {
+			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: last.Digests})
+		}
 		w[0].How = SyncedFrom + from
 		h = append(kept, w...)
 		changed = true

@@ -561,7 +561,7 @@ rm -f "$base/` + SyncHoldingFile + `"
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + images.SyncImagesEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -603,21 +603,15 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
-# session gone then ends it; from here on it restores on its own. With a
-# heartbeat, disarmed only on the session's next byte (waitBeat): a
-# session that went silent while this waited ends it too, never noticed
-# only once the services are stopped.
-` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
-rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
+`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-exec 1>&2
-devopsy --say info "syncing into $id"
-` + o.exports(t) + o.imagesExport() + `# Before anything stops: the parent's data must take the child's images,
-# and the parent's image must be here (img sync-check pulls it).
+` + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+# child's images, and the parent's image must be here (img sync-check
+# pulls it, maybe for long): an abort or a session gone meanwhile ends
+# this, nothing stopped.
 if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_lock shared syncing || exit $?
   sc=0
@@ -625,7 +619,15 @@ if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_unlock
   [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
 fi
-cd "$base/current"
+# Armed only while it waits for the lock and the parent's image, when
+# nothing changed yet: a session gone then ends it; from here on it
+# restores on its own. With a heartbeat, disarmed only on the session's
+# next byte (waitBeat): a session that went silent while this waited
+# ends it too, never noticed only once the services are stopped.
+` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock or the parent's image: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
+rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
+devopsy --say info "syncing into $id"
+` + o.exports(t) + `cd "$base/current"
 status=0
 ` + syncBlock(projectName, "the run step does not run", false) + `[ "$status" = 0 ] || exit "$status"
 `
