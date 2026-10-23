@@ -162,7 +162,7 @@ func TestMntOwners(t *testing.T) {
 	bind := func(src string, ro bool) string {
 		return fmt.Sprintf(`{"type":"bind","source":%q,"target":"/x","read_only":%v}`, dot+"/"+src, ro)
 	}
-	services, err := parse(`"app":{"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs","devopsy.mnt.owner":"10001:10001"},"volumes":[` + bind("mnt/storage/files", false) + `,` + bind("mnt/logs", false) + `,` + bind("mnt/config", true) + `]},
+	services, err := parse(`"app":{"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs","devopsy.mnt.owner":"10001:10001"},"volumes":[` + bind("mnt/storage", false) + `,` + bind("mnt/logs", false) + `,` + bind("mnt/config", true) + `]},
 "goaccess":{"labels":{"devopsy.mnt.owner":"20000:20000"},"volumes":[` + bind("mnt/logs", true) + `,` + bind("mnt/report", false) + `]},
 "database":{"profiles":["db"],"labels":{"devopsy.data":"stream","devopsy.mnt.owner":"999:999"},"volumes":[` + bind("mnt/database", false) + `]},
 "sqlite":{"profiles":["tools"],"volumes":[` + bind("mnt/storage", false) + `]}`)
@@ -261,8 +261,8 @@ func TestCheckMounts(t *testing.T) {
 		}
 		return CheckMounts(parsed)
 	}
-	if err := check(`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
-		t.Errorf("read-only tree mounts, shared/'s links, mnt, absolute paths, mnt whole read-only: %v", err)
+	if err := check(`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `,` + bind(dot+"/mnt/logs/app", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
+		t.Errorf("read-only tree mounts, shared/'s links, mnt, absolute paths, mnt whole read-only, below an entry nobody owns: %v", err)
 	}
 	for services, want := range map[string]string{
 		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                             "app mounts ./src writable: it is in the release, and the next one replaces it",
@@ -274,6 +274,12 @@ func TestCheckMounts(t *testing.T) {
 		// once its mount was no entry (review of 2026-10-23): a sync
 		// rsynced under it running.
 		`"files":{"volumes":[` + bind(dot+"/mnt", false) + `]}`: "files mounts ./mnt whole writable: it would write every entry, and no sync or import sees it there",
+		// A bind source below an owned entry, by any service, read-only
+		// too: the owner can swap the path for a symbolic link, and
+		// Docker resolves it on the host (decided, review of 2026-10-23,
+		// round 2: devopsy made such paths instead, its owner's).
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage/files", false) + `]}`:                                                                 "app mounts ./mnt/storage/files, below the owned entry ./mnt/storage (devopsy.mnt.owner=1:1): its owner can make that path a symbolic link, and Docker would mount what it points to on the host",
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage", false) + `]},"reader":{"volumes":[` + bind(dot+"/mnt/storage/files/x", true) + `]}`: "reader mounts ./mnt/storage/files/x, below the owned entry ./mnt/storage",
 	} {
 		err := check(services)
 		if err == nil || err.Error() != "the mounts check refuses the release: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {

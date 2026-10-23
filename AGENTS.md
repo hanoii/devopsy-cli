@@ -967,10 +967,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   2026-10-23; rsync's 24 is the same race). Applied: a release, right after
   `make_current` (it changes live data, so never before; `--mnt-owners`,
   a failure a failed run step), `--network none`, missing entries made
-  0755, the bind sources below an owned entry too (`cli.OwnedPaths`,
-  `ownPaths`, a directory at a time, never past a link: review of
-  2026-10-23, Docker made `./mnt/storage/files` root's under an owned
-  `storage`), and every owned entry scanned whole (decided: what devopsy did
+  0755 (only entries: a bind source below one is refused, below), and
+  every owned entry scanned whole (decided: what devopsy did
   not write has the wrong owner deep under a correct top; measured 0.24
   s warm, 0.75 s cold for 500,000 files; fallback for huge trees: `-type
   d` only), and rollbacks and the restart after a failed run from the
@@ -1009,8 +1007,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   excluded) or an owner of no writable entry (a sync said "nothing to
   sync" and a child's first release went live on empty data), two
   owners on one entry, `./mnt` whole mounted writable by any service
-  (`WholeMnt`, below), and an owned path that is or goes through a
-  symbolic link in `shared/mnt` (`ownedLinks`: Docker would mount what
+  (`WholeMnt`, below), a bind source below an owned entry
+  (`Binds`), and an owned entry that is a symbolic link in `shared/mnt`
+  (`ownedLinks`: Docker would mount what
   it points to, for the owners' step to give away; the util container
   itself never follows one, so rollbacks, which run no check, need
   none). With an entry owned it readies `UtilImage`
@@ -1025,6 +1024,17 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as
   for `--check-names`: after `--missing-vars` that is a broken file,
   which the run step names.
+- **A bind source below an owned entry is refused** (decided, review
+  of 2026-10-23, round 2), by any service, read-only too: the entry's
+  owner (the app, writing it) can replace `storage/files` with a
+  symbolic link, and Docker resolves a bind source on the host, so a
+  link to `/` would mount the host's root into the next container
+  started. The entry itself is a mount point no container can replace,
+  and the check refuses one that is a link. Before: devopsy made such
+  paths, its owner's (`OwnedPaths`, a directory at a time), which this
+  replaced; only top-level owned entries are made and scanned now. A
+  path below an entry nobody owns is the deploy user's, which no
+  container writes, so it stays allowed.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a `mnt` service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
