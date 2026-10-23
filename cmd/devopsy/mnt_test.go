@@ -406,3 +406,31 @@ func TestImportExtractsInItsEntriesAlone(t *testing.T) {
 		t.Errorf("the extracting container mounts all of mnt (auth included) while app, the entry's owner, runs:\n%s", docker)
 	}
 }
+
+// An mnt import whose owners' step fails after its extraction keeps its
+// mark, and --resolved is the documented way out ("accepts the data as
+// it is"); it then starts the services on the entry as the tar's maker
+// left it (review of 2026-10-23, round 3): a tar made anywhere carries
+// its maker's owners (1000 on a laptop, root), so an app running as
+// 10001 from its first process, or MariaDB as 999, cannot write it (or
+// read a datadir's mode-600 files) until the next release's
+// --mnt-owners. --resolved should give the owned entries to their
+// owners before it starts anything, as the import would have.
+func TestImportResolvedGivesOwners(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	s.releaseProd(nil)
+	_, errs, code := s.runIO([]string{"FAIL_OWNERS=1"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@prod", "--import", "app", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(docker, "-owners-0 --network none") || !strings.Contains(errs, "the import of app did not complete") {
+		t.Fatalf("an import whose owners' step fails (%d):\n%s\n%s", code, errs, docker)
+	}
+	_, errs, code = s.runIO(nil, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(docker, " start ") {
+		t.Fatalf("--resolved (%d):\n%s\n%s", code, errs, docker)
+	}
+	if !strings.Contains(docker, "--mount type=bind,source="+s.mnt("prod")+"/storage,target=/mnt/storage devopsy-util:2") {
+		t.Errorf("--resolved started the services on mnt/storage as the tar left it, never given to 10001:10001:\n%s\n%s", errs, docker)
+	}
+}
