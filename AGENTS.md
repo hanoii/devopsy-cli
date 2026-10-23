@@ -676,6 +676,15 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   pulls buildable services with an `image:` too and fails on a missing
   tag. A rollback or a restart restores its bookmarks (`img restore`)
   and fetches only when it cannot.
+- **The listing is per service** (`devopsy-images`: name, image id,
+  service, kind, registry digest, version label), from `compose config
+  --format json` without profiles and without devopsy's own file
+  (`NoReleaseComposeEnv`). Own or pulled is decided by compose and the
+  mode (`Service.own`: a build in build mode, or `pull_policy: never`),
+  never by the image: on Docker's containerd store built and loaded
+  images carry `RepoDigests` too (checked 2026-10-23), and a pulled
+  image's id is its index digest. The version is display only: no field
+  is common to images.
 - **Bookmarks are the reference count:** each release tags every image
   it runs as `<repo>:devopsy-<compose name>-<id>` (`bookmarkPrefix`: a
   long compose name is cut and hashed so the tag fits Docker's 128; a

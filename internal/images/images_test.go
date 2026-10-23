@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeDocker is Docker's image store as the rules see it: names (tags
@@ -23,6 +24,16 @@ type fakeDocker struct {
 	names      map[string]string
 	containers []container
 	fail       map[string]bool
+	// digests are each image's registry names (repo@<its id>, as on
+	// Docker's containerd store, where a pulled image's id is its
+	// index digest), created its build times, versions its labels.
+	digests  map[string][]string
+	created  map[string]time.Time
+	versions map[string]string
+	// upstream is what a registry's tags point to now, registry every
+	// image it serves by digest (its digests): what Pull fetches.
+	upstream map[string]string
+	registry map[string][]string
 }
 
 func (d *fakeDocker) failing(method string) error {
@@ -33,10 +44,37 @@ func (d *fakeDocker) failing(method string) error {
 	return nil
 }
 
-type container struct{ image, project string }
+type container struct {
+	image, project string
+	// service and state: "" is a running container of no service.
+	service, state string
+}
 
 func newFake() *fakeDocker {
-	return &fakeDocker{images: map[string]bool{}, names: map[string]string{}}
+	return &fakeDocker{images: map[string]bool{}, names: map[string]string{}, digests: map[string][]string{}, created: map[string]time.Time{}, versions: map[string]string{}, upstream: map[string]string{}, registry: map[string][]string{}}
+}
+
+func (d *fakeDocker) Inspect(ref string) (Image, error) {
+	if err := d.failing("Inspect"); err != nil {
+		return Image{}, err
+	}
+	id, err := d.ID(ref)
+	if err != nil {
+		// A pulled image is found by any of its digests, name or not.
+		if digest := digestOf(ref); digest != "" {
+			for i, ds := range d.digests {
+				for _, x := range ds {
+					if digestOf(x) == digest && d.images[i] {
+						id, err = i, nil
+					}
+				}
+			}
+		}
+		if err != nil {
+			return Image{}, err
+		}
+	}
+	return Image{ID: id, Digests: d.digests[id], Created: d.created[id], Version: d.versions[id]}, nil
 }
 
 func (d *fakeDocker) ID(ref string) (string, error) {
@@ -138,10 +176,70 @@ outer:
 	return fmt.Sprintf("%dMB", n), nil
 }
 
-// pull points ref at a new image, or at an existing one.
+func (d *fakeDocker) Pull(ref string) error {
+	if err := d.failing("Pull"); err != nil {
+		return err
+	}
+	if digest := digestOf(ref); digest != "" {
+		// By digest: only an image the registry has, kept as a name of
+		// its own (as on Docker's containerd store).
+		for id, ds := range d.registry {
+			for _, x := range ds {
+				if digestOf(x) == digest {
+					d.images[id] = true
+					d.names[familiar(digestRef(ref))] = id
+					d.digests[id] = appendNew(d.digests[id], repoKey(ref)+"@"+id)
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("manifest unknown: %s", ref)
+	}
+	id, ok := d.upstream[familiar(ref)]
+	if !ok {
+		return fmt.Errorf("manifest unknown: %s", ref)
+	}
+	d.pull(ref, id)
+	return nil
+}
+
+func (d *fakeDocker) Containers(project string) ([]Container, error) {
+	if err := d.failing("Containers"); err != nil {
+		return nil, err
+	}
+	var cs []Container
+	for i, c := range d.containers {
+		if c.project == project && c.service != "" {
+			st := c.state
+			if st == "" {
+				st = "running"
+			}
+			cs = append(cs, Container{Name: fmt.Sprintf("%s-%s-%d", project, c.service, i), Service: c.service, Image: c.image, State: st})
+		}
+	}
+	return cs, nil
+}
+
+// pull points ref at a new image, or at an existing one, which gets
+// the ref's repository's digest.
 func (d *fakeDocker) pull(ref, id string) {
 	d.images[id] = true
 	d.names[familiar(ref)] = id
+	dg := repoKey(ref) + "@" + id
+	d.digests[id] = appendNew(d.digests[id], dg)
+	d.registry[id] = appendNew(d.registry[id], dg)
+	d.upstream[familiar(ref)] = id
+}
+
+// services are a listing's services, named after their refs; a ref
+// ending in -app is built.
+func services(refs []string) []Service {
+	r := strings.NewReplacer(":", "-", "/", "-", "@", "-", ".", "-")
+	svcs := make([]Service, len(refs))
+	for i, ref := range refs {
+		svcs[i] = Service{Name: r.Replace(ref), Ref: ref, Build: strings.HasSuffix(ref, "-app")}
+	}
+	return svcs
 }
 
 func TestCksum(t *testing.T) {
@@ -217,8 +315,8 @@ type env struct {
 
 func newEnv(t *testing.T, d *fakeDocker, name, left string, out *bytes.Buffer) *env {
 	e := &env{dir: filepath.Join(t.TempDir(), name, "releases"), lists: map[string][]string{}}
-	e.set = &Set{Docker: d, Name: name, Left: left, Out: out, List: func(rel string) ([]string, error) {
-		return e.lists[filepath.Base(rel)], nil
+	e.set = &Set{Docker: d, Name: name, Left: left, Out: out, List: func(rel string) ([]Service, error) {
+		return services(e.lists[filepath.Base(rel)]), nil
 	}}
 	return e
 }
@@ -245,7 +343,7 @@ func (e *env) run(d *fakeDocker) {
 	}
 	for _, r := range e.lists[e.current] {
 		if id, err := d.ID(r); err == nil {
-			cs = append(cs, container{id, e.set.Name})
+			cs = append(cs, container{image: id, project: e.set.Name})
 		}
 	}
 	d.containers = cs
@@ -325,7 +423,7 @@ func randomHistory(t *testing.T, seed int64) {
 		switch op := rng.Intn(9); op {
 		case 8: // a container outside Compose on the shared name's image
 			if i, err := d.ID("mariadb:11"); err == nil {
-				d.containers = append(d.containers, container{i, ""})
+				d.containers = append(d.containers, container{image: i, project: ""})
 				check("outside container on " + i)
 			}
 		case 7: // taken down (devopsy down): no containers, current stays
@@ -365,7 +463,7 @@ func randomHistory(t *testing.T, seed int64) {
 			e.run(d)
 			if rng.Intn(4) == 0 { // a one-off left behind
 				if i, err := d.ID(own); err == nil {
-					d.containers = append(d.containers, container{i, e.set.Name})
+					d.containers = append(d.containers, container{image: i, project: e.set.Name})
 				}
 			}
 			check(e.set.Name + " release " + id)
@@ -577,7 +675,7 @@ func TestRemoveLeavesUsedImage(t *testing.T) {
 	d.pull("mariadb:11.4", "sha256:1")
 	id := e.newRelease("mariadb:11")
 	e.set.Bookmark(e.rel(id))
-	d.containers = []container{{"sha256:1", ""}}
+	d.containers = []container{{image: "sha256:1"}}
 	if err := e.set.Remove(e.rel(id)); err != nil {
 		t.Fatal(err)
 	}

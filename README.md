@@ -494,7 +494,7 @@ since a child's first release syncs from a released parent. `devopsy
 ```sh
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
-devopsy @vm1:prod --releases     # list them and their images, * marks the current one
+devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
@@ -684,6 +684,13 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   Pin such images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
   bookmark is what the name held when the release fetched: two releases
   pulling `mariadb:11` at the same moment may each bookmark the other's.
+- **What changed:** each release says which images changed since the
+  one it replaces, a pulled image by its version label
+  (`org.opencontainers.image.version`) when it has one, else by short
+  digest, a built one as rebuilt. In image mode it warns when an image
+  the project builds changed under the same name (tag it by commit), and
+  when one stayed the same for over 30 days while releases go on: its
+  base may have patches, so rebuild it with `--pull`.
 - **Images go with their releases:** pruning a release removes its tags.
   An image no other release still tags, of any environment, instance or
   project on the server, also loses the names that release ran that still

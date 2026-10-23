@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -402,10 +403,10 @@ func TestFeaturesCoverScripts(t *testing.T) {
 }
 
 func TestFormatReleases(t *testing.T) {
-	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
+	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
 	got := FormatReleases(out)
-	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11\n  20261004120000", "FAILED"} {
+	for _, want := range []string{"* 20261005120000", "main@0123456789+dirty", "\n    registry/app:abc mariadb:11 (11.8.9)\n  20261004120000", "FAILED"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
@@ -673,7 +674,7 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
-	if got := calls(root); got != "--missing-vars from= to= args=\n--check-names "+base+" from= to= args=\n--check-mounts from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--mnt-owners from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
+	if got := calls(root); got != "--missing-vars from= to= args=\n--check-names "+base+" from= to= args=\n--check-mounts from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --format json from= to= args=\n--mnt-owners from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1032,6 +1033,18 @@ case "$1 $2" in
     elif [ "$4" = '{{.Id}}' ]; then
       [ -f "$(f "$5")" ] || { echo "Error response from daemon: No such image: $5" >&2; exit 1; }
       cat "$(f "$5")"
+    elif [ "$4" = '{{json .}}' ]; then
+      # Every name's repository gets the image's id as its digest, as on
+      # Docker's containerd store.
+      [ -f "$(f "$5")" ] || { echo "Error response from daemon: No such image: $5" >&2; exit 1; }
+      id=$(cat "$(f "$5")") ds=
+      for t in "$FAKE_ROOT"/images/*; do
+        [ -f "$t" ] && [ "$(cat "$t")" = "$id" ] || continue
+        n=${t##*/}
+        case $n in *@*) continue ;; esac
+        ds="$ds${ds:+,}\"$(echo "${n%:*}" | tr '_' '/')@$id\""
+      done
+      printf '{"Id":"%s","RepoDigests":[%s],"Created":"","Config":{"Labels":{}}}\n' "$id" "$ds"
     else
       for t in "$FAKE_ROOT"/images/*; do
         [ -f "$t" ] && [ "$(cat "$t")" = "$5" ] || continue
@@ -1074,12 +1087,36 @@ esac
 	if err := os.Rename(filepath.Join(bin, "devopsy"), filepath.Join(bin, "devopsy.fake")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") exec "+Quote(realDevopsy)+" \"$@\" ;; esac\nexec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
+	// A fake that lists nothing (it prints no compose config) runs no
+	// services.
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") exec "+Quote(realDevopsy)+" \"$@\" ;; esac\n"+
+		`if [ "$*" = '-- config --format json' ]; then out=$("$(dirname "$0")/devopsy.fake" "$@") || exit; [ -n "$out" ] || out='{"services":{}}'; printf '%s\n' "$out"; exit; fi`+"\n"+
+		"exec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
 	for _, f := range []string{"devopsy", "devopsy.fake", "docker", "flock", "mv"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+// cfgJSON is compose config --format json for a project app-prod
+// running refs: app-prod-app is service app's build, every other ref a
+// service named after it.
+func cfgJSON(refs ...string) string {
+	svcs := map[string]any{}
+	r := strings.NewReplacer(":", "-", "/", "-", "@", "-", ".", "-")
+	for _, ref := range refs {
+		if ref == "app-prod-app" {
+			svcs["app"] = map[string]any{"build": map[string]any{"context": "."}}
+			continue
+		}
+		svcs[r.Replace(ref)] = map[string]any{"image": ref}
+	}
+	data, err := json.Marshal(map[string]any{"name": "app-prod", "services": svcs})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }
 
 // fakeImage is the id a tag holds in fakeImageTools' store, "" without
@@ -1105,7 +1142,7 @@ case $PWD in */current) at=current ;; *) at=$id ;; esac
 echo "$at: $*" >> "$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --images") printf 'app-prod-app\nmariadb:11\nx@sha256:abc\n' ;;
+  "-- config --format json") printf '%s' '` + cfgJSON("app-prod-app", "mariadb:11", "x@sha256:abc") + `' ;;
   "-- pull --ignore-buildable" | "-- pull") echo "$id${PULLED:-}" > "$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull")
     if [ -n "${FAIL_BUILD:-}" ]; then
@@ -1157,7 +1194,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1186,7 +1223,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\ncurrent: --mnt-owners restored\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\ncurrent: --mnt-owners restored\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "1" {
@@ -1273,7 +1310,7 @@ exit 0
 	if out, err := run(root, script(image2, "1", false)); err != nil {
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- pull\n1: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -1292,7 +1329,7 @@ echo "$*" >>"$FAKE_ROOT/calls"
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "--stdin-guard") exec cat ;;
-  "-- config --images") printf 'registry/app:%s\nmariadb:11\n' "$TAG" ;;
+  "-- config --format json") printf '{"name":"app","services":{"app":{"image":"registry/app:%s"},"db":{"image":"mariadb:11"}}}' "$TAG" ;;
   "-- pull") echo "$IMG" >"$FAKE_ROOT/images/registry_app:$TAG"; echo "$IMG" >"$FAKE_ROOT/images/mariadb:11" ;;
 esac
 exit 0
@@ -1432,6 +1469,12 @@ exit 0
 	if rs := ParseReleases(out); len(rs) != 1 || rs[0].ID != "2" {
 		t.Errorf("releases parsed: %+v", rs)
 	}
+	// Each image with its version, else its short digest.
+	write(t, filepath.Join(root, "app/a/prod/releases/2", ImagesFile), "registry/app:abc\tI1\tapp\tpulled\tregistry/app@sha256:0123456789abcdef\t1.2\nmariadb:11\tI2\tdatabase\tdata\tmariadb@sha256:0123456789abcdef\napp-a-prod-x\tI3\tx\town\n")
+	out, _ = run(ReleasesScript(target("a")))
+	if rs := ParseReleases(out); len(rs) != 1 || strings.Join(rs[0].Images, " ") != "registry/app:abc=1.2 mariadb:11=sha256:0123456789ab app-a-prod-x" {
+		t.Errorf("images with versions: %+v", rs)
+	}
 	if f := FormatReleases(out); !strings.Contains(f, "Images the project's removals left") || !strings.Contains(f, "  mariadb:devopsy-app-a-prod-1  app-a-prod, release 1, ") {
 		t.Errorf("formatted:\n%s", f)
 	}
@@ -1504,7 +1547,7 @@ func TestBookmarksPerRef(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --images") printf 'postgres:15\npostgres:16\nx@sha256:abc\n' ;;
+  "-- config --format json") printf '%s' '`+cfgJSON("postgres:15", "postgres:16", "x@sha256:abc")+`' ;;
   "-- pull") echo "A$IMG" >"$FAKE_ROOT/images/postgres:15"; echo "B$IMG" >"$FAKE_ROOT/images/postgres:16"; echo "D$IMG" >"$FAKE_ROOT/images/x@sha256:abc" ;;
 esac
 exit 0
@@ -1554,7 +1597,7 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --images") printf 'app-prod-app\nmariadb:11\n' ;;
+  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- pull --ignore-buildable") echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull")
     if [ -n "${FAKE_HANG:-}" ]; then touch "$FAKE_ROOT/building"; sleep 30; exit 1; fi
@@ -1822,7 +1865,7 @@ func TestLeftoverImagesRecord(t *testing.T) {
 // as one: each name gets its own bookmark.
 func TestRebookmark(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n[ \"$*\" = \"-- config --images\" ] && printf \"$LISTING\"\nexit 0\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n[ \"$*\" = \"-- config --format json\" ] && printf '%s' \"$LISTING\"\nexit 0\n")
 	fakeImageTools(t, bin)
 	root := t.TempDir()
 	rel := filepath.Join(root, "app", "prod", "releases", "1")
@@ -1833,7 +1876,7 @@ func TestRebookmark(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	run := func(listing string) {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`img bookmark "$REL"`)
+		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`img record "$REL"`)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "REL=" + rel, "LISTING=" + listing}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v:\n%s", err, out)
@@ -1849,7 +1892,7 @@ func TestRebookmark(t *testing.T) {
 		}
 		return bs
 	}
-	run(`ghcr.io/x/app:1\nlibrary/nginx:1\nnginx:2\n`)
+	run(cfgJSON("ghcr.io/x/app:1", "library/nginx:1", "nginx:2"))
 	bs := bookmarks()
 	if len(bs) != 3 || !slices.Contains(bs, "ghcr.io_x_app:devopsy-app-prod-1") {
 		t.Fatalf("bookmarks: %v", bs)
@@ -1859,7 +1902,7 @@ func TestRebookmark(t *testing.T) {
 			t.Errorf("%s has no suffix: library/nginx and nginx are one repository", b)
 		}
 	}
-	run(`ghcr.io/y/app:1\n`)
+	run(cfgJSON("ghcr.io/y/app:1"))
 	if bs := bookmarks(); len(bs) != 1 || bs[0] != "ghcr.io_y_app:devopsy-app-prod-1" {
 		t.Errorf("bookmarks after the listing changed: %v", bs)
 	}
@@ -1994,7 +2037,7 @@ func TestAfterSwitchSurvives(t *testing.T) {
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
-  "-- config --images") printf 'app-prod-app\n' ;;
+  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
   "-- build --pull") id=$(pwd -P); id=${id%/code}; echo "${id##*/}" >"$FAKE_ROOT/images/app-prod-app" ;;
   deploy)
     if [ -n "${FAKE_WAIT:-}" ]; then
@@ -2129,7 +2172,7 @@ func TestActivateGoneAndNeighbours(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 case "$*" in
   fail) exit 3 ;;
-  "-- config --images") printf 'app-prod-app\n' ;;
+  "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app")+`' ;;
 esac
 exit 0
 `)

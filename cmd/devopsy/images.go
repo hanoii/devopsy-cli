@@ -17,7 +17,8 @@ import (
 //
 //	devopsy --images --name <compose name> --left <record> <action> ...
 //
-// bookmark <release>..., restore <release> (exit 1 when it cannot),
+// record <release> [<release it replaces>] (exit 1 when it cannot),
+// restore <release> (exit 1 when it cannot),
 // remove <release>... (exit 1 when Docker failed: keep the release),
 // undo [--rollback] <release> [<current release>], recover <environment>
 // [<current release>], prune; for an environment's releases (images.ToPrune,
@@ -35,17 +36,21 @@ func runImages(args []string, color bool) int {
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
 	rollback, named, quiet, goneOK := false, false, false, false
+	s.Mode = images.ModeBuild
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--name", "--left":
+		case "--name", "--left", "--mode":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
-			if args[i] == "--name" {
+			switch args[i] {
+			case "--name":
 				s.Name, named = args[i+1], true
-			} else {
+			case "--left":
 				s.Left = args[i+1]
+			default:
+				s.Mode = args[i+1]
 			}
 			i++
 		case "--rollback":
@@ -71,9 +76,12 @@ func runImages(args []string, color bool) int {
 		return ""
 	}
 	switch words[0] {
-	case "bookmark":
-		for _, r := range rest {
-			s.Bookmark(r)
+	case "record":
+		if len(rest) < 1 || len(rest) > 2 {
+			return imagesUsage(color)
+		}
+		if s.Record(rest[0], arg(1)) != nil {
+			return 1
 		}
 	case "restore":
 		if len(rest) != 1 {
@@ -136,6 +144,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> record|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

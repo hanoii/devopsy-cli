@@ -838,7 +838,7 @@ done
   image_lock shared fetching || return $?
   fr=0
   # A signal during the restore (img ignores it) skips the fetch.
-  img restore "$1" || { [ -z "$fetch_sig" ] && fetch_images "$1" && img bookmark "$1"; } || fr=$?
+  img restore "$1" || { [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; } || fr=$?
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -894,7 +894,7 @@ fetch_release "$rel" || fr=$?
 # A write before the marker goes: a session gone during the fetch that
 # watchSession did not see (none on -t, which gets HUP) fails here (PIPE
 # is ignored, so the write fails and set -e ends it), the marker kept for
-# img recover and current as it was. img bookmark ignores SIGPIPE, so
+# img recover and current as it was. img record ignores SIGPIPE, so
 # nothing died sooner.
 [ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready"
 rm -f "$rel/` + FetchingFile + `"
@@ -1322,7 +1322,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name}, false) + ` --left "$left" "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode}, false) + ` --left "$left" "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1377,7 +1377,7 @@ image_unlock() {
 get_images() {
   image_lock shared fetching || return $?
   gi=0
-  img restore "$1" || { fetch_images "$1" && img bookmark "$1"; } || gi=$?
+  img restore "$1" || { fetch_images "$1" && img record "$1"; } || gi=$?
   image_unlock
   return "$gi"
 }
@@ -1517,9 +1517,10 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     # The current release, while a sync into it runs.
     [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
   fi
-  # Names only: the ids after a tab stay on the server.
+  # Names, each with its version or short digest (name=version): the
+  # ids stay on the server.
   i=
-  [ ! -f "$base/releases/$r/%s" ] || i=$(cut -f 1 < "$base/releases/$r/%s" | tr '\n' ' ')
+  [ ! -f "$base/releases/$r/%s" ] || i=$(awk -F '\t' '$1 != "" { v = $6; if (v == "" && $5 != "") { v = $5; sub(/.*@/, "", v); v = substr(v, 1, 19) } printf "%%s%%s ", $1, (v == "" ? "" : "=" v) }' "$base/releases/$r/%s")
   printf '%%s\t%%s\t%%s\t%%s\t' "$r" "$c" "$f" "$i"
   [ ! -f "$base/releases/$r/%s" ] || tr -d '\n' < "$base/releases/$r/%s"
   echo
@@ -1538,8 +1539,9 @@ type Release struct {
 	Incomplete, InProgress bool
 	// Syncing: current, while a sync into it runs (SyncRunning).
 	Syncing bool
-	// Images are the names it runs (ImagesFile): what a rollback to it
-	// restores, and what removing it may free.
+	// Images are the names it runs (ImagesFile), each followed by = and
+	// its version or short digest when the listing has one: what a
+	// rollback to it restores, and what removing it may free.
 	Images []string
 	Record Record
 }
@@ -1627,7 +1629,15 @@ func FormatReleases(out string) string {
 	for _, r := range ParseReleases(out) {
 		b.WriteString(r.Line() + "\n")
 		if len(r.Images) > 0 {
-			b.WriteString("    " + strings.Join(r.Images, " ") + "\n")
+			shown := make([]string, len(r.Images))
+			for i, img := range r.Images {
+				// name=version: the version or short digest the release ran.
+				if ref, v, ok := strings.Cut(img, "="); ok {
+					img = ref + " (" + v + ")"
+				}
+				shown[i] = img
+			}
+			b.WriteString("    " + strings.Join(shown, " ") + "\n")
 		}
 	}
 	if b.Len() == 0 {
