@@ -102,7 +102,7 @@ var Capabilities = []Capability{
 				Does:  "in syncs only, on each side once the sync ended. The parent's: go or abort, its stopped services back. The child's says what the copy did to its data: go (complete), abort (nothing of the parent's written), both with its stopped services back, or partial (written in part: they stay down, and the hook must not start them). On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
 			},
 		},
-		Env: "every action gets DEVOPSY_DATA_MNT and DEVOPSY_DATA_STREAM, its side's services labeled devopsy.data=mnt and devopsy.data=stream (depends_on order), and DEVOPSY_DATA_STOP, what this operation stops on this side (devopsy.data.stop and the services depending on them; at finish ... go|abort they are back up, at finish child partial what stays down), space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses) and DEVOPSY_SYNC_ARGS (--sync's arguments after --)",
+		Env: "every action gets DEVOPSY_DATA_MNT and DEVOPSY_DATA_STREAM, its side's services labeled devopsy.data=mnt and devopsy.data=stream (depends_on order), and DEVOPSY_DATA_STOP, what this operation stops on this side (devopsy.data.stop and the services depending on them; at finish ... go|abort they are back up, at finish child partial what stays down), space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses)",
 	},
 }
 

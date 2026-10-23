@@ -44,8 +44,6 @@ type syncJob struct {
 	// to and port are where the parent's server reaches the child's
 	// (user@hostname), when they differ.
 	to, port string
-	// args go to rsync (after --sync's --).
-	args []string
 	// first: the child's first release, with no data of its own yet. Its
 	// inherited variables are written before the upload, so the variables
 	// check sees them, and stay if the sync fails: the next release is a
@@ -78,7 +76,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, args []string, reset bool) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -91,7 +89,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 	if c.Release == nil || len(remote.StepArgs(c.Release.Run)) == 0 {
 		return nil, errors.New(missingSteps(c, "release"))
 	}
-	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args, id: newSyncID(), reset: reset}
+	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
 	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
@@ -391,7 +389,6 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 		remote.SyncToDirEnv:      base + "/current/.devopsy",
 		remote.SyncToProjectEnv:  job.projectName,
 		remote.SyncToTargetEnv:   job.child.Address,
-		remote.SyncArgsEnv:       strings.Join(job.args, " "),
 		remote.SyncFromTargetEnv: p.Address,
 		remote.SyncWatchEnv:      "1",
 		remote.HeartbeatEnv:      fmt.Sprint(int(remote.HeartbeatEvery().Seconds())),
@@ -587,9 +584,8 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if reset {
 		flag = "--reset"
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--yes] [-- <rsync args>...]"
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--yes]"
 	yes, from := false, ""
-	var rsyncArgs []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--yes", "-y":
@@ -600,9 +596,6 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			}
 			from = strings.TrimPrefix(args[i+1], "@")
 			i++
-		case "--":
-			rsyncArgs = args[i+1:]
-			i = len(args)
 		default:
 			return fail(usage)
 		}
@@ -618,7 +611,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, rsyncArgs, reset)
+	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -646,7 +639,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
+	o := &remote.SyncOptions{From: p.Address, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesYes(yes)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
@@ -1087,7 +1080,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// import's): what its holder decides from, answer or not.
 	code := 0
 	if len(dirs) > 0 {
-		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), strings.Fields(os.Getenv(remote.SyncArgsEnv)), len(streams) == 0); err != nil {
+		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), len(streams) == 0); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -1348,7 +1341,7 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, nil, len(streams) == 0, wipeScript())
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0, wipeScript())
 	}
 	if os.Getenv(remote.SyncResetEnv) != "" {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
@@ -1595,7 +1588,7 @@ func rsyncdConf(entries, files []string) string {
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, args []string, last bool) error {
+func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -1641,7 +1634,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 		}
 		for i, d := range present {
 			report.Info("rsync mnt/" + d)
-			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
+			run := append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...)
 			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
 			if slices.Contains(files, d) {
@@ -1713,7 +1706,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, args, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1746,13 +1739,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}

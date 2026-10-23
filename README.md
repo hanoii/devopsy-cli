@@ -1206,9 +1206,9 @@ and `--import` do,
 and so does `--release-sync` on a child already released; `--yes`
 skips it. First-release syncs never ask. `--from` copies from another
 environment of the project instead of the parent: an address, as after
-`devopsy`, with its `@` (devopsy takes it without one too). What follows
-`--` goes to rsync, and to the data capability's actions as
-`DEVOPSY_SYNC_ARGS`.
+`devopsy`, with its `@` (devopsy takes it without one too). A sync copies
+everything the labels say; what must never be copied is excluded by label
+(`devopsy.data.exclude`).
 
 **Starting a child over:** `devopsy @develop --reset` (same options as
 `--sync`) is a sync that first throws away everything a sync leaves on
@@ -1644,8 +1644,7 @@ lists them with their contracts):
     labels (at `finish ... go|abort` back up by then; at `finish child
     partial`, what stays down); a stopped `stream` service is in both. In
     a sync also `DEVOPSY_SYNC_FROM_TARGET` and `DEVOPSY_SYNC_TO_TARGET`
-    (the parent's and the child's addresses) and `DEVOPSY_SYNC_ARGS`
-    (what followed `--sync`'s `--`). The other `DEVOPSY_SYNC_*` variables
+    (the parent's and the child's addresses). The other `DEVOPSY_SYNC_*` variables
     a push sets are devopsy's own.
 
 ## License

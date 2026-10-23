@@ -474,15 +474,14 @@ func TestSyncSameHost(t *testing.T) {
 		t.Fatalf("second release (%d):\n%s\n%s", code, out, docker)
 	}
 
-	// --sync asks; --yes; arguments after -- go to rsync; the log goes
-	// with the current release.
+	// --sync asks; --yes; the log goes with the current release.
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "newer\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") {
 		t.Fatalf("--sync without a terminal (%d):\n%s", code, out)
 	}
-	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --exclude=css /src/storage/") {
+	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 /src/storage/") {
 		t.Fatalf("--sync (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "newer\n" {
@@ -912,10 +911,10 @@ func TestSyncParentRestoreFails(t *testing.T) {
 func TestSyncCapability(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
-	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_DATA_MNT stream=$DEVOPSY_DATA_STREAM stop=$DEVOPSY_DATA_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET args=$DEVOPSY_SYNC_ARGS\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
+	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_DATA_MNT stream=$DEVOPSY_DATA_STREAM stop=$DEVOPSY_DATA_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
 	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\"\nif [ \"${FAIL_EXPORT:-}\" = \"$1\" ]; then exit 3; fi\n", 0o755)
-	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1 into $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD from=$DEVOPSY_SYNC_FROM_TARGET args=$DEVOPSY_SYNC_ARGS: $(cat)\"\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1 into $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD from=$DEVOPSY_SYNC_FROM_TARGET: $(cat)\"\n", 0o755)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
@@ -945,9 +944,9 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stream (%d):\n%s", code, out)
 	}
-	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=", "devopsy: copying",
+	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "devopsy: copying",
 		"prepare parent in shop-prod rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "rsync mnt/storage", "devopsy: exporting db",
-		"import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
+		"import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
 	if strings.Contains(docker, "stop db") || strings.Contains(docker, "/src/db/") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait db") {
 		t.Errorf("stream docker:\n%s", docker)
 	}
@@ -958,12 +957,6 @@ func TestSyncCapability(t *testing.T) {
 	// after the sync, at the run step.
 	out, code = s.run(nil, "@dev", "--log")
 	inOrder("--log", out, code, "prepare child in shop-dev", "devopsy: copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
-	// --sync's arguments reach the hooks and the import.
-	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
-	s.logs()
-	if code != 0 || !strings.Contains(out, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=--exclude=css") || !strings.Contains(out, "args=--exclude=css: dump of db") {
-		t.Errorf("--sync -- args (%d):\n%s", code, out)
-	}
 
 	// Two streams, db stopped (own) and app with it (it depends on db):
 	// in depends_on order, neither brought up for its import (no
@@ -1030,7 +1023,7 @@ func TestSyncCapability(t *testing.T) {
 	across := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
 	_, ssh := s.logs()
-	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret") {
+	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret") {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"

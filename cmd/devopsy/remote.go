@@ -572,7 +572,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					} else if t.ParentErr != nil {
 						return failParent(t, color, args[0])
 					}
-					if job, err = syncPreflight(t, p, projectName, nil, false); err != nil {
+					if job, err = syncPreflight(t, p, projectName, false); err != nil {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}

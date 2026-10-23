@@ -348,7 +348,7 @@ const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
 // --sync-push's own, set for it by the push session; the data capability
-// gets SyncFromTargetEnv, SyncToTargetEnv, SyncArgsEnv and its side's
+// gets SyncFromTargetEnv, SyncToTargetEnv and its side's
 // lists (DataMntEnv, DataStreamEnv, DataStopEnv).
 const (
 	// SyncToEnv is the child's server, user@hostname as the parent's
@@ -364,9 +364,6 @@ const (
 	// its address.
 	SyncToProjectEnv = "DEVOPSY_SYNC_TO_PROJECT"
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
-	// SyncArgsEnv are the arguments after --sync's --, space-joined: for
-	// rsync, and for the data capability's scripts to read.
-	SyncArgsEnv = "DEVOPSY_SYNC_ARGS"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
 	// DataMntEnv and DataStreamEnv name a side's services labeled
@@ -394,8 +391,6 @@ const (
 type SyncOptions struct {
 	// From is the parent's address.
 	From string
-	// Args go to rsync (DEVOPSY_SYNC_ARGS).
-	Args []string
 	// Inherit: the operator wrote this sync's inherited variables into
 	// its SyncInheritPending.
 	Inherit bool
@@ -417,7 +412,7 @@ func (o *SyncOptions) imagesExport() string {
 // exports sets the child side's sync variables, the sync's id and its
 // pending inherited variables' file among them; t is the child.
 func (o *SyncOptions) exports(t *Target) string {
-	s := fmt.Sprintf("export %s=%s %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")), SyncIDEnv, Quote(o.ID))
+	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncIDEnv, Quote(o.ID))
 	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
 	return s
 }
@@ -561,7 +556,7 @@ rm -f "$base/` + SyncHoldingFile + `"
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + images.SyncImagesEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + images.SyncImagesEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -897,7 +892,7 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, args []string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
 	if wipe != "" {
@@ -916,7 +911,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }

@@ -466,8 +466,6 @@ machine: the parent's server copies into the child's.
   --from @<target>  copy from another environment of the project instead
                     (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
-  -- args...        DEVOPSY_SYNC_ARGS: rsync's arguments (--exclude=cache),
-                    and the data capability's to read
 
 Services opt in, with labels on compose services, read by each side from
 its own release. A sync is an export of every service with data on the

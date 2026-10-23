@@ -1645,8 +1645,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `devopsy.data.exclude` honored) is left out of `ParentData`: the copy
   writes nothing for it, so the child keeps its own data and image.
   Entries come from compose's config (`Service.Entries`, the bind
-  sources under `.devopsy/mnt`). Not known: what `--sync -- <rsync
-  args>` excludes, which the operator chose.
+  sources under `.devopsy/mnt`).
 
 ### Streams
 
@@ -1754,9 +1753,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `--sync-push`, `--sync-exec <devopsy args>` (both need the push's
   `DEVOPSY_SYNC_TO_DIR` and `DEVOPSY_SYNC_TO_PROJECT`) and
   `--sync-services prepare [first] | finish go|abort|partial | settle |
-  import <service> [last] | list` (`runSyncServices`). `DEVOPSY_SYNC_ARGS`
-  (space-joined, split like `StepArgs`) go to rsync, and to the hooks
-  to read.
+  import <service> [last] | list` (`runSyncServices`). A sync takes no
+  rsync arguments (decided 2026-10-23): it copies environments fully,
+  and what must never be copied is a label (`devopsy.data.exclude`).
 
 ### inherit
 
