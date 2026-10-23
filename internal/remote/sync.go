@@ -17,8 +17,8 @@ import (
 // A sync copies a parent environment's data (shared/mnt) into a child's,
 // host to host: devopsy @<child> --sync, and a child's first release.
 // devopsy opens two sessions: the holder, on the child's server, which takes
-// the child's release lock, stops its services labeled
-// devopsy.sync.stop=true and prints SyncMarker; then the push, on the
+// the child's release lock, stops what its devopsy.data.stop labels say
+// (cli.DataStops) and prints SyncMarker; then the push, on the
 // parent's server, which copies (devopsy --sync-push): rsync, then each
 // stream through a spool file in the child's directory (StreamSpool). The
 // push's result goes back to the holder on its stdin, go or abort, and the
@@ -36,7 +36,7 @@ const HalfCopiedNotice = "is half copied: a database copied raw cannot start on 
 // The holder decides by taking that record in one move (SyncTakenFile):
 // a writer appending after it finds no file and stops. Its own sync's
 // done is go (the copy is complete), taken without it partial (written
-// in part: the stop=true services stay down, SyncIncompleteFile, and
+// in part: what the sync stopped stays down, SyncIncompleteFile, and
 // whatever still writes is ended, --sync-services finish partial),
 // nothing taken the answer (nothing written). A holder that never
 // decided (killed) leaves them for whoever takes the lock next
@@ -56,11 +56,31 @@ const (
 	// SyncLockFile is an environment's sync lock: a push from it or an
 	// export of it holds it exclusively (syncSourceLock).
 	SyncLockFile = ".devopsy-sync.lock"
-	// SyncIncompleteFile marks a child whose data no sync completed on:
+	// SyncIncompleteFile marks an environment whose data no sync
+	// completed on, or whose import did not complete (IncompleteImport):
 	// one line, IncompleteLine. Releases and rollbacks refuse, a push
-	// from it too, until a sync completes and removes it.
+	// from it too, until a sync (or for an import, a complete import of
+	// its service or --resolved) removes it.
 	SyncIncompleteFile = ".devopsy-sync.incomplete"
+	// SyncImportingFile says an --import holds the environment's release
+	// lock (ImportScript writes it once it holds it, and removes it on
+	// its way out): with the lock held (ImportRunning), an import runs.
+	SyncImportingFile = ".devopsy-sync.importing"
 )
+
+// ImportContainerPrefix and the compose project start the name of the
+// container an mnt --import writes through, then devopsy's pid: what the
+// next lock-taker removes when a killed devopsy left it, and --destroy
+// before emptying mnt.
+const ImportContainerPrefix = "devopsy-import-"
+
+// ImportMarker is the line devopsy --import on a server prints on stderr
+// right before its first write, and waits for a byte from the session
+// after it: the operator's devopsy sends one on it unless interrupted, so
+// a session gone between the data and the write imports nothing. From the
+// byte on, the import finishes on its own, whatever happens to the
+// session.
+const ImportMarker = "devopsy-internal-import"
 
 // SyncOpenFile is sync id's gate: the holder writes it (the parent's
 // address and the id) before its marker and removes it before deciding;
@@ -87,18 +107,23 @@ func DoneLine(id string) string {
 	return "done " + id
 }
 
-// Why a child is marked (SyncIncompleteFile), the line's code: a copy
-// cut, a holder killed before it decided (settled by the next
-// lock-taker), or a complete copy its project's finish child go refused.
+// Why an environment is marked (SyncIncompleteFile), the line's code: a
+// copy cut, a holder killed before it decided (settled by the next
+// lock-taker), a complete copy its project's finish child go refused,
+// or an --import that did not complete (from its first write on). A
+// sync's mark replaces an import's, never the reverse: from then on the
+// data is partly a sync's.
 const (
 	IncompleteCopy    = "copy"
 	IncompleteSettled = "settled"
 	IncompleteFinish  = "finish"
+	IncompleteImport  = "import"
 )
 
 // IncompleteLine is SyncIncompleteFile's content: since when (UTC, the
-// first mark's: a later one keeps it), the parent's address, the code
-// and why, for people, tab separated.
+// first mark's: a later one keeps it), the parent's address (for an
+// import, IncompleteImport, the service's name), the code and why, for
+// people, tab separated.
 func IncompleteLine(since, from, code, why string) string {
 	return since + "\t" + from + "\t" + code + "\t" + why + "\n"
 }
@@ -108,6 +133,64 @@ func ParseIncomplete(s string) (since, from, code, why string) {
 	f := strings.SplitN(strings.TrimRight(s, "\n"), "\t", 4)
 	f = append(f, "", "", "", "")
 	return f[0], f[1], f[2], f[3]
+}
+
+// ParseMark is ParseIncomplete as an Incomplete.
+func ParseMark(s string) *Incomplete {
+	since, from, code, why := ParseIncomplete(s)
+	return &Incomplete{since, from, code, why}
+}
+
+// Incomplete is a mark, parsed (ParseMark). Code is empty for a sync's
+// files no holder settled (no mark yet).
+type Incomplete struct{ Since, From, Code, Why string }
+
+// IsImport reports an import's mark: From is its service.
+func (m *Incomplete) IsImport() bool { return m != nil && m.Code == IncompleteImport }
+
+// ImportFixes are the ways out of an import of service that did not
+// complete, ref the address as typed, child whether it has a parent: the
+// import again from a complete file (on a child, or a sync), or
+// --resolved to go on with the data as it is. Each a text and its
+// command, for report.Fix and --say's details alike.
+func ImportFixes(ref, service string, child bool) [][2]string {
+	fixes := [][2]string{
+		{"import it again, from a complete file:", "devopsy @" + ref + " --import " + service + " < <file>"},
+	}
+	if child {
+		fixes = append(fixes, [2]string{"or sync it from its parent:", "devopsy @" + ref + " --sync"})
+	}
+	return append(fixes,
+		[2]string{"or go on with the data as it is (to fix it by hand first: devopsy @" + ref + " up -d --no-deps " + service + ", then --shell " + service + "):", "devopsy @" + ref + " --import " + service + " --resolved"})
+}
+
+// importFixLines are ImportFixes as --say's details for a script, the
+// service the shell's $service: each text, then its command after
+// report.CmdMark, double-quoted.
+func importFixLines(t *Target, service string) string {
+	var lines []string
+	for _, f := range ImportFixes(hintAddress(t), "$"+service, t.Parent != "") {
+		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
+	}
+	return strings.Join(lines, " ")
+}
+
+// markRefusal is shell refusing on the environment's mark ($base set),
+// then running refuse: an import's says which service and the ways out,
+// a sync's what syncFix says (--say details). what is what does not
+// happen ("nothing released"). Without a mark, nothing.
+func markRefusal(t *Target, what, syncFix, refuse string) string {
+	mark := `"$base/` + SyncIncompleteFile + `"`
+	return `if [ -e ` + mark + ` ]; then
+  if [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
+    mr_service=$(cut -f2 ` + mark + ` 2>/dev/null) || true
+    devopsy --say error "the import of $mr_service into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + importFixLines(t, "mr_service") + `
+  else
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + what + `: ` + IncompleteWhy + `" ` + syncFix + `
+  fi
+  ` + refuse + `
+fi
+`
 }
 
 // IncompleteWhy is shell printing the mark's why and since ($base set),
@@ -214,9 +297,9 @@ func SyncInheritPath(base, id string) string {
 const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
-// --sync-push's own, set for it by the push session; the sync capability
+// --sync-push's own, set for it by the push session; the data capability
 // gets SyncFromTargetEnv, SyncToTargetEnv, SyncArgsEnv and its side's
-// lists (SyncRsyncEnv, SyncStreamEnv, SyncStopEnv).
+// lists (DataMntEnv, DataStreamEnv, DataStopEnv).
 const (
 	// SyncToEnv is the child's server, user@hostname as the parent's
 	// server reaches it; empty when both are the same host.
@@ -232,17 +315,17 @@ const (
 	SyncToProjectEnv = "DEVOPSY_SYNC_TO_PROJECT"
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
 	// SyncArgsEnv are the arguments after --sync's --, space-joined: for
-	// rsync, and for the sync capability's scripts to read.
+	// rsync, and for the data capability's scripts to read.
 	SyncArgsEnv = "DEVOPSY_SYNC_ARGS"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
-	// SyncRsyncEnv, SyncStreamEnv and SyncStopEnv name a side's services
-	// labeled devopsy.sync=rsync, devopsy.sync=stream (depends_on order)
-	// and devopsy.sync.stop=true, space-separated, for the sync
-	// capability's actions (cli.SyncLists).
-	SyncRsyncEnv  = "DEVOPSY_SYNC_RSYNC"
-	SyncStreamEnv = "DEVOPSY_SYNC_STREAM"
-	SyncStopEnv   = "DEVOPSY_SYNC_STOP"
+	// DataMntEnv and DataStreamEnv name a side's services labeled
+	// devopsy.data=mnt and devopsy.data=stream (depends_on order), and
+	// DataStopEnv what the operation stops on that side (cli.DataStops),
+	// space-separated, for the data capability's actions (cli.DataLists).
+	DataMntEnv    = "DEVOPSY_DATA_MNT"
+	DataStreamEnv = "DEVOPSY_DATA_STREAM"
+	DataStopEnv   = "DEVOPSY_DATA_STOP"
 	// SyncNeedsEnv is, for --sync-exec, what the sync's later sessions
 	// to the child need of its devopsy (remote.Needs), space-separated:
 	// checked on the first (ChildCheck).
@@ -283,7 +366,7 @@ func (o *SyncOptions) exports(t *Target) string {
 // current release: on go, the pending inherited variables move into
 // shared/inherit.env (which every release links), so what follows reads
 // them there; otherwise they go. Then --sync-services finish, which
-// starts what was stopped (not on partial) and runs the sync
+// starts what was stopped (not on partial) and runs the data
 // capability's finish child.
 func syncFinish(projectName string) string {
 	pending := `"$` + InheritPendingEnv + `"`
@@ -303,8 +386,8 @@ func syncFinish(projectName string) string {
 
 // syncPrepare readies the child's current release to be written:
 // --sync-services prepare checks the stream services have an import,
-// runs the sync capability's prepare child and stops the services labeled
-// devopsy.sync.stop=true. A failure sets $status and restores what it
+// runs the data capability's prepare child and stops the child side's
+// set (cli.DataStops). A failure sets $status and restores what it
 // changed.
 //
 // release is an activation's: one with nothing current before it ($prev
@@ -377,6 +460,8 @@ func syncBlock(projectName, failed string, release bool) string {
       if [ -e ` + taken + ` ]; then
         devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
         printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
+      elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
+        devopsy --say error "nothing was copied, and the data is still from an import of $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes that service, and ` + failed + `" || true
       else
         devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, fix the child's entries or labels by hand, or --destroy it and release it again" || true
       fi
@@ -470,9 +555,9 @@ trap '' PIPE
 
 // syncSourceLock takes the locks a read of a live environment's data
 // holds (PushScript, ExportScript): its release lock shared (a release
-// waits) and its sync lock exclusively (each stops and restores the
-// environment's stop=true services, so two at once would restore them
-// under the other).
+// waits) and its sync lock exclusively (each stops and restores what the
+// environment's labels say, so two at once would restore them under the
+// other).
 func syncSourceLock() string {
 	return releaseLock(true, false) + `exec 8>"$base/` + SyncLockFile + `"
 ` + lockWait(8, false, "another sync from $base") + "\n"
@@ -495,7 +580,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + `if [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+` + syncSourceLock() + markRefusal(p, "nothing synced from it", `"`+report.CmdMark+`devopsy @`+hintAddress(p)+` --sync"`, "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi
@@ -506,8 +591,8 @@ export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, tru
 // ExportScript writes service's data to stdout (devopsy --export), in the
 // target's current release under a shared hold of its release lock (a
 // release waits, as for a sync's push) and an exclusive one on its sync
-// lock: a push from this environment stops and restores the same
-// services a stop=true export does.
+// lock: a push from this environment stops and restores services as an
+// export does.
 func ExportScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to export"; exit 1; }
 ` + syncSourceLock() + `cd "$base/current"
@@ -523,25 +608,81 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 
 // ImportScript replaces service's data with stdin (devopsy --import), in
 // the target's current release under its release lock, as a sync holds it.
-// end is what the data must end with (ImportEndEnv).
+// end is what the data must end with (ImportEndEnv). A mark refuses
+// before devopsy reads stdin, so a dump is never sent only to be refused:
+// a sync's (only a sync completes it), and an import's of another service
+// (only its own completes it). While it holds the lock, SyncImportingFile
+// says an import runs (ImportRunning).
 func ImportScript(t *Target, projectName, service, end string) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, hintAddress(t)) + `` + releaseLock(false, false) + `cd "$base/current"
-# A sync's holder killed outright left its record: its writers end first.
+`, hintAddress(t)) + releaseLock(false, false) + `cd "$base/current"
+: >"$base/` + SyncImportingFile + `"
+trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
+# A sync's holder killed outright left its record: its writers end first,
+# and it becomes a sync's mark, which the check below sees.
 if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
-export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, true) + "\n"
+if [ -e "$base/` + SyncIncompleteFile + `" ]; then
+  im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
+  im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
+  if [ "$im_code" != ` + IncompleteImport + ` ]; then
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
+    exit 1
+  elif [ "$im_service" != ` + Quote(service) + ` ]; then
+    devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixLines(t, "im_service") + `
+    exit 1
+  fi
+fi
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
 }
+
+// ResolvedCheckScript is --import <service> --resolved's first session,
+// read-only: "importing" while an import holds the lock, the mark's line
+// ("mark", a tab and the line) and the record's "stop <service>" lines
+// (SyncStateFile), for the operator's prompt. It never waits for the lock.
+func ResolvedCheckScript(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
+if ` + ImportRunning + `; then echo importing; fi
+if [ -e "$base/` + SyncIncompleteFile + `" ]; then printf 'mark\t%s\n' "$(cat "$base/` + SyncIncompleteFile + `")"; fi
+grep '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null || true
+`
+}
+
+// ResolvedScript is --import <service> --resolved's second session: under
+// the release lock, devopsy --import <service> --resolved --yes in the
+// current release, which checks the mark again, ends a writer a killed
+// devopsy left, starts what the import kept down and only then removes
+// the mark and the record.
+func ResolvedScript(t *Target, projectName, service string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
+` + releaseLock(false, false) + `cd "$base/current"
+` + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, true) + "\n"
+}
+
+// SyncStateFile is the record of what a sync or an import stopped, in the
+// environment's directory ("stop <service>" lines; cmd/devopsy's
+// syncRecord): what restoring brings back, and what --resolved names.
+const SyncStateFile = ".devopsy-sync.services"
 
 // CurrentExistsScript prints "current" when the target has a current
 // release, else "none": whether a release is its first, and whether a
-// parent was released. Then "incomplete" when a sync left it with a
-// partial copy (SyncIncompleteFile, or a sync's files no holder
-// settled): a release that does not sync refuses before uploading.
-func CurrentExistsScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/current/.devopsy" ]; then echo current; else echo none; fi
+// parent was released. Then "incomplete", a tab and the mark's line when
+// a sync or an import left its data partial (SyncIncompleteFile;
+// "incomplete" alone for a sync's files no holder settled), "importing"
+// while an import runs, and DataLabelsFeature when the server's devopsy
+// has it: a release that does not sync refuses before uploading, and one
+// that syncs on a server without it. extra are needs to check besides
+// the script's own (the push's, for a parent).
+func CurrentExistsScript(t *Target, extra []string) string {
+	needs := ""
+	if len(extra) > 0 {
+		needs = needsEnv + `="${` + needsEnv + `:-} ` + strings.Join(extra, " ") + `"` + "\n"
+	}
+	return "set -eu\n" + needs + basePrelude(t) + `if [ -d "$base/current/.devopsy" ]; then echo current; else echo none; fi
 ` + IncompleteCheck + `
+if ` + ImportRunning + `; then echo importing; fi
+case "$server_features" in *" ` + DataLabelsFeature + ` "*) echo ` + DataLabelsFeature + ` ;; esac
 `
 }
 
@@ -554,15 +695,43 @@ func ClaimWriteScript(base, id string) string {
 	return "mv -f " + open + " " + started + " 2>/dev/null || " + mine + " || { devopsy --say error \"the child's side ended already (" + base + "): nothing copied\"; exit 1; }\n"
 }
 
-// ParseCurrent reads CurrentExistsScript's output.
-func ParseCurrent(out string) (current, incomplete bool) {
-	lines := strings.Fields(out)
-	return slices.Contains(lines, "current"), slices.Contains(lines, "incomplete")
+// Current is CurrentExistsScript's output: Mark nil without one (Code
+// empty for a sync's files no holder settled), Importing while an import
+// runs, DataLabels whether the server's devopsy has DataLabelsFeature.
+type Current struct {
+	Current, Importing, DataLabels bool
+	Mark                           *Incomplete
 }
 
-// IncompleteCheck prints "incomplete" when the environment's data is a
-// partial copy, $base set.
-const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then echo incomplete; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+// ParseCurrent reads CurrentExistsScript's output.
+func ParseCurrent(out string) Current {
+	var c Current
+	for _, line := range strings.Split(out, "\n") {
+		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+		switch key {
+		case "current":
+			c.Current = true
+		case "incomplete":
+			c.Mark = ParseMark(value)
+		case "importing":
+			c.Importing = true
+		case DataLabelsFeature:
+			c.DataLabels = true
+		}
+	}
+	return c
+}
+
+// IncompleteCheck prints "incomplete", a tab and the mark's line when the
+// environment's data is partial, "incomplete" alone for a sync's files
+// no holder settled, $base set.
+const IncompleteCheck = `if [ -e "$base/` + SyncIncompleteFile + `" ]; then printf 'incomplete\t%s\n' "$(cat "$base/` + SyncIncompleteFile + `")"; elif { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; } && ! ` + LockBusy + `; then echo incomplete; fi`
+
+// ImportRunning succeeds while an --import holds the environment's
+// release lock ($base set): the holding file it writes once it holds it,
+// with the lock held. Never in a script holding the lock itself:
+// LockBusy is always true there.
+const ImportRunning = `{ [ -e "$base/` + SyncImportingFile + `" ] && ` + LockBusy + `; }`
 
 // SyncRunning succeeds while a sync's holder holds the child's release
 // lock ($base set), its prepare included.

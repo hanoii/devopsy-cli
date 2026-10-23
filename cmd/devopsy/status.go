@@ -109,7 +109,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
-	syncing, source := false, false
+	syncing, source, importing := false, false, false
+	var mark *remote.Incomplete
 	var record *remote.Record
 	id := ""
 	for _, line := range strings.Split(header, "\n") {
@@ -138,11 +139,16 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			// The mark (remote.IncompleteLine), or nothing for a sync's
 			// files no holder settled yet.
 			partial = "a sync was cut"
-			if since, from, _, why := remote.ParseIncomplete(value); why != "" {
-				partial = why + " (since " + since + " UTC, from @" + from + ")"
+			mark = remote.ParseMark(value)
+			if mark.IsImport() {
+				partial = mark.Why + " (since " + mark.Since + " UTC)"
+			} else if mark.Why != "" {
+				partial = mark.Why + " (since " + mark.Since + " UTC, from @" + mark.From + ")"
 			}
 		case "syncing":
 			syncing = true
+		case "importing":
+			importing = true
 		case "source":
 			source = true
 		}
@@ -189,7 +195,18 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	if source {
 		fmt.Println("data        a sync or an export from it is running")
 	}
-	if partial != "" {
+	switch {
+	case mark.IsImport() && importing:
+		fmt.Println(st.bad("data        importing " + mark.From + ": what it stopped stays down until it completes"))
+	case importing:
+		fmt.Println("data        an import into it is running")
+	case mark.IsImport():
+		var fixes []string
+		for _, f := range remote.ImportFixes(targetRef(t), mark.From, t.Parent != "") {
+			fixes = append(fixes, f[1])
+		}
+		fmt.Println(st.bad("data        the import of " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+	case partial != "":
 		fix := "devopsy @" + targetRef(t) + " --sync"
 		if id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"

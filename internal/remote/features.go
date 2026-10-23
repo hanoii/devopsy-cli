@@ -32,7 +32,17 @@ var featureFlags = []string{
 var namedFeatures = []struct {
 	Name string
 	Uses *regexp.Regexp
-}{}
+}{
+	// The devopsy.data labels: an older devopsy reads them as no label (a
+	// parent's "nothing to sync", an import refusing an "unlabeled"
+	// service), so every script reading labels needs it. Not settle,
+	// which every activation calls (partialGuard), and which tolerates
+	// labels it cannot read.
+	{DataLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
+}
+
+// DataLabelsFeature is the devopsy.data labels' named feature.
+const DataLabelsFeature = "data-labels"
 
 // flagUse finds a devopsy flag a script calls, quoted or not (inside
 // with_tty's quotes too).
