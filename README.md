@@ -866,9 +866,11 @@ the secrets its compose file requires), the mounts check refuses
   symbolic link in `shared/mnt`: Docker would mount what it points to,
   and devopsy give that to the owner.
 
-With an entry owned, it also builds `devopsy-util` when the server lacks
-it, so a registry that cannot be reached refuses the release before it
-goes live.
+Labels the owners' step after the switch could not read (a name from
+before a change, a leftover `.devopsy/capabilities/sync/`) refuse the
+release here too. With an entry owned, it also builds `devopsy-util`
+when the server lacks it, so a registry that cannot be reached refuses
+the release before it goes live.
 
 Named volumes and absolute paths are not checked. `--destroy` empties
 `shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and

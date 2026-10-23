@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -183,6 +184,11 @@ func (s SyncService) Active(profiles string) bool {
 	return false
 }
 
+// ErrComposeConfig is ComposeConfig's failure: compose could not read
+// the project's files, which its own commands then say (no label's
+// fault: --check-mounts lets it through).
+var ErrComposeConfig = errors.New("docker compose config")
+
 // ComposeConfig prints the project's compose configuration as JSON, every
 // profile's services included: the project found from cwd, with its
 // environment over environ. Replaceable in tests.
@@ -197,7 +203,7 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("docker compose config: %v %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("%w: %v %s", ErrComposeConfig, err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }

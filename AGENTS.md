@@ -1016,9 +1016,15 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   none). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
-  documented: named volumes and absolute paths. A compose config that
-  cannot be read is no refusal, as for `--check-names`: after
-  `--missing-vars` that is a broken file, which the run step names.
+  documented: named volumes and absolute paths. It reads the labels
+  exactly as `--mnt-owners` does after the switch (`cli.SyncServices`,
+  the leftover `.devopsy/capabilities/sync/` included), so labels that
+  step could not read refuse the release here (review of 2026-10-23,
+  round 2: the check parsed compose's output itself, passed a leftover
+  sync capability, and the release failed after its switch). A compose
+  config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as
+  for `--check-names`: after `--missing-vars` that is a broken file,
+  which the run step names.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a `mnt` service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
