@@ -2032,6 +2032,9 @@ func TestExportImport(t *testing.T) {
 		if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
 			t.Errorf("a tar reaching out of its entries, %s (%d), the import's container ran:\n%s", c.name, code, errs)
 		}
+		if !strings.Contains(errs, "error: the tar has a member reaching out of its entry: ") || !strings.Contains(errs, ": nothing imported") {
+			t.Errorf("a tar reaching out of its entries, %s, not said so:\n%s", c.name, errs)
+		}
 	}
 	// Without data, unknown: refused.
 	if _, errs, code := s.runIO([]string{"FAKE_APP=none"}, nil, "--export", "app"); code == 0 || !strings.Contains(errs, "app has no data: label it devopsy.data=mnt or stream") {

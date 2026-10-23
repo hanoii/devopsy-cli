@@ -385,7 +385,7 @@ func tarEntries(spool string) ([]string, error) {
 // they are in: GNU tar extracts some through to another entry or out of
 // mnt, refuses others only after the entries were emptied, and a link
 // in place of an entry removes the directory a container bind-mounts.
-var errOutside = errors.New("a member reaches out of its entry")
+var errOutside = errors.New("a member reaching out of its entry")
 
 // tarMember checks a member (p, its name without ./) stays in its
 // top-level entry of mnt, and returns that entry. A path or a link out
@@ -580,7 +580,7 @@ func runImport(cwd string, args []string, color bool) int {
 	var mnt string
 	if s.Transfer == cli.DataMnt {
 		if entries, err = tarEntries(spool); errors.Is(err, errOutside) {
-			return fail("the tar " + err.Error() + ": nothing imported")
+			return fail("the tar has " + err.Error() + ": nothing imported")
 		} else if err != nil {
 			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
 		}
