@@ -1364,7 +1364,7 @@ exit 0
 	// Another failed run, while another compose project runs the
 	// mariadb:11 it pulled: that name stays on it, the rest go back.
 	write(t, filepath.Join(root, "users", "35m"), "stage-prod\napp-prod\n")
-	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb-11 stays on mariadb:11's current image") {
+	if out, err := release("35", "FAIL_RUN=4", "PULLED=m"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "mariadb-11 runs what mariadb:11 holds now") {
 		t.Fatalf("failed run with mariadb:11 shared (%v):\n%s", err, out)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "35m" {

@@ -706,16 +706,16 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   tell newer from older there), is refused before anything changes, the
   names its pull moved put back; `--release --yes` runs it anyway, and the
   data's history starts over from that image.
-- **Rollbacks:** a rollback, or the restart after a failed `run`, brings
-  back the release's own images exactly: what it built, from its tags,
-  without building again, and an image whose name changed between the
-  two releases (a commit tag, a pin), held by digest when its name now
-  points elsewhere and pulled again by its digest when gone. A data
-  service stays on the newest image its data ran, whatever the older
-  release named; a pulled image under the same name in both releases
-  (`caddy:2-alpine`) stays on what the name holds now. The rollback says
-  each service that does not go back, and why. Pin an image (a tag that
-  never moves, or a digest) when you want a rollback to take it back.
+- **Rollbacks bring back code:** a rollback, or the restart after a
+  failed `run`, brings back the release's own images exactly (what it
+  built, from its tags, without building again), its compose files,
+  variables and commands. Any other pulled image runs what the older
+  release's name gives now: a pin or a commit tag is the image it ran,
+  a floating tag its current, patched one. A data service stays on the
+  newest image its data ran, whatever the older release named. Data is
+  never undone (that is for snapshots). The rollback says each service
+  that does not go back, and why. Pin an image (a tag that never moves,
+  or a digest) when you want a rollback to take it back.
 - **What changed:** each release says which images changed since the
   one it replaces, a pulled image by its version label
   (`org.opencontainers.image.version`) when it has one, else by short

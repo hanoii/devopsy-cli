@@ -31,11 +31,9 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 //   - a pulled data service runs the newest image its data ran (the
 //     history's last, else what its container runs), held by digest,
 //     whatever target's name: data only goes forward;
-//   - a pulled service whose name is the same in both releases runs what
-//     the name holds now (forward), held by nothing;
-//   - a pulled service whose name changed (a commit tag, a pin) runs
-//     target's image, held by digest when its name points elsewhere,
-//     pulled by its digest when gone, else by its name, said;
+//   - any other pulled service runs what target's name holds now, pulled
+//     when gone, held by nothing: a pin or a commit tag is target's image
+//     anyway, a floating tag its current (patched) one;
 //   - an own image is target's, its bookmark put back on its name (no
 //     bookmark: ErrGone; with fetched, the name's just-built image).
 //
@@ -70,8 +68,6 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		kind  string
 		hold  string // a digest name to run, pulled when gone
 		retag string // an own image's bookmark to put back on its name
-		tag   string // the name to pull by when the digest cannot be
-		line  string
 	}
 	var steps []step
 	for _, svc := range svcs {
@@ -85,21 +81,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		// pulled image, which an unordered own image must not replace.
 		data := (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
 		switch {
-		case data && own && !haveHistory(h, svc.Name):
-			// Nothing known ran on its data: as the target builds it.
-			st.kind = KindOwn
-			if fetched {
-				break
-			}
-			i := indexOf(old, o)
-			if !haveOld || o.ID == "" || i < 0 {
-				return s.gone(tid, svc)
-			}
-			if _, err := s.Docker.ID(names[i]); err != nil {
-				return s.gone(tid, svc)
-			}
-			st.retag = names[i]
-		case own && !data:
+		// Built (or never pulled), and either no data service or one whose
+		// data has no history: as the target builds it.
+		case own && (!data || !haveHistory(h, svc.Name)):
 			st.kind = KindOwn
 			if fetched {
 				break
@@ -140,26 +124,6 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			}
 		default:
 			st.kind = KindPulled
-			if haveAg && familiar(a.Ref) != familiar(svc.Ref) && haveOld && o.ID != "" {
-				cur, err := s.Docker.ID(svc.Ref)
-				if err == nil && cur == o.ID {
-					break
-				}
-				hold := o.Digest
-				if img, err := s.Docker.Inspect(o.ID); err == nil {
-					if d := digestIn(img, svc.Ref); d != "" {
-						hold = d
-					}
-				} else {
-					st.tag = svc.Ref
-				}
-				if hold == "" {
-					// Never held by a digest: forward, as unchanged.
-					st.tag = ""
-					break
-				}
-				st.hold = hold
-			}
 		}
 		steps = append(steps, st)
 	}
@@ -192,30 +156,18 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		case st.hold != "":
 			if _, err := s.Docker.Inspect(st.hold); err != nil {
 				if err := s.Docker.Pull(st.hold); err != nil {
-					if st.kind == KindData || st.tag == "" {
-						s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s is gone from this server and could not be pulled by its digest", svc.Name, st.hold),
-							[]string{err.Error()}, report.Fix("the newest image its data ran must be there: never one older"))
-						return ErrRefused
-					}
-					s.say(report.WarnLevel, "%s: %s is gone, and its digest could not be pulled (%v): pulling %s, whatever it is now", svc.Name, short(st.hold), err, st.tag)
-					if err := s.Docker.Pull(st.tag); err != nil {
-						s.say(report.ErrorLevel, "%s: could not pull %s: %v", svc.Name, st.tag, err)
-						return err
-					}
-					es = append(es, s.entryOf(svc, svc.Ref))
-					continue
+					s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s is gone from this server and could not be pulled by its digest", svc.Name, st.hold),
+						[]string{err.Error()}, report.Fix("the newest image its data ran must be there: never one older"))
+					return ErrRefused
 				}
 				pulled = append(pulled, st.hold)
 				s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
 			}
 			e := s.entryOf(svc, st.hold)
-			e.Kind, e.Digest = st.kind, st.hold
+			e.Kind, e.Digest = KindData, st.hold
 			es = append(es, e)
-			// No hold needed while the name still holds the image.
-			if cur, err := s.Docker.ID(svc.Ref); st.kind == KindData || err != nil || cur != e.ID {
-				holds[svc.Name] = st.hold
-			}
-			if st.kind == KindData && haveOld && o.ID != "" && o.ID != e.ID {
+			holds[svc.Name] = st.hold
+			if haveOld && o.ID != "" && o.ID != e.ID {
 				lines = append(lines, fmt.Sprintf("%s stays on %s, the newest image its data ran, not %s's (%s): data only goes forward", svc.Name, shownEntry(e), tid, shownEntry(o)))
 			}
 		default:
@@ -232,7 +184,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			}
 			es = append(es, e)
 			if e.Kind != KindOwn && haveOld && o.ID != "" && o.ID != e.ID {
-				lines = append(lines, fmt.Sprintf("%s stays on %s's current image (%s), not %s's (%s): its name did not change", svc.Name, svc.Ref, shownEntry(e), tid, shownEntry(o)))
+				lines = append(lines, fmt.Sprintf("%s runs what %s holds now (%s), not the image %s ran (%s): pin a version for a rollback to take it back", svc.Name, svc.Ref, shownEntry(e), tid, shownEntry(o)))
 			}
 		}
 	}

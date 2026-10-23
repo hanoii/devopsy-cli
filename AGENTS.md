@@ -679,8 +679,8 @@ step's rules):
 ### Images
 
 Every image a release runs stays until its last release goes. A
-rollback runs exactly what the release built and what its changed names
-pulled; a pulled data service only goes forward (below). The rules live in Go
+rollback runs exactly what the release built; other pulled images run
+what its names give now; a pulled data service only goes forward (below). The rules live in Go
 (`internal/images`, whose comments say how each action decides), run
 on the server as the hidden `--images` (`runImages`; `img` in the
 scripts), under "What is deployed decides on the server"; they were
@@ -745,14 +745,17 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
 - **Holds, never retags of pulled names:** every activation writes
   `ComposeFile`: a `devopsy.digest` label per fetched service (the image
   it was given: compose recreates on a label change, so never a release
-  id) and `image: <repo>@<digest>` for every pulled data service and for
-  a rollback's changed name whose name moved on. `Restore(target,
+  id) and `image: <repo>@<digest>` for every pulled data service, never
+  another. `Restore(target,
   against)` decides per service from target's compose now (`List`, which
   never reads devopsy's own file: `NoReleaseComposeEnv`): data, the
-  history's last (else its container's, else against's); a pulled name
-  unchanged between the two releases, forward; a changed one, exact, held
-  or pulled by digest; own images from their bookmarks, `ErrGone` (exit
-  1) to build again. Why never a retag: `others()` let a rollback move a
+  history's last (else its container's, else against's); any other
+  pulled image, what target's name holds now, pulled when gone; own
+  images from their bookmarks, `ErrGone` (exit 1) to build again. A
+  rollback brings back code (decided 2026-10-23): it once restored a
+  changed name's exact image, held or pulled by digest, which cost
+  stateless holds and digest refetches for what a pin or a commit tag
+  gives anyway; a floating tag goes forward, the patched image. Why never a retag: `others()` let a rollback move a
   shared pin back while its other user was down, and a backward retag
   takes a database back on its upgraded data. `Undo` and `Recover` put
   back own names only (`RestoreOwn`). A re-listing that drops an image

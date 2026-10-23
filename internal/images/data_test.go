@@ -294,9 +294,9 @@ func TestDataRefusals(t *testing.T) {
 }
 
 // S16, S25, S27: across a changed name or repository, the data keeps the
-// history's last; a pulled service whose name changed goes back
-// exactly, held by digest when its name moved on (S30), pulled by its
-// digest when gone (S32).
+// history's last, held; any other pulled service runs what the target's
+// name holds now, held by nothing (a rollback's promise for images that
+// are not data), pulled when gone.
 func TestDataRollbackAcrossNames(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
@@ -311,27 +311,29 @@ func TestDataRollbackAcrossNames(t *testing.T) {
 	if _, err := m.release(true, dbSvc("mirror.example/mariadb:11.8"), caddy2); err != nil {
 		m.fail("r2: %v", err)
 	}
-	// caddy:2.10 pushed again meanwhile: its name points elsewhere now.
+	// caddy:2.10 pushed again meanwhile (a patch of the series).
 	d.publish("caddy:2.10", "C1b")
 	d.Pull("caddy:2.10")
 	out.Reset()
-	if err := m.rollback(r1); err != nil || m.runs("database") != "I2" || m.runs("alwaysup") != "C1" {
+	if err := m.rollback(r1); err != nil || m.runs("database") != "I2" || m.runs("alwaysup") != "C1b" {
 		m.fail("rollback (%v): database %s, alwaysup %s", err, m.runs("database"), m.runs("alwaysup"))
 	}
-	if h := holdsIn(m.e.rel(r1)); h["database"] != "mirror.example/mariadb@I2" || h["alwaysup"] != "caddy@C1" {
+	if h := holdsIn(m.e.rel(r1)); h["database"] != "mirror.example/mariadb@I2" || h["alwaysup"] != "" {
 		m.fail("holds %v", h)
 	}
-	// S32: the held caddy gone from the server: pulled by its digest.
-	r3, _ := m.release(false, dbSvc("mirror.example/mariadb:11.8"), caddy2)
-	_ = r3
+	if !strings.Contains(out.String(), "alwaysup runs what caddy:2.10 holds now (caddy@C1b), not the image "+r1+" ran (caddy@C1)") {
+		m.fail("not said")
+	}
+	// S32: the target's name gone from the server: pulled by its name.
+	m.release(false, dbSvc("mirror.example/mariadb:11.8"), caddy2)
 	for n, i := range d.names {
-		if i == "C1" {
+		if i == "C1b" {
 			delete(d.names, n)
 		}
 	}
-	delete(d.images, "C1")
-	if err := m.rollback(r1); err != nil || m.runs("alwaysup") != "C1" || !strings.Contains(out.String(), "pulled caddy@C1 again by its digest") {
-		m.fail("gone hold (%v): %s", err, m.runs("alwaysup"))
+	delete(d.images, "C1b")
+	if err := m.rollback(r1); err != nil || m.runs("alwaysup") != "C1b" {
+		m.fail("gone name (%v): %s", err, m.runs("alwaysup"))
 	}
 }
 
