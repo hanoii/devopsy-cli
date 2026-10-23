@@ -1668,3 +1668,23 @@ func TestRestoreFailingPullLeavesNothing(t *testing.T) {
 		}
 	}
 }
+
+// A parent's mnt service whose entries are all missing on the parent has
+// nothing a copy writes: the child keeps its own data, and its image.
+func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	db := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: DataMnt, Entries: []string{"database"}, EntriesKnown: true}
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db)
+	d.publish("mariadb:11.8", "I2")
+	dev.release(false, db)
+	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); data != "" {
+		t.Errorf("a service with no entry on the parent in its data:\n%s", data)
+	}
+	os.MkdirAll(filepath.Join(prod.e.rel(prod.cur), codeDir, ".devopsy", "mnt", "database"), 0o755)
+	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); !strings.Contains(data, "image\tdatabase\t") {
+		t.Errorf("a service with its entry on the parent missing from its data:\n%s", data)
+	}
+}

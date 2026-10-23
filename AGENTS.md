@@ -1641,6 +1641,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   the child's own digests, which its server resolves. The parent's `old`
   line reaches the child (`remote.ParseParentData`). A sync's check or a
   restore that fails removes what it pulled by digest before.
+- **A service whose entries are all missing on the parent** (its
+  `devopsy.data.exclude` honored) is left out of `ParentData`: the copy
+  writes nothing for it, so the child keeps its own data and image.
+  Entries come from compose's config (`Service.Entries`, the bind
+  sources under `.devopsy/mnt`). Not known: what `--sync -- <rsync
+  args>` excludes, which the operator chose.
 
 ### Streams
 

@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,23 +182,30 @@ func TestRecordStale(t *testing.T) {
 func TestParseComposeConfig(t *testing.T) {
 	svcs, err := ParseComposeConfig([]byte(`{"name":"x-prod","services":{
 		"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"none"}},
-		"app":{"build":{"context":"."},"labels":{"devopsy.data":"mnt"}},
+		"app":{"build":{"context":"."},"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs"},"volumes":[
+			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage"},
+			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage/sub"},
+			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/logs"},
+			{"type":"bind","source":"/srv/x/prod/current/.devopsy/config"},
+			{"type":"volume","source":"cache"}]},
+		"whole":{"image":"busybox","labels":{"devopsy.data":"mnt"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
 		"tool":{"image":"local/tool","pull_policy":"never"},
 		"web":{"image":"caddy:2"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "mnt"},
-		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none"},
-		{Name: "tool", Ref: "local/tool", NeverPull: true},
-		{Name: "web", Ref: "caddy:2"},
+		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "mnt", Entries: []string{"storage"}, EntriesKnown: true},
+		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
+		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},
+		{Name: "web", Ref: "caddy:2", EntriesKnown: true},
+		{Name: "whole", Ref: "busybox", Data: true, Method: "mnt", Entries: []string{"."}, EntriesKnown: true},
 	}
 	if len(svcs) != len(want) {
 		t.Fatalf("%+v", svcs)
 	}
 	for i := range want {
-		if svcs[i] != want[i] {
+		if fmt.Sprint(svcs[i]) != fmt.Sprint(want[i]) {
 			t.Errorf("%d: %+v, want %+v", i, svcs[i], want[i])
 		}
 	}

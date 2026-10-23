@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -41,7 +42,9 @@ func (s *Set) ParentData(base, rel string) string {
 	copied := map[string]bool{}
 	pulled := false
 	for _, svc := range svcs {
-		copied[svc.Name] = svc.Method == DataMnt
+		// A service whose entries are all missing here has nothing a
+		// copy writes: the child keeps its own data, and its image.
+		copied[svc.Name] = svc.Method == DataMnt && (!svc.EntriesKnown || hasEntry(rel, svc.Entries))
 		pulled = pulled || (svc.Method == DataMnt && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
@@ -449,4 +452,15 @@ func (s *Set) ownImage(e entry) Image {
 		return img
 	}
 	return Image{ID: e.ID}
+}
+
+// hasEntry says whether any of entries is in rel's mnt (its shared/mnt,
+// through the release's link).
+func hasEntry(rel string, entries []string) bool {
+	for _, e := range entries {
+		if _, err := os.Stat(filepath.Join(rel, codeDir, ".devopsy", "mnt", e)); err == nil {
+			return true
+		}
+	}
+	return false
 }

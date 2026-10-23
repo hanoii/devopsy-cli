@@ -186,6 +186,10 @@ type Service struct {
 	// value, which is Method. NeverPull: pull_policy: never.
 	Build, Data, NeverPull bool
 	Method                 string
+	// Entries are the entries of mnt it bind-mounts, less its excluded
+	// ones (. for mnt whole); EntriesKnown: read from compose's config.
+	Entries      []string
+	EntriesKnown bool
 }
 
 // own says whether a service's image is the project's own: built (in
