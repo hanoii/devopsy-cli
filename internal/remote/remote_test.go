@@ -2894,3 +2894,55 @@ func TestRestartFetchIgnoresOldHolds(t *testing.T) {
 		t.Errorf("release 1 restarted with its compose file holding the database on an image older than the newest its data ran (I2):\n%s\n%s", got, out)
 	}
 }
+
+// Bug: fetch_release checks fetch_sig only before img names, which
+// ignores signals: a Ctrl-C, or the watcher's SIGTERM for a session gone,
+// landing while img names lists the release goes unseen, and the whole
+// pull and build run before the release is undone, where a signal is
+// otherwise acted on at once ("not a build later").
+func TestFetchInterruptedDuringNames(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+id=$(pwd -P); id=${id%/code}; id=${id##*/}
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --format json")
+    if [ -n "${FAKE_SLOW_LIST:-}" ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
+    printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
+  "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
+  "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
+	base := filepath.Join(root, tg.Path)
+	command := func(id string, env ...string) *exec.Cmd {
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		return cmd
+	}
+	if out, err := command("1").CombinedOutput(); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	cmd := command("2", "FAKE_SLOW_LIST=1")
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && !fileExists(filepath.Join(root, "listing")); i++ {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code != 130 || strings.Contains(readFile(filepath.Join(root, "fetched")), "2") {
+		t.Errorf("SIGTERM during img names (exit %d): release 2 still pulled and built (fetched: %q):\n%s", code, readFile(filepath.Join(root, "fetched")), buf.String())
+	}
+}
