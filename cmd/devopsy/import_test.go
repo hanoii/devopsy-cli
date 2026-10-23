@@ -463,6 +463,33 @@ func TestSyncOverImportMark(t *testing.T) {
 	}
 }
 
+// A sync over an import's mark that writes nothing (refused: the parent
+// does not copy the service) leaves what the import stopped down, and
+// only that: the push says nothing changed, so a service the sync's own
+// prepare stopped, whose data the import never touched (db, own), runs
+// again, as it did before the sync.
+func TestSyncRefusedOverImportMark(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	write(t, s.log+".shop-dev", "FAKE_APP=mnt+import\n", 0o644)
+	if _, errs, code := s.runIO([]string{"FAIL_TAR=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@dev", "--import", "app", "--yes"); code == 0 || readMark(dev) == nil || readMark(dev).From != "app" {
+		t.Fatalf("a failing import of app into dev (%d), mark %+v:\n%s", code, readMark(dev), errs)
+	}
+	if stopped := strings.Fields(readString(s.log + ".stopped.shop-dev")); slices.Contains(stopped, "db") || !slices.Contains(stopped, "app") {
+		t.Fatalf("after the import: stopped %v", stopped)
+	}
+	write(t, s.log+".shop-prod", "FAKE_APP=none\n", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+	if code == 0 || !strings.Contains(out, "the parent does not copy app") || !readMark(dev).IsImport() || slices.Contains(stopped, "db") || !slices.Contains(stopped, "app") {
+		t.Errorf("a refused sync over app's import mark (%d), stopped %v:\n%s", code, stopped, out)
+	}
+}
+
 // The data labels are a feature: a server's devopsy without it reads them
 // as no label, so what reads them refuses before anything changes, with
 // the upgrade line (an export, a sync: the parent's check, before the
