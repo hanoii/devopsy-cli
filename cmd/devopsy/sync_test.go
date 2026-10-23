@@ -168,6 +168,19 @@ case "$*" in
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
+  # Containers as devopsy's images rules read them (images.CLI): one per
+  # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
+  # exited, its id ctr:<project>:<service>.
+  "ps -a -q --no-trunc --filter label=com.docker.compose.project="*)
+    p=${6#label=com.docker.compose.project=}
+    [ ! -f "$DOCKER_LOG.containers.$p" ] || while read -r cs cl; do echo "ctr:$p:$cs"; done <"$DOCKER_LOG.containers.$p" ;;
+  "inspect --format {{json .}} ctr:"*)
+    shift 3
+    for c; do
+      p=${c#ctr:}; cs=${p#*:}; p=${p%%:*}
+      cl=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f2)
+      printf '{"Name":"/%s-%s-1","Image":"sha256:%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "$cs" "$p" "$cs" "$cl"
+    done ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
   # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
@@ -3251,4 +3264,37 @@ func parentChanged(docker string) bool {
 		}
 	}
 	return false
+}
+
+// Bug: finish abort recreates, like finish go, every stopped service
+// whose container's devopsy.digest differs from the current release's
+// devopsy-compose.yaml (images.Recreate). In a release that syncs,
+// current is already the new release, not live, whose file holds its
+// data services on what it fetched (img record skips the child's own
+// check of a service the parent's data covers), while the containers
+// are the previous release's: an abort (Ctrl-C, the push refusing)
+// recreates the child's database on the new release's image over its
+// own data, a series bump or a lowered pin (a downgrade) included, and
+// img ran then records it. Abort starts nothing new (plan, part 9).
+func TestSyncAbortRecreatesNothing(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	// The new release, current while its sync runs: its file holds db on
+	// what it fetched; db's container is the previous release's.
+	write(t, filepath.Join(s.root, "shop", "dev", s.current("dev"), "devopsy-compose.yaml"),
+		"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
+	write(t, s.log+".containers.shop-dev", "db y@sha256:old\n", 0o644)
+	write(t, filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services"), "stop db\n", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "abort")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir, "FAKE_DB_DOWN=1")
+	out, err := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if err != nil || !strings.Contains(docker, " start db") || strings.Contains(docker, "up -d --no-deps --wait db") {
+		t.Errorf("finish abort (%v): db must start as it was, never be recreated on the release's image:\n%s\n%s", err, out, docker)
+	}
 }
