@@ -16,7 +16,7 @@ import (
 func phasesProject(t *testing.T, name string, files map[string]string) string {
 	all := map[string]string{
 		".devopsy/commands/deploy":           "#!/bin/sh\n## Description: starts the project, once ~/wait-run-<project> is gone\nwhile [ -e \"$HOME/wait-run-$COMPOSE_PROJECT_NAME\" ]; do : >\"$HOME/running-$COMPOSE_PROJECT_NAME\"; echo waiting; sleep 0.2; done\nbasename \"$(dirname \"$(pwd -P)\")\" >>\"$HOME/deploys-$COMPOSE_PROJECT_NAME\"\nexec devopsy up -d --wait\n",
-		".devopsy/capabilities/sync/prepare": "#!/bin/sh\nwhile [ \"$1\" = child ] && [ -e \"$HOME/wait-prepare-$COMPOSE_PROJECT_NAME\" ]; do : >\"$HOME/preparing-$COMPOSE_PROJECT_NAME\"; sleep 0.2; done\n",
+		".devopsy/capabilities/data/prepare": "#!/bin/sh\nwhile [ \"$1\" = child ] && [ -e \"$HOME/wait-prepare-$COMPOSE_PROJECT_NAME\" ]; do : >\"$HOME/preparing-$COMPOSE_PROJECT_NAME\"; sleep 0.2; done\n",
 	}
 	for p, content := range files {
 		all[p] = content
@@ -52,11 +52,11 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.sync: rsync, devopsy.sync.stop: "true"}
+    labels: {devopsy.data: mnt, devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.sync: stream}
+    labels: {devopsy.data: stream}
   slow:
     build: {context: ./slow, args: {WAIT: "${BUILD_WAIT:-0}"}}
     command: [sleep, infinity]

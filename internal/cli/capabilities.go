@@ -76,33 +76,33 @@ var Capabilities = []Capability{
 		},
 	},
 	{
-		Name:     "sync",
-		What:     "hooks into a sync (a child environment's data from its parent's, devopsy @<child> --sync and a child's first release), and the transport of the services labeled devopsy.sync=stream, there and in --export and --import; each hook runs only when its file is there, besides devopsy's handling of the labels (rsync: its mounts rsynced; stream: export and import; devopsy.sync.stop=true: stopped meanwhile)",
+		Name:     DataCapability,
+		What:     "moves the data of the services labeled devopsy.data=stream (export, import), in syncs and --export and --import, and hooks into syncs (a child environment's data from its parent's: devopsy @<child> --sync and a child's first release) with prepare and finish; each runs only when its file is there, besides devopsy's handling of the labels (mnt: its entries of mnt rsynced, or a tar; devopsy.data.stop: what is stopped meanwhile)",
 		Who:      "projects whose data a copy of .devopsy/mnt cannot move, like a database to dump, or that ready or sanitize an environment around a sync",
-		CalledBy: "devopsy @<child> --sync, a child's first release or --release-sync, and devopsy [@<target>] --export|--import <service> (export and import only)",
+		CalledBy: "devopsy [@<target>] --export <service> (export), devopsy [@<target>] --import <service> (import), and devopsy @<child> --sync, a child's first release or --release-sync (all four); --import --resolved runs none",
 		Actions: []CapabilityAction{
 			{
 				Name:  "prepare",
 				Usage: "prepare parent|child",
-				Does:  "on each side, in its current release, before anything is stopped there: the child's under its release lock before the parent's push starts, the parent's under a shared hold of its lock. A failure aborts the sync before anything stops on that side (finish abort runs)",
+				Does:  "in syncs only, on each side, in its current release, before anything is stopped there: the child's under its release lock before the parent's push starts, the parent's under a shared hold of its lock. A failure aborts the sync before anything stops on that side (finish abort runs)",
 			},
 			{
 				Name:  "export",
 				Usage: "export <service>",
-				Does:  "writes a stream service's data to stdout: on the parent's server in a sync, once its stop=true services are stopped and the rsync is done, once per stream service in depends_on order; and devopsy --export. Required when a service is labeled stream (checked before anything stops). devopsy spools the output and only imports it once this exited 0. stdin is empty; when the service is in DEVOPSY_SYNC_STOP it is stopped: use devopsy run --rm --no-deps -T <service> rather than exec",
+				Does:  "writes a stream service's data to stdout: on the parent's server in a sync, once what the sync stops there is stopped and the rsync is done, once per stream service in depends_on order; and devopsy --export. Required when a service is labeled stream (checked before anything stops). devopsy spools the output and only imports it once this exited 0. stdin is empty; when the service is in DEVOPSY_DATA_STOP it is stopped: use devopsy run --rm --no-deps -T <service> rather than exec, or refuse",
 			},
 			{
 				Name:  "import",
 				Usage: "import <service>",
-				Does:  "reads a stream service's data from stdin, what export wrote, complete: on the child's server in a sync, its service brought up first (up -d --wait) unless stopped; and devopsy --import. Required on the child when a service is labeled stream there (checked before anything stops anywhere)",
+				Does:  "reads a stream service's data from stdin, what export wrote, complete: on the child's server in a sync, and devopsy --import; the service is up (devopsy starts it with --no-deps first, and stops it again after if it was down) unless it is in DEVOPSY_DATA_STOP. Required on the child when a service is labeled stream there (checked before anything stops anywhere)",
 			},
 			{
 				Name:  "finish",
 				Usage: "finish parent|child go|abort|partial",
-				Does:  "on each side once the sync ended. The parent's: go or abort, its stopped services back. The child's says what the copy did to its data: go (complete), abort (nothing of the parent's written), both with its stopped services back, or partial (written in part: they stay down, and the hook must not start them). On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
+				Does:  "in syncs only, on each side once the sync ended. The parent's: go or abort, its stopped services back. The child's says what the copy did to its data: go (complete), abort (nothing of the parent's written), both with its stopped services back, or partial (written in part: they stay down, and the hook must not start them). On the child after go it sanitizes what a copy of production should not keep (scrubbed emails and passwords, a login the child did not have) before the release's run step runs",
 			},
 		},
-		Env: "every action gets DEVOPSY_SYNC_RSYNC, DEVOPSY_SYNC_STREAM and DEVOPSY_SYNC_STOP, its side's services labeled devopsy.sync=rsync, devopsy.sync=stream (depends_on order) and devopsy.sync.stop=true, space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses) and DEVOPSY_SYNC_ARGS (--sync's arguments after --)",
+		Env: "every action gets DEVOPSY_DATA_MNT and DEVOPSY_DATA_STREAM, its side's services labeled devopsy.data=mnt and devopsy.data=stream (depends_on order), and DEVOPSY_DATA_STOP, what this operation stops on this side (devopsy.data.stop and the services depending on them; at finish ... go|abort they are back up, at finish child partial what stays down), space separated (a stopped stream service is in both); in a sync also DEVOPSY_SYNC_FROM_TARGET and DEVOPSY_SYNC_TO_TARGET (the parent's and child's addresses) and DEVOPSY_SYNC_ARGS (--sync's arguments after --)",
 	},
 }
 

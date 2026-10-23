@@ -521,6 +521,9 @@ fi
 `
 }
 
+// UpgradeHint is the command that upgrades t's server's devopsy.
+func UpgradeHint(t *Target) string { return "devopsy @" + upgradeRef(t) + " --upgrade" }
+
 // upgradeRef names t's server for --upgrade, a server's command: the
 // alias as typed, else the server alone (<host>:).
 func upgradeRef(t *Target) string {
@@ -572,8 +575,22 @@ make_current() { ln -sfn "$1/` + CodeDir + `" "$base/current.new" && mv -Tf "$ba
 // UploadScript extracts a release from stdin, under the release lock,
 // and prints its id on stdout, its only output there: chosen by the
 // server's devopsy (ReleaseIDFlag), never the operator's clock.
-func UploadScript(t *Target) string {
-	return prelude(t, true) + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+//
+// A release of a marked environment that does not sync (syncs false) is
+// refused here, under the lock, before LockedMarker: devopsy sends no tar
+// and no release is left, with no session of its own to find the mark.
+// One that syncs goes on: the sync is the fix (partialGuard refuses the
+// rest at activation).
+func UploadScript(t *Target, syncs bool) string {
+	guard := ""
+	if !syncs {
+		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
+  exit 1
+fi
+` + markRefusal(t, "nothing released", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it"`, "exit 1")
+	}
+	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
 [ ! -e "$rel" ] || { devopsy --say error "release $id exists already on $base"; exit 1; }
 rm -rf "$rel.tmp"
@@ -888,7 +905,12 @@ devopsy --say info "current is now $id" || true
 	// Not on a partial copy (a sync's that went wrong): the previous
 	// release's code would run on it.
 	restart := `    if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-      devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
+      if [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteImport + ` ]; then
+        rs_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
+        devopsy --say warning "not restarting ${prev#releases/}: the import of $rs_service did not complete, and nothing runs on its data until one does" ` + importFixLines(t, "rs_service") + `
+      else
+        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
+      fi
       exit "$status"
     fi
     get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
@@ -1158,16 +1180,13 @@ exec 4<&-
 
 // partialGuard refuses a release or rollback (then runs refuse) on a
 // partial copy from a sync, which nothing runs on: only a sync completes
-// it. A holder that never decided (killed) left its files, settled first.
+// it; or on an import that did not complete, with its own ways out. A
+// holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; }; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
-if [ -e "$base/` + SyncIncompleteFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" "or --release-sync to release with it"
-  ` + refuse + `
-fi
-`
+` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it"`, refuse)
 }
 
 // NoExit255 keeps a script's own exit status off 255, ssh's for a
