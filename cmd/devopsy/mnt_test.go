@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -121,5 +122,15 @@ func TestMntOwnersLocal(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("an entry its owner's given away again:\n%s", docker)
+	}
+}
+
+// The util container's scripts parse (sh -n, as the servers' scripts
+// do in internal/remote).
+func TestMntScriptsParse(t *testing.T) {
+	for name, script := range map[string]string{"ownEntries": ownEntries, "emptyAndExtract": emptyAndExtract} {
+		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
+			t.Errorf("%s: %v\n%s", name, err, out)
+		}
 	}
 }
