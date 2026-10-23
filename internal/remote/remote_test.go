@@ -2342,7 +2342,13 @@ func TestImportMarkRefusals(t *testing.T) {
 	if busy(false) != "" || busy(true) != "importing\n" {
 		t.Errorf("an import's holding file")
 	}
-	os.Remove(filepath.Join(base, SyncImportingFile))
+	// Left by a shell killed outright: whatever takes the lock next
+	// removes them, or they read as running whenever the lock is held.
+	write(t, filepath.Join(base, SyncHoldingFile), "")
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
+	if out, err := run("base="+Quote(base)+"\n"+releaseLock(true, false), ""); err != nil || fileExists(filepath.Join(base, SyncImportingFile)) || fileExists(filepath.Join(base, SyncHoldingFile)) {
+		t.Errorf("stale holding files after the lock (%v):\n%s", err, out)
+	}
 	write(t, filepath.Join(base, SyncStateFile), "stop db\nstop app\nwriter 123\n")
 	if out, err := run(ResolvedCheckScript(tg), ""); err != nil || out != "mark\t"+importMark+"stop db\nstop app\n" {
 		t.Errorf("--resolved's check (%v): %q", err, out)

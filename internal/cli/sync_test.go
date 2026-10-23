@@ -112,6 +112,15 @@ func TestSyncServices(t *testing.T) {
 	if got, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"mnt"},"volumes":[{"type":"bind","source":"`+dot+`/mnt"}]}}}`), dot); err != nil || got[0].Dirs[0] != "." || SyncDirs(got)[0] != "." {
 		t.Errorf("mnt bind: %+v %v", got, err)
 	}
+	// An entry with whitespace in its name would split in the lists and
+	// modules that name it: refused on a mnt service, fine elsewhere.
+	spaced := `"volumes":[{"type":"bind","source":"` + dot + `/mnt/my files"}]`
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"mnt"},`+spaced+`}}}`), dot); err == nil || !strings.Contains(err.Error(), "service x: ./mnt/my files: an entry of mnt a copy carries cannot have whitespace") {
+		t.Errorf("an entry with a space: %v", err)
+	}
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"stream"},`+spaced+`}}}`), dot); err != nil {
+		t.Errorf("an entry with a space on a stream service: %v", err)
+	}
 
 	// Values devopsy does not know are errors naming the service; the
 	// labels and values before devopsy.data name what replaces them; an
