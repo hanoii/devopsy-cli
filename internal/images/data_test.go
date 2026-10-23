@@ -1383,3 +1383,29 @@ func TestDataRollbackKeepsContainerFullName(t *testing.T) {
 		t.Errorf("the rollback keeps I2 but changes the database's image: %q to %q and its label %q to %q: Compose recreates it", h2, h1, l2, l1)
 	}
 }
+
+// Bug: SyncDone adds a history line naming the parent's image under the
+// child's own reference whenever the two differ (for a mirror of the
+// same image), also when the child's reference is another series the
+// sync's --yes let through: its next release on that reference finds it
+// "ran" there, so an image the data never ran passes without --yes. A
+// child pinned behind (mariadb:11.4) after a --sync --yes from a parent
+// on 11.8 goes back to 11.4 on data 11.8 wrote (rule 1).
+func TestSyncYesThenOwnSeriesRefused(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.4", "I4")
+	dev.release(false, dbSvc("mariadb:11.4"))
+	d.publish("mariadb:11.8", "P8")
+	prod.release(false, db118)
+	// dev's 11.4 never ran on prod's data: --yes, held on prod's 11.8.
+	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
+		t.Fatalf("--sync --yes (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// dev's next release, still pinned to 11.4.
+	out.Reset()
+	if _, err := dev.release(false, dbSvc("mariadb:11.4")); !errors.Is(err, ErrRefused) || dev.runs("database") != "P8" {
+		t.Errorf("dev's release on mariadb:11.4 after the sync (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8\n%s", err, dev.runs("database"), out.String())
+	}
+}
