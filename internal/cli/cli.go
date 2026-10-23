@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
@@ -89,19 +90,51 @@ func composeCommand(args []string) string {
 	return ""
 }
 
+// commandValueFlags are the flags of compose's starting commands that
+// take a value as the next argument (compose 5.5's --help for each), so
+// dryRun never takes a value for a flag: run --name --dry-run names the
+// container --dry-run, and starts it.
+var commandValueFlags = map[string][]string{
+	"up":      {"--attach", "--exit-code-from", "--no-attach", "--pull", "--scale", "-t", "--timeout", "--wait-timeout"},
+	"start":   {"--wait-timeout"},
+	"restart": {"-t", "--timeout"},
+	"create":  {"--pull", "--scale"},
+	"run": {"--cap-add", "--cap-drop", "--entrypoint", "-e", "--env", "--env-from-file", "-l", "--label", "--name",
+		"-p", "--publish", "--pull", "-u", "--user", "-v", "--volume", "-w", "--workdir"},
+}
+
 // dryRun reports whether args (compose's command line) ask for
-// compose's --dry-run, a global flag compose takes before or after its
-// command, up to a --.
+// compose's --dry-run, a global flag that compose, as cobra parses its
+// flags, takes wherever its command's own flags go: before the command,
+// and after it up to a -- (up -d app --dry-run included), but for run
+// only before its service, past which everything is the container's
+// command (run --rm app composer update --dry-run starts app: checked
+// with Compose 5.5, review of 2026-10-23, round 4). Never a flag's value
+// (commandValueFlags, composeValueFlags, which compose takes after the
+// command too). The last one says, as a bool flag parses its value
+// (--dry-run=0 starts); a value compose cannot parse fails the command,
+// which starts nothing.
 func dryRun(args []string) bool {
-	for _, a := range args {
-		if a == "--" {
-			return false
-		}
-		if a == "--dry-run" || strings.HasPrefix(a, "--dry-run=") && a != "--dry-run=false" {
-			return true
+	dry, command := false, ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			return dry
+		case a == "--dry-run":
+			dry = true
+		case strings.HasPrefix(a, "--dry-run="):
+			v, err := strconv.ParseBool(strings.TrimPrefix(a, "--dry-run="))
+			dry = err != nil || v
+		case slices.Contains(composeValueFlags, a) || slices.Contains(commandValueFlags[command], a):
+			i++
+		case strings.HasPrefix(a, "-"):
+		case command == "":
+			command = a
+		case command == "run":
+			return dry
 		}
 	}
-	return false
+	return dry
 }
 
 // mayOwnMnt reports whether files, the project's compose files

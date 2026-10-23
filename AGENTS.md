@@ -1011,8 +1011,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   `include:` or `extends:` key, comments left out: no compose config for
   every command, and every template's comments say "included"; the
   project's own files, the ones `ComposeConfig` reads labels from, so a
-  `-f` the command adds is half seen by neither; never for `--dry-run`,
-  and never in a release on a server, `cli.InRelease`, where
+  `-f` the command adds is half seen by neither; never for compose's
+  `--dry-run`, which is compose's only where cobra parses it: before
+  the command, after it up to a `--`, for `run` only before its service
+  (past it the container's command: `run --rm app composer update
+  --dry-run` starts app, review of 2026-10-23, round 4), never a flag's
+  value (`commandValueFlags`, `dryRun`), and never in a release on a server, `cli.InRelease`, where
   `--mnt-owners` owns it: review of 2026-10-23, round 2, a rollback's
   plain `up` failed on labels `--mnt-owners restored` only warned about;
   labels that cannot be read are a warning and compose's command goes
