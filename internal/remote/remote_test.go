@@ -1664,6 +1664,49 @@ exit 0
 	}
 }
 
+// Bug: syncRestorePipe unsets the sync's variables before the run step
+// ("the run and after steps are no sync's"), but not the parent's data
+// images (images.SyncImagesEnv), exported for the whole activation: the
+// run step and every command and container it starts get the base64 of
+// the parent's history, unbounded, and any devopsy --images it runs
+// checks against a sync that is over.
+func TestSyncImagesNotInRunStep(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"mnt"}}}}' ;;
+  "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
+  deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev", Mode: ModeBuild}
+	write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	parent := "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\nran\t1\tdb\tran\tmariadb:11.8\tP1\tmariadb@P1\n"
+	cmd := exec.Command("sh", "-c", ActivateScript(tg, "1", false, "app-dev", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Images: parent}))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	cmd.Stdin = r
+	_, _ = w.WriteString("go\n")
+	out, err := cmd.CombinedOutput()
+	r.Close()
+	calls := readFile(filepath.Join(root, "calls"))
+	if err != nil || !strings.Contains(calls, "deploy from=") {
+		t.Fatalf("the release that syncs (%v), calls %q:\n%s", err, calls, out)
+	}
+	if !strings.Contains(calls, "deploy from= images=\n") {
+		t.Errorf("the run step gets the parent's data images: %q", calls)
+	}
+}
+
 // Two tags of one repository in a release get a bookmark each, so a
 // rollback puts each back on its own image, and a ref by digest gets one
 // too, so docker image prune -f leaves a rollback's image alone.
