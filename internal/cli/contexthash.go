@@ -117,15 +117,11 @@ func ContextHash(p *loadedProject, service string) (string, error) {
 		dockerfileText = string(text)
 	}
 	args, _ := build["args"].(map[string]string)
-	digests := map[string]string{}
 	for _, ref := range baseImages(dockerfileText, args) {
 		digest := ref
 		if !strings.Contains(ref, "@") {
-			if digest = digests[ref]; digest == "" {
-				if digest, err = BaseDigest(ref); err != nil {
-					return "", fmt.Errorf("service %s: base image %s: %v", service, ref, err)
-				}
-				digests[ref] = digest
+			if digest, err = BaseDigest(ref); err != nil {
+				return "", fmt.Errorf("service %s: base image %s: %v", service, ref, err)
 			}
 		}
 		fmt.Fprintf(h, "base %s %s\n", ref, digest)
