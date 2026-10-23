@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +10,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/cli"
 )
 
 // A release gives its owned entries to their owners right after its
@@ -147,6 +152,33 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("owners given away by labels that cannot be read:\n%s", docker)
+	}
+}
+
+// The owners' step runs after the switch, so no signal stops it halfway
+// (review of 2026-10-23, round 3): Go does not keep an inherited ignored
+// SIGTERM, so the script's trap alone let a SIGTERM end it with entries
+// left as they were, as it would have runImages.
+func TestMntOwnersSignals(t *testing.T) {
+	s := newSyncSetup(t)
+	wait := filepath.Join(t.TempDir(), "owners")
+	cmd := exec.Command(binary, cli.MntOwnersFlag)
+	cmd.Dir = s.project
+	cmd.Env = append(slices.Clone(s.env), "FAKE_APP_OWNER=10001:10001", "FAKE_APP_MOUNT2=/cache", "FAKE_OWNERS_WAIT="+wait)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, wait, "the owners' step", out.String)
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGPIPE} {
+		_ = cmd.Process.Signal(sig)
+	}
+	time.Sleep(200 * time.Millisecond)
+	write(t, wait+".go", "", 0o644)
+	err := cmd.Wait()
+	if docker, _ := s.logs(); err != nil || strings.Count(docker, "run --rm --name devopsy-owners-") != 2 {
+		t.Errorf("signalled during its first entry: %v\n%s\n%s", err, out.String(), docker)
 	}
 }
 

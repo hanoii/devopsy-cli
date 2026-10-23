@@ -163,7 +163,9 @@ case "$*" in
   "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
   "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
   # The owners' containers, one per entry (devopsy made it).
+  # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
+    if [ -n "${FAKE_OWNERS_WAIT:-}" ]; then : >"$FAKE_OWNERS_WAIT"; n=0; while [ ! -e "$FAKE_OWNERS_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS" ;;
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done

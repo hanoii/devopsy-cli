@@ -171,9 +171,11 @@ func runMntOwners(cwd string, args []string) int {
 		report.Error(cli.MntOwnersFlag + " takes nothing, or " + mntOwnersRestored)
 		return 2
 	}
-	// Short and needed whole: a gone session is no reason to stop
-	// halfway.
-	signal.Ignore(syscall.SIGPIPE, syscall.SIGHUP)
+	// After the switch, nothing interrupts: needed whole, whatever
+	// happens to the session. Go would die of a SIGPIPE writing to a gone
+	// one, and of a SIGTERM even ignored by the script (it only keeps an
+	// inherited SIGINT and SIGHUP ignored), as runImages says.
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil && restored {
 		report.Warn("the entries of mnt keep their owners: the restored release's labels cannot be read", err.Error())
