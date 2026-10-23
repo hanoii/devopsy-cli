@@ -1223,7 +1223,7 @@ arrived; from the first replacement until the import completes, the
 environment is marked and what devopsy stopped stays down.
 
 - Before the import starts writing (devopsy asks Docker to start the
-  hook, or the container that empties and extracts), a failure, a
+  hook, or the first container that empties and extracts), a failure, a
   Ctrl-C or a session gone restores what was stopped, and nothing is
   imported. On a target devopsy waits for a word from your session right
   before that write, so a session gone since the data came imports
