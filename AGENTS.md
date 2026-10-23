@@ -1010,7 +1010,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   `--mnt-owners` owns it: review of 2026-10-23, round 2, a rollback's
   plain `up` failed on labels `--mnt-owners restored` only warned about;
   labels that cannot be read are a warning and compose's command goes
-  on, since a label devopsy reads must never stop it), only
+  on, since a label devopsy reads must never stop it, and so is an
+  owned entry that is a symbolic link, left as it is: review of
+  2026-10-23, round 3, `makeEntry` refused it and every `up` failed
+  before compose), only
   missing paths made and, on Linux, an entry whose top is wrong given
   away and scanned whole (one whose top is right is never scanned);
   macOS never checks (Docker Desktop and OrbStack let any container user
