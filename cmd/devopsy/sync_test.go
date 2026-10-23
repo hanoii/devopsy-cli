@@ -2785,15 +2785,25 @@ func TestSyncEndWriters(t *testing.T) {
 	}
 	dev := filepath.Join(s.root, "shop", "dev")
 	// An import's devopsy, still running: what isSyncImport looks for is
-	// in its arguments (": " keeps sh from exec'ing sleep).
+	// in its arguments and its directory, the child's (": " keeps sh
+	// from exec'ing sleep). Another, in another environment (a pid
+	// reused after a reboot), is left alone.
 	imp := exec.Command("sh", "-c", "sleep 30; :", "devopsy", "--sync-services", "import", "db")
-	if err := imp.Start(); err != nil {
-		t.Fatal(err)
+	imp.Dir = filepath.Join(dev, "current")
+	other := exec.Command("sh", "-c", "sleep 30; :", "devopsy", "--sync-services", "import", "db")
+	other.Dir = filepath.Join(s.root, "shop", "prod", "current")
+	ended, otherEnded := make(chan error, 1), make(chan error, 1)
+	for _, c := range []struct {
+		cmd   *exec.Cmd
+		ended chan error
+	}{{imp, ended}, {other, otherEnded}} {
+		if err := c.cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		go func() { c.ended <- c.cmd.Wait() }()
+		defer func() { _ = c.cmd.Process.Kill() }()
 	}
-	ended := make(chan error, 1)
-	go func() { ended <- imp.Wait() }()
-	defer func() { _ = imp.Process.Kill() }()
-	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n", 0o644)
+	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n"+remote.WriterLine("db", other.Process.Pid, "running")+"\n", 0o644)
 	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\n", 0o644)
 	s.logs()
 	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
@@ -2818,6 +2828,11 @@ func TestSyncEndWriters(t *testing.T) {
 		case <-ended:
 		case <-time.After(20 * time.Second):
 			t.Errorf("the import still runs:\n%s", out)
+		}
+		select {
+		case <-otherEnded:
+			t.Errorf("another environment's import was ended:\n%s", out)
+		default:
 		}
 	}
 }

@@ -2163,12 +2163,14 @@ const syncFirst = "first"
 // of them already down when a sync's prepare stopped more ("held
 // <name>": an earlier sync's or import's, which a sync that writes
 // nothing leaves down) and an import's hook while it runs ("writer
-// <process group>").
+// <process group>", then " down" when its service was not running
+// before the import: writerDown).
 type syncRecord struct {
-	first   bool
-	stops   []string
-	held    []string
-	writers []int
+	first      bool
+	stops      []string
+	held       []string
+	writers    []int
+	writerDown bool
 }
 
 // readSyncRecord reads the record; ok is false without one.
@@ -2187,8 +2189,10 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 		case action == "held" && name != "" && !slices.Contains(rec.held, name):
 			rec.held = append(rec.held, name)
 		case action == "writer":
-			if pgid, err := strconv.Atoi(name); err == nil {
-				rec.writers = append(rec.writers, pgid)
+			pgid, down, _ := strings.Cut(name, " ")
+			if n, err := strconv.Atoi(pgid); err == nil {
+				rec.writers = append(rec.writers, n)
+				rec.writerDown = rec.writerDown || down == "down"
 			}
 		}
 	}
@@ -2208,7 +2212,11 @@ func (rec syncRecord) write(cwd string) error {
 		b.WriteString("held " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
-		b.WriteString("writer " + strconv.Itoa(pgid) + "\n")
+		b.WriteString("writer " + strconv.Itoa(pgid))
+		if rec.writerDown {
+			b.WriteString(" down")
+		}
+		b.WriteString("\n")
 	}
 	path := filepath.Join(filepath.Dir(cwd), syncState)
 	if err := os.WriteFile(path+".tmp", []byte(b.String()), 0o644); err != nil {
