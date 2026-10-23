@@ -925,7 +925,7 @@ devopsy --say info "current is now $id" || true
 `
 	// Its entries of mnt to their owners, by its own labels: the new
 	// release's may have given them to others.
-	restart += `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
+	restart += `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
@@ -936,7 +936,14 @@ devopsy --say info "current is now $id" || true
 	// live data, so never before it. Before a sync, whose first one
 	// creates the services with data before its finish hook, and before
 	// the run step. A failure is a failed run step: the usual way back.
-	owners := `(cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners"}, false) + `) || { status=$?; failed="giving the entries of mnt to their owners"; }
+	// A restored release's (restored: a rollback's, the restart's) labels
+	// that this devopsy cannot read only warn: a rollback never fails for
+	// them, as it never checks roles or imports.
+	ownersArgs := []string{"--mnt-owners"}
+	if rollback {
+		ownersArgs = append(ownersArgs, "restored")
+	}
+	owners := `(cd "$base/current" && ` + devopsyCall(projectName, ownersArgs, false) + `) || { status=$?; failed="giving the entries of mnt to their owners"; }
 `
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
