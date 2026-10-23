@@ -1050,8 +1050,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   and the check refuses one that is a link. Before: devopsy made such
   paths, its owner's (`OwnedPaths`, a directory at a time), which this
   replaced; only top-level owned entries are made and scanned now. A
-  path below an entry nobody owns is the deploy user's, which no
-  container writes, so it stays allowed.
+  path below an entry nobody owns stays allowed (decided scope): such
+  an entry is the deploy user's, written from the host, while an owned
+  one is written by a container by design. Locally nothing refuses it.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a `mnt` service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
