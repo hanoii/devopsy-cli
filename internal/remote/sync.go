@@ -69,9 +69,10 @@ const (
 )
 
 // ImportContainerPrefix and the compose project start the name of the
-// container an mnt --import writes through, then devopsy's pid: what the
-// next lock-taker removes when a killed devopsy left it, and --destroy
-// before emptying mnt.
+// container an mnt --import writes through, then devopsy's pid (and
+// -owners-<n> for those giving what it extracted to its owners): what
+// the next lock-taker removes when a killed devopsy left it, and
+// --destroy before emptying mnt.
 const ImportContainerPrefix = "devopsy-import-"
 
 // ImportMarker is the line devopsy --import on a server prints on stderr

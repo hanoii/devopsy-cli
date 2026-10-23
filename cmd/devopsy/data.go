@@ -439,22 +439,18 @@ func (e *endReader) Read(p []byte) (int, error) {
 
 // emptyAndExtract empties each entry the tar carries (a sync's --delete:
 // what the source does not have goes) and extracts it, as root in the
-// util image so owners and modes come as they were, then gives each
-// owned entry it extracted to its owner (OWNED: <entry>=<uid>:<gid>, one
-// per line, ownPaths), before the import counts as complete: a tar made anywhere
-// carries its maker's owners. Directories are emptied, never removed,
-// and files overwritten in place: a running container bind-mounts their
-// inodes.
-const emptyAndExtract = "set -eu\n" + chownEntry + ownPaths + `for e; do
+// util image so owners and modes come as they were. Directories are
+// emptied, never removed, and files overwritten in place: a running
+// container bind-mounts their inodes. The owned entries it extracted go
+// to their owners after it, each in a container of its own (ownMnt):
+// this one mounts all of mnt.
+const emptyAndExtract = `set -eu
+for e; do
   if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
     find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   fi
 done
-tar -C /mnt -xf - --numeric-owner --overwrite
-IFS='
-'
-set -f
-own_paths ${OWNED:-}
+exec tar -C /mnt -xf - --numeric-owner --overwrite
 `
 
 // runImport implements devopsy --import <service> [--yes] [--resolved]:
@@ -675,18 +671,20 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
+			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
+			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+			err = dockerRunIO(ctx, cname, in2, nil, run...)
+			// What it extracted goes to its owner before the import counts
+			// as complete: a tar made anywhere carries its maker's owners.
 			owned := map[string]string{}
 			for _, e := range entries {
 				if o := owners[e]; o != "" {
 					owned[e] = o
 				}
 			}
-			args, line := ownerArgs(owned)
-			if len(args) > 0 {
-				report.Info("then " + line)
+			if err == nil {
+				err = ownMnt(ctx, mnt, owned, cname+"-owners")
 			}
-			run := append([]string{"-i", "-e", "OWNED=" + strings.Join(args, "\n"), "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
-			err = dockerRunIO(ctx, fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()), in2, nil, run...)
 		}
 	}
 	if err != nil {

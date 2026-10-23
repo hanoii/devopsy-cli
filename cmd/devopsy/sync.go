@@ -2436,7 +2436,7 @@ func wipeData(cwd, projectDir, base string) error {
 		who = "@" + to
 	}
 	report.Info("resetting " + who + ": every container and volume goes and mnt is emptied; its shared/.env stays")
-	if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+$"); err != nil {
+	if err := removeContainers(importContainers(cwd)); err != nil {
 		return err
 	}
 	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {

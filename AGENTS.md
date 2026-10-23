@@ -956,13 +956,23 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   (tar and rsync set owner and mode explicitly, a chmod sets the ACL
   mask), capability hooks (none runs after an `mnt` import, a plain
   `up` or an upload by hand), a root `init` service in every template.
-- **Where owners are applied,** always as root in `UtilImage`, `chown
-  -h` from the file's directory (`-execdir`: never through a link the
-  app made, its own or one swapped in for a directory on the way, which
-  reached another entry) and only what differs (`find \( ! -user -o !
-  -group \)`, `chownEntry`). A scan that fails is looked at again,
-  chowning nothing, and fails only when something is left with another
-  owner: the services may run meanwhile, and a file one removed after
+- **Where owners are applied,** always as root in `UtilImage`, one
+  container per owned entry that mounts that entry alone (`ownMnt`,
+  `--mount`, its source a CSV field), `--network none`, `chown -h` in
+  batches (`find -exec ... +`) and only what differs (`find \( ! -user
+  -o ! -group \)`, `chownEntry`). Why one entry per container (decided,
+  review of 2026-10-23, round 2): a directory the app swaps for a link
+  during the scan can lead chown only into that entry or the throwaway
+  container, never another entry or the host, which is what `-execdir`
+  bought before at one chown per directory (measured on 20,200
+  directories of 40,201 inodes in `devopsy-util:2`, container
+  included: 15.3 s with `-execdir`, 0.34 s now). A missing entry is
+  made by devopsy first, 0755 (`makeEntry`; one that is a link is
+  refused there too). A scan that fails is looked at again, chowning
+  nothing, and fails only when something is left with another owner or
+  when that look fails itself (a directory find cannot read: review of
+  2026-10-23, round 2, it passed silently), `-ignore_readdir_race` on
+  both: the services may run meanwhile, and a file one removed after
   find saw it failed the release after its switch (review of
   2026-10-23; rsync's 24 is the same race). Applied: a release, right after
   `make_current` (it changes live data, so never before; `--mnt-owners`,
@@ -978,8 +988,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   reason rollbacks never check roles or imports; review of 2026-10-23,
   a rollback to a release with `devopsy.sync` labels failed; a chown
   failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
-  the child's labels (Syncs); an `mnt` import, in its extracting
-  container (`emptyAndExtract`, `OWNED`); a reset, after `emptyMnt`;
+  the child's labels (Syncs); an `mnt` import, after its extracting
+  container (`emptyAndExtract`, which mounts all of `mnt`) in the
+  entries' own; a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `run`, `create`, `watch`
   and `scale`
   (`Plan.Starts`, only when the compose files' YAML has the label or an
@@ -1620,8 +1631,10 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   included (it may have stopped them all the same) up to the first
   write. A `stream` import of a service not stopped brings it up alone
   and down again if it was down (`upFor`), an `up` that failed too. An
-  owned entry it extracted goes to its owner in the same container,
-  before the import counts as complete (`OWNED`).
+  owned entry it extracted goes to its owner before the import counts
+  as complete, in a container of its own (`ownMnt`, named
+  `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
+  `importContainers` ends it with the extracting one).
 - **An mnt import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
