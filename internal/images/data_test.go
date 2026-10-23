@@ -1573,3 +1573,61 @@ func TestSyncTwiceThenOwnSeriesRefused(t *testing.T) {
 		t.Errorf("dev's release on mariadb:11.4 after two syncs (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8 (history %v)\n%s", err, dev.runs("database"), readHistory(dev.base()), out.String())
 	}
 }
+
+// Bug: SyncCheck pulls the parent's images by digest one service after
+// the other and bookmarks them only once all are in: a pull that fails
+// for a later service refuses the sync with the earlier ones pulled and
+// neither listed nor recorded. An image pulled by digest keeps a
+// repo@sha256 name that docker image prune never removes, so it stays on
+// the child's server for good (rule 5), however its releases go.
+func TestSyncRefusedPullLeavesNothing(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	search := func(ref string) Service { return Service{Name: "search", Ref: ref, Data: true, Method: DataMnt} }
+	d.publish("mariadb:11.8", "I1")
+	d.publish("elasticsearch:8", "E1")
+	dev.release(false, db118, search("elasticsearch:8"))
+	d.publish("mariadb:11.8", "I2")
+	d.publish("elasticsearch:8", "E2")
+	prod.release(false, db118, search("elasticsearch:8"))
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	// The child's server: it never had prod's images, and the registry no
+	// longer serves elasticsearch's.
+	var cs []container
+	for _, c := range d.containers {
+		if c.project != "app-prod" {
+			cs = append(cs, c)
+		}
+	}
+	d.containers = cs
+	for n, i := range d.names {
+		if i == "I2" || i == "E2" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "I2")
+	delete(d.images, "E2")
+	delete(d.registry, "E2")
+	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a parent's image the child's server cannot pull: %v\n%s", err, out.String())
+	}
+	// Everything of the child goes.
+	d.containers = nil
+	for _, id := range dev.e.releases() {
+		if err := dev.e.set.Remove(dev.e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		os.RemoveAll(dev.e.rel(id))
+	}
+	dev.e.set.Prune()
+	if d.images["I2"] {
+		var ns []string
+		for n, i := range d.names {
+			if i == "I2" {
+				ns = append(ns, n)
+			}
+		}
+		t.Errorf("prod's database image, pulled for the refused sync, stays once the child's releases are gone: %v", ns)
+	}
+}
