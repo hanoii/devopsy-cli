@@ -1021,6 +1021,86 @@ exit 0
 	}
 }
 
+// Bug: the holder pulls the parent's image (img sync-check) once its
+// watcher is disarmed, then goes on into prepare whatever happened to
+// its session meanwhile: an operator's Ctrl-C (or a cut session) during
+// a long pull stops the child's services, only for the abort to start
+// them again. S73: nothing stops; the holder looks for an early answer
+// after the pull, before its prepare.
+func TestHolderAbortDuringPullStopsNothing(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+echo "$*" >> "$FAKE_ROOT/calls"
+exit 0
+`)
+	fakeImageTools(t, bin)
+	// A pull that takes until $FAKE_ROOT/pulled exists, then has the image
+	// by its digest.
+	if err := os.Rename(filepath.Join(bin, "docker"), filepath.Join(bin, "docker.fake")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
+if [ "$1" = pull ]; then
+  : >"$FAKE_ROOT/pulling"
+  while [ ! -e "$FAKE_ROOT/pulled" ]; do sleep 0.05; done
+  eval "n=\${$#}"
+  echo "${n#*@}" >"$FAKE_ROOT/images/$(echo "$n" | tr '/' '_')"
+  exit 0
+fi
+exec "$(dirname "$0")/docker.fake" "$@"
+`)
+	if err := os.Chmod(filepath.Join(bin, "docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev", Mode: ModeImage}
+	root := t.TempDir()
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(base, "releases", "1", images.ListFile), "mariadb:11.8\tI1\tdb\tdata\tmariadb@I1\n")
+	write(t, filepath.Join(root, "images", "mariadb:11.8"), "I1\n")
+	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\n"}
+	holder := exec.Command("sh", "-c", HolderScript(tg, "app-dev", o, true))
+	holder.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder.Stdin = r
+	var out bytes.Buffer
+	holder.Stdout, holder.Stderr = &out, &out
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	done := make(chan error, 1)
+	go func() { done <- holder.Wait() }()
+	for i := 0; !fileExists(filepath.Join(root, "pulling")); i++ {
+		if i > 400 {
+			_ = holder.Process.Kill()
+			w.Close()
+			t.Fatalf("the holder never pulled the parent's image:\n%s", out.String())
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	// Ctrl-C during the pull: devopsy says abort and closes the session.
+	_, _ = w.WriteString("abort\n")
+	w.Close()
+	write(t, filepath.Join(root, "pulled"), "")
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		_ = holder.Process.Kill()
+		t.Fatalf("the holder hangs:\n%s", out.String())
+	}
+	if calls := readFile(filepath.Join(root, "calls")); strings.Contains(calls, "--sync-services prepare") {
+		t.Errorf("an abort during the parent image's pull went on into prepare, which stops the child's services:\n%s\n%s", calls, out.String())
+	}
+}
+
 func readFile(path string) string {
 	data, _ := os.ReadFile(path)
 	return string(data)
