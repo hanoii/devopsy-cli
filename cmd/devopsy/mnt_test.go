@@ -14,29 +14,24 @@ import (
 // A release gives its owned entries to their owners right after its
 // switch, before the run step: in the util container, without a network,
 // a missing entry made 0755, every entry scanned whole (chown -h, never
-// through a link), and a bind source below an owned entry made too
-// (review of 2026-10-23: Docker made storage/files root's, which a
-// service running as its owner from its first process could not write).
+// through a link).
 // A child's first sync rsyncs into an entry the child owns as its owner
 // (--chown), from the child's labels only.
 func TestMntOwnersRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	config := filepath.Join(s.dot, "config.yaml")
 	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/storage/files/cache\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code := s.run(nil, "@prod", "--release")
 	docker, _ := s.logs()
 	switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/storage to 10001:10001"), strings.Index(out, "deploy in shop-prod")
 	if code != 0 || switched < 0 || giving < switched || deployed < giving {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	for _, want := range []string{"run --rm --name devopsy-owners-shop-prod-", " --network none -v " + s.mnt("prod") + ":/mnt devopsy-util:2 sh -c set -eu\n", `mkdir -m 0755 "$d"`, `find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} +`, "own_paths \"$@\"\n sh storage=10001:10001 storage/files/cache=10001:10001\n"} {
+	for _, want := range []string{"run --rm --name devopsy-owners-shop-prod-", " --network none -v " + s.mnt("prod") + ":/mnt devopsy-util:2 sh -c set -eu\n", `mkdir -m 0755 "$d"`, `find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} +`, "own_paths \"$@\"\n sh storage=10001:10001\n"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
-	}
-	if fi, err := os.Stat(filepath.Join(s.mnt("prod"), "storage", "files", "cache")); err != nil || !fi.IsDir() {
-		t.Errorf("mnt/storage/files/cache not made: %v", err)
 	}
 	// Failing, it is a failed run step: nothing current on a first one.
 	write(t, s.log+".shop-solo", "FAKE_APP_OWNER=10001:10001\n", 0o644)
@@ -161,7 +156,7 @@ func TestMntOwnersReset(t *testing.T) {
 }
 
 // Locally, before compose starts anything, an owned entry missing is
-// made, and a bind source below it, and on Linux an entry not its
+// made, and on Linux an entry not its
 // owner's is given away in a util container, only then; on macOS (Docker Desktop, OrbStack) ownership is
 // never checked. A command that starts nothing, or a project whose
 // compose files cannot carry the label, reads no labels: its YAML keys
@@ -171,7 +166,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	s := newSyncSetup(t)
 	compose := filepath.Join(s.dot, "compose.yaml")
 	write(t, compose, "# Every request's headers included; extends: nothing.\n"+readString(compose)+"    # devopsy.mnt.owner is not here\n    environment: {A: b} # nor devopsy.mnt.owner\n", 0o644)
-	owned := []string{"FAKE_APP_OWNER=10001:10001", "FAKE_APP_MOUNT2=/storage/files"}
+	owned := []string{"FAKE_APP_OWNER=10001:10001"}
 	if out, code := s.run(owned, "up", "-d"); code != 0 {
 		t.Fatalf("up (%d):\n%s", code, out)
 	}
@@ -200,7 +195,7 @@ func TestMntOwnersLocal(t *testing.T) {
 		out, code := s.run(owned, args...)
 		docker, _ := s.logs()
 		container := strings.Contains(docker, "run --rm --name devopsy-owners-")
-		if code != 0 || !fileExists(filepath.Join(s.dot, "mnt", "storage", "files")) || container != (runtime.GOOS != "darwin") || !strings.Contains(docker, "compose -f "+compose) {
+		if code != 0 || !fileExists(filepath.Join(s.dot, "mnt", "storage")) || container != (runtime.GOOS != "darwin") || !strings.Contains(docker, "compose -f "+compose) {
 			t.Errorf("%v (%d), the util container %v:\n%s\n%s", args, code, container, out, docker)
 		}
 	}
@@ -209,7 +204,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	}
 	// The entry there and its owner's (the test's own user): nothing to do.
 	uid, gid := os.Getuid(), os.Getgid()
-	if out, code := s.run([]string{"FAKE_APP_OWNER=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "FAKE_APP_MOUNT2=/storage/files"}, "start"); code != 0 {
+	if out, code := s.run([]string{"FAKE_APP_OWNER=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid)}, "start"); code != 0 {
 		t.Fatalf("start (%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
@@ -247,20 +242,6 @@ exit ${st:-0}
 `, 0o755)
 	script := strings.ReplaceAll(strings.ReplaceAll(ownEntries, `"/mnt/`, `"`+mnt+`/`), "d=/mnt ", "d="+mnt+" ")
 	own := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	// Bind sources below an entry: each directory missing made and its
-	// owner's, never past a link the app made (it would reach another
-	// entry); only entries scanned.
-	write(t, filepath.Join(mnt, "db", "x"), "x\n", 0o644)
-	write(t, filepath.Join(mnt, "storage", "keep.txt"), "x\n", 0o644)
-	if err := os.Symlink(filepath.Join(mnt, "db"), filepath.Join(mnt, "storage", "link")); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("sh", "-c", script, "sh", "storage="+own, "storage/files/cache="+own, "storage/link/y="+own, "logs/a="+own)
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
-	if out, err := cmd.CombinedOutput(); err != nil || !fileExists(filepath.Join(mnt, "storage", "files", "cache")) || !fileExists(filepath.Join(mnt, "logs", "a")) || fileExists(filepath.Join(mnt, "db", "y")) {
-		t.Errorf("paths (%v):\n%s", err, out)
-	}
-	os.Remove(filepath.Join(mnt, "storage", "link"))
 	for owner, fails := range map[string]bool{own: false, "99999:99999": true} {
 		write(t, filepath.Join(mnt, "storage", "keep.txt"), "x\n", 0o644)
 		write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
@@ -291,7 +272,7 @@ exit ${st:-0}
 	}
 	calls := filepath.Join(tmp, "calls")
 	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
-	cmd = exec.Command("sh", "-c", script, "sh", "storage="+own)
+	cmd := exec.Command("sh", "-c", script, "sh", "storage="+own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("a tree of many directories: %v\n%s", err, out)

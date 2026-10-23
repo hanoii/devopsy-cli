@@ -811,9 +811,8 @@ network, never following a symbolic link:
 - **a release**, right after its switch (before a sync and the run
   step), and a rollback and the restart after a failed run, from the
   restored release's own labels: each owned entry missing is created
-  (0755) and given to its owner, and so is each bind source below one
-  (`./mnt/storage/files`, which Docker would make root's), then every
-  owned entry is scanned whole, so what devopsy did not write (an upload
+  (0755) and given to its owner, then every owned entry is scanned
+  whole, so what devopsy did not write (an upload
   by hand, data from before the label) gets its owner too; a file a
   running service removes meanwhile is no failure. A failure fails the
   release as its run step would: the previous one comes back. In a
@@ -823,12 +822,12 @@ network, never following a symbolic link:
 - **a sync**: an entry the child owns lands as the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files are;
 - **an `--import`** of a `mnt` service: what it extracted goes to its
-  owner before the import completes, the bind sources below it made;
+  owner before the import completes;
 - **a reset**, once it emptied `mnt`;
 - **locally**, before `up`, `start`, `run`, `create`, `watch` and
-  `scale` (not with `--dry-run`): an owned entry missing is created, and
-  each bind source below one, and on Linux an entry whose directory is
-  not its owner's is given away, scanned whole; one whose directory is
+  `scale` (not with `--dry-run`): an owned entry missing is created,
+  and on Linux an entry whose directory is not its owner's is given
+  away, scanned whole; one whose directory is
   its owner's is never scanned, since this runs before every such
   command. On macOS, Docker Desktop and OrbStack let any container user
   write the Mac's files, so only the directories are made. Labels that
@@ -862,9 +861,14 @@ the secrets its compose file requires), the mounts check refuses
   owner. Mounted writable by any other service too: it would write
   every entry, and no sync or import sees it there. Read-only (a tool
   reading every entry), devopsy ignores it;
-- an owned entry, or a path below one a service mounts, that is a
-  symbolic link in `shared/mnt`: Docker would mount what it points to,
-  and devopsy give that to the owner.
+- a bind mount from below an owned entry (`./mnt/storage/files` when
+  `storage` is owned), by any service, read-only too: the entry's owner
+  can replace that path with a symbolic link, and Docker resolves a
+  bind mount's source on the host, so a link to `/` would mount the
+  host's root. Bind the entry itself (`./mnt/storage:/app/storage`) and
+  use the path below it inside the container;
+- an owned entry that is a symbolic link in `shared/mnt`: Docker would
+  mount what it points to, and devopsy give that to the owner.
 
 Labels the owners' step after the switch could not read (a name from
 before a change, a leftover `.devopsy/capabilities/sync/`) refuse the

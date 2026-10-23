@@ -114,10 +114,10 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, name strin
 	return nil
 }
 
-// projectOwners are the owned paths of the project at cwd's mnt, path to
-// owner, from its labels (every profile): each owned entry
-// (cli.MntOwners), and each bind source below one (cli.OwnedPaths), so
-// Docker never makes a part of it root's. And its mnt resolved.
+// projectOwners are the owned entries of the project at cwd's mnt,
+// entry to owner, from its labels (every profile, cli.MntOwners), and
+// its mnt resolved. Only entries: a bind source below one is refused by
+// the mounts check (cli.CheckMounts).
 func projectOwners(cwd string) (owned map[string]string, mnt string, err error) {
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
@@ -127,7 +127,6 @@ func projectOwners(cwd string) (owned map[string]string, mnt string, err error) 
 	if err != nil || len(owned) == 0 {
 		return owned, "", err
 	}
-	maps.Copy(owned, cli.OwnedPaths(services, owned))
 	mnt, err = dataMnt(projectDir)
 	return owned, mnt, err
 }
@@ -205,14 +204,13 @@ func runCheckMounts(cwd string, args []string) int {
 	return 0
 }
 
-// checkOwned refuses owned paths of mnt through a symbolic link, and
+// checkOwned refuses owned entries of mnt that are symbolic links, and
 // readies the util image, when the project owns any entry.
 func checkOwned(projectDir string, services []cli.SyncService) error {
 	owned, err := cli.MntOwners(services)
 	if err != nil || len(owned) == 0 {
 		return err
 	}
-	maps.Copy(owned, cli.OwnedPaths(services, owned))
 	mnt, err := dataMnt(projectDir)
 	if err != nil {
 		return err

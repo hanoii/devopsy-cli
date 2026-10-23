@@ -158,8 +158,8 @@ type SyncService struct {
 	// and go with the next one (CheckMounts refuses them).
 	TreeBinds []string
 	// Binds are the sources of its bind mounts under mnt, relative to it
-	// (storage, storage/files), read-only ones too: Docker makes a
-	// missing one root's (OwnedPaths).
+	// (storage, storage/files), read-only ones too: one below an owned
+	// entry is refused (CheckMounts).
 	Binds []string
 	// WholeMnt is whether it mounts ./mnt whole writable, which a service
 	// without data or an owner may as far as parsing goes, and
@@ -451,23 +451,6 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 	return owners, nil
 }
 
-// OwnedPaths are the bind sources below the owned entries (owners, as
-// MntOwners returns them), each to its entry's owner: devopsy makes them
-// with the entry, since Docker would make a missing one root's, and a
-// service running as its owner from its first process could not write
-// its mount (./mnt/storage/files under storage).
-func OwnedPaths(services []SyncService, owners map[string]string) map[string]string {
-	paths := map[string]string{}
-	for _, s := range services {
-		for _, b := range s.Binds {
-			if e, _, below := strings.Cut(b, string(filepath.Separator)); below && owners[e] != "" {
-				paths[b] = owners[e]
-			}
-		}
-	}
-	return paths
-}
-
 // CheckMounts refuses, before a release goes live, the mounts whose data
 // would not be what the labels say (services as SyncServices read them,
 // so ./mnt whole as data or an owner's is refused already): ./mnt whole
@@ -477,13 +460,23 @@ func OwnedPaths(services []SyncService, owners map[string]string) map[string]str
 // outside mnt, which goes with the next release; a service labeled
 // DataMnt that copies no entry of mnt (none mounted, or all excluded),
 // which a sync would take for nothing to copy; an MntOwnerLabel on one
-// that mounts no entry writable; and an entry two owners write
-// (MntOwners).
+// that mounts no entry writable; an entry two owners write (MntOwners);
+// and a bind source below an owned entry (./mnt/storage/files), by any
+// service, read-only too: the entry's owner can replace that path with a
+// symbolic link, and Docker resolves a bind source on the host (a link
+// to / would mount the host's root).
 func CheckMounts(services []SyncService) error {
 	var bad []string
 	var fixes []report.Remedy
-	tree, data, owner, whole := false, false, false, false
+	tree, data, owner, whole, below := false, false, false, false, false
+	owners, ownersErr := MntOwners(services)
 	for _, s := range services {
+		for _, b := range s.Binds {
+			if e, _, under := strings.Cut(b, string(filepath.Separator)); under && owners[e] != "" {
+				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below the owned entry ./mnt/%s (%s=%s): its owner can make that path a symbolic link, and Docker would mount what it points to on the host", s.Name, b, e, MntOwnerLabel, owners[e]))
+				below = true
+			}
+		}
 		if s.WholeMnt {
 			bad = append(bad, fmt.Sprintf("%s mounts ./mnt whole writable: it would write every entry, and no sync or import sees it there", s.Name))
 			whole = true
@@ -501,7 +494,7 @@ func CheckMounts(services []SyncService) error {
 			owner = true
 		}
 	}
-	if _, err := MntOwners(services); err != nil {
+	if err := ownersErr; err != nil {
 		bad = append(bad, err.Error())
 		fixes = append(fixes, report.Fix("give the services writing an entry one "+MntOwnerLabel+" (a variable keeps them alike), or mount it read-only where it is only read (:ro)"))
 	}
@@ -519,6 +512,9 @@ func CheckMounts(services []SyncService) error {
 	}
 	if whole {
 		fixes = append(fixes, report.Fix("mount the entries it writes (./mnt/<name>), or ./mnt read-only (:ro)"))
+	}
+	if below {
+		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }

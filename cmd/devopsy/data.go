@@ -440,9 +440,8 @@ func (e *endReader) Read(p []byte) (int, error) {
 // emptyAndExtract empties each entry the tar carries (a sync's --delete:
 // what the source does not have goes) and extracts it, as root in the
 // util image so owners and modes come as they were, then gives each
-// owned entry it extracted to its owner, the bind sources below it made
-// when the tar lacks them (OWNED: <path>=<uid>:<gid>, one per line,
-// ownPaths), before the import counts as complete: a tar made anywhere
+// owned entry it extracted to its owner (OWNED: <entry>=<uid>:<gid>, one
+// per line, ownPaths), before the import counts as complete: a tar made anywhere
 // carries its maker's owners. Directories are emptied, never removed,
 // and files overwritten in place: a running container bind-mounts their
 // inodes.
@@ -677,11 +676,6 @@ func runImport(cwd string, args []string, color bool) int {
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
 			owned := map[string]string{}
-			for p, o := range cli.OwnedPaths(services, owners) {
-				if e, _, _ := strings.Cut(p, "/"); slices.Contains(entries, e) {
-					owned[p] = o
-				}
-			}
 			for _, e := range entries {
 				if o := owners[e]; o != "" {
 					owned[e] = o
