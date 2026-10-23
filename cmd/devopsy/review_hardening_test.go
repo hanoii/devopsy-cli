@@ -97,3 +97,23 @@ func TestReviewOwnersSubdirectoryMount(t *testing.T) {
 		t.Errorf("mnt/storage/files, app's bind source, not made before the run step: Docker makes it root's:\n%s", out)
 	}
 }
+
+// Review 2026-10-23: Plan.Starts reads compose files as text and takes
+// any "include" or "extends" for a file that includes or extends others
+// (cli.mayOwnMnt), so a comment saying "included" (every template has
+// one: Traefik's "projects' included", whoami's "headers included",
+// drupal11's "its app included") makes every local up, start, run and
+// create pay a compose config (and a second Build, the env capability
+// included) for a project without devopsy.mnt.owner, which AGENTS.md
+// says it never does ("only when the compose files mention the label or
+// include or extend others: no compose config for every command").
+func TestReviewStartsIncludedInAComment(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "compose.yaml"), "# Every request's headers included.\nservices:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
+	if out, code := s.run(nil, "up", "-d"); code != 0 {
+		t.Fatalf("up (%d):\n%s", code, out)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") {
+		t.Errorf("labels read for a project without the label, its compose file saying \"included\":\n%s", docker)
+	}
+}
