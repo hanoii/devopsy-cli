@@ -71,7 +71,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return code
 	}
 	report.Info("pulling and building images")
-	if code := run("", []string{"--", "pull", "--ignore-buildable"}); code != 0 {
+	if code := run("", append([]string{"--"}, remote.ProfilePull...)); code != 0 {
 		return code
 	}
 	if code := run("", []string{"--", "build", "--pull"}); code != 0 {

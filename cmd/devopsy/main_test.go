@@ -1297,7 +1297,7 @@ func TestLocalRelease(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--release (%d):\n%s", code, out)
 	}
-	order := []string{"SECRETS in " + tmp, "[compose]", "[pull][--ignore-buildable]", "[build][--pull]", "DEPLOY"}
+	order := []string{"SECRETS in " + tmp, "[compose]", "[--profile][*][pull][--ignore-buildable]", "[build][--pull]", "DEPLOY"}
 	at := 0
 	for _, want := range order {
 		i := strings.Index(out[at:], want)

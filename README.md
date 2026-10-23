@@ -602,12 +602,17 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   failure fails the release as its run step would.
 - **Images:** after the checks, devopsy gets the release's images, by
   `mode:`, on the server and before it goes live: in build mode `docker
-  compose pull --ignore-buildable` (services without a `build:`) then
-  `docker compose build --pull` (the rest, base images refreshed); in
-  image mode `docker compose pull`, every service with an `image:`,
-  buildable ones included, so a tag missing from the registry fails the
-  release there. Only the services Compose starts by default: other
-  profiles get theirs when used. The run step's `up` then finds them all;
+  compose --profile '*' pull --ignore-buildable` (services without a
+  `build:`) then `docker compose build --pull` (the rest, base images
+  refreshed); in image mode `docker compose pull`, every service with an
+  `image:`, buildable ones included, so a tag missing from the registry
+  fails the release there, then the same `--profile '*' pull
+  --ignore-buildable`. Every profile's services without a `build:` are
+  pulled on every release, so a tool run now and then (`devopsy
+  --profile tools run --rm jq`) gets its tag's fixes too, and one that
+  fails to pull fails the release like any other; they are only pulled,
+  not kept as the release's own images (below), and a profile's
+  buildable services are built when used. The run step's `up` then finds them all;
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
   `current` as it was, its images included; what the failed release got
   is tagged as its own, so it goes with it. So does an interrupted one
@@ -1441,6 +1446,13 @@ Its options come first, so they win over devopsy's own: ssh keeps the first
 value of each. devopsy adds `-o ClearAllForwardings=yes` to every session:
 it never needs the host's `LocalForward` lines, and each session would try
 to bind them again while another holds them.
+
+**Environments nobody releases:** floating tags (`mariadb:11.8`,
+`caddy:2-alpine`) and base images get their fixes with a release, which
+pulls them again (Images, above). An environment nobody releases for
+weeks keeps what it pulled last: schedule a release from CI, weekly,
+with the same restricted key (`devopsy @prod --release` in a scheduled
+job).
 
 **SSH settings:** a release opens several SSH sessions (checks, upload,
 activation, its log), each a new connection and handshake: noticeable

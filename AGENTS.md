@@ -679,11 +679,22 @@ bugs. The scripts keep what needs the shell (`releaseImages`): the
 locks, and fetching on a terminal (`fetch_images`, `with_tty`).
 
 - **Fetching happens before the switch** (`fetchImages`, through
-  `devopsy --`, past project commands): build mode `pull
-  --ignore-buildable` then `build --pull`; image mode `pull`, which
-  pulls buildable services with an `image:` too and fails on a missing
-  tag. A rollback or a restart restores its bookmarks (`img restore`)
-  and fetches only when it cannot.
+  `devopsy --`, past project commands): build mode `ProfilePull`
+  (`--profile '*' pull --ignore-buildable`) then `build --pull`; image
+  mode `pull`, which pulls buildable services with an `image:` too and
+  fails on a missing tag, then `ProfilePull`. A rollback or a restart
+  restores its images (`img restore`) and fetches only when an image
+  it builds is gone.
+- **Every release pulls every profile's non-buildable services,** pull
+  only: the listing and the bookmarks stay the default
+  services'. Why: a profile-only tool was pulled once, on first
+  use, and its tag never got a patch (decided 2026-10-23). A profile's
+  buildable services are never built or pulled by a release, so a tool
+  nobody pushed never fails one; a non-buildable one that fails to pull
+  fails it before the switch. Accepted: image mode asks the registry
+  twice for its default third-party tags (Compose cannot pull those and
+  the default buildable ones in one call; an unchanged image downloads
+  nothing).
 - **The listing is per service** (`devopsy-images`: name, image id,
   service, kind, registry digest, version label), from `compose config
   --format json` without profiles and without devopsy's own file

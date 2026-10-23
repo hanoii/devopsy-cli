@@ -1411,16 +1411,28 @@ image_unlock() {
 // the registry fails there. Through `devopsy --`, past project commands
 // named pull or build, on a pseudo-terminal (with_tty) for BuildKit's live
 // progress. Empty for any other mode.
+//
+// Either way every profile's services without a build are pulled too
+// (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
+// would otherwise keep the tag it pulled first, never its fixes. Pulled
+// only: the listing and the bookmarks stay the default services' (`config
+// --images`), and a profile's buildable services are neither built nor
+// pulled, so a tool nobody pushed never fails a release. In build mode
+// that is the same one pull; image mode pulls its default services'
+// third-party images twice (a manifest request each, nothing
+// downloaded), since Compose cannot pull a profile's non-buildable
+// services and the default buildable ones in one call.
 func fetchImages(projectName, mode string) string {
 	var what, cmd string
 	switch mode {
 	case ModeBuild:
 		what = "pulling and building images (build mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull", "--ignore-buildable"}, false) +
+		cmd = devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
 			" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
 	case ModeImage:
 		what = "pulling images (image mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull"}, false)
+		cmd = devopsyCall(projectName, []string{"--", "pull"}, false) +
+			" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
 	default:
 		return ""
 	}
@@ -1430,6 +1442,10 @@ func fetchImages(projectName, mode string) string {
 }
 `
 }
+
+// ProfilePull is compose's arguments to pull every service without a
+// build, every profile's included (fetchImages).
+var ProfilePull = []string{"--profile", "*", "pull", "--ignore-buildable"}
 
 // NotLive is not_live, for a new release that does not go live: marked
 // failed, so rollbacks skip it and keep never counts it. A first one
