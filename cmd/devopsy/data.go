@@ -561,7 +561,7 @@ func readyEntry(mnt string, e tarEntry) error {
 //
 // Nothing is replaced until the data has fully arrived. Before the first
 // write a failure restores what was stopped; from it (devopsy asks Docker
-// to start the writer: the import hook, or the container that empties
+// to start the writer: the import hook, or the first container that empties
 // and extracts), on a target the environment is marked (an import's
 // mark, IncompleteImport) and what was stopped is recorded, both before
 // the write, and a failure keeps it all down, the imported service and
