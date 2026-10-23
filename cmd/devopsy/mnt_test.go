@@ -171,7 +171,10 @@ func TestMntOwnersLocal(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") {
 		t.Errorf("labels read for ps:\n%s", docker)
 	}
-	for _, args := range [][]string{{"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}} {
+	// compose's watch starts the services first too (unless --no-up),
+	// and scale creates containers (review of 2026-10-23, round 2: both
+	// left the entries for Docker to make root's).
+	for _, args := range [][]string{{"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}, {"watch"}, {"scale", "app=2"}} {
 		os.RemoveAll(filepath.Join(s.dot, "mnt"))
 		out, code := s.run(owned, args...)
 		docker, _ := s.logs()
