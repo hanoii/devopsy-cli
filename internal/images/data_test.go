@@ -969,3 +969,56 @@ func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
 		m.fail("a tag pushed back after a rollback to a forced release (%v): the database runs %s, want I3", err, m.runs("database"))
 	}
 }
+
+// Bug: Ran marks forced whatever a forced release's data service runs,
+// not the image --yes let through: a forced release whose run step fails
+// before the database is recreated appends a forced line for the old
+// image, under the forced release's reference. The next release on the
+// name that kept running (a tag moved forward) is refused as a name its
+// data never ran, and the history starts over at the old image,
+// forgetting what the data moved past (S8).
+func TestDataForcedReleaseFailingEarlyKeepsHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I0")
+	m.release(false, db118)
+	d.publish("mariadb:11.8", "I1")
+	r2, err := m.release(false, db118)
+	if err != nil || m.runs("database") != "I1" {
+		m.fail("r2 (%v): %s", err, m.runs("database"))
+	}
+	// A series switch let through with --yes, whose run step fails before
+	// compose recreates the database: it still runs I1.
+	d.publish("mariadb:11.4", "J1")
+	r3 := m.e.release(dbSvc("mariadb:11.4"))
+	m.e.set.SaveNames(m.e.rel(r3))
+	m.fetch(m.e.svcs[r3])
+	m.e.set.Yes = true
+	err = m.e.set.Record(m.e.rel(r3), m.e.rel(r2))
+	m.e.set.Yes = false
+	if err != nil {
+		m.fail("r3 with --yes: %v", err)
+	}
+	m.e.set.Ran(m.base(), m.e.rel(r3))
+	if got := strings.Join(m.history("database"), " "); got != "ran:I0 ran:I1" {
+		t.Errorf("history after a forced release that never ran its image: %s, want ran:I0 ran:I1", got)
+	}
+	// The restart of r2.
+	if err := m.e.set.Restore(m.e.rel(r2), m.e.rel(r3), false); err != nil {
+		m.fail("restart: %v", err)
+	}
+	m.cur = r2
+	m.up()
+	// mariadb:11.8 moves on to I2, then is pushed back to I0, which the
+	// data moved past: refused.
+	d.publish("mariadb:11.8", "I2")
+	if _, err := m.release(false, db118); err != nil || m.runs("database") != "I2" {
+		m.fail("r4 (%v): %s", err, m.runs("database"))
+	}
+	d.publish("mariadb:11.8", "I0")
+	out.Reset()
+	if _, err := m.release(false, db118); !errors.Is(err, ErrRefused) || m.runs("database") != "I2" {
+		m.fail("a tag pushed back after a forced release failed early (%v): the database runs %s, want I2", err, m.runs("database"))
+	}
+}
