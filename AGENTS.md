@@ -1541,8 +1541,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   keeps any mark when nothing was written), so from then on only a sync
   clears it. A sync clears an import's mark only by copying that
   service: the push refuses before stopping anything on the parent
-  otherwise (`copiesService`: data, a stream, or a mnt entry that exists
-  there), and a sync whose parent writes nothing stays partial. Every
+  otherwise (`copiesService`: a stream, or for a mnt service every
+  entry the child's service mounts, from the child's list, copied and
+  present on the parent: with any one, a sync completed over a
+  half-written entry the parent lacks and cleared the mark), and a sync
+  whose parent writes nothing stays partial. Every
   reader of the mark branches on its code (`markRefusal`,
   `partialGuard`, the restart skip, `PushScript`, `syncBlock`,
   `--status`, `--export`'s warning, `syncPreflight`, the operator's

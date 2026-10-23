@@ -598,6 +598,24 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "the parent does not copy app") || !readMark(dev).IsImport() || slices.Contains(stopped, "db") || !slices.Contains(stopped, "app") {
 		t.Errorf("a refused sync over app's import mark (%d), stopped %v:\n%s", code, stopped, out)
 	}
+
+	// The parent copies app, but not all of it: the child's app mounts
+	// cache too, which the parent lacks, so what the import half wrote
+	// there would stay. Refused, naming it; with it, the sync clears the
+	// mark.
+	prodMnt := filepath.Join(s.root, "shop", "prod", "shared", "mnt")
+	write(t, filepath.Join(prodMnt, "storage", "f"), "prod\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP=mnt+import\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP=mnt+import\nFAKE_APP_MOUNT2=/cache\n", 0o644)
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "the parent does not copy ./mnt/cache, which the child's app mounts: a sync completes it only by copying all of it: nothing changed") || !readMark(dev).IsImport() {
+		t.Errorf("a sync copying part of app (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(prodMnt, "cache", "c"), "prod\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP=mnt+import\nFAKE_APP_MOUNT2=/cache\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || readMark(dev) != nil {
+		t.Errorf("a sync copying all of app (%d), mark %+v:\n%s", code, readMark(dev), out)
+	}
 }
 
 // The data labels are a feature: a server's devopsy without it reads them

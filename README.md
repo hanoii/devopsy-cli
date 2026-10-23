@@ -1105,8 +1105,10 @@ environment is marked and what devopsy stopped stays down.
   only that service can be imported until one completes. The ways out:
   the import again from a complete file (`devopsy @prod --import
   database < database.sql`), which starts what the import kept down and
-  only then removes the mark; on a child, a `--sync` that copies that
-  service; or `--resolved`, below. The next import, or `--resolved`,
+  only then removes the mark; on a child, a `--sync` that copies all of
+  that service (every entry the child's service mounts: one the parent
+  lacks would keep what the import half wrote, so the sync refuses
+  first, naming it); or `--resolved`, below. The next import, or `--resolved`,
   first ends a load a killed devopsy left running. `--destroy` still
   works, its `destroy:` step running with what the import kept down
   still down.
