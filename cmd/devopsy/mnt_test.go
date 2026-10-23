@@ -255,6 +255,29 @@ exit ${st:-0}
 			t.Errorf("the rest not given away: %q", got)
 		}
 	}
+
+	// A tree of many directories, all of another owner (data from before
+	// the label, an import of a tar made elsewhere) is given away in a few
+	// chowns, as find -exec ... + batches them, not one per directory.
+	// Review of 2026-10-23 (round 2): -execdir runs chown once per
+	// directory; measured in devopsy-util:2 on a Docker volume, 20,200
+	// directories of 40,201 inodes took 22.7 s against 0.43 s for -exec
+	// +, after the switch (a release) or with the services stopped (an
+	// import), so a Drupal files tree took minutes.
+	os.RemoveAll(filepath.Join(mnt, "storage"))
+	for i := range 200 {
+		write(t, filepath.Join(mnt, "storage", "d"+strconv.Itoa(i), "f"), "x\n", 0o644)
+	}
+	calls := filepath.Join(tmp, "calls")
+	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
+	cmd = exec.Command("sh", "-c", script, "sh", "storage="+own)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("a tree of many directories: %v\n%s", err, out)
+	}
+	if n := strings.Count(readString(calls), "\n"); n > 10 {
+		t.Errorf("a tree of 200 directories given away in %d chowns", n)
+	}
 }
 
 // A rollback's run step runs a plain up (the templates' deploy), which
