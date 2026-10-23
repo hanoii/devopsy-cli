@@ -283,8 +283,13 @@ var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync 
 // and by default its time to the second, so a datadir both sides wrote
 // in the same second (the child's database stopping right before the
 // parent's) kept the child's tablespace files under the parent's
-// dictionary, a database that no longer opened its tables.
-var RsyncCopy = []string{"rsync", "-a", "--delete", "--numeric-ids", "--modify-window=-1"}
+// dictionary, a database that no longer opened its tables. --no-D takes
+// back -a's -D: device nodes, FIFOs and sockets are never copied (an mnt
+// import extracts none either, errMember in cmd/devopsy). Why: rsync as
+// root makes them on the child's host, where bind mounts are not nodev,
+// and --chown gave them to the entry's owner, a block device of the
+// server's disk the raw disk for that UID.
+var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the

@@ -59,7 +59,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 	for _, want := range []string{
 		"run --rm --name devopsy-owners-shop-prod-", " --network none --mount type=bind,source=" + s.mnt("prod") + "/cache,target=/mnt/cache devopsy-util:2 sh -c set -eu\n",
-		`find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "chown_entry \"$1\" \"$2\"\n sh cache 10001:10001\n",
+		`find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "chown_entry \"$1\" \"$2\"\n sh cache 10001:10001\n",
 		"-1 --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
 	} {
 		if !strings.Contains(docker, want) {
@@ -91,7 +91,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(docker, "rsync -a --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000") {
+	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -367,7 +367,12 @@ func TestMntOwnersLocal(t *testing.T) {
 // find cannot read (review of 2026-10-23, round 2: it passed, 2>/dev/null
 // || true). The fake find takes every file for another owner's, as a
 // scan of an entry another machine wrote would, then asks the real one
-// what is left (GNU's -ignore_readdir_race left out: macOS's has none).
+// what is left (GNU's -ignore_readdir_race left out: macOS's has none),
+// or, with FOREIGN=<name>, takes the files of that name for another's
+// in that look too.
+// A FIFO in the entry is never given away nor counted as left with
+// another owner (review of 2026-10-23, round 4: the scan gave every kind
+// of file away, a device node to the entry's owner included).
 func TestMntScripts(t *testing.T) {
 	for name, script := range map[string]string{"ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract} {
 		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
@@ -378,8 +383,17 @@ func TestMntScripts(t *testing.T) {
 	mnt, bin := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin")
 	write(t, filepath.Join(bin, "find"), `#!/bin/sh
 p=$1; shift
-for a; do shift; [ "$a" = -ignore_readdir_race ] || set -- "$@" "$a"; done
-case " $* " in *" -exec "*) for a; do [ "${q:-}" = -h ] && o=$a; q=$a; done; exec /usr/bin/find "$p" -exec chown -h "$o" {} + ;; esac
+case " $* " in *" -exec "*) foreign=1 ;; *) foreign=${FOREIGN:-} ;; esac
+[ -z "$foreign" ] || [ "$foreign" = 1 ] || set -- -name "$foreign" "$@"
+u=
+for a; do
+  shift
+  [ "$a" = -ignore_readdir_race ] && continue
+  [ -n "$u" ] && a=2147483646 u=
+  [ "$a" = -user ] && u=$foreign
+  set -- "$@" "$a"
+done
+case " $* " in *" -exec "*) exec /usr/bin/find "$p" "$@" ;; esac
 [ -z "${FIND_FAIL:-}" ] || { echo "find: '$p/private': Permission denied" >&2; exit 1; }
 exec /usr/bin/find "$p" "$@"
 `, 0o755)
@@ -415,6 +429,21 @@ exit ${st:-0}
 		}
 	}
 
+	// A FIFO (as a device node, which only root can make) keeps its
+	// owner, and is not left with another either.
+	os.RemoveAll(filepath.Join(mnt, "storage"))
+	write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
+	if err := syscall.Mkfifo(filepath.Join(mnt, "storage", "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chowned := filepath.Join(tmp, "chowned")
+	os.Remove(chowned)
+	cmd := exec.Command("sh", "-c", script, "sh", "storage", own)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FOREIGN=fifo"}
+	if out, err := cmd.CombinedOutput(); err != nil || strings.Contains(readString(chowned), "fifo") {
+		t.Errorf("a FIFO in the entry: %v, given away: %q\n%s", err, readString(chowned), out)
+	}
+
 	// A tree of many directories, all of another owner (data from before
 	// the label, an import of a tar made elsewhere) is given away in a few
 	// chowns, as find -exec ... + batches them, not one per directory.
@@ -429,7 +458,7 @@ exit ${st:-0}
 	}
 	calls := filepath.Join(tmp, "calls")
 	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
-	cmd := exec.Command("sh", "-c", script, "sh", "storage", own)
+	cmd = exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("a tree of many directories: %v\n%s", err, out)

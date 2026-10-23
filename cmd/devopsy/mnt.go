@@ -46,9 +46,16 @@ import (
 // read: whatever is in it was never seen). -ignore_readdir_race keeps a
 // file removed between find's reading of its directory and its look at
 // it from failing either.
+//
+// Only files, directories and symbolic links are given away, in both
+// looks: a device node, a FIFO or a socket keeps its owner, and is no
+// file left with another owner either. Why: the entry's owner given a
+// block device of the server's disk has the raw disk; devopsy never
+// makes one (rsync --no-D, an mnt import refuses them), and one made
+// otherwise (by root on the host) stays root's.
 const chownEntry = `chown_entry() {
-  ce_err=$(find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} + 2>&1) && return 0
-  if ! ce_left=$(find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit); then
+  ce_err=$(find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} + 2>&1) && return 0
+  if ! ce_left=$(find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit); then
     printf '%s\n' "$ce_err" >&2
     return 1
   fi

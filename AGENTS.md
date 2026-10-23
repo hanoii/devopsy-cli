@@ -965,7 +965,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   container per owned entry that mounts that entry alone (`ownMnt`,
   `--mount`, its source a CSV field), `--network none`, `chown -h` in
   batches (`find -exec ... +`) and only what differs (`find \( ! -user
-  -o ! -group \)`, `chownEntry`). Why one entry per container (decided,
+  -o ! -group \)`, `chownEntry`), only files, directories and links
+  (`\( -type f -o -type d -o -type l \)`, in both looks: a device node
+  given to the entry's owner, a block device of the server's disk, is
+  its raw disk; review of 2026-10-23, round 4). Why one entry per container (decided,
   review of 2026-10-23, round 2): a directory the app swaps for a link
   during the scan can lead chown only into that entry or the throwaway
   container, never another entry or the host, which is what `-execdir`
@@ -1515,7 +1518,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   built on each host from `UtilDockerfile` when missing; GNU tar for
   `--export` and `--import` too, GNU find and chown for owners), as
   root with `--numeric-ids`. Why: owners and modes survive, and the
-  deploy user's permissions do not matter. Times are compared to the
+  deploy user's permissions do not matter. Never devices, FIFOs or
+  sockets (`--no-D`, taking back `-a`'s `-D`): as root rsync made them
+  on the child's host, where bind mounts are not nodev, and `--chown`
+  gave a block device to the entry's owner (review of 2026-10-23, round
+  4), as an `mnt` import refuses them (`errMember`). Times are compared to the
   nanosecond (`RsyncCopy`, `--modify-window=-1`): to the second, rsync
   skipped a datadir's files of the same size that both sides wrote in
   the same second (the child stops right before the parent), and the
