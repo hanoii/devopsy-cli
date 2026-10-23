@@ -929,5 +929,43 @@ func TestImportedHistory(t *testing.T) {
 	h := readHistory(m.base())
 	if w := h.window("database"); len(w) != 1 || w[0].How != Imported || w[0].ID != "I2" {
 		t.Errorf("window after an import: %+v", w)
+
+// Bug: a release's ForcedFile stays in its directory after its --yes was
+// used, so a later rollback to that release (img ran on the target) appends
+// a forced line for an image that only ran, starting the history over and
+// forgetting what the data moved past: a tag pushed back afterwards
+// (S8) is let through without --yes, the database going back.
+func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	if _, err := m.release(false, dbSvc("mariadb:11.8.3")); err != nil {
+		m.fail("p1: %v", err)
+	}
+	// A series switch, let through with --yes: its history starts at I2.
+	d.publish("mariadb:11.8", "I2")
+	forced, err := m.release(true, db118)
+	if err != nil {
+		m.fail("--yes: %v", err)
+	}
+	// The tag moves forward: I3 runs, after I2.
+	d.publish("mariadb:11.8", "I3")
+	if _, err := m.release(false, db118); err != nil || m.runs("database") != "I3" {
+		m.fail("r3 (%v): %s", err, m.runs("database"))
+	}
+	// A rollback to the forced release keeps I3, which only ran: nothing
+	// was let through this time.
+	if err := m.rollback(forced); err != nil || m.runs("database") != "I3" {
+		m.fail("rollback (%v): %s", err, m.runs("database"))
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 forced:I2 ran:I3" {
+		t.Errorf("history after the rollback: %s, want ran:I1 forced:I2 ran:I3", got)
+	}
+	// The tag pushed back to I2, which the data moved past: refused.
+	d.publish("mariadb:11.8", "I2")
+	out.Reset()
+	if _, err := m.release(false, db118); !errors.Is(err, ErrRefused) || m.runs("database") != "I3" {
+		m.fail("a tag pushed back after a rollback to a forced release (%v): the database runs %s, want I3", err, m.runs("database"))
 	}
 }
