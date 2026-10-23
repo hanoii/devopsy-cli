@@ -981,7 +981,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   find saw it failed the release after its switch (review of
   2026-10-23; rsync's 24 is the same race). Applied: a release, right after
   `make_current` (it changes live data, so never before; `--mnt-owners`,
-  a failure a failed run step), `--network none`, missing entries made
+  a failure a failed run step, ignoring SIGTERM, SIGINT, SIGHUP and
+  SIGPIPE as `runImages` does, since nothing interrupts after the
+  switch and Go keeps no inherited ignored SIGTERM: review of
+  2026-10-23, round 3), `--network none`, missing entries made
   0755 (only entries: a bind source below one is refused, below), and
   every owned entry scanned whole (decided: what devopsy did
   not write has the wrong owner deep under a correct top; measured 0.24
