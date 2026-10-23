@@ -70,7 +70,7 @@ func endWriters(cwd, base string, services []cli.SyncService) error {
 	}
 	var errs []error
 	for _, pid := range pids {
-		if isSyncImport(pid) {
+		if isSyncImport(pid, base) {
 			report.Info(fmt.Sprintf("ending the import that may still write (pid %d)", pid))
 			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
@@ -124,7 +124,7 @@ func endWriters(cwd, base string, services []cli.SyncService) error {
 			}
 		}
 	}
-	waitImports(pids)
+	waitImports(pids, base)
 	if len(errs) > 0 {
 		return fmt.Errorf("ending the sync's writers: %w", errors.Join(errs...))
 	}
@@ -145,23 +145,35 @@ func recordStops(cwd string, stopped []string, was map[string]string) error {
 }
 
 // isSyncImport reports whether pid is still a devopsy sync import
-// (--sync-services import): a pid recorded long ago may be another
-// process's now. Linux's /proc only: elsewhere nothing is signalled.
-func isSyncImport(pid int) bool {
+// (--sync-services import) into the environment at base, by its working
+// directory (devopsy never changes it): a pid recorded long ago may be
+// another process's now, another environment's import after a reboot
+// included. Linux's /proc only: elsewhere nothing is signalled.
+func isSyncImport(pid int, base string) bool {
 	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil {
 		return false
 	}
 	args := strings.Split(string(cmdline), "\x00")
-	return slices.Contains(args, "--sync-services") && slices.Contains(args, "import")
+	if !slices.Contains(args, "--sync-services") || !slices.Contains(args, "import") {
+		return false
+	}
+	dir, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return false
+	}
+	if b, err := filepath.EvalSymlinks(base); err == nil {
+		base = b
+	}
+	return dir == base || strings.HasPrefix(dir, base+string(filepath.Separator))
 }
 
-// waitImports waits for the imports to exit, and kills those still
-// running after writersWait.
-func waitImports(pids []int) {
+// waitImports waits for the imports into base to exit, and kills those
+// still running after writersWait.
+func waitImports(pids []int, base string) {
 	deadline := time.Now().Add(writersWait)
 	for {
-		alive := slices.DeleteFunc(slices.Clone(pids), func(pid int) bool { return !isSyncImport(pid) })
+		alive := slices.DeleteFunc(slices.Clone(pids), func(pid int) bool { return !isSyncImport(pid, base) })
 		if len(alive) == 0 {
 			return
 		}
@@ -274,9 +286,10 @@ func endImport(cwd, name string, services []cli.SyncService, record, wasRunning 
 // endImport, recording what it stops. A reboot ended it all already.
 func endLeftoverImport(cwd, base string, services []cli.SyncService, name string) error {
 	rec, _ := readSyncRecord(cwd)
+	compose := composeName(cwd)
 	var alive []int
 	for _, pgid := range rec.writers {
-		if isDataImport(pgid) {
+		if isDataImport(pgid, compose) {
 			report.Info(fmt.Sprintf("ending the import of %s a devopsy killed outright left (process group %d)", name, pgid))
 			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			alive = append(alive, pgid)
@@ -284,7 +297,7 @@ func endLeftoverImport(cwd, base string, services []cli.SyncService, name string
 	}
 	deadline := time.Now().Add(writersWait)
 	for len(alive) > 0 {
-		alive = slices.DeleteFunc(alive, func(p int) bool { return !isDataImport(p) })
+		alive = slices.DeleteFunc(alive, func(p int) bool { return !isDataImport(p, compose) })
 		if len(alive) == 0 {
 			break
 		}
@@ -298,20 +311,28 @@ func endLeftoverImport(cwd, base string, services []cli.SyncService, name string
 		time.Sleep(250 * time.Millisecond)
 	}
 	if len(rec.writers) > 0 {
-		if err := recordWriter(cwd, 0, false); err != nil {
+		if err := recordWriter(cwd, 0, false, false); err != nil {
 			return err
 		}
 	}
-	_, err := endImport(cwd, name, services, true, true)
+	// What it brought up for itself was down before: it stays down.
+	_, err := endImport(cwd, name, services, true, !rec.writerDown)
 	return err
 }
 
 // isDataImport reports whether pid is still the data capability's import
-// (the hook's script, or the devopsy about to exec it): a pid recorded
-// long ago may be another process's now. Linux's /proc only.
-func isDataImport(pid int) bool {
+// (the hook's script, or the devopsy about to exec it) of the compose
+// project compose, by the environment it started with (a hook may change
+// its directory): a pid recorded long ago may be another process's now,
+// another environment's import after a reboot included. Linux's /proc
+// only.
+func isDataImport(pid int, compose string) bool {
 	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil {
+		return false
+	}
+	environ, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil || !slices.Contains(strings.Split(string(environ), "\x00"), "COMPOSE_PROJECT_NAME="+compose) {
 		return false
 	}
 	args := strings.Split(string(cmdline), "\x00")
@@ -321,14 +342,17 @@ func isDataImport(pid int) bool {
 }
 
 // recordWriter adds the import hook's process group (pgid, add) to the
-// record (syncState), or with add false removes every writer line: the
-// next lock-taker ends a hook a killed devopsy left by it.
-func recordWriter(cwd string, pgid int, add bool) error {
+// record (syncState), down when its service was not running before the
+// import, or with add false removes every writer line: the next
+// lock-taker ends a hook a killed devopsy left by it, and starts the
+// service again later only if it ran.
+func recordWriter(cwd string, pgid int, add, down bool) error {
 	rec, _ := readSyncRecord(cwd)
 	if add {
 		rec.writers = append(rec.writers, pgid)
+		rec.writerDown = down
 	} else {
-		rec.writers = nil
+		rec.writers, rec.writerDown = nil, false
 	}
 	return rec.write(cwd)
 }

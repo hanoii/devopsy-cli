@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // DataLabel says the service has data and how it moves, in syncs and
@@ -255,6 +256,15 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		}
 		sort.Strings(cs.Dirs)
 		sort.Strings(cs.Excluded)
+		// Copies name entries in space-separated lists (the child's,
+		// exclude) and rsync modules: a name with whitespace would split.
+		if cs.Transfer == DataMnt {
+			for _, d := range append(slices.Clone(cs.Dirs), cs.Excluded...) {
+				if strings.ContainsFunc(d, unicode.IsSpace) {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name: rename it", name, d)
+				}
+			}
+		}
 		for dep := range s.DependsOn {
 			cs.DependsOn = append(cs.DependsOn, dep)
 		}

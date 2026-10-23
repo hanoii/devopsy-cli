@@ -719,12 +719,12 @@ func runImport(cwd string, args []string, color bool) int {
 			report.Info("importing " + name)
 			started := func(pid int) {
 				if onTarget {
-					_ = recordWriter(cwd, pid, true)
+					_ = recordWriter(cwd, pid, true, !wasUp)
 				}
 			}
 			err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), in2, nil, started, "import", name)
 			if onTarget {
-				_ = recordWriter(cwd, 0, false)
+				_ = recordWriter(cwd, 0, false, false)
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
