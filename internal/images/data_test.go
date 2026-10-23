@@ -1022,3 +1022,42 @@ func TestDataForcedReleaseFailingEarlyKeepsHistory(t *testing.T) {
 		m.fail("a tag pushed back after a forced release failed early (%v): the database runs %s, want I2", err, m.runs("database"))
 	}
 }
+
+// Bug: a refused release puts every pulled name back on what it held
+// when its own fetch began (SaveNames), whatever moved it since: another
+// environment's release that pulled the same name meanwhile (fetches
+// share the image lock) has it moved back under it, so that
+// environment's run step or next plain up runs the older image its
+// release never gave it (rule 4: no environment moves another's
+// images), a patch undone.
+func TestDataRefusalLeavesOthersNames(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	d.publish("caddy:2-alpine", "C1")
+	prod.release(false, dbSvc("mariadb:11.8.3"), proxySvc)
+	stage.release(false, dbSvc("mariadb:11.8.3"), proxySvc)
+	// caddy patched upstream; prod starts a release bumping its pin,
+	// which its data never ran: refused once its fetch ends.
+	d.publish("caddy:2-alpine", "C2")
+	d.publish("mariadb:11.8.9", "I2")
+	r := prod.e.release(dbSvc("mariadb:11.8.9"), proxySvc)
+	if err := prod.e.set.SaveNames(prod.e.rel(r)); err != nil {
+		t.Fatal(err)
+	}
+	// Meanwhile stage releases, pulling the patched caddy.
+	if _, err := stage.release(false, dbSvc("mariadb:11.8.3"), proxySvc); err != nil || stage.runs("alwaysup") != "C2" {
+		t.Fatalf("stage's release (%v): %s\n%s", err, stage.runs("alwaysup"), out.String())
+	}
+	prod.fetch(prod.e.svcs[r])
+	if err := prod.e.set.Record(prod.e.rel(r), prod.prev()); !errors.Is(err, ErrRefused) {
+		t.Fatalf("prod's pin bump not refused: %v\n%s", err, out.String())
+	}
+	prod.e.set.Undo(prod.e.rel(r), prod.prev(), false)
+	// stage's next plain up runs what its release gave it.
+	stage.up()
+	if got := stage.runs("alwaysup"); got != "C2" {
+		t.Errorf("stage's alwaysup runs %s after prod's refused release, want C2, which its own release pulled and gave it (caddy:2-alpine is %s)\n%s", got, d.names["caddy:2-alpine"], out.String())
+	}
+}
