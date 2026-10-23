@@ -572,30 +572,34 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   from a release by them). A step that needs the address is a command
   with `## Needs: target`, which gets it in `DEVOPSY_COMMAND_TARGET`.
   Without steps, devopsy prints a starting point.
-- **The names check:** containers of the release's compose project from
-  another environment's directory fail the release before `prepare`.
-  Names are joined with `-`, so instance `a-b` of `c` and instance `a` of
-  `b-c` are both `<project>-a-b-c`, and Compose would take the other's
-  containers and volumes as its own. Rename an instance or environment.
-- **The networks check:** a network the compose file names as its own
-  (not `external`) that belongs to another compose project on the server
-  fails the release before `prepare`: Compose would silently share it,
-  and the two projects' containers would reach each other by service
-  name. Name a project's networks from `COMPOSE_PROJECT_NAME`; to reach
-  another project, join its network as `external`.
-- **The mounts check:** a writable bind mount in the release's tree, data
-  or an owner with no entry of `mnt`, an entry with two owners, `./mnt`
-  whole as data, fail the release before `prepare` ("Data and mounts",
-  below).
-- **The owners:** right after the switch, before a sync and the run
-  step, the entries of `mnt` the labels own are created when missing and
-  given to their owners (`devopsy.mnt.owner`, "Data and mounts"); a
-  failure fails the release as its run step would.
 - **The variables check:** after `prepare`, devopsy checks that every
   variable compose requires (`${VAR:?message}`) is set there, env capability
   included. A missing one fails the release before it goes live, listing the
   variables and the `--vars set` line. Generate secrets in `prepare` so the
   check finds them, and name them in `secrets:`.
+- **The names check:** containers of the release's compose project from
+  another environment's directory fail the release before it goes live,
+  after `prepare` and the variables check (compose cannot read its
+  files while a variable they require is missing). Names are joined
+  with `-`, so instance `a-b` of `c` and instance `a` of `b-c` are both
+  `<project>-a-b-c`, and Compose would take the other's containers and
+  volumes as its own. Rename an instance or environment.
+- **The networks check:** a network the compose file names as its own
+  (not `external`) that belongs to another compose project on the server
+  fails the release before it goes live, after `prepare` and the
+  variables check: Compose would silently share it, and the two
+  projects' containers would reach each other by service name. Name a
+  project's networks from `COMPOSE_PROJECT_NAME`; to reach another
+  project, join its network as `external`.
+- **The mounts check:** a writable bind mount in the release's tree, data
+  or an owner with no entry of `mnt`, an entry with two owners, `./mnt`
+  whole as data, a bind mount from below an owned entry, fail the
+  release before it goes live, after `prepare` and the variables check
+  ("Data and mounts", below).
+- **The owners:** right after the switch, before a sync and the run
+  step, the entries of `mnt` the labels own are created when missing and
+  given to their owners (`devopsy.mnt.owner`, "Data and mounts"); a
+  failure fails the release as its run step would.
 - **Images:** after the checks, devopsy gets the release's images, by
   `mode:`, on the server and before it goes live: in build mode `docker
   compose pull --ignore-buildable` (services without a `build:`) then
