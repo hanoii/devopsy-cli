@@ -323,16 +323,28 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			if v.Type != "bind" {
 				continue
 			}
-			d := mntEntry(filepath.Clean(v.Source), mnts)
-			if rel := mntPath(filepath.Clean(v.Source), mnts); d != "" && d != "." && !slices.Contains(cs.Binds, rel) {
-				cs.Binds = append(cs.Binds, rel)
-			}
-			if d == "" && !v.ReadOnly {
-				if r := resolvePath(filepath.Clean(v.Source)); mntEntry(r, mnts) == "" {
-					if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
-						cs.TreeBinds = append(cs.TreeBinds, rel)
-					}
+			// What a bind is in mnt goes by its source as written (on
+			// servers through .devopsy/mnt, the link to shared/mnt); what
+			// the mounts check refuses goes by that and by where its
+			// links lead too (Docker mounts that), so a link in the
+			// release to below an owned entry, or one in shared/mnt into
+			// the release, is judged by where it leads.
+			src := filepath.Clean(v.Source)
+			r := resolvePath(src)
+			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
+			for _, rel := range []string{mntPath(src, mnts), mntPath(r, mnts)} {
+				if rel != "" && rel != "." && !slices.Contains(cs.Binds, rel) {
+					cs.Binds = append(cs.Binds, rel)
 				}
+			}
+			if rd == "" && !v.ReadOnly {
+				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
+					cs.TreeBinds = append(cs.TreeBinds, rel)
+				}
+			}
+			if rd == "." && d != "." {
+				cs.WholeMnt = cs.WholeMnt || !v.ReadOnly
+				continue
 			}
 			if d == "." {
 				// mnt whole is no entry: it would carry every other
@@ -417,8 +429,15 @@ func mntPath(source string, mnts []string) string {
 
 // resolvePath is p with its symbolic links resolved, as far as it
 // exists: what is missing (Docker creates a bind's source) is joined as
-// written.
+// written, and a link whose target is missing is followed to where it
+// leads all the same (what it points to may be made later).
 func resolvePath(p string) string {
+	return resolveLinks(p, 0)
+}
+
+// resolveLinks is resolvePath, depth links followed so far: past 40 (a
+// loop) the path stays as it is.
+func resolveLinks(p string, depth int) string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		return r
 	}
@@ -426,7 +445,15 @@ func resolvePath(p string) string {
 	if parent == p {
 		return p
 	}
-	return filepath.Join(resolvePath(parent), filepath.Base(p))
+	rp := resolveLinks(parent, depth)
+	full := filepath.Join(rp, filepath.Base(p))
+	if t, err := os.Readlink(full); err == nil && depth < 40 {
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(rp, t)
+		}
+		return resolveLinks(t, depth+1)
+	}
+	return full
 }
 
 // MntOwners are the owners of the entries of mnt, entry to <uid>:<gid>
