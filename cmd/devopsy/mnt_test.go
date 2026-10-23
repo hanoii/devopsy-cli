@@ -113,6 +113,17 @@ func TestMntOwnersRelease(t *testing.T) {
 	if docker, _ := s.logs(); code == 0 || s.current("prod") != second || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "nothing changed: current is still") || strings.Contains(out, "current is now") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("a rollback without the util image (%d), current %q, want %q:\n%s\n%s", code, s.current("prod"), second, out, docker)
 	}
+	// Two owners on one entry in the restored release: labels its
+	// owners' step cannot read, so the check before the switch only
+	// warns too.
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT=/db FAKE_APP_OWNER=1:1 FAKE_DB_OWNER=2:2\n", 0o644)
+	out, code = s.run(nil, "@prod", "--rollback")
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | ./mnt/db is written by") {
+		t.Errorf("a rollback to a release with two owners on an entry (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
+	}
+	write(t, s.log+".shop-prod", "", 0o644)
+	s.releaseProd(nil)
+	s.logs()
 	write(t, s.log+".shop-prod", "FAKE_APP=old\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
 	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {

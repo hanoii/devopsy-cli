@@ -218,6 +218,11 @@ func runCheckMounts(cwd string, args []string) int {
 		return 2
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	if restored && err == nil {
+		// Two owners on one entry: --mnt-owners restored reads them as
+		// labels it cannot read.
+		_, err = cli.MntOwners(services)
+	}
 	switch {
 	case restored && err != nil:
 		report.Warn("the restored release's labels cannot be read: the entries of mnt will keep their owners", err.Error())
