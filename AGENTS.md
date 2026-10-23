@@ -998,8 +998,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   entries' own, never locally on macOS (review of 2026-10-23, round 2:
   as before `up`, and Docker Desktop's file sharing may refuse a
   chown); a reset, after `emptyMnt`;
-  locally before compose's `up`, `start`, `run`, `create`, `watch`
-  and `scale`
+  locally before compose's `up`, `start`, `restart`, `run`,
+  `create`, `watch` and `scale` (review of 2026-10-23, round 3:
+  `restart` starts containers, and Docker makes a missing entry root's)
   (`Plan.Starts`, only when the compose files' YAML has the label or an
   `include:` or `extends:` key, comments left out: no compose config for
   every command, and every template's comments say "included"; the
