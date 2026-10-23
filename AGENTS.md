@@ -509,6 +509,11 @@ step's rules):
    `--check-mounts` (`cli.CheckMounts`, Data, destroying and removing),
    which also readies `UtilImage` when an entry is owned, so a registry
    down refuses the release instead of failing it after its switch.
+   Rollbacks run `--check-mounts restored` in the release they restore
+   instead: no label refuses (unreadable ones warn), only what its
+   `--mnt-owners restored` needs, the util image and no owned entry a
+   link (review of 2026-10-23, round 2: an image pruned since failed the
+   rollback after its switch).
 7. The images (`fetch_release`, Images). `ServerLogFile` is created
    here, so a full disk fails the release before it goes live.
 8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
@@ -1023,9 +1028,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   (`WholeMnt`, below), a bind source below an owned entry
   (`Binds`), and an owned entry that is a symbolic link in `shared/mnt`
   (`ownedLinks`: Docker would mount what
-  it points to, for the owners' step to give away; the util container
-  itself never follows one, so rollbacks, which run no check, need
-  none). With an entry owned it readies `UtilImage`
+  it points to, for the owners' step to give away; `makeEntry` refuses
+  one too, wherever owners are given). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: named volumes and absolute paths. It reads the labels

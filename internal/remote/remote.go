@@ -795,6 +795,13 @@ done
 		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
+	if rollback {
+		// What the restored release's owners' step needs after the
+		// switch, and only that (its labels refuse nothing): the util
+		// image, which may have been pruned since, and no owned entry a
+		// link.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + ") || not_live 1\n"
+	}
 	if !rollback {
 		// The checks reading compose's configuration, which fails while a
 		// required variable is unset: after the prepare steps that make

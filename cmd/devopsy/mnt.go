@@ -193,30 +193,40 @@ func runMntOwners(cwd string, args []string) int {
 // (runMntOwners).
 const mntOwnersRestored = "restored"
 
-// runCheckMounts implements the hidden --check-mounts, run by an
-// activation in the new release before its switch, after its prepare
-// steps and --missing-vars (cli.CheckMounts). The labels are read as
-// --mnt-owners reads them after the switch (cli.SyncServices, the
-// leftover sync capability included), so a release this passes never
-// fails there for its labels. A compose configuration that cannot be
-// read is no refusal, as for --check-names: the release's up says what
-// is wrong with it. With an entry owned, it also refuses an owned entry
-// that is a symbolic link (ownedLinks), and readies the util image the
-// owners' step runs after the switch, so a registry down refuses the
+// runCheckMounts implements the hidden --check-mounts [restored], run
+// by an activation in the new release before its switch, after its
+// prepare steps and --missing-vars (cli.CheckMounts). The labels are
+// read as --mnt-owners reads them after the switch (cli.SyncServices,
+// the leftover sync capability included), so a release this passes
+// never fails there for its labels. A compose configuration that cannot
+// be read is no refusal, as for --check-names: the release's up says
+// what is wrong with it. With an entry owned, it also refuses an owned
+// entry that is a symbolic link (ownedLinks), and readies the util image
+// the owners' step runs after the switch, so a registry down refuses the
 // release instead of failing it there.
+//
+// restored is a rollback's, in the release it restores: what
+// --mnt-owners restored needs after the switch and only that, so an
+// image pruned since fails the rollback before it changes anything. Its
+// labels refuse nothing, as rollbacks never check roles or imports:
+// labels this devopsy cannot read are a warning, and the owners' step
+// gives nothing away then.
 func runCheckMounts(cwd string, args []string) int {
-	if len(args) > 0 {
-		report.Error(cli.CheckMountsFlag + " takes nothing")
+	restored := len(args) == 1 && args[0] == mntOwnersRestored
+	if len(args) > 0 && !restored {
+		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored)
 		return 2
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
-	if errors.Is(err, cli.ErrComposeConfig) {
+	switch {
+	case restored && err != nil:
+		report.Warn("the restored release's labels cannot be read: the entries of mnt will keep their owners", err.Error())
 		return 0
-	}
-	if err != nil {
+	case errors.Is(err, cli.ErrComposeConfig):
+		return 0
+	case err != nil:
 		err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
-	}
-	if err == nil {
+	case !restored:
 		err = cli.CheckMounts(services)
 	}
 	if err == nil {
@@ -246,7 +256,7 @@ func checkOwned(projectDir string, services []cli.SyncService) error {
 			details = append(details, "mnt/"+l+" is a symbolic link")
 		}
 		return &report.Failure{
-			Msg:     "an owned entry of mnt goes through a symbolic link: Docker would mount what it points to, and devopsy give that to the entry's owner: the release does not go live",
+			Msg:     "an owned entry of mnt is a symbolic link: Docker would mount what it points to, and devopsy give that to the entry's owner: the release does not go live",
 			Details: details,
 			Fixes:   []report.Remedy{report.Fix("make each a directory of its own in shared/mnt, moving what it points to there")},
 		}

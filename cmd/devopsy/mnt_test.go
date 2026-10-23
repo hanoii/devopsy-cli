@@ -86,17 +86,27 @@ func TestMntOwnersRelease(t *testing.T) {
 
 	// A rollback gives owners by the restored release's labels; labels
 	// this devopsy cannot read there (here a name from before
-	// devopsy.data) only warn, nothing given away: a rollback never fails
-	// for them, as it never checks roles or imports (review of
-	// 2026-10-23: it failed, and current went back).
+	// devopsy.data) only warn, before the switch and after it, nothing
+	// given away: a rollback never fails for them, as it never checks
+	// roles or imports (review of 2026-10-23: it failed, and current
+	// went back).
 	first := s.current("prod")
 	s.releaseProd(nil)
 	if s.current("prod") == first {
 		t.Fatalf("second release did not go live")
 	}
+	// The util image the restored release's owners need, gone since (a
+	// prune) and not buildable: the rollback fails before its switch,
+	// nothing changed (review of 2026-10-23, round 2: it failed after
+	// the switch, and went back).
+	second := s.current("prod")
+	out, code = s.run([]string{"FAKE_NO_UTIL=1", "FAIL_UTIL_BUILD=1"}, "@prod", "--rollback")
+	if docker, _ := s.logs(); code == 0 || s.current("prod") != second || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "nothing changed: current is still") || strings.Contains(out, "current is now") || strings.Contains(docker, "devopsy-owners-") {
+		t.Errorf("a rollback without the util image (%d), current %q, want %q:\n%s\n%s", code, s.current("prod"), second, out, docker)
+	}
 	write(t, s.log+".shop-prod", "FAKE_APP=old\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") {
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") {
 		t.Errorf("a rollback to a release with older labels (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
