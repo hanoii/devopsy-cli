@@ -125,6 +125,19 @@ func TestCheckMountsRelease(t *testing.T) {
 	if code == 0 || s.current("slow") != "" || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "not made current") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("no util image (%d), current %q:\n%s\n%s", code, s.current("slow"), out, docker)
 	}
+
+	// What the owners' step refuses after the switch, the check refuses
+	// before it (or neither does): here a leftover
+	// .devopsy/capabilities/sync/, which SyncServices refuses and
+	// ParseSyncServices never looks at. Review of 2026-10-23 (round 2):
+	// the check passed, the release went live and failed in
+	// --mnt-owners, for a project with no owner at all (on main, a
+	// release that does not sync never read it).
+	write(t, filepath.Join(s.dot, "capabilities", "sync", "prepare"), "#!/bin/sh\nexit 0\n", 0o755)
+	out, code = s.run(nil, "@prod", "--release")
+	if code != 0 && strings.Contains(out, "current is now") {
+		t.Errorf("refused after the switch, not before (%d), current %q:\n%s", code, s.current("prod"), out)
+	}
 }
 
 // A reset gives the owned entries back to their owners once mnt is
