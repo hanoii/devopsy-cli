@@ -297,7 +297,7 @@ func TestMntOwnerFeature(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"activate", "activate+sync", "rollback+cmd"} {
-		if got := Needs(allScripts()[name]); !slices.Contains(got, "mnt-owners") || slices.Contains(got, "check-mounts") != (name != "rollback+cmd") {
+		if got := Needs(allScripts()[name]); !slices.Contains(got, "mnt-owners") || !slices.Contains(got, "check-mounts") {
 			t.Errorf("%s: %v", name, got)
 		}
 	}

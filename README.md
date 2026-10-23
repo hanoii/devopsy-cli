@@ -820,7 +820,10 @@ meanwhile can lead nowhere else:
   release as its run step would: the previous one comes back. In a
   rollback or a restart, labels that cannot be read (names from before
   a change, a compose error) are only a warning, nothing given away: a
-  rollback never fails for its release's labels;
+  rollback never fails for its release's labels. Before its switch, a
+  rollback makes sure `devopsy-util` is there when the release it
+  restores owns entries, so an image pruned since fails it before
+  anything changes;
 - **a sync**: an entry the child owns lands as the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files are;
 - **an `--import`** of a `mnt` service: what it extracted goes to its
