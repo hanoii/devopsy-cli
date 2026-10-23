@@ -1633,6 +1633,14 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   digests (`repoKey`), so holding the same image never changes the
   reference compose sees. A signal during `img names` stops the fetch
   before it pulls.
+- **And the fourth:** the child's image a sync checks, and the one its
+  history's last line names, is the one its own name holds on its
+  server (`ownImage`: its pin, its mirror's tag), never the parent's it
+  is held on, so a series `--yes` let through needs `--yes` on every
+  sync and stays refused for the child's own releases; that line takes
+  the child's own digests, which its server resolves. The parent's `old`
+  line reaches the child (`remote.ParseParentData`). A sync's check or a
+  restore that fails removes what it pulled by digest before.
 
 ### Streams
 

@@ -42,7 +42,17 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // Never a pulled name retagged: another environment may run it. Every
 // service that does not go back says why. Every check comes before any
 // change, so a failure changes nothing but pulls.
-func (s *Set) Restore(target, against string, fetched bool) error {
+func (s *Set) Restore(target, against string, fetched bool) (err error) {
+	// What it pulled by digest goes when it fails: a name by digest alone
+	// that no listing names would never be removed.
+	var pulled []string
+	defer func() {
+		if err != nil {
+			for _, p := range pulled {
+				_ = s.Docker.Remove(p)
+			}
+		}
+	}()
 	tid := filepath.Base(target)
 	svcs, err := s.List(target)
 	if err != nil {
@@ -195,6 +205,7 @@ func (s *Set) Restore(target, against string, fetched bool) error {
 					es = append(es, s.entryOf(svc, svc.Ref))
 					continue
 				}
+				pulled = append(pulled, st.hold)
 				s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
 			}
 			e := s.entryOf(svc, st.hold)

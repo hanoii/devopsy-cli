@@ -1562,8 +1562,14 @@ func TestSyncTwiceThenOwnSeriesRefused(t *testing.T) {
 	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
 		t.Fatalf("--sync --yes (%v): %s\n%s", err, dev.runs("database"), out.String())
 	}
-	// A second sync from prod, which still runs P8.
-	if err := syncInto(t, prod, dev, false); err != nil || dev.runs("database") != "P8" {
+	// A second sync from prod, which still runs P8: dev's own name is
+	// still a series prod's data never ran, so --yes on every sync
+	// (decision 7).
+	out.Reset()
+	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the second sync without --yes (%v)\n%s", err, out.String())
+	}
+	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
 		t.Fatalf("the second sync (%v): %s\n%s", err, dev.runs("database"), out.String())
 	}
 	// mariadb:11.4 moves on upstream; dev's next release, still on it.
@@ -1629,5 +1635,36 @@ func TestSyncRefusedPullLeavesNothing(t *testing.T) {
 			}
 		}
 		t.Errorf("prod's database image, pulled for the refused sync, stays once the child's releases are gone: %v", ns)
+	}
+}
+
+// A restore that fails on a later hold's pull leaves no image it pulled
+// by digest before: nothing would ever remove a name by digest alone.
+func TestRestoreFailingPullLeavesNothing(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	a, b := Service{Name: "a", Ref: "mariadb:11.8", Data: true, Method: DataMnt}, Service{Name: "b", Ref: "postgres:17", Data: true, Method: DataMnt}
+	d.publish("mariadb:11.8", "A1")
+	d.publish("postgres:17", "B1")
+	r1, _ := m.release(false, a, b)
+	r2, _ := m.release(false, a, b)
+	// Both gone from this server; the registry still serves A1 only.
+	for n, i := range d.names {
+		if i == "A1" || i == "B1" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "A1")
+	delete(d.images, "B1")
+	d.containers = nil
+	d.registry = map[string][]string{"A1": {"mariadb@A1"}}
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r2), false); err == nil {
+		t.Fatal("restored with b's image gone everywhere")
+	}
+	for n, i := range d.names {
+		if i == "A1" {
+			t.Errorf("a's image pulled for the failed restore stays as %s", n)
+		}
 	}
 }

@@ -204,10 +204,7 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 		}
 		mine = append(mine, e)
 		n := len(refused)
-		img := Image{ID: e.ID}
-		if i, err := s.Docker.Inspect(e.ID); err == nil {
-			img = i
-		}
+		img := s.ownImage(e)
 		last := ran{Ref: p.Ref, ID: p.Image.ID, Digests: p.Image.Digests}
 		switch {
 		case last.is(img), familiar(p.Ref) == familiar(e.Ref):
@@ -240,6 +237,7 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 		s.sayAll(report.WarnLevel, "--yes: syncing anyway, the child held on the parent's images after the copy:", refused)
 	}
 	var extra []entry
+	var pulled []string
 	for _, e := range mine {
 		hold := s.localHold(e, ps[e.Service])
 		if hold == "" {
@@ -249,8 +247,14 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 			if err := s.Docker.Pull(hold); err != nil {
 				s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: the parent's image %s could not be pulled here: nothing changed", e.Service, hold), []string{err.Error()},
 					report.Fix("the child's server needs the registry's image the parent's data last ran"))
+				// What it pulled before goes: a name by digest alone nothing
+				// would ever remove.
+				for _, p := range pulled {
+					_ = s.Docker.Remove(p)
+				}
 				return nil, ErrRefused
 			}
+			pulled = append(pulled, hold)
 			s.say(report.InfoLevel, "%s: pulled the parent's image %s", e.Service, hold)
 		}
 		extra = append(extra, s.entryOf(Service{Name: syncPrefix + e.Service, Ref: hold}, hold))
@@ -342,15 +346,17 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 		if !known {
 			w = append(w, ranOn(e.Service, Ran, p.Ref, p.Image, s.now()))
 		}
-		mine := Image{ID: e.ID}
-		if i, err := s.Docker.Inspect(e.ID); err == nil {
-			mine = i
-		}
-		// Only when the child ran the very image under its name (a
-		// mirror): another series --yes let through stays one its data
-		// never ran.
+		// Only when the child's own name holds the very image (a mirror):
+		// another series --yes let through stays one its data never ran.
+		// Its digests are the child's, so a hold of it is one the child's
+		// server can resolve.
+		mine := s.ownImage(e)
 		if last := w[len(w)-1]; last.is(p.Image) && last.is(mine) && familiar(last.Ref) != familiar(e.Ref) {
-			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: last.Digests})
+			ds := mine.Digests
+			if len(ds) == 0 {
+				ds = last.Digests
+			}
+			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: ds})
 		}
 		w[0].How = SyncedFrom + from
 		h = append(kept, w...)
@@ -429,3 +435,18 @@ func readHistoryText(text string) history {
 
 // baseOfRel is rel's environment directory, for callers outside.
 func BaseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
+
+// ownImage is the image the child's own name for e's service holds on
+// this server (its pin, its mirror's tag), else the image it runs: what
+// its next release would run, which the parent's data must take.
+func (s *Set) ownImage(e entry) Image {
+	if !strings.Contains(e.Ref, "@") {
+		if img, err := s.Docker.Inspect(e.Ref); err == nil {
+			return img
+		}
+	}
+	if img, err := s.Docker.Inspect(e.ID); err == nil {
+		return img
+	}
+	return Image{ID: e.ID}
+}

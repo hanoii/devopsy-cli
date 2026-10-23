@@ -807,7 +807,7 @@ fi
 func ParseParentData(out string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") {
+		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") || strings.HasPrefix(line, "old\t") {
 			b.WriteString(strings.TrimRight(line, "\r") + "\n")
 		}
 	}
