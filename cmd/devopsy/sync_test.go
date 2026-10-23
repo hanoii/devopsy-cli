@@ -147,6 +147,9 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
+  "run --rm --name devopsy-sync-"*"-wipe "*)
+    for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
+    find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-sync-"*"-receive --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done

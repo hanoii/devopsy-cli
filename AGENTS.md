@@ -1036,8 +1036,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `partial` (decided: nothing written leaves an earlier sync's partial
   copy as it was, even when the parent's labels cover nothing now, and
   only it: `finish partial` starts again what this sync stopped,
-  `restoreOwnStops`, so only what was down at its prepare, the
-  record's `held` lines, stays down), else the answer; the taken record goes once finish is done.
+  `restoreOwnStops`, the record's `own <sync id> <name>` lines that
+  `stopServices` writes, so what was down before stays down; none when
+  its prepare failed before stopping, and never another sync's: a
+  record of what was down before, written in prepare, missed a prepare
+  failing earlier and started the import's set), else the answer; the
+  taken record goes once finish is done.
 - **No write outlives its sync** (`endWriters`, cmd/devopsy/writers.go):
   before a partial copy is marked (`finish partial`) or settled, what
   the record names is ended. A write runs on past its sync when its
@@ -1285,8 +1289,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   import or `--resolved`, whose mark and record are written together),
   one down on purpose included. One left by an earlier sync or import
   that could not restore is kept and added to (`syncRecord`, rewritten
-  whole, `writer <pgid>` lines kept), what it holds already marked
-  `held <name>` by the next prepare.
+  whole, `writer <pgid>` lines kept), and what a sync stops itself is
+  marked `own <sync id>`.
 - **Restoring brings back only the recorded services,** whatever their
   labels say now (an inherited variable may have changed them since a
   cut sync), from container state (exited), so it also recovers after an interrupted sync, and a
@@ -1445,7 +1449,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   marked, down). `--sync-services wipe` (`wipeData`): an import's
   leftover containers, `compose --profile '*' down --volumes
   --remove-orphans` (no `--rmi`: the release's images stay),
-  `emptyMnt` (shared with `--destroy-data`), and the record set to
+  `emptyMnt` (shared with `--destroy-data`; in a container named by the
+  sync, `<SyncContainerPrefix><id>-wipe`, so a holder deciding meanwhile
+  removes it, and in `syncImport` after its writer line), and the record set to
   `first` with nothing stopped, so `finish go` creates the services
   with data and the child's set and the run step the rest. Its
   `shared/.env` and release stay.
@@ -1453,7 +1459,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`syncConflicts`: nothing of the child runs under the copy) and the
   import mark's `copiesService` (it replaces everything); the stream
   mismatches stay (the child's import would refuse). A parent with no
-  data refuses (it would only empty the child: `--destroy` does). On
+  data refuses (it would only empty the child: `--destroy` does), and
+  so does one whose labeled entries are all missing there with no
+  stream (the rsync skips them, so nothing would claim and wipe). On
   an environment without a parent `syncPreflight` refuses, as for
   `--sync`.
 - **A named feature, `reset`,** found by `--sync-push reset` and
