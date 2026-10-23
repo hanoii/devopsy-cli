@@ -117,9 +117,24 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if st.hold == "" && haveAg && a.Digest != "" {
 				st.hold = a.Digest
 			}
-			if st.hold == "" {
+			if st.hold == "" && own {
+				// Built, and nothing to hold it by (no registry digest, as on
+				// Docker's classic store): its build, from its bookmark.
+				st.kind = KindOwn
+				if fetched {
+					break
+				}
+				i := indexOf(old, o)
+				if !haveOld || o.ID == "" || i < 0 {
+					return s.gone(tid, svc)
+				}
+				if _, err := s.Docker.ID(names[i]); err != nil {
+					return s.gone(tid, svc)
+				}
+				st.retag = names[i]
+			} else if st.hold == "" {
 				// Nothing ever ran on its data that devopsy knows of: like any
-				// pulled image whose name did not change.
+				// other pulled image.
 				st.kind = KindPulled
 			}
 		default:

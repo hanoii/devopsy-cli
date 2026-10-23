@@ -1724,3 +1724,36 @@ func TestBuiltDatabaseAfterPulled(t *testing.T) {
 		t.Errorf("a database always built (%v), history %v", err, readHistory(other.base()))
 	}
 }
+
+// A built database whose history ends on a build without a registry
+// digest (Docker's classic store) rolls back to its build, from its
+// bookmark, never a pull of its build's name.
+func TestRollbackBuiltDatabaseWithoutDigest(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	r2, err := m.release(true, built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.release(false, built)
+	// Classic store: builds carry no digests.
+	for id := range d.images {
+		if strings.HasPrefix(id, "app-prod-build") {
+			d.digests[id] = nil
+		}
+	}
+	h := readHistory(m.base())
+	for i := range h {
+		if strings.HasPrefix(h[i].ID, "app-prod-build") {
+			h[i].Digests = nil
+		}
+	}
+	h.write(m.base())
+	if err := m.rollback(r2); err != nil {
+		t.Errorf("rollback to a release that built its database (%v)\n%s", err, out.String())
+	}
+}
