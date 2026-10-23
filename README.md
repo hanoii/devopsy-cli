@@ -842,7 +842,9 @@ meanwhile can lead nowhere else:
   command. On macOS, Docker Desktop and OrbStack let any container user
   write the Mac's files, so only the directories are made. Labels that
   cannot be read are only a warning: the command goes on, and compose
-  says what is wrong with its files. The labels come from the project's
+  says what is wrong with its files. So is an owned entry that is a
+  symbolic link (an entry shared between worktrees): it is left as it
+  is, and Docker mounts what it points to. The labels come from the project's
   compose files (`compose.yaml` and its override), never from one a
   command adds with `-f`. In a release on a server these commands do
   none of it: each release's switch did.

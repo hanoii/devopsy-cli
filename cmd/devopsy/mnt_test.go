@@ -263,6 +263,28 @@ func TestMntOwnersLocal(t *testing.T) {
 			t.Errorf("%v (%d), the util container %v:\n%s\n%s", args, code, container, out, docker)
 		}
 	}
+	// An owned entry that is a symbolic link (an entry shared between
+	// worktrees, a database on another disk) is a warning naming it, left
+	// as it is, and the command goes on: Docker mounts what it points to,
+	// the developer's choice locally (review of 2026-10-23, round 3:
+	// makeEntry refused it and every up failed before compose; on a
+	// server the mounts check refuses one before the switch).
+	os.RemoveAll(filepath.Join(s.dot, "mnt"))
+	elsewhere := filepath.Join(t.TempDir(), "storage")
+	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.dot, "mnt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(s.dot, "mnt", "storage")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(owned, "up", "-d")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: mnt/storage is a symbolic link: devopsy leaves it and what it points to as they are") || strings.Contains(docker, "devopsy-owners-") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
+		t.Errorf("up with a linked owned entry (%d):\n%s\n%s", code, out, docker)
+	}
+	os.RemoveAll(filepath.Join(s.dot, "mnt"))
 	if runtime.GOOS == "darwin" {
 		return
 	}
@@ -434,35 +456,6 @@ func TestImportResolvedGivesOwners(t *testing.T) {
 	}
 	if !strings.Contains(docker, "--mount type=bind,source="+s.mnt("prod")+"/storage,target=/mnt/storage devopsy-util:2") {
 		t.Errorf("--resolved started the services on mnt/storage as the tar left it, never given to 10001:10001:\n%s\n%s", errs, docker)
-	}
-}
-
-// The local owners' step never stops a compose command (round 2's rule:
-// a label devopsy reads must never stop a plain up), yet an owned entry
-// that is a symbolic link locally (an entry shared between worktrees, a
-// database on another disk) fails every up before compose runs: makeEntry
-// refuses it, on macOS and Linux alike (review of 2026-10-23, round 3).
-// On a server the mounts check refuses one before the switch; locally
-// Docker mounts what it points to, which is what the developer chose, so
-// it is at most a warning.
-func TestMntOwnersLocalLinkedEntry(t *testing.T) {
-	s := newSyncSetup(t)
-	compose := filepath.Join(s.dot, "compose.yaml")
-	write(t, compose, readString(compose)+"    labels: [devopsy.mnt.owner=10001:10001]\n", 0o644)
-	elsewhere := filepath.Join(t.TempDir(), "storage")
-	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(s.dot, "mnt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, filepath.Join(s.dot, "mnt", "storage")); err != nil {
-		t.Fatal(err)
-	}
-	out, code := s.run([]string{"FAKE_APP_OWNER=10001:10001"}, "up", "-d")
-	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "compose -f "+compose+" up -d") {
-		t.Errorf("up with a linked owned entry (%d) never ran compose:\n%s\n%s", code, out, docker)
 	}
 }
 

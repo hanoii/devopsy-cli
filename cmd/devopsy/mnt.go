@@ -294,7 +294,11 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 // error) are a warning and the command goes on: it is compose's, which
 // says what is wrong with its files, and a label devopsy reads must
 // never stop a plain up (on a server, a rollback's run step:
-// cli.Plan.Starts is never set in a release there).
+// cli.Plan.Starts is never set in a release there). For the same reason
+// an owned entry that is a symbolic link (an entry shared between
+// worktrees, a database on another disk) is a warning, left as it is:
+// Docker mounts what it points to, which is the developer's choice
+// locally (on a server the mounts check refuses one).
 func localMnt(cwd string) error {
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil {
@@ -305,9 +309,12 @@ func localMnt(cwd string) error {
 		return nil
 	}
 	wrong := map[string]string{}
-	for e, o := range owners {
+	for _, e := range slices.Sorted(maps.Keys(owners)) {
+		o := owners[e]
 		fi, err := os.Lstat(filepath.Join(mnt, e))
 		switch {
+		case err == nil && fi.Mode()&os.ModeSymlink != 0:
+			report.Warn("mnt/"+e+" is a symbolic link: devopsy leaves it and what it points to as they are, not giving it to "+o, "Docker mounts what it points to")
 		case runtime.GOOS == "darwin":
 			if err := makeEntry(mnt, e); err != nil {
 				return err
