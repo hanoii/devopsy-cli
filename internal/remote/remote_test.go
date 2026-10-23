@@ -1040,6 +1040,24 @@ func fakeImageTools(t *testing.T, bin string) {
 	t.Helper()
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 f() { echo "$FAKE_ROOT/images/$(echo "$1" | tr '/' '_')"; }
+# A name by digest (<repository>@<id>) finds the image a tag of that
+# repository holds, as Docker finds an image pulled by tag by its digest.
+if [ "$1 $2" = "image inspect" ]; then
+  eval "n=\${$#}"
+  case $n in *@*)
+    if [ ! -f "$(f "$n")" ]; then
+      for t in "$FAKE_ROOT"/images/*; do
+        [ -f "$t" ] || continue
+        tn=$(echo "${t##*/}" | tr '_' '/')
+        case $tn in *@*) continue ;; esac
+        if [ "${tn%:*}" = "${n%@*}" ] && [ "$(cat "$t")" = "${n#*@}" ]; then
+          if [ $# -eq 3 ]; then set -- "$1" "$2" "$tn"; else set -- "$1" "$2" "$3" "$4" "$tn"; fi
+          break
+        fi
+      done
+    fi ;;
+  esac
+fi
 if [ -n "${FAKE_DOCKER_DOWN:-}" ]; then
   echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
   exit 1
@@ -2636,5 +2654,71 @@ func TestImgOptionsNeedDataImages(t *testing.T) {
 		if !slices.Contains(Needs(s), DataImagesFeature) {
 			t.Errorf("%s passes --mode to devopsy --images but does not need %s: %v", name, DataImagesFeature, Needs(s))
 		}
+	}
+}
+
+// Bug: when a rollback's restore finds an image the target builds gone
+// (img restore exits 1), fetch_images runs compose in the target's code,
+// where devopsy merges the target's own devopsy-compose.yaml from its
+// last activation: its old holds. Compose's pull then pulls the database's
+// old held digest, which nothing runs any more (the restore holds the
+// history's last): a registry that no longer serves it fails the rollback,
+// and one that does leaves an image pulled by digest that no release
+// lists. The fake's pull fails, as compose's would, when it sees a hold
+// on mariadb@I1 and the registry dropped it.
+func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+id=$(pwd -P); id=${id%/code}; id=${id##*/}
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"mnt"}}}}' ;;
+  "-- --profile * pull --ignore-buildable")
+    # devopsy merges the release's own compose file, unless told not to.
+    if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && grep -q 'image: "mariadb@I1"' ../devopsy-compose.yaml 2>/dev/null && [ -n "${GONE:-}" ]; then
+      echo "pulling mariadb@I1: manifest unknown" >&2
+      exit 1
+    fi
+    echo "$IMG" >"$FAKE_ROOT/images/mariadb:11.8" ;;
+  "-- build --pull") echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild, Address: "vm1:prod", Project: &Project{Name: "app"}}
+	base := filepath.Join(root, tg.Path)
+	run := func(id string, rollback bool, env ...string) (string, error) {
+		t.Helper()
+		if !rollback {
+			write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		}
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, rollback, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	current := func() string { l, _ := os.Readlink(filepath.Join(base, "current")); return l }
+	if out, err := run("1", false, "IMG=I1"); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I1"`) {
+		t.Fatalf("release 1's compose file:\n%s", got)
+	}
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
+	if out, err := run("2", false, "IMG=I2"); err != nil || current() != "releases/2/code" {
+		t.Fatalf("release 2 (%v):\n%s", err, out)
+	}
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\n")
+	// Release 1's app image gone (its bookmark removed by hand): the
+	// rollback builds it again.
+	os.Remove(filepath.Join(root, "images", "app-prod-app:devopsy-app-prod-1"))
+	out, err := run("", true, "IMG=I2", "GONE=1")
+	if err != nil || current() != "releases/1/code" {
+		t.Fatalf("rollback (%v), current %q: its fetch pulled release 1's old hold of the database:\n%s", err, current(), out)
+	}
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) {
+		t.Errorf("release 1's compose file after the rollback:\n%s", got)
 	}
 }
