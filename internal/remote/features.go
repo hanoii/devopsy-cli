@@ -19,10 +19,11 @@ import (
 // from what it calls; TestFeaturesCoverScripts fails on a flag a script
 // calls that is not listed here.
 var featureFlags = []string{
-	"check-names", "destroy-data", "export", "images", "import",
-	"missing-vars", "prepare-release", "release-id", "release-settings",
-	"release-steps", "say", "status", "stdin-guard", "sync-push",
-	"sync-services", "upgrade", "watch-session",
+	"check-mounts", "check-names", "destroy-data", "export", "images",
+	"import", "missing-vars", "mnt-owners", "prepare-release",
+	"release-id", "release-settings", "release-steps", "say", "status",
+	"stdin-guard", "sync-push", "sync-services", "upgrade",
+	"watch-session",
 }
 
 // namedFeatures are behaviors of a flag that came after it, each found
@@ -43,7 +44,16 @@ var namedFeatures = []struct {
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
 	{ResetFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push[ '\\]{1,8}reset\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}wipe\b`)},
+	// devopsy.mnt.owner in copies: the child's list gains each entry's
+	// owner, which the parent's rsync applies (--chown), and an mnt
+	// import gives what it extracted to its owner. An older parent would
+	// copy the parent's owners, an older child list none, an older
+	// server's import keep the tar's.
+	{MntOwnerFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}list\b`)},
 }
+
+// MntOwnerFeature is devopsy.mnt.owner's named feature, for copies.
+const MntOwnerFeature = "mnt-owner"
 
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"

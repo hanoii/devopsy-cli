@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -55,6 +56,56 @@ type Plan struct {
 	// Verbose lines are said at debug level (-v), before Notice. Secrets
 	// are masked.
 	Verbose []string
+	// Starts is set for a compose command that starts containers (up,
+	// start, run, create) in a project whose compose files may carry
+	// MntOwnerLabel: the caller readies mnt's owned entries first.
+	Starts bool
+}
+
+// startingCommands are compose's commands that start containers, whose
+// bind mounts Docker creates when missing, as root.
+var startingCommands = []string{"up", "start", "run", "create"}
+
+// composeValueFlags are compose's global flags that take a value as the
+// next argument.
+var composeValueFlags = []string{"--ansi", "--env-file", "-f", "--file", "--parallel", "--profile", "--progress", "-p", "--project-name", "--project-directory"}
+
+// composeCommand is the compose command in args (what follows docker
+// compose), past its global flags: "" without one.
+func composeCommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case slices.Contains(composeValueFlags, a):
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			return a
+		}
+	}
+	return ""
+}
+
+// mayOwnMnt reports whether the compose files the plan passes (after -f)
+// may carry MntOwnerLabel: the label, or a file they include or extend.
+// Read as text, so a project without the label pays no compose config
+// before every command.
+func mayOwnMnt(args []string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "-f" {
+			continue
+		}
+		data, err := os.ReadFile(args[i+1])
+		if err == nil && (bytes.Contains(data, []byte(MntOwnerLabel)) || bytes.Contains(data, []byte("include")) || bytes.Contains(data, []byte("extends"))) {
+			return true
+		}
+	}
+	return false
+}
+
+// starting sets plan.Starts for args, compose's command line after
+// docker compose.
+func (plan *Plan) starting(args []string) {
+	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && mayOwnMnt(plan.Args)
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -356,7 +407,9 @@ parent and an import of each on the child:
 
   devopsy.data=mnt     its entries of .devopsy/mnt rsynced (rsync -a
                        --delete --numeric-ids, as root in devopsy's own
-                       image, devopsy-util, built on each server)
+                       image, devopsy-util, built on each server), an
+                       entry the child owns as its owner's
+                       (devopsy.mnt.owner, --chown)
   devopsy.data=stream  the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
@@ -450,10 +503,7 @@ through SSH.
   devopsy.data=stream  the data capability's export <service> (a dump)
   devopsy.data=mnt     a tar of the entries of .devopsy/mnt it mounts
                        (devopsy.data.exclude honored), made as root in
-                       devopsy-util with numeric owners and modes. A
-                       service mounting ./mnt itself exports all of it,
-                       other services' and excluded entries included
-                       (devopsy says which)
+                       devopsy-util with numeric owners and modes
 
 Stopped meanwhile, then started again: the service when it is labeled
 devopsy.data.stop=own or always, every always service, and what depends
@@ -480,10 +530,10 @@ does anything change, and the file is removed afterwards.
                        unless stopped, and down again after if it was
   devopsy.data=mnt     a tar: each entry of mnt it carries is emptied,
                        then extracted as root in devopsy-util, owners and
-                       modes as they were. A truncated tar, or one
-                       carrying entries the service does not mount,
-                       changes nothing; one of ./mnt itself replaces all
-                       of mnt (devopsy says so)
+                       modes as they were, and an entry its labels own
+                       given to its owner (devopsy.mnt.owner). A
+                       truncated tar, or one carrying entries the service
+                       does not mount, changes nothing
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),
@@ -1134,6 +1184,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		// The escape hatch: straight to docker compose, past project
 		// commands and the check for compose's commands.
 		plan := p.compose(args[1:])
+		plan.starting(args[1:])
 		secrets := p.newSecrets()
 		plan.running(secrets)
 		plan.Verbose = maskAll(secrets, verbose)
@@ -1182,6 +1233,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 
 	plan := p.compose(args)
+	plan.starting(args)
 	plan.running(secrets)
 	plan.Verbose = maskAll(secrets, verbose)
 	return plan, nil
