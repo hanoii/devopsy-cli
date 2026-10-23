@@ -81,8 +81,8 @@ func TestMntOwnersRelease(t *testing.T) {
 // runs after the prepare steps, which may make the secrets compose
 // requires (review of 2026-10-23: before them, compose config failed on
 // a first release and the check passed it unchecked). With an entry
-// owned, it readies the util image the owners' step needs after the
-// switch.
+// owned, it refuses one that is a symbolic link in shared/mnt, and
+// readies the util image the owners' step needs after the switch.
 func TestCheckMountsRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	out, code := s.run([]string{"FAKE_APP_MOUNT=/../cache"}, "@prod", "--release")
@@ -101,6 +101,21 @@ func TestCheckMountsRelease(t *testing.T) {
 	if code == 0 || s.current("secret") != "" || !strings.Contains(out, "app mounts ./.devopsy/cache writable") {
 		t.Errorf("a first release whose prepare makes its secrets (%d), current %q:\n%s", code, s.current("secret"), out)
 	}
+
+	// An owned entry that is a symbolic link: Docker would mount what it
+	// points to.
+	write(t, s.log+".shop-solo", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	if err := os.MkdirAll(s.mnt("solo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(s.mnt("solo"), "storage")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@solo", "--release")
+	if code == 0 || s.current("solo") != "" || !strings.Contains(out, "devopsy: | mnt/storage is a symbolic link") || !strings.Contains(out, "make each a directory of its own in shared/mnt") {
+		t.Errorf("an owned entry a link (%d), current %q:\n%s", code, s.current("solo"), out)
+	}
+	s.logs()
 
 	// The util image missing and its build failing (a registry down):
 	// refused before the switch, not failed after it.

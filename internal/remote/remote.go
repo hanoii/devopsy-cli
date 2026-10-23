@@ -806,8 +806,9 @@ done
 		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 		// Mounts whose data would not be what the labels say: a writable
 		// one in the release's tree, data or an owner with no entry, an
-		// entry with two owners, ./mnt whole writable (cli.CheckMounts);
-		// and the util image the owners' step needs after the switch.
+		// entry with two owners, ./mnt whole writable, an owned path
+		// through a link (cli.CheckMounts); and the util image the owners'
+		// step needs after the switch.
 		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts"}, false) + ") || not_live 1\n"
 	}
 	// fetch_release: the release's images under the shared lock,
