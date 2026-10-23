@@ -806,7 +806,9 @@ an entry no service owns stays as it is, the deploy user's (right for
 what is written from the host). It is never taken from `user:`, so
 changing that never silently changes the data's owner: a variable keeps
 the two alike. devopsy applies it, as root in `devopsy-util` without a
-network, never following a symbolic link:
+network, never following a symbolic link, each entry in a container
+that mounts that entry alone, so a directory the app swaps for a link
+meanwhile can lead nowhere else:
 
 - **a release**, right after its switch (before a sync and the run
   step), and a rollback and the restart after a failed run, from the

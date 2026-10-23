@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"maps"
@@ -26,92 +27,116 @@ import (
 // chownEntry is a shell function giving the entry of /mnt $1 and
 // everything in it to $2 (<uid>:<gid>), scanned whole: what devopsy did
 // not write (an upload by hand, data from before the label) has the
-// wrong owner deep in a tree under a correct top. Never through a
-// symbolic link the app made in its entries: not the file's own (-h,
-// and find's default -P), nor one swapped in for a directory on the way
-// (-execdir: chown runs in the file's directory, which find entered
-// safely, on ./<name>, so it cannot reach another entry).
+// wrong owner deep in a tree under a correct top. Only what differs is
+// changed, in batches (-exec ... +: -execdir ran chown once per
+// directory, 22.7 s against 0.43 s for 20,200 directories), never
+// through the file's own link (-h, and find's default -P). It runs in a
+// container that mounts that entry alone (ownMnt): a directory the app
+// swaps for a link during the scan leads chown only into the entry
+// itself or the throwaway container, never another entry or the host.
 //
 // The scan runs while the services may run (a release's old containers,
 // an import's service): a file one removes after find saw it fails its
 // chown, and find with it. A vanished file has no owner to fix, so a
 // failed scan is looked at again, chowning nothing: only something left
 // with another owner fails it (measured: 31 of 200 scans of a busy entry
-// failed before).
+// failed before), or a look that fails itself (a directory find cannot
+// read: whatever is in it was never seen). -ignore_readdir_race keeps a
+// file removed between find's reading of its directory and its look at
+// it from failing either.
 const chownEntry = `chown_entry() {
-  ce_err=$(find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} + 2>&1) && return 0
-  ce_left=$(find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit 2>/dev/null) || true
+  ce_err=$(find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} + 2>&1) && return 0
+  if ! ce_left=$(find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit); then
+    printf '%s\n' "$ce_err" >&2
+    return 1
+  fi
   [ -n "$ce_left" ] || return 0
   printf '%s\n' "$ce_err" >&2
   return 1
 }
 `
 
-// ownPaths is a shell function: each argument <path>=<uid>:<gid>, a
-// path of /mnt (an entry, or a bind source below one), has each of its
-// directories missing made (0755, as Docker would) and given to its
-// owner, never past a symbolic link; then each entry among them (a path
-// without /) is scanned whole (chownEntry). An owner has no =.
-const ownPaths = `own_paths() {
-  for po; do
-    o=${po##*=} d=/mnt rest=${po%=*}/
-    while [ -n "$rest" ]; do
-      d=$d/${rest%%/*} rest=${rest#*/}
-      [ ! -L "$d" ] || break
-      if [ ! -e "$d" ]; then
-        mkdir -m 0755 "$d"
-        chown -h "$o" "$d"
-      fi
-    done
-  done
-  for po; do
-    case ${po%=*} in */*) ;; *) chown_entry "${po%=*}" "${po##*=}" ;; esac
-  done
-}
+// ownEntry is the util container's script for one owned entry, its
+// arguments the entry and its owner (chownEntry).
+const ownEntry = "set -eu\n" + chownEntry + `chown_entry "$1" "$2"
 `
 
-// ownEntries is the util container's script for owned paths, its
-// arguments (ownPaths).
-const ownEntries = "set -eu\n" + chownEntry + ownPaths + `own_paths "$@"
-`
-
-// ownerArgs are owned paths (path to owner: entries, and bind sources
-// below them) as ownEntries' arguments, sorted, and the line that says
-// them: the entries, and the paths below an entry not among them.
-func ownerArgs(owned map[string]string) (args []string, line string) {
-	paths := slices.Sorted(maps.Keys(owned))
-	for _, p := range paths {
-		args = append(args, p+"="+owned[p])
-	}
+// ownerLine says what ownMnt gives away: each entry and its owner.
+func ownerLine(entries []string, owned map[string]string) string {
 	var parts []string
-	for _, a := range args {
-		i := strings.LastIndex(a, "=")
-		p, o := a[:i], a[i+1:]
-		if e, _, below := strings.Cut(p, "/"); below && owned[e] != "" {
-			continue
-		}
-		parts = append(parts, "mnt/"+p+" to "+o)
+	for _, e := range entries {
+		parts = append(parts, "mnt/"+e+" to "+owned[e])
 	}
-	return args, "giving " + strings.Join(parts, ", ")
+	return "giving " + strings.Join(parts, ", ")
 }
 
-// ownMnt makes the owned paths of mnt (resolved: on servers shared/mnt)
-// missing and gives the entries among them to their owners, scanned
-// whole, in one util container named name, without a network.
+// ownMnt gives the owned entries of mnt (resolved: on servers
+// shared/mnt), entry to owner, to their owners, each scanned whole in a
+// util container of its own, named name-<n>, that mounts that entry
+// alone, without a network (chownEntry). A missing entry is made first,
+// 0755 as Docker would, so the container mounts it; one that is a
+// symbolic link is refused, since Docker would mount what it points to
+// (the mounts check refuses it before a release's switch already).
 func ownMnt(ctx context.Context, mnt string, owned map[string]string, name string) error {
 	if len(owned) == 0 {
 		return nil
 	}
+	entries := slices.Sorted(maps.Keys(owned))
+	for _, e := range entries {
+		if err := makeEntry(mnt, e); err != nil {
+			return err
+		}
+	}
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	args, line := ownerArgs(owned)
-	report.Info(line)
-	run := append([]string{"--network", "none", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", ownEntries, "sh"}, args...)
-	if err := dockerRun(ctx, name, run...); err != nil {
-		return fmt.Errorf("giving mnt's entries to their owners (%s): %w", cli.MntOwnerLabel, err)
+	report.Info(ownerLine(entries, owned))
+	for i, e := range entries {
+		mount, err := bindMount(filepath.Join(mnt, e), "/mnt/"+e)
+		if err != nil {
+			return err
+		}
+		if err := dockerRun(ctx, fmt.Sprintf("%s-%d", name, i), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
+			return fmt.Errorf("giving mnt/%s to %s (%s): %w", e, owned[e], cli.MntOwnerLabel, err)
+		}
 	}
 	return nil
+}
+
+// makeEntry makes the entry e of mnt when missing, 0755 whatever the
+// umask (as Docker makes a bind source), and refuses one that is a
+// symbolic link.
+func makeEntry(mnt, e string) error {
+	p := filepath.Join(mnt, e)
+	fi, err := os.Lstat(p)
+	switch {
+	case err == nil && fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("mnt/%s is a symbolic link: Docker would mount what it points to, and devopsy give that to its owner: make it a directory of its own, moving what it points to there", e)
+	case err == nil:
+		return nil
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	if err := os.MkdirAll(mnt, 0o755); err != nil {
+		return err
+	}
+	if err := os.Mkdir(p, 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(p, 0o755)
+}
+
+// bindMount is docker run's --mount for a bind of source at target,
+// its fields quoted as CSV, as Docker parses them, so an entry's name
+// with a comma or a colon stays one path.
+func bindMount(source, target string) (string, error) {
+	var b strings.Builder
+	w := csv.NewWriter(&b)
+	if err := w.Write([]string{"type=bind", "source=" + source, "target=" + target}); err != nil {
+		return "", err
+	}
+	w.Flush()
+	return strings.TrimSuffix(b.String(), "\n"), w.Error()
 }
 
 // projectOwners are the owned entries of the project at cwd's mnt,
@@ -229,43 +254,32 @@ func checkOwned(projectDir string, services []cli.SyncService) error {
 	return ensureUtilImage(context.Background())
 }
 
-// ownedLinks are the paths of mnt, among owned's and their parents
-// below mnt, that are symbolic links, sorted.
+// ownedLinks are the owned entries of mnt that are symbolic links,
+// sorted.
 func ownedLinks(mnt string, owned map[string]string) []string {
 	var links []string
-	for p := range owned {
-		parts := strings.Split(p, "/")
-		for i := range parts {
-			q := strings.Join(parts[:i+1], "/")
-			fi, err := os.Lstat(filepath.Join(mnt, q))
-			if err != nil {
-				break
-			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				if !slices.Contains(links, q) {
-					links = append(links, q)
-				}
-				break
-			}
+	for e := range owned {
+		if fi, err := os.Lstat(filepath.Join(mnt, e)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			links = append(links, e)
 		}
 	}
 	slices.Sort(links)
 	return links
 }
 
-// localMnt readies the owned paths of mnt before compose starts
-// anything locally (cli.Plan.Starts): each missing one (an entry,
-// a bind source below one) is made, and on Linux an entry whose top
-// directory is not its owner's is given away in a util container, only
-// then, and scanned whole there: an entry whose top is right is never
-// scanned, since that would run before every such command. On macOS the
-// top is never checked: Docker Desktop and OrbStack let any container
-// user write the Mac's files, and show them the owner Docker asks for,
-// whatever the Mac says. Labels that cannot be read (names from before
-// a change, a compose error) are a warning and the command goes on: it
-// is compose's, which says what is wrong with its files, and a label
-// devopsy reads must never stop a plain up (on a server, a rollback's
-// run step: cli.Plan.Starts is never set in a release there).
+// localMnt readies the owned entries of mnt before compose starts
+// anything locally (cli.Plan.Starts): each missing one is made, and on
+// Linux one missing or whose top directory is not its owner's is given
+// away in a util container, only then, and scanned whole there: an
+// entry whose top is right is never scanned, since that would run
+// before every such command. On macOS the top is never checked: Docker
+// Desktop and OrbStack let any container user write the Mac's files,
+// and show them the owner Docker asks for, whatever the Mac says.
+// Labels that cannot be read (names from before a change, a compose
+// error) are a warning and the command goes on: it is compose's, which
+// says what is wrong with its files, and a label devopsy reads must
+// never stop a plain up (on a server, a rollback's run step:
+// cli.Plan.Starts is never set in a release there).
 func localMnt(cwd string) error {
 	owners, mnt, err := projectOwners(cwd)
 	if err != nil {
@@ -277,17 +291,15 @@ func localMnt(cwd string) error {
 	}
 	wrong := map[string]string{}
 	for e, o := range owners {
-		p := filepath.Join(mnt, e)
-		fi, err := os.Lstat(p)
+		fi, err := os.Lstat(filepath.Join(mnt, e))
 		switch {
-		case err != nil && runtime.GOOS == "darwin":
-			if err := os.MkdirAll(p, 0o755); err != nil {
+		case runtime.GOOS == "darwin":
+			if err := makeEntry(mnt, e); err != nil {
 				return err
 			}
 		case err != nil:
 			wrong[e] = o
-		case runtime.GOOS != "darwin" && !strings.Contains(e, "/"):
-			// A bind source below an entry is only made when missing.
+		default:
 			if st, ok := fi.Sys().(*syscall.Stat_t); ok && fmt.Sprintf("%d:%d", st.Uid, st.Gid) != o {
 				wrong[e] = o
 			}

@@ -37,8 +37,7 @@ import (
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
 // FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
-// is app's devopsy.mnt.owner; the owners' containers make the entries
-// they are given.
+// is app's devopsy.mnt.owner.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -123,10 +122,10 @@ case "$*" in
   # left, listed by its label.
   "ps -aq --filter label=devopsy.data.parent="*) echo "${FAKE_STALE_DAEMON:-}" ;;
   # FAKE_IMPORT_CONTAINERS: containers an --import left
-  # (devopsy-import-<compose project>-<pid>), listed by its name filter.
+  # (devopsy-import-<compose project>-<pid>[-owners-<n>]), listed by its
+  # name filter, a regular expression, as Docker's.
   "ps -aq --filter name=^/?devopsy-import-"*)
-    p=${4#name=^/?}; p=${p%%\[*}
-    for c in ${FAKE_IMPORT_CONTAINERS:-}; do case $c in "$p"*) case ${c#"$p"} in ''|*[!0-9]*) ;; *) echo "$c" ;; esac ;; esac; done ;;
+    for c in ${FAKE_IMPORT_CONTAINERS:-}; do ! printf '%s\n' "$c" | grep -Eq -- "${4#name=}" || echo "$c"; done ;;
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
@@ -159,11 +158,9 @@ case "$*" in
   # failing, as with a registry down.
   "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
   "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
-  # The owners' container: the entries it is given made, as it would.
-  "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners "*)
-    [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
-    for eo; do mkdir -p "$dst/${eo%=*}"; done ;;
+  # The owners' containers, one per entry (devopsy made it).
+  "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
+    [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS" ;;
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
@@ -1932,16 +1929,17 @@ func TestExportImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED= -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n") || !strings.Contains(docker, "own_paths ${OWNED:-}\n sh storage\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "exec tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
-	// An entry its labels own goes to its owner once extracted, in the
-	// same container, before the import counts as complete: a tar made
-	// anywhere carries its maker's owners.
-	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: then giving mnt/storage to 10001:10001\n") {
+	// An entry its labels own goes to its owner once extracted, before
+	// the import counts as complete (a tar made anywhere carries its
+	// maker's owners), in a container that mounts that entry alone: the
+	// extracting one mounts all of mnt, and the service may run.
+	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") {
 		t.Fatalf("--import of an owned entry (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "own_paths ${OWNED:-}") || !strings.Contains(docker, `-execdir chown -h "$2" {} +`) {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker) || !strings.Contains(docker, `-exec chown -h "$2" {} +`) {
 		t.Errorf("an owned import:\n%s", docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,

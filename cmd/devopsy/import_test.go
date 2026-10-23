@@ -328,12 +328,12 @@ func TestImportLeftoverWriter(t *testing.T) {
 	go func() { otherEnded <- other.Wait() }()
 	defer func() { _ = syscall.Kill(-other.Process.Pid, syscall.SIGKILL) }()
 	write(t, filepath.Join(s.base, syncState), s.record()+"writer "+strconv.Itoa(other.Process.Pid)+"\n", 0o644)
-	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123 devopsy-import-shop-prod-eu-9'\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123 devopsy-import-shop-prod-123-owners-0 devopsy-import-shop-prod-eu-9 devopsy-import-shop-prod-1-9-owners-0'\n", 0o644)
 	s.logs()
 	os.Remove(wait)
 	_, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	docker, _ := s.logs()
-	if code != 0 || s.mark() != nil || !strings.Contains(docker, "rm -f devopsy-import-shop-prod-123\n") || strings.Contains(docker, "shop-prod-eu-9") {
+	if code != 0 || s.mark() != nil || !strings.Contains(docker, "rm -f devopsy-import-shop-prod-123 devopsy-import-shop-prod-123-owners-0\n") || strings.Contains(docker, "shop-prod-eu-9") || strings.Contains(docker, "shop-prod-1-9") {
 		t.Errorf("the next import (%d), mark %+v:\n%s\n%s", code, s.mark(), out, docker)
 	}
 	// The killed import's spool (a whole dump, in the environment's

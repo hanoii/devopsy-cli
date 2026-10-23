@@ -12,25 +12,45 @@ import (
 )
 
 // A release gives its owned entries to their owners right after its
-// switch, before the run step: in the util container, without a network,
-// a missing entry made 0755, every entry scanned whole (chown -h, never
-// through a link).
+// switch, before the run step: a missing entry made 0755, every entry
+// scanned whole (chown -h, batched, never through a link) in a util
+// container of its own that mounts that entry alone, without a network
+// (review of 2026-10-23, round 2: one container mounted all of mnt, so a
+// directory the app swapped for a link during the scan could lead chown
+// into another entry).
 // A child's first sync rsyncs into an entry the child owns as its owner
 // (--chown), from the child's labels only.
 func TestMntOwnersRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	config := filepath.Join(s.dot, "config.yaml")
 	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
+	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "storage"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	out, code := s.run(nil, "@prod", "--release")
 	docker, _ := s.logs()
-	switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/storage to 10001:10001"), strings.Index(out, "deploy in shop-prod")
+	switched, giving, deployed := strings.Index(out, "current is now"), strings.Index(out, "devopsy: giving mnt/cache to 10001:10001, mnt/storage to 10001:10001"), strings.Index(out, "deploy in shop-prod")
 	if code != 0 || switched < 0 || giving < switched || deployed < giving {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	for _, want := range []string{"run --rm --name devopsy-owners-shop-prod-", " --network none -v " + s.mnt("prod") + ":/mnt devopsy-util:2 sh -c set -eu\n", `mkdir -m 0755 "$d"`, `find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} +`, "own_paths \"$@\"\n sh storage=10001:10001\n"} {
+	for _, want := range []string{
+		"run --rm --name devopsy-owners-shop-prod-", " --network none --mount type=bind,source=" + s.mnt("prod") + "/cache,target=/mnt/cache devopsy-util:2 sh -c set -eu\n",
+		`find "/mnt/$1" -ignore_readdir_race \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "chown_entry \"$1\" \"$2\"\n sh cache 10001:10001\n",
+		"-1 --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
+	} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
+		}
+	}
+	if strings.Contains(docker, ":/mnt devopsy-util") && strings.Contains(docker, "devopsy-owners-") {
+		t.Errorf("an owners' container mounts all of mnt:\n%s", docker)
+	}
+	// The missing entry made 0755, whatever the umask; one there left as
+	// it is, for the container to give away.
+	for e, mode := range map[string]os.FileMode{"cache": 0o755, "storage": 0o700} {
+		if fi, err := os.Lstat(filepath.Join(s.mnt("prod"), e)); err != nil || !fi.IsDir() || fi.Mode().Perm() != mode {
+			t.Errorf("mnt/%s: %v %v, want a directory %v", e, fi, err, mode)
 		}
 	}
 	// Failing, it is a failed run step: nothing current on a first one.
@@ -149,7 +169,7 @@ func TestMntOwnersReset(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code := s.run(nil, "@dev", "--reset", "--yes")
 	docker, _ := s.logs()
-	wipe, owners := strings.Index(docker, "-wipe -v "), strings.Index(docker, "-owners --network none -v "+s.mnt("dev")+":/mnt ")
+	wipe, owners := strings.Index(docker, "-wipe -v "), strings.Index(docker, "-owners-0 --network none --mount type=bind,source="+s.mnt("dev")+"/storage,target=/mnt/storage ")
 	if code != 0 || wipe < 0 || owners < wipe || !strings.Contains(docker, "run --rm --name devopsy-sync-") {
 		t.Errorf("reset (%d):\n%s\n%s", code, out, docker)
 	}
@@ -217,11 +237,13 @@ func TestMntOwnersLocal(t *testing.T) {
 // import's) survives a file a running service removes meanwhile: its
 // chown fails, find with it, and only what is left with another owner
 // fails the scan (review of 2026-10-23: the release failed after its
-// switch and went back). The fake find takes every file for another
-// owner's, as a scan of an entry another machine wrote would, then asks
-// the real one what is left.
+// switch and went back), or a look again that fails itself, a directory
+// find cannot read (review of 2026-10-23, round 2: it passed, 2>/dev/null
+// || true). The fake find takes every file for another owner's, as a
+// scan of an entry another machine wrote would, then asks the real one
+// what is left (GNU's -ignore_readdir_race left out: macOS's has none).
 func TestMntScripts(t *testing.T) {
-	for name, script := range map[string]string{"ownEntries": ownEntries, "emptyAndExtract": emptyAndExtract} {
+	for name, script := range map[string]string{"ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract} {
 		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v\n%s", name, err, out)
 		}
@@ -229,8 +251,11 @@ func TestMntScripts(t *testing.T) {
 	tmp := t.TempDir()
 	mnt, bin := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin")
 	write(t, filepath.Join(bin, "find"), `#!/bin/sh
-case " $* " in *" -exec"*) for a; do [ "${p:-}" = -h ] && o=$a; p=$a; done; exec /usr/bin/find "$1" -execdir chown -h "$o" {} + ;; esac
-exec /usr/bin/find "$@"
+p=$1; shift
+for a; do shift; [ "$a" = -ignore_readdir_race ] || set -- "$@" "$a"; done
+case " $* " in *" -exec "*) for a; do [ "${q:-}" = -h ] && o=$a; q=$a; done; exec /usr/bin/find "$p" -exec chown -h "$o" {} + ;; esac
+[ -z "${FIND_FAIL:-}" ] || { echo "find: '$p/private': Permission denied" >&2; exit 1; }
+exec /usr/bin/find "$p" "$@"
 `, 0o755)
 	// The app removes tmp-123 between find's look and the chown.
 	write(t, filepath.Join(bin, "chown"), `#!/bin/sh
@@ -240,18 +265,24 @@ for f; do
 done
 exit ${st:-0}
 `, 0o755)
-	script := strings.ReplaceAll(strings.ReplaceAll(ownEntries, `"/mnt/`, `"`+mnt+`/`), "d=/mnt ", "d="+mnt+" ")
+	script := strings.ReplaceAll(ownEntry, `"/mnt/`, `"`+mnt+`/`)
 	own := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-	for owner, fails := range map[string]bool{own: false, "99999:99999": true} {
+	for _, c := range []struct {
+		owner, findFail string
+		fails           bool
+	}{{own, "", false}, {"99999:99999", "", true}, {own, "1", true}} {
 		write(t, filepath.Join(mnt, "storage", "keep.txt"), "x\n", 0o644)
 		write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
 		chowned := filepath.Join(tmp, "chowned")
 		os.Remove(chowned)
-		cmd := exec.Command("sh", "-c", script, "sh", "storage="+owner)
-		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned}
+		cmd := exec.Command("sh", "-c", script, "sh", "storage", c.owner)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned, "FIND_FAIL=" + c.findFail}
 		out, err := cmd.CombinedOutput()
-		if (err != nil) != fails || strings.Contains(string(out), "cannot access") == !fails {
-			t.Errorf("owner %s, a file the app removed during the scan, nothing else left: %v (fails: %v)\n%s", owner, err, fails, out)
+		if (err != nil) != c.fails || strings.Contains(string(out), "cannot access") == !c.fails {
+			t.Errorf("owner %s, find failing %q, a file the app removed during the scan: %v (fails: %v)\n%s", c.owner, c.findFail, err, c.fails, out)
+		}
+		if c.findFail != "" && !strings.Contains(string(out), "Permission denied") {
+			t.Errorf("find's own failure not said:\n%s", out)
 		}
 		if got := readString(chowned); !strings.Contains(got, "keep.txt") {
 			t.Errorf("the rest not given away: %q", got)
@@ -272,13 +303,33 @@ exit ${st:-0}
 	}
 	calls := filepath.Join(tmp, "calls")
 	write(t, filepath.Join(bin, "chown"), "#!/bin/sh\necho >> \"$CALLS\"\n", 0o755)
-	cmd := exec.Command("sh", "-c", script, "sh", "storage="+own)
+	cmd := exec.Command("sh", "-c", script, "sh", "storage", own)
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CALLS=" + calls}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("a tree of many directories: %v\n%s", err, out)
 	}
 	if n := strings.Count(readString(calls), "\n"); n > 10 {
 		t.Errorf("a tree of 200 directories given away in %d chowns", n)
+	}
+}
+
+// The owners' container's mount: its source one CSV field, as Docker
+// parses --mount, so an entry's name with a comma stays one path; the
+// entry made first when missing, and refused when it is a symbolic link
+// (Docker would mount what it points to).
+func TestOwnersMount(t *testing.T) {
+	if got, err := bindMount("/srv/mnt/a,b", "/mnt/a,b"); err != nil || got != `type=bind,"source=/srv/mnt/a,b","target=/mnt/a,b"` {
+		t.Errorf("bindMount: %q %v", got, err)
+	}
+	mnt := filepath.Join(t.TempDir(), "mnt")
+	if err := makeEntry(mnt, "storage"); err != nil || !fileExists(filepath.Join(mnt, "storage")) {
+		t.Errorf("a missing entry: %v", err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(mnt, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeEntry(mnt, "link"); err == nil || !strings.Contains(err.Error(), "mnt/link is a symbolic link") {
+		t.Errorf("an entry a link: %v", err)
 	}
 }
 
