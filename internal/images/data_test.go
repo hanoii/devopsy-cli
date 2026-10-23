@@ -1330,3 +1330,27 @@ func TestSyncOldChildListing(t *testing.T) {
 		t.Errorf("an old listing (%v):\n%s", err, out.String())
 	}
 }
+
+// Bug: a parent whose current release an older devopsy recorded (no
+// service column, no kinds) has no data images for ParentData, which
+// skips every entry that is not KindData: the sync then checks nothing
+// and takes nothing over, so a child on an older image runs it on data a
+// newer one wrote (rule 7), where an old child listing refuses
+// (TestSyncOldChildListing). The first sync from prod after the server's
+// upgrade, before prod is released again.
+func TestSyncOldParentListing(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	// prod's release as an older devopsy recorded it, and no history yet.
+	os.WriteFile(filepath.Join(prod.e.rel(prod.cur), ListFile), []byte("mariadb:11.8\tI2\n"), 0o644)
+	os.Remove(historyPath(prod.base()))
+	err := syncInto(t, prod, dev, false)
+	if !errors.Is(err, ErrRefused) && dev.runs("database") != "I2" {
+		t.Errorf("a sync from a parent an older devopsy released (%v): the child's database runs %s on data mariadb:11.8 at I2 wrote, want I2 or a refusal\n%s", err, dev.runs("database"), out.String())
+	}
+}
