@@ -904,7 +904,8 @@ whose its files are).
 - `devopsy.data=mnt`: the entries of `.devopsy/mnt` the service
   bind-mounts (`./mnt/files` gives `files`; a file, `./mnt/app.ini`,
   itself; never `./mnt` whole, refused). A sync rsyncs them (`rsync -a
-  --delete --numeric-ids`, the child's copy equal to the parent's,
+  --delete --numeric-ids --modify-window=-1`, times compared to the
+  nanosecond, the child's copy equal to the parent's,
   owners and modes included, but an entry the child owns, as its owner's:
   `devopsy.mnt.owner`, above); `--export` and `--import` move them as a
   tar. Both as root in `devopsy-util`.

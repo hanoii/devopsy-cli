@@ -1519,7 +1519,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 	if len(present) == 0 {
 		return nil
 	}
-	rsync := []string{"rsync", "-a", "--delete", "--numeric-ids"}
+	rsync := slices.Clone(remote.RsyncCopy)
 
 	to := os.Getenv(remote.SyncToEnv)
 	if to == "" {
