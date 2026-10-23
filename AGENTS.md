@@ -951,8 +951,14 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   mask), capability hooks (none runs after an `mnt` import, a plain
   `up` or an upload by hand), a root `init` service in every template.
 - **Where owners are applied,** always as root in `UtilImage`, `chown
-  -h` (never through a link the app made) and only what differs (`find
-  \( ! -user -o ! -group \)`, `chownEntry`): a release, right after
+  -h` from the file's directory (`-execdir`: never through a link the
+  app made, its own or one swapped in for a directory on the way, which
+  reached another entry) and only what differs (`find \( ! -user -o !
+  -group \)`, `chownEntry`). A scan that fails is looked at again,
+  chowning nothing, and fails only when something is left with another
+  owner: the services may run meanwhile, and a file one removed after
+  find saw it failed the release after its switch (review of
+  2026-10-23; rsync's 24 is the same race). Applied: a release, right after
   `make_current` (it changes live data, so never before; `--mnt-owners`,
   a failure a failed run step), `--network none`, missing entries made
   0755 and every owned entry scanned whole (decided: what devopsy did
