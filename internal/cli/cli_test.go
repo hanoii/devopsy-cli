@@ -147,8 +147,36 @@ func TestBuildComposePassthrough(t *testing.T) {
 // A command that starts containers reads labels (Plan.Starts) only when
 // a compose file's YAML may carry devopsy.mnt.owner: the label, or a
 // file it includes or extends; never a comment that says so
-// (cmd/devopsy's TestMntOwnersLocal runs one).
+// (cmd/devopsy's TestMntOwnersLocal runs one). Only the project's own
+// files, the ones the labels are read from: a -f the command adds is
+// in neither. Never for --dry-run, and never in a release on a server,
+// where --mnt-owners owns that (review of 2026-10-23, round 2: a
+// rollback's up failed on labels this devopsy could not read).
 func TestBuildStarts(t *testing.T) {
+	owned := minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n"
+	root := project(t, "p", map[string]string{"compose.yaml": minimalCompose, "extra.yaml": owned})
+	inRelease := project(t, "p", map[string]string{"compose.yaml": owned, "target.env": "COMPOSE_PROJECT_NAME=p-prod\n"})
+	ownedRoot := project(t, "p", map[string]string{"compose.yaml": owned})
+	for _, c := range []struct {
+		root, args string
+		starts     bool
+	}{
+		{root, "-f " + filepath.Join(root, ProjectDirName, "extra.yaml") + " up -d", false},
+		{inRelease, "up -d", false},
+		{ownedRoot, "--dry-run up -d", false},
+		{ownedRoot, "up --dry-run -d", false},
+		{ownedRoot, "up --dry-run=false -d", true},
+		{ownedRoot, "run --rm a -- sh --dry-run", true},
+	} {
+		plan, err := build(c.root, strings.Fields(c.args), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Starts != c.starts {
+			t.Errorf("%s in %s: Starts %v", c.args, c.root, plan.Starts)
+		}
+	}
+
 	for compose, want := range map[string]bool{
 		minimalCompose: false,
 		"include:\n  - other.yaml\n" + minimalCompose:                                      true,

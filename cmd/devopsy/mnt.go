@@ -262,11 +262,19 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 // scanned, since that would run before every such command. On macOS the
 // top is never checked: Docker Desktop and OrbStack let any container
 // user write the Mac's files, and show them the owner Docker asks for,
-// whatever the Mac says.
+// whatever the Mac says. Labels that cannot be read (names from before
+// a change, a compose error) are a warning and the command goes on: it
+// is compose's, which says what is wrong with its files, and a label
+// devopsy reads must never stop a plain up (on a server, a rollback's
+// run step: cli.Plan.Starts is never set in a release there).
 func localMnt(cwd string) error {
 	owners, mnt, err := projectOwners(cwd)
-	if err != nil || len(owners) == 0 {
-		return err
+	if err != nil {
+		report.Warn("the entries of mnt are left as they are: the labels cannot be read", err.Error())
+		return nil
+	}
+	if len(owners) == 0 {
+		return nil
 	}
 	wrong := map[string]string{}
 	for e, o := range owners {
