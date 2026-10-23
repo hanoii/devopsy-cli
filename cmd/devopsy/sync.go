@@ -835,10 +835,25 @@ func ensureUtilImage(ctx context.Context) error {
 }
 
 // buildUtilImage builds remote.UtilImage from its Dockerfile, refresh as
-// remote.BuildUtilImageArgs says.
+// remote.BuildUtilImageArgs says. The Dockerfile goes in from a file,
+// never a pipe: a docker that exits before reading it (its daemon down)
+// would raise SIGPIPE, which interruptible takes for the operator's
+// interrupt, cancelling the whole command.
 func buildUtilImage(ctx context.Context, refresh bool) error {
+	f, err := os.CreateTemp("", "devopsy-util-*.Dockerfile")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if _, err := f.WriteString(strings.Join(remote.UtilDockerfile, "\n") + "\n"); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs(refresh)...)
-	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
+	cmd.Stdin = f
 	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
 	return cmd.Run()
 }
