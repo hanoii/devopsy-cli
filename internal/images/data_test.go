@@ -1238,3 +1238,31 @@ func TestSyncMirrorSameDigest(t *testing.T) {
 		}
 	}
 }
+
+// Bug: a release that syncs refused by the parent's check (SyncCheck,
+// through Record) leaves the name its fetch pulled moved, where Record's
+// own refusal puts it back (putNamesBack): another environment's plain up
+// on that name then runs the image this release was refused.
+func TestSyncReleaseRefusalPutsNamesBack(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.4", "J1")
+	prod.release(false, dbSvc("mariadb:11.4"))
+	dev.release(false, dbSvc("mariadb:11.4"))
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, Service{Name: "client", Ref: "mariadb:11.8"})
+	// dev bumps its series in a release that syncs: prod's data never ran
+	// mariadb:11.8, refused once its fetch moved the name to I2.
+	d.publish("mariadb:11.8", "I2")
+	dev.e.set.SyncData = prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	_, err := dev.release(false, dbSvc("mariadb:11.8"))
+	dev.e.set.SyncData = ""
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("a series bump syncing from a parent that never ran it: %v\n%s", err, out.String())
+	}
+	stage.up()
+	if got := stage.runs("client"); got != "I1" {
+		t.Errorf("stage's client runs %s after dev's refused release, want I1 (mariadb:11.8 is %s)\n%s", got, d.names["mariadb:11.8"], out.String())
+	}
+}
