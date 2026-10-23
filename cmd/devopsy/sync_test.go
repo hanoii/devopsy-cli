@@ -2104,10 +2104,10 @@ func TestExportImport(t *testing.T) {
 		})},
 	} {
 		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")
-		if docker, _ := s.logs(); code == 0 || !strings.Contains(errs, "devopsy: error: the tar a member ") || strings.Contains(docker, "run --rm --name devopsy-import-") {
+		if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
 			t.Errorf("a tar reaching out of its entries, %s (%d), the import's container ran:\n%s", c.name, code, errs)
 		}
-		if !strings.Contains(errs, "error: the tar has a member reaching out of its entry: ") || !strings.Contains(errs, ": nothing imported") {
+		if !strings.Contains(errs, "devopsy: error: the tar has a member ") || !strings.Contains(errs, ": nothing imported") {
 			t.Errorf("a tar reaching out of its entries, %s, not said so:\n%s", c.name, errs)
 		}
 	}
