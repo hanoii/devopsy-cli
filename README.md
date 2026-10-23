@@ -1205,7 +1205,8 @@ environment on a server) and changes nothing until it is all there; a
 truncated tar (cut anywhere, or missing its end-of-archive blocks),
 or one carrying entries the service does not mount or excludes, is
 refused, and so is one carrying `mnt` itself (`./`: make it with `tar -C
-mnt -cf - <entry>...`), or a member reaching out of its entry. On a target, `--export`
+mnt -cf - <entry>...`), a member reaching out of its entry, or a device
+node or a FIFO anywhere (as root, tar would make them on the server). On a target, `--export`
 holds the release lock shared and the environment's sync lock (a sync from
 it waits), `--import` the release lock, and asks for the environment's
 full name on the terminal unless `--yes` (stdin is the data); one silent

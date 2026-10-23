@@ -1663,7 +1663,13 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   directory or file, a link into another entry, and `./`, `mnt` itself.
   Why: GNU tar extracted those through to another entry, refused them
   only once the entries were emptied, or (`../x` into `.`, before `.`
-  went) emptied the container's root. Then each carried entry is
+  went) emptied the container's root. Any member but files,
+  directories and links is refused too (`tarTypes`, `errMember`):
+  GNU tar as root makes device nodes on the host, where bind mounts
+  are not nodev, and the owners' step then gave one to the entry's
+  owner, a block device of the server's disk the raw disk for the
+  app's UID (review of 2026-10-23, round 3); FIFOs and anything else a
+  tar of data never needs went with them. Then each carried entry is
   emptied, never removed, and extracted with `--overwrite`. Why never removed: a running
   container bind-mounts the directory's inode. An entry that is a
   symlink is refused both ways: tar carries only the link (an export

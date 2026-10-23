@@ -2027,9 +2027,25 @@ func TestExportImport(t *testing.T) {
 			member(tw, &tar.Header{Name: "./", Typeflag: tar.TypeDir}, "")
 			member(tw, &tar.Header{Name: "./storage/x", Typeflag: tar.TypeReg}, "fine\n")
 		})},
+		// Device nodes and FIFOs, anywhere (review of 2026-10-23, round
+		// 3): GNU tar as root makes them in shared/mnt on the host, where
+		// bind mounts are not nodev, and the owners' step then gives one
+		// to the entry's owner, the app's UID: a block device of the
+		// server's disk (b 8 0), 0666 in the tar, is the raw disk for any
+		// user on the host. A tar of an entry never needs one.
+		{"storage/disk a block device", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/disk", Typeflag: tar.TypeBlock, Devmajor: 8}, "")
+		})},
+		{"storage/tty a character device", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/tty", Typeflag: tar.TypeChar, Devmajor: 5}, "")
+		})},
+		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
+		})},
 	} {
 		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")
-		if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
+		if docker, _ := s.logs(); code == 0 || !strings.Contains(errs, "devopsy: error: the tar a member ") || strings.Contains(docker, "run --rm --name devopsy-import-") {
 			t.Errorf("a tar reaching out of its entries, %s (%d), the import's container ran:\n%s", c.name, code, errs)
 		}
 		if !strings.Contains(errs, "error: the tar has a member reaching out of its entry: ") || !strings.Contains(errs, ": nothing imported") {
