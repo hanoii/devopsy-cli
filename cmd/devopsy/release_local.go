@@ -325,16 +325,16 @@ func destroyData(cwd string, step []string, color bool) int {
 	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
 		return fail("docker compose down: " + err.Error())
 	}
-	if err := emptyMnt(ctx, projectDir); err != nil {
+	if err := emptyMnt(ctx, projectDir, fmt.Sprintf("devopsy-destroy-%d", os.Getpid())); err != nil {
 		return fail(err.Error())
 	}
 	return 0
 }
 
-// emptyMnt empties the project's mnt as root in remote.UtilImage (files
-// containers wrote as other users included), never removing it: on
-// servers it is a link to shared/mnt.
-func emptyMnt(ctx context.Context, projectDir string) error {
+// emptyMnt empties the project's mnt as root in remote.UtilImage, in a
+// container named name (files containers wrote as other users
+// included), never removing it: on servers it is a link to shared/mnt.
+func emptyMnt(ctx context.Context, projectDir, name string) error {
 	mnt := filepath.Join(projectDir, "mnt")
 	if entries, err := os.ReadDir(mnt); err != nil || len(entries) == 0 {
 		return nil
@@ -347,7 +347,7 @@ func emptyMnt(ctx context.Context, projectDir string) error {
 		return err
 	}
 	report.Info("emptying " + mnt)
-	if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
+	if err := dockerRun(ctx, name, "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
 		return fmt.Errorf("emptying mnt: %w", err)
 	}
 	return nil
