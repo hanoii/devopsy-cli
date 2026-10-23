@@ -2090,6 +2090,36 @@ func TestExportImport(t *testing.T) {
 		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
 		})},
+		// A link out of mnt through another link of the tar (review of
+		// 2026-10-23, round 4): storage/x -> . never descends, so each
+		// x/.. pair path.Clean cancels climbs one directory for real.
+		// Judged lexically, storage/w's target was storage/etc/shadow,
+		// inside its entry; GNU tar extracts both links (checked in
+		// devopsy-util:2, one container mounting storage alone), and on
+		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
+		// root's, in the entry for whatever follows it on the host
+		// (Docker resolves a bind's source there). The ways a tar's links
+		// can lead are tarEntries' (TestTarLinks).
+		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
+			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
+		})},
+		// A link out of mnt through another link of the tar (review of
+		// 2026-10-23, round 4): storage/x -> . never descends, so each
+		// x/.. pair path.Clean cancels climbs one directory for real.
+		// Judged lexically, storage/w's target was storage/etc/shadow,
+		// inside its entry; GNU tar extracts both links (checked in
+		// devopsy-util:2, one container mounting storage alone), and on
+		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
+		// root's, in the entry for whatever follows it on the host
+		// (Docker resolves a bind's source there). The ways a tar's links
+		// can lead are tarEntries' (TestTarLinks).
+		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
+			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
+		})},
 		// Names no plain path, which each entry's extraction could not
 		// select its members by, and an entry both a file and a directory.
 		{"././storage/x", "/storage", reaching(func(tw *tar.Writer) {
@@ -2314,40 +2344,79 @@ func TestExportImport(t *testing.T) {
 	os.Remove(s.log + ".shop-prod")
 }
 
-// An mnt import refuses a link out of mnt that goes through another link
-// of the tar (review of 2026-10-23, round 4): storage/x -> . never
-// descends, so each x/.. pair that path.Clean cancels climbs one
-// directory for real. tarMember judges storage/w's target lexically,
-// storage/etc/shadow, inside its entry, and the import goes on; GNU tar
-// extracts both links (checked in devopsy-util:2, one container mounting
-// storage alone), and on the server `realpath shared/mnt/storage/w` is
-// /etc/shadow: a link out of mnt, which the import says it refuses, left
-// root's in the entry for whatever follows it on the host (Docker
-// resolves a bind's source there, and a bind below an entry nobody owns
-// is allowed). FAIL_TAR keeps the fake from touching files: what counts
-// is that the import's container never runs.
-func TestImportLinkOutThroughLink(t *testing.T) {
-	s := newSyncSetup(t)
-	var b bytes.Buffer
-	tw := tar.NewWriter(&b)
-	for _, h := range []*tar.Header{
-		{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
-		{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: ".", Mode: 0o777},
-		{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow", Mode: 0o777},
+// tarEntries follows the tar's own links to judge where a link leads,
+// as the kernel resolves it (tarLinks.check): relative links within
+// their entry pass, a way that leaves the entry at any point is refused,
+// however path.Clean reads it, and so are the members whose names would
+// not be where they land (review of 2026-10-23, round 4).
+func TestTarLinks(t *testing.T) {
+	sym := func(name, target string) *tar.Header {
+		return &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}
+	}
+	hard := func(name, target string) *tar.Header {
+		return &tar.Header{Name: name, Typeflag: tar.TypeLink, Linkname: target, Mode: 0o644}
+	}
+	file := func(name string) *tar.Header { return &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644} }
+	dir := func(name string) *tar.Header { return &tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: 0o755} }
+	for _, c := range []struct {
+		name    string
+		members []*tar.Header
+		refused string
+	}{
+		{"links within their entry", []*tar.Header{
+			dir("storage/"), dir("storage/sub/"), file("storage/sub/f"),
+			sym("storage/a", "sub/f"), sym("storage/sub/b", "../f"), sym("storage/self", "."),
+			sym("storage/c", "self/sub/./f"), sym("storage/d", "sub/"), sym("storage/sub/up", ".."),
+			sym("storage/e", "sub/up/sub/f"), sym("storage/dangling", "gone/away"),
+			hard("storage/h", "storage/sub/f"), hard("./storage/i", "./storage/sub/f"),
+		}, ""},
+		{"through a link to the entry, path.Clean inside", []*tar.Header{
+			dir("storage/"), sym("storage/x", "."), sym("storage/w", strings.Repeat("x/", 3)+strings.Repeat("../", 3)+"etc/shadow"),
+		}, "storage/w, whose target leads out of mnt/storage"},
+		{"through a link to a parent, path.Clean inside", []*tar.Header{
+			dir("storage/sub/"), sym("storage/sub/up", ".."), sym("storage/w", "sub/up/../x"),
+		}, "storage/w, whose target leads out of mnt/storage"},
+		{"a link in a subdirectory through another", []*tar.Header{
+			dir("storage/sub/"), sym("storage/x", "."), sym("storage/sub/up", "../x/.."),
+		}, "storage/sub/up, whose target leads out of mnt/storage"},
+		{"out and back through mnt", []*tar.Header{
+			file("storage/b"), sym("storage/a", "../storage/b"),
+		}, "storage/a, whose target leads out of mnt/storage"},
+		{"a loop", []*tar.Header{
+			sym("storage/a", "b"), sym("storage/b", "a"),
+		}, "follows more than 40 links"},
+		{"a member below a link", []*tar.Header{
+			sym("storage/x", "sub"), dir("storage/sub/"), file("storage/x/f"),
+		}, "storage/x/f is below the link storage/x"},
+		{"a link and a directory of one name", []*tar.Header{
+			sym("storage/x", "sub"), dir("storage/x/"),
+		}, "storage/x is a link and another member of the same name"},
+		{"a hard link to a link", []*tar.Header{
+			dir("storage/sub/"), file("storage/f"), sym("storage/sub/s", "../f"), hard("storage/h", "storage/sub/s"),
+		}, "storage/h is a hard link to the link storage/sub/s"},
+		{"a hard link below a link", []*tar.Header{
+			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
+		}, "storage/h is a hard link below the link storage/x"},
 	} {
-		if err := tw.WriteHeader(h); err != nil {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for _, h := range c.members {
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=/storage"}, b.Bytes(), "--import", "app")
-	if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
-		t.Errorf("a tar with a link out of mnt through another link (%d), the import's container ran:\n%s", code, errs)
-	}
-	if !strings.Contains(errs, "devopsy: error: the tar has a member ") || !strings.Contains(errs, ": nothing imported") {
-		t.Errorf("a tar with a link out of mnt through another link, not said so:\n%s", errs)
+		spool := filepath.Join(t.TempDir(), "spool")
+		write(t, spool, b.String(), 0o644)
+		_, err := tarEntries(spool)
+		switch {
+		case c.refused == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.refused != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
+			t.Errorf("%s: %v, want %q", c.name, err, c.refused)
+		}
 	}
 }
 

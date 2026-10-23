@@ -1681,7 +1681,21 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   directory or file, a link into another entry, and `./`, `mnt` itself.
   Why: GNU tar extracted those through to another entry, refused them
   only once the entries were emptied, or (`../x` into `.`, before `.`
-  went) emptied the container's root. Any member but files,
+  went) emptied the container's root. Where a link leads is judged
+  through the tar's own links, never lexically alone (`tarLinks.check`,
+  after the whole tar is read): a symbolic link's target is walked
+  component by component from its directory as the kernel resolves it,
+  following every link of the tar on the way (40 at most, Linux's own
+  limit), and refused when the way leaves its entry at any point (a `..`
+  above it, `../storage/b` going through `mnt` included), as are a
+  member below a link of the tar or sharing a link's name (a tar never
+  writes them, and then every name is where it lands) and a hard link
+  to a link or below one (GNU tar links the symbolic link itself, whose
+  relative target then leads elsewhere: checked in `devopsy-util:2`).
+  Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
+  `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
+  `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
+  carry is a directory to the walk: the entry is emptied first. Any member but files,
   directories and links is refused too (`tarTypes`, `errMember`):
   GNU tar as root makes device nodes on the host, where bind mounts
   are not nodev, and the owners' step then gave one to the entry's
