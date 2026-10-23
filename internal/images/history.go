@@ -198,9 +198,11 @@ func (s *Set) containers() map[string]Container {
 
 // Ran appends to the environment's history the image each pulled data
 // service's container runs, once started, when it is not the last one
-// there: after a run step (failed or not), a sync, an import. forced
-// are the services a --yes let through (ForcedFile), whose image starts
-// their history over. One that runs an image its data moved past went
+// there: after a run step (failed or not), a sync, an import. A service
+// running the very image a --yes let through (ForcedFile) starts its
+// history over from it; the file is the activation's and goes once read,
+// so a later rollback to the release forces nothing. One that runs an
+// image its data moved past went
 // back outside devopsy: said, never written, so the history keeps the
 // newest. rel is the release whose listing names the data services;
 // those with a history count too.
@@ -240,7 +242,7 @@ func (s *Set) Ran(base, rel string) error {
 			ref = repoOf(c.Digest)
 		}
 		how := Ran
-		if forced[svc] {
+		if id := forced[svc]; id != "" && id == img.ID {
 			how = Forced
 		}
 		if last, ok := h.last(svc); ok && last.is(img) {
@@ -254,12 +256,16 @@ func (s *Set) Ran(base, rel string) error {
 		h = append(h, ranOn(svc, how, ref, img, s.now()))
 		changed = true
 	}
-	if !changed {
-		return nil
+	if changed {
+		if err := h.write(base); err != nil {
+			s.say(report.ErrorLevel, "could not write the history of the images that ran on the data (%v): the next release's checks may miss them", err)
+			return err
+		}
 	}
-	if err := h.write(base); err != nil {
-		s.say(report.ErrorLevel, "could not write the history of the images that ran on the data (%v): the next release's checks may miss them", err)
-		return err
+	if forced != nil {
+		if err := os.Remove(filepath.Join(rel, ForcedFile)); err != nil && !os.IsNotExist(err) {
+			s.say(report.WarnLevel, "could not remove %s: %v", ForcedFile, err)
+		}
 	}
 	return nil
 }
@@ -278,19 +284,22 @@ func shownImage(ref string, img Image) string {
 	return short(img.ID)
 }
 
-// ForcedFile, in a release's directory, names the services whose image
-// a --yes let through its checks (Record): their history starts over
-// from it once it runs (Ran).
+// ForcedFile, in a release's directory, names each service whose image
+// a --yes let through its checks (Record), with that image's id, tab
+// separated: its history starts over from it once that image runs (Ran),
+// after the activation that wrote it, never later.
 const ForcedFile = "devopsy-forced"
 
-func readForced(rel string) map[string]bool {
+func readForced(rel string) map[string]string {
 	data, err := os.ReadFile(filepath.Join(rel, ForcedFile))
 	if err != nil {
 		return nil
 	}
-	m := map[string]bool{}
-	for _, f := range strings.Fields(string(data)) {
-		m[f] = true
+	m := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if svc, id, ok := strings.Cut(line, "\t"); ok && svc != "" {
+			m[svc] = id
+		}
 	}
 	return m
 }

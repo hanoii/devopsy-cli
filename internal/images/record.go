@@ -1,6 +1,7 @@
 package images
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,7 +49,8 @@ func (s *Set) Record(rel, prev string) error {
 	old := readList(prev)
 	base := baseOf(rel)
 	h := s.seed(base, old, es)
-	var refused, forced []string
+	var refused []string
+	var forced, refusedRefs []string
 	holds := map[string]string{}
 	// A release that syncs: the parent's data replaces the child's, so
 	// its images are checked against the parent's (SyncCheck, below); a
@@ -69,11 +71,12 @@ func (s *Set) Record(rel, prev string) error {
 		}
 		if why := h.check(old, e, img); why != "" {
 			refused = append(refused, why)
-			forced = append(forced, e.Service)
+			forced = append(forced, e.Service+"\t"+e.ID)
+			refusedRefs = append(refusedRefs, e.Ref)
 		}
 	}
 	if len(refused) > 0 && !s.Yes {
-		s.putNamesBack(rel)
+		s.putNamesBack(rel, es, refusedRefs)
 		yes := "--release --yes"
 		if s.Address != "" {
 			yes = "devopsy @" + s.Address + " " + yes
@@ -178,15 +181,15 @@ func (s *Set) seed(base string, old, es []entry) history {
 	return h
 }
 
-func writeForced(rel string, svcs []string) error {
+func writeForced(rel string, lines []string) error {
 	path := filepath.Join(rel, ForcedFile)
-	if len(svcs) == 0 {
+	if len(lines) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
 	}
-	return writeFile(path, strings.Join(svcs, "\n")+"\n")
+	return writeFile(path, strings.Join(lines, "\n")+"\n")
 }
 
 // NamesFile, in a new release's directory, is what its pulled names held
@@ -207,28 +210,45 @@ func (s *Set) SaveNames(rel string) error {
 		if svc.own(s.Mode) || strings.Contains(svc.Ref, "@") {
 			continue
 		}
-		id, _ := s.Docker.ID(svc.Ref)
+		// Docker failing: unknown, so never put back (a refusal would take
+		// a name that exists for one that was not there).
+		id, err := s.Docker.ID(svc.Ref)
+		if err != nil && !errors.Is(err, ErrNoImage) {
+			continue
+		}
 		b.WriteString(svc.Ref + "\t" + id + "\n")
 	}
 	return writeFile(filepath.Join(rel, NamesFile), b.String())
 }
 
-// putNamesBack points a refused release's pulled names back at what they
-// held before its fetch (NamesFile), so another environment's plain up
-// never runs what was refused here; a name that was not there goes.
-func (s *Set) putNamesBack(rel string) {
+// putNamesBack points the names of a refused release's refused images
+// (refs) back at what they held before its fetch (NamesFile), so another
+// environment's plain up never runs what was refused here: only while a
+// name still holds the image this release's fetch gave it (es), never
+// one another environment's fetch moved since, and never another name
+// of the release (a stateless image's patch stays). A name that was not
+// there before goes.
+func (s *Set) putNamesBack(rel string, es []entry, refs []string) {
 	data, err := os.ReadFile(filepath.Join(rel, NamesFile))
 	if err != nil {
 		return
 	}
+	fetched := map[string]string{}
+	for _, e := range es {
+		fetched[familiar(e.Ref)] = e.ID
+	}
+	refused := map[string]bool{}
+	for _, r := range refs {
+		refused[familiar(r)] = true
+	}
 	for _, line := range strings.Split(string(data), "\n") {
 		ref, id, _ := strings.Cut(line, "\t")
-		if ref == "" {
+		if ref == "" || !refused[familiar(ref)] {
 			continue
 		}
 		cur, err := s.Docker.ID(ref)
 		switch {
-		case err != nil || cur == id:
+		case err != nil || cur == id || cur != fetched[familiar(ref)]:
 		case id == "":
 			_ = s.Docker.Remove(ref)
 		default:

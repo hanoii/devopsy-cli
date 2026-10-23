@@ -694,10 +694,10 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Every session of the release keeps itself alive: the upload, the
-	// holder, the push, the push's look at the child's services
-	// (--sync-exec), the receive, and the log's save.
+	// holder, the push, the push's look at the child's services and its
+	// util image (--sync-exec), the receive, and the log's save.
 	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	if strings.Count(ssh, keep) != 7 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
@@ -706,9 +706,15 @@ func TestSyncDifferentHosts(t *testing.T) {
 		}
 	}
 	// Both servers get the util image ready before using it: the push
-	// in Go, the receive script through devopsy --util-image.
-	if n := strings.Count(docker, "image inspect -f {{.Id}} {{.Created}} devopsy-util:2\n"); n != 2 {
-		t.Errorf("the util image checked %d times, want 2 (push, receive):\n%s", n, docker)
+	// in Go, the child's through devopsy --util-image before the parent
+	// stops anything (a weekly rebuild would lengthen its downtime), and
+	// the receive script's again.
+	check := "image inspect -f {{.Id}} {{.Created}} devopsy-util:2\n"
+	if n := strings.Count(docker, check); n != 3 {
+		t.Errorf("the util image checked %d times, want 3 (push, the child's before the stop, receive):\n%s", n, docker)
+	}
+	if second, stop := strings.Index(docker[strings.Index(docker, check)+len(check):], check), strings.Index(docker, "shop-prod compose -f"); second < 0 || stop < 0 || strings.Index(docker, check)+len(check)+second > strings.Index(docker[stop:], " stop ")+stop {
+		t.Errorf("the child's util image checked after the parent stopped:\n%s", docker)
 	}
 	// Vanished files across servers: the receive script goes on too.
 	s.logs()
@@ -1003,8 +1009,8 @@ func TestSyncCapability(t *testing.T) {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 3 {
-		t.Errorf("the child's list, the spool's cat and the import, each a session:\n%s", ssh)
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 4 {
+		t.Errorf("the child's list, its util image (app's storage is rsynced), the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {
 		t.Errorf("the spool stays across servers")

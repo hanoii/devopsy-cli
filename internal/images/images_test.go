@@ -35,6 +35,8 @@ type fakeDocker struct {
 	// image it serves by digest (its digests): what Pull fetches.
 	upstream map[string]string
 	registry map[string][]string
+	// outside are names a plain up pulled (name, a space, its image).
+	outside []string
 }
 
 func (d *fakeDocker) failing(method string) error {

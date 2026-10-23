@@ -1035,6 +1035,14 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
+		// Across servers the child's too, before anything stops here: a
+		// weekly rebuild there (a pull of its base) would otherwise lengthen
+		// this side's downtime, in its receive script.
+		if os.Getenv(remote.SyncToEnv) != "" {
+			if err := childUtilImage(ctx); err != nil {
+				return fail(err.Error())
+			}
+		}
 	}
 
 	set := cli.DataStops(services, cli.SyncParent, "")
@@ -1413,6 +1421,21 @@ func childServices(ctx context.Context, needs []string) ([]childService, string,
 	}
 	services, mark := parseChildServices(out.String())
 	return services, mark, nil
+}
+
+// childUtilImage gets the child's server's devopsy-util ready
+// (remote.UtilImageFlag) through --sync-exec, in a session of its own.
+func childUtilImage(ctx context.Context) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, remote.UtilImageFlag)
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("getting the child's server's %s ready: %w", remote.UtilImage, err)
+	}
+	return nil
 }
 
 // parseChildServices reads --sync-services list: per service its name,

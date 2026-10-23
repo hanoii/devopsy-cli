@@ -340,12 +340,12 @@ func TestSyncReceiveOwners(t *testing.T) {
 // its first write (an older one would sync without wiping), the child's
 // devopsy runs the wipe. A sync needs neither.
 // The images' history and holds: every activation needs them (img
-// names, record, restore, ran), a sync's holder (sync-check, sync-done)
-// and the parent's check (data); the removals' scripts call img too, but
-// none of those words.
+// names, record, restore, ran), a sync's holder (sync-check, sync-done),
+// the parent's check (data), and the removals, whose img passes options
+// an older devopsy refuses.
 func TestDataImagesFeature(t *testing.T) {
 	for name, s := range allScripts() {
-		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check"
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove"
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
@@ -1638,8 +1638,10 @@ exit 0
 	if out, err := release("3", "DB=mariadb:11.4", "IMG=I0", ImagesYesEnv+"=1"); err != nil || current() != "releases/3/code" || !strings.Contains(out, "--yes: running them anyway") {
 		t.Fatalf("release 3 with --yes (%v):\n%s", err, out)
 	}
-	if got := readFile(filepath.Join(base, "releases", "3", images.ForcedFile)); got != "db\n" {
-		t.Errorf("forced: %q", got)
+	// What --yes let through is the activation's: read after its run
+	// step, then gone, so a rollback to the release forces nothing.
+	if fileExists(filepath.Join(base, "releases", "3", images.ForcedFile)) {
+		t.Errorf("the forced file outlived its activation")
 	}
 	// A release that syncs from a parent whose data never ran its
 	// database's name: refused at its record, before its switch, before

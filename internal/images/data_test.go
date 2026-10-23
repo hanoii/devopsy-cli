@@ -110,6 +110,7 @@ func (m *sim) up() {
 			// removal may have taken.
 			if m.d.Pull(ref) == nil {
 				img, err = m.d.Inspect(ref)
+				m.d.outside = append(m.d.outside, familiar(ref)+" "+img.ID)
 			}
 		}
 		if err != nil {
@@ -685,6 +686,14 @@ func dataRandom(t *testing.T, seed int64) {
 		}
 		m.e.set.Prune()
 	}
+	// What a plain up pulled outside devopsy is no release's.
+	for _, o := range d.outside {
+		n, id, _ := strings.Cut(o, " ")
+		if d.names[n] == id {
+			d.Remove(n)
+		}
+	}
+	d.Prune()
 	if len(d.images) > 0 {
 		var ls []string
 		for id := range d.images {
@@ -1061,5 +1070,24 @@ func TestDataRefusalLeavesOthersNames(t *testing.T) {
 	stage.up()
 	if got := stage.runs("alwaysup"); got != "C2" {
 		t.Errorf("stage's alwaysup runs %s after prod's refused release, want C2, which its own release pulled and gave it (caddy:2-alpine is %s)\n%s", got, d.names["caddy:2-alpine"], out.String())
+	}
+}
+
+// A restart whose images could not be restored still holds the data
+// services on the newest image their data ran, never on what the
+// release's last activation held.
+func TestHoldData(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, appSvc, db118)
+	d.publish("mariadb:11.8", "I2")
+	m.release(false, appSvc, db118)
+	if err := m.e.set.HoldData(m.base(), m.e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if got := holdsIn(m.e.rel(r1))["database"]; got != "mariadb@I2" {
+		t.Errorf("held on %q, want mariadb@I2", got)
 	}
 }

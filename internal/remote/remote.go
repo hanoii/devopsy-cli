@@ -963,7 +963,13 @@ devopsy --say info "current is now $id" || true
       fi
       exit "$status"
     fi
-    get_images "$base/$prev" "$rel" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
+    get_images "$base/$prev" "$rel" || {
+      gi_s=$?
+      # Its data services still held on the newest image their data ran,
+      # never on what its last activation held (img hold).
+      img hold "$base" "$base/$prev" || true
+      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway, its data services on the newest image their data ran"
+    }
 `
 	// Its entries of mnt to their owners, by its own labels: the new
 	// release's may have given them to others.
@@ -1441,9 +1447,13 @@ func fetchImages(projectName, mode string) string {
 	default:
 		return ""
 	}
+	// Without devopsy's own compose file (images.NoReleaseComposeEnv): a
+	// rollback's or a restart's fetch is of the project's images, never of
+	// the holds the release's last activation wrote, which may name an
+	// image nothing runs any more (the restore decides the holds after).
 	return `fetch_images() {
   devopsy --say info "` + what + `"
-  (cd "$1/` + CodeDir + `" && with_tty ` + Quote(cmd) + `)
+  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty ` + Quote(cmd) + `)
 }
 `
 }

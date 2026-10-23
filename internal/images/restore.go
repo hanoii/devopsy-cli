@@ -251,6 +251,34 @@ func shownEntry(e entry) string {
 	return s
 }
 
+// HoldData holds rel's pulled data services on the newest image their
+// data ran (the history's last), in its ComposeFile, when nothing else
+// could restore its images (the restart after a failed run whose fetch
+// failed): what its last activation held may be older. An image gone is
+// pulled by compose's up, by its digest.
+func (s *Set) HoldData(base, rel string) error {
+	h := readHistory(base)
+	holds, _ := composeFacts(rel)
+	if holds == nil {
+		holds = map[string]string{}
+	}
+	es := readList(rel)
+	changed := false
+	for i, e := range es {
+		last, ok := h.last(e.Service)
+		if e.Kind != KindData || !ok || last.hold() == "" || holds[e.Service] == last.hold() {
+			continue
+		}
+		holds[e.Service] = last.hold()
+		es[i].Digest, es[i].ID = last.hold(), last.ID
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return writeCompose(rel, es, holds)
+}
+
 // RestoreOwn puts a release's own images back on their names, after a
 // release's fetch failed or was cut off (Undo, Recover): a build moved
 // them, and a plain up in the live release would run what the failed
