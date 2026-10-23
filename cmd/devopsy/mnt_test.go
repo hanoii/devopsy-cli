@@ -187,7 +187,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	// compose's watch starts the services first too (unless --no-up),
 	// and scale creates containers (review of 2026-10-23, round 2: both
 	// left the entries for Docker to make root's).
-	for _, args := range [][]string{{"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}, {"watch"}, {"scale", "app=2"}} {
+	for _, args := range [][]string{{"watch"}, {"scale", "app=2"}, {"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}} {
 		os.RemoveAll(filepath.Join(s.dot, "mnt"))
 		out, code := s.run(owned, args...)
 		docker, _ := s.logs()
