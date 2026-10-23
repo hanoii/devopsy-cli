@@ -307,7 +307,7 @@ func TestMntOwnerFeature(t *testing.T) {
 // (--chown), and keeps the others' (--numeric-ids).
 func TestSyncReceiveOwners(t *testing.T) {
 	s := allScripts()["receive"]
-	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --delete --numeric-ids $4 ") {
+	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --delete --numeric-ids --modify-window=-1 $4 ") {
 		t.Errorf("receive:\n%s", s)
 	}
 	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {

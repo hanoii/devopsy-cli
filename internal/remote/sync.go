@@ -276,6 +276,16 @@ const UtilImage = "devopsy-util:2"
 // chown -h, as documented.
 var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar findutils coreutils"}
 
+// RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
+// server or across two: everything, owners as numbers, and what the
+// parent lacks removed. --modify-window=-1 compares modification times
+// to the nanosecond. Why: rsync skips a file whose size and time match,
+// and by default its time to the second, so a datadir both sides wrote
+// in the same second (the child's database stopping right before the
+// parent's) kept the child's tablespace files under the parent's
+// dictionary, a database that no longer opened its tables.
+var RsyncCopy = []string{"rsync", "-a", "--delete", "--numeric-ids", "--modify-window=-1"}
+
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
 // import once complete. Locally, --import's temporary file under
@@ -827,7 +837,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }

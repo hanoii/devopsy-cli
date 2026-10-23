@@ -1500,7 +1500,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   built on each host from `UtilDockerfile` when missing; GNU tar for
   `--export` and `--import` too, GNU find and chown for owners), as
   root with `--numeric-ids`. Why: owners and modes survive, and the
-  deploy user's permissions do not matter. An entry the child's labels
+  deploy user's permissions do not matter. Times are compared to the
+  nanosecond (`RsyncCopy`, `--modify-window=-1`): to the second, rsync
+  skipped a datadir's files of the same size that both sides wrote in
+  the same second (the child stops right before the parent), and the
+  child's database opened its old tablespaces under the parent's
+  dictionary (found on a test server, 2026-10-23). An entry the child's labels
   own gets `--chown=<uid>:<gid>` (`syncRsync`, the receive script's
   options), from the child's list: the child's owner for every file
   written, whatever the parent's are (a parent whose files were wrong,
