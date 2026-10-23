@@ -1196,3 +1196,45 @@ func TestSyncDriftedParentHistory(t *testing.T) {
 		t.Errorf("prod's next release (%v): runs %s", err, prod.runs("database"))
 	}
 }
+
+// Bug: SyncCheck and SyncDone get and hold the parent's image by its
+// digest in the parent's repository, even when the child already runs
+// that very image (the same digest) from its own mirror (S74: equal
+// digests are equal whatever the references). Docker finds a digest only
+// in its repository, so the child's server pulls it from the parent's
+// registry, which it may not reach: the sync is refused, nothing wrong.
+func TestSyncMirrorSameDigest(t *testing.T) {
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	if _, err := dev.release(false, dbSvc("mirror.example/mariadb:11.8")); err != nil {
+		t.Fatalf("dev's release: %v\n%s", err, out.String())
+	}
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	// Another server, which reaches only its mirror: it has I2 under the
+	// mirror's name alone.
+	for n := range d.names {
+		if repoKey(n) == "mariadb" {
+			delete(d.names, n)
+		}
+	}
+	d.digests["I2"] = []string{"mirror.example/mariadb@I2"}
+	d.registry["I2"] = []string{"mirror.example/mariadb@I2"}
+	rel := dev.e.rel(dev.cur)
+	out.Reset()
+	if err := dev.e.set.SyncCheck(rel, data); err != nil {
+		t.Fatalf("the child runs the parent's very image from its mirror, refused (%v):\n%s", err, out.String())
+	}
+	if err := dev.e.set.SyncDone(dev.base(), rel, data, "vm1:prod"); err != nil {
+		t.Fatal(err)
+	}
+	if hold := holdsIn(rel)["database"]; hold != "" {
+		if _, err := d.Inspect(hold); err != nil {
+			t.Errorf("dev held on %s, which this server does not have: compose's up would pull it from the parent's registry", hold)
+		}
+	}
+}

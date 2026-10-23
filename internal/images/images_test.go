@@ -37,6 +37,10 @@ type fakeDocker struct {
 	registry map[string][]string
 	// outside are names a plain up pulled (name, a space, its image).
 	outside []string
+	// strictRepo finds and pulls an image by digest only in the
+	// reference's repository, as Docker does (busybox@sha256:... never
+	// matches asdf@sha256:...); off, any repository's digest does.
+	strictRepo bool
 }
 
 func (d *fakeDocker) failing(method string) error {
@@ -69,7 +73,7 @@ func (d *fakeDocker) Inspect(ref string) (Image, error) {
 		if digest := digestOf(ref); digest != "" {
 			for i, ds := range d.digests {
 				for _, x := range ds {
-					if digestOf(x) == digest && d.images[i] {
+					if digestOf(x) == digest && d.images[i] && (!d.strictRepo || repoKey(x) == repoKey(ref)) {
 						id, err = i, nil
 					}
 				}
@@ -203,7 +207,7 @@ func (d *fakeDocker) Pull(ref string) error {
 		// its own (as on Docker's containerd store).
 		for id, ds := range d.registry {
 			for _, x := range ds {
-				if digestOf(x) == digest {
+				if digestOf(x) == digest && (!d.strictRepo || repoKey(x) == repoKey(ref)) {
 					d.images[id] = true
 					d.names[familiar(digestRef(ref))] = id
 					d.digests[id] = appendNew(d.digests[id], repoKey(ref)+"@"+id)
