@@ -193,9 +193,12 @@ case "$*" in
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
-    for e; do if [ -d "$dst/$e" ] && [ ! -L "$dst/$e" ]; then find "$dst/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done
-    exec tar -C "$dst" -xf - ;;
+    # One entry per container (--mount, its source the entry): emptied,
+    # then the members named after it extracted, as the util image does.
+    while [ $# -gt 0 ]; do case $1 in --mount) src=${2#type=bind,source=}; src=${src%%,target=*} ;; -c) shift 3; break ;; esac; shift; done
+    e=$1; shift
+    if [ -d "$src" ] && [ ! -L "$src" ]; then find "$src" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
+    exec tar -C "${src%/"$e"}" -xf - "$@" ;;
 esac
 exit 0
 `
@@ -1926,27 +1929,79 @@ func TestExportImport(t *testing.T) {
 	if err := os.Rename(real, filepath.Join(mnt, "storage")); err != nil {
 		t.Fatal(err)
 	}
-	// Its import empties the entries the tar carries, then extracts.
-	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+	// Tars made member by member.
+	member := func(tw *tar.Writer, h *tar.Header, data string) {
+		h.Mode, h.Size = 0o644, int64(len(data))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reaching := func(members func(tw *tar.Writer)) []byte {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		members(tw)
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	// Its import empties each entry the tar carries, then extracts its
+	// members, in a container that mounts that entry alone, without a
+	// network, never all of mnt (review of 2026-10-23, round 3): the
+	// service whose entry it is runs meanwhile unless its stop label
+	// says otherwise (never, the default, here), and its owner can swap a
+	// directory the extraction just made for a link to ../<another
+	// entry> (renameat2's RENAME_EXCHANGE, or a link in place of a
+	// directory a tar implies without a member of its own, as tarOf's
+	// do): GNU tar follows it and writes the tar's files, as root, into
+	// that entry. Checked on alpine 3.22's tar with the app as 10001
+	// without capabilities, mounting only its entry: auth/htpasswd of
+	// another entry replaced with the tar's. Members are selected by the
+	// names the archive gives the entry (GNU tar matches ./storage/x only
+	// by ./storage), each read from the whole spool.
+	write(t, filepath.Join(mnt, "auth", "htpasswd"), "admin:secret\n", 0o644)
+	dotted := reaching(func(tw *tar.Writer) {
+		member(tw, &tar.Header{Name: "./storage/", Typeflag: tar.TypeDir}, "")
+		member(tw, &tar.Header{Name: "./storage/new.txt", Typeflag: tar.TypeReg}, "new\n")
+		member(tw, &tar.Header{Name: "storage/dir/htpasswd", Typeflag: tar.TypeReg}, "pwned\n")
+	})
+	if _, errs, code := s.runIO(nil, dotted, "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" || readString(filepath.Join(mnt, "auth", "htpasswd")) != "admin:secret\n" {
 		t.Fatalf("--import rsync (%d):\n%s", code, errs)
 	}
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, "exec tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") || strings.Contains(docker, "-owners-") {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 -i --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage devopsy-util:2 sh -c `).MatchString(docker) || !strings.Contains(docker, "exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- \"$@\"\n sh storage ./storage storage\n") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
+	// An entry that is a file: made empty when missing, for its
+	// container to mount, then written in place; one the tar carries as
+	// the other kind is refused before anything changes (the mount point
+	// could not be replaced).
+	file := []string{"FAKE_APP_MOUNT=/app.ini"}
+	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini": "[x]\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
+		t.Errorf("--import of a file entry (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, " -i --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini devopsy-util:2 ") || !strings.Contains(docker, " sh app.ini app.ini\n") {
+		t.Errorf("--import of a file entry:\n%s", docker)
+	}
+	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/app.ini as a directory, and it is a file here: nothing imported") || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
+		t.Errorf("--import of a directory over a file entry (%d):\n%s", code, errs)
+	}
+	s.logs()
 	// An entry its labels own goes to its owner once extracted, before
 	// the import counts as complete (a tar made anywhere carries its
-	// maker's owners), in a container that mounts that entry alone: the
-	// extracting one mounts all of mnt, and the service may run. Not on
-	// macOS, as before up (review of 2026-10-23, round 2): Docker
-	// Desktop's file sharing may refuse the chown, and any container user
-	// writes the Mac's files anyway.
+	// maker's owners), in a container that mounts that entry alone. Not
+	// on macOS, as before up (review of 2026-10-23, round 2): Docker
+	// Desktop's file sharing may refuse the chown, and any container
+	// user writes the Mac's files anyway.
 	_, errs, code = s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app")
 	docker, _ = s.logs()
 	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker)
-	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") {
+	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") || strings.Contains(docker, ":/mnt devopsy-util") {
 		t.Errorf("--import of an owned entry (%d), the owners' container %v:\n%s\n%s", code, owners, errs, docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,
@@ -1985,24 +2040,6 @@ func TestExportImport(t *testing.T) {
 	// never looks at link targets or member types, and with "." nothing
 	// is checked at all. FAIL_TAR keeps the fake from touching files: what
 	// counts is that the import's container never runs.
-	member := func(tw *tar.Writer, h *tar.Header, data string) {
-		h.Mode, h.Size = 0o644, int64(len(data))
-		if err := tw.WriteHeader(h); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tw.Write([]byte(data)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	reaching := func(members func(tw *tar.Writer)) []byte {
-		var b bytes.Buffer
-		tw := tar.NewWriter(&b)
-		members(tw)
-		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return b.Bytes()
-	}
 	for _, c := range []struct {
 		name  string
 		mount string
@@ -2042,6 +2079,18 @@ func TestExportImport(t *testing.T) {
 		})},
 		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
+		})},
+		// Names no plain path, which each entry's extraction could not
+		// select its members by, and an entry both a file and a directory.
+		{"././storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "././storage/x", Typeflag: tar.TypeReg}, "x\n")
+		})},
+		{"storage//x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage//x", Typeflag: tar.TypeReg}, "x\n")
+		})},
+		{"storage a file and a directory", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage", Typeflag: tar.TypeReg}, "x\n")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeReg}, "x\n")
 		})},
 	} {
 		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")

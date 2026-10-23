@@ -994,8 +994,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   a rollback to a release with `devopsy.sync` labels failed; a chown
   failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
   the child's labels (Syncs); an `mnt` import, after its extracting
-  container (`emptyAndExtract`, which mounts all of `mnt`) in the
-  entries' own, never locally on macOS (review of 2026-10-23, round 2:
+  containers (`extractEntries`, below) in the entries' own, never
+  locally on macOS (review of 2026-10-23, round 2:
   as before `up`, and Docker Desktop's file sharing may refuse a
   chown); a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `restart`, `run`,
@@ -1650,7 +1650,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   owned entry it extracted goes to its owner before the import counts
   as complete, in a container of its own (`ownMnt`, named
   `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
-  `importContainers` ends it with the extracting one).
+  `importContainers` ends it with the extracting ones).
 - **An mnt import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
@@ -1671,7 +1671,21 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   app's UID (review of 2026-10-23, round 3); FIFOs and anything else a
   tar of data never needs went with them. Then each carried entry is
   emptied, never removed, and extracted with `--overwrite`. Why never removed: a running
-  container bind-mounts the directory's inode. An entry that is a
+  container bind-mounts the directory's inode. Each entry in a util
+  container of its own (`extractEntries`, `<ImportContainerPrefix><compose
+  name>-<pid>-extract-<n>`), `--network none`, that mounts that entry
+  alone (made first when missing, a directory or an empty file as the
+  tar has it; one of the other kind refused before anything changes)
+  and extracts only its members from the whole spool, by the names
+  the archive gives it (`tarEntry.forms`: GNU tar matches
+  `./storage/x` only by `./storage`, so member names must be plain
+  paths, `././` and `//` refused). Why (decided, review of 2026-10-23,
+  round 3): the service whose entry it is may run (`never` is the
+  default stop), and its owner swapped a directory the extraction had
+  just made for a link to `../<another entry>`, which GNU tar followed
+  as root, planting files in another entry (demonstrated); here a link
+  leads only into the entry or the throwaway container. Cost: the spool
+  is read once per entry. An entry that is a
   symlink is refused both ways: tar carries only the link (an export
   that succeeded empty), and the image's `/mnt` never reaches its
   target.

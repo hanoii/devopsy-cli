@@ -1182,8 +1182,11 @@ writes a service's data to stdout, and `devopsy [@<target>] --import
 through the capability's `export` and `import`, a `mnt` service as a tar
 of its entries of `mnt` (made and extracted as root in `devopsy-util`,
 numeric owners and modes kept; an import empties each entry the tar
-carries first, as a sync's `--delete` does, and an entry its labels own
-given to its owner once extracted). What its stop labels say is
+carries first, as a sync's `--delete` does, and extracts it in a
+container without a network that mounts that entry alone, so a running
+service that swaps a directory for a link meanwhile can lead the
+extraction nowhere else; an entry its labels own is given to its owner
+once extracted). What its stop labels say is
 stopped around either (an export: the service if `own` or `always`, every
 `always` one; an import: the service if `own`, `import` or `always`, every
 `import` and `always` one; with what depends on them), and comes back

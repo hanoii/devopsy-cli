@@ -214,12 +214,13 @@ func dockerRm(names []string) error {
 }
 
 // importContainers is docker ps' filter for the containers an mnt
-// --import of the project at cwd writes through: its extracting one,
+// --import of the project at cwd writes through:
 // remote.ImportContainerPrefix, its compose project and devopsy's pid,
-// and the owners' after it (ownMnt), the same and -owners-<n>. Never
+// then -extract-<n> for the extracting ones (extractEntries) and
+// -owners-<n> for the owners' after them (ownMnt), one per entry. Never
 // another compose project's: shop-prod-1's start shop-prod- too.
 func importContainers(cwd string) string {
-	return "name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+(-owners-[0-9]+)?$"
+	return "name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+(-(extract|owners)-[0-9]+)?$"
 }
 
 // endImport ends an import into name that failed or was cut, which may
