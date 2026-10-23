@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -330,12 +329,26 @@ func removeSpools(base, name string) {
 // maybe right after a member.
 var errNoTarEnd = errors.New("no end-of-archive blocks: cut short?")
 
-// tarEntries lists the top-level entries of mnt the tar in spool carries:
-// a truncated archive fails here, before anything is emptied, and so does
-// one carrying mnt itself (./), whose owner and mode are no entry's. Read here, not by tar -t, which takes a tar cut at a member
+// tarEntry is a top-level entry of mnt an import's tar carries: its
+// name, the names the archive gives it (storage, ./storage), which its
+// extraction selects its members by (GNU tar matches ./storage/x only
+// by ./storage), and whether it is a file.
+type tarEntry struct {
+	name  string
+	forms []string
+	file  bool
+}
+
+// tarEntries lists the top-level entries of mnt the tar in spool carries,
+// sorted: a truncated archive fails here, before anything is emptied, and
+// so does one carrying mnt itself (./), whose owner and mode are no
+// entry's. Read here, not by tar -t, which takes a tar cut at a member
 // boundary for complete, its last member's zeros (a sparse file, a
-// database's pages) passing for the end-of-archive blocks.
-func tarEntries(spool string) ([]string, error) {
+// database's pages) passing for the end-of-archive blocks. A member's
+// name must be a plain path (storage/x, ./storage/x: no ././, //, or
+// /./), so that each entry's extraction selects its members by name
+// (tarEntry.forms), and an entry is a file or a directory, never both.
+func tarEntries(spool string) ([]tarEntry, error) {
 	f, err := os.Open(spool)
 	if err != nil {
 		return nil, err
@@ -346,7 +359,8 @@ func tarEntries(spool string) ([]string, error) {
 	// last.
 	r := &endReader{r: f}
 	tr := tar.NewReader(r)
-	seen := map[string]bool{}
+	seen := map[string]*tarEntry{}
+	dirs := map[string]bool{}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -371,13 +385,31 @@ func tarEntries(spool string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		seen[top] = true
+		if strings.TrimSuffix(p, "/") != path.Clean(p) {
+			return nil, fmt.Errorf("%w: %s is no plain path (tar -C mnt -cf - <entry>... writes them)", errMember, h.Name)
+		}
+		e := seen[top]
+		if e == nil {
+			e = &tarEntry{name: top}
+			seen[top] = e
+		}
+		if form := strings.TrimSuffix(h.Name, "/")[:len(h.Name)-len(p)+len(top)]; !slices.Contains(e.forms, form) {
+			e.forms = append(e.forms, form)
+		}
+		if strings.TrimSuffix(p, "/") == top && h.Typeflag != tar.TypeDir {
+			e.file = true
+		} else {
+			dirs[top] = true
+		}
+		if e.file && dirs[top] {
+			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
+		}
 	}
-	var entries []string
-	for e := range seen {
-		entries = append(entries, e)
+	var entries []tarEntry
+	for _, e := range seen {
+		entries = append(entries, *e)
 	}
-	sort.Strings(entries)
+	slices.SortFunc(entries, func(a, b tarEntry) int { return strings.Compare(a.name, b.name) })
 	return entries, nil
 }
 
@@ -457,21 +489,71 @@ func (e *endReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// emptyAndExtract empties each entry the tar carries (a sync's --delete:
-// what the source does not have goes) and extracts it, as root in the
-// util image so owners and modes come as they were. Directories are
-// emptied, never removed, and files overwritten in place: a running
-// container bind-mounts their inodes. The owned entries it extracted go
-// to their owners after it, each in a container of its own (ownMnt):
-// this one mounts all of mnt.
+// emptyAndExtract empties the entry of mnt $1 (a sync's --delete: what
+// the source does not have goes) and extracts the tar's members named
+// by the rest ($1 as the archive names it: storage, ./storage), as root
+// in the util image so owners and modes come as they were. A directory
+// is emptied, never removed, and a file overwritten in place: a running
+// container bind-mounts their inodes. It runs in a container that
+// mounts that entry alone (extractEntries).
 const emptyAndExtract = `set -eu
-for e; do
-  if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
-    find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  fi
-done
-exec tar -C /mnt -xf - --numeric-owner --overwrite
+e=$1; shift
+if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
+  find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
+exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 `
+
+// extractEntries empties and extracts each entry of mnt the tar in spool
+// carries (emptyAndExtract), in a util container of its own, named
+// name-extract-<n>, that mounts that entry alone, without a network, and
+// reads the whole spool for that entry's members. Why one per entry: the
+// service whose entry it is may run meanwhile (its stop label says, and
+// never is the default), and its owner can swap a directory the
+// extraction just made for a link to ../<another entry>, which GNU tar
+// follows as root; here it leads only into the entry itself or the
+// throwaway container, never another entry or the host (review of
+// 2026-10-23, round 3: one container mounting all of mnt let the app
+// plant files in another entry). A missing entry is made first, an
+// empty directory or file as the tar has it, for the container to mount.
+func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name string) error {
+	for i, e := range entries {
+		if err := readyEntry(mnt, e); err != nil {
+			return err
+		}
+		mount, err := bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name)
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(spool)
+		if err != nil {
+			return err
+		}
+		run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
+		err = dockerRunIO(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, nil, run...)
+		in.Close()
+		if err != nil {
+			return fmt.Errorf("extracting mnt/%s: %w", e.name, err)
+		}
+	}
+	return nil
+}
+
+// readyEntry makes the entry e of mnt when missing, as the tar has it: a
+// directory (makeEntry) or an empty file.
+func readyEntry(mnt string, e tarEntry) error {
+	if !e.file {
+		return makeEntry(mnt, e.name)
+	}
+	f, err := os.OpenFile(filepath.Join(mnt, e.name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
 
 // runImport implements devopsy --import <service> [--yes] [--resolved]:
 // stdin, spooled to a file until complete, into the service. --yes is
@@ -595,7 +677,8 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail("nothing on stdin: nothing imported")
 	}
 
-	var entries []string
+	var entries []tarEntry
+	var names []string
 	var mnt string
 	if s.Transfer == cli.DataMnt {
 		if entries, err = tarEntries(spool); errors.Is(err, errOutside) || errors.Is(err, errMember) {
@@ -607,7 +690,9 @@ func runImport(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
-		for _, e := range entries {
+		for _, t := range entries {
+			e := t.name
+			names = append(names, e)
 			switch {
 			case slices.Contains(s.Excluded, e):
 				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
@@ -618,8 +703,17 @@ func runImport(cwd string, args []string, color bool) int {
 		if mnt, err = dataMnt(projectDir); err != nil {
 			return fail("the project's mnt: " + err.Error())
 		}
-		if e := symlinkEntry(mnt, entries); e != "" {
+		if e := symlinkEntry(mnt, names); e != "" {
 			return fail("mnt/" + e + " is a symlink: the import would not reach what it points to: make it a directory, mounting that there, to import into it: nothing imported")
+		}
+		for _, e := range entries {
+			if fi, err := os.Stat(filepath.Join(mnt, e.name)); err == nil && fi.IsDir() == e.file {
+				as, is := "a directory", "a file"
+				if e.file {
+					as, is = is, as
+				}
+				return fail(fmt.Sprintf("the tar carries mnt/%s as %s, and it is %s here: nothing imported", e.name, as, is))
+			}
 		}
 	}
 
@@ -690,17 +784,16 @@ func runImport(cwd string, args []string, color bool) int {
 				_ = recordWriter(cwd, 0, false, false)
 			}
 		} else {
-			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
-			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
+			report.Info("importing " + name + ": mnt/" + strings.Join(names, ", mnt/") + " replaced")
 			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
-			err = dockerRunIO(ctx, cname, in2, nil, run...)
+			err = extractEntries(ctx, mnt, spool, entries, cname)
 			// What it extracted goes to its owner before the import counts
 			// as complete: a tar made anywhere carries its maker's owners.
 			// Not locally on macOS, as localMnt: Docker Desktop's file
 			// sharing may refuse the chown, and both it and OrbStack let
 			// any container user write the Mac's files anyway.
 			owned := map[string]string{}
-			for _, e := range entries {
+			for _, e := range names {
 				if o := owners[e]; o != "" && (onTarget || runtime.GOOS != "darwin") {
 					owned[e] = o
 				}

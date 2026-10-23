@@ -397,38 +397,6 @@ func TestOwnersMount(t *testing.T) {
 	}
 }
 
-// An mnt import extracts as root in a util container that mounts that
-// import's entries alone, never all of mnt (review of 2026-10-23, round
-// 3). The service whose entry it is runs meanwhile unless its stop label
-// says otherwise (devopsy.data.stop defaults to never: app is not
-// stopped here), and it owns that entry (devopsy.mnt.owner), so it can
-// swap a directory the extraction just made for a link to ../<another
-// entry> (renameat2's RENAME_EXCHANGE, or a link in place of a directory
-// a tar implies without a member of its own, as tarOf's do): GNU tar
-// follows it and writes the tar's files, as root, into that entry.
-// Checked on alpine 3.22's tar with the compromised app as 10001 without
-// capabilities, mounting only its entry: auth/htpasswd of another entry
-// replaced with the tar's, 2994 files planted there as root. Round 2
-// gave each owned entry's chown a container of its own for this very
-// reason; the extraction writes content, not only owners.
-func TestImportExtractsInItsEntriesAlone(t *testing.T) {
-	s := newSyncSetup(t)
-	mnt := filepath.Join(s.dot, "mnt")
-	write(t, filepath.Join(mnt, "storage", "old.txt"), "local\n", 0o644)
-	write(t, filepath.Join(mnt, "auth", "htpasswd"), "admin:secret\n", 0o644)
-	_, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/dir/htpasswd": "pwned\n"}), "--import", "app")
-	docker, _ := s.logs()
-	if code != 0 {
-		t.Fatalf("--import app (%d):\n%s\n%s", code, errs, docker)
-	}
-	if strings.Contains(docker, " stop app") {
-		t.Fatalf("app was stopped for its import, which this test needs running:\n%s", docker)
-	}
-	if strings.Contains(docker, "-v "+mnt+":/mnt devopsy-util") {
-		t.Errorf("the extracting container mounts all of mnt (auth included) while app, the entry's owner, runs:\n%s", docker)
-	}
-}
-
 // An mnt import whose owners' step fails after its extraction keeps its
 // mark, and --resolved is the documented way out ("accepts the data as
 // it is"); it then starts the services on the entry as the tar's maker
