@@ -882,6 +882,11 @@ the secrets its compose file requires), the mounts check refuses
 - an owned entry that is a symbolic link in `shared/mnt`: Docker would
   mount what it points to, and devopsy give that to the owner.
 
+A bind mount's source counts as written and as where its symbolic links
+lead, since Docker mounts that: a link in the release to below an owned
+entry, or one in `shared/mnt` into the release, is refused as what it
+leads to (links into `shared/`, which is outside the release, are fine).
+
 Labels the owners' step after the switch could not read (a name from
 before a change, a leftover `.devopsy/capabilities/sync/`) refuse the
 release here too. With an entry owned, it also builds `devopsy-util`

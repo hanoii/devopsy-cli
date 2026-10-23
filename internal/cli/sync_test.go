@@ -250,6 +250,22 @@ func TestCheckMounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Links judged by where they lead (review of 2026-10-23, round 3:
+	// the check was lexical): files in the release to below the owned
+	// entry storage (its target missing yet, as the owner may make it
+	// later), cache in shared/mnt into the release.
+	if err := os.Symlink(filepath.Join(ProjectDirName, "mnt", "storage", "files"), filepath.Join(root, "files")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "cache"), filepath.Join(shared, "mnt", "cache")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(ProjectDirName, "mnt"), filepath.Join(root, "data")); err != nil {
+		t.Fatal(err)
+	}
 	bind := func(src string, ro bool) string {
 		return fmt.Sprintf(`{"type":"bind","source":%q,"target":"/x","read_only":%v}`, src, ro)
 	}
@@ -280,6 +296,9 @@ func TestCheckMounts(t *testing.T) {
 		// round 2: devopsy made such paths instead, its owner's).
 		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage/files", false) + `]}`:                                                                 "app mounts ./mnt/storage/files, below the owned entry ./mnt/storage (devopsy.mnt.owner=1:1): its owner can make that path a symbolic link, and Docker would mount what it points to on the host",
 		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage", false) + `]},"reader":{"volumes":[` + bind(dot+"/mnt/storage/files/x", true) + `]}`: "reader mounts ./mnt/storage/files/x, below the owned entry ./mnt/storage",
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage", false) + `]},"reader":{"volumes":[` + bind(root+"/files", true) + `]}`:              "reader mounts ./mnt/storage/files, below the owned entry ./mnt/storage",
+		`"app":{"volumes":[` + bind(dot+"/mnt/cache", false) + `]}`:                                                                                                              "app mounts ./cache writable: it is in the release",
+		`"app":{"volumes":[` + bind(root+"/data", false) + `]}`:                                                                                                                  "app mounts ./mnt whole writable",
 	} {
 		err := check(services)
 		if err == nil || err.Error() != "the mounts check refuses the release: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {
