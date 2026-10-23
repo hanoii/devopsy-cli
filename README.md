@@ -1137,8 +1137,9 @@ child goes by that:
 - **Nothing written** (a prepare or a check failed, the parent's stop
   failed, the first export failed with nothing to rsync): its stopped
   services come back, `finish child abort`, and the run step is
-  skipped. On data an earlier sync left partial, it stays partial
-  (below).
+  skipped. On data an earlier sync or an import left partial, it stays
+  partial (below), and what was down for it stays down; what this sync
+  stopped comes back.
 - **Written in part** (the rsync or an import failed or was cut,
   Ctrl-C mid-copy, a connection lost): the child's data is part old, part
   the parent's, so its stopped services stay down and the run step is
