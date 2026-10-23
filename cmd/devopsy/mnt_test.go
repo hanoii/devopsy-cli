@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -184,6 +185,13 @@ func TestMntOwnersLocal(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") {
 		t.Errorf("labels read for ps:\n%s", docker)
 	}
+	// Labels devopsy cannot read (a name from before a change) are a
+	// warning, and compose's command goes on: it says what is wrong with
+	// its own files (review of 2026-10-23, round 2: up failed on them).
+	out, code := s.run(append(slices.Clone(owned), "FAKE_APP=old"), "up", "-d")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: the entries of mnt are left as they are: the labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
+		t.Errorf("up on labels that cannot be read (%d):\n%s\n%s", code, out, docker)
+	}
 	// compose's watch starts the services first too (unless --no-up),
 	// and scale creates containers (review of 2026-10-23, round 2: both
 	// left the entries for Docker to make root's).
@@ -317,7 +325,9 @@ func TestMntOwnersRollbackUp(t *testing.T) {
 	// name from before a change.
 	write(t, s.log+".shop-prod", "FAKE_APP=old FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code := s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || strings.Contains(out, "devopsy: error:") {
+	// The run step's up reads no labels at all: on a server
+	// --mnt-owners restored owns that, and said so.
+	if code != 0 || s.current("prod") != first || strings.Contains(out, "devopsy: error:") || strings.Contains(out, "the entries of mnt are left as they are") {
 		t.Errorf("a rollback whose up meets labels this devopsy cannot read (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 }

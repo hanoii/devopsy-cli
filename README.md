@@ -825,13 +825,18 @@ network, never following a symbolic link:
 - **an `--import`** of a `mnt` service: what it extracted goes to its
   owner before the import completes, the bind sources below it made;
 - **a reset**, once it emptied `mnt`;
-- **locally**, before `up`, `start`, `run`, `create`, `watch` and `scale`: an owned entry
-  missing is created, and each bind source below one, and on Linux an
-  entry whose directory is not its owner's is given away, scanned whole;
-  one whose directory is its owner's is never scanned, since this runs
-  before every such command. On macOS, Docker Desktop and OrbStack let
-  any container user write the Mac's files, so only the directories are
-  made.
+- **locally**, before `up`, `start`, `run`, `create`, `watch` and
+  `scale` (not with `--dry-run`): an owned entry missing is created, and
+  each bind source below one, and on Linux an entry whose directory is
+  not its owner's is given away, scanned whole; one whose directory is
+  its owner's is never scanned, since this runs before every such
+  command. On macOS, Docker Desktop and OrbStack let any container user
+  write the Mac's files, so only the directories are made. Labels that
+  cannot be read are only a warning: the command goes on, and compose
+  says what is wrong with its files. The labels come from the project's
+  compose files (`compose.yaml` and its override), never from one a
+  command adds with `-f`. In a release on a server these commands do
+  none of it: each release's switch did.
 
 Two services whose owners differ on one entry are refused; one without
 the label may write an owned entry (a tool sharing it). A stream's

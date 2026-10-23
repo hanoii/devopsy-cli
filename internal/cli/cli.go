@@ -56,8 +56,10 @@ type Plan struct {
 	// are masked.
 	Verbose []string
 	// Starts is set for a compose command that starts containers
-	// (startingCommands) in a project whose compose files may carry
-	// MntOwnerLabel: the caller readies mnt's owned entries first.
+	// (startingCommands) locally, in a project whose compose files may
+	// carry MntOwnerLabel: the caller readies mnt's owned entries first.
+	// Never in a release on a server, where --mnt-owners gives them away
+	// at each switch, nor for --dry-run, which starts nothing.
 	Starts bool
 }
 
@@ -86,17 +88,31 @@ func composeCommand(args []string) string {
 	return ""
 }
 
-// mayOwnMnt reports whether the compose files the plan passes (after -f)
-// may carry MntOwnerLabel: the label, or a file they include or extend.
+// dryRun reports whether args (compose's command line) ask for
+// compose's --dry-run, a global flag compose takes before or after its
+// command, up to a --.
+func dryRun(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--dry-run" || strings.HasPrefix(a, "--dry-run=") && a != "--dry-run=false" {
+			return true
+		}
+	}
+	return false
+}
+
+// mayOwnMnt reports whether files, the project's compose files
+// (composeFiles: what the labels are read from, ComposeConfig), may
+// carry MntOwnerLabel: the label, or a file they include or extend. A
+// file a command adds with -f is in neither, so it is never half seen.
 // Read as text, so a project without the label pays no compose config
 // before every command: YAML's keys only, comments left out (every
 // template's say "included" somewhere).
-func mayOwnMnt(args []string) bool {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] != "-f" {
-			continue
-		}
-		data, err := os.ReadFile(args[i+1])
+func mayOwnMnt(files []string) bool {
+	for _, file := range files {
+		data, err := os.ReadFile(file)
 		if err != nil {
 			continue
 		}
@@ -120,9 +136,9 @@ func mayOwnMnt(args []string) bool {
 }
 
 // starting sets plan.Starts for args, compose's command line after
-// docker compose.
-func (plan *Plan) starting(args []string) {
-	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && mayOwnMnt(plan.Args)
+// docker compose (Plan.Starts).
+func (p *loadedProject) starting(plan *Plan, args []string) {
+	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && !dryRun(args) && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -1201,7 +1217,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		// The escape hatch: straight to docker compose, past project
 		// commands and the check for compose's commands.
 		plan := p.compose(args[1:])
-		plan.starting(args[1:])
+		p.starting(plan, args[1:])
 		secrets := p.newSecrets()
 		plan.running(secrets)
 		plan.Verbose = maskAll(secrets, verbose)
@@ -1250,7 +1266,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 
 	plan := p.compose(args)
-	plan.starting(args)
+	p.starting(plan, args)
 	plan.running(secrets)
 	plan.Verbose = maskAll(secrets, verbose)
 	return plan, nil

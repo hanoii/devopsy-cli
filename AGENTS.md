@@ -986,7 +986,14 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   and `scale`
   (`Plan.Starts`, only when the compose files' YAML has the label or an
   `include:` or `extends:` key, comments left out: no compose config for
-  every command, and every template's comments say "included"), only
+  every command, and every template's comments say "included"; the
+  project's own files, the ones `ComposeConfig` reads labels from, so a
+  `-f` the command adds is half seen by neither; never for `--dry-run`,
+  and never in a release on a server, `cli.InRelease`, where
+  `--mnt-owners` owns it: review of 2026-10-23, round 2, a rollback's
+  plain `up` failed on labels `--mnt-owners restored` only warned about;
+  labels that cannot be read are a warning and compose's command goes
+  on, since a label devopsy reads must never stop it), only
   missing paths made and, on Linux, an entry whose top is wrong given
   away and scanned whole (one whose top is right is never scanned);
   macOS never checks (Docker Desktop and OrbStack let any container user
