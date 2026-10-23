@@ -1,0 +1,703 @@
+package images
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// sim is one environment as its activations drive it: releases fetch
+// what the registry serves (fakeDocker.upstream), record, go live (up:
+// each service on its hold, else on what its name holds) and append
+// what ran; rollbacks and restarts restore.
+type sim struct {
+	t   *testing.T
+	d   *fakeDocker
+	e   *recEnv
+	out *bytes.Buffer
+	cur string
+	n   int
+	// activation: the next up is an activation's, which labels anew.
+	activation bool
+}
+
+func newSim(t *testing.T, d *fakeDocker, name string, out *bytes.Buffer) *sim {
+	m := &sim{t: t, d: d, e: newRecEnv(t, d, name, ModeBuild, out), out: out}
+	m.e.set.Address = "vm1:" + strings.TrimPrefix(name, "app-")
+	return m
+}
+
+func (m *sim) base() string { return filepath.Dir(m.e.dir) }
+
+func (m *sim) prev() string {
+	if m.cur == "" {
+		return ""
+	}
+	return m.e.rel(m.cur)
+}
+
+// fetch is a release's fetch: own images built anew, pulled ones pulled
+// as the registry has them now.
+func (m *sim) fetch(svcs []Service) {
+	for _, svc := range svcs {
+		if svc.own(m.e.set.Mode) {
+			m.n++
+			m.d.pull(svc.Ref, m.e.set.Name+"-build-"+string(rune('a'+m.n)))
+			continue
+		}
+		if err := m.d.Pull(svc.Ref); err != nil {
+			m.t.Fatalf("fetch %s: %v", svc.Ref, err)
+		}
+	}
+}
+
+// release fetches, records and, unless refused, goes live and runs.
+func (m *sim) release(yes bool, svcs ...Service) (string, error) {
+	m.t.Helper()
+	id := m.e.release(svcs...)
+	rel := m.e.rel(id)
+	if err := m.e.set.SaveNames(rel); err != nil {
+		m.t.Fatal(err)
+	}
+	m.fetch(svcs)
+	m.e.set.Yes = yes
+	defer func() { m.e.set.Yes = false }()
+	if err := m.e.set.Record(rel, m.prev()); err != nil {
+		m.e.set.Undo(rel, m.prev(), false)
+		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+		return id, err
+	}
+	m.cur = id
+	m.activation = true
+	m.up()
+	if err := m.e.set.Ran(m.base(), rel); err != nil {
+		m.t.Fatal(err)
+	}
+	return id, nil
+}
+
+// up is the run step: each service on its hold, else on its name.
+func (m *sim) up() {
+	var cs []container
+	for _, c := range m.d.containers {
+		if c.project != m.e.set.Name {
+			cs = append(cs, c)
+		}
+	}
+	holds := holdsIn(m.e.rel(m.cur))
+	given := map[string]string{}
+	for _, c := range m.d.containers {
+		if c.project == m.e.set.Name && !m.activation {
+			given[c.service] = c.digest
+		}
+	}
+	m.activation = false
+	for _, svc := range m.e.svcs[m.cur] {
+		ref := svc.Ref
+		if h := holds[svc.Name]; h != "" {
+			ref = h
+		}
+		img, err := m.d.Inspect(ref)
+		if errors.Is(err, ErrNoImage) {
+			// Compose pulls an image that is gone, which another project's
+			// removal may have taken.
+			if m.d.Pull(ref) == nil {
+				img, err = m.d.Inspect(ref)
+			}
+		}
+		if err != nil {
+			m.fail("up %s: %v (%v)", ref, err, m.d.names)
+		}
+		c := container{image: img.ID, project: m.e.set.Name, service: svc.Name}
+		// Its label: what the activation gave it, which a plain up of an
+		// unchanged service keeps.
+		c.digest = h(holds[svc.Name], given[svc.Name])
+		if c.digest == "" {
+			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: svc.Name}); ok {
+				c.digest = h(e.Digest, e.ID)
+			}
+		}
+		cs = append(cs, c)
+	}
+	m.d.containers = cs
+}
+
+// h is the first of its arguments that is set.
+func h(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// rollback restores target in place of current, then runs it.
+func (m *sim) rollback(target string) error {
+	err := m.e.set.Restore(m.e.rel(target), m.prev(), false)
+	if errors.Is(err, ErrGone) {
+		m.fetch(m.e.svcs[target])
+		err = m.e.set.Restore(m.e.rel(target), m.prev(), true)
+	}
+	if err != nil {
+		return err
+	}
+	m.cur = target
+	m.activation = true
+	m.up()
+	return m.e.set.Ran(m.base(), m.e.rel(target))
+}
+
+// runs is what a service's container runs.
+func (m *sim) runs(svc string) string {
+	for _, c := range m.d.containers {
+		if c.project == m.e.set.Name && c.service == svc {
+			return c.image
+		}
+	}
+	return ""
+}
+
+func (m *sim) history(svc string) []string {
+	var ids []string
+	for _, r := range readHistory(m.base()) {
+		if r.Service == svc {
+			ids = append(ids, r.How+":"+r.ID)
+		}
+	}
+	return ids
+}
+
+func (m *sim) fail(format string, args ...any) {
+	m.t.Helper()
+	m.t.Fatalf(format+"\n%s", append(args, m.out.String())...)
+}
+
+var db118 = dbSvc("mariadb:11.8")
+
+// S2, S24, S28: a tag moving forward is pulled, held and recorded as it
+// runs; rollbacks never take the database back, while the app goes back
+// exactly; a rollback after rollbacks still keeps the newest.
+func TestDataGoesForward(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, appSvc, db118)
+	if err != nil || m.runs("database") != "I1" {
+		m.fail("r1 (%v): %s", err, m.runs("database"))
+	}
+	app1 := m.runs("app")
+	d.publish("mariadb:11.8", "I2")
+	r2, err := m.release(false, appSvc, db118)
+	if err != nil || m.runs("database") != "I2" || holdsIn(m.e.rel(r2))["database"] != "mariadb@I2" {
+		m.fail("r2 (%v): %s %v", err, m.runs("database"), holdsIn(m.e.rel(r2)))
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 ran:I2" {
+		m.fail("history: %s", got)
+	}
+	d.publish("mariadb:11.8", "I3")
+	r3, _ := m.release(false, appSvc, db118)
+	out.Reset()
+	if err := m.rollback(r2); err != nil || m.runs("database") != "I3" {
+		m.fail("rollback to r2 (%v): %s", err, m.runs("database"))
+	}
+	if err := m.rollback(r1); err != nil || m.runs("database") != "I3" || m.runs("app") != app1 {
+		m.fail("rollback to r1 (%v): database %s, app %s, want I3 and %s", err, m.runs("database"), m.runs("app"), app1)
+	}
+	if !strings.Contains(out.String(), "database stays on mariadb@I3, the newest image its data ran, not "+r1+"'s (mariadb@I1)") {
+		m.fail("not said")
+	}
+	// The name was never moved back: another environment's next up
+	// would follow it.
+	if d.names["mariadb:11.8"] != "I3" {
+		m.fail("mariadb:11.8 is %s", d.names["mariadb:11.8"])
+	}
+	// R1's own record now says what it runs.
+	if es := readList(m.e.rel(r1)); es[1].ID != "I3" || holdsIn(m.e.rel(r1))["database"] != "mariadb@I3" {
+		m.fail("r1's listing %+v", es)
+	}
+	_ = r3
+	// A release after the rollbacks runs what it fetched, forward.
+	d.publish("mariadb:11.8", "I4")
+	if _, err := m.release(false, appSvc, db118); err != nil || m.runs("database") != "I4" {
+		m.fail("r4 (%v): %s", err, m.runs("database"))
+	}
+}
+
+// S3, S4, S5, S7, S8: what the history cannot order, or knows is older,
+// is refused before anything changes, the names the fetch moved put
+// back; --yes lets it through and starts the history over.
+func TestDataRefusals(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.3")); err != nil {
+		m.fail("p1: %v", err)
+	}
+	// S4: a pin bumped: the history cannot order it.
+	d.publish("mariadb:11.8.9", "I2")
+	out.Reset()
+	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.9")); !errors.Is(err, ErrRefused) || m.runs("database") != "I1" {
+		m.fail("pin bump not refused (%v)", err)
+	}
+	if !strings.Contains(out.String(), "database: mariadb:11.8.9 (mariadb@I2) never ran on its data, which last ran mariadb@I1 as mariadb:11.8.3") || !strings.Contains(out.String(), "--release --yes") {
+		m.fail("refusal")
+	}
+	// The name it pulled went: it was not there before.
+	if _, ok := d.names["mariadb:11.8.9"]; ok {
+		m.fail("mariadb:11.8.9 stays after the refusal")
+	}
+	out.Reset()
+	if _, err := m.release(true, appSvc, dbSvc("mariadb:11.8.9")); err != nil || m.runs("database") != "I2" {
+		m.fail("--yes (%v)", err)
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 forced:I2" {
+		m.fail("history after --yes: %s", got)
+	}
+	// S5: the pin lowered to what ran before: moved past, whatever the
+	// name.
+	out.Reset()
+	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.3")); !errors.Is(err, ErrRefused) {
+		m.fail("lowered pin: %v", err)
+	}
+	// S7: --yes started the history over at I2: I1 is no longer known as
+	// moved past, but a name its data never ran, refused as such.
+	if !strings.Contains(out.String(), "never ran on its data") {
+		m.fail("after the reset")
+	}
+	// S8: a tag pushed again backward, under the same name.
+	d.publish("mariadb:11.8.9", "I3")
+	m.release(false, appSvc, dbSvc("mariadb:11.8.9"))
+	d.publish("mariadb:11.8.9", "I2")
+	out.Reset()
+	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.9")); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "an image its data moved past: it last ran mariadb@I3") {
+		m.fail("backward tag (%v)", err)
+	}
+	if d.names["mariadb:11.8.9"] != "I3" || m.runs("database") != "I3" {
+		m.fail("names not put back: %s runs %s", d.names["mariadb:11.8.9"], m.runs("database"))
+	}
+	// A tag moving forward under the same name needs nothing.
+	d.publish("mariadb:11.8.9", "I4")
+	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.9")); err != nil || m.runs("database") != "I4" {
+		m.fail("forward (%v)", err)
+	}
+}
+
+// S16, S25, S27: across a changed name or repository, the data keeps the
+// history's last; a pulled service whose name changed goes back
+// exactly, held by digest when its name moved on (S30), pulled by its
+// digest when gone (S32).
+func TestDataRollbackAcrossNames(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	caddy1 := Service{Name: "alwaysup", Ref: "caddy:2.10"}
+	caddy2 := Service{Name: "alwaysup", Ref: "caddy:2.11"}
+	d.publish("mariadb:11", "I0")
+	d.publish("caddy:2.10", "C1")
+	r1, _ := m.release(false, dbSvc("mariadb:11"), caddy1)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	d.publish("caddy:2.11", "C2")
+	if _, err := m.release(true, dbSvc("mirror.example/mariadb:11.8"), caddy2); err != nil {
+		m.fail("r2: %v", err)
+	}
+	// caddy:2.10 pushed again meanwhile: its name points elsewhere now.
+	d.publish("caddy:2.10", "C1b")
+	d.Pull("caddy:2.10")
+	out.Reset()
+	if err := m.rollback(r1); err != nil || m.runs("database") != "I2" || m.runs("alwaysup") != "C1" {
+		m.fail("rollback (%v): database %s, alwaysup %s", err, m.runs("database"), m.runs("alwaysup"))
+	}
+	if h := holdsIn(m.e.rel(r1)); h["database"] != "mirror.example/mariadb@I2" || h["alwaysup"] != "caddy@C1" {
+		m.fail("holds %v", h)
+	}
+	// S32: the held caddy gone from the server: pulled by its digest.
+	r3, _ := m.release(false, dbSvc("mirror.example/mariadb:11.8"), caddy2)
+	_ = r3
+	for n, i := range d.names {
+		if i == "C1" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "C1")
+	if err := m.rollback(r1); err != nil || m.runs("alwaysup") != "C1" || !strings.Contains(out.String(), "pulled caddy@C1 again by its digest") {
+		m.fail("gone hold (%v): %s", err, m.runs("alwaysup"))
+	}
+}
+
+// S15, S17: a run step that failed after the database started on the new
+// image: what ran is recorded before the restart, which keeps it; one
+// that failed before keeps the old one.
+func TestDataRestartKeepsWhatRan(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, appSvc, db118)
+	app1 := m.runs("app")
+	d.publish("mariadb:11.8", "I2")
+	// r2 records, its up starts the database, its run step fails.
+	r2 := m.e.release(appSvc, db118)
+	m.e.set.SaveNames(m.e.rel(r2))
+	m.fetch(m.e.svcs[r2])
+	if err := m.e.set.Record(m.e.rel(r2), m.e.rel(r1)); err != nil {
+		m.fail("%v", err)
+	}
+	m.cur = r2
+	m.up()
+	m.e.set.Ran(m.base(), m.e.rel(r2))
+	// The restart: r1 back, in place of r2.
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r2), false); err != nil {
+		m.fail("%v", err)
+	}
+	m.cur = r1
+	m.up()
+	if m.runs("database") != "I2" || m.runs("app") != app1 {
+		m.fail("restart: database %s, app %s", m.runs("database"), m.runs("app"))
+	}
+	// A release that failed before the database started: it stays.
+	d.publish("mariadb:11.8", "I3")
+	r3 := m.e.release(appSvc, db118)
+	m.fetch(m.e.svcs[r3])
+	m.e.set.Record(m.e.rel(r3), m.e.rel(r1))
+	m.e.set.Ran(m.base(), m.e.rel(r3))
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r3), false); err != nil {
+		m.fail("%v", err)
+	}
+	m.up()
+	if m.runs("database") != "I2" {
+		m.fail("restart before the database started: %s", m.runs("database"))
+	}
+}
+
+// S13, S37: a failed fetch, or one cut off, puts the live release's own
+// names back and never a pulled one; the live database stays held.
+func TestDataUndoKeepsPulledNames(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, appSvc, db118)
+	app1 := d.names["app-prod-app:latest"]
+	d.publish("mariadb:11.8", "I2")
+	r2 := m.e.release(appSvc, db118)
+	m.fetch(m.e.svcs[r2])
+	m.e.set.Undo(m.e.rel(r2), m.e.rel(r1), false)
+	if d.names["app-prod-app:latest"] != app1 || d.names["mariadb:11.8"] != "I2" {
+		m.fail("undo: app %s (want %s), mariadb:11.8 %s", d.names["app-prod-app:latest"], app1, d.names["mariadb:11.8"])
+	}
+	m.up()
+	if m.runs("database") != "I1" {
+		m.fail("the live database moved: %s", m.runs("database"))
+	}
+}
+
+// S39 to S42: another environment's release, rollback or plain up never
+// moves this one's database, which only its own activations change.
+func TestDataOtherEnvironments(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	p1, _ := prod.release(false, db118)
+	stage.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	stage.up() // a plain up: held
+	if stage.runs("database") != "I1" || prod.runs("database") != "I2" {
+		t.Fatalf("stage %s, prod %s\n%s", stage.runs("database"), prod.runs("database"), out.String())
+	}
+	prod.rollback(p1)
+	if d.names["mariadb:11.8"] != "I2" || stage.runs("database") != "I1" {
+		t.Fatalf("prod's rollback moved a name: %s\n%s", d.names["mariadb:11.8"], out.String())
+	}
+	stage.release(false, db118)
+	if stage.runs("database") != "I2" {
+		t.Fatalf("stage's own release: %s", stage.runs("database"))
+	}
+}
+
+// S88: a container moved back outside devopsy is said, never recorded.
+func TestDataWentBackOutside(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	r2, _ := m.release(false, db118)
+	for i, c := range d.containers {
+		if c.service == "database" {
+			d.containers[i].image = "I1"
+		}
+	}
+	out.Reset()
+	m.e.set.Ran(m.base(), m.e.rel(r2))
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 ran:I2" || !strings.Contains(out.String(), "went back outside devopsy") {
+		m.fail("history %s", got)
+	}
+}
+
+// A data service with a history from an older devopsy's release (no
+// service column) and none of its own: what its container runs seeds
+// it, and a changed name is refused (S33, a service gaining its label).
+func TestDataSeed(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.4", "I0")
+	d.Pull("mariadb:11.4")
+	id := m.e.release(dbSvc("mariadb:11.4"))
+	os.WriteFile(filepath.Join(m.e.rel(id), ListFile), []byte("mariadb:11.4\tI0\n"), 0o644)
+	m.cur = id
+	d.containers = []container{{image: "I0", project: "app-prod", service: "database", ref: "mariadb:11.4"}}
+	d.publish("mariadb:11.8", "I1")
+	out.Reset()
+	if _, err := m.release(false, db118); !errors.Is(err, ErrRefused) {
+		m.fail("a changed name over a seeded history: %v", err)
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I0" {
+		m.fail("seed: %s", got)
+	}
+}
+
+// --destroy-data forgets the history with the data.
+func TestRemoveHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	if err := RemoveHistory(m.base()); err != nil || len(readHistory(m.base())) != 0 {
+		t.Fatalf("history stays (%v)", err)
+	}
+	if err := RemoveHistory(m.base()); err != nil {
+		t.Fatalf("twice: %v", err)
+	}
+}
+
+// Two environments sharing mariadb tags release (the same name, another
+// one, a pin, now and then with --yes), fail in their run step after the
+// database started or in their fetch, roll back, run plain ups and lose
+// releases to pruning, while the registry moves the tags forward and
+// sometimes back. After every step: each database runs the newest image
+// its data ran (rules 1 and 2), a rollback moved no pulled name (rule 4),
+// every kept release's bookmarks hold what it lists; once all goes,
+// nothing is left (rule 5).
+func TestDataRandom(t *testing.T) {
+	for seed := int64(1); seed <= int64(seeds(300)); seed++ {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) { dataRandom(t, seed) })
+	}
+}
+
+func dataRandom(t *testing.T, seed int64) {
+	rng := rand.New(rand.NewSource(seed))
+	d := newFake()
+	var out bytes.Buffer
+	envs := []*sim{newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)}
+	left := filepath.Join(t.TempDir(), LeftFile)
+	for _, m := range envs {
+		m.e.set.Left = left
+	}
+	refs := []string{"mariadb:11.8", "mariadb:11", "mariadb:11.8.9", "mirror.example/mariadb:11.8"}
+	img := 0
+	var pushed []string
+	push := func(ref string) {
+		img++
+		id := fmt.Sprintf("I%03d", img)
+		if len(pushed) > 0 && rng.Intn(5) == 0 {
+			id = pushed[rng.Intn(len(pushed))] // pushed again: maybe back
+		}
+		d.publish(ref, id)
+		pushed = append(pushed, id)
+	}
+	for _, r := range refs {
+		push(r)
+	}
+	var log []string
+	check := func(step string) {
+		t.Helper()
+		log = append(log, step)
+		for _, m := range envs {
+			if m.cur == "" {
+				continue
+			}
+			if got := m.runs("database"); got != "" {
+				if last, ok := readHistory(m.base()).last("database"); ok && got != last.ID {
+					t.Fatalf("after %v: %s's database runs %s, its data's newest is %s\n%s", log, m.e.set.Name, got, last.ID, out.String())
+				}
+			}
+			for _, id := range m.e.releases() {
+				es := readList(m.e.rel(id))
+				for i, b := range bookmarks(es, m.e.set.Name, id) {
+					if es[i].ID == "" {
+						continue
+					}
+					if got, _ := d.ID(b); got != es[i].ID {
+						t.Fatalf("after %v: %s's bookmark %s is %q, want %q\n%s", log, id, b, got, es[i].ID, out.String())
+					}
+				}
+			}
+		}
+	}
+	// Each environment builds its own app, named after its compose project.
+	var m *sim
+	svcs := func() []Service {
+		return []Service{{Name: "app", Ref: m.e.set.Name + "-app", Build: true}, dbSvc(refs[rng.Intn(len(refs))]), proxySvc}
+	}
+	d.publish("caddy:2-alpine", "C1")
+	for step := 0; step < 40; step++ {
+		m = envs[rng.Intn(2)]
+		switch op := rng.Intn(8); op {
+		case 0: // the registry moves a tag
+			push(refs[rng.Intn(len(refs))])
+			if rng.Intn(2) == 0 {
+				d.publish("caddy:2-alpine", fmt.Sprintf("C%d", step))
+			}
+		case 1, 2: // a release
+			id, err := m.release(rng.Intn(4) == 0, svcs()...)
+			if err != nil && !errors.Is(err, ErrRefused) {
+				t.Fatalf("after %v: release: %v\n%s", log, err, out.String())
+			}
+			check(m.e.set.Name + " release " + id)
+		case 3: // a run step failing after its database started, restarted
+			if m.cur == "" {
+				continue
+			}
+			prev := m.cur
+			id := m.e.release(svcs()...)
+			m.e.set.SaveNames(m.e.rel(id))
+			m.fetch(m.e.svcs[id])
+			m.e.set.Yes = rng.Intn(4) == 0
+			err := m.e.set.Record(m.e.rel(id), m.e.rel(prev))
+			m.e.set.Yes = false
+			if err != nil {
+				m.e.set.Undo(m.e.rel(id), m.e.rel(prev), false)
+				os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
+				check(m.e.set.Name + " refused " + id)
+				continue
+			}
+			m.cur = id
+			m.up()
+			m.e.set.Ran(m.base(), m.e.rel(id))
+			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
+			if err := m.e.set.Restore(m.e.rel(prev), m.e.rel(id), false); err != nil && !errors.Is(err, ErrGone) {
+				t.Fatalf("after %v: restart: %v\n%s", log, err, out.String())
+			} else if err != nil {
+				m.fetch(m.e.svcs[prev])
+				m.e.set.Restore(m.e.rel(prev), m.e.rel(id), true)
+			}
+			m.cur = prev
+			m.up()
+			check(m.e.set.Name + " failed run " + id)
+		case 4: // a fetch failing: undone
+			id := m.e.release(svcs()...)
+			m.fetch(m.e.svcs[id])
+			m.e.set.Undo(m.e.rel(id), m.prev(), false)
+			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
+			m.up()
+			check(m.e.set.Name + " failed fetch " + id)
+		case 5: // a rollback
+			var target string
+			for _, id := range m.e.releases() {
+				if id < m.cur && !exists(filepath.Join(m.e.rel(id), failedFile)) {
+					target = id
+				}
+			}
+			if target == "" {
+				continue
+			}
+			before := map[string]string{}
+			for n, i := range d.names {
+				if !isBookmark(n) && !strings.HasSuffix(n, "-app:latest") {
+					before[n] = i
+				}
+			}
+			if err := m.rollback(target); err != nil {
+				t.Fatalf("after %v: rollback to %s: %v\n%s", log, target, err, out.String())
+			}
+			for n, i := range before {
+				if got, ok := d.names[n]; ok && got != i && !strings.Contains(n, "@") {
+					t.Fatalf("after %v: the rollback to %s moved %s from %s to %s\n%s", log, target, n, i, got, out.String())
+				}
+			}
+			check(m.e.set.Name + " rollback " + target)
+		case 6: // a plain up
+			if m.cur != "" {
+				m.up()
+				check(m.e.set.Name + " up")
+			}
+		case 7: // pruning a release
+			for _, id := range m.e.releases() {
+				if id != m.cur {
+					if err := m.e.set.Remove(m.e.rel(id)); err != nil {
+						t.Fatal(err)
+					}
+					os.RemoveAll(m.e.rel(id))
+					m.e.set.Prune()
+					check(m.e.set.Name + " remove " + id)
+					break
+				}
+			}
+		}
+	}
+	d.containers = nil
+	for _, m := range envs {
+		for _, id := range m.e.releases() {
+			m.e.set.Remove(m.e.rel(id))
+			os.RemoveAll(m.e.rel(id))
+		}
+		m.e.set.Prune()
+	}
+	if len(d.images) > 0 {
+		var ls []string
+		for id := range d.images {
+			var ns []string
+			for n, i := range d.names {
+				if i == id {
+					ns = append(ns, n)
+				}
+			}
+			ls = append(ls, id+" "+strings.Join(ns, ","))
+		}
+		sort.Strings(ls)
+		t.Fatalf("after %v and removing everything, images are left: %v\n%s", log, ls, out.String())
+	}
+}
+
+// seeds is n, or DEVOPSY_TEST_SEEDS for a longer run.
+func seeds(n int) int {
+	if v, err := strconv.Atoi(os.Getenv("DEVOPSY_TEST_SEEDS")); err == nil && v > 0 {
+		return v
+	}
+	return n
+}
+
+// --status names the services held by digest and those a plain up moved
+// off the image their activation gave them.
+func TestStatusLines(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	d.publish("caddy:2-alpine", "C1")
+	stage.release(false, db118, proxySvc)
+	d.publish("mariadb:11.8", "I2")
+	d.publish("caddy:2-alpine", "C2")
+	prod.release(false, db118, proxySvc)
+	stage.up() // a plain up: caddy follows its name, the database is held
+	got := StatusLines(d, "app-stage", stage.e.rel(stage.cur))
+	want := []string{"database held on mariadb@I1", "alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}

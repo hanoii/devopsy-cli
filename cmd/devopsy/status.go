@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -61,6 +62,16 @@ func runStatus(cwd string, args []string, color bool) int {
 				line += "  " + strings.ToLower(e.Status[:1]) + e.Status[1:]
 			}
 			fmt.Println(line)
+		}
+	}
+	// On a server, the images held by digest and those a plain up moved
+	// off what their activation gave them.
+	if cli.InRelease(projectDir) {
+		if lines := images.StatusLines(images.CLI{}, composeName(cwd), remote.ReleaseFile(projectDir, "")); len(lines) > 0 {
+			fmt.Println("images")
+			for _, l := range lines {
+				fmt.Println("  " + l)
+			}
 		}
 	}
 	// The project's own lines, when it has the capability.

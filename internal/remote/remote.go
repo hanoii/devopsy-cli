@@ -698,6 +698,18 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	s += watchSession(sync != nil, true)
 	// Defined first: the fetch and not_live's callers use them.
 	s += releaseImages(projectName, t, t.Mode)
+	// get_images <dir> <against>, for the restart after a failed run:
+	// under the shared image lock, a release's images restored in place
+	// of against's (img restore), fetched again when an image it builds
+	// is gone.
+	s += `get_images() {
+  image_lock shared fetching || return $?
+  gi=0
+  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || gi=$?
+  image_unlock
+  return "$gi"
+}
+`
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -834,11 +846,21 @@ done
 	if rollback {
 		undo = `img undo --rollback "$1" ${prev:+"$base/$prev"}`
 	}
+	// A new release: what its pulled names held first (a refused one
+	// puts them back), then its fetch and its record (img record: the
+	// listing, the bookmarks, devopsy's compose file, and the checks of
+	// the pulled data services against their data's history, exit 3).
+	// A rollback: its images restored against the release it leaves
+	// (img restore), fetched again only when an image it builds is gone
+	// (exit 1). A signal during either (img ignores it) skips the fetch.
+	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
+	if rollback {
+		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
+	}
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
-  # A signal during the restore (img ignores it) skips the fetch.
-  img restore "$1" || { [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; } || fr=$?
+  ` + fetchStep + ` || fr=$?
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -936,7 +958,7 @@ devopsy --say info "current is now $id" || true
       fi
       exit "$status"
     fi
-    get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
+    get_images "$base/$prev" "$rel" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
 `
 	// Its entries of mnt to their owners, by its own labels: the new
 	// release's may have given them to others.
@@ -992,7 +1014,10 @@ fi
 fi
 `
 	}
-	s += `if [ "$status" != 0 ]; then
+	// What ran on the data, failed or not, before a restart replaces it:
+	// the history the next activation's checks and holds go by.
+	s += `img ran "$base" "$rel" || true
+if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + `  if [ -n "$prev" ]; then
     make_current "$prev"
@@ -1149,6 +1174,11 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
 fi
 `
 
+// ImagesYesEnv set (to anything) lets an activation's images through
+// the checks of its pulled data services (img record): the operator's
+// --yes.
+const ImagesYesEnv = "DEVOPSY_INTERNAL_IMAGES_YES"
+
 // WatchEnv tells an activation that its stdin stays open for as long as
 // the operator's devopsy runs (a pipe it keeps), so EOF there means the
 // session is gone: activations are always -T, whose drop sends no
@@ -1296,9 +1326,6 @@ func leftPath(t *Target) string {
 //   - img <action> ...: devopsy --images for the environment (its compose
 //     name, its project's record).
 //   - fetch_images <dir>: builds or pulls a release's images (fetchImages).
-//   - get_images <dir>: under the shared image lock, a release's images
-//     restored from its bookmarks (img restore), else fetched and
-//     bookmarked. A new release has no listing yet, so it fetches.
 //   - image_lock shared|exclusive <doing> [now] and image_unlock: the
 //     server's image lock (ImagesLock) on fd 8, always taken after the
 //     release lock (fd 9). With now it never waits; otherwise up to 10
@@ -1322,7 +1349,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode}, false) + ` --left "$left" "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesYesEnv + `:+--yes} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1373,13 +1400,6 @@ image_lock() {
 image_unlock() {
   rm -f "$root/` + ImagesHolders + `/$$" 2>/dev/null || true
   exec 8>&-
-}
-get_images() {
-  image_lock shared fetching || return $?
-  gi=0
-  img restore "$1" || { fetch_images "$1" && img record "$1"; } || gi=$?
-  image_unlock
-  return "$gi"
 }
 `
 }

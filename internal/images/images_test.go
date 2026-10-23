@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -45,7 +46,9 @@ func (d *fakeDocker) failing(method string) error {
 }
 
 type container struct {
-	image, project string
+	image, project, ref string
+	// digest is its devopsy.digest label.
+	digest string
 	// service and state: "" is a running container of no service.
 	service, state string
 }
@@ -97,9 +100,11 @@ func (d *fakeDocker) Tags(id string) ([]string, error) {
 	if !d.images[id] {
 		return nil, ErrNoImage
 	}
+	// A name by digest too, as Docker's containerd store lists one an
+	// image was pulled by.
 	var ts []string
 	for n, i := range d.names {
-		if i == id && !strings.Contains(n, "@") {
+		if i == id {
 			ts = append(ts, n)
 		}
 	}
@@ -121,6 +126,17 @@ func (d *fakeDocker) Remove(ref string) error {
 	id, ok := d.names[ref]
 	if !ok {
 		return ErrNoImage
+	}
+	if strings.Contains(ref, "@") {
+		// By digest, Docker's containerd store removes every name of the
+		// image in that repository.
+		for n, i := range d.names {
+			if i == id && n != ref && repoKey(n) == repoKey(ref) {
+				if err := d.Remove(n); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	n := 0
 	for _, i := range d.names {
@@ -214,7 +230,7 @@ func (d *fakeDocker) Containers(project string) ([]Container, error) {
 			if st == "" {
 				st = "running"
 			}
-			cs = append(cs, Container{Name: fmt.Sprintf("%s-%s-%d", project, c.service, i), Service: c.service, Image: c.image, State: st})
+			cs = append(cs, Container{Name: fmt.Sprintf("%s-%s-%d", project, c.service, i), Service: c.service, Image: c.image, Ref: c.ref, State: st, Digest: c.digest})
 		}
 	}
 	return cs, nil
@@ -225,10 +241,21 @@ func (d *fakeDocker) Containers(project string) ([]Container, error) {
 func (d *fakeDocker) pull(ref, id string) {
 	d.images[id] = true
 	d.names[familiar(ref)] = id
+	d.digests[id] = appendNew(d.digests[id], d.publish(ref, id))
+}
+
+// publish puts an image in the registry under ref, without pulling it:
+// its digest is the one ref names, else its id.
+func (d *fakeDocker) publish(ref, id string) string {
 	dg := repoKey(ref) + "@" + id
-	d.digests[id] = appendNew(d.digests[id], dg)
+	if digest := digestOf(ref); digest != "" {
+		dg = repoKey(ref) + "@" + digest
+	}
 	d.registry[id] = appendNew(d.registry[id], dg)
-	d.upstream[familiar(ref)] = id
+	if !strings.Contains(ref, "@") {
+		d.upstream[familiar(ref)] = id
+	}
+	return dg
 }
 
 // services are a listing's services, named after their refs; a ref
@@ -341,9 +368,14 @@ func (e *env) run(d *fakeDocker) {
 			cs = append(cs, c)
 		}
 	}
-	for _, r := range e.lists[e.current] {
-		if id, err := d.ID(r); err == nil {
-			cs = append(cs, container{image: id, project: e.set.Name})
+	holds := holdsIn(e.rel(e.current))
+	for _, svc := range services(e.lists[e.current]) {
+		ref := svc.Ref
+		if h := holds[svc.Name]; h != "" {
+			ref = h
+		}
+		if img, err := d.Inspect(ref); err == nil {
+			cs = append(cs, container{image: img.ID, project: e.set.Name, service: svc.Name})
 		}
 	}
 	d.containers = cs
@@ -494,12 +526,32 @@ func randomHistory(t *testing.T, seed int64) {
 			}
 			before := usedNames(d, other)
 			shared := sharedNames(d, other)
-			if e.set.Restore(e.rel(target)) {
-				assertKept(t, d, before, log, &out)
-				// Exact, but for the names another environment uses.
+			pulled := map[string]string{}
+			for n, i := range d.names {
+				if !isBookmark(n) && !strings.HasSuffix(n, "-app:latest") {
+					pulled[n] = i
+				}
+			}
+			err := e.set.Restore(e.rel(target), e.rel(e.current), false)
+			if errors.Is(err, ErrGone) {
+				// Built again, sometimes listing another repository (a variable
+				// changed since): its old bookmarks must not linger.
+				if rng.Intn(2) == 0 {
+					e.lists[target] = []string{own, "postgres:16"}
+					if _, ok := d.upstream["postgres:16"]; !ok {
+						d.publish("postgres:16", newImage())
+					}
+				}
+				d.pull(own, newImage())
+				err = e.set.Restore(e.rel(target), e.rel(e.current), true)
+				for _, b := range bookmarks(readList(e.rel(target)), e.set.Name, target) {
+					delete(gone, b)
+				}
+			} else if err == nil {
+				// An own image exactly, but for a name another environment uses.
 				es := readList(e.rel(target))
 				for i, b := range bookmarks(es, e.set.Name, target) {
-					if strings.Contains(es[i].Ref, "@") {
+					if es[i].Kind != KindOwn {
 						continue
 					}
 					want, _ := d.ID(b)
@@ -507,18 +559,15 @@ func randomHistory(t *testing.T, seed int64) {
 						t.Fatalf("after %v: rolling back to %s left %s on %s, want %s\n%s", log, target, es[i].Ref, got, want, out.String())
 					}
 				}
-			} else {
-				// Fetched again, sometimes listing another repository (a variable
-				// changed since): its old bookmarks must not linger.
-				if rng.Intn(2) == 0 {
-					e.lists[target] = []string{own, "postgres:16"}
-				}
-				for _, r := range e.lists[target] {
-					d.pull(r, newImage())
-				}
-				e.set.Bookmark(e.rel(target))
-				for _, b := range bookmarks(readList(e.rel(target)), e.set.Name, target) {
-					delete(gone, b)
+			}
+			if err != nil {
+				t.Fatalf("after %v: rolling back to %s: %v\n%s", log, target, err, out.String())
+			}
+			assertKept(t, d, before, log, &out)
+			// A pulled name never moves back: only a gone one is pulled again.
+			for n, i := range pulled {
+				if got, ok := d.names[n]; ok && got != i && !strings.Contains(n, "@") {
+					t.Fatalf("after %v: rolling back to %s moved %s from %s to %s\n%s", log, target, n, i, got, out.String())
 				}
 			}
 			e.current = target
@@ -690,20 +739,21 @@ func TestRemoveLeavesUsedImage(t *testing.T) {
 }
 
 // A bookmark Docker shows short (nginx for docker.io/library/nginx) is
-// still the environment's own: its rollback restores exactly.
+// still the environment's own: its rollback restores an image compose
+// never pulls (pull_policy: never) exactly.
 func TestRestoreFamiliarNames(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
-	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
-	ref := "docker.io/library/nginx:1.27"
-	d.pull(ref, "sha256:1")
-	first := e.newRelease(ref)
-	e.set.Bookmark(e.rel(first))
-	d.pull(ref, "sha256:2")
-	second := e.newRelease(ref)
-	e.set.Bookmark(e.rel(second))
-	if !e.set.Restore(e.rel(first)) || d.names["nginx:1.27"] != "sha256:1" {
-		t.Errorf("nginx:1.27 is %s after the rollback, want sha256:1\n%s", d.names["nginx:1.27"], out.String())
+	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
+	web := Service{Name: "web", Ref: "docker.io/library/nginx:1.27", NeverPull: true}
+	d.pull(web.Ref, "sha256:1")
+	first := e.release(web)
+	e.set.Record(e.rel(first), "")
+	d.pull(web.Ref, "sha256:2")
+	second := e.release(web)
+	e.set.Record(e.rel(second), e.rel(first))
+	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != nil || d.names["nginx:1.27"] != "sha256:1" {
+		t.Errorf("nginx:1.27 is %s after the rollback (%v), want sha256:1\n%s", d.names["nginx:1.27"], err, out.String())
 	}
 }
 
@@ -778,21 +828,34 @@ func TestRemoveOtherRepository(t *testing.T) {
 	}
 }
 
-// A release whose digest's image is gone is not restored: the fetch
-// pulls it before the switch, never the run step after.
+// A release whose digest's image is gone gets it again before the
+// switch, never from the run step's up after: pulled by its digest, and
+// refused when the registry no longer has it.
 func TestRestoreDigestGone(t *testing.T) {
-	d := newFake()
-	var out bytes.Buffer
-	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
-	d.pull("nginx@sha256:abc", "sha256:1")
-	id := e.newRelease("nginx@sha256:abc")
-	e.set.Bookmark(e.rel(id))
-	for n := range d.names {
-		delete(d.names, n)
-	}
-	delete(d.images, "sha256:1")
-	if e.set.Restore(e.rel(id)) {
-		t.Errorf("restored with its image gone\n%s", out.String())
+	for _, served := range []bool{true, false} {
+		d := newFake()
+		var out bytes.Buffer
+		e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
+		web := Service{Name: "web", Ref: "nginx@sha256:abc"}
+		d.pull(web.Ref, "sha256:1")
+		first := e.release(web)
+		e.set.Record(e.rel(first), "")
+		second := e.release(web)
+		e.set.Record(e.rel(second), e.rel(first))
+		for n := range d.names {
+			delete(d.names, n)
+		}
+		delete(d.images, "sha256:1")
+		if !served {
+			d.registry = map[string][]string{}
+		}
+		err := e.set.Restore(e.rel(first), e.rel(second), false)
+		if served && (err != nil || d.names["nginx@sha256:abc"] != "sha256:1") {
+			t.Errorf("not pulled again (%v): %v\n%s", err, d.names, out.String())
+		}
+		if !served && err == nil {
+			t.Errorf("restored with its image gone from server and registry\n%s", out.String())
+		}
 	}
 }
 

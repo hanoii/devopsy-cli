@@ -504,7 +504,7 @@ devopsy @vm1:develop --release-sync       # a release and the parent's data in o
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.data label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
 devopsy @vm1:prod --import database --resolved   # accept the data an import that failed left, start what it kept down
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, images held or moved, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -673,17 +673,36 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   runs gets a second tag, `devopsy-<compose name>-<release id>` (a long
   compose name shortened, a checksum added when a release names one
   repository twice), without changing the names Compose runs
-  (`drupal11-prod-app`, `mariadb:11`), images pulled by digest included. A
-  rollback, or the restart after a failed `run`, points those names back
-  at that release's tags: exactly the images it ran, floating tags
-  included, without building or pulling. A release whose images are gone
-  builds or pulls again. One exception: a shared name (`mariadb:11`) whose
-  newer image another compose project on the server runs, any environment,
-  instance or project, or a container outside Compose, stays on it, and
-  the release says so: rolling back one environment never changes another.
-  Pin such images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
-  bookmark is what the name held when the release fetched: two releases
-  pulling `mariadb:11` at the same moment may each bookmark the other's.
+  (`drupal11-prod-app`, `mariadb:11.8`), images pulled by digest included.
+  devopsy never moves a pulled name back: another environment, instance or
+  project may run it.
+- **Data only goes forward:** a service with a `devopsy.data` label (any
+  value, `none` included) whose image Compose pulls rather than builds (a
+  database, in drupal11) changes its data in place, so it must never meet
+  an older image than the newest that ran on it. devopsy keeps, per
+  environment, the images that ran on each such service's data
+  (`.devopsy-data-images`, beside `shared/`), and holds the service on its
+  image by digest in every activation (`devopsy-compose.yaml`, below), so
+  nothing but the environment's own next activation moves it: not another
+  environment's pull, not a plain `up`. A release whose image for it moved
+  under the same name (`mariadb:11.8` patched upstream) runs it, like any
+  pull. One whose image the data moved past (a tag pushed again backward,
+  a stale mirror, a pin lowered to an image that ran before), or whose name
+  changed to an image the data never ran (`mariadb:11.8` to `mariadb:11.4`,
+  a pin bumped, a series switched: devopsy reads no versions, so it cannot
+  tell newer from older there), is refused before anything changes, the
+  names its pull moved put back; `--release --yes` runs it anyway, and the
+  data's history starts over from that image.
+- **Rollbacks:** a rollback, or the restart after a failed `run`, brings
+  back the release's own images exactly: what it built, from its tags,
+  without building again, and an image whose name changed between the
+  two releases (a commit tag, a pin), held by digest when its name now
+  points elsewhere and pulled again by its digest when gone. A data
+  service stays on the newest image its data ran, whatever the older
+  release named; a pulled image under the same name in both releases
+  (`caddy:2-alpine`) stays on what the name holds now. The rollback says
+  each service that does not go back, and why. Pin an image (a tag that
+  never moves, or a digest) when you want a rollback to take it back.
 - **What changed:** each release says which images changed since the
   one it replaces, a pulled image by its version label
   (`org.opencontainers.image.version`) when it has one, else by short
@@ -747,6 +766,17 @@ Two modes, `mode:` in the config:
   run their own image. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
 
+**Choosing tags.** Float third-party images on the series upstream
+patches (`mariadb:11.8`, `caddy:2-alpine`, `traefik:v3.7`): every release
+pulls them, so fixes arrive with your next release and no commit. Never
+`latest`, and never a major whose data or configuration format changes
+(`mariadb:11`): a plain release would cross series. A series bump is one
+`--release --yes` for a service with data. Tag your own images by commit
+(image mode) or let devopsy build them (build mode). Pin a stateless image
+whose upgrade you test by hand, by tag or by digest, when you want a
+rollback to take it back. An environment nobody releases gets no patches:
+release it on a schedule (below).
+
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755
 when executable, else 0644 (a checkout synced by ddev's Mutagen has 0600
@@ -765,7 +795,8 @@ uploaded in `code/`, where `current` points and commands run, and
 devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
-(its images), `devopsy-log-session` and `devopsy-log-server`,
+(its images, with each one's digest and version), `devopsy-compose.yaml`
+(below), `devopsy-log-session` and `devopsy-log-server`,
 `devopsy-pending` until it goes live, `devopsy-fetching` while it gets
 its images, `devopsy-failed` when it never went live or its run failed,
 and `devopsy-rolled-back` once a rollback left it.
@@ -777,6 +808,14 @@ files are never uploaded. Each release records its commit, branch and who
 made it. A release that fails before going live stays, marked failed, a
 first one too: `devopsy @<target> --destroy` removes an environment that
 never went live, `--releases remove failed` the release alone.
+`devopsy-compose.yaml` is devopsy's own compose file, the only one it
+writes, holding only facts of the release's last activation: the image
+each service was given (a `devopsy.digest` label) and the images held by
+digest (above). devopsy runs compose with it between the project's
+`compose.yaml` and your `compose.override.yaml`, so your override still
+wins; `devopsy -- config` shows the result. Run compose on a server
+through devopsy: a plain `docker compose up` lacks it, recreates every
+container once and follows the names.
 One that fails in its `run` step leaves what the step started: a container
 left restarting recreates its bind mounts under `current` as a directory
 (Docker does, as root), and the next release refuses until it is taken
@@ -905,8 +944,9 @@ when the server lacks it, so a registry that cannot be reached refuses
 the release before it goes live.
 
 Named volumes and absolute paths are not checked. `--destroy` empties
-`shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and
-`shared/mnt` (databases as dumps).
+`shared/mnt` as root in `devopsy-util`, and forgets the history of the
+images that ran on the data. Back up `shared/.env`, `shared/mnt`
+(databases as dumps) and `.devopsy-data-images` beside them.
 
 **Data and its labels.** Everything devopsy does with data is an export
 (a read) or an import (a replacement), of one service or of all of them

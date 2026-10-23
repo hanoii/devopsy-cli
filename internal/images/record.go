@@ -3,6 +3,7 @@ package images
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,24 +24,206 @@ func (s *Set) sayAll(lv report.Level, msg string, details []string, fixes ...rep
 }
 
 // Record writes what a new release runs, once its images are fetched:
-// the listing (ListFile, with each image's digest and version) and the
-// bookmarks. prev is the release it replaces ("" for a first one), whose
-// listing says what moved.
+// the listing (ListFile, with each image's digest and version), the
+// bookmarks and its ComposeFile, which labels each service with the
+// image it was given and holds each pulled data service by digest. prev
+// is the release it replaces ("" for a first one): its listing says what
+// moved, and what each data service's name was.
+//
+// A pulled data service's new image must not be older than the newest
+// its data ran (HistoryFile): one its data moved past (a tag pushed
+// again backward, a stale mirror, a pin lowered) is refused, and so is
+// an image it never ran under a changed name (a series switched, a pin
+// bumped or lowered), whose order the history cannot tell. A tag moving
+// under the same name is forward. Refused, the names the fetch moved go
+// back (SaveNames) and ErrRefused; with yes, it goes on, and the
+// service's history starts over from that image once it runs
+// (ForcedFile, Ran).
 func (s *Set) Record(rel, prev string) error {
 	es, err := s.entries(rel)
 	if err != nil {
 		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
 		return err
 	}
-	if prev != "" {
-		s.moved(readList(prev), es)
+	old := readList(prev)
+	base := baseOf(rel)
+	h := s.seed(base, old, es)
+	var refused, forced []string
+	holds := map[string]string{}
+	for _, e := range es {
+		if e.Kind != KindData {
+			continue
+		}
+		holds[e.Service] = e.Digest
+		img, err := s.Docker.Inspect(e.Digest)
+		if err != nil {
+			img = Image{ID: e.ID}
+		}
+		if why := h.check(old, e, img); why != "" {
+			refused = append(refused, why)
+			forced = append(forced, e.Service)
+		}
 	}
-	s.stale(es, readList(prev))
+	if len(refused) > 0 && !s.Yes {
+		s.putNamesBack(rel)
+		yes := "--release --yes"
+		if s.Address != "" {
+			yes = "devopsy @" + s.Address + " " + yes
+		}
+		fixes := []report.Remedy{
+			report.Fix("release an image its data ran, or a newer one under the same name"),
+			report.Fix("or, knowing its data takes it (an upgrade devopsy cannot order), run it anyway, its data's history starting over from it:", yes),
+		}
+		s.sayAll(report.ErrorLevel, "the release's images would take data where it never was:", refused, fixes...)
+		return ErrRefused
+	}
+	if len(refused) > 0 {
+		s.sayAll(report.WarnLevel, "--yes: running them anyway, the history of their data starting over from them:", refused)
+	}
+	if err := writeForced(rel, forced); err != nil {
+		s.say(report.ErrorLevel, "could not record what --yes let through: %v", err)
+		return err
+	}
+	if prev != "" {
+		s.moved(old, es)
+	}
+	s.stale(es, old)
 	if err := s.keep(rel, es); err != nil {
 		s.say(report.ErrorLevel, "could not record the images of %s: %v", filepath.Base(rel), err)
 		return err
 	}
+	if err := writeCompose(rel, es, holds); err != nil {
+		s.say(report.ErrorLevel, "could not write %s's %s: %v", filepath.Base(rel), ComposeFile, err)
+		return err
+	}
 	return nil
+}
+
+// check says why img, e's new image, must not run on its data: "" when
+// it may. old is the release before's listing.
+func (h history) check(old []entry, e entry, img Image) string {
+	last, ok := h.last(e.Service)
+	if !ok {
+		// Nothing ran on its data that devopsy knows of: a new name for it
+		// cannot be ordered.
+		if o, ok := match(old, e); ok && o.Kind != "" && familiar(o.Ref) != familiar(e.Ref) {
+			return fmt.Sprintf("%s: %s (%s) never ran on its data, and its image was %s", e.Service, e.Ref, shownEntry(e), o.Ref)
+		}
+		return ""
+	}
+	switch {
+	case last.is(img):
+		return ""
+	case h.movedPast(e.Service, img):
+		return fmt.Sprintf("%s: %s is %s, an image its data moved past: it last ran %s", e.Service, e.Ref, shownEntry(e), last.shown())
+	case familiar(last.Ref) != familiar(e.Ref):
+		return fmt.Sprintf("%s: %s (%s) never ran on its data, which last ran %s as %s: devopsy cannot tell a newer image from an older one under another name", e.Service, e.Ref, shownEntry(e), last.shown(), last.Ref)
+	}
+	return ""
+}
+
+// seed starts the history of a pulled data service that has none with
+// what its container runs, once started: data an older devopsy ran, or a
+// service that just gained its label. Written under the release lock.
+func (s *Set) seed(base string, old, es []entry) history {
+	h := readHistory(base)
+	var cs map[string]Container
+	changed := false
+	for _, e := range es {
+		if e.Kind != KindData {
+			continue
+		}
+		if _, ok := h.last(e.Service); ok {
+			continue
+		}
+		if cs == nil {
+			cs = s.containers()
+		}
+		c, ok := cs[e.Service]
+		if !ok || !c.started() {
+			continue
+		}
+		img, err := s.Docker.Inspect(c.Image)
+		if err != nil {
+			continue
+		}
+		// The name it ran as: its container's, else the release before's.
+		ref := e.Ref
+		if c.Ref != "" && !strings.Contains(c.Ref, "@") {
+			ref = c.Ref
+		} else if o, ok := match(old, e); ok {
+			ref = o.Ref
+		}
+		h = append(h, ranOn(e.Service, Ran, ref, img, s.now()))
+		changed = true
+	}
+	if changed {
+		if err := h.write(base); err != nil {
+			s.say(report.WarnLevel, "could not write the history of the images that ran on the data: %v", err)
+		}
+	}
+	return h
+}
+
+func writeForced(rel string, svcs []string) error {
+	path := filepath.Join(rel, ForcedFile)
+	if len(svcs) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeFile(path, strings.Join(svcs, "\n")+"\n")
+}
+
+// NamesFile, in a new release's directory, is what its pulled names held
+// before its fetch (SaveNames): a refused release puts them back, since
+// its pull moved them for every environment on the server.
+const NamesFile = "devopsy-names"
+
+// SaveNames records what each pulled name of a release held, before its
+// fetch moves them.
+func (s *Set) SaveNames(rel string) error {
+	svcs, err := s.List(rel)
+	if err != nil {
+		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
+		return err
+	}
+	var b strings.Builder
+	for _, svc := range svcs {
+		if svc.own(s.Mode) || strings.Contains(svc.Ref, "@") {
+			continue
+		}
+		id, _ := s.Docker.ID(svc.Ref)
+		b.WriteString(svc.Ref + "\t" + id + "\n")
+	}
+	return writeFile(filepath.Join(rel, NamesFile), b.String())
+}
+
+// putNamesBack points a refused release's pulled names back at what they
+// held before its fetch (NamesFile), so another environment's plain up
+// never runs what was refused here; a name that was not there goes.
+func (s *Set) putNamesBack(rel string) {
+	data, err := os.ReadFile(filepath.Join(rel, NamesFile))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		ref, id, _ := strings.Cut(line, "\t")
+		if ref == "" {
+			continue
+		}
+		cur, err := s.Docker.ID(ref)
+		switch {
+		case err != nil || cur == id:
+		case id == "":
+			_ = s.Docker.Remove(ref)
+		default:
+			if err := s.Docker.Tag(id, ref); err != nil {
+				s.say(report.WarnLevel, "could not put %s back on the image it held (%v): other environments' next up may run what was refused here", ref, err)
+			}
+		}
+	}
 }
 
 // match is the entry of old for the service of e: by service, else (a

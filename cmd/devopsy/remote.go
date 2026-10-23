@@ -681,12 +681,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return code
 		}
 		if job == nil {
-			if code := session(remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
+			if code := session(imagesYes(yes) + remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
 				return save(id, code)
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
+			script := imagesYes(yes) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}
@@ -1015,4 +1015,13 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 		return 1
 	}
 	return code
+}
+
+// imagesYes is the line that lets an activation's images through their
+// checks (remote.ImagesYesEnv): the operator's --yes.
+func imagesYes(yes bool) string {
+	if !yes {
+		return ""
+	}
+	return remote.ImagesYesEnv + "=1\n"
 }

@@ -120,13 +120,16 @@ func (d CLI) Containers(project string) ([]Container, error) {
 			Name   string
 			Image  string
 			State  struct{ Status string }
-			Config struct{ Labels map[string]string }
+			Config struct {
+				Image  string
+				Labels map[string]string
+			}
 		}
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			return nil, fmt.Errorf("docker inspect: %w", err)
 		}
 		l := v.Config.Labels
-		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, State: v.State.Status, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
+		cs = append(cs, Container{Name: strings.TrimPrefix(v.Name, "/"), Service: l["com.docker.compose.service"], Image: v.Image, Ref: v.Config.Image, State: v.State.Status, OneOff: l["com.docker.compose.oneoff"] == "True", Digest: l[DigestLabel]})
 	}
 	return cs, nil
 }

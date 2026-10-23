@@ -96,8 +96,9 @@ type Docker interface {
 // Container is one of an environment's containers, as the rules read it.
 type Container struct {
 	Name, Service string
-	// Image is its image's id.
-	Image string
+	// Image is its image's id, Ref the name it was created with
+	// (Config.Image).
+	Image, Ref string
 	// State is Docker's: created (never started), running, exited...
 	State string
 	// OneOff: a compose run's.
@@ -161,6 +162,10 @@ type Set struct {
 	Mode string
 	// Now is the time, for tests (time.Now when nil).
 	Now func() time.Time
+	// Yes lets through what Record would refuse (--yes); Address is the
+	// target as typed, for the fix lines.
+	Yes     bool
+	Address string
 
 	// built are the services with a build: section, from the last List.
 	built map[string]bool
@@ -425,9 +430,12 @@ func digestOf(ref string) string {
 func (s *Set) keep(rel string, es []entry) error {
 	id := filepath.Base(rel)
 	old := readList(rel)
+	// A name and the image it had: a listing again under the same name
+	// may give it another image (a rollback holding a newer one), which
+	// leaves the old pair to nothing that would remove it.
 	listed := map[string]bool{}
 	for _, e := range es {
-		listed[familiar(e.Ref)] = true
+		listed[familiar(e.Ref)+" "+e.ID] = true
 	}
 	if err := writeList(rel, es); err != nil {
 		return err
@@ -452,9 +460,19 @@ func (s *Set) keep(rel string, es []entry) error {
 				}
 			}
 		}
-		if e.ID != "" && !listed[familiar(e.Ref)] {
+		if e.ID != "" && !listed[familiar(e.Ref)+" "+e.ID] {
+			// Its names, this one and those other releases of its
+			// repositories counted on it to take (Remove): the next pruning
+			// retries them, removing a name only once nothing holds or uses
+			// its image.
 			if cur, err := s.Docker.ID(digestRef(e.Ref)); err == nil && cur == e.ID {
 				s.record(digestRef(e.Ref), e.ID, id, "no release lists it any more")
+			}
+			tags, _ := s.Docker.Tags(e.ID)
+			for _, t := range tags {
+				if !isBookmark(t) && repoKey(t) == repoKey(e.Ref) {
+					s.record(t, e.ID, id, "no release lists it any more")
+				}
 			}
 		}
 	}
@@ -473,69 +491,6 @@ func (s *Set) own(rel string) map[string]bool {
 		}
 	}
 	return own
-}
-
-// Restore points a release's names back at its bookmarks, so it runs
-// exactly the images it ran: false, changing nothing, when it has no
-// listing or a bookmark is gone. Digests are exact already. A name whose
-// current image another environment uses (a container of another compose
-// project, any project or none, or a bookmark this environment's
-// releases did not make) stays on it, said: moving a shared name like
-// mariadb:11 back would change that environment at its next recreate.
-// When Docker cannot tell, it stays too.
-func (s *Set) Restore(rel string) bool {
-	id := filepath.Base(rel)
-	es := readList(rel)
-	if len(es) == 0 {
-		return false
-	}
-	names := bookmarks(es, s.Name, id)
-	marks := make([]string, len(es))
-	for i, e := range es {
-		// A digest is exact, but its image must still be there: a restore
-		// that leaves it to the run step's up would pull after the switch.
-		// One Docker never had (no id) was never bookmarked.
-		if strings.Contains(e.Ref, "@") && e.ID == "" {
-			continue
-		}
-		img, err := s.Docker.ID(names[i])
-		if err != nil {
-			return false
-		}
-		marks[i] = img
-	}
-	// Every check before any tag, so a Docker error changes nothing.
-	own := s.own(rel)
-	var stayed []string
-	var tag []int
-	for i, e := range es {
-		if strings.Contains(e.Ref, "@") {
-			continue
-		}
-		cur, err := s.Docker.ID(e.Ref)
-		if err != nil && !errors.Is(err, ErrNoImage) {
-			return false
-		}
-		if err == nil && cur != marks[i] {
-			if who := s.others(cur, own); len(who) > 0 {
-				s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", e.Ref, strings.Join(who, ", "), id)
-				stayed = append(stayed, e.Ref)
-				continue
-			}
-		}
-		tag = append(tag, i)
-	}
-	for _, i := range tag {
-		if err := s.Docker.Tag(names[i], es[i].Ref); err != nil {
-			return false
-		}
-	}
-	if len(stayed) > 0 {
-		s.say(report.WarnLevel, "images of %s restored, but for %s", id, strings.Join(stayed, ", "))
-	} else {
-		s.say(report.InfoLevel, "images of %s restored", id)
-	}
-	return true
 }
 
 // others are who besides this environment uses an image: other compose
@@ -558,35 +513,6 @@ func (s *Set) others(img string, own map[string]bool) []string {
 		return append(who, "Docker could not tell: "+err.Error())
 	}
 	return append(who, holding(tags, own)...)
-}
-
-// Undo puts the live release's names back after a release's fetch failed
-// or was interrupted: a new release's own images are bookmarked first,
-// so they go with it; a rollback's are not (the names may hold the live
-// release's images, which would become the target's).
-func (s *Set) Undo(rel, prev string, rollback bool) {
-	if !rollback {
-		s.Bookmark(rel)
-	}
-	if prev != "" {
-		s.Restore(prev)
-	}
-}
-
-// Recover finishes what a release cut off mid-fetch without a signal
-// left (FetchingFile): marked failed, what it got bookmarked, and the
-// current release's names (prev, when there is one) back.
-func (s *Set) Recover(base, prev string) {
-	marks, _ := filepath.Glob(filepath.Join(base, "releases", "*", FetchingFile))
-	for _, m := range marks {
-		rel := filepath.Dir(m)
-		s.say(report.WarnLevel, "the images' fetch of release %s was interrupted: marking it failed, its images bookmarked", filepath.Base(rel))
-		s.Undo(rel, prev, false)
-		if f, err := os.Create(filepath.Join(rel, failedFile)); err == nil {
-			f.Close()
-		}
-		os.Remove(m)
-	}
 }
 
 // Remove takes a going release's images: its bookmarks are untagged, and

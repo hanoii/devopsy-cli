@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,17 +16,22 @@ import (
 // imagesFlag is the hidden flag release scripts run on a server, under
 // the server's image lock, for a release's images (internal/images):
 //
-//	devopsy --images --name <compose name> --left <record> <action> ...
+//	devopsy --images --name <compose name> --left <record> [--mode <mode>]
+//	  [--address <target>] [--yes] [--fetched] <action> ...
 //
-// record <release> [<release it replaces>] (exit 1 when it cannot),
-// restore <release> (exit 1 when it cannot),
-// remove <release>... (exit 1 when Docker failed: keep the release),
-// undo [--rollback] <release> [<current release>], recover <environment>
-// [<current release>], prune; for an environment's releases (images.ToPrune,
-// RollbackTarget, RemoveReleases): to-prune <environment> <keep> (the ids,
-// one per line), rollback-target <environment> (exit 1 without one),
-// remove-releases [--quiet] [--gone-ok] <environment> <id>... (exit 1 when refused or
-// a release stays).
+// names <release> (what its pulled names hold, before its fetch),
+// record <release> [<release it replaces>] (exit 3 when its checks
+// refuse, 1 when it cannot), restore <release> <release it replaces>
+// [--fetched] (exit 1 when an own image must be built again, 3 when it
+// cannot), ran <environment> <release> (the history of what ran on the
+// data), remove <release>... (exit 1 when Docker failed: keep the
+// release), undo [--rollback] <release> [<current release>], recover
+// <environment> [<current release>], prune; for an environment's
+// releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
+// <environment> <keep> (the ids, one per line), rollback-target
+// <environment> (exit 1 without one), remove-releases [--quiet]
+// [--gone-ok] <environment> <id>... (exit 1 when refused or a release
+// stays).
 const imagesFlag = "--images"
 
 func runImages(args []string, color bool) int {
@@ -35,12 +41,16 @@ func runImages(args []string, color bool) int {
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback, named, quiet, goneOK := false, false, false, false
+	rollback, named, quiet, goneOK, fetched := false, false, false, false, false
 	s.Mode = images.ModeBuild
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--name", "--left", "--mode":
+		case "--yes":
+			s.Yes = true
+		case "--fetched":
+			fetched = true
+		case "--name", "--left", "--mode", "--address":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
@@ -49,6 +59,8 @@ func runImages(args []string, color bool) int {
 				s.Name, named = args[i+1], true
 			case "--left":
 				s.Left = args[i+1]
+			case "--address":
+				s.Address = args[i+1]
 			default:
 				s.Mode = args[i+1]
 			}
@@ -76,18 +88,36 @@ func runImages(args []string, color bool) int {
 		return ""
 	}
 	switch words[0] {
+	case "names":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		if s.SaveNames(rest[0]) != nil {
+			return 1
+		}
 	case "record":
 		if len(rest) < 1 || len(rest) > 2 {
 			return imagesUsage(color)
 		}
-		if s.Record(rest[0], arg(1)) != nil {
+		if err := s.Record(rest[0], arg(1)); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
 			return 1
 		}
 	case "restore":
-		if len(rest) != 1 {
+		if len(rest) != 2 {
 			return imagesUsage(color)
 		}
-		if !s.Restore(rest[0]) {
+		if err := s.Restore(rest[0], rest[1], fetched); errors.Is(err, images.ErrGone) {
+			return 1
+		} else if err != nil {
+			return 3
+		}
+	case "ran":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if s.Ran(rest[0], rest[1]) != nil {
 			return 1
 		}
 	case "undo":
@@ -144,6 +174,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> record|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> names|record|restore|ran|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

@@ -40,7 +40,9 @@ import (
 // FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
 // is app's devopsy.mnt.owner, FAKE_DB_OWNER db's.
 const syncFakeDocker = `#!/bin/sh
-echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
+# devopsy's own compose file (images.ComposeFile) is left out of the log:
+# the tests here match the project's compose commands.
+echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done

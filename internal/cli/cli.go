@@ -16,6 +16,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/template"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"go.yaml.in/yaml/v3"
 )
@@ -1382,10 +1383,34 @@ func (p *loadedProject) compose(args []string) *Plan {
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
 	}
-	for _, file := range composeFiles(p.dir) {
+	// The release's devopsy-compose.yaml goes right after compose.yaml,
+	// before the override.
+	for i, file := range composeFiles(p.dir) {
 		composeArgs = append(composeArgs, "-f", file)
+		if f := p.releaseCompose(); i == 0 && f != "" {
+			composeArgs = append(composeArgs, "-f", f)
+		}
 	}
 	return &Plan{Path: "docker", Args: append(composeArgs, args...), Env: p.env.Environ()}
+}
+
+// releaseCompose is devopsy's own compose file of the release the
+// project runs in (images.ComposeFile, beside its code/), between the
+// project's compose.yaml and the operator's override: "" outside a
+// release, without one, or while a listing asks for the project's files
+// alone (images.NoReleaseComposeEnv).
+func (p *loadedProject) releaseCompose() string {
+	if v, _ := p.env.Lookup(images.NoReleaseComposeEnv); v != "" {
+		return ""
+	}
+	f := remote.ReleaseFile(p.dir, images.ComposeFile)
+	if f == "" {
+		return ""
+	}
+	if fi, err := os.Stat(f); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	return f
 }
 
 // Compose plans `docker compose` args with the project's files and

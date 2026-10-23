@@ -16,13 +16,20 @@ The few rules that shape every design. Each says what, why, what it
 costs (accepted: do not "fix" it) and where it lives. A change that
 conflicts with one is a design question for the user, not a detail.
 
-- **Compose plus environment variables.** devopsy never generates or
-  rewrites compose files; everything it computes shows in `devopsy
-  --env`. Why: a project stays a plain compose project anyone can read
-  and run, and devopsy adds no format of its own to learn or debug.
-  Cost: what compose cannot express through variables or labels is a
-  project's command or capability, never devopsy's. If a feature needs
-  to change compose files, it is the wrong feature.
+- **Compose plus environment variables.** devopsy never rewrites a
+  project's compose files; everything it computes shows in `devopsy
+  --env`. An activation adds one file of devopsy's own,
+  `devopsy-compose.yaml` beside the release (`images.ComposeFile`),
+  holding only facts of that activation (the image each service was
+  given, an image held by digest), shown by `devopsy -- config`. Why: a
+  project stays a plain compose project anyone can read and run, and
+  devopsy adds no format of its own to learn or debug; the file exists
+  because a hold by digest is the one fact compose can only take as a
+  service's `image:` (decided 2026-10-23). Cost: what compose cannot
+  express through variables or labels is a project's command or
+  capability, never devopsy's; a plain `docker compose` on a server
+  lacks the file. If a feature needs a project's choice in that file,
+  it is the wrong feature.
 - **Nothing is frozen before 1.0.0.** One person uses devopsy and runs
   every server, so anything may change when the change makes it better
   in the long run, the basics included (project discovery, `.env`
@@ -661,8 +668,9 @@ step's rules):
 
 ### Images
 
-Every image a release runs stays until its last release goes, so a
-rollback runs exactly what it ran. The rules live in Go
+Every image a release runs stays until its last release goes. A
+rollback runs exactly what the release built and what its changed names
+pulled; a pulled data service only goes forward (below). The rules live in Go
 (`internal/images`, whose comments say how each action decides), run
 on the server as the hidden `--images` (`runImages`; `img` in the
 scripts), under "What is deployed decides on the server"; they were
@@ -693,6 +701,39 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   (`prune -f` would delete an unused image pulled by digest only), never
   restored. `devopsy-images` lists `ref<tab>image id`: what a removal
   decides from even after a bookmark went.
+- **Data only goes forward** (`history.go`, `record.go`,
+  `restore.go`): a pulled data service (`KindData`: a `devopsy.data`
+  label, any value, no `build:`, pulled) never runs an image older than
+  the newest its data ran. No version ordering (no field is common to
+  images, checked 2026-10-23): the environment's `HistoryFile`
+  (`$base/.devopsy-data-images`) keeps every image that ran on each such
+  service's data, appended only after something ran (`img ran` after the
+  run step, failed or not, before a restart), never at `img record` (a
+  release cancelled after it ran nothing). "Newer" means "ran later on
+  this data". `img record` refuses an image the history moved past, or
+  one it never ran under a changed name (`check`), unless `--yes`
+  (`ImagesYesEnv`), whose `ForcedFile` starts the service's history over
+  once it runs; refused, `putNamesBack` restores what `img names` saved
+  before the fetch. A history is seeded from the running container when
+  it has none (`seed`: an older devopsy's data, a label just added). Only
+  the environment's own side writes it, under its release lock;
+  `--destroy-data` removes it.
+- **Holds, never retags of pulled names:** every activation writes
+  `ComposeFile`: a `devopsy.digest` label per fetched service (the image
+  it was given: compose recreates on a label change, so never a release
+  id) and `image: <repo>@<digest>` for every pulled data service and for
+  a rollback's changed name whose name moved on. `Restore(target,
+  against)` decides per service from target's compose now (`List`, which
+  never reads devopsy's own file: `NoReleaseComposeEnv`): data, the
+  history's last (else its container's, else against's); a pulled name
+  unchanged between the two releases, forward; a changed one, exact, held
+  or pulled by digest; own images from their bookmarks, `ErrGone` (exit
+  1) to build again. Why never a retag: `others()` let a rollback move a
+  shared pin back while its other user was down, and a backward retag
+  takes a database back on its upgraded data. `Undo` and `Recover` put
+  back own names only (`RestoreOwn`). A re-listing that drops an image
+  records its names as left (`keep`), or the names other releases
+  counted on it to take would leak (found by `TestDataRandom`).
 - **Compare names as Docker reports them:** Docker shows names short
   (`docker.io/library/nginx` is `nginx:latest`), so every comparison
   with a name Docker reports goes through `familiar`.
@@ -700,13 +741,14 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   bookmarks its new listing no longer makes and records the names it
   dropped for the next pruning. Why: it runs under the shared lock,
   beside other fetches.
-- **A restore never changes another environment:** a name whose current
-  image another compose project's container uses (`docker ps --filter
-  ancestor=`, checked on Docker 29's containerd store), or that a
-  bookmark none of this environment's releases made holds (exact names:
-  `app-prod` never matches `app-prod-eu`), stays on the newer image,
-  said. A digest's bookmark must be there too, or the run step's `up`
-  would pull after the switch.
+- **A restore never changes another environment:** pulled names never
+  move back; an own name whose current image another compose project's
+  container uses (`docker ps --filter ancestor=`, checked on Docker 29's
+  containerd store), or that a bookmark none of this environment's
+  releases made holds (exact names: `app-prod` never matches
+  `app-prod-eu`), stays on the newer image, said. A held image must be
+  there before the switch, pulled by its digest when gone, or the run
+  step's `up` would pull after it.
 - **A removal frees only what nothing else holds:** it untags the going
   release's bookmarks, then per image, from Docker's state: held by
   another bookmark, it stays (its names in repositories no holder is
@@ -738,7 +780,8 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   says what it forgets.
 - **Undo** (`img undo`): a new release's fetch is bookmarked, so it goes
   with the release; a rollback's target is left alone, since the names
-  may hold the live release's images; then current's names come back.
+  may hold the live release's images; then current's own names come
+  back, never a pulled one (its data services are held anyway).
 - **Which releases go** (`images/releases.go`): `ToPrune` (older than
   the `keep`-th live one; current and fetching ones stay), the rollback
   target and removals by id, unit-tested on directories.
@@ -747,10 +790,14 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   `trap ''` alone would let a gone session or a second TERM kill an
   undo halfway. Its steps are short and under the lock. `leftAdd`
   records before it says.
-- **Tests:** an in-memory Docker (`images_test.go`) and
-  `TestRandomHistory`, 200 random histories of two environments sharing
-  `mariadb:11` and an alias, checking the rules above and that nothing
-  is left once all goes. Script tests call the real `--images`
+- **Tests:** an in-memory Docker (`images_test.go`, with a registry and
+  containerd's digest names), `TestRandomHistory`, 200 random histories
+  of two environments sharing `mariadb:11` and an alias, and
+  `TestDataRandom`, 300 (`DEVOPSY_TEST_SEEDS` for more) of releases,
+  refusals, `--yes`, failed runs, rollbacks, plain ups and pruning while
+  the registry moves tags forward and back, checking that each database
+  runs its data's newest image, that no rollback moves a pulled name and
+  that nothing is left once all goes. Script tests call the real `--images`
   (`realDevopsy`, built by `TestMain`) behind a fake devopsy and a
   file-per-tag docker.
 
@@ -1938,7 +1985,10 @@ Smaller features, each with the rule an agent must keep.
   export holds the parent's sync lock, `SourceBusy`; `--releases` marks
   the current release SYNCING the same way),
   `---`, then `devopsy --status` in the current release; the operator
-  formats the header and prints the rest as it came.
+  formats the header and prints the rest as it came. In a release,
+  `images.StatusLines`: the services held by digest, and those running
+  another image than their `devopsy.digest` label says (a plain up
+  followed a moved name).
 - **`--ssh-keys` edits only the deploy user's own
   `~/.ssh/authorized_keys`** (`cmd/devopsy/sshkeys.go`,
   `internal/remote/keys.go`), over the usual session. Why: no root, so
@@ -2010,6 +2060,18 @@ Smaller features, each with the rule an agent must keep.
 ## Gotchas
 
 Findings that are not one area's.
+
+- Compose recreates a container when a label's value changes (its
+  config hash covers labels) and when its `image:` reference changes,
+  even to the same image by digest; a plain `up` follows a name moved to
+  another image; `pull_policy: never` makes `compose pull` skip the
+  service; `compose start` starts the old container whatever the files
+  now say. Checked on Docker 29.9 with the containerd store (2026-10-23).
+- On Docker's containerd store an image's id is its index digest for a
+  pulled image, every image (built and loaded too) has `RepoDigests`, a
+  pull by digest leaves a name `docker image prune` never removes, and
+  `docker rmi <repo>@<digest>` removes every name of that repository on
+  the image, bookmarks included.
 
 - Compose reads `--env-file` more than once: `<(devopsy --env)` fails,
   a file works.
