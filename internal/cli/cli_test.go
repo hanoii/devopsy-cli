@@ -144,6 +144,34 @@ func TestBuildComposePassthrough(t *testing.T) {
 	}
 }
 
+// A command that starts containers reads labels (Plan.Starts) only when
+// a compose file's YAML may carry devopsy.mnt.owner: the label, or a
+// file it includes or extends; never a comment that says so
+// (cmd/devopsy's TestMntOwnersLocal runs one).
+func TestBuildStarts(t *testing.T) {
+	for compose, want := range map[string]bool{
+		minimalCompose: false,
+		"include:\n  - other.yaml\n" + minimalCompose:                                      true,
+		minimalCompose + "    extends: {file: base.yaml, service: app}\n":                  true,
+		minimalCompose + "    labels:\n      devopsy.mnt.owner: 1:1\n":                     true,
+		minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n":                       true,
+		"# include: and extends: in a comment\n" + minimalCompose:                          false,
+		minimalCompose + "    image: x # devopsy.mnt.owner, included\n":                    false,
+		minimalCompose + "    environment: {INCLUDED: extends}\n    # devopsy.mnt.owner\n": false,
+	} {
+		root := project(t, "p", map[string]string{"compose.yaml": compose})
+		for args, starts := range map[string]bool{"up -d": want, "--profile x run --rm a": want, "ps": false} {
+			plan, err := build(root, strings.Fields(args), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Starts != starts {
+				t.Errorf("%s with\n%s: Starts %v", args, compose, plan.Starts)
+			}
+		}
+	}
+}
+
 // A script in the arguments is only counted in the notice; -vv has it whole.
 func TestBuildNoticeScript(t *testing.T) {
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, "config.yaml": "secrets: [API_TOKEN]\n"})
