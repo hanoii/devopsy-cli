@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -170,27 +171,27 @@ const mntOwnersRestored = "restored"
 
 // runCheckMounts implements the hidden --check-mounts, run by an
 // activation in the new release before its switch, after its prepare
-// steps and --missing-vars (cli.CheckMounts). A compose configuration
-// that cannot be read is no refusal, as for --check-names: the release's
-// up says what is wrong with it. With an entry owned, it also refuses an
-// owned path that is or goes through a symbolic link (ownedLinks), and
-// readies the util image the owners' step runs after the switch, so a
-// registry down refuses the release instead of failing it there.
+// steps and --missing-vars (cli.CheckMounts). The labels are read as
+// --mnt-owners reads them after the switch (cli.SyncServices, the
+// leftover sync capability included), so a release this passes never
+// fails there for its labels. A compose configuration that cannot be
+// read is no refusal, as for --check-names: the release's up says what
+// is wrong with it. With an entry owned, it also refuses an owned entry
+// that is a symbolic link (ownedLinks), and readies the util image the
+// owners' step runs after the switch, so a registry down refuses the
+// release instead of failing it there.
 func runCheckMounts(cwd string, args []string) int {
 	if len(args) > 0 {
 		report.Error(cli.CheckMountsFlag + " takes nothing")
 		return 2
 	}
-	projectDir, err := cli.FindProjectDir(cwd)
-	if err != nil {
-		report.Fail(err)
-		return 1
-	}
-	out, err := cli.ComposeConfig(cwd, os.Environ())
-	if err != nil {
+	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	if errors.Is(err, cli.ErrComposeConfig) {
 		return 0
 	}
-	services, err := cli.ParseSyncServices(out, projectDir)
+	if err != nil {
+		err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
+	}
 	if err == nil {
 		err = cli.CheckMounts(services)
 	}

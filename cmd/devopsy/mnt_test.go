@@ -136,7 +136,7 @@ func TestCheckMountsRelease(t *testing.T) {
 	// release that does not sync never read it).
 	write(t, filepath.Join(s.dot, "capabilities", "sync", "prepare"), "#!/bin/sh\nexit 0\n", 0o755)
 	out, code = s.run(nil, "@prod", "--release")
-	if code != 0 && strings.Contains(out, "current is now") {
+	if code == 0 || strings.Contains(out, "current is now") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release, whose labels cannot be read: it does not go live\ndevopsy: | .devopsy/capabilities/sync/ is now .devopsy/capabilities/data/") {
 		t.Errorf("refused after the switch, not before (%d), current %q:\n%s", code, s.current("prod"), out)
 	}
 }
