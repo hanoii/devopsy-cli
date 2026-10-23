@@ -839,13 +839,15 @@ Before a release goes live, the mounts check refuses (nothing changes):
   shipped with the release, are fine, and so are files from `shared/`
   linked into it;
 - `devopsy.data=mnt` or `devopsy.mnt.owner` on a service that mounts no
-  entry of `mnt` (writable, for the owner): a sync would copy nothing of
-  it, and a child's first release go live on empty data;
+  entry of `mnt` (writable, for the owner), or whose
+  `devopsy.data.exclude` leaves all of them out: a sync would copy
+  nothing of it, and a child's first release go live on empty data;
 - one entry written by services with different owners;
 - `./mnt` whole as a data or owned entry, refused wherever labels are
   read: it would carry every other service's data and give them one
-  owner. A service without data may still mount it (a read-only tool),
-  which devopsy ignores.
+  owner. Mounted writable by any other service too: it would write
+  every entry, and no sync or import sees it there. Read-only (a tool
+  reading every entry), devopsy ignores it.
 
 Named volumes and absolute paths are not checked. `--destroy` empties
 `shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and
