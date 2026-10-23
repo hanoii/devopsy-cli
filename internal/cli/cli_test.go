@@ -167,6 +167,14 @@ func TestBuildStarts(t *testing.T) {
 		{ownedRoot, "up --dry-run -d", false},
 		{ownedRoot, "up --dry-run=false -d", true},
 		{ownedRoot, "run --rm a -- sh --dry-run", true},
+		// Past run's service, everything is the container's command
+		// (compose stops parsing its own flags there, -- or not):
+		// `docker compose run --rm a echo ran --dry-run` prints "ran
+		// --dry-run" (checked with Compose on Docker 29.8), so the
+		// container starts and Docker makes a missing entry root's
+		// (review of 2026-10-23, round 4: dryRun took it for compose's).
+		{ownedRoot, "run --rm a composer update --dry-run", true},
+		{ownedRoot, "--profile x run --rm a sh --dry-run", true},
 		// restart starts containers too, and Docker makes a missing bind
 		// source then, as root (checked with Compose on Docker 29: an
 		// entry removed while the service was stopped came back on
