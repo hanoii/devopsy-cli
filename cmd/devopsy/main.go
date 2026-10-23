@@ -133,7 +133,7 @@ func run() int {
 	// A sync's parts on servers, run by its sessions (cmd/devopsy/sync.go).
 	switch args[0] {
 	case cli.SyncPushFlag:
-		return runSyncPush(cwd, color)
+		return runSyncPush(cwd, args[1:], color)
 	case cli.SyncExecFlag:
 		return runSyncExec(args[1:], color)
 	case cli.SyncServicesFlag:

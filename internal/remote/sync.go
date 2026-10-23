@@ -158,10 +158,21 @@ func ImportFixes(ref, service string, child bool) [][2]string {
 		{"import it again, from a complete file:", "devopsy @" + ref + " --import " + service + " < <file>"},
 	}
 	if child {
-		fixes = append(fixes, [2]string{"or sync it from its parent:", "devopsy @" + ref + " --sync"})
+		fixes = append(fixes, [2]string{"or sync it from its parent:", "devopsy @" + ref + " --sync"}, ResetFix(ref))
 	}
 	return append(fixes,
 		[2]string{"or go on with the data as it is (to fix it by hand first: devopsy @" + ref + " up -d --no-deps " + service + ", then --shell " + service + "):", "devopsy @" + ref + " --import " + service + " --resolved"})
+}
+
+// ResetFix is the way out that starts a child over from its parent.
+func ResetFix(ref string) [2]string {
+	return [2]string{"or start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @" + ref + " --reset"}
+}
+
+// resetFixLines is ResetFix as --say's details for a script.
+func resetFixLines(t *Target) string {
+	f := ResetFix(hintAddress(t))
+	return `"` + f[0] + `" "` + report.CmdMark + f[1] + `"`
 }
 
 // importFixLines are ImportFixes as --say's details for a script, the
@@ -213,6 +224,12 @@ const SyncMarker = report.Prefix + "ready for sync in "
 // only when it names this sync (ClaimWriteScript), so one left over
 // from an earlier sync never writes into a newer one.
 const SyncIDEnv = "DEVOPSY_INTERNAL_SYNC_ID"
+
+// SyncResetEnv set makes a sync a reset (--reset): the first write into
+// the child wipes it first (--sync-services wipe). In PushScript's env it
+// becomes --sync-push's reset argument; the push passes it on to the
+// child's devopsy.
+const SyncResetEnv = "DEVOPSY_INTERNAL_SYNC_RESET"
 
 // SyncingInto is the line the holder of --sync prints on stderr: the
 // release whose log the sync's is appended to.
@@ -571,7 +588,12 @@ func syncSourceLock() string {
 // in its current release, with env (the DEVOPSY_SYNC_* variables).
 func PushScript(p *Target, projectName string, env map[string]string) string {
 	keys := make([]string, 0, len(env))
+	push := []string{"--sync-push"}
 	for k := range env {
+		if k == SyncResetEnv {
+			push = append(push, "reset")
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -580,12 +602,12 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + markRefusal(p, "nothing synced from it", `"`+report.CmdMark+`devopsy @`+hintAddress(p)+` --sync"`, "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+` + syncSourceLock() + markRefusal(p, "nothing synced from it", `"`+report.CmdMark+`devopsy @`+hintAddress(p)+` --sync" `+resetFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi
 cd "$base/current"
-export` + exports + "\n" + devopsyCall(projectName, []string{"--sync-push"}, true) + "\n"
+export` + exports + "\n" + devopsyCall(projectName, push, true) + "\n"
 }
 
 // ExportScript writes service's data to stdout (devopsy --export), in the
@@ -622,7 +644,7 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
   im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   if [ "$im_code" != ` + IncompleteImport + ` ]; then
-    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
     devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixLines(t, "im_service") + `
@@ -790,9 +812,15 @@ func RsyncModule(entry string) string {
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + ClaimWriteScript(base, id) +
+	claim := ClaimWriteScript(base, id)
+	if wipe != "" {
+		// A reset: the first write wipes the child first.
+		open := Quote(path.Join(base, SyncOpenFile(id)))
+		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
+	}
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
 ( while sleep 1; do

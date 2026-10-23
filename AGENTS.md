@@ -1427,6 +1427,38 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   never read or remove each other's; finish removes another's only past
   `staleInherit` (an hour, longer than any wait for the lock).
 
+### --reset
+
+- **A sync that starts the child over** (`devopsy @<child> --reset`,
+  `runSync` with reset): everything a sync checks, then the same two
+  sessions; the push gets `--sync-push reset`, and passes
+  `SyncResetEnv` on to the child's devopsy. Why: the way out of data
+  nothing else fixes (a cut sync or import, a half-written entry the
+  parent lacks, which `copiesService` refuses), and every refusal on a
+  marked child lists it (`remote.ResetFix`).
+- **The wipe is the copy's first write,** at whichever claim comes
+  first (`claimWrite`'s first: the same-server rsync's, through
+  `--sync-exec --sync-services wipe`; the receive script's, its
+  `wipe`; a stream's import, in-process before its `upFor`), never in
+  prepare: a push that refuses or never reaches the child leaves it as
+  it was, and once claimed the existing rules hold (cut: partial,
+  marked, down). `--sync-services wipe` (`wipeData`): an import's
+  leftover containers, `compose --profile '*' down --volumes
+  --remove-orphans` (no `--rmi`: the release's images stay),
+  `emptyMnt` (shared with `--destroy-data`), and the record set to
+  `first` with nothing stopped, so `finish go` creates the services
+  with data and the child's set and the run step the rest. Its
+  `shared/.env` and release stay.
+- **What a reset skips and refuses:** the child guard
+  (`syncConflicts`: nothing of the child runs under the copy) and the
+  import mark's `copiesService` (it replaces everything); the stream
+  mismatches stay (the child's import would refuse). A parent with no
+  data refuses (it would only empty the child: `--destroy` does). On
+  an environment without a parent `syncPreflight` refuses, as for
+  `--sync`.
+- **A named feature, `reset`,** found by `--sync-push reset` and
+  `--sync-services wipe`: an older parent would sync without wiping.
+
 ## --export and --import
 
 One service's data to stdout or from stdin, moved the way its data
@@ -1541,8 +1573,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   keeps any mark when nothing was written), so from then on only a sync
   clears it. A sync clears an import's mark only by copying that
   service: the push refuses before stopping anything on the parent
-  otherwise (`copiesService`: data, a stream, or a mnt entry that exists
-  there), and a sync whose parent writes nothing stays partial. Every
+  otherwise (`copiesService`: a stream, or for a mnt service every
+  entry the child's service mounts, from the child's list, copied and
+  present on the parent: with any one, a sync completed over a
+  half-written entry the parent lacks and cleared the mark), and a sync
+  whose parent writes nothing stays partial. Every
   reader of the mark branches on its code (`markRefusal`,
   `partialGuard`, the restart skip, `PushScript`, `syncBlock`,
   `--status`, `--export`'s warning, `syncPreflight`, the operator's

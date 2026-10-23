@@ -414,6 +414,30 @@ sides, export on the parent's and import on the child's for the stream
 services (devopsy --debug capabilities). Asks for the environment's name,
 unless --yes. The log goes with the current release: devopsy @<target>
 --log. One service alone, from anywhere to anywhere: --export, --import.
+To start a child over instead: --reset.
+`,
+	"--reset": `Usage: devopsy @<target> --reset [--from @<target>] [--yes] [-- args...]
+
+Starts a child environment over from its parent: a --sync that first
+throws away everything of the child's a sync leaves (every container,
+of every profile, its named volumes, every entry of shared/mnt, not
+only the ones the labels copy), then copies the parent's data in as
+on a first release and runs its release's run step. Its release, its
+images and its shared/.env (its secrets) stay. The way out of data
+nothing else fixes: a sync or an import that did not complete, a copy
+of what the parent no longer has.
+
+  --from @<target>  start over from another environment of the project
+  --yes             do not ask for the environment's name (CI)
+  -- args...        as for --sync
+
+Everything a sync checks comes first, and the child is wiped only at
+its first write: a parent that refuses or cannot be reached leaves it
+as it was. Cut after that, it is down and marked, like a sync cut
+mid-copy, until a sync or a reset completes. A parent with no data
+to copy refuses. Children only: on an environment without a parent,
+--destroy and a release start it over. Asks for the environment's
+name, unless --yes.
 `,
 	"--export": `Usage: devopsy [@<target>] --export <service>
 
