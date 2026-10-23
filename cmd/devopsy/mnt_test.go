@@ -25,6 +25,12 @@ func TestMntOwnersRelease(t *testing.T) {
 	s := newSyncSetup(t)
 	config := filepath.Join(s.dot, "config.yaml")
 	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
+	// The run step runs a plain up, as the templates' deploy does: in a
+	// release on a server it reads no labels (a rollback's below).
+	compose := filepath.Join(s.dot, "compose.yaml")
+	write(t, compose, readString(compose)+"    labels: [devopsy.mnt.owner=10001:10001]\n", 0o644)
+	deploy := filepath.Join(s.dot, "commands", "deploy")
+	write(t, deploy, readString(deploy)+"exec devopsy up -d\n", 0o755)
 	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache\n", 0o644)
 	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "storage"), 0o700); err != nil {
 		t.Fatal(err)
@@ -89,7 +95,10 @@ func TestMntOwnersRelease(t *testing.T) {
 	// devopsy.data) only warn, before the switch and after it, nothing
 	// given away: a rollback never fails for them, as it never checks
 	// roles or imports (review of 2026-10-23: it failed, and current
-	// went back).
+	// went back). Its run step's up reads no labels at all (review of
+	// 2026-10-23, round 2: the local owners' step before up failed it on
+	// them, and the restart after it too: AGENTS.md, old labels are
+	// errors only where labels are read, never in Build).
 	first := s.current("prod")
 	s.releaseProd(nil)
 	if s.current("prod") == first {
@@ -106,7 +115,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 	write(t, s.log+".shop-prod", "FAKE_APP=old\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") {
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {
 		t.Errorf("a rollback to a release with older labels (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
@@ -352,36 +361,5 @@ func TestOwnersMount(t *testing.T) {
 	}
 	if err := makeEntry(mnt, "link"); err == nil || !strings.Contains(err.Error(), "mnt/link is a symbolic link") {
 		t.Errorf("an entry a link: %v", err)
-	}
-}
-
-// A rollback's run step runs a plain up (the templates' deploy), which
-// must work on the restored release's labels whatever this devopsy reads
-// in them, as --mnt-owners restored does: rollbacks never check labels
-// (AGENTS.md: old labels are errors only where labels are read, never in
-// Build). Review of 2026-10-23 (round 2): the local owners' step before
-// up reads every label whenever the compose file mentions
-// devopsy.mnt.owner (or include:/extends:), and fails up on the labels
-// --mnt-owners restored only warned about: the rollback fails exactly
-// when it is needed, and the restart after it too.
-func TestMntOwnersRollbackUp(t *testing.T) {
-	s := newSyncSetup(t)
-	config := filepath.Join(s.dot, "config.yaml")
-	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
-	compose := filepath.Join(s.dot, "compose.yaml")
-	write(t, compose, readString(compose)+"    labels: [devopsy.mnt.owner=10001:10001]\n", 0o644)
-	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME\"\nexec devopsy up -d\n", 0o755)
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001\n", 0o644)
-	s.releaseProd(nil)
-	first := s.current("prod")
-	s.releaseProd(nil)
-	// The restored release's labels, as a newer devopsy reads them: a
-	// name from before a change.
-	write(t, s.log+".shop-prod", "FAKE_APP=old FAKE_APP_OWNER=10001:10001\n", 0o644)
-	out, code := s.run(nil, "@prod", "--rollback")
-	// The run step's up reads no labels at all: on a server
-	// --mnt-owners restored owns that, and said so.
-	if code != 0 || s.current("prod") != first || strings.Contains(out, "devopsy: error:") || strings.Contains(out, "the entries of mnt are left as they are") {
-		t.Errorf("a rollback whose up meets labels this devopsy cannot read (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 }
