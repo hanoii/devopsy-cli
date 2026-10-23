@@ -899,7 +899,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if missing, ok := copiesService(projectDir, services, streams, mark, childDirs); !ok {
 			ref := os.Getenv(remote.SyncToTargetEnv)
 			var fixes []report.Remedy
-			for _, f := range remote.ImportFixes(ref, mark, false) {
+			for _, f := range remote.ImportFixes(ref, mark, true) {
 				fixes = append(fixes, report.Fix(f[0], f[1]))
 			}
 			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
@@ -911,6 +911,12 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}
 	nothing := !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) || len(dirs) == 0 && len(streams) == 0
+	if reset && !nothing && len(streams) == 0 {
+		// The rsync skips an entry missing here: with none present it
+		// would write nothing, and nothing wipes without a write.
+		mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
+		nothing = mnt == "" || !slices.ContainsFunc(dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })
+	}
 	if nothing && reset {
 		// It would only empty the child: --destroy and a release do that.
 		return fail("the parent has no data to start the child over from (no service labeled " + cli.DataLabel + " with entries of mnt or a stream): nothing reset")
@@ -1838,13 +1844,6 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			}
 		}
 		dependentNotices(cwd, services, data, set)
-		// What is down already is an earlier sync's or import's: a sync
-		// that writes nothing leaves it so, and starts only its own.
-		rec, _ := readSyncRecord(cwd)
-		rec.held = slices.Clone(rec.stops)
-		if err := rec.write(cwd); err != nil {
-			return fail(err.Error())
-		}
 		if err := stopServices(cwd, set); err != nil {
 			return fail(err.Error())
 		}
@@ -2078,6 +2077,11 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 			return fail(err.Error())
 		}
 		if first {
+			// Recorded first, so a holder deciding meanwhile ends this
+			// devopsy, which wipes.
+			if err := recordWrite(base, remote.WriterLine(name, os.Getpid(), "none")); err != nil {
+				return fail(err.Error())
+			}
 			if err := wipeData(cwd, projectDir, base); err != nil {
 				return fail(err.Error())
 			}
@@ -2258,9 +2262,15 @@ func stopServices(cwd string, set []cli.Stopped) error {
 		return err
 	}
 	stop = intersect(stop, up)
+	// What this sync stops, by its id: a sync that writes nothing starts
+	// it again, and only it (restoreOwnStops).
+	if id := os.Getenv(remote.SyncIDEnv); rec.ownID != id {
+		rec.own, rec.ownID = nil, id
+	}
 	for _, name := range stop {
 		if !slices.Contains(rec.stops, name) {
 			rec.stops = append(rec.stops, name)
+			rec.own = append(rec.own, name)
 		}
 	}
 	if err := rec.write(cwd); err != nil {
@@ -2283,15 +2293,16 @@ const syncFirst = "first"
 // syncRecord is the record a sync or an import keeps (syncState):
 // whether a sync started on a child's first release (no container at
 // all: syncFirst), the services it stopped ("stop <name>" lines), those
-// of them already down when a sync's prepare stopped more ("held
-// <name>": an earlier sync's or import's, which a sync that writes
-// nothing leaves down) and an import's hook while it runs ("writer
+// of them a sync stopped itself, by its id ("own <sync id> <name>": what
+// a sync that writes nothing starts again; the rest is an earlier sync's
+// or import's, kept down) and an import's hook while it runs ("writer
 // <process group>", then " down" when its service was not running
 // before the import: writerDown).
 type syncRecord struct {
 	first      bool
 	stops      []string
-	held       []string
+	own        []string
+	ownID      string
 	writers    []int
 	writerDown bool
 }
@@ -2309,8 +2320,11 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 			rec.first = true
 		case action == "stop" && name != "" && !slices.Contains(rec.stops, name):
 			rec.stops = append(rec.stops, name)
-		case action == "held" && name != "" && !slices.Contains(rec.held, name):
-			rec.held = append(rec.held, name)
+		case action == "own":
+			if id, svc, ok := strings.Cut(name, " "); ok && svc != "" {
+				rec.ownID = id
+				rec.own = append(rec.own, svc)
+			}
 		case action == "writer":
 			pgid, down, _ := strings.Cut(name, " ")
 			if n, err := strconv.Atoi(pgid); err == nil {
@@ -2331,8 +2345,8 @@ func (rec syncRecord) write(cwd string) error {
 	for _, name := range rec.stops {
 		b.WriteString("stop " + name + "\n")
 	}
-	for _, name := range rec.held {
-		b.WriteString("held " + name + "\n")
+	for _, name := range rec.own {
+		b.WriteString("own " + rec.ownID + " " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
 		b.WriteString("writer " + strconv.Itoa(pgid))
@@ -2382,22 +2396,26 @@ func wipeData(cwd, projectDir, base string) error {
 	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
 		return fmt.Errorf("docker compose down: %w", err)
 	}
-	if err := emptyMnt(context.Background(), projectDir); err != nil {
+	// Named by the sync, so a holder deciding meanwhile removes it
+	// (endWriters): no write outlives its sync.
+	if err := emptyMnt(context.Background(), projectDir, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-wipe"); err != nil {
 		return err
 	}
 	rec, _ := readSyncRecord(cwd)
-	rec.first, rec.stops, rec.held = true, nil, nil
+	rec.first, rec.stops, rec.own = true, nil, nil
 	return rec.write(cwd)
 }
 
 // restoreOwnStops starts what a sync that wrote nothing stopped itself
-// (the record's stops it does not hold) and keeps the rest recorded.
+// (the record's own lines with its id: none when its prepare failed
+// before stopping, or another sync's) and keeps the rest recorded.
 func restoreOwnStops(cwd string) error {
 	rec, ok := readSyncRecord(cwd)
-	if !ok {
+	id := os.Getenv(remote.SyncIDEnv)
+	if !ok || id == "" || rec.ownID != id {
 		return nil
 	}
-	own := slices.DeleteFunc(slices.Clone(rec.stops), func(name string) bool { return slices.Contains(rec.held, name) })
+	own := rec.own
 	if len(own) > 0 {
 		exited, err := servicesIn(cwd, "exited")
 		if err != nil {
@@ -2413,7 +2431,8 @@ func restoreOwnStops(cwd string) error {
 			}
 		}
 	}
-	rec.stops, rec.held = rec.held, nil
+	rec.stops = slices.DeleteFunc(rec.stops, func(name string) bool { return slices.Contains(own, name) })
+	rec.own, rec.ownID = nil, ""
 	return rec.write(cwd)
 }
 
