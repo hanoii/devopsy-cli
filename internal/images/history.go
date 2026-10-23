@@ -93,15 +93,20 @@ type history []ran
 
 func historyPath(base string) string { return filepath.Join(base, HistoryFile) }
 
-// readHistory reads an environment's history: empty without one. A line
-// cut short counts once it has its image.
+// readHistory reads an environment's history: empty without one.
 func readHistory(base string) history {
 	data, err := os.ReadFile(historyPath(base))
 	if err != nil {
 		return nil
 	}
+	return parseHistory(string(data))
+}
+
+// parseHistory reads history lines: a line cut short counts once it has
+// its image.
+func parseHistory(text string) history {
 	var h history
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) < 5 || f[1] == "" || f[4] == "" {
 			continue

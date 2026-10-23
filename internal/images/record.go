@@ -50,11 +50,19 @@ func (s *Set) Record(rel, prev string) error {
 	h := s.seed(base, old, es)
 	var refused, forced []string
 	holds := map[string]string{}
+	// A release that syncs: the parent's data replaces the child's, so
+	// its images are checked against the parent's (SyncCheck, below); a
+	// sync that does not complete brings the release before back, on
+	// its own images.
+	parent := parseParentData(s.SyncData)
 	for _, e := range es {
 		if e.Kind != KindData {
 			continue
 		}
 		holds[e.Service] = e.Digest
+		if parent[e.Service] != nil {
+			continue
+		}
 		img, err := s.Docker.Inspect(e.Digest)
 		if err != nil {
 			img = Image{ID: e.ID}
@@ -95,6 +103,11 @@ func (s *Set) Record(rel, prev string) error {
 	if err := writeCompose(rel, es, holds); err != nil {
 		s.say(report.ErrorLevel, "could not write %s's %s: %v", filepath.Base(rel), ComposeFile, err)
 		return err
+	}
+	// A release that syncs: the parent's data must take the child's
+	// images, checked against what the release fetched.
+	if s.SyncData != "" {
+		return s.SyncCheck(rel, s.SyncData)
 	}
 	return nil
 }

@@ -247,6 +247,7 @@ func allScripts() map[string]string {
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataLabelsFeature}),
+		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, map[string]string{"storage": "10001:10001"}, []string{"--exclude=x y"}, true, ""),
 		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
 		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, map[string]string{"app.ini": "1:2"}, nil, false, ""),
@@ -339,11 +340,12 @@ func TestSyncReceiveOwners(t *testing.T) {
 // its first write (an older one would sync without wiping), the child's
 // devopsy runs the wipe. A sync needs neither.
 // The images' history and holds: every activation needs them (img
-// names, record, restore, ran), and so do the removals' scripts, which
-// call img too but none of those words.
+// names, record, restore, ran), a sync's holder (sync-check, sync-done)
+// and the parent's check (data); the removals' scripts call img too, but
+// none of those words.
 func TestDataImagesFeature(t *testing.T) {
 	for name, s := range allScripts() {
-		wants := strings.HasPrefix(name, "activate") || name == "rollback+cmd" || name == "sync only"
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check"
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
@@ -1621,6 +1623,25 @@ exit 0
 	if got := readFile(filepath.Join(base, "releases", "3", images.ForcedFile)); got != "db\n" {
 		t.Errorf("forced: %q", got)
 	}
+	// A release that syncs from a parent whose data never ran its
+	// database's name: refused at its record, before its switch, before
+	// anything of the sync (S59).
+	parent := "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\nran\t1\tdb\tran\tmariadb:11.8\tP1\tmariadb@P1\n"
+	write(t, filepath.Join(base, "releases", "4", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	cmd := exec.Command("sh", "-c", ActivateScript(tg, "4", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Images: parent}))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "DB=mariadb:11.4", "IMG=I0"}
+	// Its stdin is the answer's pipe, open for as long as devopsy runs.
+	r, w, perr := os.Pipe()
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	defer w.Close()
+	cmd.Stdin = r
+	o, err := cmd.CombinedOutput()
+	r.Close()
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/3/code" || !strings.Contains(string(o), "db: mariadb:11.4 (mariadb@I0) never ran on the parent's data") || strings.Contains(string(o), SyncMarker) {
+		t.Fatalf("a release syncing from a parent that never ran its image (%v):\n%s", err, o)
+	}
 }
 
 // Two tags of one repository in a release get a bookmark each, so a
@@ -2575,4 +2596,29 @@ func TestImportMarkRefusals(t *testing.T) {
 	if out, err := run(ResolvedCheckScript(tg), ""); err != nil || out != "mark\t"+importMark+"stop db\nstop app\n" {
 		t.Errorf("--resolved's check (%v): %q", err, out)
 	}
+}
+
+// A sync's holder checks the parent's data images before anything
+// stops (img sync-check before --sync-services prepare), takes them
+// over once the copy is complete, before finish starts anything (img
+// sync-done before sync_finish go), and records what ran after its run
+// step; a release that syncs takes them over the same way.
+func TestSyncImagesOrder(t *testing.T) {
+	tg := &Target{Name: "dev", Host: "h", Path: "app/dev", Mode: ModeImage}
+	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\n"}
+	holder := HolderScript(tg, "app-dev", o, true)
+	order := func(s string, words ...string) {
+		t.Helper()
+		at := 0
+		for _, w := range words {
+			i := strings.Index(s[at:], w)
+			if i < 0 {
+				t.Fatalf("%q missing after offset %d, or out of order", w, at)
+			}
+			at += i + len(w)
+		}
+	}
+	order(holder, images.SyncImagesEnv+"=", "img sync-check", "--sync-services' 'prepare", "img sync-done", "sync_finish go", "release-steps", "img ran")
+	activate := ActivateScript(tg, "20261005120000", false, "app-dev", Phases{Run: []string{"deploy"}}, o)
+	order(activate, images.SyncImagesEnv+"=", "img record", "make_current", "img sync-done", "sync_finish go")
 }

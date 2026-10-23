@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -20,6 +21,9 @@ import (
 //	  [--address <target>] [--yes] [--fetched] <action> ...
 //
 // names <release> (what its pulled names hold, before its fetch),
+// data <environment> <release> (the parent's data images, for a sync),
+// sync-check <release> and sync-done <environment> <release> (the
+// child's side of a sync, the parent's in images.SyncImagesEnv),
 // record <release> [<release it replaces>] (exit 3 when its checks
 // refuse, 1 when it cannot), restore <release> <release it replaces>
 // [--fetched] (exit 1 when an own image must be built again, 3 when it
@@ -43,6 +47,14 @@ func runImages(args []string, color bool) int {
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
 	rollback, named, quiet, goneOK, fetched := false, false, false, false, false
 	s.Mode = images.ModeBuild
+	if v := os.Getenv(images.SyncImagesEnv); v != "" {
+		data, err := images.DecodeData(v)
+		if err != nil {
+			report.Error("the parent's images (" + images.SyncImagesEnv + "): " + err.Error())
+			return 2
+		}
+		s.SyncData = data
+	}
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -113,6 +125,27 @@ func runImages(args []string, color bool) int {
 		} else if err != nil {
 			return 3
 		}
+	case "data":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		fmt.Print(s.ParentData(rest[0], rest[1]))
+	case "sync-check":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		if err := s.SyncCheck(rest[0], s.SyncData); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
+			return 1
+		}
+	case "sync-done":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if s.SyncDone(rest[0], rest[1], s.SyncData, os.Getenv(remote.SyncFromTargetEnv)) != nil {
+			return 1
+		}
 	case "ran":
 		if len(rest) != 2 {
 			return imagesUsage(color)
@@ -174,6 +207,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> names|record|restore|ran|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> names|record|restore|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

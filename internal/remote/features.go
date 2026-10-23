@@ -45,9 +45,10 @@ var namedFeatures = []struct {
 	// sync without wiping, an older child refuse the word.
 	{ResetFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push[ '\\]{1,8}reset\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}wipe\b`)},
 	// The images' history and holds: a release's img record, names, ran
-	// and restore against the release it replaces. An older devopsy
-	// refuses the words, after the fetch.
-	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran)\b`)},
+	// and restore against the release it replaces, a sync's data,
+	// sync-check and sync-done. An older devopsy refuses the words, after
+	// the fetch.
+	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|data|sync-check|sync-done)\b`)},
 	// devopsy.mnt.owner in copies: the child's list gains each entry's
 	// owner, which the parent's rsync applies (--chown), and an mnt
 	// import gives what it extracted to its owner. An older parent would

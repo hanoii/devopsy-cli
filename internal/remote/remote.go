@@ -789,6 +789,11 @@ done
 	for _, l := range t.Levels {
 		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
 	}
+	if sync != nil && sync.Images != "" {
+		// The parent's data images, for the check at the end of the fetch
+		// (img record) and the take-over once the copy is complete.
+		s += sync.imagesExport()
+	}
 	if sync != nil && sync.Inherit {
 		// What the sync inherits this time, in the pending file the
 		// operator wrote: the checks before the switch (prepare,

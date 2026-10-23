@@ -1105,6 +1105,25 @@ its services, nothing was copied. A service streamed on one side and not
 the other is refused the same way (a label the child sets in its own
 `shared/.env` can still differ).
 
+**Images with the data.** A copy of a pulled data service's files
+(`mnt`; a `stream` goes through the child's own image, which keeps its
+history) brings data the parent's image wrote, so the child takes that
+image with it. Before anything stops, the child's side checks the image
+it runs: the parent's, or another under the same name, is fine (it is
+held on the parent's after the copy); an image the parent's data moved
+past, or a name the parent's data never ran (a child pinned to another
+version), is refused, every sync, unless `--sync --yes`. The parent's
+image is pulled on the child's server by its digest when missing, never
+taken from a local name, and a sync that cannot pull it is refused,
+nothing changed. Once the copy is complete the child holds the parent's
+exact image, takes over the parent's history of the images that ran on
+that data, and its stopped service is made again on it (`compose start`
+would start the old container on the new data), before `finish child
+go`. A parent released between the sync's start and its copy refuses the
+copy before stopping anything: sync again. A complete `--import` of a
+`mnt` service, or `--resolved`, starts that service's history over from
+the image that runs it.
+
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits
 for the parent. On the parent's, under a shared hold of its release lock

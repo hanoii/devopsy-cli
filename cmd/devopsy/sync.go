@@ -25,6 +25,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -57,6 +58,10 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
+	// images are the parent's data images (images.Set.ParentData), read
+	// in the preflight: the child's side checks and takes them over, the
+	// push refuses when they changed since.
+	images string
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -115,7 +120,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 	if reset {
 		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
 	}
-	code, err := remote.SSH(p, remote.CurrentExistsScript(p, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
+	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +128,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 		return nil, fmt.Errorf("could not check the parent @%s (%d)", p.Address, code)
 	}
 	cur := remote.ParseCurrent(out.String())
+	job.images = remote.ParseParentData(out.String())
 	switch {
 	case !cur.Current:
 		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
@@ -389,6 +395,7 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 		remote.SyncFromTargetEnv: p.Address,
 		remote.SyncWatchEnv:      "1",
 		remote.HeartbeatEnv:      fmt.Sprint(int(remote.HeartbeatEvery().Seconds())),
+		images.SyncImagesSumEnv:  images.Sum(job.images),
 	}
 	if job.reset {
 		env[remote.SyncResetEnv] = "1"
@@ -639,7 +646,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id}
+	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
 	code := runSyncSession(job, remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
@@ -928,6 +935,16 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}()
 
+	// The data images the child's side checked and takes over: this
+	// side's must be the ones the preflight read (a release of this
+	// environment since would copy data another image wrote).
+	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
+		rel := remote.ReleaseFile(projectDir, "")
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
+			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
+		}
+	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		return fail(err.Error())
@@ -2617,7 +2634,26 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 		if err != nil {
 			errs = append(errs, err)
 		}
-		if start := intersect(stop, exited); len(start) > 0 {
+		start := intersect(stop, exited)
+		// A service whose image devopsy's compose file changed since its
+		// container was made (a sync took over the parent's image) is
+		// made again, with no other: compose start would run the old
+		// image on the new data.
+		recreate := intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+		if len(recreate) > 0 {
+			report.Info("recreating " + strings.Join(recreate, " ") + " on the image its data now needs")
+			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, recreate...)...); err != nil {
+				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
+			}
+			var rest []string
+			for _, s := range start {
+				if !slices.Contains(recreate, s) {
+					rest = append(rest, s)
+				}
+			}
+			start = rest
+		}
+		if len(start) > 0 {
 			report.Info("starting " + strings.Join(start, " "))
 			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose start: %w", err))

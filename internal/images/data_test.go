@@ -557,7 +557,34 @@ func dataRandom(t *testing.T, seed int64) {
 	d.publish("caddy:2-alpine", "C1")
 	for step := 0; step < 40; step++ {
 		m = envs[rng.Intn(2)]
-		switch op := rng.Intn(8); op {
+		switch op := rng.Intn(10); op {
+		case 8, 9: // a sync of the other environment's data into this one
+			other := envs[0]
+			if other == m {
+				other = envs[1]
+			}
+			if m.cur == "" || other.cur == "" {
+				continue
+			}
+			if op == 9 { // aborted after its check: nothing changes but a pull
+				data := other.e.set.ParentData(other.base(), other.e.rel(other.cur))
+				before := m.runs("database")
+				m.e.set.SyncCheck(m.e.rel(m.cur), data)
+				m.up()
+				if m.runs("database") != before {
+					t.Fatalf("after %v: an aborted sync moved %s's database", log, m.e.set.Name)
+				}
+				check(m.e.set.Name + " sync aborted")
+				continue
+			}
+			err := syncInto(t, other, m, rng.Intn(3) == 0)
+			if err != nil && !errors.Is(err, ErrRefused) {
+				t.Fatalf("after %v: sync: %v\n%s", log, err, out.String())
+			}
+			if err == nil && m.runs("database") != other.runs("database") {
+				t.Fatalf("after %v: %s's database runs %s after a sync from %s, which runs %s", log, m.e.set.Name, m.runs("database"), other.e.set.Name, other.runs("database"))
+			}
+			check(m.e.set.Name + " sync")
 		case 0: // the registry moves a tag
 			push(refs[rng.Intn(len(refs))])
 			if rng.Intn(2) == 0 {
@@ -699,5 +726,208 @@ func TestStatusLines(t *testing.T) {
 	want := []string{"database held on mariadb@I1", "alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// syncInto is a sync of parent's data into child, as the child's side
+// runs it: the parent's data images read (ParentData), checked before
+// anything stops (SyncCheck), and, the copy complete, taken over
+// (SyncDone), then finish recreating what must be (Recreate) and the
+// rest starting.
+func syncInto(t *testing.T, parent, child *sim, yes bool) error {
+	t.Helper()
+	data := parent.e.set.ParentData(parent.base(), parent.e.rel(parent.cur))
+	child.e.set.Yes = yes
+	defer func() { child.e.set.Yes = false }()
+	rel := child.e.rel(child.cur)
+	if err := child.e.set.SyncCheck(rel, data); err != nil {
+		return err
+	}
+	if err := child.e.set.SyncDone(child.base(), rel, data, "vm1:prod"); err != nil {
+		return err
+	}
+	for _, svc := range Recreate(child.d, child.e.set.Name, rel) {
+		_ = svc
+	}
+	child.activation = true
+	child.up()
+	return child.e.set.Ran(child.base(), rel)
+}
+
+// S50, S51, S58, S65: a child on an older image under the same name is
+// held on the parent's exact image once the copy is in, recreated, its
+// history the parent's; its next release moves it forward; a chain
+// carries the history on.
+func TestSyncTakesParentImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev, pr := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out), newSim(t, d, "app-pr1", &out)
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, db118)
+	pr.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	d.publish("mariadb:11.8", "I3") // pulled later by another environment
+	d.Pull("mariadb:11.8")
+	rel := dev.e.rel(dev.cur)
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	if !strings.Contains(data, "image\tdatabase\tmariadb:11.8\tI2\t") {
+		t.Fatalf("parent data:\n%s", data)
+	}
+	if err := dev.e.set.SyncCheck(rel, data); err != nil {
+		t.Fatalf("check: %v\n%s", err, out.String())
+	}
+	// Before the copy completes, nothing changes on the child.
+	if dev.runs("database") != "I1" || holdsIn(rel)["database"] != "mariadb@I1" {
+		t.Fatalf("the check changed the child")
+	}
+	if err := dev.e.set.SyncDone(dev.base(), rel, data, "vm1:prod"); err != nil {
+		t.Fatal(err)
+	}
+	if got := Recreate(d, "app-dev", rel); strings.Join(got, " ") != "database" {
+		t.Errorf("recreate: %v", got)
+	}
+	dev.activation = true
+	dev.up()
+	if dev.runs("database") != "I2" || holdsIn(rel)["database"] != "mariadb@I2" {
+		t.Fatalf("after the copy: runs %s, holds %v\n%s", dev.runs("database"), holdsIn(rel), out.String())
+	}
+	if got := strings.Join(dev.history("database"), " "); got != "sync vm1:prod:I2" {
+		t.Errorf("history: %s", got)
+	}
+	// S65: the chain, dev into pr1.
+	if err := syncInto(t, dev, pr, false); err != nil || pr.runs("database") != "I2" {
+		t.Fatalf("chain (%v): %s\n%s", err, pr.runs("database"), out.String())
+	}
+	// S51: its next release moves it forward, no --yes.
+	if _, err := dev.release(false, db118); err != nil || dev.runs("database") != "I3" {
+		t.Fatalf("next release (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+}
+
+// S53, S54, S57, S69: a child pinned to an image the parent's data moved
+// past, or on a name the parent's data never ran, is refused before
+// anything stops, every sync, unless --yes; a child's local tag is
+// never trusted as newer: held on the parent's digest.
+func TestSyncRefusals(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	prod.release(false, dbSvc("mariadb:11.8.3"))
+	dev.release(false, dbSvc("mariadb:11.8.3"))
+	d.publish("mariadb:11.8.9", "I2")
+	prod.release(true, dbSvc("mariadb:11.8.9"))
+	// S53: dev pinned to 11.8.3, which prod's history starts after (--yes
+	// started it over): a name prod's data never ran.
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	out.Reset()
+	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "never ran on the parent's data") {
+		t.Fatalf("pinned child (%v):\n%s", err, out.String())
+	}
+	dev.e.set.Yes = true
+	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); err != nil {
+		t.Fatalf("--yes: %v", err)
+	}
+	dev.e.set.Yes = false
+	// S69: a child on mariadb:11.8.9 pulled long ago, another image than
+	// prod's: same name, held on prod's.
+	stage := newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8.9", "I0")
+	stage.release(true, dbSvc("mariadb:11.8.9"))
+	if err := syncInto(t, prod, stage, false); err != nil || stage.runs("database") != "I2" {
+		t.Fatalf("local tag (%v): %s\n%s", err, stage.runs("database"), out.String())
+	}
+	// S54 moved past: the parent's history ran I3 after I2; a child on I2
+	// under another name is refused.
+	d.publish("mariadb:11.8.9", "I3")
+	prod.release(false, dbSvc("mariadb:11.8.9"))
+	other := newSim(t, d, "app-other", &out)
+	d.publish("mirror.example/mariadb:11.8.9", "I2")
+	other.release(false, dbSvc("mirror.example/mariadb:11.8.9"))
+	out.Reset()
+	if err := syncInto(t, prod, other, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "moved past") {
+		t.Fatalf("moved past (%v):\n%s", err, out.String())
+	}
+}
+
+// S68, S70, S73: the parent's image missing on the child's server is
+// pulled by its digest before anything stops and bookmarked as the
+// child's release's at once; one the registry no longer serves is
+// refused, nothing changed.
+func TestSyncPullsParentImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	// Another server: the child's has never seen I2.
+	for n, i := range d.names {
+		if i == "I2" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "I2")
+	rel := dev.e.rel(dev.cur)
+	if err := dev.e.set.SyncCheck(rel, data); err != nil || !d.images["I2"] {
+		t.Fatalf("not pulled (%v)\n%s", err, out.String())
+	}
+	found := false
+	for _, b := range bookmarks(readList(rel), "app-dev", dev.cur) {
+		found = found || d.names[familiar(b)] == "I2"
+	}
+	if !found {
+		t.Errorf("the pulled image is not bookmarked: %v", d.names)
+	}
+	// The registry lost it.
+	for n, i := range d.names {
+		if i == "I2" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "I2")
+	d.registry = map[string][]string{}
+	out.Reset()
+	if err := dev.e.set.SyncCheck(rel, data); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "could not be pulled here") {
+		t.Fatalf("gone from the registry (%v):\n%s", err, out.String())
+	}
+}
+
+// S59, S60: a release that syncs checks against what it fetched; once
+// synced, a restart after its failed run keeps the parent's image.
+func TestSyncReleaseRecord(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8.9", "I2")
+	prod.release(false, dbSvc("mariadb:11.8.9"))
+	dev.release(false, dbSvc("mariadb:11.8.9"))
+	d.publish("mariadb:11.8.3", "I1")
+	dev.e.set.SyncData = prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	if _, err := dev.release(false, dbSvc("mariadb:11.8.3")); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a lowered pin syncing: %v\n%s", err, out.String())
+	}
+	dev.e.set.SyncData = ""
+}
+
+// A complete import of a data service's files starts its history over
+// from what runs it.
+func TestImportedHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	m.release(false, db118)
+	if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
+		t.Fatal(err)
+	}
+	h := readHistory(m.base())
+	if w := h.window("database"); len(w) != 1 || w[0].How != Imported || w[0].ID != "I2" {
+		t.Errorf("window after an import: %+v", w)
 	}
 }

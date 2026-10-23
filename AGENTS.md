@@ -1561,6 +1561,34 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   then stays up. Only on go: an aborted first sync creates nothing.
   Never otherwise: a missing service was removed on purpose.
 
+### Images with the data
+
+- **The child takes the parent's data images with its data** (`img
+  data`, `sync-check`, `sync-done`, `internal/images/sync.go`): the
+  parent's pulled data services' images (their containers', else the
+  history's last) and history are read in the preflight session
+  (`ParentCheckScript`, `ParentData`), passed to the child's side
+  (`images.SyncImagesEnv`) and their checksum to the push
+  (`SyncImagesSumEnv`), which refuses when the parent's changed since
+  (a release between the preflight and the push), before stopping
+  anything. The holder checks before its prepare, a release that syncs
+  at its record (in place of its own check for those services: an
+  aborted sync brings the release before back on its own images): the
+  parent's image or name passes; moved past, or a name the parent's
+  data never ran, needs `--yes`, every sync. The parent's image is
+  pulled by digest when missing and listed at once as a `sync:<service>`
+  entry of the child's release (bookmarked, removed with it). On a
+  complete copy (its done line, whatever the answer), `sync-done` holds
+  the child on the parent's image and replaces its history with the
+  parent's window (first line `sync <parent>`); failing, the child is
+  marked (`finish`) and stays down. `restoreServices` makes again (`up
+  --no-deps --wait`) a service whose container's `devopsy.digest` label
+  differs from the release's `ComposeFile` (`images.Recreate`), before
+  starting the rest: `compose start` would run the old image on the new
+  data, the finish hook first. Only `mnt` copies: a stream goes through
+  the child's own image. A complete `mnt` `--import` or `--resolved`
+  starts the service's history over (`Imported`).
+
 ### Streams
 
 - **An import only ever reads a complete export:** per `stream`

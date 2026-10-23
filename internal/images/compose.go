@@ -62,21 +62,37 @@ func writeCompose(rel string, es []entry, holds map[string]string) error {
 // holdsIn reads the holds of rel's ComposeFile (service to digest name):
 // what its last activation held.
 func holdsIn(rel string) map[string]string {
+	holds, _ := composeFacts(rel)
+	return holds
+}
+
+// labelsIn reads the DigestLabel of each service in rel's ComposeFile.
+func labelsIn(rel string) map[string]string {
+	_, labels := composeFacts(rel)
+	return labels
+}
+
+// composeFacts reads rel's ComposeFile as writeCompose writes it: nil
+// without one.
+func composeFacts(rel string) (holds, labels map[string]string) {
 	data, err := os.ReadFile(filepath.Join(rel, ComposeFile))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	holds := map[string]string{}
+	holds, labels = map[string]string{}, map[string]string{}
 	svc := ""
+	label := "      " + strconv.Quote(DigestLabel) + ": "
 	for _, line := range strings.Split(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(line, ":"):
 			svc, _ = strconv.Unquote(strings.TrimSuffix(strings.TrimSpace(line), ":"))
 		case strings.HasPrefix(line, "    image: ") && svc != "":
 			holds[svc], _ = strconv.Unquote(strings.TrimPrefix(line, "    image: "))
+		case strings.HasPrefix(line, label) && svc != "":
+			labels[svc], _ = strconv.Unquote(strings.TrimPrefix(line, label))
 		}
 	}
-	return holds
+	return holds, labels
 }
 
 // StatusLines are --status's lines on rel's images, one per service

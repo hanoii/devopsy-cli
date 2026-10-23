@@ -166,6 +166,9 @@ type Set struct {
 	// target as typed, for the fix lines.
 	Yes     bool
 	Address string
+	// SyncData is a parent's ParentData, in a sync's activation or
+	// holder: Record and SyncCheck check the child against it.
+	SyncData string
 
 	// built are the services with a build: section, from the last List.
 	built map[string]bool

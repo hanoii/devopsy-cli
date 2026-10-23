@@ -3,6 +3,7 @@ package remote
 import (
 	"cmp"
 	"fmt"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"os"
 	"path"
 	"regexp"
@@ -401,6 +402,16 @@ type SyncOptions struct {
 	// ID is the sync's, chosen by the operator's devopsy: its pending
 	// inherited variables are written before the holder runs.
 	ID string
+	// Images are the parent's data images (images.Set.ParentData), from
+	// the preflight: checked before anything stops, taken over once the
+	// copy is complete.
+	Images string
+}
+
+// imagesExport exports the parent's data images for the child's img
+// calls (images.SyncImagesEnv).
+func (o *SyncOptions) imagesExport() string {
+	return "export " + images.SyncImagesEnv + "=" + Quote(images.EncodeData(o.Images)) + "\n"
 }
 
 // exports sets the child side's sync variables, the sync's id and its
@@ -519,7 +530,24 @@ func syncBlock(projectName, failed string, release bool) string {
   esac
   # finish partial ends what the record names, then it goes.
   if [ "$sync_word" = go ]; then
-    sync_finish go || status=$?
+    # The data is the parent's: so are its images and their history
+    # (img sync-done), whatever the answer or finish child go says,
+    # before finish starts the services on them.
+    if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+      if image_lock shared syncing; then
+        img sync-done "$base" "$rel" || status=$?
+        image_unlock
+      else
+        status=75
+      fi
+      if [ "$status" != 0 ]; then
+        # The data is the parent's, its images not: nothing runs on it.
+        devopsy --say error "could not take over the parent's images ($status): the services stay down until a sync completes" || true
+        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "the copy is complete, but the parent's images could not be taken over" >` + incomplete + ` || true
+        sync_finish partial || true
+      fi
+    fi
+    [ "$status" != 0 ] || sync_finish go || status=$?
   else
     sync_finish "$sync_word" || true
     status=1
@@ -575,7 +603,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
+`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
 # session gone then ends it; from here on it restores on its own. With a
 # heartbeat, disarmed only on the session's next byte (waitBeat): a
 # session that went silent while this waited ends it too, never noticed
@@ -585,9 +613,19 @@ rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
+rel="$base/releases/$id"
 exec 1>&2
 devopsy --say info "syncing into $id"
-` + o.exports(t) + `cd "$base/current"
+` + o.exports(t) + o.imagesExport() + `# Before anything stops: the parent's data must take the child's images,
+# and the parent's image must be here (img sync-check pulls it).
+if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+  image_lock shared syncing || exit $?
+  sc=0
+  img sync-check "$rel" || sc=$?
+  image_unlock
+  [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
+fi
+cd "$base/current"
 status=0
 ` + syncBlock(projectName, "the run step does not run", false) + `[ "$status" = 0 ] || exit "$status"
 `
@@ -597,7 +635,9 @@ status=0
 		s += `out="$base/releases/$id/` + ServerLogFile + `"
 trap '' PIPE
 ` + followOutput
-		s += "with_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + "\n"
+		s += "rs=0\nwith_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + " || rs=$?\n"
+		// What ran on the data, as after a release's run step.
+		s += "img ran \"$base\" \"$rel\" || true\nexit \"$rs\"\n"
 	}
 	return s
 }
@@ -747,6 +787,29 @@ func CurrentExistsScript(t *Target, extra []string) string {
 if ` + ImportRunning + `; then echo importing; fi
 case "$server_features" in *" ` + DataLabelsFeature + ` "*) echo ` + DataLabelsFeature + ` ;; esac
 `
+}
+
+// ParentCheckScript is CurrentExistsScript for a sync's parent, then its
+// data images (images.Set.ParentData: lines starting image and ran),
+// which the child's side checks and takes over (images.SyncImagesEnv).
+func ParentCheckScript(t *Target, projectName string, extra []string) string {
+	return CurrentExistsScript(t, extra) + releaseImages(projectName, t, t.Mode) + `if [ -d "$base/current/.devopsy" ]; then
+  pc_rel=$(readlink "$base/current")
+  img data "$base" "$base/${pc_rel%/` + CodeDir + `}"
+fi
+`
+}
+
+// ParseParentData is the parent's data images in ParentCheckScript's
+// output (images.Set.ParentData's lines).
+func ParseParentData(out string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") {
+			b.WriteString(strings.TrimRight(line, "\r") + "\n")
+		}
+	}
+	return b.String()
 }
 
 // ClaimWriteScript claims the right to write into the child at base for
