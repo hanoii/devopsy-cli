@@ -494,16 +494,21 @@ step's rules):
 4. Links into the release: `shared/*`, `inherit.env`, `project.env` and
    `instance.env`, even when missing, so one created later applies.
 5. Releases only: `--prepare-release` when the compose files use role
-   or import labels (`PrepareScript`, Roles, exports and imports);
-   `--check-names`: containers of the same compose project from another
-   directory (`cli.ProjectConflict`: `-`-joined names coincide,
-   `a-b`/`c` and `a`/`b-c`), and a network the project names as its
-   own that another compose project owns (`cli.NetworkConflicts`:
-   Compose would silently share it; external networks are how a project
-   joins another's); `--check-mounts` (`cli.CheckMounts`, Data,
-   destroying and removing).
+   or import labels (`PrepareScript`, Roles, exports and imports).
 6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`: compose's
-   `${VAR:?}`/`${VAR?}` left unset).
+   `${VAR:?}`/`${VAR?}` left unset), then, releases only, the checks
+   that read compose's configuration, which fails while a required
+   variable is unset, so they come after what makes them (decided: before
+   prepare, a first release whose prepare makes its secrets, drupal11's
+   and the registry's, passed them unchecked): `--check-names`:
+   containers of the same compose project from another directory
+   (`cli.ProjectConflict`: `-`-joined names coincide, `a-b`/`c` and
+   `a`/`b-c`), and a network the project names as its own that another
+   compose project owns (`cli.NetworkConflicts`: Compose would silently
+   share it; external networks are how a project joins another's);
+   `--check-mounts` (`cli.CheckMounts`, Data, destroying and removing),
+   which also readies `UtilImage` when an entry is owned, so a registry
+   down refuses the release instead of failing it after its switch.
 7. The images (`fetch_release`, Images). `ServerLogFile` is created
    here, so a full disk fails the release before it goes live.
 8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
@@ -988,16 +993,20 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   stream's import (it writes as the service's user), restores, restarts
   or reboots (owners persist). No flag to fix owners: a release does it.
 - **The mounts check refuses before the switch** (`--check-mounts`,
-  `cli.CheckMounts`, beside `--check-names`, on the server: labels can
-  come from its variables): a writable bind from the project's tree
-  outside `mnt` (`TreeBinds`, links resolved, so `shared/`'s are out of
-  it: it goes with the next release), `devopsy.data=mnt` copying no
-  entry (none mounted, or all excluded) or an owner of no writable
-  entry (a sync said "nothing to sync" and a child's first release went
-  live on empty data), two owners on one entry, and `./mnt` whole
-  mounted writable by any service (`WholeMnt`, below). Not checkable, so documented: named volumes and
-  absolute paths. A compose config that cannot be read is no refusal,
-  as for `--check-names`.
+  `cli.CheckMounts`, beside `--check-names` after the prepare steps and
+  `--missing-vars`, on the server: labels can come from its variables):
+  a writable bind from the project's tree outside `mnt` (`TreeBinds`,
+  links resolved, so `shared/`'s are out of it: it goes with the next
+  release), `devopsy.data=mnt` copying no entry (none mounted, or all
+  excluded) or an owner of no writable entry (a sync said "nothing to
+  sync" and a child's first release went live on empty data), two
+  owners on one entry, and `./mnt` whole mounted writable by any
+  service (`WholeMnt`, below). With an entry owned it readies `UtilImage`
+  (`ensureUtilImage`), so a registry down refuses the release rather
+  than failing `--mnt-owners` after the switch. Not checkable, so
+  documented: named volumes and absolute paths. A compose config that
+  cannot be read is no refusal, as for `--check-names`: after
+  `--missing-vars` that is a broken file, which the run step names.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a `mnt` service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing

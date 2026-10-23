@@ -169,9 +169,12 @@ func runMntOwners(cwd string, args []string) int {
 const mntOwnersRestored = "restored"
 
 // runCheckMounts implements the hidden --check-mounts, run by an
-// activation in the new release before its switch (cli.CheckMounts). A
-// compose configuration that cannot be read is no refusal, as for
-// --check-names: the release's up says what is wrong with it.
+// activation in the new release before its switch, after its prepare
+// steps and --missing-vars (cli.CheckMounts). A compose configuration
+// that cannot be read is no refusal, as for --check-names: the release's
+// up says what is wrong with it. With an entry owned, it also readies
+// the util image the owners' step runs after the switch, so a registry
+// down refuses the release instead of failing it there.
 func runCheckMounts(cwd string, args []string) int {
 	if len(args) > 0 {
 		report.Error(cli.CheckMountsFlag + " takes nothing")
@@ -190,11 +193,23 @@ func runCheckMounts(cwd string, args []string) int {
 	if err == nil {
 		err = cli.CheckMounts(services)
 	}
+	if err == nil {
+		err = checkOwned(services)
+	}
 	if err != nil {
 		report.Fail(err)
 		return 1
 	}
 	return 0
+}
+
+// checkOwned readies the util image when the project owns any entry.
+func checkOwned(services []cli.SyncService) error {
+	owned, err := cli.MntOwners(services)
+	if err != nil || len(owned) == 0 {
+		return err
+	}
+	return ensureUtilImage(context.Background())
 }
 
 // localMnt readies the owned paths of mnt before compose starts
