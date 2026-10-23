@@ -32,7 +32,7 @@ func (e *recEnv) release(svcs ...Service) string {
 
 var (
 	appSvc   = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true}
-	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true} }
+	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true, Method: DataMnt} }
 	proxySvc = Service{Name: "alwaysup", Ref: "caddy:2-alpine"}
 )
 
@@ -188,8 +188,8 @@ func TestParseComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, Data: true},
-		{Name: "db", Ref: "mariadb:11.8", Data: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "mnt"},
+		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none"},
 		{Name: "tool", Ref: "local/tool", NeverPull: true},
 		{Name: "web", Ref: "caddy:2"},
 	}

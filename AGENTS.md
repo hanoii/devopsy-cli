@@ -404,6 +404,14 @@ before changing anything".
   `data-labels`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
+- **The images' history and holds are a named feature, `data-images`,**
+  found by the `img` words they added (`names`, `record`, `restore`,
+  `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
+  `--mode` and `--address`, which an older `--images` refuses as usage
+  after the locks: every activation, holder, parent check and removal
+  needs it, so an older server refuses before anything changes, naming
+  the upgrade. `childNeeds` does not add it: the parent's sessions to the
+  child call none of them, and the child's holder needs it itself.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -537,8 +545,10 @@ step's rules):
    recreates every container whose image or config changed, a tag
    rebuilt upstream included, so their evidence went with them and
    `--log` only said "unhealthy"), `current` back, the previous
-   release restarted with its own images (`get_images`), owners
-   (`--mnt-owners restored`, a failure only said) and run step
+   release restarted with its images restored as a rollback's are
+   (`get_images`; when that fails, `img hold` still holds its data
+   services on their data's newest image), owners (`--mnt-owners
+   restored`, a failure only said) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
@@ -699,8 +709,10 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   service, kind, registry digest, version label), from `compose config
   --format json` without profiles and without devopsy's own file
   (`NoReleaseComposeEnv`). Own or pulled is decided by compose and the
-  mode (`Service.own`: a build in build mode, or `pull_policy: never`),
-  never by the image: on Docker's containerd store built and loaded
+  mode (`Service.own`: a build in build mode, or `pull_policy: never`;
+  and a pulled image without a registry digest, which nothing could hold,
+  is restored as own), never by `RepoDigests` alone: on Docker's
+  containerd store built and loaded
   images carry `RepoDigests` too (checked 2026-10-23), and a pulled
   image's id is its index digest. The version is display only: no field
   is common to images.
@@ -710,8 +722,9 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   repository named twice adds a checksum of the ref), by image id, since
   another fetch may move the name meanwhile. Digests are bookmarked too
   (`prune -f` would delete an unused image pulled by digest only), never
-  restored. `devopsy-images` lists `ref<tab>image id`: what a removal
-  decides from even after a bookmark went.
+  restored. `devopsy-images` lists each service's ref, image id, kind,
+  digest and version: what a removal decides from even after a bookmark
+  went.
 - **Data only goes forward** (`history.go`, `record.go`,
   `restore.go`): a pulled data service (`KindData`: a `devopsy.data`
   label, any value, no `build:`, pulled) never runs an image older than
@@ -919,7 +932,7 @@ interrupts" and "The server never waits on the operator for long".
   `FetchingFile` marks a new release's fetch until a line says its
   images are ready, and `img recover` (by every activation, `--destroy`
   and `--releases remove`, after the lock) marks such a release failed,
-  bookmarks its images and restores current's names; until then it
+  bookmarks its images and restores current's own names; until then it
   counts as failed. Rollbacks never write the marker, which would mark
   a good release failed.
 - **From the end of a fetch that went through, INT, TERM and HUP are
@@ -1630,8 +1643,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   own gets `--chown=<uid>:<gid>` (`syncRsync`, the receive script's
   options), from the child's list: the child's owner for every file
   written, whatever the parent's are (a parent whose files were wrong,
-  an upload by hand there). Bump the tag whenever the Dockerfile's
-  packages change: a host keeps an image of the old ones until it is a
+  an upload by hand there). Bump the tag whenever the
+  Dockerfile changes: a new tag is built at its first use on each host,
+  where the old one would only be rebuilt from the old Dockerfile once a
   week old.
 - **The util image floats on `alpine:3` and is rebuilt weekly**
   (`ensureUtilImage`, before every use; scripts call the hidden

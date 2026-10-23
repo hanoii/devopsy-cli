@@ -21,7 +21,9 @@ const (
 )
 
 // ParentData is what a child's sync needs of a parent's data images: per
-// pulled data service, the image that wrote its data (its container's,
+// pulled data service whose files a sync copies (devopsy.data=mnt, as
+// the parent's config resolves it now: a stream goes through the child's
+// own image, which keeps its history), the image that wrote its data (its container's,
 // once started: a parent that drifted runs what wrote it; else its
 // history's last), then the history that counts for it (its window).
 // Lines, tab separated: "image", service, reference, id, digests; then
@@ -30,8 +32,17 @@ func (s *Set) ParentData(base, rel string) string {
 	h := readHistory(base)
 	var cs map[string]Container
 	var b strings.Builder
+	svcs, err := s.List(rel)
+	if err != nil {
+		s.say(report.WarnLevel, "could not list the services of %s (%v): the child keeps its images", filepath.Base(rel), err)
+		return ""
+	}
+	copied := map[string]bool{}
+	for _, svc := range svcs {
+		copied[svc.Name] = svc.Method == DataMnt
+	}
 	for _, e := range readList(rel) {
-		if e.Kind != KindData {
+		if e.Kind != KindData || !copied[e.Service] {
 			continue
 		}
 		img := Image{}

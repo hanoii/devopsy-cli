@@ -1091,3 +1091,23 @@ func TestHoldData(t *testing.T) {
 		t.Errorf("held on %q, want mariadb@I2", got)
 	}
 }
+
+// A database streamed (devopsy.data=stream): its dump goes through the
+// child's own image, which keeps its history; a sync neither checks nor
+// takes over its image.
+func TestSyncStreamKeepsChildImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	stream := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: "stream"}
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, stream)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, stream)
+	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); data != "" {
+		t.Errorf("a stream's image in the parent's data:\n%s", data)
+	}
+	if err := syncInto(t, prod, dev, false); err != nil || dev.runs("database") != "I1" {
+		t.Errorf("after the sync (%v): %s", err, dev.runs("database"))
+	}
+}

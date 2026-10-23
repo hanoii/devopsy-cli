@@ -139,7 +139,7 @@ func (d CLI) Containers(project string) ([]Container, error) {
 const VersionLabel = "org.opencontainers.image.version"
 
 // NoReleaseComposeEnv set keeps devopsy's own compose file
-// (remote.ReleaseComposeFile) out of a project's files: a listing reads
+// (ComposeFile) out of a project's files: a listing reads
 // the project's choices alone, never the holds an earlier activation
 // wrote.
 const NoReleaseComposeEnv = "DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE"
@@ -184,8 +184,8 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 	svcs := make([]Service, 0, len(names))
 	for _, n := range names {
 		c := cfg.Services[n]
-		_, data := c.Labels[DataLabel]
-		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", Data: data, NeverPull: c.PullPolicy == "never"}
+		method, data := c.Labels[DataLabel]
+		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
 		}
@@ -194,5 +194,9 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 	return svcs, nil
 }
 
-// DataLabel is cli.DataLabel, which this package cannot import.
-const DataLabel = "devopsy.data"
+// DataLabel is cli.DataLabel, which this package cannot import, and
+// DataMnt its value for a copy of the service's files (cli.DataMnt).
+const (
+	DataLabel = "devopsy.data"
+	DataMnt   = "mnt"
+)

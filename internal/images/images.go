@@ -7,9 +7,10 @@
 // <repository>:devopsy-<compose name>-<release id> (Bookmark). The
 // bookmarks are the reference count: a release going (Remove) untags
 // its bookmarks, and an image no other bookmark holds loses the names
-// the release ran, so Docker deletes it. A rollback or a restart points
-// the names back at a release's bookmarks (Restore), so it runs exactly
-// the images it ran without building or pulling.
+// the release ran, so Docker deletes it. A rollback or a restart puts
+// what a release built back from its bookmarks and holds what must not
+// move by digest in devopsy's own compose file (Restore): a pulled data
+// service only ever goes forward (HistoryFile).
 package images
 
 import (
@@ -182,8 +183,9 @@ type Service struct {
 	// (<compose name>-<service>).
 	Ref string
 	// Build: it has a build: section. Data: a devopsy.data label, any
-	// value. NeverPull: pull_policy: never.
+	// value, which is Method. NeverPull: pull_policy: never.
 	Build, Data, NeverPull bool
+	Method                 string
 }
 
 // own says whether a service's image is the project's own: built (in

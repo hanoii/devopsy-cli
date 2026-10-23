@@ -647,7 +647,9 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		return 1
 	}
 	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
-	code := runSyncSession(job, remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
+	// --yes also lets the child's images through the check against the
+	// parent's data (img sync-check), as it does a release's.
+	code := runSyncSession(job, imagesYes(yes)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))
@@ -940,7 +942,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// environment since would copy data another image wrote).
 	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
 		rel := remote.ReleaseFile(projectDir, "")
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
 		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
 			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
 		}

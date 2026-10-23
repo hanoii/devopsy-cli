@@ -25,8 +25,10 @@ code, so every project works the same way.
   listens for webhooks. A server is Docker, SSH and this binary.
 - **Not an orchestrator.** No Kubernetes, no Swarm, no failover: an
   environment is one compose project on one server.
-- **Not a compose replacement.** It never generates or rewrites compose
-  files; plain `docker compose` sees exactly what devopsy runs.
+- **Not a compose replacement.** It never rewrites your compose files:
+  plain `docker compose` sees what devopsy runs, but for the one file of
+  devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
+  image each service was given, the ones held by digest).
 - **Not a local development tool like DDEV.** No per-framework setup, router
   or snapshots: it runs the compose project you write.
 - **Not a build system.** Images are built however you like: on the server
@@ -631,9 +633,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   healthy nor exited 0, its last health checks and its last 100 log
   lines. Then `current` goes back to the previous release, which
   is restarted with its own run step, from its own config (its `rollback:`
-  run step, else its `release:` one), with its own images back, so its
-  containers are the previous release's again. Data changes, like database
-  updates, are the project's to undo. A first release has nothing to go
+  run step, else its `release:` one), with its images as a rollback gets
+  them (below: what it built back, a database staying on the newest image
+  its data ran). Data changes, like database updates, are the project's
+  to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
   kept), and `--status` says the release failed.
 - **A child's first release** syncs its parent's data between switching
@@ -718,8 +721,8 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   (`org.opencontainers.image.version`) when it has one, else by short
   digest, a built one as rebuilt. In image mode it warns when an image
   the project builds changed under the same name (tag it by commit), and
-  when one stayed the same for over 30 days while releases go on: its
-  base may have patches, so rebuild it with `--pull`.
+  when one built over 30 days ago has not changed since the release
+  before: its base may have patches, so rebuild it with `--pull`.
 - **Images go with their releases:** pruning a release removes its tags.
   An image no other release still tags, of any environment, instance or
   project on the server, also loses the names that release ran that still

@@ -237,6 +237,8 @@ fi
 opts=
 for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
+# Which sessions carried the operator's --yes for the images' checks.
+case "$s" in *DEVOPSY_INTERNAL_IMAGES_YES=1*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
 # FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
@@ -713,7 +715,9 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if n := strings.Count(docker, check); n != 3 {
 		t.Errorf("the util image checked %d times, want 3 (push, the child's before the stop, receive):\n%s", n, docker)
 	}
-	if second, stop := strings.Index(docker[strings.Index(docker, check)+len(check):], check), strings.Index(docker, "shop-prod compose -f"); second < 0 || stop < 0 || strings.Index(docker, check)+len(check)+second > strings.Index(docker[stop:], " stop ")+stop {
+	first := strings.Index(docker, check)
+	second := strings.Index(docker[first+len(check):], check) + first + len(check)
+	if stop := strings.Index(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop"); stop < 0 || second > stop {
 		t.Errorf("the child's util image checked after the parent stopped:\n%s", docker)
 	}
 	// Vanished files across servers: the receive script goes on too.
@@ -781,8 +785,13 @@ func TestSyncAbort(t *testing.T) {
 	}
 	s.logs()
 	// The parent's stop fails, before anything is written: what it
-	// stopped comes back, and so does the child.
+	// stopped comes back, and so does the child. --yes reaches the
+	// holder's checks of the images too.
+	os.Remove(s.sshLog + ".yes")
 	out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
+	if yes, _ := os.ReadFile(s.sshLog + ".yes"); string(yes) != "holder\n" {
+		t.Errorf("sessions with the images' --yes: %q", yes)
+	}
 	docker, _ := s.logs()
 	if code != 1 || !strings.Contains(out, "aborting the sync") || !strings.Contains(out, "before writing anything") {
 		t.Fatalf("parent's stop fails (%d):\n%s", code, out)
@@ -1517,7 +1526,7 @@ func TestSyncLabels(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data (rsync is mnt") || strings.Contains(docker, " stop ") || strings.Contains(docker, "shop-prod compose") {
+	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data (rsync is mnt") || strings.Contains(docker, " stop ") || parentChanged(docker) {
 		t.Errorf("an old label on the child (%d):\n%s\n%s", code, out, docker)
 	}
 	os.Remove(s.log + ".shop-dev")
@@ -1568,7 +1577,7 @@ func TestSyncMismatch(t *testing.T) {
 			want = "without data (devopsy.data=none or no label)"
 		}
 		if code == 0 || !strings.Contains(out, "devopsy: error: the child's data labels do not match the parent's: nothing changed\ndevopsy: | the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.data=mnt)\n") ||
-			strings.Contains(out, "deploy in shop-dev") || strings.Count(docker, "shop-prod compose") != 1 || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
+			strings.Contains(out, "deploy in shop-dev") || parentChanged(docker) || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
 			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start app") {
 			t.Errorf("child db %s (%d):\n%s\n%s", label, code, out, docker)
 		}
@@ -3200,4 +3209,15 @@ func TestUtilImage(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "error: building devopsy-util:2: exit status 1") {
 		t.Errorf("missing, its build failing (%d):\n%s", code, out)
 	}
+}
+
+// parentChanged says whether the parent's side ran a compose command
+// that changes anything: its reads (config, ps) do not.
+func parentChanged(docker string) bool {
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.HasPrefix(line, "shop-prod compose") && !strings.Contains(line, " config ") && !strings.Contains(line, " ps ") && !strings.HasSuffix(line, " config --format json") {
+			return true
+		}
+	}
+	return false
 }
