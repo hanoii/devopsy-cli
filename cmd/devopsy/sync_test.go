@@ -1937,7 +1937,7 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || !strings.Contains(errs, "devopsy: then giving mnt/storage to 10001:10001") {
 		t.Fatalf("--import of an owned entry (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, `chown_entry "${eo%=*}" "${eo##*=}"`) || !strings.Contains(docker, `-exec chown -h "$2" {} +`) {
+	if docker, _ := s.logs(); !strings.Contains(docker, "-i -e OWNED=storage=10001:10001 -v "+mnt+":/mnt devopsy-util:2 sh -c ") || !strings.Contains(docker, `chown_entry "${eo%=*}" "${eo##*=}"`) || !strings.Contains(docker, `-execdir chown -h "$2" {} +`) {
 		t.Errorf("an owned import:\n%s", docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,

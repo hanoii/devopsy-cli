@@ -24,11 +24,24 @@ import (
 // chownEntry is a shell function giving the entry of /mnt $1 and
 // everything in it to $2 (<uid>:<gid>), scanned whole: what devopsy did
 // not write (an upload by hand, data from before the label) has the
-// wrong owner deep in a tree under a correct top. Never following a
-// symbolic link (-h, and find's default -P): the app can make them in
-// its entries.
+// wrong owner deep in a tree under a correct top. Never through a
+// symbolic link the app made in its entries: not the file's own (-h,
+// and find's default -P), nor one swapped in for a directory on the way
+// (-execdir: chown runs in the file's directory, which find entered
+// safely, on ./<name>, so it cannot reach another entry).
+//
+// The scan runs while the services may run (a release's old containers,
+// an import's service): a file one removes after find saw it fails its
+// chown, and find with it. A vanished file has no owner to fix, so a
+// failed scan is looked at again, chowning nothing: only something left
+// with another owner fails it (measured: 31 of 200 scans of a busy entry
+// failed before).
 const chownEntry = `chown_entry() {
-  find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +
+  ce_err=$(find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} + 2>&1) && return 0
+  ce_left=$(find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -print -quit 2>/dev/null) || true
+  [ -n "$ce_left" ] || return 0
+  printf '%s\n' "$ce_err" >&2
+  return 1
 }
 `
 

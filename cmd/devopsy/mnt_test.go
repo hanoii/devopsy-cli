@@ -24,7 +24,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	if code != 0 || switched < 0 || giving < switched || deployed < giving {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
-	for _, want := range []string{"run --rm --name devopsy-owners-shop-prod-", " --network none -v " + s.mnt("prod") + ":/mnt devopsy-util:2 sh -c set -eu\n", `mkdir -m 0755 "/mnt/$e"`, `find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "done\n sh storage=10001:10001\n"} {
+	for _, want := range []string{"run --rm --name devopsy-owners-shop-prod-", " --network none -v " + s.mnt("prod") + ":/mnt devopsy-util:2 sh -c set -eu\n", `mkdir -m 0755 "/mnt/$e"`, `find "/mnt/$1" \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -execdir chown -h "$2" {} +`, "done\n sh storage=10001:10001\n"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -129,11 +129,48 @@ func TestMntOwnersLocal(t *testing.T) {
 }
 
 // The util container's scripts parse (sh -n, as the servers' scripts
-// do in internal/remote).
-func TestMntScriptsParse(t *testing.T) {
+// do in internal/remote), and the scan (chownEntry, a release's and an
+// import's) survives a file a running service removes meanwhile: its
+// chown fails, find with it, and only what is left with another owner
+// fails the scan (review of 2026-10-23: the release failed after its
+// switch and went back). The fake find takes every file for another
+// owner's, as a scan of an entry another machine wrote would, then asks
+// the real one what is left.
+func TestMntScripts(t *testing.T) {
 	for name, script := range map[string]string{"ownEntries": ownEntries, "emptyAndExtract": emptyAndExtract} {
 		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v\n%s", name, err, out)
+		}
+	}
+	tmp := t.TempDir()
+	mnt, bin := filepath.Join(tmp, "mnt"), filepath.Join(tmp, "bin")
+	write(t, filepath.Join(bin, "find"), `#!/bin/sh
+case " $* " in *" -exec"*) for a; do [ "${p:-}" = -h ] && o=$a; p=$a; done; exec /usr/bin/find "$1" -execdir chown -h "$o" {} + ;; esac
+exec /usr/bin/find "$@"
+`, 0o755)
+	// The app removes tmp-123 between find's look and the chown.
+	write(t, filepath.Join(bin, "chown"), `#!/bin/sh
+shift 2
+for f; do
+  case $f in *tmp-*) rm -f "$f"; echo "chown: cannot access '$f': No such file or directory" >&2; st=1 ;; *) echo "$f" >> "$CHOWNED" ;; esac
+done
+exit ${st:-0}
+`, 0o755)
+	script := strings.ReplaceAll(ownEntries, `"/mnt/`, `"`+mnt+`/`)
+	own := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	for owner, fails := range map[string]bool{own: false, "99999:99999": true} {
+		write(t, filepath.Join(mnt, "storage", "keep.txt"), "x\n", 0o644)
+		write(t, filepath.Join(mnt, "storage", "tmp-123"), "x\n", 0o644)
+		chowned := filepath.Join(tmp, "chowned")
+		os.Remove(chowned)
+		cmd := exec.Command("sh", "-c", script, "sh", "storage="+owner)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "CHOWNED=" + chowned}
+		out, err := cmd.CombinedOutput()
+		if (err != nil) != fails || strings.Contains(string(out), "cannot access") == !fails {
+			t.Errorf("owner %s, a file the app removed during the scan, nothing else left: %v (fails: %v)\n%s", owner, err, fails, out)
+		}
+		if got := readString(chowned); !strings.Contains(got, "keep.txt") {
+			t.Errorf("the rest not given away: %q", got)
 		}
 	}
 }
