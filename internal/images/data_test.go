@@ -1111,3 +1111,55 @@ func TestSyncStreamKeepsChildImage(t *testing.T) {
 		t.Errorf("after the sync (%v): %s", err, dev.runs("database"))
 	}
 }
+
+// labeled is a service as compose config gives it: image ref, and a
+// devopsy.data label with value data.
+func labeled(t *testing.T, name, ref, data string) Service {
+	t.Helper()
+	svcs, err := ParseComposeConfig([]byte(`{"name":"app","services":{"` + name + `":{"image":"` + ref + `","labels":{"devopsy.data":"` + data + `"}}}}`))
+	if err != nil || len(svcs) != 1 {
+		t.Fatalf("compose config: %v", err)
+	}
+	return svcs[0]
+}
+
+// Bug: a sync takes over the parent's image and history for every pulled
+// service with any devopsy.data label (ParentData, SyncCheck and SyncDone
+// read only KindData), stream and none included, when only the data an
+// mnt copy writes is the parent's (S55: a stream service keeps its own
+// history). A child whose stream database runs a newer image than the
+// parent's under the same tag is held on the parent's older one after the
+// dump is imported into it, and one on another series is refused.
+func TestSyncStreamKeepsOwnImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	db := labeled(t, "database", "mariadb:11.8", "stream")
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db)
+	// mariadb:11.8 moves on; dev's release takes it: its data runs I2.
+	d.publish("mariadb:11.8", "I2")
+	if _, err := dev.release(false, db); err != nil || dev.runs("database") != "I2" {
+		t.Fatalf("dev's release (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// prod's dump imported into dev's running I2 server: dev's data is
+	// still what I2 wrote.
+	if err := syncInto(t, prod, dev, false); err != nil {
+		t.Fatalf("a stream sync (%v):\n%s", err, out.String())
+	}
+	if got := dev.runs("database"); got != "I2" {
+		t.Errorf("dev's stream database runs %s after the sync, want I2, the image its own data ran last (held %v)", got, holdsIn(dev.e.rel(dev.cur)))
+	}
+	if got := strings.Join(dev.history("database"), " "); got != "ran:I2" {
+		t.Errorf("dev's stream database's history: %s, want its own, ran:I2", got)
+	}
+	// A child on another series, with a stream database: no check.
+	stage := newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.4", "J1")
+	stage.release(false, labeled(t, "database", "mariadb:11.4", "stream"))
+	out.Reset()
+	if err := syncInto(t, prod, stage, false); err != nil {
+		t.Errorf("a stream sync into a child on another series refused (%v):\n%s", err, out.String())
+	}
+}
+
