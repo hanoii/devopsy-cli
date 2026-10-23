@@ -49,8 +49,7 @@ func (s *Set) Record(rel, prev string) error {
 	old := readList(prev)
 	base := baseOf(rel)
 	h := s.seed(base, old, es)
-	var refused []string
-	var forced, refusedRefs []string
+	var refused, refusedSvcs, refusedRefs, accepted, forced []string
 	holds := map[string]string{}
 	// A release that syncs: the parent's data replaces the child's, so
 	// its images are checked against the parent's (SyncCheck, below); a
@@ -58,41 +57,54 @@ func (s *Set) Record(rel, prev string) error {
 	// its own images.
 	parent := parseParentData(s.SyncData)
 	for _, e := range es {
-		if e.Kind != KindData {
+		// A pulled data service; or a built one whose data has a history
+		// (it ran a pulled image before), checked by its name: a switch
+		// between pulled and built is one its data never ran, its own
+		// builds after go through (no digest to order them by). A
+		// project that always built its database has no history.
+		_, hasHistory := h.last(e.Service)
+		if e.Kind != KindData && !(e.Kind == KindOwn && s.data[e.Service] && hasHistory) {
 			continue
 		}
-		holds[e.Service] = e.Digest
-		if parent[e.Service] != nil {
-			continue
+		var img Image
+		if e.Kind == KindData {
+			holds[e.Service] = e.Digest
+			if parent[e.Service] != nil {
+				continue
+			}
+			img, err = s.Docker.Inspect(e.Digest)
+		} else {
+			img, err = s.Docker.Inspect(e.ID)
 		}
-		img, err := s.Docker.Inspect(e.Digest)
 		if err != nil {
 			img = Image{ID: e.ID}
 		}
-		if why := h.check(old, e, img); why != "" {
+		why := h.check(old, e, img)
+		switch {
+		case why == "":
+		case s.Accept[e.Service]:
+			accepted = append(accepted, why)
+			forced = append(forced, e.Service+"\t"+img.ID)
+		default:
 			refused = append(refused, why)
-			forced = append(forced, e.Service+"\t"+e.ID)
+			refusedSvcs = append(refusedSvcs, e.Service)
 			refusedRefs = append(refusedRefs, e.Ref)
 		}
 	}
-	if len(refused) > 0 && !s.Yes {
+	if len(refused) > 0 {
 		s.putNamesBack(rel, es, refusedRefs)
-		yes := "--release --yes"
-		if s.Address != "" {
-			yes = "devopsy @" + s.Address + " " + yes
-		}
 		fixes := []report.Remedy{
 			report.Fix("release an image its data ran, or a newer one under the same name"),
-			report.Fix("or, knowing its data takes it (an upgrade devopsy cannot order), run it anyway, its data's history starting over from it:", yes),
+			report.Fix("or, knowing its data takes it (an upgrade devopsy cannot order), accept it, its data's history starting over from it:", s.again("--release", refusedSvcs)),
 		}
 		s.sayAll(report.ErrorLevel, "the release's images would take data where it never was:", refused, fixes...)
 		return ErrRefused
 	}
-	if len(refused) > 0 {
-		s.sayAll(report.WarnLevel, "--yes: running them anyway, the history of their data starting over from them:", refused)
+	if len(accepted) > 0 {
+		s.sayAll(report.WarnLevel, "accepted (--accept-image): running them anyway, the history of their data starting over from them:", accepted)
 	}
 	if err := writeForced(rel, forced); err != nil {
-		s.say(report.ErrorLevel, "could not record what --yes let through: %v", err)
+		s.say(report.ErrorLevel, "could not record what --accept-image let through: %v", err)
 		return err
 	}
 	if prev != "" {
@@ -110,7 +122,7 @@ func (s *Set) Record(rel, prev string) error {
 	// A release that syncs: the parent's data must take the child's
 	// images, checked against what the release fetched.
 	if s.SyncData != "" {
-		refs, err := s.syncCheck(rel, s.SyncData, "--release --yes")
+		refs, err := s.syncCheck(rel, s.SyncData, "--release")
 		if errors.Is(err, ErrRefused) {
 			s.putNamesBack(rel, es, refs)
 		}
@@ -372,3 +384,13 @@ func (s *Set) now() time.Time {
 
 // sanitize keeps a value on one listing column.
 func sanitize(v string) string { return strings.Join(strings.Fields(v), "_") }
+
+// again is the command that runs it again accepting svcs: devopsy
+// @<address> <flag> --accept-image <svcs>.
+func (s *Set) again(flag string, svcs []string) string {
+	cmd := flag + " --accept-image " + strings.Join(svcs, ",")
+	if s.Address != "" {
+		cmd = "devopsy @" + s.Address + " " + cmd
+	}
+	return cmd
+}

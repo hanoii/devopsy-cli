@@ -1673,7 +1673,7 @@ exit 0
 // A release writes devopsy's compose file, its database held by digest;
 // one whose database's name changed to an image its data never ran is
 // refused before its switch, the name its pull made gone again, and goes
-// through with --yes, which starts its data's history over (S3, S21).
+// through with --accept-image, which starts its data's history over (S3, S21).
 func TestActivateDataImages(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
@@ -1709,14 +1709,14 @@ exit 0
 	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
 	out, err := release("2", "DB=mariadb:11.4", "IMG=I0")
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: mariadb:11.4 (mariadb@I0) never ran on its data") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+hintAddress(tg)+" --release --yes") {
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: mariadb:11.4 (mariadb@I0) never ran on its data") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+hintAddress(tg)+" --release --accept-image db") {
 		t.Fatalf("refused release 2 (%v), current %q:\n%s", err, current(), out)
 	}
 	if fakeImage(root, "mariadb:11.4") != "" {
 		t.Errorf("the refused pull's name stays")
 	}
-	if out, err := release("3", "DB=mariadb:11.4", "IMG=I0", ImagesYesEnv+"=1"); err != nil || current() != "releases/3/code" || !strings.Contains(out, "--yes: running them anyway") {
-		t.Fatalf("release 3 with --yes (%v):\n%s", err, out)
+	if out, err := release("3", "DB=mariadb:11.4", "IMG=I0", ImagesAcceptEnv+"=db"); err != nil || current() != "releases/3/code" || !strings.Contains(out, "accepted (--accept-image): running them anyway") {
+		t.Fatalf("release 3 with --accept-image (%v):\n%s", err, out)
 	}
 	// What --yes let through is the activation's: read after its run
 	// step, then gone, so a rollback to the release forces nothing.

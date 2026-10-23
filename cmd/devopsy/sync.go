@@ -584,8 +584,9 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if reset {
 		flag = "--reset"
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--yes]"
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--accept-image <service>[,<service>...]] [--yes]"
 	yes, from := false, ""
+	var accept []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--yes", "-y":
@@ -595,6 +596,12 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 				return fail(usage)
 			}
 			from = strings.TrimPrefix(args[i+1], "@")
+			i++
+		case "--accept-image":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return fail(usage)
+			}
+			accept = acceptImage(accept, args[i+1])
 			i++
 		default:
 			return fail(usage)
@@ -642,7 +649,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	o := &remote.SyncOptions{From: p.Address, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
-	code := runSyncSession(job, imagesYes(yes)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
+	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))

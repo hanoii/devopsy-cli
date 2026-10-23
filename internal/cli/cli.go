@@ -448,7 +448,7 @@ func commandHeader(path, key string) string {
 // RemoteCommandHelp is the detailed help of each `devopsy @<target>`
 // subcommand, shown by `devopsy @<target> <subcommand> --help`.
 var RemoteCommandHelp = map[string]string{
-	"--sync": `Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]
+	"--sync": `Usage: devopsy @<target> --sync [--from @<target>] [--accept-image <service>,...] [--yes]
 
 Replaces a child environment's data (shared/mnt, and what its services
 hold) with its parent's, then runs its release's run step. A child is an
@@ -463,6 +463,11 @@ machine: the parent's server copies into the child's.
     dev:
       parent: prod
 
+  --accept-image <service>,...
+                    a database that runs an image the parent's data never
+                    ran (another series, a pin) runs its own on the copy,
+                    its history starting over: refused otherwise, every
+                    sync
   --from @<target>  copy from another environment of the project instead
                     (@vm1:prod, @a/prod...), with its inherit:
   --yes             do not ask for the environment's name (CI)
@@ -536,7 +541,7 @@ unless --yes. The log goes with the current release: devopsy @<target>
 --log. One service alone, from anywhere to anywhere: --export, --import.
 To start a child over instead: --reset.
 `,
-	"--reset": `Usage: devopsy @<target> --reset [--from @<target>] [--yes] [-- args...]
+	"--reset": `Usage: devopsy @<target> --reset [--from @<target>] [--accept-image <service>,...] [--yes]
 
 Starts a child environment over from its parent: a --sync that first
 throws away everything of the child's a sync leaves (every container,
@@ -645,9 +650,9 @@ file; its server's instance and project .env come below it.
     dev:
       parent: prod
 `,
-	"--release": `Usage: devopsy @<target> --release [--from @<target>] [--yes]
-       devopsy @<target> --release-sync [--from @<target>] [--yes]
-       devopsy @<target> --release-no-sync
+	"--release": `Usage: devopsy @<target> --release [--from @<target>] [--accept-image <service>,...] [--yes]
+       devopsy @<target> --release-sync [--from @<target>] [--accept-image <service>,...] [--yes]
+       devopsy @<target> --release-no-sync [--accept-image <service>,...]
        devopsy --release
 
 Uploads the project to the target as a new release, makes it current and
@@ -714,6 +719,13 @@ devopsy asks, and fails without a terminal or with --yes.
 The first release of an instance the server does not have yet asks before
 creating it (a typo would otherwise make a new site); --yes skips that, for
 CI.
+
+A database (a service with a devopsy.data label whose image is pulled, or
+built after it was) only goes forward: a release whose image for it is one
+its data moved past, or a name its data never ran (another series, a pin
+bumped), is refused before anything changes. --accept-image <service>
+runs it anyway, its data's history starting over from it: a series bump
+is one --accept-image. --yes never does.
 
 The first release of a child (an environment with parent:) syncs its
 parent's data once current, before its run step, so the run step works on

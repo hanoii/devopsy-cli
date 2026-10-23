@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
@@ -18,7 +19,7 @@ import (
 // the server's image lock, for a release's images (internal/images):
 //
 //	devopsy --images --name <compose name> --left <record> [--mode <mode>]
-//	  [--address <target>] [--yes] [--fetched] <action> ...
+//	  [--address <target>] [--accept <services>] [--fetched] <action> ...
 //
 // names <release> (what its pulled names hold, before its fetch),
 // data <environment> <release> (the parent's data images, for a sync),
@@ -59,11 +60,9 @@ func runImages(args []string, color bool) int {
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--yes":
-			s.Yes = true
 		case "--fetched":
 			fetched = true
-		case "--name", "--left", "--mode", "--address":
+		case "--name", "--left", "--mode", "--address", "--accept":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
@@ -74,6 +73,12 @@ func runImages(args []string, color bool) int {
 				s.Left = args[i+1]
 			case "--address":
 				s.Address = args[i+1]
+			case "--accept":
+				// The services --accept-image named (remote.ImagesAcceptEnv).
+				s.Accept = map[string]bool{}
+				for _, svc := range strings.FieldsFunc(args[i+1], func(r rune) bool { return r == ',' || r == ' ' }) {
+					s.Accept[svc] = true
+				}
 			default:
 				s.Mode = args[i+1]
 			}

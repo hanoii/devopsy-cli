@@ -176,12 +176,12 @@ func (p *parentImage) hold() string {
 // The parent's image is pulled by its digest when missing (never trusted
 // from a local name, which may be anything), refused when it cannot be.
 func (s *Set) SyncCheck(rel, data string) error {
-	_, err := s.syncCheck(rel, data, "--sync --yes")
+	_, err := s.syncCheck(rel, data, "--sync")
 	return err
 }
 
 // syncCheck is SyncCheck, returning the names of the images it refused;
-// again is how to run it again with --yes.
+// again is the flag that runs it again (--sync, --release).
 func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
@@ -198,11 +198,17 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 			report.Fix("release the child first, with the sync if you want it:", "devopsy @"+cmp.Or(s.Address, "<child>")+" --release-sync"))
 		return nil, ErrRefused
 	}
-	var refused, refusedRefs []string
+	var refused, refusedSvcs, refusedRefs []string
 	var mine []entry
 	for _, e := range es {
 		p := ps[e.Service]
 		if e.Kind != KindData || p == nil {
+			continue
+		}
+		// Accepted: the child runs its own image on the parent's data
+		// (SyncDone), nothing of the parent's to check or pull.
+		if s.Accept[e.Service] {
+			s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image, %s, on the parent's data, its history starting over from it", e.Service, e.Ref)
 			continue
 		}
 		mine = append(mine, e)
@@ -223,21 +229,15 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 			}
 		}
 		if len(refused) > n {
+			refusedSvcs = append(refusedSvcs, e.Service)
 			refusedRefs = append(refusedRefs, e.Ref)
 		}
 	}
-	if len(refused) > 0 && !s.Yes {
-		yes := again
-		if s.Address != "" {
-			yes = "devopsy @" + s.Address + " " + yes
-		}
+	if len(refused) > 0 {
 		s.sayAll(report.ErrorLevel, "the child runs images the parent's data never ran, or moved past: nothing changed", refused,
 			report.Fix("release the child with the parent's image (the same name), then sync, or release it with the sync (--release-sync)"),
-			report.Fix("or, knowing the data takes it, sync anyway: the child runs the parent's image after the copy:", yes))
+			report.Fix("or, knowing its data takes it (an upgrade to try), run the child's own image on the parent's data, its history starting over from it:", s.again(again, refusedSvcs)))
 		return refusedRefs, ErrRefused
-	}
-	if len(refused) > 0 {
-		s.sayAll(report.WarnLevel, "--yes: syncing anyway, the child held on the parent's images after the copy:", refused)
 	}
 	var extra []entry
 	var pulled []string
@@ -311,6 +311,7 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 	h := readHistory(base)
 	changed := false
 	var out []entry
+	var cs map[string]Container
 	for _, e := range es {
 		if strings.HasPrefix(e.Service, syncPrefix) {
 			continue
@@ -318,6 +319,41 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 		p := ps[e.Service]
 		if e.Kind != KindData || p == nil || p.hold() == "" {
 			out = append(out, e)
+			continue
+		}
+		if s.Accept[e.Service] {
+			// The image it runs (its container's, else its release's) on
+			// the parent's data, accepted: its history starting over from it.
+			hold := e.Digest
+			if cs == nil {
+				cs = s.containers()
+			}
+			if c, ok := cs[e.Service]; ok && c.started() {
+				if img, err := s.Docker.Inspect(c.Image); err == nil {
+					if d := digestIn(img, e.Ref); d != "" {
+						hold = d
+					} else if len(img.Digests) > 0 {
+						hold = img.Digests[0]
+					}
+				}
+			}
+			img, err := s.Docker.Inspect(hold)
+			if err != nil || hold == "" {
+				out = append(out, e)
+				continue
+			}
+			n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
+			n.Kind, n.Digest = KindData, hold
+			out = append(out, n)
+			holds[e.Service] = hold
+			var kept history
+			for _, r := range h {
+				if r.Service != e.Service {
+					kept = append(kept, r)
+				}
+			}
+			h = append(kept, ranOn(e.Service, Forced, e.Ref, img, s.now()))
+			changed = true
 			continue
 		}
 		hold := s.localHold(e, p)

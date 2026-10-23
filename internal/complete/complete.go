@@ -290,11 +290,14 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)
 		}
+		if len(words) > 2 && words[len(words)-2] == "--accept-image" {
+			return shellServices(projectDir, cur)
+		}
 		given := words[1 : len(words)-1]
 		for i := 0; i < len(given); i++ {
 			switch given[i] {
-			case "--from":
-				i++ // its address
+			case "--from", "--accept-image":
+				i++ // its value
 			case "--yes", "-y":
 			default:
 				return none
@@ -303,6 +306,7 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		var r Result
 		for _, c := range []Candidate{
 			{"--from", "sync from another environment than its parent", GroupDevopsy},
+			{"--accept-image", "run a database's image its data never ran, or moved past", GroupDevopsy},
 			{"--yes", "create a new instance, or replace a child's data, without asking", GroupDevopsy},
 			help,
 		} {
@@ -339,14 +343,14 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)
 		}
-		// After --, rsync's (or the data capability's) arguments.
-		given := words[1 : len(words)-1]
-		if slices.Contains(given, "--") {
-			return none
+		if len(words) > 2 && words[len(words)-2] == "--accept-image" {
+			return shellServices(projectDir, cur)
 		}
+		given := words[1 : len(words)-1]
 		var r Result
 		for _, c := range []Candidate{
 			{"--from", "copy from another environment than its parent", GroupDevopsy},
+			{"--accept-image", "run a database's own image on the copy, its history over", GroupDevopsy},
 			{"--yes", "do not ask for the environment's name", GroupDevopsy},
 			help,
 		} {

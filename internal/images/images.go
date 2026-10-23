@@ -163,16 +163,18 @@ type Set struct {
 	Mode string
 	// Now is the time, for tests (time.Now when nil).
 	Now func() time.Time
-	// Yes lets through what Record would refuse (--yes); Address is the
+	// Accept are the services whose image Record or a sync's check lets
+	// through what it would refuse (--accept-image); Address is the
 	// target as typed, for the fix lines.
-	Yes     bool
+	Accept  map[string]bool
 	Address string
 	// SyncData is a parent's ParentData, in a sync's activation or
 	// holder: Record and SyncCheck check the child against it.
 	SyncData string
 
-	// built are the services with a build: section, from the last List.
-	built map[string]bool
+	// built are the services with a build: section, data those with a
+	// devopsy.data label, from the last List.
+	built, data map[string]bool
 }
 
 // Service is one of the services a release runs, as compose resolves it
@@ -384,9 +386,9 @@ func (s *Set) entries(rel string) ([]entry, error) {
 		return nil, err
 	}
 	es := make([]entry, 0, len(svcs))
-	s.built = map[string]bool{}
+	s.built, s.data = map[string]bool{}, map[string]bool{}
 	for _, svc := range svcs {
-		s.built[svc.Name] = svc.Build
+		s.built[svc.Name], s.data[svc.Name] = svc.Build, svc.Data
 		es = append(es, s.entryOf(svc, digestRef(svc.Ref)))
 	}
 	return es, nil

@@ -240,12 +240,21 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			kind = "rollback"
 		}
 		yes, from := false, ""
+		var accept []string
 		for i := 1; i < len(args); i++ {
 			switch a := args[i]; {
 			// A rollback never asks: --yes is accepted, for scripts that
 			// pass it to every command.
 			case a == "--yes" || a == "-y":
 				yes = true
+			case !rollback && a == "--accept-image":
+				// The services whose image the release's checks let through
+				// against their data's history.
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", releaseRef(t), args[0]))
+				}
+				accept = acceptImage(accept, args[i+1])
+				i++
 			case !rollback && a == "--from":
 				// Where a syncing release copies from, instead of the
 				// parent: an address, its @ optional.
@@ -681,12 +690,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return code
 		}
 		if job == nil {
-			if code := session(imagesYes(yes) + remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
+			if code := session(imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, nil)); code != 0 {
 				return save(id, code)
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := imagesYes(yes) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id, Images: job.images})
+			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id, Images: job.images})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}
@@ -1017,11 +1026,22 @@ func purgeLeftovers(t *remote.Target, purge, terminal bool, color bool) int {
 	return code
 }
 
-// imagesYes is the line that lets an activation's images through their
-// checks (remote.ImagesYesEnv): the operator's --yes.
-func imagesYes(yes bool) string {
-	if !yes {
+// imagesAccept is the line that names the services --accept-image lets
+// through the images' checks (remote.ImagesAcceptEnv).
+func imagesAccept(services []string) string {
+	if len(services) == 0 {
 		return ""
 	}
-	return remote.ImagesYesEnv + "=1\n"
+	return remote.ImagesAcceptEnv + "=" + remote.Quote(strings.Join(services, " ")) + "\n"
+}
+
+// acceptImage reads --accept-image's value: services, comma separated,
+// added to those given before.
+func acceptImage(services []string, value string) []string {
+	for _, svc := range strings.Split(value, ",") {
+		if svc = strings.TrimSpace(svc); svc != "" && !slices.Contains(services, svc) {
+			services = append(services, svc)
+		}
+	}
+	return services
 }

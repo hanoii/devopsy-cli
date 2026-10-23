@@ -251,7 +251,7 @@ opts=
 for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
 # Which sessions carried the operator's --yes for the images' checks.
-case "$s" in *DEVOPSY_INTERNAL_IMAGES_YES=1*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
+case "$s" in *DEVOPSY_INTERNAL_IMAGES_ACCEPT=*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
 
 # FAKE_SSH_SCRIPTS: each session's script there too, after a line ----.
 [ -z "${FAKE_SSH_SCRIPTS:-}" ] || printf -- '----\n%s\n' "$s" >> "$FAKE_SSH_SCRIPTS"
@@ -508,10 +508,10 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback", "--from", "@prod"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
 		t.Errorf("--rollback --from (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.data=stream") {
+	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--accept-image <service>,...] [--yes]") || !strings.Contains(out, "devopsy.data=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--from @<target>] [--yes]") {
+	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--from @<target>] [--accept-image <service>,...] [--yes]") {
 		t.Errorf("--release --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from @<target>]") {
@@ -800,12 +800,12 @@ func TestSyncAbort(t *testing.T) {
 	}
 	s.logs()
 	// The parent's stop fails, before anything is written: what it
-	// stopped comes back, and so does the child. --yes reaches the
-	// holder's checks of the images too.
+	// stopped comes back, and so does the child. --yes is only the
+	// prompt's: no session gets the images' acceptance.
 	os.Remove(s.sshLog + ".yes")
 	out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
-	if yes, _ := os.ReadFile(s.sshLog + ".yes"); string(yes) != "holder\n" {
-		t.Errorf("sessions with the images' --yes: %q", yes)
+	if yes, _ := os.ReadFile(s.sshLog + ".yes"); len(yes) != 0 {
+		t.Errorf("sessions with the images' acceptance from --yes: %q", yes)
 	}
 	docker, _ := s.logs()
 	if code != 1 || !strings.Contains(out, "aborting the sync") || !strings.Contains(out, "before writing anything") {
@@ -1281,19 +1281,17 @@ func TestSyncRunStepDeployed(t *testing.T) {
 	}
 }
 
-// Bug: --sync --yes, the fix SyncCheck's refusal names, never reaches the
-// holder's img sync-check: runSync builds HolderScript without imagesYes,
-// unlike a release's activation, so a child the parent's data never ran
-// (S53, S54) is refused again, whatever the operator says.
-func TestSyncYesReachesHolder(t *testing.T) {
+// --sync --accept-image, the fix SyncCheck's refusal names, reaches the
+// holder's img sync-check with the services named, each once.
+func TestSyncAcceptReachesHolder(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	scripts := filepath.Join(t.TempDir(), "scripts")
-	if out, code := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@dev", "--sync", "--yes"); code != 0 {
-		t.Fatalf("--sync --yes (%d):\n%s", code, out)
+	if out, code := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@dev", "--sync", "--yes", "--accept-image", "db,app", "--accept-image", "db"); code != 0 {
+		t.Fatalf("--sync --accept-image (%d):\n%s", code, out)
 	}
 	holder := ""
 	for _, sc := range strings.Split(readString(scripts), "----\n") {
@@ -1304,8 +1302,9 @@ func TestSyncYesReachesHolder(t *testing.T) {
 	if holder == "" {
 		t.Fatalf("no holder session:\n%s", readString(scripts))
 	}
-	if !strings.Contains(holder, remote.ImagesYesEnv+"=1") {
-		t.Errorf("the holder's img sync-check does not get --yes (%s): --sync --yes refuses what it says --yes lets through", remote.ImagesYesEnv)
+	// Inside sh -c's quotes: 'db app' quoted again.
+	if !strings.Contains(holder, remote.ImagesAcceptEnv+`='\''db app'\''`) {
+		t.Errorf("the holder's img sync-check does not get --accept-image's services (%s):\n%s", remote.ImagesAcceptEnv, holder[:min(600, len(holder))])
 	}
 }
 

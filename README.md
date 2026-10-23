@@ -704,8 +704,13 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   changed to an image the data never ran (`mariadb:11.8` to `mariadb:11.4`,
   a pin bumped, a series switched: devopsy reads no versions, so it cannot
   tell newer from older there), is refused before anything changes, the
-  names its pull moved put back; `--release --yes` runs it anyway, and the
-  data's history starts over from that image.
+  names its pull moved put back; `--accept-image <service>` (comma
+  separated, or repeated) runs it anyway, and the data's history starts
+  over from that image. `--yes` never does: it only skips prompts. A
+  database the project builds (`FROM mariadb`) is checked the same way
+  once its data ran a pulled image: switching between pulled and built
+  is one acceptance, its own builds after are not checked (no digest
+  orders them); one always built is never asked.
 - **Rollbacks bring back code:** a rollback, or the restart after a
   failed `run`, brings back the release's own images exactly (what it
   built, from its tags, without building again), its compose files,
@@ -784,7 +789,7 @@ patches (`mariadb:11.8`, `caddy:2-alpine`, `traefik:v3.7`): every release
 pulls them, so fixes arrive with your next release and no commit. Never
 `latest`, and never a major whose data or configuration format changes
 (`mariadb:11`): a plain release would cross series. A series bump is one
-`--release --yes` for a service with data. Tag your own images by commit
+`--release --accept-image <service>` for a service with data. Tag your own images by commit
 (image mode) or let devopsy build them (build mode). Pin a stateless image
 whose upgrade you test by hand, by tag or by digest, when you want a
 rollback to take it back. An environment nobody releases gets no patches:
@@ -1115,7 +1120,11 @@ image with it. Before anything stops, the child's side checks the image
 it runs: the parent's, or another under the same name, is fine (it is
 held on the parent's after the copy); an image the parent's data moved
 past, or a name the parent's data never ran (a child pinned to another
-version), is refused, every sync, unless `--sync --yes`. The parent's
+version), is refused, every sync, unless `--sync --accept-image
+<service>`: then that service runs the child's own image on the copy,
+its history starting over from it, the way to try an upgrade on the
+parent's data (dev on `mariadb:12`, prod on `11.8`), one command per
+sync. The parent's
 image is pulled on the child's server by its digest when missing, never
 taken from a local name, and a sync that cannot pull it is refused,
 nothing changed. Once the copy is complete the child holds the parent's
@@ -1197,7 +1206,7 @@ So, across servers:
 devopsy @develop --sync                         # asks for the environment's name
 devopsy @develop --sync --yes                   # CI
 devopsy @develop --sync --from @b/prod          # another environment of the project
-devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
+devopsy @develop --sync --yes --accept-image database  # its own image on prod's data
 ```
 
 `--sync` asks you to type the environment's full name

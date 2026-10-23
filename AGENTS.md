@@ -735,9 +735,13 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   run step, failed or not, before a restart), never at `img record` (a
   release cancelled after it ran nothing). "Newer" means "ran later on
   this data". `img record` refuses an image the history moved past, or
-  one it never ran under a changed name (`check`), unless `--yes`
-  (`ImagesYesEnv`), whose `ForcedFile` starts the service's history over
-  once it runs; refused, `putNamesBack` restores what `img names` saved
+  one it never ran under a changed name (`check`), unless the operator
+  names the service (`--accept-image`, `ImagesAcceptEnv`), whose
+  `ForcedFile` starts its history over once that image runs. `--yes`
+  never does (decided 2026-10-23): it skips prompts, so CI passed it
+  everywhere and skipped every check. A built service whose data has a
+  history (it ran a pulled image) is checked by its name too: a switch
+  between pulled and built needs acceptance, its own builds go through; refused, `putNamesBack` restores what `img names` saved
   before the fetch. A history is seeded from the running container when
   it has none (`seed`: an older devopsy's data, a label just added). Only
   the environment's own side writes it, under its release lock;
@@ -821,7 +825,7 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   containerd's digest names), `TestRandomHistory`, 200 random histories
   of two environments sharing `mariadb:11` and an alias, and
   `TestDataRandom`, 300 (`DEVOPSY_TEST_SEEDS` for more) of releases,
-  refusals, `--yes`, failed runs, rollbacks, plain ups and pruning while
+  refusals, `--accept-image`, failed runs, rollbacks, plain ups and pruning while
   the registry moves tags forward and back, checking that each database
   runs its data's newest image, that no rollback moves a pulled name and
   that nothing is left once all goes. Script tests call the real `--images`
@@ -1591,7 +1595,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   at its record (in place of its own check for those services: an
   aborted sync brings the release before back on its own images): the
   parent's image or name passes; moved past, or a name the parent's
-  data never ran, needs `--yes`, every sync. The parent's image is
+  data never ran, needs `--accept-image`, every sync: then the child
+  runs its own image (what its container runs) on the copy, its history
+  one `forced` line (`SyncDone`), nothing of the parent's pulled. The parent's image is
   pulled by digest when missing and listed at once as a `sync:<service>`
   entry of the child's release (bookmarked, removed with it). On a
   complete copy (its done line, whatever the answer), `sync-done` holds
@@ -1619,7 +1625,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   most 100 history lines in all (`ParentHistoryLines`): it rides in the
   child's script, one argument, capped at 128KB on Linux. A release that
   syncs, refused by the parent's check, puts its names back like any
-  refusal. `--sync --yes` reaches the holder (`imagesYes`), and the
+  refusal. `--sync --accept-image` reaches the holder (`imagesAccept`), and the
   parent's images are unset with the sync's variables before the run
   step.
 - **And the third:** only `finish go` makes services again on the
@@ -1627,7 +1633,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   syncs restores the child's own data, which the release's images, never
   live, must not touch. The line naming the image as the child does is
   added only when the child ran that very image (a mirror), never for
-  another series `--yes` let through. A parent's release recorded by an
+  another series let through. A parent's release recorded by an
   older devopsy sends `old`, and the child refuses (release the parent
   first), as for the child's own. A rollback keeps a pulled data service
   of the release it leaves on its data's newest image even where the
@@ -1639,8 +1645,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 - **And the fourth:** the child's image a sync checks, and the one its
   history's last line names, is the one its own name holds on its
   server (`ownImage`: its pin, its mirror's tag), never the parent's it
-  is held on, so a series `--yes` let through needs `--yes` on every
-  sync and stays refused for the child's own releases; that line takes
+  is held on, so a child on another series is refused on every sync; that line takes
   the child's own digests, which its server resolves. The parent's `old`
   line reaches the child (`remote.ParseParentData`). A sync's check or a
   restore that fails removes what it pulled by digest before.

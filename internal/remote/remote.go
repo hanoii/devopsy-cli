@@ -1185,10 +1185,11 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
 fi
 `
 
-// ImagesYesEnv set (to anything) lets an activation's images through
-// the checks of its pulled data services (img record): the operator's
-// --yes.
-const ImagesYesEnv = "DEVOPSY_INTERNAL_IMAGES_YES"
+// ImagesAcceptEnv names, space-separated, the services whose image an
+// activation or a sync's holder lets through the checks against their
+// data's history (img record, sync-check, sync-done): the operator's
+// --accept-image.
+const ImagesAcceptEnv = "DEVOPSY_INTERNAL_IMAGES_ACCEPT"
 
 // WatchEnv tells an activation that its stdin stays open for as long as
 // the operator's devopsy runs (a pipe it keeps), so EOF there means the
@@ -1360,7 +1361,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesYesEnv + `:+--yes} "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)

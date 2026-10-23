@@ -428,7 +428,7 @@ func TestUsage(t *testing.T) {
 		"commands/push*":   "#!/bin/sh\n## Description: Push it\n## Run: local\n## Needs: server\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--accept-image <svc>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

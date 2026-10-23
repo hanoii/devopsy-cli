@@ -67,8 +67,10 @@ func (m *sim) release(yes bool, svcs ...Service) (string, error) {
 		m.t.Fatal(err)
 	}
 	m.fetch(svcs)
-	m.e.set.Yes = yes
-	defer func() { m.e.set.Yes = false }()
+	if yes {
+		m.e.set.Accept = acceptAll(svcs)
+	}
+	defer func() { m.e.set.Accept = nil }()
 	if err := m.e.set.Record(rel, m.prev()); err != nil {
 		m.e.set.Undo(rel, m.prev(), false)
 		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
@@ -250,7 +252,7 @@ func TestDataRefusals(t *testing.T) {
 	if _, err := m.release(false, appSvc, dbSvc("mariadb:11.8.9")); !errors.Is(err, ErrRefused) || m.runs("database") != "I1" {
 		m.fail("pin bump not refused (%v)", err)
 	}
-	if !strings.Contains(out.String(), "database: mariadb:11.8.9 (mariadb@I2) never ran on its data, which last ran mariadb@I1 as mariadb:11.8.3") || !strings.Contains(out.String(), "--release --yes") {
+	if !strings.Contains(out.String(), "database: mariadb:11.8.9 (mariadb@I2) never ran on its data, which last ran mariadb@I1 as mariadb:11.8.3") || !strings.Contains(out.String(), "--release --accept-image database") {
 		m.fail("refusal")
 	}
 	// The name it pulled went: it was not there before.
@@ -630,11 +632,20 @@ func dataRandom(t *testing.T, seed int64) {
 				check(m.e.set.Name + " sync aborted")
 				continue
 			}
-			err := syncInto(t, other, m, rng.Intn(3) == 0)
+			accepted := rng.Intn(3) == 0
+			own := m.runs("database")
+			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"}); !ok || e.Kind != KindData {
+				own = "" // a built database: not checked (S56)
+			}
+			err := syncInto(t, other, m, accepted)
 			if err != nil && !errors.Is(err, ErrRefused) {
 				t.Fatalf("after %v: sync: %v\n%s", log, err, out.String())
 			}
-			if err == nil && pulledData(m) && pulledData(other) && m.runs("database") != other.runs("database") {
+			// Accepted, the child runs its own image on the copy.
+			if err == nil && accepted && pulledData(m) && pulledData(other) && m.runs("database") != own && own != "" {
+				t.Fatalf("after %v: %s's database runs %s after an accepted sync, not its own %s", log, m.e.set.Name, m.runs("database"), own)
+			}
+			if err == nil && !accepted && pulledData(m) && pulledData(other) && m.runs("database") != other.runs("database") {
 				t.Fatalf("after %v: %s's database runs %s after a sync from %s, which runs %s", log, m.e.set.Name, m.runs("database"), other.e.set.Name, other.runs("database"))
 			}
 			check(m.e.set.Name + " sync")
@@ -657,9 +668,11 @@ func dataRandom(t *testing.T, seed int64) {
 			id := m.e.release(svcs()...)
 			m.e.set.SaveNames(m.e.rel(id))
 			m.fetch(m.e.svcs[id])
-			m.e.set.Yes = rng.Intn(4) == 0
+			if rng.Intn(4) == 0 {
+				m.e.set.Accept = acceptAll(m.e.svcs[id])
+			}
 			err := m.e.set.Record(m.e.rel(id), m.e.rel(prev))
-			m.e.set.Yes = false
+			m.e.set.Accept = nil
 			if err != nil {
 				m.e.set.Undo(m.e.rel(id), m.e.rel(prev), false)
 				os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
@@ -798,8 +811,10 @@ func TestStatusLines(t *testing.T) {
 func syncInto(t *testing.T, parent, child *sim, yes bool) error {
 	t.Helper()
 	data := parent.e.set.ParentData(parent.base(), parent.e.rel(parent.cur))
-	child.e.set.Yes = yes
-	defer func() { child.e.set.Yes = false }()
+	if yes {
+		child.e.set.Accept = acceptAll(child.e.svcs[child.cur])
+	}
+	defer func() { child.e.set.Accept = nil }()
 	rel := child.e.rel(child.cur)
 	if err := child.e.set.SyncCheck(rel, data); err != nil {
 		return err
@@ -886,11 +901,11 @@ func TestSyncRefusals(t *testing.T) {
 	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "never ran on the parent's data") {
 		t.Fatalf("pinned child (%v):\n%s", err, out.String())
 	}
-	dev.e.set.Yes = true
+	dev.e.set.Accept = acceptAll(dev.e.svcs[dev.cur])
 	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); err != nil {
 		t.Fatalf("--yes: %v", err)
 	}
-	dev.e.set.Yes = false
+	dev.e.set.Accept = nil
 	// S69: a child on mariadb:11.8.9 pulled long ago, another image than
 	// prod's: same name, held on prod's.
 	stage := newSim(t, d, "app-stage", &out)
@@ -1057,9 +1072,9 @@ func TestDataForcedReleaseFailingEarlyKeepsHistory(t *testing.T) {
 	r3 := m.e.release(dbSvc("mariadb:11.4"))
 	m.e.set.SaveNames(m.e.rel(r3))
 	m.fetch(m.e.svcs[r3])
-	m.e.set.Yes = true
+	m.e.set.Accept = acceptAll(m.e.svcs[m.cur])
 	err = m.e.set.Record(m.e.rel(r3), m.e.rel(r2))
-	m.e.set.Yes = false
+	m.e.set.Accept = nil
 	if err != nil {
 		m.fail("r3 with --yes: %v", err)
 	}
@@ -1436,32 +1451,6 @@ func TestDataRollbackKeepsContainerFullName(t *testing.T) {
 	}
 }
 
-// Bug: SyncDone adds a history line naming the parent's image under the
-// child's own reference whenever the two differ (for a mirror of the
-// same image), also when the child's reference is another series the
-// sync's --yes let through: its next release on that reference finds it
-// "ran" there, so an image the data never ran passes without --yes. A
-// child pinned behind (mariadb:11.4) after a --sync --yes from a parent
-// on 11.8 goes back to 11.4 on data 11.8 wrote (rule 1).
-func TestSyncYesThenOwnSeriesRefused(t *testing.T) {
-	d := newFake()
-	var out bytes.Buffer
-	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	d.publish("mariadb:11.4", "I4")
-	dev.release(false, dbSvc("mariadb:11.4"))
-	d.publish("mariadb:11.8", "P8")
-	prod.release(false, db118)
-	// dev's 11.4 never ran on prod's data: --yes, held on prod's 11.8.
-	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
-		t.Fatalf("--sync --yes (%v): %s\n%s", err, dev.runs("database"), out.String())
-	}
-	// dev's next release, still pinned to 11.4.
-	out.Reset()
-	if _, err := dev.release(false, dbSvc("mariadb:11.4")); !errors.Is(err, ErrRefused) || dev.runs("database") != "P8" {
-		t.Errorf("dev's release on mariadb:11.4 after the sync (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8\n%s", err, dev.runs("database"), out.String())
-	}
-}
-
 // Bug: Restore takes a service the target release builds for an own
 // image whatever the release it leaves ran, so a rollback across a
 // switch from a database the project built (FROM mariadb:11.4) to a
@@ -1542,43 +1531,6 @@ func TestSyncMirrorRollbackHoldsLocalDigest(t *testing.T) {
 		if _, err := d.Inspect(h.hold()); err != nil {
 			t.Errorf("the child's data's newest image is held as %s, which this server does not have", h.hold())
 		}
-	}
-}
-
-// Bug: after a --sync --yes held a child on another series (mariadb:11.4)
-// on the parent's image (11.8), the child's listing records the parent's
-// image as its own, so the next sync, without --yes, passes its check
-// (the child "runs" the parent's image) and SyncDone, finding that the
-// child ran that very image, adds a history line naming it as
-// mariadb:11.4: the child's next release on mariadb:11.4 then passes as
-// the same name moving forward, an 11.4 image on data 11.8 wrote (rule
-// 1), what TestSyncYesThenOwnSeriesRefused refuses after one sync.
-func TestSyncTwiceThenOwnSeriesRefused(t *testing.T) {
-	d := newFake()
-	var out bytes.Buffer
-	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	d.publish("mariadb:11.4", "I4")
-	dev.release(false, dbSvc("mariadb:11.4"))
-	d.publish("mariadb:11.8", "P8")
-	prod.release(false, db118)
-	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
-		t.Fatalf("--sync --yes (%v): %s\n%s", err, dev.runs("database"), out.String())
-	}
-	// A second sync from prod, which still runs P8: dev's own name is
-	// still a series prod's data never ran, so --yes on every sync
-	// (decision 7).
-	out.Reset()
-	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
-		t.Fatalf("the second sync without --yes (%v)\n%s", err, out.String())
-	}
-	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "P8" {
-		t.Fatalf("the second sync (%v): %s\n%s", err, dev.runs("database"), out.String())
-	}
-	// mariadb:11.4 moves on upstream; dev's next release, still on it.
-	d.publish("mariadb:11.4", "I5")
-	out.Reset()
-	if _, err := dev.release(false, dbSvc("mariadb:11.4")); !errors.Is(err, ErrRefused) || dev.runs("database") != "P8" {
-		t.Errorf("dev's release on mariadb:11.4 after two syncs (%v): its database runs %s on data mariadb:11.8 wrote, want a refusal and P8 (history %v)\n%s", err, dev.runs("database"), readHistory(dev.base()), out.String())
 	}
 }
 
@@ -1688,5 +1640,87 @@ func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
 	os.MkdirAll(filepath.Join(prod.e.rel(prod.cur), codeDir, ".devopsy", "mnt", "database"), 0o755)
 	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); !strings.Contains(data, "image\tdatabase\t") {
 		t.Errorf("a service with its entry on the parent missing from its data:\n%s", data)
+	}
+}
+
+// acceptAll is --accept-image naming every service with data among svcs.
+func acceptAll(svcs []Service) map[string]bool {
+	m := map[string]bool{}
+	for _, svc := range svcs {
+		if svc.Data {
+			m[svc.Name] = true
+		}
+	}
+	return m
+}
+
+// A child on another series (mariadb:11.4) trying its upgrade path, or its
+// own version, on the parent's data (11.8): refused on every sync unless
+// --accept-image names the service, which runs the child's own image on
+// the copy, its history starting over from it; its own releases on that
+// series go on from there.
+func TestSyncAcceptedRunsOwnImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.4", "I4")
+	dev.release(false, dbSvc("mariadb:11.4"))
+	d.publish("mariadb:11.8", "P8")
+	prod.release(false, db118)
+	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a sync without --accept-image (%v)\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "devopsy @vm1:dev --sync --accept-image database") {
+		t.Errorf("the fix line:\n%s", out.String())
+	}
+	if err := syncInto(t, prod, dev, true); err != nil || dev.runs("database") != "I4" {
+		t.Fatalf("--accept-image (%v): runs %s, want its own I4\n%s", err, dev.runs("database"), out.String())
+	}
+	if got := strings.Join(dev.history("database"), " "); got != "forced:I4" {
+		t.Errorf("history after an accepted sync: %s", got)
+	}
+	// Every sync asks again.
+	out.Reset()
+	if err := syncInto(t, prod, dev, false); !errors.Is(err, ErrRefused) {
+		t.Errorf("a second sync without --accept-image (%v)\n%s", err, out.String())
+	}
+	// Its own series moving forward needs nothing.
+	d.publish("mariadb:11.4", "I5")
+	if _, err := dev.release(false, dbSvc("mariadb:11.4")); err != nil || dev.runs("database") != "I5" {
+		t.Errorf("dev's next release on its own series (%v): %s\n%s", err, dev.runs("database"), out.String())
+	}
+}
+
+// A database that moves from pulled to built (FROM mariadb plus the
+// project's configuration) runs an image its data never ran: refused
+// unless --accept-image, which starts its history over; the project's
+// own builds after go through, and a project that always built its
+// database is never asked (S56).
+func TestBuiltDatabaseAfterPulled(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	out.Reset()
+	if _, err := m.release(false, built); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "--accept-image database") {
+		t.Fatalf("a built database over pulled data (%v)\n%s", err, out.String())
+	}
+	if _, err := m.release(true, built); err != nil {
+		t.Fatalf("accepted: %v\n%s", err, out.String())
+	}
+	if w := readHistory(m.base()).window("database"); len(w) != 1 || w[0].How != Forced {
+		t.Errorf("history after the accepted build: %+v", w)
+	}
+	if _, err := m.release(false, built); err != nil {
+		t.Errorf("the next build: %v\n%s", err, out.String())
+	}
+	// Never pulled: never asked.
+	other := newSim(t, d, "app-other", &out)
+	ob := Service{Name: "database", Ref: "app-other-database", Build: true, Data: true, Method: DataMnt}
+	other.release(false, ob)
+	if _, err := other.release(false, ob); err != nil || len(readHistory(other.base())) != 0 {
+		t.Errorf("a database always built (%v), history %v", err, readHistory(other.base()))
 	}
 }
