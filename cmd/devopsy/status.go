@@ -207,7 +207,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		}
 		fmt.Println(st.bad("data        the import of " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
 	case partial != "":
-		fix := "devopsy @" + targetRef(t) + " --sync"
+		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
 		if id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}

@@ -61,6 +61,16 @@ func TestSyncAcrossServers(t *testing.T) {
 	if out, code := op(t, dir, agent+" devopsy @dev --sync --yes"); code != 0 || stamp() != "three" || marked() || srv2State(t, "across", "dev", "data") != "running" {
 		t.Errorf("a complete sync (%d), stamp %q, marked %v:\n%s", code, stamp(), marked(), out)
 	}
+
+	// A reset: the child wiped by the receive script at its first write
+	// (an entry no label copies goes too), then the copy and the run step.
+	srv2(t, "mkdir -p across/dev/shared/mnt/extra && echo dev >across/dev/shared/mnt/extra/left")
+	srv(t, "echo four >across/prod/shared/mnt/data/stamp")
+	out, code = op(t, dir, agent+" devopsy @dev --reset --yes")
+	_, extra := srv2(t, "test -e across/dev/shared/mnt/extra")
+	if code != 0 || stamp() != "four" || marked() || extra == 0 || srv2State(t, "across", "dev", "data") != "running" || !strings.Contains(out, "resetting @") {
+		t.Errorf("a reset across servers (%d), stamp %q, marked %v, extra kept %v:\n%s", code, stamp(), marked(), extra == 0, out)
+	}
 }
 
 // The operator cut silently from the parent's server mid-import, the
