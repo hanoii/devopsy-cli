@@ -450,7 +450,7 @@ func CheckMounts(services []SyncService) error {
 	if owner {
 		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
 	}
-	return &report.Failure{Msg: "the release's mounts do not hold their data as its labels say: it does not go live", Details: bad, Fixes: fixes}
+	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }
 
 // SyncDirs are the entries of mnt a sync rsyncs: those of the services
