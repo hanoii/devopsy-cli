@@ -77,9 +77,9 @@ var Capabilities = []Capability{
 	},
 	{
 		Name:     DataCapability,
-		What:     "moves the data of the services labeled devopsy.data=stream (export, import), in syncs and --export and --import, and hooks into syncs (a child environment's data from its parent's: devopsy @<child> --sync and a child's first release) with prepare and finish; each runs only when its file is there, besides devopsy's handling of the labels (mnt: its entries of mnt rsynced, or a tar; devopsy.data.stop: what is stopped meanwhile)",
+		What:     "moves the data of the services labeled devopsy.data=stream (export, import), in syncs and --export and --import, and hooks into syncs (a child environment's data from its parent's: devopsy @<child> --sync or --reset and a child's first release) with prepare and finish; each runs only when its file is there, besides devopsy's handling of the labels (mnt: its entries of mnt rsynced, or a tar; devopsy.data.stop: what is stopped meanwhile)",
 		Who:      "projects whose data a copy of .devopsy/mnt cannot move, like a database to dump, or that ready or sanitize an environment around a sync",
-		CalledBy: "devopsy [@<target>] --export <service> (export), devopsy [@<target>] --import <service> (import), and devopsy @<child> --sync, a child's first release or --release-sync (all four); --import --resolved runs none",
+		CalledBy: "devopsy [@<target>] --export <service> (export), devopsy [@<target>] --import <service> (import), and devopsy @<child> --sync or --reset, a child's first release or --release-sync (all four); --import --resolved runs none",
 		Actions: []CapabilityAction{
 			{
 				Name:  "prepare",
