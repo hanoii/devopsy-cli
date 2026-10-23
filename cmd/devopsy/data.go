@@ -928,13 +928,49 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	removeSpools(base, name)
+	again := report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved")
+	// What an mnt import may have extracted goes to its owners first, as
+	// a complete import does: a tar made anywhere carries its maker's
+	// owners, and the services would start on them.
+	if err := resolvedOwners(cwd, projectDir, services, name); err != nil {
+		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
+		return 1
+	}
 	if err := restoreServices(cwd, services, false, nil); err != nil {
-		report.Fail(fmt.Errorf("%w: the mark stays", err), report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
+		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0
+}
+
+// resolvedOwners gives the owned entries of name, when it is an mnt
+// service, to their owners (ownMnt), in containers named as an import's
+// owners' are (importContainers), for --resolved.
+func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name string) error {
+	s, ok := cli.SyncFind(services, name)
+	if !ok || s.Transfer != cli.DataMnt {
+		return nil
+	}
+	owners, err := cli.MntOwners(services)
+	if err != nil {
+		return err
+	}
+	owned := map[string]string{}
+	for _, e := range s.Dirs {
+		if o := owners[e]; o != "" {
+			owned[e] = o
+		}
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+	mnt, err := dataMnt(projectDir)
+	if err != nil {
+		return err
+	}
+	return ownMnt(context.Background(), mnt, owned, fmt.Sprintf("%s%s-%d-owners", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()))
 }
 
 // chunk is a read of a stream: data, or its error.

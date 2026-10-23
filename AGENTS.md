@@ -1802,7 +1802,10 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   the imported service only when it ran before) and asks for the full
   name; a second session under the lock settles a killed holder's sync
   (`settleLeftover`, as `ImportScript` does), checks again, ends a
-  leftover writer, starts the record and only then
+  leftover writer, gives a `mnt` service's owned entries to their
+  owners (`resolvedOwners`, named as an import's owners' containers:
+  review of 2026-10-23, round 3, it started the services on the tar
+  maker's owners), starts the record and only then
   removes the mark and the record. On the server it is `devopsy
   --import <service> --resolved --yes` (`ResolvedScript`), so the
   `data-labels` regexp gates it. Not locally (decided): nothing there

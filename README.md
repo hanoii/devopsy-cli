@@ -1258,8 +1258,10 @@ data as it is: what is missing does not matter, or you fixed it by hand
 (`devopsy @<target> up -d --no-deps <service>`, then `--shell
 <service>`). It reads no stdin and loads nothing; it asks for the
 environment's full name, saying what it starts (`--yes` without a
-terminal), starts what the import kept down, the service included, and
-only once all of it is healthy removes the mark. A start that fails keeps
+terminal), gives the entries a `mnt` service's labels own to their
+owners (as the import would have), starts what the import kept down,
+the service included, and only once all of it is healthy removes the
+mark. A start that fails keeps
 it: fix it and run it again. On a target only, and never over a sync's
 mark: a sync's partial copy is completed only by a sync, which replaces
 an import's mark when it is cut too. A `--release-sync` of a child marked
