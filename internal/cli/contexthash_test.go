@@ -1,13 +1,36 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// The registry --context-hash asks for base images' digests is a fake:
+// baseAsked records what it was asked, baseMoved changes every answer (a
+// base patched upstream), baseDown makes it fail.
+var (
+	baseAsked []string
+	baseMoved string
+	baseDown  error
+)
+
+func init() {
+	BaseDigest = func(ref string) (string, error) {
+		baseAsked = append(baseAsked, ref)
+		if baseDown != nil {
+			return "", baseDown
+		}
+		sum := sha256.Sum256([]byte(ref + baseMoved))
+		return "sha256:" + hex.EncodeToString(sum[:]), nil
+	}
+}
 
 // gitRepo is a git repository for --context-hash tests, with the project's
 // .devopsy/ at its root.
@@ -209,5 +232,76 @@ func TestContextHashErrors(t *testing.T) {
 	r.commit(map[string]string{".devopsy/compose.yaml": "services:\n  a:\n    build:\n      context: ..\n      dockerfile: missing.Dockerfile\n"})
 	if _, err := r.hashErr(""); err == nil || !strings.Contains(err.Error(), "dockerfile missing.Dockerfile is not committed") {
 		t.Errorf("uncommitted Dockerfile: err = %v", err)
+	}
+}
+
+const baseDockerfile = `# syntax=docker/dockerfile:1
+# escape=\
+ARG BASE=alpine
+ARG TAG
+FROM ${BASE}:${TAG:-3} AS Build
+RUN <<EOF
+FROM heredoc:not-a-base
+EOF
+FROM scratch AS empty
+FROM build AS final
+# FROM commented:out
+FROM --platform=linux/amd64 busybox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+COPY --from=build / /
+FROM \
+  debian:trixie
+FROM alpine:3
+`
+
+// The bases are the external FROMs: global ARGs expanded with the
+// build's args, else their defaults; never a stage, scratch, a comment
+// or a heredoc's line; each once.
+func TestBaseImages(t *testing.T) {
+	want := []string{"alpine:3", "busybox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "debian:trixie"}
+	if got := baseImages(baseDockerfile, nil); !slices.Equal(got, want) {
+		t.Errorf("bases: %q, want %q", got, want)
+	}
+	if got := baseImages(baseDockerfile, map[string]string{"TAG": "3.22", "BASE": "mirror/alpine"}); len(got) != 4 || got[0] != "mirror/alpine:3.22" {
+		t.Errorf("bases with args: %q", got)
+	}
+	if got := baseImages("# escape=`\nFROM `\n  php:8.4\n", nil); !slices.Equal(got, []string{"php:8.4"}) {
+		t.Errorf("bases with another escape: %q", got)
+	}
+}
+
+// Base images are in the hash, by the digest their registry gives now:
+// a base that moved changes it, no answer fails it, and a base pinned by
+// digest, a stage or scratch is never asked about.
+func TestContextHashBaseImages(t *testing.T) {
+	t.Cleanup(func() { baseAsked, baseMoved, baseDown = nil, "", nil })
+	r := newGitRepo(t, map[string]string{
+		".devopsy/compose.yaml": "services:\n  app:\n    build: ..\n",
+		"Dockerfile":            baseDockerfile,
+	})
+	baseAsked = nil
+	before := r.hash()
+	if !slices.Equal(baseAsked, []string{"alpine:3", "debian:trixie"}) {
+		t.Errorf("asked about %q, want alpine:3 and debian:trixie once each", baseAsked)
+	}
+	baseMoved = "patched"
+	if r.hash() == before {
+		t.Error("a base that moved did not change the hash")
+	}
+	baseMoved = ""
+	if r.hash() != before {
+		t.Error("the same bases gave another hash")
+	}
+	baseDown = errors.New("no such host")
+	if _, err := r.hashErr(""); err == nil || !strings.Contains(err.Error(), "service app: base image alpine:3: no such host") {
+		t.Errorf("no answer: err = %v", err)
+	}
+	baseDown = nil
+
+	// An inline Dockerfile's bases too.
+	r.commit(map[string]string{".devopsy/compose.yaml": "services:\n  app:\n    build:\n      context: ..\n      dockerfile_inline: |\n        FROM node:22\n"})
+	baseAsked = nil
+	r.hash()
+	if !slices.Equal(baseAsked, []string{"node:22"}) {
+		t.Errorf("inline Dockerfile: asked about %q", baseAsked)
 	}
 }

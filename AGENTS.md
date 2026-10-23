@@ -2078,6 +2078,15 @@ Smaller features, each with the rule an agent must keep.
   only ever go towards a new hash (a kept file costs a rebuild, a
   dropped one would reuse a stale image), hence Docker's own matcher
   and refusing what it cannot hash.
+- **`--context-hash` folds base images in, always** (`baseImages`,
+  `BaseDigest`): each external `FROM` (no stage, no `scratch`; global
+  `ARG`s expanded with the build's args) by its registry's current
+  digest (`docker buildx imagetools inspect`, no pull); one pinned by
+  digest is its reference; no answer fails the hash. Why: a hash that
+  ignored bases reused `ctx-<hash>` images forever, so patched bases
+  never arrived (decided 2026-10-23, no opt out). Cost: a registry
+  request per base, and a hash needs the network. `COPY --from` images
+  are not covered.
 - **`--upgrade` reads the same release files as `install.sh`** (archive
   names without version, `checksums.txt`). The daily check runs
   detached (`--upgrade-check`), since devopsy execs right away; only

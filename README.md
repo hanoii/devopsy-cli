@@ -316,10 +316,15 @@ capability.
 
 **`--context-hash [service]`** prints a hash of what the service's image is
 built from at `HEAD` (git-tracked context minus the dockerignore Docker
-uses, the Dockerfile, the `build:` section), to reuse an image across
-commits that do not change it: `tag=ctx-$(devopsy --context-hash app)`.
-Base images and downloads are not covered: rebuild with `--pull`. devopsy
-builds nothing itself.
+uses, the Dockerfile, the `build:` section, its base images), to reuse an
+image across commits that do not change it: `tag=ctx-$(devopsy
+--context-hash app)`. Each base image (a `FROM` that is no stage and not
+`scratch`, its global `ARG`s expanded) counts by the digest its registry
+gives now (`docker buildx imagetools inspect`, nothing pulled; a base
+pinned by digest asks nothing), so a patched base makes a new hash: build
+it with `--pull`, or Docker's cache keeps the old base. A registry that
+does not answer fails the command, so the caller builds. Downloads during
+the build are not covered. devopsy builds nothing itself.
 
 ### Output, secrets and debugging
 

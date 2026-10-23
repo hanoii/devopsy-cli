@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -20,7 +22,7 @@ import (
 
 // contextHashVersion goes into every hash, so a change to what is hashed
 // changes every hash instead of silently matching old ones.
-const contextHashVersion = "devopsy context-hash 1"
+const contextHashVersion = "devopsy context-hash 2"
 
 // ContextHash is `devopsy --context-hash [service]`: a hash of what a
 // service's image is built from, at the git commit HEAD. Like Platform's tree
@@ -32,11 +34,17 @@ const contextHashVersion = "devopsy context-hash 1"
 //     rules): <Dockerfile>.dockerignore next to the Dockerfile, else
 //     .dockerignore in the context;
 //   - the Dockerfile, wherever it is, even ignored in the context;
-//   - the service's whole build: section, interpolated (args, target...).
+//   - the service's whole build: section, interpolated (args, target...);
+//   - each base image (an external FROM: not a stage, not scratch), by the
+//     digest its reference has in the registry now (BaseDigest, no pull),
+//     so a base that moved (alpine:3 patched) makes a new hash and the
+//     caller builds; always, no opt out: a hash that ignored bases kept
+//     patches from ever arriving. A base pinned by digest is its
+//     reference. No answer fails the hash: errors go towards a build.
 //
-// Not covered: base images, images in COPY --from and anything the build
-// downloads. Uncommitted and untracked files are not either: build from a
-// git export of HEAD, or the hash does not describe the image.
+// Not covered: images in COPY --from and anything the build downloads.
+// Uncommitted and untracked files are not either: build from a git
+// export of HEAD, or the hash does not describe the image.
 func ContextHash(p *loadedProject, service string) (string, error) {
 	build, service, err := serviceBuild(p.composeFile, service)
 	if err != nil {
@@ -81,7 +89,10 @@ func ContextHash(p *loadedProject, service string) (string, error) {
 
 	// The Dockerfile, unless it is inline (then it is in the build: JSON).
 	var ignoreFiles []string
-	if _, inline := build["dockerfile_inline"]; !inline {
+	var dockerfileText string
+	if inline, ok := build["dockerfile_inline"]; ok {
+		dockerfileText = fmt.Sprint(inline)
+	} else {
 		dockerfile := "Dockerfile"
 		if v, ok := build["dockerfile"].(string); ok && v != "" {
 			dockerfile = v
@@ -99,6 +110,25 @@ func ContextHash(p *loadedProject, service string) (string, error) {
 		}
 		fmt.Fprintf(h, "dockerfile %s", blob)
 		ignoreFiles = append(ignoreFiles, dockerfileRel+".dockerignore")
+		text, err := gitOutput(gitRoot, "cat-file", "blob", strings.TrimSpace(string(blob)))
+		if err != nil {
+			return "", err
+		}
+		dockerfileText = string(text)
+	}
+	args, _ := build["args"].(map[string]string)
+	digests := map[string]string{}
+	for _, ref := range baseImages(dockerfileText, args) {
+		digest := ref
+		if !strings.Contains(ref, "@") {
+			if digest = digests[ref]; digest == "" {
+				if digest, err = BaseDigest(ref); err != nil {
+					return "", fmt.Errorf("service %s: base image %s: %v", service, ref, err)
+				}
+				digests[ref] = digest
+			}
+		}
+		fmt.Fprintf(h, "base %s %s\n", ref, digest)
 	}
 	ignoreFiles = append(ignoreFiles, joinRel(contextRel, ".dockerignore"))
 
@@ -154,6 +184,122 @@ func ContextHash(p *loadedProject, service string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// BaseDigest is the digest ref has in its registry now, asked without
+// pulling (an image index's digest for a multi-platform image): what
+// --context-hash folds in for each base image. Tests replace it.
+var BaseDigest = func(ref string) (string, error) {
+	cmd := exec.Command("docker", "buildx", "imagetools", "inspect", "--format", "{{.Manifest.Digest}}", ref)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	digest := strings.TrimSpace(string(out))
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("no digest from its registry: %s", msg)
+	}
+	if !digestRe.MatchString(digest) {
+		return "", fmt.Errorf("no digest from its registry: docker buildx imagetools inspect said %q", digest)
+	}
+	return digest, nil
+}
+
+var digestRe = regexp.MustCompile(`^[a-z0-9]+:[a-f0-9]{32,}$`)
+
+// baseImages are the external images a Dockerfile's stages start from,
+// in order, once each: FROM's image, its global ARGs (those before the
+// first FROM) expanded with args (the build's), else their defaults,
+// leaving out earlier stages' names and scratch. Lines are joined at the
+// escape character (`# escape=` honored), comments and heredocs'
+// contents skipped.
+func baseImages(dockerfile string, args map[string]string) []string {
+	escape := `\`
+	vars := map[string]string{}
+	lookup := func(k string) (string, bool) { v, ok := vars[k]; return v, ok }
+	stages := map[string]bool{}
+	var bases []string
+	seenFrom, directives := false, true
+	var heredocs []string
+	var cur string
+	for _, line := range strings.Split(strings.ReplaceAll(dockerfile, "\r\n", "\n"), "\n") {
+		if len(heredocs) > 0 {
+			if strings.TrimSpace(line) == heredocs[0] {
+				heredocs = heredocs[1:]
+			}
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			if directives {
+				if k, v, ok := strings.Cut(strings.TrimSpace(trimmed[1:]), "="); ok && strings.EqualFold(strings.TrimSpace(k), "escape") {
+					escape = strings.TrimSpace(v)
+					continue
+				}
+			}
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		directives = false
+		if strings.HasSuffix(trimmed, escape) && escape != "" {
+			cur += strings.TrimSuffix(trimmed, escape) + " "
+			continue
+		}
+		instr := strings.TrimSpace(cur + trimmed)
+		cur = ""
+		for _, m := range heredocRe.FindAllStringSubmatch(instr, -1) {
+			heredocs = append(heredocs, m[1])
+		}
+		fields := strings.Fields(instr)
+		if len(fields) < 2 {
+			continue
+		}
+		switch strings.ToUpper(fields[0]) {
+		case "ARG":
+			if seenFrom {
+				continue
+			}
+			for _, a := range fields[1:] {
+				k, v, hasDefault := strings.Cut(a, "=")
+				if val, ok := args[k]; ok {
+					vars[k] = val
+				} else if hasDefault {
+					v, _ = template.Substitute(strings.Trim(v, `"'`), lookup)
+					vars[k] = v
+				}
+			}
+		case "FROM":
+			seenFrom = true
+			rest := fields[1:]
+			for len(rest) > 0 && strings.HasPrefix(rest[0], "--") {
+				rest = rest[1:]
+			}
+			if len(rest) == 0 {
+				continue
+			}
+			ref, err := template.Substitute(rest[0], lookup)
+			if err != nil {
+				ref = rest[0]
+			}
+			if !stages[strings.ToLower(ref)] && !strings.EqualFold(ref, "scratch") && !slices.Contains(bases, ref) {
+				bases = append(bases, ref)
+			}
+			// A stage's name counts from the next FROM on.
+			if len(rest) >= 3 && strings.EqualFold(rest[1], "AS") {
+				stages[strings.ToLower(rest[2])] = true
+			}
+		}
+	}
+	return bases
+}
+
+// heredocRe finds a heredoc's end word in an instruction (<<EOF, <<-EOF,
+// <<"EOF").
+var heredocRe = regexp.MustCompile(`<<-?["']?([A-Za-z_][A-Za-z0-9_]*)["']?`)
 
 // serviceBuild returns a service's build: section from the compose file, as
 // a map (the short form, a string, is the context). With no service given,
