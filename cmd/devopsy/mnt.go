@@ -255,7 +255,7 @@ func ownedLinks(mnt string, owned map[string]string) []string {
 }
 
 // localMnt readies the owned paths of mnt before compose starts
-// anything locally (up, start, run, create): each missing one (an entry,
+// anything locally (cli.Plan.Starts): each missing one (an entry,
 // a bind source below one) is made, and on Linux an entry whose top
 // directory is not its owner's is given away in a util container, only
 // then, and scanned whole there: an entry whose top is right is never
