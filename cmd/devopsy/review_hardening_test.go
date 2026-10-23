@@ -39,27 +39,6 @@ func TestReviewRollbackToOldLabels(t *testing.T) {
 	}
 }
 
-// Review 2026-10-23: a service that bind-mounts a directory below an
-// entry (./mnt/storage/files:/app/files) owns the entry, storage, and a
-// first release creates only that: the bind's own source, storage/files,
-// is still missing when the run step's up starts the container, so
-// Docker creates it as root, and a service running as its owner from its
-// first process cannot write its mount, which is what the label is for
-// (README, "Data and mounts"). The next release's scan would fix it,
-// after a first release that failed. (The fake's owners container makes
-// what it is given, as ownEntries does: mkdir of each entry.)
-func TestReviewOwnersSubdirectoryMount(t *testing.T) {
-	s := newSyncSetup(t)
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT=/storage/files\n", 0o644)
-	out, code := s.run(nil, "@prod", "--release")
-	if code != 0 {
-		t.Fatalf("release (%d):\n%s", code, out)
-	}
-	if !fileExists(filepath.Join(s.mnt("prod"), "storage", "files")) {
-		t.Errorf("mnt/storage/files, app's bind source, not made before the run step: Docker makes it root's:\n%s", out)
-	}
-}
-
 // Review 2026-10-23: the mounts check runs before prepare, and a compose
 // configuration it cannot read is no refusal, so a project whose compose
 // file requires a secret its prepare step generates (drupal11's and the

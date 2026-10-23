@@ -961,7 +961,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   2026-10-23; rsync's 24 is the same race). Applied: a release, right after
   `make_current` (it changes live data, so never before; `--mnt-owners`,
   a failure a failed run step), `--network none`, missing entries made
-  0755 and every owned entry scanned whole (decided: what devopsy did
+  0755, the bind sources below an owned entry too (`cli.OwnedPaths`,
+  `ownPaths`, a directory at a time, never past a link: review of
+  2026-10-23, Docker made `./mnt/storage/files` root's under an owned
+  `storage`), and every owned entry scanned whole (decided: what devopsy did
   not write has the wrong owner deep under a correct top; measured 0.24
   s warm, 0.75 s cold for 500,000 files; fallback for huge trees: `-type
   d` only), and rollbacks and the restart after a failed run from the
@@ -972,7 +975,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   (`Plan.Starts`, only when the compose files' YAML has the label or an
   `include:` or `extends:` key, comments left out: no compose config for
   every command, and every template's comments say "included"), only
-  missing entries made and, on Linux, a wrong top given away, no scan;
+  missing paths made and, on Linux, an entry whose top is wrong given
+  away and scanned whole (one whose top is right is never scanned);
   macOS never checks (Docker Desktop and OrbStack let any container user
   write the Mac's files and show them the owner Docker asks for). Not a
   stream's import (it writes as the service's user), restores, restarts

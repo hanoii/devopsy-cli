@@ -156,6 +156,10 @@ type SyncService struct {
 	// tree outside mnt, relative to the tree: they live in the release,
 	// and go with the next one (CheckMounts refuses them).
 	TreeBinds []string
+	// Binds are the sources of its bind mounts under mnt, relative to it
+	// (storage, storage/files), read-only ones too: Docker makes a
+	// missing one root's (OwnedPaths).
+	Binds []string
 	// WholeMnt is whether it mounts ./mnt whole writable, which a service
 	// without data or an owner may as far as parsing goes, and
 	// CheckMounts refuses: it would write every entry, which the child
@@ -320,6 +324,9 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				continue
 			}
 			d := mntEntry(filepath.Clean(v.Source), mnts)
+			if rel := mntPath(filepath.Clean(v.Source), mnts); d != "" && d != "." && !slices.Contains(cs.Binds, rel) {
+				cs.Binds = append(cs.Binds, rel)
+			}
 			if d == "" && !v.ReadOnly {
 				if r := resolvePath(filepath.Clean(v.Source)); mntEntry(r, mnts) == "" {
 					if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
@@ -356,6 +363,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		sort.Strings(cs.Excluded)
 		sort.Strings(cs.Writable)
 		sort.Strings(cs.TreeBinds)
+		sort.Strings(cs.Binds)
 		// The owners' list (the child's, for a sync) names entries split
 		// by spaces too.
 		if cs.Owner != "" {
@@ -388,15 +396,21 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 // for mnt itself (never an entry: parseSyncServices refuses or ignores
 // it), "" outside it.
 func mntEntry(source string, mnts []string) string {
+	rel := mntPath(source, mnts)
+	if rel == "" || rel == "." {
+		return rel
+	}
+	return strings.SplitN(rel, string(filepath.Separator), 2)[0]
+}
+
+// mntPath is source relative to mnt, "." for mnt itself, "" outside it.
+func mntPath(source string, mnts []string) string {
 	for _, m := range mnts {
 		rel, err := filepath.Rel(m, source)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
 		}
-		if rel == "." {
-			return "."
-		}
-		return strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		return rel
 	}
 	return ""
 }
@@ -435,6 +449,23 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 		}
 	}
 	return owners, nil
+}
+
+// OwnedPaths are the bind sources below the owned entries (owners, as
+// MntOwners returns them), each to its entry's owner: devopsy makes them
+// with the entry, since Docker would make a missing one root's, and a
+// service running as its owner from its first process could not write
+// its mount (./mnt/storage/files under storage).
+func OwnedPaths(services []SyncService, owners map[string]string) map[string]string {
+	paths := map[string]string{}
+	for _, s := range services {
+		for _, b := range s.Binds {
+			if e, _, below := strings.Cut(b, string(filepath.Separator)); below && owners[e] != "" {
+				paths[b] = owners[e]
+			}
+		}
+	}
+	return paths
 }
 
 // CheckMounts refuses, before a release goes live, the mounts whose data

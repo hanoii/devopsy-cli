@@ -811,20 +811,23 @@ network, never following a symbolic link:
 - **a release**, right after its switch (before a sync and the run
   step), and a rollback and the restart after a failed run, from the
   restored release's own labels: each owned entry missing is created
-  (0755) and given to its owner, then every owned entry is scanned
-  whole, so what devopsy did not write (an upload by hand, data from
-  before the label) gets its owner too. A failure fails the release as
-  its run step would: the previous one comes back;
+  (0755) and given to its owner, and so is each bind source below one
+  (`./mnt/storage/files`, which Docker would make root's), then every
+  owned entry is scanned whole, so what devopsy did not write (an upload
+  by hand, data from before the label) gets its owner too. A failure
+  fails the release as its run step would: the previous one comes back;
 - **a sync**: an entry the child owns lands as the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files are;
 - **an `--import`** of a `mnt` service: what it extracted goes to its
-  owner before the import completes;
+  owner before the import completes, the bind sources below it made;
 - **a reset**, once it emptied `mnt`;
 - **locally**, before `up`, `start`, `run` and `create`: an owned entry
-  missing is created, and on Linux one whose directory is not its
-  owner's is given away (no scan: it runs before every such command). On
-  macOS, Docker Desktop and OrbStack let any container user write the
-  Mac's files, so only the directory is made.
+  missing is created, and each bind source below one, and on Linux an
+  entry whose directory is not its owner's is given away, scanned whole;
+  one whose directory is its owner's is never scanned, since this runs
+  before every such command. On macOS, Docker Desktop and OrbStack let
+  any container user write the Mac's files, so only the directories are
+  made.
 
 Two services whose owners differ on one entry are refused; one without
 the label may write an owned entry (a tool sharing it). A stream's
