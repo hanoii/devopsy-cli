@@ -387,12 +387,31 @@ func tarEntries(spool string) ([]string, error) {
 // in place of an entry removes the directory a container bind-mounts.
 var errOutside = errors.New("a member reaching out of its entry")
 
+// errMember is a tar member devopsy never extracts, wherever it is: a
+// device node, which GNU tar as root makes on the host (bind mounts are
+// not nodev) for the owners' step to give to the entry's owner, a block
+// device of the server's disk the raw disk for that UID; a FIFO, which
+// a tar of data never needs either. Only files, directories and links
+// pass (tarTypes).
+var errMember = errors.New("a member devopsy does not extract")
+
+// tarTypes are the member types an mnt import extracts.
+var tarTypes = []byte{tar.TypeReg, tar.TypeRegA, tar.TypeGNUSparse, tar.TypeCont, tar.TypeDir, tar.TypeSymlink, tar.TypeLink}
+
 // tarMember checks a member (p, its name without ./) stays in its
 // top-level entry of mnt, and returns that entry. A path or a link out
 // of its entry (into another entry too), and a top-level entry that is
-// no directory or file, are errOutside.
+// no directory or file, are errOutside; a member of another type than
+// tarTypes (a device node, a FIFO) is errMember.
 func tarMember(h *tar.Header, p string) (top string, err error) {
 	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
+	if !slices.Contains(tarTypes, h.Typeflag) {
+		kind := map[byte]string{tar.TypeBlock: "a block device", tar.TypeChar: "a character device", tar.TypeFifo: "a FIFO"}[h.Typeflag]
+		if kind == "" {
+			kind = fmt.Sprintf("of type %q", h.Typeflag)
+		}
+		return "", fmt.Errorf("%w: %s is %s, which a tar of data never needs", errMember, h.Name, kind)
+	}
 	if path.IsAbs(p) || slices.Contains(strings.Split(p, "/"), "..") {
 		return outside()
 	}
@@ -579,7 +598,7 @@ func runImport(cwd string, args []string, color bool) int {
 	var entries []string
 	var mnt string
 	if s.Transfer == cli.DataMnt {
-		if entries, err = tarEntries(spool); errors.Is(err, errOutside) {
+		if entries, err = tarEntries(spool); errors.Is(err, errOutside) || errors.Is(err, errMember) {
 			return fail("the tar has " + err.Error() + ": nothing imported")
 		} else if err != nil {
 			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
