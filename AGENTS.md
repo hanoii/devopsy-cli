@@ -990,7 +990,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
   the child's labels (Syncs); an `mnt` import, after its extracting
   container (`emptyAndExtract`, which mounts all of `mnt`) in the
-  entries' own; a reset, after `emptyMnt`;
+  entries' own, never locally on macOS (review of 2026-10-23, round 2:
+  as before `up`, and Docker Desktop's file sharing may refuse a
+  chown); a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `run`, `create`, `watch`
   and `scale`
   (`Plan.Starts`, only when the compose files' YAML has the label or an

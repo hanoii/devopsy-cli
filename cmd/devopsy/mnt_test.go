@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -70,6 +71,17 @@ func TestMntOwnersRelease(t *testing.T) {
 	docker, _ = s.logs()
 	if code != 0 || !strings.Contains(docker, "rsync -a --delete --numeric-ids --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/db/ /dst/db/\n") || strings.Contains(docker, "20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// An mnt import on a target gives what it extracted to its owner,
+	// before it counts as complete, in a container that mounts that
+	// entry alone, named so that a leftover import's end removes it
+	// (importContainers). Locally on macOS it gives nothing away
+	// (TestExportImport).
+	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker) {
+		t.Errorf("an owned import on a target (%d):\n%s\n%s", code, errs, docker)
 	}
 
 	// A rollback gives owners by the restored release's labels; labels

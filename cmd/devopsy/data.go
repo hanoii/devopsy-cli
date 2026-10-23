@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -676,9 +677,12 @@ func runImport(cwd string, args []string, color bool) int {
 			err = dockerRunIO(ctx, cname, in2, nil, run...)
 			// What it extracted goes to its owner before the import counts
 			// as complete: a tar made anywhere carries its maker's owners.
+			// Not locally on macOS, as localMnt: Docker Desktop's file
+			// sharing may refuse the chown, and both it and OrbStack let
+			// any container user write the Mac's files anyway.
 			owned := map[string]string{}
 			for _, e := range entries {
-				if o := owners[e]; o != "" {
+				if o := owners[e]; o != "" && (onTarget || runtime.GOOS != "darwin") {
 					owned[e] = o
 				}
 			}

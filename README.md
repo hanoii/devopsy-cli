@@ -824,7 +824,8 @@ meanwhile can lead nowhere else:
 - **a sync**: an entry the child owns lands as the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files are;
 - **an `--import`** of a `mnt` service: what it extracted goes to its
-  owner before the import completes;
+  owner before the import completes (locally on macOS nothing, as
+  below: Docker Desktop's file sharing may refuse the chown);
 - **a reset**, once it emptied `mnt`;
 - **locally**, before `up`, `start`, `run`, `create`, `watch` and
   `scale` (not with `--dry-run`): an owned entry missing is created,
