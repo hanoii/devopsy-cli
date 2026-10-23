@@ -229,12 +229,6 @@ func SyncServices(cwd string, environ []string) (projectDir string, services []S
 	return projectDir, services, err
 }
 
-// ParseSyncServices is SyncServices from compose's JSON configuration
-// out, read already, for the project at projectDir (its .devopsy/).
-func ParseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
-	return parseSyncServices(out, projectDir)
-}
-
 // parseSyncServices reads compose's JSON configuration. Bind sources are
 // absolute there, under the compose file's directory as written (on
 // servers .devopsy/mnt is a link to shared/mnt, which compose may have

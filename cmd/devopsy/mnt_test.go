@@ -130,7 +130,7 @@ func TestCheckMountsRelease(t *testing.T) {
 	// What the owners' step refuses after the switch, the check refuses
 	// before it (or neither does): here a leftover
 	// .devopsy/capabilities/sync/, which SyncServices refuses and
-	// ParseSyncServices never looks at. Review of 2026-10-23 (round 2):
+	// the check once parsed past. Review of 2026-10-23 (round 2):
 	// the check passed, the release went live and failed in
 	// --mnt-owners, for a project with no owner at all (on main, a
 	// release that does not sync never read it).
