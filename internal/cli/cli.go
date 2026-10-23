@@ -440,11 +440,11 @@ its own release. A sync is an export of every service with data on the
 parent and an import of each on the child:
 
   devopsy.data=mnt     its entries of .devopsy/mnt rsynced (rsync -a
-                       --delete --numeric-ids --modify-window=-1, times
-                       to the nanosecond, as root in devopsy's own
-                       image, devopsy-util, built on each server), an
-                       entry the child owns as its owner's
-                       (devopsy.mnt.owner, --chown)
+                       --no-D --delete --numeric-ids --modify-window=-1:
+                       no device nodes or FIFOs, times to the nanosecond,
+                       as root in devopsy's own image, devopsy-util,
+                       built on each server), an entry the child owns as
+                       its owner's (devopsy.mnt.owner, --chown)
   devopsy.data=stream  the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a

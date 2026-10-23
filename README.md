@@ -812,7 +812,9 @@ changing that never silently changes the data's owner: a variable keeps
 the two alike. devopsy applies it, as root in `devopsy-util` without a
 network, never following a symbolic link, each entry in a container
 that mounts that entry alone, so a directory the app swaps for a link
-meanwhile can lead nowhere else:
+meanwhile can lead nowhere else. Only files, directories and links are
+given away: a device node, a FIFO or a socket keeps its owner (devopsy
+never makes one there, so it is the host's root's):
 
 - **a release**, right after its switch (before a sync and the run
   step), and a rollback and the restart after a failed run, from the
@@ -911,11 +913,14 @@ whose its files are).
 - `devopsy.data=mnt`: the entries of `.devopsy/mnt` the service
   bind-mounts (`./mnt/files` gives `files`; a file, `./mnt/app.ini`,
   itself; never `./mnt` whole, refused). A sync rsyncs them (`rsync -a
-  --delete --numeric-ids --modify-window=-1`, times compared to the
-  nanosecond, the child's copy equal to the parent's,
-  owners and modes included, but an entry the child owns, as its owner's:
+  --no-D --delete --numeric-ids --modify-window=-1`, times compared to
+  the nanosecond, the child's copy equal to the parent's, owners and
+  modes included, but an entry the child owns, as its owner's:
   `devopsy.mnt.owner`, above); `--export` and `--import` move them as a
-  tar. Both as root in `devopsy-util`.
+  tar. Both as root in `devopsy-util`. Device nodes, FIFOs and sockets
+  are never copied, nor given to an owner: as root, rsync and tar would
+  make them on the server, where a block device given to the app's UID
+  is its raw disk.
 - `devopsy.data=stream`: the data capability's `export <service>` writes
   it to stdout (a database dump), and its `import <service>` reads it
   from stdin (a load).
