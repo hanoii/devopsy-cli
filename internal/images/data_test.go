@@ -929,6 +929,8 @@ func TestImportedHistory(t *testing.T) {
 	h := readHistory(m.base())
 	if w := h.window("database"); len(w) != 1 || w[0].How != Imported || w[0].ID != "I2" {
 		t.Errorf("window after an import: %+v", w)
+	}
+}
 
 // Bug: a release's ForcedFile stays in its directory after its --yes was
 // used, so a later rollback to that release (img ran on the target) appends

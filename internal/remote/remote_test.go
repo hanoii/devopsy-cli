@@ -2639,6 +2639,7 @@ func TestSyncImagesOrder(t *testing.T) {
 	order(holder, images.SyncImagesEnv+"=", "img sync-check", "--sync-services' 'prepare", "img sync-done", "sync_finish go", "release-steps", "img ran")
 	activate := ActivateScript(tg, "20261005120000", false, "app-dev", Phases{Run: []string{"deploy"}}, o)
 	order(activate, images.SyncImagesEnv+"=", "img record", "make_current", "img sync-done", "sync_finish go")
+}
 
 // Bug: every script that defines img() passes --mode and --address to
 // devopsy --images, options a devopsy without data-images refuses (its
