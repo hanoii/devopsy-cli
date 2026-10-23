@@ -1438,3 +1438,57 @@ func TestDataRollbackFromBuiltDatabase(t *testing.T) {
 		t.Errorf("the rollback to the built database runs %s (r1's own build) on data mariadb:11.8 at I2 ran, want I2 or a refusal; history %v\n%s", m.runs("database"), m.history("database"), out.String())
 	}
 }
+
+// Bug: after a sync into a child on its own mirror of the parent's very
+// image (S74), the child's history ends with a line under the child's
+// reference that carries only the parent's digests (SyncDone copies the
+// parent's line's), so its hold() is the parent's repository's digest,
+// which Docker finds only under that repository: the child's rollback
+// (and a restart after a failed run, or img hold) holds the database on
+// mariadb@<digest>, which a server that reaches only its mirror cannot
+// pull, though it runs that very image. The rollback is refused, and a
+// restart's up fails, the site down.
+func TestSyncMirrorRollbackHoldsLocalDigest(t *testing.T) {
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	// dev's server reaches only its mirror, which serves the same image.
+	for n := range d.names {
+		if repoKey(n) == "mariadb" {
+			delete(d.names, n)
+		}
+	}
+	d.digests["I2"] = nil
+	d.registry["I2"] = nil
+	mirror := dbSvc("mirror.example/mariadb:11.8")
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	r1, err := dev.release(false, mirror)
+	if err != nil {
+		t.Fatalf("dev's r1: %v\n%s", err, out.String())
+	}
+	if _, err := dev.release(false, mirror); err != nil {
+		t.Fatalf("dev's r2: %v\n%s", err, out.String())
+	}
+	rel := dev.e.rel(dev.cur)
+	if err := dev.e.set.SyncCheck(rel, data); err != nil {
+		t.Fatalf("the sync's check (%v):\n%s", err, out.String())
+	}
+	if err := dev.e.set.SyncDone(dev.base(), rel, data, "vm1:prod"); err != nil {
+		t.Fatal(err)
+	}
+	dev.activation = true
+	dev.up()
+	out.Reset()
+	if err := dev.rollback(r1); err != nil || dev.runs("database") != "I2" {
+		t.Errorf("dev's rollback after the sync (%v): runs %s, want I2, which this server has from its mirror (history %v)\n%s", err, dev.runs("database"), readHistory(dev.base()), out.String())
+	}
+	if h, ok := readHistory(dev.base()).last("database"); ok {
+		if _, err := d.Inspect(h.hold()); err != nil {
+			t.Errorf("the child's data's newest image is held as %s, which this server does not have", h.hold())
+		}
+	}
+}
