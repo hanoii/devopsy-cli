@@ -1163,3 +1163,36 @@ func TestSyncStreamKeepsOwnImage(t *testing.T) {
 	}
 }
 
+// Bug: ParentData gives a drifted parent's container image (S52) as the
+// newest its data ran, and SyncDone appends it after the parent's
+// history's last, so the child's history says the data moved past the
+// image the parent's own history keeps as its newest. The parent's next
+// release of its unchanged tag goes through, the child's (same tag, same
+// image, the same data) is refused as moved past.
+func TestSyncDriftedParentHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	dev.release(false, db118)
+	// prod's database moved back to I1 outside devopsy.
+	for i, c := range d.containers {
+		if c.project == "app-prod" && c.service == "database" {
+			d.containers[i].image = "I1"
+		}
+	}
+	if err := syncInto(t, prod, dev, false); err != nil || dev.runs("database") != "I1" {
+		t.Fatalf("the sync (%v): dev runs %s\n%s", err, dev.runs("database"), out.String())
+	}
+	// mariadb:11.8 is still I2, the newest image this data ever ran.
+	out.Reset()
+	if _, err := dev.release(false, db118); err != nil || dev.runs("database") != "I2" {
+		t.Errorf("dev's next release of the same tag (%v): runs %s, want I2, the newest its data ran (history %v)\n%s", err, dev.runs("database"), dev.history("database"), out.String())
+	}
+	if _, err := prod.release(false, db118); err != nil || prod.runs("database") != "I2" {
+		t.Errorf("prod's next release (%v): runs %s", err, prod.runs("database"))
+	}
+}
