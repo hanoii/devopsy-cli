@@ -34,7 +34,6 @@ func TestStepExit255(t *testing.T) {
 		{"run", "devopsy @dev --sync --yes"},
 	} {
 		srv(t, "rm -f fail-prepare fail-run; touch fail-"+c.fail)
-		op(t, dir, "sleep 1.1")
 		out, code := op(t, dir, c.command)
 		if code == 0 {
 			t.Errorf("%s, %s failing: went through:\n%s", c.command, c.fail, out)

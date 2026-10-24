@@ -25,7 +25,6 @@ func TestStepArguments(t *testing.T) {
 	want := `[a'b][$HOME][x"y]`
 	for _, terminal := range []bool{false, true} {
 		srv(t, "rm -f args-*")
-		op(t, dir, "sleep 1.1")
 		if terminal {
 			inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/stepargs")
 			if code := terminalCode(t, "/tmp/stepargs"); code != "exit=0" {

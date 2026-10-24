@@ -20,7 +20,6 @@ func TestReleasesStates(t *testing.T) {
 	first, _ := srv(t, "readlink states/prod/current")
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing") })
-	op(t, dir, "sleep 1.1")
 	background(t, dir, "devopsy @server:prod --release", "/tmp/states.log")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	if out, _ := op(t, dir, "devopsy @server:prod --releases"); !strings.Contains(out, "IN PROGRESS") {

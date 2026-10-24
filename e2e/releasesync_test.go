@@ -71,7 +71,6 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
 	first, _ := srv(t, "readlink rsfetch/dev/current")
 	srv(t, "echo BUILD_WAIT=607 >>rsfetch/dev/shared/.env")
 	t.Cleanup(func() { srv(t, "pkill -f '[s]leep 607' || true") })
-	op(t, dir, "sleep 1.1")
 	background(t, dir, fast()+" devopsy @dev --release-sync --yes", "/tmp/rsfetch.log")
 	eventually(t, 3*time.Minute, "the build running", func() bool {
 		out, _ := srv(t, "pgrep -f '[s]leep 607' || true")
@@ -122,7 +121,6 @@ func TestReleaseSyncInterruptAfterSwitch(t *testing.T) {
 	firstID := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(first), "releases/"), "/code")
 	srv(t, "rm -f preparing-rsint-dev deploys-rsint-dev finish.log; touch wait-prepare-rsint-dev")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare-rsint-dev preparing-rsint-dev deploys-rsint-dev") })
-	op(t, dir, "sleep 1.1")
 	inTerminal(t, dir, "devopsy @server:dev --release-sync --yes", "/tmp/rsint")
 	eventually(t, 2*time.Minute, "the sync's prepare waiting", func() bool { return exists(t, "preparing-rsint-dev") })
 	id := newest(t, "rsint/dev")
@@ -181,7 +179,6 @@ func TestReleaseSyncInterruptCopy(t *testing.T) {
 	first, _ := srv(t, "readlink rscopy/dev/current")
 	srv(t, "rm -f importing-rscopy-dev deploys-rscopy-dev; echo 120 >import-wait-rscopy-dev")
 	t.Cleanup(func() { srv(t, "rm -f import-wait-rscopy-dev importing-rscopy-dev deploys-rscopy-dev") })
-	op(t, dir, "sleep 1.1")
 	inTerminal(t, dir, "devopsy @server:dev --release-sync --yes", "/tmp/rscopy")
 	eventually(t, 2*time.Minute, "the import running", func() bool { return exists(t, "importing-rscopy-dev") })
 	id := newest(t, "rscopy/dev")
@@ -217,7 +214,6 @@ func TestReleaseSyncDropInRunStep(t *testing.T) {
 	for _, how := range []string{"silently", "closed"} {
 		first, _ := srv(t, "readlink rsrun/dev/current")
 		srv(t, "rm -f running-rsrun-dev finish.log; touch wait-run-rsrun-dev; echo "+how+" >rsrun/prod/shared/mnt/data/stamp")
-		op(t, dir, "sleep 1.1")
 		background(t, dir, fast()+" devopsy @dev --release-sync --yes", "/tmp/rsrun.log")
 		eventually(t, 2*time.Minute, how+": the run step waiting", func() bool { return exists(t, "running-rsrun-dev") })
 		id := newest(t, "rsrun/dev")

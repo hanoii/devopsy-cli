@@ -103,7 +103,6 @@ func TestSyncKilledHolder(t *testing.T) {
 		t.Errorf("--status after:\n%s", out)
 	}
 	releases, _ := srv(t, "ls skill/dev/releases | wc -l")
-	op(t, dir, "sleep 1.1")
 	if out, code := op(t, dir, "devopsy @dev --release"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release on it (%d):\n%s", code, out)
 	}
@@ -128,7 +127,6 @@ func TestReleaseSyncCut(t *testing.T) {
 	first, _ := srv(t, "readlink rscut/dev/current")
 	srv(t, "rm -f importing-rscut-dev; echo 120 >import-wait-rscut-dev")
 	t.Cleanup(func() { srv(t, "rm -f import-wait-rscut-dev importing-rscut-dev") })
-	op(t, dir, "sleep 1.1")
 	background(t, dir, fast()+" devopsy @dev --release-sync --yes", "/tmp/rscut.log")
 	eventually(t, 2*time.Minute, "the import running", func() bool { return exists(t, "importing-rscut-dev") })
 	dropConnection(t, "[-]-sync-push")

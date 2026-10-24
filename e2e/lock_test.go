@@ -27,11 +27,9 @@ func TestReleaseLockWait(t *testing.T) {
 	for _, cut := range []string{"Ctrl-C", "a silent drop"} {
 		before, _ := srv(t, "ls lockwait/prod/releases")
 		srv(t, "rm -f preparing; touch wait-prepare")
-		op(t, dir, "sleep 1.1")
 		// Not @server, which ctrlC looks for.
 		background(t, dir, "DEVOPSY_SERVER=server devopsy @prod --release; echo exit=$?", "/tmp/lockholder.log")
 		eventually(t, time.Minute, cut+": the first release's prepare waiting", func() bool { return exists(t, "preparing") })
-		op(t, dir, "sleep 1.1")
 		if cut == "Ctrl-C" {
 			inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/lockwait")
 		} else {
@@ -99,7 +97,6 @@ func TestDestroyWaits(t *testing.T) {
 	}
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing") })
-	op(t, dir, "sleep 1.1")
 	background(t, dir, "devopsy @server:prod --release; echo exit=$?", "/tmp/destroyholder.log")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	background(t, dir, "devopsy @server:prod --destroy --yes; echo exit=$?", "/tmp/destroywait.log")
@@ -150,7 +147,6 @@ func TestRemovalsCutWhileWaiting(t *testing.T) {
 			command = strings.Replace(command, "%s", old, 1)
 		}
 		srv(t, "rm -f preparing; touch wait-prepare")
-		op(t, dir, "sleep 1.1")
 		// Not @server, which ctrlC looks for.
 		background(t, dir, "DEVOPSY_SERVER=server devopsy @prod --release; echo exit=$?", "/tmp/cutholder.log")
 		eventually(t, time.Minute, command+": prepare waiting", func() bool { return exists(t, "preparing") })
@@ -202,7 +198,6 @@ func TestRemovalsCutWhileWaiting(t *testing.T) {
 func TestRemovalsCutWhileWaitingForImages(t *testing.T) {
 	dir := dropProject(t, "cutimages")
 	for i := 0; i < 2; i++ {
-		op(t, dir, "sleep 1.1")
 		if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 			t.Fatalf("release (%d):\n%s", code, out)
 		}
@@ -271,7 +266,6 @@ func TestSyncCutWhileWaiting(t *testing.T) {
 	t.Cleanup(func() { srv(t, "rm -f wait-run-syncwait-dev running-syncwait-dev") })
 	for _, cut := range []string{"Ctrl-C", "a silent drop"} {
 		srv(t, "rm -f running-syncwait-dev finish.log; touch wait-run-syncwait-dev")
-		op(t, dir, "sleep 1.1")
 		// A release of dev holding its lock, in its run step.
 		background(t, dir, "devopsy @dev --release-no-sync; echo exit=$?", "/tmp/syncwaitholder.log")
 		eventually(t, time.Minute, cut+": dev's release in its run step", func() bool { return exists(t, "running-syncwait-dev") })
