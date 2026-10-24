@@ -2033,3 +2033,38 @@ func TestSyncParentImageOtherPlatform(t *testing.T) {
 		t.Errorf("(%v):\n%s", err, out.String())
 	}
 }
+
+// A record line whose digest field names no digest (nothing after an @,
+// or no @ at all) counts as none, as one without its reference or id does
+// (DataFor): nothing could check or hold the service by it. Let through,
+// the check passes it as the same name with nothing to pull (ownHold
+// finds no digest), and ImportDone then holds the service on nothing:
+// the hold goes from the release's ComposeFile, so a plain up follows the
+// name wherever it points, and the listing's entry takes the record's id,
+// whatever the tar's maker wrote there.
+func TestImportRecordWithoutDigest(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	stage := newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, db118)
+	rel := stage.e.rel(stage.cur)
+	for _, data := range []string{"image\tdatabase\tmariadb:11.8\tI1\tmariadb\n", "image\tdatabase\tmariadb:11.8\tI9\tmariadb@\n"} {
+		if got := DataFor(data, "database"); got != "" {
+			t.Errorf("DataFor(%q) = %q, want none", data, got)
+		}
+		err := stage.e.set.ImportCheck(rel, data, "database")
+		if err == nil {
+			err = stage.e.set.ImportDone(stage.base(), rel, data)
+		}
+		if err != nil && !errors.Is(err, ErrRefused) {
+			t.Fatalf("import of %q: %v\n%s", data, err, out.String())
+		}
+		if hold := holdsIn(rel)["database"]; hold != "mariadb@I1" {
+			t.Errorf("after an import of %q the database is held on %q, was mariadb@I1\n%s", data, hold, out.String())
+		}
+		if e, ok := match(readList(rel), entry{Service: "database"}); !ok || e.ID != "I1" {
+			t.Errorf("after an import of %q the listing's database is %+v, was on I1", data, e)
+		}
+	}
+}
