@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1096,5 +1097,55 @@ func TestTarGlobalHeaders(t *testing.T) {
 		if es, err := tarEntries(spool); !errors.Is(err, errOutside) && !errors.Is(err, errMember) {
 			t.Errorf("%s: not refused (%v): %v", c.name, err, es)
 		}
+	}
+}
+
+// An import that completed and held its stopped service on the export's
+// image (ImportDone) but could not make it again (the recreate's up
+// failed) keeps the mark and the record, and names --resolved as what
+// starts them. --resolved then has to bring the service back on the
+// image its data now needs, as the import would have: compose start of
+// the old container runs the old image on the imported data (the very
+// thing the hold is for), and Imported then starts the history over from
+// that old image, losing the export's record of what wrote the data.
+func TestImportResolvedKeepsExportImage(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:app=mariadb@sha256:app", "FAKE_APP=mnt+own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	s.logs()
+	// app, stopped for the import (own), its container on another image
+	// than the export's: made again on the export's once the data is in,
+	// which fails here.
+	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
+	base := filepath.Join(s.root, "shop", "prod")
+	history := filepath.Join(base, images.HistoryFile)
+	_, errs, code = s.runIO(append(env, "FAIL_UP=shop-prod"), out, "@prod", "--import", "app", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(errs, "did not all come back") || !strings.Contains(errs, "--import app --resolved") || readMark(base) == nil || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+		t.Fatalf("an import whose recreate failed (%d):\n%s\n%s", code, errs, docker)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
+		t.Fatalf("not held on the export's image:\n%s", c)
+	}
+	if h := readString(history); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Fatalf("history after the import:\n%s", h)
+	}
+	// --resolved, as the error says: app comes back on the hold.
+	_, errs, code = s.runIO(env, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readMark(base) != nil {
+		t.Fatalf("--resolved (%d):\n%s\n%s", code, errs, docker)
+	}
+	if !strings.Contains(docker, " up -d --no-deps --wait app\n") || regexp.MustCompile(` start( \w+)* app\n`).MatchString(docker) {
+		t.Errorf("--resolved started app's old container, on the image it had, not made again on the export's image its data now needs:\n%s", docker)
+	}
+	if h := readString(history); strings.Contains(h, "\tsha256:app\t") || !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Errorf("--resolved started app's history over from the old image, losing the export's:\n%s", h)
 	}
 }

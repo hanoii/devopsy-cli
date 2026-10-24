@@ -150,16 +150,19 @@ case "$*" in
     for s in $svcs; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
     for s in ${FAKE_ONEOFF:-}; do printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
-  *" up -d --wait "*)
+  # up -d --wait [--no-deps] <svc>... (upFor, a first release's create)
+  # and up -d --no-deps --wait <svc>... (a recreate on the image the data
+  # now needs).
+  *" up -d --wait "*|*" up -d --no-deps --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_WAIT: an up that writes its caller's pid there and takes
     # until $FAKE_UP_WAIT.go exists.
     if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
     # depends on, too, unless --no-deps.
-    ups=$(after --wait "$@")
+    ups=$(after --wait "$@" | grep -v '^--')
     case "$* " in
-      *" --no-deps "*) ups=$(after --no-deps "$@") ;;
+      *" --no-deps "*) ;;
       *) [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac ;;
     esac
     for s in $ups; do
