@@ -20,4 +20,8 @@ jobs:
       - run: sudo apt-get update -q && sudo apt-get install -yq zsh fish
       - run: go vet ./...
       - run: go test -count=1 ./...
+      # The race detector over the packages that test in process; the
+      # scripts' timing tests (cmd/devopsy, internal/remote) fail under
+      # its slowdown, not on a race.
+      - run: go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
       - run: shellcheck -s sh install.sh
