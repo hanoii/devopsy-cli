@@ -9,10 +9,10 @@ import (
 )
 
 // ctrlC sends SIGINT to the foreground group of devopsy's terminal, as
-// a Ctrl-C there does.
+// a Ctrl-C there does: the newest devopsy @server on the operator's.
 func ctrlC(t *testing.T) {
 	t.Helper()
-	if out, code := op(t, "/", `pid=$(pgrep -f '^devopsy @server' | head -n 1) && kill -INT -$(ps -o pgid= -p "$pid" | tr -d ' ')`); code != 0 {
+	if out, code := op(t, "/", `pid=$(pgrep -n -f '^devopsy @server') && kill -INT -$(ps -o pgid= -p "$pid" | tr -d ' ')`); code != 0 {
 		t.Fatalf("Ctrl-C (%d): %s", code, out)
 	}
 }
