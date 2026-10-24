@@ -38,8 +38,11 @@ jobs:
             echo "nothing new since $last"
             echo skip=1 >>"$GITHUB_OUTPUT"
           fi
+      # The tags too: TestOlderServer builds devopsy from one.
       - uses: actions/checkout@v7
         if: steps.last.outputs.skip != '1'
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         if: steps.last.outputs.skip != '1'
         with:
