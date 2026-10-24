@@ -43,6 +43,7 @@ func fake(dns map[string][]string, certs map[string]CertInfo, status map[string]
 }
 
 func TestHost(t *testing.T) {
+	t.Parallel()
 	valid := CertInfo{Valid: true, Issuer: "Let's Encrypt R11", Expires: time.Date(2027, 1, 3, 0, 0, 0, 0, time.UTC)}
 	c := fake(map[string][]string{
 		"live.org":      {"10.0.0.5"},

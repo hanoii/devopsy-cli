@@ -42,6 +42,7 @@ func layout(t *testing.T, cur string, ids ...string) string {
 // ones never count, and stay while newer than the oldest kept; current
 // and a release still fetching always stay.
 func TestToPrune(t *testing.T) {
+	t.Parallel()
 	base := layout(t, "5", "1", "2f", "3", "4b", "5", "6x", "7")
 	if got := ToPrune(base, 2); !slices.Equal(got, []string{"4", "3", "2", "1"}) {
 		t.Errorf("keep 2: %v", got)
@@ -67,6 +68,7 @@ func TestToPrune(t *testing.T) {
 }
 
 func TestRollbackTarget(t *testing.T) {
+	t.Parallel()
 	if got := RollbackTarget(layout(t, "5", "1", "2", "3f", "4b", "4p", "5", "6")); got != "2" {
 		t.Errorf("target %q, want 2", got)
 	}
@@ -77,6 +79,7 @@ func TestRollbackTarget(t *testing.T) {
 
 // Every id is checked before anything goes; then each with its images.
 func TestRemoveReleases(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	s := &Set{Docker: d, Name: "app-prod", Left: filepath.Join(t.TempDir(), LeftFile), Out: &out}

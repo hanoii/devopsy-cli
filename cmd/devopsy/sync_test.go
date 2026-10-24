@@ -408,6 +408,7 @@ func readString(path string) string {
 // silent by then (its connection died just before the switch, the watcher
 // not counting its quiet time yet) never sees its release go live.
 func TestBeatMarkerAnswered(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	start := time.Now()
 	out, code := s.run([]string{remote.HeartbeatEveryEnv + "=1", "FAKE_SILENT=1"}, "@prod", "--release")
@@ -430,6 +431,7 @@ func TestBeatMarkerAnswered(t *testing.T) {
 }
 
 func TestSyncSameHost(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 
@@ -541,6 +543,7 @@ func TestSyncSameHost(t *testing.T) {
 // failed, nothing is current, the services restored, and the next release
 // syncs again; --release-no-sync releases without the data.
 func TestReleaseFirstSync(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 
@@ -597,6 +600,7 @@ func TestReleaseFirstSync(t *testing.T) {
 // --from on a release: the parent's address when only the address names
 // its server, as --sync --from; only on a child's release that syncs.
 func TestReleaseFrom(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.dot, ".env"), "", 0o644) // prod's server from no variable
@@ -637,6 +641,7 @@ func TestReleaseFrom(t *testing.T) {
 
 // A service bind-mounting a file of mnt: copied as a file, on both paths.
 func TestSyncFileEntry(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.mnt("prod"), "app.ini"), "[prod]\n", 0o644)
@@ -665,6 +670,7 @@ func TestSyncFileEntry(t *testing.T) {
 // there, the child's server reaching it through a reverse forward, and the
 // daemon removed.
 func TestSyncDifferentHosts(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	env := []string{"DEVOPSY_SERVER_PROD=devopsy@one"}
@@ -808,6 +814,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 // A push that fails aborts: the child's services are restored, its run
 // step skipped.
 func TestSyncAbort(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
@@ -894,6 +901,7 @@ func TestSyncAbort(t *testing.T) {
 // services again: the child goes on (its data is complete), but the
 // command fails, since the parent's database is left down.
 func TestSyncParentRestoreFails(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -924,6 +932,7 @@ func TestSyncParentRestoreFails(t *testing.T) {
 // depends_on order; the hooks on both sides with their side and lists;
 // the child's commands run as the child, without the parent's environment.
 func TestSyncCapability(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
 	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_DATA_MNT stream=$DEVOPSY_DATA_STREAM stop=$DEVOPSY_DATA_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
@@ -1105,6 +1114,7 @@ func TestSyncCapability(t *testing.T) {
 
 // What --sync refuses before anything starts.
 func TestSyncGuards(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	// A parent that cannot be resolved only fails what syncs.
 	bad := []string{"DEVOPSY_SERVER_PROD=bad:host"}
@@ -1169,6 +1179,7 @@ func TestSyncGuards(t *testing.T) {
 // upload of a first release and before a --sync's copy; never with
 // --release-no-sync.
 func TestSyncInherit(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ninstances: true\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY, INST_KEY, PROJ_KEY, MISSING_KEY]}\n  dev: {parent: prod}\n", 0o644)
 	if out, code := s.run(nil, "@a/prod", "--release", "--yes"); code != 0 {
@@ -1280,6 +1291,7 @@ func TestSyncInherit(t *testing.T) {
 // release's own config on the server decides, as for a rollback or a
 // restart, never the checkout, which may be another branch.
 func TestSyncRunStepDeployed(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -1299,6 +1311,7 @@ func TestSyncRunStepDeployed(t *testing.T) {
 // --sync --accept-image, the fix SyncCheck's refusal names, reaches the
 // holder's img sync-check with the services named, each once.
 func TestSyncAcceptReachesHolder(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -1327,6 +1340,7 @@ func TestSyncAcceptReachesHolder(t *testing.T) {
 // aborts: the export is ended, its spool removed, both sides' stopped
 // services come back, nothing is imported and the run step does not run.
 func TestSyncInterrupt(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	started := filepath.Join(t.TempDir(), "started")
 	caps := filepath.Join(s.dot, "capabilities", "data")
@@ -1352,11 +1366,11 @@ func TestSyncInterrupt(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the export never started:\n%s", readString(outFile.Name()))
 		}
@@ -1391,6 +1405,7 @@ func TestSyncInterrupt(t *testing.T) {
 // session, which shows it, nothing is copied and the child is no partial
 // copy.
 func TestSyncInterruptPrepare(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	started := filepath.Join(t.TempDir(), "started")
 	caps := filepath.Join(s.dot, "capabilities", "data")
@@ -1414,11 +1429,11 @@ func TestSyncInterruptPrepare(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the prepare never started:\n%s", readString(outFile.Name()))
 		}
@@ -1440,6 +1455,7 @@ func TestSyncInterruptPrepare(t *testing.T) {
 // on each side its own services (devopsy.data.stop=own) and what depends
 // on them, the child its import ones too, and restores what was stopped.
 func TestSyncLabels(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -1588,6 +1604,7 @@ func TestSyncLabels(t *testing.T) {
 // variable can change in that sync): db, stopped by a sync left
 // partial, starts once a sync completes, labeled own or not.
 func TestSyncRestoresRecordedStops(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -1612,6 +1629,7 @@ func TestSyncRestoresRecordedStops(t *testing.T) {
 // label there) fails the push before the parent stops anything: the child
 // restores its services; rsync on the child says running is fine.
 func TestSyncMismatch(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "data", "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
 	s.releaseProd(nil)
@@ -1666,6 +1684,7 @@ func TestSyncMismatch(t *testing.T) {
 // service not labeled mnt conflicts; a stop word differing between the
 // sides is named.
 func TestChildServicesParse(t *testing.T) {
+	t.Parallel()
 	// The last service mounts nothing: its line ends in a tab.
 	got, mark := parseChildServices("app\tmnt+import\texited\tstorage\ndb\tstream+never\trunning\tdb\nworker\tnone+never\trunning\tdb\n!import\tdb\nbad\ncache\tnone+never\tnone\t\n")
 	want := []childService{
@@ -1705,6 +1724,7 @@ func TestChildServicesParse(t *testing.T) {
 // removes the rsync container, restores its services, and never runs the
 // export of the stream services.
 func TestSyncInterruptCopy(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	tmp := t.TempDir()
 	started, pushed := filepath.Join(tmp, "started"), filepath.Join(tmp, "pushed")
@@ -1729,11 +1749,11 @@ func TestSyncInterruptCopy(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the copy never started:\n%s\n%s", readString(outFile.Name()), readString(s.log))
 		}
@@ -1772,6 +1792,7 @@ func TestSyncInterruptCopy(t *testing.T) {
 // The holder's session ends during the copy: the push is stopped, the
 // parent restored, nothing answered, no run step.
 func TestSyncHolderGone(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	started := filepath.Join(t.TempDir(), "started")
 	s.releaseProd(nil)
@@ -1802,6 +1823,7 @@ func TestSyncHolderGone(t *testing.T) {
 // container's bind mounts under it after a failed first release removed
 // the link) fails the release before the upload, with the way out.
 func TestReleaseCurrentDirectory(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
@@ -1818,6 +1840,7 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 // --status: the containers and the status capability's lines, locally;
 // with a target, the release's record and the last sync first.
 func TestStatus(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "status", "show"), "#!/bin/sh\necho \"url https://$COMPOSE_PROJECT_NAME.example\"\n", 0o755)
 	out, code := s.run([]string{"FAKE_DB_DOWN=1"}, "--status")
@@ -1850,6 +1873,7 @@ func TestStatus(t *testing.T) {
 // A release never takes over another project's network: the networks a
 // project names are its own, or external.
 func TestReleaseNetworkOwned(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	if out, code := s.run([]string{"FAKE_NETWORK_OWNER=other-prod"}, "@prod", "--release"); code == 0 || !strings.Contains(out, "network shop-prod_default is other-prod's") || !strings.Contains(out, "join its network as external") || s.current("prod") != "" {
 		t.Errorf("another project's network (%d):\n%s", code, out)
@@ -1903,6 +1927,7 @@ func tarOf(t *testing.T, files map[string]string) []byte {
 // its stop label says (and what depends on it) stopped around it; stdin
 // spooled first, and nothing changed unless it is complete.
 func TestExportImport(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	imported := filepath.Join(t.TempDir(), "imported")
 	caps := filepath.Join(s.dot, "capabilities", "data")
@@ -2255,10 +2280,10 @@ func TestExportImport(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFile(t, exportStarted, "the export", func() string { return eerr.String() })
+	waitFile(t, exportStarted, "the export", startWait, func() string { return eerr.String() })
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
-	waitFile(t, exportStopped, "the export's end", func() string { return eerr.String() })
+	waitFile(t, exportStopped, "the export's end", 10*time.Second, func() string { return eerr.String() })
 	if docker, _ := s.logs(); cmd.ProcessState.ExitCode() == 0 || !strings.Contains(eerr.String(), "export db: interrupted: what was written is incomplete") || !strings.Contains(docker, " start db app") {
 		t.Errorf("interrupted export (%d):\n%s\n%s", cmd.ProcessState.ExitCode(), eerr.String(), docker)
 	}
@@ -2445,6 +2470,7 @@ func TestExportImport(t *testing.T) {
 // own record (images.ExportKey), wherever it is, must be refused, or the
 // check judges links GNU tar never writes.
 func TestTarLinks(t *testing.T) {
+	t.Parallel()
 	sym := func(name, target string) *tar.Header {
 		return &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}
 	}
@@ -2532,14 +2558,15 @@ func TestTarLinks(t *testing.T) {
 	}
 }
 
-// waitFile waits for a file to exist, up to 10 seconds.
-func waitFile(t *testing.T, path, what string, out func() string) {
+// waitFile waits for a file to exist, up to within: startWait for what
+// the test then acts on, the behavior's own bound for what it checks.
+func waitFile(t *testing.T, path, what string, within time.Duration, out func() string) {
 	t.Helper()
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		if time.Since(start) > 10*time.Second {
+		if time.Since(start) > within {
 			t.Fatalf("%s never happened:\n%s", what, out())
 		}
 	}
@@ -2551,6 +2578,7 @@ func waitFile(t *testing.T, path, what string, out func() string) {
 // first release (no containers at all), never in a project that has
 // others.
 func TestSyncPrepareFailsKeepsDown(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "data", "prepare"), "#!/bin/sh\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
 	s.releaseProd(nil)
@@ -2592,6 +2620,7 @@ func TestSyncPrepareFailsKeepsDown(t *testing.T) {
 // sync fails, the record stays, and every later sync fails the same way.
 // It should leave out what the project no longer has.
 func TestSyncRecordedStopGone(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -2620,6 +2649,7 @@ func TestSyncRecordedStopGone(t *testing.T) {
 // stopped), so Compose starts db, which this sync stopped, and it runs
 // on the partial copy. It should stay down, as on a later sync.
 func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
+	t.Parallel()
 	for _, first := range []bool{false, true} {
 		s := newSyncSetup(t)
 		caps := filepath.Join(s.dot, "capabilities", "data")
@@ -2652,6 +2682,7 @@ func TestSyncImportUpKeepsStoppedDown(t *testing.T) {
 // pipe the push keeps open as its stdin closes, and the import ends its
 // hook and removes the spool.
 func TestSyncImportCancelled(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	tmp := t.TempDir()
 	started, stopped := filepath.Join(tmp, "started"), filepath.Join(tmp, "stopped")
@@ -2680,10 +2711,10 @@ func TestSyncImportCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := func() string { return readString(outFile.Name()) + readString(s.log) }
-	waitFile(t, started, "the import", out)
+	waitFile(t, started, "the import", startWait, out)
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
-	waitFile(t, stopped, "the import's end", out)
+	waitFile(t, stopped, "the import's end", 10*time.Second, out)
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
 		if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")); err != nil {
 			break
@@ -2699,6 +2730,7 @@ func TestSyncImportCancelled(t *testing.T) {
 // creates every labeled service before its hook, which sanitizes through
 // them; the record of the first release goes afterwards.
 func TestSyncFirstReleaseCreates(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
@@ -2737,6 +2769,7 @@ func TestSyncFirstReleaseCreates(t *testing.T) {
 // first one again and must create every labeled service before finish
 // child go, which sanitizes through them.
 func TestSyncFirstReleaseRetryCreates(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho dump\n", 0o755)
@@ -2775,6 +2808,7 @@ func TestSyncFirstReleaseRetryCreates(t *testing.T) {
 // shared/inherit.env on go. A failed copy leaves the child's file; a
 // stale pending file, from a sync that wrote none this time, goes.
 func TestSyncInheritedLabel(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [FAKE_DB]}\n  dev: {parent: prod}\n  solo: {}\n", 0o644)
 	caps := filepath.Join(s.dot, "capabilities", "data")
@@ -2857,6 +2891,7 @@ func TestSyncInheritedLabel(t *testing.T) {
 // A sync that finds containers drops a first release's mark an earlier,
 // failed sync left; its stops stay.
 func TestSyncRecordStaleFirst(t *testing.T) {
+	t.Parallel()
 	cwd := filepath.Join(t.TempDir(), "current")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
@@ -2875,6 +2910,7 @@ func TestSyncRecordStaleFirst(t *testing.T) {
 // the switch it ends the watched session, which cancels the release;
 // during the run step it says the step goes on, and the release finishes.
 func TestReleaseInterrupt(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	interrupt := func(env string, args ...string) (string, int, time.Duration) {
 		t.Helper()
@@ -2891,11 +2927,11 @@ func TestReleaseInterrupt(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; ; i++ {
+		for start := time.Now(); ; {
 			if _, err := os.Stat(started); err == nil {
 				break
 			}
-			if i > 300 {
+			if time.Since(start) > startWait {
 				_ = cmd.Process.Kill()
 				t.Fatalf("never started:\n%s", readString(outFile.Name()))
 			}
@@ -2925,6 +2961,7 @@ func TestReleaseInterrupt(t *testing.T) {
 // takes the lock next counts the data as a partial copy, which only a
 // sync completes. A partial copy is never a parent.
 func TestSyncSettle(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "capabilities", "data", "finish"), "#!/bin/sh\n[ \"${FAIL_FINISH:-}\" != \"$1 $2\" ]\n", 0o755)
 	s.releaseProd(nil)
@@ -2976,6 +3013,7 @@ func TestSyncSettle(t *testing.T) {
 // The sync log, appended to by every sync whose session went, keeps its
 // last lines once too big.
 func TestTrimSyncLog(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), syncLog)
 	line := strings.Repeat("x", 99) + "\n"
 	write(t, path, strings.Repeat(line, remote.SyncLogMax/len(line)+10)+"last\n", 0o644)
@@ -3053,6 +3091,7 @@ func TestClaimWrite(t *testing.T) {
 // A push whose child decided already (its gate closed: the holder gone
 // on, a push that outlived its connection) writes nothing into it.
 func TestSyncPushGateClosed(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
@@ -3077,6 +3116,7 @@ func TestSyncPushGateClosed(t *testing.T) {
 // What every server-side reader of a session shares: through until its
 // end, or a silence.
 func TestReadQuiet(t *testing.T) {
+	t.Parallel()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -3103,6 +3143,7 @@ func TestReadQuiet(t *testing.T) {
 // A first release whose sync aborted before writing anything does not go
 // live: its services are not created on the child's empty data.
 func TestSyncFirstAbortCreatesNothing(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	write(t, s.log+".shop-dev", "FAKE_ABSENT='app db'\n", 0o644)
@@ -3126,6 +3167,7 @@ func TestSyncFirstAbortCreatesNothing(t *testing.T) {
 // one-off is removed; and the sync's own containers go, never another
 // sync's.
 func TestSyncEndWriters(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -3188,6 +3230,7 @@ func TestSyncEndWriters(t *testing.T) {
 // A sync hook runs in the foreground: what it leaves running in the
 // background ends when it returns, said, and the hook still succeeds.
 func TestSyncHookLeftovers(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	write(t, filepath.Join(s.dot, "capabilities", "data", "finish"), "#!/bin/sh\n[ \"$1 $2\" = \"child go\" ] || exit 0\nsleep 30 >/dev/null 2>&1 &\necho $! >"+pidFile+"\n", 0o755)
@@ -3224,6 +3267,7 @@ func TestSyncHookLeftovers(t *testing.T) {
 // record left) ends the sync's writers before taking anything down, so
 // nothing writes into mnt while it is emptied.
 func TestDestroyEndsWriters(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -3247,6 +3291,7 @@ func TestDestroyEndsWriters(t *testing.T) {
 // rebuilt with its base pulled and no cache once older than a week, the
 // image it replaced removed (never with -f), a failure only warning.
 func TestUtilImage(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	df := s.log + ".dockerfile"
 	built := func() string { b, _ := os.ReadFile(s.log + ".util"); os.Remove(s.log + ".util"); return string(b) }
@@ -3308,6 +3353,7 @@ func parentChanged(docker string) bool {
 // own data, a series bump or a lowered pin (a downgrade) included, and
 // img ran then records it. Abort starts nothing new (plan, part 9).
 func TestSyncAbortRecreatesNothing(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {

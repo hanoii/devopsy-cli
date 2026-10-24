@@ -11,6 +11,7 @@ import (
 // and fails when its write does (a session gone), as echo would, which
 // the scripts rely on before a switch; never by SIGPIPE.
 func TestSay(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if out, code := runDevopsy(t, dir, nil, "--say", "warning", "careful", "why"); code != 0 || out != "devopsy: warning: careful\ndevopsy: | why\n" {
 		t.Errorf("warning (%d): %q", code, out)

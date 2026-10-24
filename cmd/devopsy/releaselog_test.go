@@ -11,6 +11,7 @@ import (
 // The log keeps final states only: no terminal codes, spinner frames or
 // the empty lines compose's redraws leave, each line after its time.
 func TestReleaseLogText(t *testing.T) {
+	t.Parallel()
 	l := &releaseLog{}
 	l.Line("devopsy: running 'devopsy deploy' (run)")
 	_, _ = l.Write([]byte("[+] up 1/2\n \x1b[32m✔\x1b[0m Network n Created      \n \u280b Container c Creating   0.0s\n\n\n"))
@@ -29,6 +30,7 @@ func TestReleaseLogText(t *testing.T) {
 // A progress display that goes back up to redraw its lines (BuildKit on a
 // terminal) leaves only its last frame in the log.
 func TestReleaseLogFrames(t *testing.T) {
+	t.Parallel()
 	l := &releaseLog{}
 	for _, chunk := range []string{"start\n", "#1 step one\n#2 step two 0.1s\n", "\x1b[2A\x1b[2K#1 step one DONE\n\x1b[2K#2 step two 0.5s\n", "\x1b[1A\x1b[2K#2 step two DONE\n", "end\n"} {
 		_, _ = l.Write([]byte(chunk))
@@ -49,6 +51,7 @@ func TestReleaseLogFrames(t *testing.T) {
 // indented, whatever the times say; a part no anchor claims (its
 // operator gone before saving) at the end, never under a later anchor.
 func TestJoinLogs(t *testing.T) {
+	t.Parallel()
 	anchor := remote.LogAnchor
 	session := "2026-10-17 10:00:00 devopsy release: release of @prod\n" +
 		"2026-10-17 10:00:05 devopsy: the images of 1 are ready\n" +

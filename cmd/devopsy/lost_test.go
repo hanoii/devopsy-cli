@@ -12,6 +12,7 @@ import (
 // script's status on, and sshLost takes every 255 for ssh's own
 // (cmd/devopsy/remote.go:380; sync.go:289 for a sync's run step).
 func TestRunStepExit255(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\n[ -z \"${FAKE_RUN_EXIT:-}\" ] || exit \"$FAKE_RUN_EXIT\"\necho deployed\n", 0o755)
 	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {

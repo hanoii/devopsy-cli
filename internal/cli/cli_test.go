@@ -79,6 +79,7 @@ func build(cwd string, args []string, environ []string) (*Plan, error) {
 }
 
 func TestFindProjectDirFromSubdirectory(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
 	sub := filepath.Join(root, "a", "b")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -94,6 +95,7 @@ func TestFindProjectDirFromSubdirectory(t *testing.T) {
 }
 
 func TestFindProjectDirMissing(t *testing.T) {
+	t.Parallel()
 	_, err := FindProjectDir(t.TempDir())
 	var e *ExitError
 	if !errors.As(err, &e) || e.Code != 100 {
@@ -102,6 +104,7 @@ func TestFindProjectDirMissing(t *testing.T) {
 }
 
 func TestBuildComposePassthrough(t *testing.T) {
+	t.Parallel()
 	root := project(t, "My Proj", map[string]string{"compose.yaml": minimalCompose})
 	plan, err := build(root, []string{"config", "--services", "x y"}, nil)
 	if err != nil {
@@ -154,6 +157,7 @@ func TestBuildComposePassthrough(t *testing.T) {
 // where --mnt-owners owns that (review of 2026-10-23, round 2: a
 // rollback's up failed on labels this devopsy could not read).
 func TestBuildStarts(t *testing.T) {
+	t.Parallel()
 	owned := minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n"
 	root := project(t, "p", map[string]string{"compose.yaml": minimalCompose, "extra.yaml": owned})
 	inRelease := project(t, "p", map[string]string{"compose.yaml": owned, "target.env": "COMPOSE_PROJECT_NAME=p-prod\n"})
@@ -249,6 +253,7 @@ func TestBuildStarts(t *testing.T) {
 
 // A script in the arguments is only counted in the notice; -vv has it whole.
 func TestBuildNoticeScript(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, "config.yaml": "secrets: [API_TOKEN]\n"})
 	script := "\n  echo one\n  SECRETVALUE123 two\n"
 	plan, err := build(root, []string{"run", "--rm", "web", "sh", "-c", script, "sh", "x"}, []string{"API_TOKEN=SECRETVALUE123"})
@@ -271,6 +276,7 @@ func TestBuildNoticeScript(t *testing.T) {
 }
 
 func TestBuildOverrideFile(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml":         minimalCompose,
 		"compose.override.yml": "services: {}\n",
@@ -286,6 +292,7 @@ func TestBuildOverrideFile(t *testing.T) {
 }
 
 func TestBuildDotenvCallerWins(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml": minimalCompose,
 		".env":         "# comment\nFOO=from_env\nBAR=\"quoted value\"\nexport BAZ=baz\nREF=${BAR}-x\n",
@@ -307,6 +314,7 @@ func TestBuildDotenvCallerWins(t *testing.T) {
 }
 
 func TestBuildCustomCommand(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
 		"commands/deploy*": "#!/bin/sh\n",
@@ -334,6 +342,7 @@ func TestBuildCustomCommand(t *testing.T) {
 // release, target only there, and a local one that needs an address gets
 // it from the devopsy that read it, in DEVOPSY_COMMAND_TARGET.
 func TestBuildCommandRun(t *testing.T) {
+	t.Parallel()
 	root := project(t, remote.CodeDir, map[string]string{
 		"compose.yaml":     minimalCompose,
 		"commands/image*":  "#!/bin/sh\n## Run: local\n",
@@ -395,6 +404,7 @@ func TestBuildCommandRun(t *testing.T) {
 }
 
 func TestBuildCustomCommandRecursionGuard(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml":  minimalCompose,
 		"commands/up*":  "#!/bin/sh\n",
@@ -419,6 +429,7 @@ func TestBuildCustomCommandRecursionGuard(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
 		"commands/deploy*": "#!/bin/sh\n## Description: Pull and roll out\n",
@@ -449,6 +460,7 @@ func TestUsage(t *testing.T) {
 }
 
 func TestBuildWordsAreNotBuiltins(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
 	// version and help are compose commands now; built-ins are flags.
 	for _, word := range []string{"version", "help"} {
@@ -472,6 +484,7 @@ func TestBuildWordsAreNotBuiltins(t *testing.T) {
 }
 
 func TestBuildMissingCompose(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{".env": "A=1\n"})
 	_, err := build(root, []string{"ps"}, nil)
 	var e *ExitError
@@ -481,6 +494,7 @@ func TestBuildMissingCompose(t *testing.T) {
 }
 
 func TestNormalizeProjectName(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"My Proj":    "myproj",
 		"_-app.v2":   "appv2",
@@ -493,6 +507,7 @@ func TestNormalizeProjectName(t *testing.T) {
 }
 
 func TestBuildProjectName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		files   map[string]string
 		environ []string
@@ -523,6 +538,7 @@ func TestBuildProjectName(t *testing.T) {
 }
 
 func TestEnvCapability(t *testing.T) {
+	t.Parallel()
 	root := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
 		".env":         "SITE_URL=https://override.example.org\n",
@@ -581,6 +597,7 @@ func TestEnvCapability(t *testing.T) {
 }
 
 func TestPrintEnvRoundTrip(t *testing.T) {
+	t.Parallel()
 	root := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
 		".env":         "PLAIN=a b\nTRICKY=placeholder\nDEVOPSY_DOMAINS=example.org\n",
@@ -611,6 +628,7 @@ func TestPrintEnvRoundTrip(t *testing.T) {
 }
 
 func TestBuildTargetEnvPrecedence(t *testing.T) {
+	t.Parallel()
 	root := project(t, "shop", map[string]string{
 		"compose.yaml": minimalCompose,
 		".env":         "OVERRIDE=from_env\n",
@@ -631,6 +649,7 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 }
 
 func TestBuildCapability(t *testing.T) {
+	t.Parallel()
 	root := project(t, "traefik", map[string]string{
 		"compose.yaml":                 minimalCompose,
 		".env":                         "API_TOKEN=s3cr3t-value\n",
@@ -670,6 +689,7 @@ func TestBuildCapability(t *testing.T) {
 // variables config.yaml's secrets: names, wherever they are set. Nothing
 // else is masked.
 func TestBuildMasksSecrets(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
 		"config.yaml":      "secrets: [DB_PASSWORD, OVERRIDDEN, \"*_TOKEN\", SHORT]\n",
@@ -707,6 +727,7 @@ func TestBuildMasksSecrets(t *testing.T) {
 }
 
 func TestBuildVerbose(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, ".env": "A=1\n"})
 	plan, err := build(root, []string{"ps"}, nil)
 	if err != nil {
@@ -720,6 +741,7 @@ func TestBuildVerbose(t *testing.T) {
 }
 
 func TestVerboseLevel(t *testing.T) {
+	t.Parallel()
 	for v, want := range map[string]int{"1": 1, "true": 1, "TRUE": 1, "yes": 1, "on": 1, "2": 2, "3": 2, "": 0, "0": 0, "false": 0, "no": 0, "-1": 0} {
 		if got := VerboseLevel(v); got != want {
 			t.Errorf("VerboseLevel(%q) = %d", v, got)
@@ -737,6 +759,7 @@ func TestVerboseLevel(t *testing.T) {
 // password ending in a backslash, set with --vars set, breaks the
 // environment's shared/.env for every command (--vars included).
 func TestDotenvLineRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, v := range []string{"", "a b", " lead", "trail ", "a #b", "$HOME", `a\nb`, "it's", "a\nb", `"`, "'", `x\`, `\`, `x\\`} {
 		line := DotenvLine("K", v)
 		got, err := dotenv.UnmarshalWithLookup(line+"\n", func(string) (string, bool) { return "looked up", true })
@@ -750,6 +773,7 @@ func TestDotenvLineRoundTrip(t *testing.T) {
 // compose.yaml and the operator's override, so the operator's hand still
 // wins; a listing asks for the project's files alone.
 func TestReleaseComposeFile(t *testing.T) {
+	t.Parallel()
 	rel := filepath.Join(t.TempDir(), "releases", "1")
 	dir := filepath.Join(rel, "code", ".devopsy")
 	write(t, filepath.Join(dir, "compose.yaml"), "services: {}\n")

@@ -8,6 +8,7 @@ import (
 // The data capability's catalog names every command whose sync runs its
 // hooks: what --debug capabilities shows a project author.
 func TestDataCapabilityCalledBy(t *testing.T) {
+	t.Parallel()
 	for _, c := range Capabilities {
 		if c.Name != DataCapability {
 			continue

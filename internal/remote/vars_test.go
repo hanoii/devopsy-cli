@@ -5,52 +5,61 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// varsRoot is the release root the fake server devopsy reports.
-var varsRoot = os.TempDir()
-
 // runVarsScript runs a --vars script locally, as sh on a server would, with
-// a no-op flock (macOS has none).
-func runVarsScript(t *testing.T, script, stdin string) string {
+// a no-op flock (macOS has none) and root as the release root the fake
+// server devopsy reports.
+func runVarsScript(t *testing.T, root, script, stdin string) string {
 	t.Helper()
 	// As devopsy sends it, gated: the lines, then the end line.
-	out, err := runVarsRaw(t, script, GatedInput(stdin))
+	out, err := runVarsRaw(t, root, script, GatedInput(stdin))
 	if err != nil {
 		t.Fatalf("%v\n%s\n%s", err, out, script)
 	}
 	return strings.ReplaceAll(out, LockedMarker+"\n", "")
 }
 
-// runVarsRaw runs script with stdin as given.
-func runVarsRaw(t *testing.T, script, stdin string) (string, error) {
-	t.Helper()
-	bin := t.TempDir()
+// varsBin is the fakes' directory, written once: they never change, and
+// macOS takes seconds, under the parallel tests, for the first exec of
+// each new script.
+var varsBin = sync.OnceValues(func() (string, error) {
+	bin, err := os.MkdirTemp(filepath.Dir(realDevopsy), "vars-bin")
+	if err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755); err != nil {
+	return bin, os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755)
+})
+
+// runVarsRaw runs script with stdin as given.
+func runVarsRaw(t *testing.T, root, script, stdin string) (string, error) {
+	t.Helper()
+	bin, err := varsBin()
+	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", script)
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + varsRoot}
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
 func TestVarsScripts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	varsRoot = root
-	defer func() { varsRoot = os.TempDir() }()
 
 	// A release environment before its first release: shared/.env is created.
 	base := filepath.Join(root, "app's prod")
 	tg := &Target{Name: "prod", Host: "h", Path: "app's prod"}
 	file := filepath.Join(base, "shared", ".env")
-	if out := runVarsScript(t, VarsSetScript(tg, nil), "A='1'\n"); strings.TrimSpace(out) != file {
+	if out := runVarsScript(t, root, VarsSetScript(tg, nil), "A='1'\n"); strings.TrimSpace(out) != file {
 		t.Fatalf("set printed %q", out)
 	}
 	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
@@ -60,7 +69,7 @@ func TestVarsScripts(t *testing.T) {
 	// Existing keys are replaced in place, duplicates dropped, comments and
 	// other lines kept, new keys appended in order.
 	write(t, file, "# secrets\nexport A=old\nB=keep\nA=dup\nC = spaced\n\n")
-	runVarsScript(t, VarsSetScript(tg, nil), "C='new c'\nA='new a'\nD='d'\n")
+	runVarsScript(t, root, VarsSetScript(tg, nil), "C='new c'\nA='new a'\nD='d'\n")
 	got, _ := os.ReadFile(file)
 	want := "# secrets\nA='new a'\nB=keep\nC='new c'\n\nD='d'\n"
 	if string(got) != want {
@@ -77,39 +86,39 @@ func TestVarsScripts(t *testing.T) {
 	multi := filepath.Join(root, "multi", "shared", ".env")
 	tm := &Target{Name: "prod", Host: "h", Path: "multi"}
 	write(t, multi, "B=keep\nCERT=\"-----BEGIN\nabc\n-----END\"\nNOTE=\"first\nA=inside\"\nA=old\n")
-	runVarsScript(t, VarsSetScript(tm, nil), "CERT='new'\nA='new a'\n")
+	runVarsScript(t, root, VarsSetScript(tm, nil), "CERT='new'\nA='new a'\n")
 	if got, _ := os.ReadFile(multi); string(got) != "B=keep\nCERT='new'\nNOTE=\"first\nA=inside\"\nA='new a'\n" {
 		t.Errorf("set over a value of several lines:\n%s", got)
 	}
 	write(t, multi, "B=keep\nCERT=\"-----BEGIN\nabc\n-----END\"\n")
-	runVarsScript(t, VarsUnsetScript(tm, nil), "CERT\n")
+	runVarsScript(t, root, VarsUnsetScript(tm, nil), "CERT\n")
 	if got, _ := os.ReadFile(multi); string(got) != "B=keep\n" {
 		t.Errorf("unset of a value of several lines:\n%s", got)
 	}
 	// compose's parser reads KEY: value as KEY=value: such a line is the
 	// key's too.
 	write(t, multi, "A: old\nB=keep\nC: x=y\n")
-	runVarsScript(t, VarsUnsetScript(tm, nil), "A\n")
-	runVarsScript(t, VarsSetScript(tm, nil), "C='new'\n")
+	runVarsScript(t, root, VarsUnsetScript(tm, nil), "A\n")
+	runVarsScript(t, root, VarsSetScript(tm, nil), "C='new'\n")
 	if got, _ := os.ReadFile(multi); string(got) != "B=keep\nC='new'\n" {
 		t.Errorf("KEY: value lines:\n%s", got)
 	}
 	// A session cut before its end line (gone while the script waited for
 	// the lock, its values sent before) changes nothing.
-	if out, err := runVarsRaw(t, VarsSetScript(tg, nil), "A='cut'\n"); err == nil || !strings.Contains(out, "nothing changed") {
+	if out, err := runVarsRaw(t, root, VarsSetScript(tg, nil), "A='cut'\n"); err == nil || !strings.Contains(out, "nothing changed") {
 		t.Errorf("a cut set (%v):\n%s", err, out)
 	}
 	if got, _ := os.ReadFile(file); string(got) != want {
 		t.Errorf("a cut set changed the file: %q", got)
 	}
 
-	runVarsScript(t, VarsUnsetScript(tg, nil), "A\nD\nMISSING\n")
+	runVarsScript(t, root, VarsUnsetScript(tg, nil), "A\nD\nMISSING\n")
 	got, _ = os.ReadFile(file)
 	if want := "# secrets\nB=keep\nC='new c'\n\n"; string(got) != want {
 		t.Fatalf("unset\n got %q\nwant %q", got, want)
 	}
 
-	out := runVarsScript(t, VarsReadScript(tg, nil), "")
+	out := runVarsScript(t, root, VarsReadScript(tg, nil), "")
 	read, err := ReadVarsOutput(out)
 	if err != nil || read.File != file || read.Content != string(got) || len(read.Configs) != 0 {
 		t.Fatalf("read %q: %+v (%v)", out, read, err)
@@ -124,7 +133,7 @@ func TestVarsScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	tp := &Target{Name: "vm1-traefik", Host: "h", Path: "traefik/main"}
-	runVarsScript(t, VarsSetScript(tp, nil), "TOKEN='x'\n")
+	runVarsScript(t, root, VarsSetScript(tp, nil), "TOKEN='x'\n")
 	if got, _ := os.ReadFile(filepath.Join(plain, ".devopsy", ".env")); string(got) != "TOKEN='x'\n" {
 		t.Fatalf("plain .env %q", got)
 	}
@@ -134,7 +143,7 @@ func TestVarsScripts(t *testing.T) {
 
 	// Reading a target with nothing yet creates nothing.
 	empty := filepath.Join(root, "new")
-	if out := runVarsScript(t, VarsReadScript(&Target{Path: "new"}, nil), ""); out != empty+"/shared/.env\n" {
+	if out := runVarsScript(t, root, VarsReadScript(&Target{Path: "new"}, nil), ""); out != empty+"/shared/.env\n" {
 		t.Fatalf("read empty %q", out)
 	}
 	if _, err := os.Stat(empty); err == nil {
@@ -144,13 +153,13 @@ func TestVarsScripts(t *testing.T) {
 	// A level: the project's .env under the release root, shared.
 	level := &Level{Name: "project", Dir: "app", Link: "project.env"}
 	tl := &Target{Name: "prod", Path: "app/prod"}
-	if out := runVarsScript(t, VarsSetScript(tl, level), "SHARED='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", ".env") {
+	if out := runVarsScript(t, root, VarsSetScript(tl, level), "SHARED='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", ".env") {
 		t.Fatalf("level set printed %q", out)
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, "app", ".env")); string(got) != "SHARED='1'\n" {
 		t.Fatalf("level .env %q", got)
 	}
-	if out := runVarsScript(t, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
+	if out := runVarsScript(t, root, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
 		t.Fatalf("own .env printed %q", out)
 	}
 
@@ -158,11 +167,11 @@ func TestVarsScripts(t *testing.T) {
 	// their secrets: (with and without instances).
 	write(t, filepath.Join(root, "app", "prod", "current", ".devopsy", "config.yaml"), "secrets: [A]\n")
 	write(t, filepath.Join(root, "app", "site", "dev", "current", ".devopsy", "config.yaml"), "secrets: [B]\n")
-	read, err = ReadVarsOutput(runVarsScript(t, VarsReadScript(tl, level), ""))
+	read, err = ReadVarsOutput(runVarsScript(t, root, VarsReadScript(tl, level), ""))
 	if err != nil || read.Content != "SHARED='1'\n" || strings.Join(read.Configs, "") != "secrets: [A]\nsecrets: [B]\n" {
 		t.Fatalf("level read: %+v (%v)", read, err)
 	}
-	read, err = ReadVarsOutput(runVarsScript(t, VarsReadScript(tl, nil), ""))
+	read, err = ReadVarsOutput(runVarsScript(t, root, VarsReadScript(tl, nil), ""))
 	if err != nil || strings.Join(read.Configs, "") != "secrets: [A]\n" {
 		t.Fatalf("own read: %+v (%v)", read, err)
 	}
@@ -175,6 +184,7 @@ func TestVarsScripts(t *testing.T) {
 // others on their way into place: before, they sat 644 in the
 // temporary files until the chmod.
 func TestInheritWriteMode(t *testing.T) {
+	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "dev", Host: "h", Path: "app/dev"}
 	in := filepath.Join(root, "app", "dev", "shared", InheritFile+".tmp.in")
@@ -202,6 +212,7 @@ func TestInheritWriteMode(t *testing.T) {
 // empty or cut (cat into it truncated it first), and the file keeps its
 // mode, and a link stays a link.
 func TestVarsEditInPlace(t *testing.T) {
+	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod"}
 	shared := filepath.Join(root, "app", "prod", "shared")

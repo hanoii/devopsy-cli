@@ -18,6 +18,7 @@ import (
 // armed one signals the script; beats keep it quiet, and never reach the
 // answer.
 func TestWatchHeartbeat(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	armed := filepath.Join(dir, "armed")
 	answer := filepath.Join(dir, "answer")
@@ -132,6 +133,7 @@ func TestWatchHeartbeat(t *testing.T) {
 
 // The upload's guard passes data through and fails on a silence.
 func TestStdinGuard(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command(binary, "--stdin-guard")
 	cmd.Stdin = strings.NewReader("data\n")
 	if out, err := cmd.Output(); err != nil || string(out) != "data\n" {
@@ -143,6 +145,7 @@ func TestStdinGuard(t *testing.T) {
 // session's group is the login shell's: the watcher signals all of it,
 // what the script runs included.
 func TestWatchLoginShellGroup(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/proc/self/stat"); err != nil {
 		t.Skip("needs /proc (Linux, as servers)")
 	}
@@ -191,6 +194,7 @@ func alive(pid int) bool {
 
 // A command name holding ") " never shifts the fields after it.
 func TestStatParent(t *testing.T) {
+	t.Parallel()
 	for stat, want := range map[string]int{
 		"4242 (sh) S 77 4242 4242 0 -1":       77,
 		"4242 (a) b) S 77 4242 4242 0 -1":     77,

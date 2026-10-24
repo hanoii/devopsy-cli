@@ -2351,15 +2351,33 @@ its test").
 - **Unit before e2e** (Principles): a scenario a fake can reproduce is
   seconds there, minutes in `e2e/`.
 
-Unit tests, measured 2026-10-24 on macOS (10 CPUs): `cmd/devopsy` 350
-s (108 tests; the 26 over 5 s are 56% of it), `internal/remote` 93 s
-(`TestWaitBeatWithoutWatcher` 21 s: two beats past the longest quiet
-time, by design), the rest under 15 s, at 40% of the CPUs: no test
-calls `t.Parallel`. Most could (each runs the binary or a script
-against fakes in its own `t.TempDir`), which is the next lever; what
-stops one is `t.Setenv` (one in `cmd/devopsy`, 34 in `internal/remote`),
-which Go refuses in a parallel test: set the command's `Env` instead.
-To see where the time goes:
+Unit tests run in parallel: `t.Parallel()` first in every test, but
+those that set the environment (`t.Setenv`, which Go refuses in a
+parallel test) or a package's globals (`ComposeConfig`,
+`ComposeCommands`, a fake's state like `baseAsked`), which Go runs
+first, alone. A new test is parallel; rather than a global, pass what
+it changes (the command's `Env`, a root as an argument, as
+`TestVarsScripts` does).
+
+- **What parallel tests share is guarded or never changes:** a fake
+  several call at once takes a mutex (`baseMu`); fakes nothing changes
+  are written once per test binary (`fakeBin`, `varsBin`). Why once:
+  macOS takes seconds, under the parallel tests, for the first exec of
+  each new script. Fakes a test changes stay its own (the sync and
+  import setups').
+- **Two kinds of waits:** one for what the test then acts on (a hook
+  started, a lock waited for) is bounded by `startWait`, a minute: it
+  only decides how soon a test that never gets there fails, and a
+  loaded machine needs it (the holder tests' 10 s ran out on every
+  macOS run). One for what the test checks (the import's end after a
+  signal) keeps its own bound, never `startWait`: that bound is the
+  behavior.
+
+Measured 2026-10-24: on Linux with 4 CPUs, as CI's runners, 200 s
+serial to 50 s; on macOS (10 CPUs) 410 s to 145 s, most of the rest
+the first exec of each test's own fakes.
+`TestWaitBeatWithoutWatcher` takes 20 s by design: two beats past the
+longest quiet time. To see where the time goes:
 
 ```sh
 go test -count=1 -v ./cmd/devopsy | grep -- '^--- ' | sort -t'(' -k2 -rn | head -20

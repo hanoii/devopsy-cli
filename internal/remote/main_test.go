@@ -6,12 +6,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // realDevopsy is this checkout's devopsy, built once: release scripts call
 // it for their images (--images), whose rules the tests check through
 // the scripts too.
 var realDevopsy string
+
+// startWait bounds a test's wait for what it then acts on (a script
+// waiting for a lock, an image pulled): it only decides how soon a test
+// that never gets there fails, so it is long, for a loaded machine (the
+// tests run in parallel, and macOS takes seconds then for the first
+// exec of each fake script). What a test checks keeps its own bound.
+const startWait = time.Minute
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "devopsy-remote-test")

@@ -20,6 +20,7 @@ import (
 )
 
 func TestVersions(t *testing.T) {
+	t.Parallel()
 	for v, want := range map[string]bool{"0.9.0": true, "v0.9.0": true, "dev": false, "v0.9.0-2-g1a2b3c4-dirty": false, "1a2b3c4": false} {
 		if IsRelease(v) != want {
 			t.Errorf("IsRelease(%q) != %v", v, want)
@@ -72,6 +73,7 @@ func fakeReleases(t *testing.T, bin []byte, corrupt bool) *httptest.Server {
 }
 
 func TestLatestDownloadReplace(t *testing.T) {
+	t.Parallel()
 	srv := fakeReleases(t, []byte("new binary"), false)
 	ctx := context.Background()
 	tag, err := Latest(ctx, srv.URL)
@@ -106,6 +108,7 @@ func TestLatestDownloadReplace(t *testing.T) {
 }
 
 func TestDownloadChecksumMismatch(t *testing.T) {
+	t.Parallel()
 	srv := fakeReleases(t, []byte("tampered"), true)
 	if _, err := Download(context.Background(), srv.URL, "v1.2.3"); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("want a checksum mismatch: %v", err)
@@ -113,6 +116,7 @@ func TestDownloadChecksumMismatch(t *testing.T) {
 }
 
 func TestPrepareReadOnlyDir(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root writes anywhere")
 	}
@@ -125,6 +129,7 @@ func TestPrepareReadOnlyDir(t *testing.T) {
 }
 
 func TestCached(t *testing.T) {
+	t.Parallel()
 	file := filepath.Join(t.TempDir(), "devopsy", "latest-release")
 	now := time.Now()
 	if tag, stale := Cached(file, now); tag != "" || !stale {

@@ -9,6 +9,7 @@ import (
 )
 
 func TestAuthorizedKeys(t *testing.T) {
+	t.Parallel()
 	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuaxIKUCdcH/5b0njntAmDSby4e2SdCbfB+x/kDNl8g sample@test"
 	const fp = "SHA256:n/tqoqzvcpkAa4l/m4VLZA4qrzyW77jYa7MCEQpfF/Q"
 	k, err := ParseAuthorizedKey(key)
@@ -38,6 +39,7 @@ func TestAuthorizedKeys(t *testing.T) {
 
 // A commented-out key is no key: removing the last real one is refused.
 func TestKeysRemoveLast(t *testing.T) {
+	t.Parallel()
 	home, bin := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	if err := os.Chmod(filepath.Join(bin, "flock"), 0o755); err != nil {
