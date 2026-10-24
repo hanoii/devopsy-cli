@@ -117,7 +117,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 	s := newImportSetup(t)
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, wait, "the import's hook", errs.String)
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
 	if m := s.mark(); !m.IsImport() || m.From != "db" || !strings.Contains(s.record(), "stop app\n") || !strings.Contains(s.record(), "writer ") {
 		t.Errorf("while it loads: mark %+v, record %q", m, s.record())
 	}
@@ -235,7 +235,7 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	// record names what it stopped, no mark; the next import restores it.
 	up := filepath.Join(s.tmp, "up")
 	cmd, errs := s.start([]string{"FAKE_UP_WAIT=" + up}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, up, "the import's up", errs.String)
+	waitFile(t, up, "the import's up", startWait, errs.String)
 	pid, err := strconv.Atoi(strings.TrimSpace(readString(up)))
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +261,7 @@ func TestImportSession(t *testing.T) {
 	// Interrupted while the server stops app, before the first write.
 	stop := filepath.Join(s.tmp, "stop")
 	cmd, errs := s.start([]string{"FAKE_STOP_WAIT=" + stop}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, stop, "the import's stop", errs.String)
+	waitFile(t, stop, "the import's stop", startWait, errs.String)
 	_ = cmd.Process.Signal(syscall.SIGINT)
 	time.Sleep(300 * time.Millisecond)
 	write(t, stop+".go", "", 0o644)
@@ -275,7 +275,7 @@ func TestImportSession(t *testing.T) {
 	// Interrupted during the load: it goes on, and completes.
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs = s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, wait, "the import's hook", errs.String)
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
 	_ = cmd.Process.Signal(syscall.SIGINT)
 	time.Sleep(300 * time.Millisecond)
 	write(t, wait+".go", "", 0o644)
@@ -292,7 +292,7 @@ func TestImportSession(t *testing.T) {
 	// devopsy killed during the load: the session's end interrupts
 	// nothing on the server.
 	cmd, errs = s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, wait, "the import's hook", errs.String)
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 	write(t, wait+".go", "", 0o644)
@@ -315,7 +315,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	s := newImportSetup(t)
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, wait, "the import's hook", errs.String)
+	waitFile(t, wait, "the import's hook", startWait, errs.String)
 	hook, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
 	defer func() { _ = syscall.Kill(-hook, syscall.SIGKILL) }()
@@ -368,7 +368,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	// stopped again and never started by what resolves it.
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_DB_DOWN=1\n", 0o644)
 	cmd, errs = s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
-	waitFile(t, wait, "the second import's hook", errs.String)
+	waitFile(t, wait, "the second import's hook", startWait, errs.String)
 	hook, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
 	defer func() { _ = syscall.Kill(-hook, syscall.SIGKILL) }()
@@ -481,7 +481,7 @@ func TestImportCutWhileWaitingForLock(t *testing.T) {
 	write(t, filepath.Join(filepath.Dir(s.root), "bin", "flock"), "#!/bin/sh\necho \"flock $*\" >> \"$DOCKER_LOG\"\nif [ -e \"$FAKE_LOCK_BUSY\" ]; then\n  case \"$*\" in\n    '-n 9') exit 1 ;;\n    '-w 600 9') while [ -e \"$FAKE_LOCK_BUSY\" ]; do sleep 0.1; done ;;\n  esac\nfi\nexit 0\n", 0o755)
 	cmd, errs := s.start([]string{"FAKE_LOCK_BUSY=" + busy}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	for start := time.Now(); !strings.Contains(errs.String(), "waiting for the release running on"); time.Sleep(50 * time.Millisecond) {
-		if time.Since(start) > 10*time.Second {
+		if time.Since(start) > startWait {
 			t.Fatalf("the import never waited for the lock:\n%s", errs)
 		}
 	}
@@ -814,7 +814,7 @@ func TestRestoreSurvivesCtrlC(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFile(t, start, "the restore's start", errs.String)
+	waitFile(t, start, "the restore's start", startWait, errs.String)
 	// As a terminal does: the whole foreground group.
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 	time.Sleep(300 * time.Millisecond)
@@ -1055,7 +1055,7 @@ func TestImportExportImagesImageLock(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	for start := time.Now(); !strings.Contains(readString(errFile), "waiting for the server's images"); time.Sleep(50 * time.Millisecond) {
-		if time.Since(start) > 20*time.Second {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the import never waited for the image lock:\n%s", readString(errFile))
 		}

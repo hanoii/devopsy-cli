@@ -1013,8 +1013,8 @@ exit 0
 	_, _ = w.WriteString("go\n")
 	done := make(chan error, 1)
 	go func() { done <- holder.Wait() }()
-	for i := 0; !fileExists(filepath.Join(root, "waiting")); i++ {
-		if i > 400 {
+	for start := time.Now(); !fileExists(filepath.Join(root, "waiting")); {
+		if time.Since(start) > startWait {
 			_ = holder.Process.Kill()
 			t.Fatalf("the holder never waited for the lock:\n%s", out.String())
 		}
@@ -1101,8 +1101,8 @@ exec "$(dirname "$0")/docker.fake" "$@"
 	r.Close()
 	done := make(chan error, 1)
 	go func() { done <- holder.Wait() }()
-	for i := 0; !fileExists(filepath.Join(root, "pulling")); i++ {
-		if i > 400 {
+	for start := time.Now(); !fileExists(filepath.Join(root, "pulling")); {
+		if time.Since(start) > startWait {
 			_ = holder.Process.Kill()
 			w.Close()
 			t.Fatalf("the holder never pulled the parent's image:\n%s", out.String())

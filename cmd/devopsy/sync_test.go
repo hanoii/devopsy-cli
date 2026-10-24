@@ -1366,11 +1366,11 @@ func TestSyncInterrupt(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the export never started:\n%s", readString(outFile.Name()))
 		}
@@ -1429,11 +1429,11 @@ func TestSyncInterruptPrepare(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the prepare never started:\n%s", readString(outFile.Name()))
 		}
@@ -1749,11 +1749,11 @@ func TestSyncInterruptCopy(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; ; i++ {
+	for start := time.Now(); ; {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if i > 200 {
+		if time.Since(start) > startWait {
 			_ = cmd.Process.Kill()
 			t.Fatalf("the copy never started:\n%s\n%s", readString(outFile.Name()), readString(s.log))
 		}
@@ -2280,10 +2280,10 @@ func TestExportImport(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFile(t, exportStarted, "the export", func() string { return eerr.String() })
+	waitFile(t, exportStarted, "the export", startWait, func() string { return eerr.String() })
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
-	waitFile(t, exportStopped, "the export's end", func() string { return eerr.String() })
+	waitFile(t, exportStopped, "the export's end", 10*time.Second, func() string { return eerr.String() })
 	if docker, _ := s.logs(); cmd.ProcessState.ExitCode() == 0 || !strings.Contains(eerr.String(), "export db: interrupted: what was written is incomplete") || !strings.Contains(docker, " start db app") {
 		t.Errorf("interrupted export (%d):\n%s\n%s", cmd.ProcessState.ExitCode(), eerr.String(), docker)
 	}
@@ -2558,14 +2558,15 @@ func TestTarLinks(t *testing.T) {
 	}
 }
 
-// waitFile waits for a file to exist, up to 10 seconds.
-func waitFile(t *testing.T, path, what string, out func() string) {
+// waitFile waits for a file to exist, up to within: startWait for what
+// the test then acts on, the behavior's own bound for what it checks.
+func waitFile(t *testing.T, path, what string, within time.Duration, out func() string) {
 	t.Helper()
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		if time.Since(start) > 10*time.Second {
+		if time.Since(start) > within {
 			t.Fatalf("%s never happened:\n%s", what, out())
 		}
 	}
@@ -2710,10 +2711,10 @@ func TestSyncImportCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := func() string { return readString(outFile.Name()) + readString(s.log) }
-	waitFile(t, started, "the import", out)
+	waitFile(t, started, "the import", startWait, out)
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
-	waitFile(t, stopped, "the import's end", out)
+	waitFile(t, stopped, "the import's end", 10*time.Second, out)
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
 		if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", ".devopsy-sync.stream.db")); err != nil {
 			break
@@ -2926,11 +2927,11 @@ func TestReleaseInterrupt(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; ; i++ {
+		for start := time.Now(); ; {
 			if _, err := os.Stat(started); err == nil {
 				break
 			}
-			if i > 300 {
+			if time.Since(start) > startWait {
 				_ = cmd.Process.Kill()
 				t.Fatalf("never started:\n%s", readString(outFile.Name()))
 			}

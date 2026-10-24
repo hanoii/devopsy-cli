@@ -18,6 +18,13 @@ import (
 
 var binary string
 
+// startWait bounds a test's wait for what it then acts on (a hook
+// started, a lock waited for): it only decides how soon a test that
+// never gets there fails, so it is long, for a loaded machine (the
+// tests run in parallel, and macOS takes seconds then for the first
+// exec of each fake script). What a test checks keeps its own bound.
+const startWait = time.Minute
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "devopsy-test")
 	if err != nil {

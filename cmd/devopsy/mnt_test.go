@@ -183,7 +183,7 @@ func TestMntOwnersSignals(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitFile(t, wait, "the owners' step", out.String)
+	waitFile(t, wait, "the owners' step", startWait, out.String)
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGPIPE} {
 		_ = cmd.Process.Signal(sig)
 	}
