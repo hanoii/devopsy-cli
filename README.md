@@ -849,7 +849,8 @@ never makes one there, so it is the host's root's):
   symbolic link (an entry shared between worktrees): it is left as it
   is, and Docker mounts what it points to. The labels come from the project's
   compose files (`compose.yaml` and its override), never from one a
-  command adds with `-f`. In a release on a server these commands do
+  command adds with `-f`, nor `COMPOSE_FILE`'s, which compose ignores
+  for every devopsy command, since devopsy names its files with `-f`. In a release on a server these commands do
   none of it: each release's switch did.
 
 Two services whose owners differ on one entry are refused; one without
