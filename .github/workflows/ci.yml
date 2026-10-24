@@ -19,10 +19,12 @@ jobs:
       # The completion scripts are tested in each shell found (bash is there).
       - run: sudo apt-get update -q && sudo apt-get install -yq zsh fish
       - run: go vet ./...
-      - run: go test -count=1 ./...
-      # The race detector over the packages that test in process; the
-      # scripts' timing tests (cmd/devopsy, internal/remote) fail under
-      # its slowdown, not on a race.
+      # Every package once: the scripts' timing tests (cmd/devopsy,
+      # internal/remote) fail under the race detector's slowdown, not on
+      # a race, so those two run without it; the rest, testing in
+      # process, only with it (the same tests, nothing builds otherwise
+      # under -race).
+      - run: go test -count=1 ./cmd/devopsy ./internal/remote
       - run: go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
       - run: shellcheck -s sh install.sh
   # The operator's side runs on macOS: the same tests there (bash 3.2 and

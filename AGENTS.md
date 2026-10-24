@@ -2288,7 +2288,8 @@ reruns fast:
 ```sh
 docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
   -v devopsy-gocache:/root/.cache -v devopsy-gomod:/go/pkg/mod \
-  golang:1.26-trixie sh -c 'go vet ./... && go test -count=1 ./... &&
+  golang:1.26-trixie sh -c 'go vet ./... &&
+  go test -count=1 ./cmd/devopsy ./internal/remote &&
   go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)'
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
@@ -2407,9 +2408,10 @@ tests run on lanes instead (below). Writing a test:
   parallel load goes serial (`// Not parallel: it checks <the
   latency>`), so it runs alone.
 - **The race detector** runs in CI over the packages that test in
-  process (all but `cmd/devopsy`, `internal/remote` and `e2e`; Checks):
-  a global two tests share shows there, a helper's included, which
-  the guard cannot see. Under it the script tests of the other two
+  process (all but `cmd/devopsy`, `internal/remote` and `e2e`; Checks),
+  which run only under it (the same tests: nothing builds otherwise
+  with `-race`; keep it so): a global two tests share shows there, a
+  helper's included, which the guard cannot see. Under it the script tests of the other two
   fail on time (several times slower), not on a race; run it there
   for a change to their in-process code and read only its race
   reports.
