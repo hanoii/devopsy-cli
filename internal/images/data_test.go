@@ -2068,3 +2068,33 @@ func TestImportRecordWithoutDigest(t *testing.T) {
 		}
 	}
 }
+
+// An export's record lists its image's digests as Docker does, one per
+// repository the image was pulled from or pushed to, and on Docker's
+// classic store each repository's manifest has a digest of its own (a
+// mirror pushed to separately): the first may be another repository's.
+// An import holds the service in its own repository (ownHold), so it
+// takes the digest in that repository, as localHold and ran.hold do; the
+// first digest tried under the own repository names nothing there, and
+// the import is refused for an image the registry serves.
+func TestImportHoldPrefersOwnRepositoryDigest(t *testing.T) {
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	stage := newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	data := "image\tdatabase\tmariadb:11.8\tI2\talpha.example/mariadb@sha256:mirror mariadb@I2\n"
+	rel := stage.e.rel(stage.cur)
+	err := stage.e.set.ImportCheck(rel, data, "database")
+	if err == nil {
+		err = stage.e.set.ImportDone(stage.base(), rel, data)
+	}
+	if err != nil {
+		t.Fatalf("an import of mariadb@I2, which the registry serves, listed after a mirror's digest (%v)\n%s", err, out.String())
+	}
+	if hold := holdsIn(rel)["database"]; hold != "mariadb@I2" {
+		t.Errorf("held on %q, want mariadb@I2\n%s", hold, out.String())
+	}
+}
