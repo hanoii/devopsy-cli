@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sim is one environment as its activations drive it: releases fetch
@@ -1992,18 +1993,24 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	stage.release(false, db118)
 	d.publish("mariadb:11.8", "I2")
 	prod.release(false, db118)
+	// prod's history two lines, so the import's window ends with a run's.
+	d.publish("mariadb:11.8", "I3")
+	prod.release(false, db118)
 	if err := importInto(t, prod, stage, false); err != nil {
 		t.Fatal(err)
 	}
 	before := strings.Join(stage.history("database"), " ")
-	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database"); err != nil || strings.Join(stage.history("database"), " ") != before {
+	if !strings.HasSuffix(before, "ran:I3") {
+		t.Fatalf("the import's history: %s", before)
+	}
+	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(stage.history("database"), " ") != before {
 		t.Errorf("--resolved after a held import (%v): history %v, was %s", err, stage.history("database"), before)
 	}
+	// Held as every release holds it, its newest line a run's: over.
 	dev := newSim(t, d, "app-dev", &out)
 	dev.release(false, db118)
-	os.Remove(filepath.Join(dev.e.rel(dev.cur), ComposeFile))
-	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database"); err != nil || strings.Join(dev.history("database"), " ") != "ran:I2 import:I2" {
-		t.Errorf("--resolved with nothing held (%v): history %v", err, dev.history("database"))
+	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(dev.history("database"), " ") != "ran:I3 import:I3" {
+		t.Errorf("--resolved of a release's hold (%v): history %v", err, dev.history("database"))
 	}
 }
 
@@ -2115,7 +2122,7 @@ func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
 		t.Fatalf("the release holds nothing: %v", holdsIn(dev.e.rel(dev.cur)))
 	}
 	// An import cut after its first write, nothing held, then --resolved.
-	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database"); err != nil || strings.Join(dev.history("database"), " ") != "ran:I1 import:I1" {
+	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(dev.history("database"), " ") != "ran:I1 import:I1" {
 		t.Errorf("--resolved after an import that held nothing (%v): history %v, want ran:I1 import:I1", err, dev.history("database"))
 	}
 }

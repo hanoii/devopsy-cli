@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -180,6 +181,17 @@ func (s *Set) ExportData(base, rel, service string) string {
 	return fmt.Sprintf("image\t%s\t%s\t%s\t%s\n", service, c.Ref, img.ID, strings.Join(img.Digests, " "))
 }
 
+// hasDigest says whether digests, space separated, has a registry digest
+// (<repository>@sha256:...), not only names.
+func hasDigest(digests string) bool {
+	for _, d := range strings.Fields(digests) {
+		if digestOf(d) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // DataFor is the part of an export's data that is service's: "" when it
 // has no complete image line for it (another service's export, none
 // recorded, a line without its reference, id or a digest, which nothing
@@ -191,7 +203,7 @@ func DataFor(data, service string) string {
 		kind, rest, _ := strings.Cut(line, "\t")
 		f := strings.Split(rest, "\t")
 		switch {
-		case kind == "image" && f[0] == service && len(f) > 3 && f[1] != "" && f[2] != "" && len(strings.Fields(f[3])) > 0:
+		case kind == "image" && f[0] == service && len(f) > 3 && f[1] != "" && f[2] != "" && hasDigest(f[3]):
 			found = true
 			b.WriteString(line)
 		case kind == "ran" && len(f) > 1 && f[1] == service:
@@ -225,8 +237,14 @@ func parseParentData(data string) map[string]*parentImage {
 				continue
 			}
 			p := &parentImage{Service: f[0], Ref: f[1], Image: Image{ID: f[2]}}
+			// Registry digests only: a name in their place (a record made
+			// by hand) is nothing to hold by.
 			if len(f) > 3 {
-				p.Image.Digests = strings.Fields(f[3])
+				for _, d := range strings.Fields(f[3]) {
+					if digestOf(d) != "" {
+						p.Image.Digests = append(p.Image.Digests, d)
+					}
+				}
 			}
 			ps[p.Service] = p
 		case "ran":
@@ -449,11 +467,22 @@ func otherPlatform(err error) bool {
 // evil.example/x's) never makes the service pull or run that one: under
 // e's repository the registry serves only e's images.
 func (s *Set) ownHold(e entry, p *parentImage) string {
-	var holds []string
+	// The digests in e's own repository first: on Docker's classic store
+	// each repository's manifest has its own (an image pushed to a mirror
+	// too), and the registry serves e's repository only by its own.
+	var holds, others []string
 	for _, d := range p.Image.Digests {
-		if digestOf(d) != "" {
-			holds = appendNew(holds, repoKey(e.Ref)+"@"+digestOf(d))
+		if digestOf(d) == "" {
+			continue
 		}
+		if repoKey(d) == repoKey(e.Ref) {
+			holds = appendNew(holds, repoKey(e.Ref)+"@"+digestOf(d))
+		} else {
+			others = appendNew(others, repoKey(e.Ref)+"@"+digestOf(d))
+		}
+	}
+	for _, o := range others {
+		holds = appendNew(holds, o)
 	}
 	for _, h := range holds {
 		if _, err := s.Docker.Inspect(h); err == nil {
@@ -660,20 +689,17 @@ func (s *Set) Imported(base, rel, service string) error {
 	return h.write(base)
 }
 
-// Resolved is Imported for --resolved: nothing when the history's newest
-// image for service is the one rel holds it on already (an import held
-// it on its export's and took the export's history, and only what came
-// after failed: the data is complete, and starting over would forget
-// what wrote it), else Imported.
-func (s *Set) Resolved(base, rel, service string) error {
-	if hold := holdsIn(rel)[service]; hold != "" {
-		if last, ok := readHistory(base).last(service); ok {
-			for _, d := range last.Digests {
-				if digestOf(d) != "" && digestOf(d) == digestOf(hold) {
-					return nil
-				}
-			}
-		}
+// Resolved is Imported for --resolved, since the time of the import's
+// mark: nothing when the history's window starts with an import line
+// written since (the import held the service on its export's image and
+// took the export's history, and only what came after failed: the data
+// is complete, and starting over would forget what wrote it), else
+// Imported, as before. Neither the hold nor the newest line tells: every
+// release holds its data service, and an export's window ends with its
+// own lines.
+func (s *Set) Resolved(base, rel, service string, since time.Time) error {
+	if w := readHistory(base).window(service); len(w) > 0 && w[0].How == Imported && !since.IsZero() && w[0].Time >= since.Unix() {
+		return nil
 	}
 	return s.Imported(base, rel, service)
 }

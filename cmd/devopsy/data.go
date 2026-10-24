@@ -1144,7 +1144,7 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
 	if imgs == nil {
-		importedImages(cwd, base, name, services, false)
+		importedImages(cwd, base, name, services, time.Time{})
 	}
 	clearImportMark(base, name)
 	return code
@@ -1183,7 +1183,7 @@ func recreateRunning(cwd, rel, name string) error {
 // imported (mnt), or accepted (--resolved): they came from elsewhere. A
 // stream's import goes through the service's own image, which keeps its
 // history.
-func importedImages(cwd, base, name string, services []cli.SyncService, resolved bool) {
+func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) {
 	for _, s := range services {
 		if s.Name != name || s.Transfer != cli.DataMnt {
 			continue
@@ -1191,8 +1191,8 @@ func importedImages(cwd, base, name string, services []cli.SyncService, resolved
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
 		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 		record := set.Imported
-		if resolved {
-			record = set.Resolved
+		if !resolvedSince.IsZero() {
+			record = func(base, rel, name string) error { return set.Resolved(base, rel, name, resolvedSince) }
 		}
 		if err := record(base, rel, name); err != nil {
 			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
@@ -1309,7 +1309,11 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	importedImages(cwd, base, name, services, true)
+	since := time.Time{}
+	if m := readMark(base); m != nil {
+		since, _ = time.Parse(time.DateTime, m.Since)
+	}
+	importedImages(cwd, base, name, services, since)
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0

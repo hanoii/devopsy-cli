@@ -1623,14 +1623,18 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   once the data is in (`ImportDone`, first line `import`) and makes it
   again, stopped (`restoreServices`' recreate) or running
   (`recreateRunning`, before what the import stopped starts on it).
-  `--resolved` recreates the same way and keeps a history whose newest
-  image is the hold (`Resolved`): an import whose data completed and
-  held its service but failed after left both (review of 2026-10-24:
-  the old container started on the new data, its history over from the
-  old image). Only in the service's own repository (decided
+  `--resolved` recreates the same way and keeps the history when its
+  window starts with an `import` line written since the import's mark
+  (`Resolved`): an import whose data completed and held its service but
+  failed after left both (review of 2026-10-24: the old container
+  started on the new data, its history over from the old image).
+  Neither the hold nor the newest line tells (second round: every
+  release holds its data service, and an export's window ends with its
+  own lines), so otherwise it starts over, as before. Only in the service's own repository (decided
   2026-10-24): the header is whoever made the tar's, so an image from
   another repository is a name the data never ran, never something to
-  hold, and the hold is always `<own repository>@<digest>` (`ownHold`,
+  hold, and the hold is always `<own repository>@<digest>`, the record's
+  digest in that repository first (`ownHold`,
   never `localHold`'s fallback to the record's repository: review of
   2026-10-24, a reference of the service's repository with another's
   digest pulled and ran that one). The check and the take-over run
@@ -1641,8 +1645,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   as `img` gets them: without the record, the names the take-over gave
   up leaked (review of 2026-10-24). A local export records only a
   pulled data service (`List`: a built one's containerd digest is a
-  local build's). A record line without its reference, id or a digest
-  counts as none (`DataFor`). A tar without it, a local import and
+  local build's). A record line without its reference, id or a registry
+  digest (`<repository>@sha256:...`, not a name) counts as none
+  (`DataFor`), and the record's parser keeps only such digests. A tar without it, a local import and
   `--resolved` start the history over (`Imported`). A named feature, `export-images`, found by
   `--export` and `--import`: an older server would export without it and
   import unchecked.
