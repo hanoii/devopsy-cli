@@ -2256,9 +2256,27 @@ than devopsy-server's bash (it found the watcher signalling only the
 script there). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
+Lanes run the tests at once (`E2E_LANES`, default 4; `runLanes`): each
+a network, an operator and a server (a second one when a test asks),
+each test a process of its own on the first lane free, the slowest
+first by its last time (`timesFile`, in the user's cache directory).
+Why processes, not `t.Parallel`: the tests keep their globals (`op`,
+`srv`, `server`) and everything they change (iptables, `tc`, the login
+shell, Ctrl-C) belongs to their lane's containers, so no test needs to
+know about lanes; within a lane they run one at a time, as before, and
+`resetLane` undoes between them what a test may leave (decided
+2026-10-24: a Ctrl-C reached an earlier test's devopsy once the order
+changed). `E2E_LANES=1` is the one process of before. Servers pull
+through a mirror of Docker Hub (`startMirror`, the volume
+`devopsy-e2e-mirror` its cache), so four lanes cost Docker Hub no more
+than one. Measured on OrbStack (10 CPUs): 40 minutes serial, 11 with
+four lanes. CI runs two jobs of two lanes, half the tests each
+(`E2E_SHARD`, round robin by name).
+
 ```sh
 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # E2E_KEEP=1 keeps the containers
 E2E_BEAT=5 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # the real timeouts
+E2E_LANES=1 go test -tags e2e -count=1 -v -timeout 60m ./e2e   # one after another
 ```
 
 What only a real setup shows (Traefik, certificates, the templates) is

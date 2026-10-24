@@ -30,7 +30,6 @@ func twoReleases(t *testing.T, dir, name string) (string, string) {
 	t.Helper()
 	var ids []string
 	for i := 0; i < 2; i++ {
-		op(t, dir, "sleep 1.1")
 		if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 			t.Fatalf("release (%d):\n%s", code, out)
 		}

@@ -43,7 +43,6 @@ func TestOlderServer(t *testing.T) {
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})
 	for i := 0; i < 2; i++ {
-		op(t, dir, "sleep 1.1")
 		if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 			t.Fatalf("release (%d):\n%s", code, out)
 		}

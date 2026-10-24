@@ -26,8 +26,6 @@ func TestRelease(t *testing.T) {
 		t.Errorf("--status (%d):\n%s", code, out)
 	}
 
-	// Release ids are seconds.
-	op(t, dir, "sleep 1.1")
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("second release (%d):\n%s", code, out)
 	}

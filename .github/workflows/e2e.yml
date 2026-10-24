@@ -20,7 +20,13 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      # Two jobs, each running half the tests (E2E_SHARD) on two lanes of
+      # servers at once (E2E_LANES): a runner's four CPUs.
+      matrix:
+        shard: [1, 2]
     steps:
       - id: last
         if: github.event_name == 'schedule'
@@ -38,7 +44,16 @@ jobs:
         if: steps.last.outputs.skip != '1'
         with:
           go-version-file: go.mod
+      # The tests' last times, which order each job's tests slowest first.
+      - uses: actions/cache@v6
+        if: steps.last.outputs.skip != '1'
+        with:
+          path: ~/.cache/devopsy-e2e
+          key: e2e-times-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: e2e-times-${{ matrix.shard }}-
       - if: steps.last.outputs.skip != '1'
         env:
           E2E_BEAT: ${{ inputs.beat || '1' }}
-        run: go test -tags e2e -count=1 -v -timeout 40m ./e2e
+          E2E_LANES: "2"
+          E2E_SHARD: ${{ matrix.shard }}/2
+        run: go test -tags e2e -count=1 -v -timeout 35m ./e2e

@@ -33,7 +33,7 @@ func TestUploadDropSilently(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	first, _ := srv(t, "readlink upguard/prod/current")
-	op(t, dir, "head -c 20000000 /dev/urandom >.devopsy/blob && sleep 1.1")
+	op(t, dir, "head -c 20000000 /dev/urandom >.devopsy/blob")
 	throttle(t, "2mbit")
 	background(t, dir, fast()+" devopsy @server:prod --release", "/tmp/upguard.log")
 	eventually(t, time.Minute, "the upload under way", func() bool {

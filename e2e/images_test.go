@@ -73,7 +73,7 @@ func TestRollbackKeepsData(t *testing.T) {
 	_, db1 := container(t, srv, "imgrb-prod", "database")
 	// The tag moves; the next release names another app.
 	pushAs(t, "busybox:1.37", "imgrb-db:x")
-	op(t, dir, "sed -i 's/APP_TAG: \"1\"/APP_TAG: \"2\"/' .devopsy/config.yaml && sleep 1.1")
+	op(t, dir, "sed -i 's/APP_TAG: \"1\"/APP_TAG: \"2\"/' .devopsy/config.yaml")
 	out, code := op(t, dir, "devopsy @server:prod --release")
 	dbID, db2 := container(t, srv, "imgrb-prod", "database")
 	if code != 0 || db2 == db1 || !strings.Contains(out, "images that changed:") {

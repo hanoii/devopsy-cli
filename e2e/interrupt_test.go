@@ -9,10 +9,10 @@ import (
 )
 
 // ctrlC sends SIGINT to the foreground group of devopsy's terminal, as
-// a Ctrl-C there does.
+// a Ctrl-C there does: the newest devopsy @server on the operator's.
 func ctrlC(t *testing.T) {
 	t.Helper()
-	if out, code := op(t, "/", `pid=$(pgrep -f '^devopsy @server' | head -n 1) && kill -INT -$(ps -o pgid= -p "$pid" | tr -d ' ')`); code != 0 {
+	if out, code := op(t, "/", `pid=$(pgrep -n -f '^devopsy @server') && kill -INT -$(ps -o pgid= -p "$pid" | tr -d ' ')`); code != 0 {
 		t.Fatalf("Ctrl-C (%d): %s", code, out)
 	}
 }
@@ -28,7 +28,6 @@ func TestInterrupt(t *testing.T) {
 	// Before the switch: cancelled.
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing wait-run running") })
-	op(t, dir, "sleep 1.1")
 	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/before")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	ctrlC(t)
@@ -43,7 +42,6 @@ func TestInterrupt(t *testing.T) {
 
 	// After it: the release goes on.
 	srv(t, "rm -f running; touch wait-run")
-	op(t, dir, "sleep 1.1")
 	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/after")
 	eventually(t, time.Minute, "the run step waiting", func() bool { return exists(t, "running") })
 	ctrlC(t)
@@ -85,7 +83,6 @@ func TestInterruptBashLogin(t *testing.T) {
 	}
 
 	srv(t, "rm -f preparing; touch wait-prepare")
-	op(t, dir, "sleep 1.1")
 	inTerminal(t, dir, "devopsy @server:prod --release", "/tmp/bashlogin")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	ctrlC(t)
@@ -96,7 +93,6 @@ func TestInterruptBashLogin(t *testing.T) {
 	gone("Ctrl-C")
 
 	srv(t, "rm -f preparing")
-	op(t, dir, "sleep 1.1")
 	background(t, dir, fast()+" devopsy @server:prod --release", "/tmp/bashlogin.log")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 	dropSilently(t)

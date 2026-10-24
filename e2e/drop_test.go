@@ -40,7 +40,6 @@ func dropBeforeSwitch(t *testing.T, name, env string, within time.Duration) {
 	first, _ := srv(t, "readlink "+name+"/prod/current")
 	srv(t, "rm -f preparing; touch wait-prepare")
 	t.Cleanup(func() { srv(t, "rm -f wait-prepare preparing") })
-	op(t, dir, "sleep 1.1")
 	background(t, dir, env+" devopsy @server:prod --release", "/tmp/"+name+".log")
 	eventually(t, time.Minute, "prepare waiting", func() bool { return exists(t, "preparing") })
 
@@ -72,7 +71,6 @@ func TestDropAfterSwitch(t *testing.T) {
 	for _, kill := range []string{"ssh", "devopsy"} {
 		first, _ := srv(t, "readlink dropafter/prod/current")
 		srv(t, "rm -f running; touch wait-run")
-		op(t, dir, "sleep 1.1")
 		background(t, dir, fast()+" devopsy @server:prod --release", "/tmp/dropafter.log")
 		eventually(t, time.Minute, kill+": the run step waiting", func() bool { return exists(t, "running") })
 
