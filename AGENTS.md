@@ -1606,7 +1606,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`remote.SyncInheritPending`; the id chosen by the operator's devopsy,
   `newSyncID`, since the file is written before the holder runs), named by
   `DEVOPSY_INTERNAL_INHERIT_FILE` (exported by the holder, set by
-  `--sync-exec`) for everything the sync runs on the child. Why: the
+  `--sync-exec`) for everything the sync runs on the child, and in a
+  release that syncs exported by the activation from before its prepare
+  steps, so the owners' step after the switch reads the labels with it
+  too (an owner inherited is the new one in that release, the entries
+  the sync does not copy included: `TestMntOwnersInherited`). Why: the
   child's labels follow an inherited variable in the same sync; written
   after the copy, they lagged one sync. `finish go` moves it into place
   (`mv -Tf`) before restoring services, the hook and the run step;

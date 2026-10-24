@@ -276,6 +276,33 @@ func TestMntOwnersReset(t *testing.T) {
 	}
 }
 
+// An owner from an inherited variable follows the parent's in the same
+// release that syncs: the owners' step, right after the switch and
+// before the sync, reads the labels with the sync's pending inherit file
+// (remote.InheritPendingEnv), as the sync's own rsync --chown does, so
+// an owned entry the sync does not copy gets the new owner too (review
+// of 2026-10-23, round 4, asked whether it read the old inherit.env).
+func TestMntOwnersInherited(t *testing.T) {
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [FAKE_APP_OWNER]}\n  dev: {parent: prod}\n", 0o644)
+	prodEnv := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, prodEnv, "FAKE_APP_OWNER=10001:10001\n", 0o600)
+	s.releaseProd([]string{"FAKE_APP_MOUNT2=/cache"})
+	if out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release"); code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 10001:10001, mnt/storage to 10001:10001") {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, prodEnv, "FAKE_APP_OWNER=20002:20002\n", 0o600)
+	out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release-sync", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 20002:20002, mnt/storage to 20002:20002") || !strings.Contains(docker, "chown_entry \"$1\" \"$2\"\n sh cache 20002:20002\n") || !strings.Contains(docker, "--chown=20002:20002 /src/storage/ /dst/storage/") || strings.Contains(docker, "10001") {
+		t.Errorf("a release that syncs, its owner inherited (%d):\n%s\n%s", code, out, docker)
+	}
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")); got != "FAKE_APP_OWNER='20002:20002'\n" {
+		t.Errorf("inherit.env: %q", got)
+	}
+}
+
 // Locally, before compose starts anything, an owned entry missing is
 // made, and on Linux an entry not its
 // owner's is given away in a util container, only then; on macOS (Docker Desktop, OrbStack) ownership is
