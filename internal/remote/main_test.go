@@ -35,6 +35,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
+	if bin, err := varsBin(); err == nil {
+		_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+	}
 	os.RemoveAll(dir)
 	os.Exit(code)
 }

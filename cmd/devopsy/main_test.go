@@ -36,13 +36,17 @@ func TestMain(m *testing.M) {
 		panic(string(out))
 	}
 	code := m.Run()
+	if bin, err := fakeBinOnce(); err == nil {
+		_ = os.Chmod(bin, 0o755) // read-only, so RemoveAll could not empty it
+	}
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
 
 // fakeBin is a directory with a fake docker and this devopsy, written
-// once (fakeBinOnce): nothing writes into it, and macOS takes seconds,
-// under the parallel tests, for the first exec of each new script.
+// once (fakeBinOnce), since macOS takes seconds, under the parallel
+// tests, for the first exec of each new script. Every test shares it, so
+// it is read-only: a test that writes there fails at once.
 func fakeBin(t *testing.T) string {
 	t.Helper()
 	bin, err := fakeBinOnce()
@@ -62,8 +66,28 @@ var fakeBinOnce = sync.OnceValues(func() (string, error) {
 		return "", err
 	}
 	// The custom commands below call devopsy recursively.
-	return bin, os.Symlink(binary, filepath.Join(bin, "devopsy"))
+	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
+		return "", err
+	}
+	return bin, readOnly(bin)
 })
+
+// readOnly makes a directory of fakes that tests share, and its files,
+// read-only.
+func readOnly(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			if err := os.Chmod(filepath.Join(dir, e.Name()), 0o555); err != nil {
+				return err
+			}
+		}
+	}
+	return os.Chmod(dir, 0o555)
+}
 
 // releaseFile is name beside the code/ that current points at.
 func releaseFile(t *testing.T, current, name string) string {

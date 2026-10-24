@@ -22,19 +22,23 @@ func runVarsScript(t *testing.T, root, script, stdin string) string {
 	return strings.ReplaceAll(out, LockedMarker+"\n", "")
 }
 
-// varsBin is the fakes' directory, written once: they never change, and
-// macOS takes seconds, under the parallel tests, for the first exec of
-// each new script.
+// varsBin is the fakes' directory, written once, since macOS takes
+// seconds, under the parallel tests, for the first exec of each new
+// script. Every test shares it, so it is read-only, as fakeBin's in
+// cmd/devopsy: a test that writes there fails at once.
 var varsBin = sync.OnceValues(func() (string, error) {
 	bin, err := os.MkdirTemp(filepath.Dir(realDevopsy), "vars-bin")
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o555); err != nil {
 		return "", err
 	}
 	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
-	return bin, os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755)
+	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o555); err != nil {
+		return "", err
+	}
+	return bin, os.Chmod(bin, 0o555)
 })
 
 // runVarsRaw runs script with stdin as given.
