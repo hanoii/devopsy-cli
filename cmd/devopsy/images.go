@@ -1,30 +1,43 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/hanoii/devopsy-cli/internal/images"
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // imagesFlag is the hidden flag release scripts run on a server, under
 // the server's image lock, for a release's images (internal/images):
 //
-//	devopsy --images --name <compose name> --left <record> <action> ...
+//	devopsy --images --name <compose name> --left <record> [--mode <mode>]
+//	  [--address <target>] [--accept <services>] [--fetched] <action> ...
 //
-// bookmark <release>..., restore <release> (exit 1 when it cannot),
-// remove <release>... (exit 1 when Docker failed: keep the release),
-// undo [--rollback] <release> [<current release>], recover <environment>
-// [<current release>], prune; for an environment's releases (images.ToPrune,
-// RollbackTarget, RemoveReleases): to-prune <environment> <keep> (the ids,
-// one per line), rollback-target <environment> (exit 1 without one),
-// remove-releases [--quiet] [--gone-ok] <environment> <id>... (exit 1 when refused or
-// a release stays).
+// names <release> (what its pulled names hold, before its fetch),
+// data <environment> <release> (the parent's data images, for a sync),
+// sync-check <release> and sync-done <environment> <release> (the
+// child's side of a sync, the parent's in images.SyncImagesEnv),
+// record <release> [<release it replaces>] (exit 3 when its checks
+// refuse, 1 when it cannot), restore <release> <release it replaces>
+// [--fetched] (exit 1 when an own image must be built again, 3 when it
+// cannot), ran <environment> <release> (the history of what ran on the
+// data), hold <environment> <release> (its data services held on their
+// data's newest image), remove <release>... (exit 1 when Docker failed: keep the
+// release), undo [--rollback] <release> [<current release>], recover
+// <environment> [<current release>], prune; for an environment's
+// releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
+// <environment> <keep> (the ids, one per line), rollback-target
+// <environment> (exit 1 without one), remove-releases [--quiet]
+// [--gone-ok] <environment> <id>... (exit 1 when refused or a release
+// stays).
 const imagesFlag = "--images"
 
 func runImages(args []string, color bool) int {
@@ -34,18 +47,40 @@ func runImages(args []string, color bool) int {
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback, named, quiet, goneOK := false, false, false, false
+	rollback, named, quiet, goneOK, fetched := false, false, false, false, false
+	s.Mode = images.ModeBuild
+	if v := os.Getenv(images.SyncImagesEnv); v != "" {
+		data, err := images.DecodeData(v)
+		if err != nil {
+			report.Error("the parent's images (" + images.SyncImagesEnv + "): " + err.Error())
+			return 2
+		}
+		s.SyncData = data
+	}
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--name", "--left":
+		case "--fetched":
+			fetched = true
+		case "--name", "--left", "--mode", "--address", "--accept":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
-			if args[i] == "--name" {
+			switch args[i] {
+			case "--name":
 				s.Name, named = args[i+1], true
-			} else {
+			case "--left":
 				s.Left = args[i+1]
+			case "--address":
+				s.Address = args[i+1]
+			case "--accept":
+				// The services --accept-image named (remote.ImagesAcceptEnv).
+				s.Accept = map[string]bool{}
+				for _, svc := range strings.FieldsFunc(args[i+1], func(r rune) bool { return r == ',' || r == ' ' }) {
+					s.Accept[svc] = true
+				}
+			default:
+				s.Mode = args[i+1]
 			}
 			i++
 		case "--rollback":
@@ -71,15 +106,64 @@ func runImages(args []string, color bool) int {
 		return ""
 	}
 	switch words[0] {
-	case "bookmark":
-		for _, r := range rest {
-			s.Bookmark(r)
-		}
-	case "restore":
+	case "names":
 		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		if !s.Restore(rest[0]) {
+		if s.SaveNames(rest[0]) != nil {
+			return 1
+		}
+	case "record":
+		if len(rest) < 1 || len(rest) > 2 {
+			return imagesUsage(color)
+		}
+		if err := s.Record(rest[0], arg(1)); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
+			return 1
+		}
+	case "restore":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if err := s.Restore(rest[0], rest[1], fetched); errors.Is(err, images.ErrGone) {
+			return 1
+		} else if err != nil {
+			return 3
+		}
+	case "hold":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if s.HoldData(rest[0], rest[1]) != nil {
+			return 1
+		}
+	case "data":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		fmt.Print(s.ParentData(rest[0], rest[1]))
+	case "sync-check":
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		if err := s.SyncCheck(rest[0], s.SyncData); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
+			return 1
+		}
+	case "sync-done":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if s.SyncDone(rest[0], rest[1], s.SyncData, os.Getenv(remote.SyncFromTargetEnv)) != nil {
+			return 1
+		}
+	case "ran":
+		if len(rest) != 2 {
+			return imagesUsage(color)
+		}
+		if s.Ran(rest[0], rest[1]) != nil {
 			return 1
 		}
 	case "undo":
@@ -136,6 +220,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> bookmark|restore|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> names|record|restore|ran|hold|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

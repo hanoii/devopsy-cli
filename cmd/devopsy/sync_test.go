@@ -38,9 +38,12 @@ import (
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
 // FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
-// is app's devopsy.mnt.owner, FAKE_DB_OWNER db's.
+// is app's devopsy.mnt.owner, FAKE_DB_OWNER db's. devopsy-util is there
+// and fresh unless FAKE_UTIL_* say otherwise (below).
 const syncFakeDocker = `#!/bin/sh
-echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
+# devopsy's own compose file (images.ComposeFile) is left out of the log:
+# the tests here match the project's compose commands.
+echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
 for a; do last2=${last:-}; last=$a; done
@@ -165,11 +168,32 @@ case "$*" in
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
+  # Containers as devopsy's images rules read them (images.CLI): one per
+  # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
+  # exited, its id ctr:<project>:<service>.
+  "ps -a -q --no-trunc --filter label=com.docker.compose.project="*)
+    p=${6#label=com.docker.compose.project=}
+    [ ! -f "$DOCKER_LOG.containers.$p" ] || while read -r cs cl; do echo "ctr:$p:$cs"; done <"$DOCKER_LOG.containers.$p" ;;
+  "inspect --format {{json .}} ctr:"*)
+    shift 3
+    for c; do
+      p=${c#ctr:}; cs=${p#*:}; p=${p%%:*}
+      cl=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f2)
+      printf '{"Name":"/%s-%s-1","Image":"sha256:%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "$cs" "$p" "$cs" "$cl"
+    done ;;
   "inspect "*) echo 172.17.0.9 ;;
-  # FAKE_NO_UTIL: the util image missing; FAIL_UTIL_BUILD: its build
-  # failing, as with a registry down.
-  "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
-  "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
+  # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
+  # none with FAKE_UTIL_MISSING; a build fails with FAIL_UTIL_BUILD, else
+  # keeps its Dockerfile and makes sha256:new, built now.
+  "image inspect -f "*)
+    [ -z "${FAKE_UTIL_MISSING:-}" ] || exit 1
+    id=sha256:old; c=${FAKE_UTIL_CREATED:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+    [ ! -e "$DOCKER_LOG.util" ] || { id=sha256:new; c=$(date -u +%Y-%m-%dT%H:%M:%SZ); }
+    case $4 in *Created*) echo "$id $c" ;; *) echo "$id" ;; esac ;;
+  "build "*)
+    cat >"$DOCKER_LOG.dockerfile"
+    [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "pull failed" >&2; exit 1; }
+    : >"$DOCKER_LOG.util" ;;
   # The owners' containers, one per entry (devopsy made it).
   # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
   "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
@@ -226,6 +250,11 @@ fi
 opts=
 for a; do [ -n "${s+x}" ] && opts="$opts $s"; s=$a; done
 echo "$opts" >> "$SSH_LOG"
+# Which sessions carried the operator's --yes for the images' checks.
+case "$s" in *DEVOPSY_INTERNAL_IMAGES_ACCEPT=*) case "$s" in *"ready for sync in"*) echo holder ;; *) echo other ;; esac >> "$SSH_LOG.yes" ;; esac
+
+# FAKE_SSH_SCRIPTS: each session's script there too, after a line ----.
+[ -z "${FAKE_SSH_SCRIPTS:-}" ] || printf -- '----\n%s\n' "$s" >> "$FAKE_SSH_SCRIPTS"
 case "$opts" in *ForwardAgent=yes*) ;; *) unset SSH_AUTH_SOCK ;; esac
 [ -z "${FAKE_RESTRICT:-}" ] || unset SSH_AUTH_SOCK
 # FAKE_SSH_DETACH: the push outlives its ssh, as on a server, where only
@@ -445,15 +474,14 @@ func TestSyncSameHost(t *testing.T) {
 		t.Fatalf("second release (%d):\n%s\n%s", code, out, docker)
 	}
 
-	// --sync asks; --yes; arguments after -- go to rsync; the log goes
-	// with the current release.
+	// --sync asks; --yes; the log goes with the current release.
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "newer\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") {
 		t.Fatalf("--sync without a terminal (%d):\n%s", code, out)
 	}
-	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --exclude=css /src/storage/") {
+	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 /src/storage/") {
 		t.Fatalf("--sync (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "newer\n" {
@@ -480,10 +508,10 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--rollback", "--from", "@prod"); code == 0 || !strings.Contains(out, "--rollback takes no command") {
 		t.Errorf("--rollback --from (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--yes] [-- args...]") || !strings.Contains(out, "devopsy.data=stream") {
+	if out, code := s.run(nil, "@dev", "--sync", "--help"); code != 0 || !strings.Contains(out, "Usage: devopsy @<target> --sync [--from @<target>] [--accept-image <service>,...] [--yes]") || !strings.Contains(out, "devopsy.data=stream") {
 		t.Errorf("--sync --help (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--from @<target>] [--yes]") {
+	if out, code := s.run(nil, "@dev", "--release", "--help"); code != 0 || !strings.Contains(out, "--release-sync [--from @<target>] [--accept-image <service>,...] [--yes]") {
 		t.Errorf("--release --help (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev"); code != 0 || !strings.Contains(out, "--sync [--from @<target>]") {
@@ -683,16 +711,29 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
 	// Every session of the release keeps itself alive: the upload, the
-	// holder, the push, the push's look at the child's services
-	// (--sync-exec), the receive, and the log's save.
+	// holder, the push, the push's look at the child's services and its
+	// util image (--sync-exec), the receive, and the log's save.
 	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	if strings.Count(ssh, keep) != 7 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
+	}
+	// Both servers get the util image ready before using it: the push
+	// in Go, the child's through devopsy --util-image before the parent
+	// stops anything (a weekly rebuild would lengthen its downtime), and
+	// the receive script's again.
+	check := "image inspect -f {{.Id}} {{.Created}} devopsy-util:2\n"
+	if n := strings.Count(docker, check); n != 3 {
+		t.Errorf("the util image checked %d times, want 3 (push, the child's before the stop, receive):\n%s", n, docker)
+	}
+	first := strings.Index(docker, check)
+	second := strings.Index(docker[first+len(check):], check) + first + len(check)
+	if stop := strings.Index(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop"); stop < 0 || second > stop {
+		t.Errorf("the child's util image checked after the parent stopped:\n%s", docker)
 	}
 	// Vanished files across servers: the receive script goes on too.
 	s.logs()
@@ -759,8 +800,13 @@ func TestSyncAbort(t *testing.T) {
 	}
 	s.logs()
 	// The parent's stop fails, before anything is written: what it
-	// stopped comes back, and so does the child.
+	// stopped comes back, and so does the child. --yes is only the
+	// prompt's: no session gets the images' acceptance.
+	os.Remove(s.sshLog + ".yes")
 	out, code := s.run([]string{"FAIL_STOP=shop-prod"}, "@dev", "--sync", "--yes")
+	if yes, _ := os.ReadFile(s.sshLog + ".yes"); len(yes) != 0 {
+		t.Errorf("sessions with the images' acceptance from --yes: %q", yes)
+	}
 	docker, _ := s.logs()
 	if code != 1 || !strings.Contains(out, "aborting the sync") || !strings.Contains(out, "before writing anything") {
 		t.Fatalf("parent's stop fails (%d):\n%s", code, out)
@@ -865,10 +911,10 @@ func TestSyncParentRestoreFails(t *testing.T) {
 func TestSyncCapability(t *testing.T) {
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
-	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_DATA_MNT stream=$DEVOPSY_DATA_STREAM stop=$DEVOPSY_DATA_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET args=$DEVOPSY_SYNC_ARGS\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
+	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 in $COMPOSE_PROJECT_NAME rsync=$DEVOPSY_DATA_MNT stream=$DEVOPSY_DATA_STREAM stop=$DEVOPSY_DATA_STOP from=$DEVOPSY_SYNC_FROM_TARGET to=$DEVOPSY_SYNC_TO_TARGET\"\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
 	write(t, filepath.Join(caps, "finish"), "#!/bin/sh\necho \"finish $1 $2 in $COMPOSE_PROJECT_NAME\"\n", 0o755)
 	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1 from $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD\"\nif [ \"${FAIL_EXPORT:-}\" = \"$1\" ]; then exit 3; fi\n", 0o755)
-	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1 into $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD from=$DEVOPSY_SYNC_FROM_TARGET args=$DEVOPSY_SYNC_ARGS: $(cat)\"\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\necho \"import $1 into $COMPOSE_PROJECT_NAME pw=$DB_PASSWORD from=$DEVOPSY_SYNC_FROM_TARGET: $(cat)\"\n", 0o755)
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=parent-secret\n", 0o644)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "DB_PASSWORD=child-secret\n", 0o644)
@@ -898,9 +944,9 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("stream (%d):\n%s", code, out)
 	}
-	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=", "devopsy: copying",
+	inOrder("stream", out, code, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "devopsy: copying",
 		"prepare parent in shop-prod rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev", "rsync mnt/storage", "devopsy: exporting db",
-		"import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
+		"import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret", "finish parent go in shop-prod", "finish child go in shop-dev", "deploy in shop-dev")
 	if strings.Contains(docker, "stop db") || strings.Contains(docker, "/src/db/") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" up -d --wait db") {
 		t.Errorf("stream docker:\n%s", docker)
 	}
@@ -911,12 +957,6 @@ func TestSyncCapability(t *testing.T) {
 	// after the sync, at the run step.
 	out, code = s.run(nil, "@dev", "--log")
 	inOrder("--log", out, code, "prepare child in shop-dev", "devopsy: copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
-	// --sync's arguments reach the hooks and the import.
-	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
-	s.logs()
-	if code != 0 || !strings.Contains(out, "prepare child in shop-dev rsync=app stream=db stop= from=devopsy@one:prod to=devopsy@one:dev args=--exclude=css") || !strings.Contains(out, "args=--exclude=css: dump of db") {
-		t.Errorf("--sync -- args (%d):\n%s", code, out)
-	}
 
 	// Two streams, db stopped (own) and app with it (it depends on db):
 	// in depends_on order, neither brought up for its import (no
@@ -983,12 +1023,12 @@ func TestSyncCapability(t *testing.T) {
 	across := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
 	_, ssh := s.logs()
-	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod args=: dump of db from shop-prod pw=parent-secret") {
+	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret") {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
 	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 3 {
-		t.Errorf("the child's list, the spool's cat and the import, each a session:\n%s", ssh)
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 4 {
+		t.Errorf("the child's list, its util image (app's storage is rsynced), the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {
 		t.Errorf("the spool stays across servers")
@@ -1238,6 +1278,33 @@ func TestSyncRunStepDeployed(t *testing.T) {
 	out, code := s.run(nil, "@dev", "--sync", "--yes")
 	if code != 0 || !strings.Contains(out, "deploy in shop-dev") || strings.Contains(out, "'devopsy other'") {
 		t.Errorf("the run step after a sync (%d), not the deployed release's:\n%s", code, out)
+	}
+}
+
+// --sync --accept-image, the fix SyncCheck's refusal names, reaches the
+// holder's img sync-check with the services named, each once.
+func TestSyncAcceptReachesHolder(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	if out, code := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@dev", "--sync", "--yes", "--accept-image", "db,app", "--accept-image", "db"); code != 0 {
+		t.Fatalf("--sync --accept-image (%d):\n%s", code, out)
+	}
+	holder := ""
+	for _, sc := range strings.Split(readString(scripts), "----\n") {
+		if strings.Contains(sc, "img sync-check") {
+			holder = sc
+		}
+	}
+	if holder == "" {
+		t.Fatalf("no holder session:\n%s", readString(scripts))
+	}
+	// Inside sh -c's quotes: 'db app' quoted again.
+	if !strings.Contains(holder, remote.ImagesAcceptEnv+`='\''db app'\''`) {
+		t.Errorf("the holder's img sync-check does not get --accept-image's services (%s):\n%s", remote.ImagesAcceptEnv, holder[:min(600, len(holder))])
 	}
 }
 
@@ -1495,7 +1562,7 @@ func TestSyncLabels(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data (rsync is mnt") || strings.Contains(docker, " stop ") || strings.Contains(docker, "shop-prod compose") {
+	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data (rsync is mnt") || strings.Contains(docker, " stop ") || parentChanged(docker) {
 		t.Errorf("an old label on the child (%d):\n%s\n%s", code, out, docker)
 	}
 	os.Remove(s.log + ".shop-dev")
@@ -1546,7 +1613,7 @@ func TestSyncMismatch(t *testing.T) {
 			want = "without data (devopsy.data=none or no label)"
 		}
 		if code == 0 || !strings.Contains(out, "devopsy: error: the child's data labels do not match the parent's: nothing changed\ndevopsy: | the child's db is running, "+want+", and mnt/db would change under it: the parent copies it for db (devopsy.data=mnt)\n") ||
-			strings.Contains(out, "deploy in shop-dev") || strings.Count(docker, "shop-prod compose") != 1 || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
+			strings.Contains(out, "deploy in shop-dev") || parentChanged(docker) || !strings.Contains(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" --profile * config") ||
 			strings.Contains(docker, "rsync") || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "compose.yaml")+" start app") {
 			t.Errorf("child db %s (%d):\n%s\n%s", label, code, out, docker)
 		}
@@ -3133,5 +3200,93 @@ func TestDestroyEndsWriters(t *testing.T) {
 	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
 	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
+// devopsy --util-image, which every use of the util image goes through
+// (in Go, or from a script): built when missing, a failure failing;
+// rebuilt with its base pulled and no cache once older than a week, the
+// image it replaced removed (never with -f), a failure only warning.
+func TestUtilImage(t *testing.T) {
+	s := newSyncSetup(t)
+	df := s.log + ".dockerfile"
+	built := func() string { b, _ := os.ReadFile(s.log + ".util"); os.Remove(s.log + ".util"); return string(b) }
+
+	out, code := s.run(nil, "--util-image")
+	docker, _ := s.logs()
+	if code != 0 || strings.Contains(docker, " build ") || strings.Contains(out, "devopsy-util") {
+		t.Errorf("fresh (%d):\n%s\n%s", code, out, docker)
+	}
+
+	old := []string{"FAKE_UTIL_CREATED=2026-10-01T10:00:00.123456789Z"}
+	out, code = s.run(old, "--util-image")
+	docker, _ = s.logs()
+	built()
+	if dockerfile, _ := os.ReadFile(df); code != 0 || !strings.Contains(out, "updating devopsy-util:2, built over a week ago") ||
+		!strings.Contains(docker, " build -q --pull --no-cache -t devopsy-util:2 -\n") || !strings.Contains(docker, " image rm sha256:old\n") ||
+		string(dockerfile) != "FROM alpine:3\nRUN apk add --no-cache rsync tar findutils coreutils\n" {
+		t.Errorf("a week old (%d):\n%s\n%s\n%s", code, out, docker, dockerfile)
+	}
+
+	out, code = s.run(append(old, "FAIL_UTIL_BUILD=1"), "--util-image")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "warning: updating devopsy-util:2 failed: going on with the one there") || strings.Contains(docker, " image rm ") {
+		t.Errorf("a failed rebuild (%d):\n%s\n%s", code, out, docker)
+	}
+
+	missing := []string{"FAKE_UTIL_MISSING=1"}
+	out, code = s.run(missing, "--util-image")
+	docker, _ = s.logs()
+	built()
+	if code != 0 || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(docker, " build -q -t devopsy-util:2 -\n") || strings.Contains(docker, " image rm ") {
+		t.Errorf("missing (%d):\n%s\n%s", code, out, docker)
+	}
+	out, code = s.run(append(missing, "FAIL_UTIL_BUILD=1"), "--util-image")
+	if code != 1 || !strings.Contains(out, "error: building devopsy-util:2: exit status 1") {
+		t.Errorf("missing, its build failing (%d):\n%s", code, out)
+	}
+}
+
+// parentChanged says whether the parent's side ran a compose command
+// that changes anything: its reads (config, ps) do not.
+func parentChanged(docker string) bool {
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.HasPrefix(line, "shop-prod compose") && !strings.Contains(line, " config ") && !strings.Contains(line, " ps ") && !strings.HasSuffix(line, " config --format json") {
+			return true
+		}
+	}
+	return false
+}
+
+// Bug: finish abort recreates, like finish go, every stopped service
+// whose container's devopsy.digest differs from the current release's
+// devopsy-compose.yaml (images.Recreate). In a release that syncs,
+// current is already the new release, not live, whose file holds its
+// data services on what it fetched (img record skips the child's own
+// check of a service the parent's data covers), while the containers
+// are the previous release's: an abort (Ctrl-C, the push refusing)
+// recreates the child's database on the new release's image over its
+// own data, a series bump or a lowered pin (a downgrade) included, and
+// img ran then records it. Abort starts nothing new (plan, part 9).
+func TestSyncAbortRecreatesNothing(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	s.logs()
+	// The new release, current while its sync runs: its file holds db on
+	// what it fetched; db's container is the previous release's.
+	write(t, filepath.Join(s.root, "shop", "dev", s.current("dev"), "devopsy-compose.yaml"),
+		"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
+	write(t, s.log+".containers.shop-dev", "db y@sha256:old\n", 0o644)
+	write(t, filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services"), "stop db\n", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "abort")
+	cmd.Dir = filepath.Join(s.root, "shop", "dev", "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir, "FAKE_DB_DOWN=1")
+	out, err := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if err != nil || !strings.Contains(docker, " start db") || strings.Contains(docker, "up -d --no-deps --wait db") {
+		t.Errorf("finish abort (%v): db must start as it was, never be recreated on the release's image:\n%s\n%s", err, out, docker)
 	}
 }

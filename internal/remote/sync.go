@@ -3,6 +3,7 @@ package remote
 import (
 	"cmp"
 	"fmt"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"os"
 	"path"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -265,16 +267,29 @@ var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "C
 
 // UtilImage is devopsy's own image for what needs root on a host's files,
 // built there from UtilDockerfile when missing: syncs' rsync, the tar of
-// --export and --import, emptying mnt on --destroy. Its tag changes with
-// the Dockerfile: hosts never rebuild an image they have. It was
-// devopsy-rsync until October 2026: hosts keep that one until removed.
+// --export and --import, emptying mnt on --destroy, giving owners. Once
+// older than UtilImageMaxAge it is built again, its base pulled and
+// nothing cached (devopsy --util-image, wherever it is used): it runs as
+// root on the data and serves rsync across servers, so its base floats
+// on alpine:3 and gets its fixes within a week. Its tag changes with the
+// Dockerfile's packages. It was devopsy-rsync until October 2026, then
+// devopsy-util:1: hosts keep those until removed.
 const UtilImage = "devopsy-util:2"
+
+// UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
+const UtilImageMaxAge = 7 * 24 * time.Hour
+
+// UtilImageFlag is the hidden flag that gets UtilImage ready on a host:
+// built when missing, rebuilt when older than UtilImageMaxAge. Scripts
+// call it before using the image (the receive script of a sync across
+// servers); devopsy's own commands do the same in Go.
+const UtilImageFlag = "--util-image"
 
 // UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
 // tar, find and chown, not busybox's: tar's --numeric-owner and
 // --overwrite, find's -user and -group with numbers and -exec ... +,
 // chown -h, as documented.
-var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar findutils coreutils"}
+var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils"}
 
 // RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
 // server or across two: everything, owners as numbers, and what the
@@ -333,7 +348,7 @@ const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
 // --sync-push's own, set for it by the push session; the data capability
-// gets SyncFromTargetEnv, SyncToTargetEnv, SyncArgsEnv and its side's
+// gets SyncFromTargetEnv, SyncToTargetEnv and its side's
 // lists (DataMntEnv, DataStreamEnv, DataStopEnv).
 const (
 	// SyncToEnv is the child's server, user@hostname as the parent's
@@ -349,9 +364,6 @@ const (
 	// its address.
 	SyncToProjectEnv = "DEVOPSY_SYNC_TO_PROJECT"
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
-	// SyncArgsEnv are the arguments after --sync's --, space-joined: for
-	// rsync, and for the data capability's scripts to read.
-	SyncArgsEnv = "DEVOPSY_SYNC_ARGS"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
 	// DataMntEnv and DataStreamEnv name a side's services labeled
@@ -379,20 +391,28 @@ const (
 type SyncOptions struct {
 	// From is the parent's address.
 	From string
-	// Args go to rsync (DEVOPSY_SYNC_ARGS).
-	Args []string
 	// Inherit: the operator wrote this sync's inherited variables into
 	// its SyncInheritPending.
 	Inherit bool
 	// ID is the sync's, chosen by the operator's devopsy: its pending
 	// inherited variables are written before the holder runs.
 	ID string
+	// Images are the parent's data images (images.Set.ParentData), from
+	// the preflight: checked before anything stops, taken over once the
+	// copy is complete.
+	Images string
+}
+
+// imagesExport exports the parent's data images for the child's img
+// calls (images.SyncImagesEnv).
+func (o *SyncOptions) imagesExport() string {
+	return "export " + images.SyncImagesEnv + "=" + Quote(images.EncodeData(o.Images)) + "\n"
 }
 
 // exports sets the child side's sync variables, the sync's id and its
 // pending inherited variables' file among them; t is the child.
 func (o *SyncOptions) exports(t *Target) string {
-	s := fmt.Sprintf("export %s=%s %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncArgsEnv, Quote(strings.Join(o.Args, " ")), SyncIDEnv, Quote(o.ID))
+	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncIDEnv, Quote(o.ID))
 	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
 	return s
 }
@@ -505,7 +525,24 @@ func syncBlock(projectName, failed string, release bool) string {
   esac
   # finish partial ends what the record names, then it goes.
   if [ "$sync_word" = go ]; then
-    sync_finish go || status=$?
+    # The data is the parent's: so are its images and their history
+    # (img sync-done), whatever the answer or finish child go says,
+    # before finish starts the services on them.
+    if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+      if image_lock shared syncing; then
+        img sync-done "$base" "$rel" || status=$?
+        image_unlock
+      else
+        status=75
+      fi
+      if [ "$status" != 0 ]; then
+        # The data is the parent's, its images not: nothing runs on it.
+        devopsy --say error "could not take over the parent's images ($status): the services stay down until a sync completes" || true
+        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "the copy is complete, but the parent's images could not be taken over" >` + incomplete + ` || true
+        sync_finish partial || true
+      fi
+    fi
+    [ "$status" != 0 ] || sync_finish go || status=$?
   else
     sync_finish "$sync_word" || true
     status=1
@@ -519,7 +556,7 @@ rm -f "$base/` + SyncHoldingFile + `"
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + SyncArgsEnv + " " + InheritPendingEnv + " " + SyncIDEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + images.SyncImagesEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -561,17 +598,29 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + watchSession(true, true) + releaseLock(false, false) + `# Armed only while it waits for the lock, when nothing changed yet: a
-# session gone then ends it; from here on it restores on its own. With a
-# heartbeat, disarmed only on the session's next byte (waitBeat): a
-# session that went silent while this waited ends it too, never noticed
-# only once the services are stopped.
-` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
-rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
+`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
-exec 1>&2
+rel="$base/releases/$id"
+` + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+# child's images, and the parent's image must be here (img sync-check
+# pulls it, maybe for long): an abort or a session gone meanwhile ends
+# this, nothing stopped.
+if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
+  image_lock shared syncing || exit $?
+  sc=0
+  img sync-check "$rel" || sc=$?
+  image_unlock
+  [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
+fi
+# Armed only while it waits for the lock and the parent's image, when
+# nothing changed yet: a session gone then ends it; from here on it
+# restores on its own. With a heartbeat, disarmed only on the session's
+# next byte (waitBeat): a session that went silent while this waited
+# ends it too, never noticed only once the services are stopped.
+` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock or the parent's image: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
+rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 devopsy --say info "syncing into $id"
 ` + o.exports(t) + `cd "$base/current"
 status=0
@@ -583,7 +632,9 @@ status=0
 		s += `out="$base/releases/$id/` + ServerLogFile + `"
 trap '' PIPE
 ` + followOutput
-		s += "with_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + "\n"
+		s += "rs=0\nwith_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + " || rs=$?\n"
+		// What ran on the data, as after a release's run step.
+		s += "img ran \"$base\" \"$rel\" || true\nexit \"$rs\"\n"
 	}
 	return s
 }
@@ -735,6 +786,29 @@ case "$server_features" in *" ` + DataLabelsFeature + ` "*) echo ` + DataLabelsF
 `
 }
 
+// ParentCheckScript is CurrentExistsScript for a sync's parent, then its
+// data images (images.Set.ParentData: lines starting image and ran),
+// which the child's side checks and takes over (images.SyncImagesEnv).
+func ParentCheckScript(t *Target, projectName string, extra []string) string {
+	return CurrentExistsScript(t, extra) + releaseImages(projectName, t, t.Mode) + `if [ -d "$base/current/.devopsy" ]; then
+  pc_rel=$(readlink "$base/current")
+  img data "$base" "$base/${pc_rel%/` + CodeDir + `}"
+fi
+`
+}
+
+// ParseParentData is the parent's data images in ParentCheckScript's
+// output (images.Set.ParentData's lines).
+func ParseParentData(out string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") || strings.HasPrefix(line, "old\t") {
+			b.WriteString(strings.TrimRight(line, "\r") + "\n")
+		}
+	}
+	return b.String()
+}
+
 // ClaimWriteScript claims the right to write into the child at base for
 // sync id, before the first write (its SyncOpenFile renamed to
 // SyncStartedFile), or fails: its holder decided already.
@@ -794,11 +868,6 @@ const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/`
 // lock ($base set): a sync's files are its own then, not leftovers.
 const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 2>/dev/null`
 
-// buildUtilImage builds UtilImage when the host lacks it.
-func buildUtilImage() string {
-	return "docker image inspect " + Quote(UtilImage) + " >/dev/null 2>&1 || { devopsy --say info \"building " + UtilImage + "\"; printf '%s\\n' " + quoteAll(UtilDockerfile) + " | docker build -q -t " + Quote(UtilImage) + " - >/dev/null; }\n"
-}
-
 // RsyncVanished is rsync's exit code when files vanished between its scan
 // and their copy: what a live service does to its own temporary files.
 // The copy is complete without them, so both paths say so and go on.
@@ -823,7 +892,7 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, args []string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
 	if wipe != "" {
@@ -831,7 +900,7 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owner
 		open := Quote(path.Join(base, SyncOpenFile(id)))
 		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
-	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\n" + buildUtilImage() + claim +
+	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
 ( while sleep 1; do
@@ -842,7 +911,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -913,7 +982,12 @@ func SyncExecScript(toDir, toProject string, env map[string]string, args []strin
 }
 
 // BuildUtilImageArgs are docker's arguments to build UtilImage from its
-// Dockerfile on stdin.
-func BuildUtilImageArgs() []string {
+// Dockerfile on stdin; refresh pulls its base and caches nothing, for
+// the rebuild of an image older than UtilImageMaxAge (with the cache,
+// apk's layer would stay as it was).
+func BuildUtilImageArgs(refresh bool) []string {
+	if refresh {
+		return []string{"build", "-q", "--pull", "--no-cache", "-t", UtilImage, "-"}
+	}
 	return []string{"build", "-q", "-t", UtilImage, "-"}
 }

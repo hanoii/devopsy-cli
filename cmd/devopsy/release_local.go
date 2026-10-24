@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -70,7 +71,7 @@ func runLocalRelease(cwd string, args []string, color bool) int {
 		return code
 	}
 	report.Info("pulling and building images")
-	if code := run("", []string{"--", "pull", "--ignore-buildable"}); code != 0 {
+	if code := run("", append([]string{"--"}, remote.ProfilePull...)); code != 0 {
 		return code
 	}
 	if code := run("", []string{"--", "build", "--pull"}); code != 0 {
@@ -331,6 +332,18 @@ func destroyData(cwd string, step []string, color bool) int {
 	}
 	if err := emptyMnt(ctx, projectDir, fmt.Sprintf("devopsy-destroy-%d", os.Getpid())); err != nil {
 		return fail(err.Error())
+	}
+	// The history of the images that ran on the data goes with it: a
+	// --destroy whose image removal fails keeps the directory, and the
+	// next release must not be judged by data that is gone.
+	if cli.InRelease(projectDir) {
+		base := filepath.Dir(root)
+		if filepath.Base(root) == remote.CodeDir {
+			base = filepath.Dir(filepath.Dir(base))
+		}
+		if err := images.RemoveHistory(base); err != nil {
+			return fail(err.Error())
+		}
 	}
 	return 0
 }

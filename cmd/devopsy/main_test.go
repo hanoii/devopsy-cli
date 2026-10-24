@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 func fakeBin(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
-	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --images') echo x; exit 0 ;; *' config --format json') echo '{\"services\":{}}'; exit 0 ;; 'image inspect --format '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1297,7 +1297,7 @@ func TestLocalRelease(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("--release (%d):\n%s", code, out)
 	}
-	order := []string{"SECRETS in " + tmp, "[compose]", "[pull][--ignore-buildable]", "[build][--pull]", "DEPLOY"}
+	order := []string{"SECRETS in " + tmp, "[compose]", "[--profile][*][pull][--ignore-buildable]", "[build][--pull]", "DEPLOY"}
 	at := 0
 	for _, want := range order {
 		i := strings.Index(out[at:], want)

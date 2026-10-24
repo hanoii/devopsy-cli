@@ -141,7 +141,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// nothing changed (review of 2026-10-23, round 2: it failed after
 	// the switch, and went back).
 	second := s.current("prod")
-	out, code = s.run([]string{"FAKE_NO_UTIL=1", "FAIL_UTIL_BUILD=1"}, "@prod", "--rollback")
+	out, code = s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@prod", "--rollback")
 	if docker, _ := s.logs(); code == 0 || s.current("prod") != second || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "nothing changed: current is still") || strings.Contains(out, "current is now") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("a rollback without the util image (%d), current %q, want %q:\n%s\n%s", code, s.current("prod"), second, out, docker)
 	}
@@ -237,7 +237,7 @@ func TestCheckMountsRelease(t *testing.T) {
 	// The util image missing and its build failing (a registry down):
 	// refused before the switch, not failed after it.
 	write(t, s.log+".shop-slow", "FAKE_APP_OWNER=10001:10001\n", 0o644)
-	out, code = s.run([]string{"FAKE_NO_UTIL=1", "FAIL_UTIL_BUILD=1"}, "@slow", "--release")
+	out, code = s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@slow", "--release")
 	docker, _ := s.logs()
 	if code == 0 || s.current("slow") != "" || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "not made current") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("no util image (%d), current %q:\n%s\n%s", code, s.current("slow"), out, docker)

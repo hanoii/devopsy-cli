@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"os"
 	"path/filepath"
 	"slices"
@@ -427,7 +428,7 @@ func TestUsage(t *testing.T) {
 		"commands/push*":   "#!/bin/sh\n## Description: Push it\n## Run: local\n## Needs: server\n",
 	})
 	text := Usage(filepath.Join(root, ProjectDirName))
-	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
+	for _, want := range []string{"Where each runs:", "Project commands (", "  [@t] deploy", "Pull and roll out", "  [@t] plain\n", "       image\n", "    @t go\n", "    @s push (runs locally)          Push it", "anything else is an error", "Releases:", "    @t --release [--from @<target>] [--accept-image <svc>] [--yes]", "  [@t] --shell [service]", "    @s --shell-host", "       --ssh-keys-generate", "       --version", "Setup and tools:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -742,5 +743,37 @@ func TestDotenvLineRoundTrip(t *testing.T) {
 		if err != nil || got["K"] != v {
 			t.Errorf("%q: %s reads back as %q (%v)", v, line, got["K"], err)
 		}
+	}
+}
+
+// In a release, devopsy's own compose file comes between the project's
+// compose.yaml and the operator's override, so the operator's hand still
+// wins; a listing asks for the project's files alone.
+func TestReleaseComposeFile(t *testing.T) {
+	rel := filepath.Join(t.TempDir(), "releases", "1")
+	dir := filepath.Join(rel, "code", ".devopsy")
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {}\n")
+	write(t, filepath.Join(dir, "compose.override.yaml"), "services: {}\n")
+	write(t, filepath.Join(rel, "devopsy-target.env"), "")
+	write(t, filepath.Join(rel, images.ComposeFile), "services: {}\n")
+	files := func(environ ...string) []string {
+		t.Helper()
+		p, err := Compose(filepath.Join(rel, "code"), []string{"ps"}, environ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fs []string
+		for i, a := range p.Args {
+			if a == "-f" {
+				fs = append(fs, filepath.Base(p.Args[i+1]))
+			}
+		}
+		return fs
+	}
+	if got := strings.Join(files(), " "); got != "compose.yaml "+images.ComposeFile+" compose.override.yaml" {
+		t.Errorf("files: %s", got)
+	}
+	if got := strings.Join(files(images.NoReleaseComposeEnv+"=1"), " "); got != "compose.yaml compose.override.yaml" {
+		t.Errorf("files for a listing: %s", got)
 	}
 }

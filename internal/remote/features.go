@@ -23,7 +23,7 @@ var featureFlags = []string{
 	"import", "missing-vars", "mnt-owners", "prepare-release",
 	"release-id", "release-settings", "release-steps", "say", "status",
 	"stdin-guard", "sync-push", "sync-services", "upgrade",
-	"watch-session",
+	"util-image", "watch-session",
 }
 
 // namedFeatures are behaviors of a flag that came after it, each found
@@ -44,6 +44,12 @@ var namedFeatures = []struct {
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
 	{ResetFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push[ '\\]{1,8}reset\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}wipe\b`)},
+	// The images' history and holds: a release's img record, names, ran
+	// and restore against the release it replaces, a sync's data,
+	// sync-check and sync-done, and every script defining img, whose
+	// --mode and --address an older devopsy refuses as usage (removals
+	// included), after taking the locks.
+	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images'.*'--mode'`)},
 	// devopsy.mnt.owner in copies: the child's list gains each entry's
 	// owner, which the parent's rsync applies (--chown), and an mnt
 	// import gives what it extracted to its owner. An older parent would
@@ -54,6 +60,9 @@ var namedFeatures = []struct {
 
 // MntOwnerFeature is devopsy.mnt.owner's named feature, for copies.
 const MntOwnerFeature = "mnt-owner"
+
+// DataImagesFeature is the images' history and holds' named feature.
+const DataImagesFeature = "data-images"
 
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"

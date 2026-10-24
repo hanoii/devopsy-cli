@@ -27,6 +27,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -973,8 +974,26 @@ func runImport(cwd string, args []string, color bool) int {
 	if err := restoreServices(cwd, services, false, nil); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
+	importedImages(cwd, base, name, services)
 	clearImportMark(base, name)
 	return code
+}
+
+// importedImages starts the history of the images that ran on a pulled
+// data service's data over (images.Set.Imported) once its files were
+// imported (mnt), or accepted (--resolved): they came from elsewhere. A
+// stream's import goes through the service's own image, which keeps its
+// history.
+func importedImages(cwd, base, name string, services []cli.SyncService) {
+	for _, s := range services {
+		if s.Name != name || s.Transfer != cli.DataMnt {
+			continue
+		}
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+		if err := set.Imported(base, remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name); err != nil {
+			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
+		}
+	}
 }
 
 // importFailed is a failure from the first write: whatever may still
@@ -1082,6 +1101,7 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
+	importedImages(cwd, base, name, services)
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0

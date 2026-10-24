@@ -14,6 +14,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -93,6 +94,11 @@ func debugSummary(st style, projectDir string) {
 		}
 		if cli.InRelease(projectDir) {
 			files = append(files, "../../"+remote.TargetEnvFile)
+			if f := remote.ReleaseFile(projectDir, images.ComposeFile); f != "" {
+				if _, err := os.Stat(f); err == nil {
+					files = append(files, "../../"+images.ComposeFile)
+				}
+			}
 		}
 		field("project", tilde(projectDir)+" "+st.dim("("+strings.Join(files, ", ")+")"))
 		field("commands", orNone(cli.CustomCommands(projectDir)))

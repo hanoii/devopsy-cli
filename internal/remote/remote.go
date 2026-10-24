@@ -698,6 +698,18 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	s += watchSession(sync != nil, true)
 	// Defined first: the fetch and not_live's callers use them.
 	s += releaseImages(projectName, t, t.Mode)
+	// get_images <dir> <against>, for the restart after a failed run:
+	// under the shared image lock, a release's images restored in place
+	// of against's (img restore), fetched again when an image it builds
+	// is gone.
+	s += `get_images() {
+  image_lock shared fetching || return $?
+  gi=0
+  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || gi=$?
+  image_unlock
+  return "$gi"
+}
+`
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
@@ -777,6 +789,11 @@ done
 	for _, l := range t.Levels {
 		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
 	}
+	if sync != nil && sync.Images != "" {
+		// The parent's data images, for the check at the end of the fetch
+		// (img record) and the take-over once the copy is complete.
+		s += sync.imagesExport()
+	}
 	if sync != nil && sync.Inherit {
 		// What the sync inherits this time, in the pending file the
 		// operator wrote: the checks before the switch (prepare,
@@ -834,11 +851,21 @@ done
 	if rollback {
 		undo = `img undo --rollback "$1" ${prev:+"$base/$prev"}`
 	}
+	// A new release: what its pulled names held first (a refused one
+	// puts them back), then its fetch and its record (img record: the
+	// listing, the bookmarks, devopsy's compose file, and the checks of
+	// the pulled data services against their data's history, exit 3).
+	// A rollback: its images restored against the release it leaves
+	// (img restore), fetched again only when an image it builds is gone
+	// (exit 1). A signal during either (img ignores it) skips the fetch.
+	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
+	if rollback {
+		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
+	}
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
-  # A signal during the restore (img ignores it) skips the fetch.
-  img restore "$1" || { [ -z "$fetch_sig" ] && fetch_images "$1" && img bookmark "$1"; } || fr=$?
+  ` + fetchStep + ` || fr=$?
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -894,7 +921,7 @@ fetch_release "$rel" || fr=$?
 # A write before the marker goes: a session gone during the fetch that
 # watchSession did not see (none on -t, which gets HUP) fails here (PIPE
 # is ignored, so the write fails and set -e ends it), the marker kept for
-# img recover and current as it was. img bookmark ignores SIGPIPE, so
+# img recover and current as it was. img record ignores SIGPIPE, so
 # nothing died sooner.
 [ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready"
 rm -f "$rel/` + FetchingFile + `"
@@ -936,7 +963,13 @@ devopsy --say info "current is now $id" || true
       fi
       exit "$status"
     fi
-    get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
+    get_images "$base/$prev" "$rel" || {
+      gi_s=$?
+      # Its data services still held on the newest image their data ran,
+      # never on what its last activation held (img hold).
+      img hold "$base" "$base/$prev" || true
+      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway, its data services on the newest image their data ran"
+    }
 `
 	// Its entries of mnt to their owners, by its own labels: the new
 	// release's may have given them to others.
@@ -992,7 +1025,10 @@ fi
 fi
 `
 	}
-	s += `if [ "$status" != 0 ]; then
+	// What ran on the data, failed or not, before a restart replaces it:
+	// the history the next activation's checks and holds go by.
+	s += `img ran "$base" "$rel" || true
+if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + `  if [ -n "$prev" ]; then
     make_current "$prev"
@@ -1149,6 +1185,12 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
 fi
 `
 
+// ImagesAcceptEnv names, space-separated, the services whose image an
+// activation or a sync's holder lets through the checks against their
+// data's history (img record, sync-check, sync-done): the operator's
+// --accept-image.
+const ImagesAcceptEnv = "DEVOPSY_INTERNAL_IMAGES_ACCEPT"
+
 // WatchEnv tells an activation that its stdin stays open for as long as
 // the operator's devopsy runs (a pipe it keeps), so EOF there means the
 // session is gone: activations are always -T, whose drop sends no
@@ -1296,9 +1338,6 @@ func leftPath(t *Target) string {
 //   - img <action> ...: devopsy --images for the environment (its compose
 //     name, its project's record).
 //   - fetch_images <dir>: builds or pulls a release's images (fetchImages).
-//   - get_images <dir>: under the shared image lock, a release's images
-//     restored from its bookmarks (img restore), else fetched and
-//     bookmarked. A new release has no listing yet, so it fetches.
 //   - image_lock shared|exclusive <doing> [now] and image_unlock: the
 //     server's image lock (ImagesLock) on fd 8, always taken after the
 //     release lock (fd 9). With now it never waits; otherwise up to 10
@@ -1322,7 +1361,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name}, false) + ` --left "$left" "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1374,13 +1413,6 @@ image_unlock() {
   rm -f "$root/` + ImagesHolders + `/$$" 2>/dev/null || true
   exec 8>&-
 }
-get_images() {
-  image_lock shared fetching || return $?
-  gi=0
-  img restore "$1" || { fetch_images "$1" && img bookmark "$1"; } || gi=$?
-  image_unlock
-  return "$gi"
-}
 `
 }
 
@@ -1391,25 +1423,45 @@ get_images() {
 // the registry fails there. Through `devopsy --`, past project commands
 // named pull or build, on a pseudo-terminal (with_tty) for BuildKit's live
 // progress. Empty for any other mode.
+//
+// Either way every profile's services without a build are pulled too
+// (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
+// would otherwise keep the tag it pulled first, never its fixes. Pulled
+// only: the listing and the bookmarks stay the default services' (`config
+// --images`), and a profile's buildable services are neither built nor
+// pulled, so a tool nobody pushed never fails a release. In build mode
+// that is the same one pull; image mode pulls its default services'
+// third-party images twice (a manifest request each, nothing
+// downloaded), since Compose cannot pull a profile's non-buildable
+// services and the default buildable ones in one call.
 func fetchImages(projectName, mode string) string {
 	var what, cmd string
 	switch mode {
 	case ModeBuild:
 		what = "pulling and building images (build mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull", "--ignore-buildable"}, false) +
+		cmd = devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
 			" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
 	case ModeImage:
 		what = "pulling images (image mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull"}, false)
+		cmd = devopsyCall(projectName, []string{"--", "pull"}, false) +
+			" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
 	default:
 		return ""
 	}
+	// Without devopsy's own compose file (images.NoReleaseComposeEnv): a
+	// rollback's or a restart's fetch is of the project's images, never of
+	// the holds the release's last activation wrote, which may name an
+	// image nothing runs any more (the restore decides the holds after).
 	return `fetch_images() {
   devopsy --say info "` + what + `"
-  (cd "$1/` + CodeDir + `" && with_tty ` + Quote(cmd) + `)
+  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty ` + Quote(cmd) + `)
 }
 `
 }
+
+// ProfilePull is compose's arguments to pull every service without a
+// build, every profile's included (fetchImages).
+var ProfilePull = []string{"--profile", "*", "pull", "--ignore-buildable"}
 
 // NotLive is not_live, for a new release that does not go live: marked
 // failed, so rollbacks skip it and keep never counts it. A first one
@@ -1517,9 +1569,10 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     # The current release, while a sync into it runs.
     [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
   fi
-  # Names only: the ids after a tab stay on the server.
+  # Names, each with its version or short digest (name=version): the
+  # ids stay on the server.
   i=
-  [ ! -f "$base/releases/$r/%s" ] || i=$(cut -f 1 < "$base/releases/$r/%s" | tr '\n' ' ')
+  [ ! -f "$base/releases/$r/%s" ] || i=$(awk -F '\t' '$1 != "" { v = $6; if (v == "" && $5 != "") { v = $5; sub(/.*@/, "", v); v = substr(v, 1, 19) } printf "%%s%%s ", $1, (v == "" ? "" : "=" v) }' "$base/releases/$r/%s")
   printf '%%s\t%%s\t%%s\t%%s\t' "$r" "$c" "$f" "$i"
   [ ! -f "$base/releases/$r/%s" ] || tr -d '\n' < "$base/releases/$r/%s"
   echo
@@ -1538,8 +1591,9 @@ type Release struct {
 	Incomplete, InProgress bool
 	// Syncing: current, while a sync into it runs (SyncRunning).
 	Syncing bool
-	// Images are the names it runs (ImagesFile): what a rollback to it
-	// restores, and what removing it may free.
+	// Images are the names it runs (ImagesFile), each followed by = and
+	// its version or short digest when the listing has one: what a
+	// rollback to it restores, and what removing it may free.
 	Images []string
 	Record Record
 }
@@ -1627,7 +1681,15 @@ func FormatReleases(out string) string {
 	for _, r := range ParseReleases(out) {
 		b.WriteString(r.Line() + "\n")
 		if len(r.Images) > 0 {
-			b.WriteString("    " + strings.Join(r.Images, " ") + "\n")
+			shown := make([]string, len(r.Images))
+			for i, img := range r.Images {
+				// name=version: the version or short digest the release ran.
+				if ref, v, ok := strings.Cut(img, "="); ok {
+					img = ref + " (" + v + ")"
+				}
+				shown[i] = img
+			}
+			b.WriteString("    " + strings.Join(shown, " ") + "\n")
 		}
 	}
 	if b.Len() == 0 {

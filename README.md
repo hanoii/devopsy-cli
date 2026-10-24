@@ -25,8 +25,10 @@ code, so every project works the same way.
   listens for webhooks. A server is Docker, SSH and this binary.
 - **Not an orchestrator.** No Kubernetes, no Swarm, no failover: an
   environment is one compose project on one server.
-- **Not a compose replacement.** It never generates or rewrites compose
-  files; plain `docker compose` sees exactly what devopsy runs.
+- **Not a compose replacement.** It never rewrites your compose files:
+  plain `docker compose` sees what devopsy runs, but for the one file of
+  devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
+  image each service was given, the ones held by digest).
 - **Not a local development tool like DDEV.** No per-framework setup, router
   or snapshots: it runs the compose project you write.
 - **Not a build system.** Images are built however you like: on the server
@@ -316,10 +318,15 @@ capability.
 
 **`--context-hash [service]`** prints a hash of what the service's image is
 built from at `HEAD` (git-tracked context minus the dockerignore Docker
-uses, the Dockerfile, the `build:` section), to reuse an image across
-commits that do not change it: `tag=ctx-$(devopsy --context-hash app)`.
-Base images and downloads are not covered: rebuild with `--pull`. devopsy
-builds nothing itself.
+uses, the Dockerfile, the `build:` section, its base images), to reuse an
+image across commits that do not change it: `tag=ctx-$(devopsy
+--context-hash app)`. Each base image (a `FROM` that is no stage and not
+`scratch`, its global `ARG`s expanded) counts by the digest its registry
+gives now (`docker buildx imagetools inspect`, nothing pulled; a base
+pinned by digest asks nothing), so a patched base makes a new hash: build
+it with `--pull`, or Docker's cache keeps the old base. A registry that
+does not answer fails the command, so the caller builds. Downloads during
+the build are not covered. devopsy builds nothing itself.
 
 ### Output, secrets and debugging
 
@@ -494,7 +501,7 @@ since a child's first release syncs from a released parent. `devopsy
 ```sh
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
-devopsy @vm1:prod --releases     # list them and their images, * marks the current one
+devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
 devopsy @vm1:pr-12 --destroy     # take it down and remove the environment, data included
@@ -504,7 +511,7 @@ devopsy @vm1:develop --release-sync       # a release and the parent's data in o
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.data label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
 devopsy @vm1:prod --import database --resolved   # accept the data an import that failed left, start what it kept down
-devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, the project's own lines
+devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, images held or moved, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
 devopsy @vm1:prod logs -f web    # any command, in the current release
@@ -602,12 +609,17 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   failure fails the release as its run step would.
 - **Images:** after the checks, devopsy gets the release's images, by
   `mode:`, on the server and before it goes live: in build mode `docker
-  compose pull --ignore-buildable` (services without a `build:`) then
-  `docker compose build --pull` (the rest, base images refreshed); in
-  image mode `docker compose pull`, every service with an `image:`,
-  buildable ones included, so a tag missing from the registry fails the
-  release there. Only the services Compose starts by default: other
-  profiles get theirs when used. The run step's `up` then finds them all;
+  compose --profile '*' pull --ignore-buildable` (services without a
+  `build:`) then `docker compose build --pull` (the rest, base images
+  refreshed); in image mode `docker compose pull`, every service with an
+  `image:`, buildable ones included, so a tag missing from the registry
+  fails the release there, then the same `--profile '*' pull
+  --ignore-buildable`. Every profile's services without a `build:` are
+  pulled on every release, so a tool run now and then (`devopsy
+  --profile tools run --rm jq`) gets its tag's fixes too, and one that
+  fails to pull fails the release like any other; they are only pulled,
+  not kept as the release's own images (below), and a profile's
+  buildable services are built when used. The run step's `up` then finds them all;
   a `deploy` needs no `build` or `pull` of its own. A failure leaves
   `current` as it was, its images included; what the failed release got
   is tagged as its own, so it goes with it. So does an interrupted one
@@ -621,9 +633,10 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   healthy nor exited 0, its last health checks and its last 100 log
   lines. Then `current` goes back to the previous release, which
   is restarted with its own run step, from its own config (its `rollback:`
-  run step, else its `release:` one), with its own images back, so its
-  containers are the previous release's again. Data changes, like database
-  updates, are the project's to undo. A first release has nothing to go
+  run step, else its `release:` one), with its images as a rollback gets
+  them (below: what it built back, a database staying on the newest image
+  its data ran). Data changes, like database updates, are the project's
+  to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
   kept), and `--status` says the release failed.
 - **A child's first release** syncs its parent's data between switching
@@ -673,17 +686,48 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   runs gets a second tag, `devopsy-<compose name>-<release id>` (a long
   compose name shortened, a checksum added when a release names one
   repository twice), without changing the names Compose runs
-  (`drupal11-prod-app`, `mariadb:11`), images pulled by digest included. A
-  rollback, or the restart after a failed `run`, points those names back
-  at that release's tags: exactly the images it ran, floating tags
-  included, without building or pulling. A release whose images are gone
-  builds or pulls again. One exception: a shared name (`mariadb:11`) whose
-  newer image another compose project on the server runs, any environment,
-  instance or project, or a container outside Compose, stays on it, and
-  the release says so: rolling back one environment never changes another.
-  Pin such images (`mariadb:11.8.3`) for exact rollbacks. A floating tag's
-  bookmark is what the name held when the release fetched: two releases
-  pulling `mariadb:11` at the same moment may each bookmark the other's.
+  (`drupal11-prod-app`, `mariadb:11.8`), images pulled by digest included.
+  devopsy never moves a pulled name back: another environment, instance or
+  project may run it.
+- **Data only goes forward:** a service with a `devopsy.data` label (any
+  value, `none` included) whose image Compose pulls rather than builds (a
+  database, in drupal11) changes its data in place, so it must never meet
+  an older image than the newest that ran on it. devopsy keeps, per
+  environment, the images that ran on each such service's data
+  (`.devopsy-data-images`, beside `shared/`), and holds the service on its
+  image by digest in every activation (`devopsy-compose.yaml`, below), so
+  nothing but the environment's own next activation moves it: not another
+  environment's pull, not a plain `up`. A release whose image for it moved
+  under the same name (`mariadb:11.8` patched upstream) runs it, like any
+  pull. One whose image the data moved past (a tag pushed again backward,
+  a stale mirror, a pin lowered to an image that ran before), or whose name
+  changed to an image the data never ran (`mariadb:11.8` to `mariadb:11.4`,
+  a pin bumped, a series switched: devopsy reads no versions, so it cannot
+  tell newer from older there), is refused before anything changes, the
+  names its pull moved put back; `--accept-image <service>` (comma
+  separated, or repeated) runs it anyway, and the data's history starts
+  over from that image. `--yes` never does: it only skips prompts. A
+  database the project builds (`FROM mariadb`) is checked the same way
+  once its data ran a pulled image: switching between pulled and built
+  is one acceptance, its own builds after are not checked (no digest
+  orders them); one always built is never asked.
+- **Rollbacks bring back code:** a rollback, or the restart after a
+  failed `run`, brings back the release's own images exactly (what it
+  built, from its tags, without building again), its compose files,
+  variables and commands. Any other pulled image runs what the older
+  release's name gives now: a pin or a commit tag is the image it ran,
+  a floating tag its current, patched one. A data service stays on the
+  newest image its data ran, whatever the older release named. Data is
+  never undone (that is for snapshots). The rollback says each service
+  that does not go back, and why. Pin an image (a tag that never moves,
+  or a digest) when you want a rollback to take it back.
+- **What changed:** each release says which images changed since the
+  one it replaces, a pulled image by its version label
+  (`org.opencontainers.image.version`) when it has one, else by short
+  digest, a built one as rebuilt. In image mode it warns when an image
+  the project builds changed under the same name (tag it by commit), and
+  when one built over 30 days ago has not changed since the release
+  before: its base may have patches, so rebuild it with `--pull`.
 - **Images go with their releases:** pruning a release removes its tags.
   An image no other release still tags, of any environment, instance or
   project on the server, also loses the names that release ran that still
@@ -740,6 +784,17 @@ Two modes, `mode:` in the config:
   run their own image. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
 
+**Choosing tags.** Float third-party images on the series upstream
+patches (`mariadb:11.8`, `caddy:2-alpine`, `traefik:v3.7`): every release
+pulls them, so fixes arrive with your next release and no commit. Never
+`latest`, and never a major whose data or configuration format changes
+(`mariadb:11`): a plain release would cross series. A series bump is one
+`--release --accept-image <service>` for a service with data. Tag your own images by commit
+(image mode) or let devopsy build them (build mode). Pin a stateless image
+whose upgrade you test by hand, by tag or by digest, when you want a
+rollback to take it back. An environment nobody releases gets no patches:
+release it on a schedule (below).
+
 Image mode needs no git: without it the release just has no commit.
 Either way files arrive with git's modes, whatever the checkout's: 0755
 when executable, else 0644 (a checkout synced by ddev's Mutagen has 0600
@@ -758,7 +813,8 @@ uploaded in `code/`, where `current` points and commands run, and
 devopsy's own files beside it, never in the project's tree, so a build
 context only ever sees the project: `devopsy-release.json` (commit,
 branch, who), `devopsy-target.env` (its environment), `devopsy-images`
-(its images), `devopsy-log-session` and `devopsy-log-server`,
+(its images, with each one's digest and version), `devopsy-compose.yaml`
+(below), `devopsy-log-session` and `devopsy-log-server`,
 `devopsy-pending` until it goes live, `devopsy-fetching` while it gets
 its images, `devopsy-failed` when it never went live or its run failed,
 and `devopsy-rolled-back` once a rollback left it.
@@ -770,6 +826,14 @@ files are never uploaded. Each release records its commit, branch and who
 made it. A release that fails before going live stays, marked failed, a
 first one too: `devopsy @<target> --destroy` removes an environment that
 never went live, `--releases remove failed` the release alone.
+`devopsy-compose.yaml` is devopsy's own compose file, the only one it
+writes, holding only facts of the release's last activation: the image
+each service was given (a `devopsy.digest` label) and the images held by
+digest (above). devopsy runs compose with it between the project's
+`compose.yaml` and your `compose.override.yaml`, so your override still
+wins; `devopsy -- config` shows the result. Run compose on a server
+through devopsy: a plain `docker compose up` lacks it, recreates every
+container once and follows the names.
 One that fails in its `run` step leaves what the step started: a container
 left restarting recreates its bind mounts under `current` as a directory
 (Docker does, as root), and the next release refuses until it is taken
@@ -898,8 +962,9 @@ when the server lacks it, so a registry that cannot be reached refuses
 the release before it goes live.
 
 Named volumes and absolute paths are not checked. `--destroy` empties
-`shared/mnt` as root in `devopsy-util`. Back up `shared/.env` and
-`shared/mnt` (databases as dumps).
+`shared/mnt` as root in `devopsy-util`, and forgets the history of the
+images that ran on the data. Back up `shared/.env`, `shared/mnt`
+(databases as dumps) and `.devopsy-data-images` beside them.
 
 **Data and its labels.** Everything devopsy does with data is an export
 (a read) or an import (a replacement), of one service or of all of them
@@ -1048,6 +1113,29 @@ its services, nothing was copied. A service streamed on one side and not
 the other is refused the same way (a label the child sets in its own
 `shared/.env` can still differ).
 
+**Images with the data.** A copy of a pulled data service's files
+(`mnt`; a `stream` goes through the child's own image, which keeps its
+history) brings data the parent's image wrote, so the child takes that
+image with it. Before anything stops, the child's side checks the image
+it runs: the parent's, or another under the same name, is fine (it is
+held on the parent's after the copy); an image the parent's data moved
+past, or a name the parent's data never ran (a child pinned to another
+version), is refused, every sync, unless `--sync --accept-image
+<service>`: then that service runs the child's own image on the copy,
+its history starting over from it, the way to try an upgrade on the
+parent's data (dev on `mariadb:12`, prod on `11.8`), one command per
+sync. The parent's
+image is pulled on the child's server by its digest when missing, never
+taken from a local name, and a sync that cannot pull it is refused,
+nothing changed. Once the copy is complete the child holds the parent's
+exact image, takes over the parent's history of the images that ran on
+that data, and its stopped service is made again on it (`compose start`
+would start the old container on the new data), before `finish child
+go`. A parent released between the sync's start and its copy refuses the
+copy before stopping anything: sync again. A complete `--import` of a
+`mnt` service, or `--resolved`, starts that service's history over from
+the image that runs it.
+
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits
 for the parent. On the parent's, under a shared hold of its release lock
@@ -1066,11 +1154,14 @@ uncreated, as the run step's `up` would leave it. A lock held by something else 
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
 
-The rsync runs as root in `devopsy-util`, devopsy's own image (alpine with
-rsync and GNU tar, find and chown; it replaced `devopsy-rsync`, which
-`docker image rm devopsy-rsync:2` removes, and `devopsy-util:1`, which
-`docker image rm devopsy-util:1` removes), built on each server the first time, so
-ownership and the deploy user's permissions do not matter. **On one
+The rsync runs as root in `devopsy-util`, devopsy's own image (alpine 3
+with rsync and GNU tar, find and chown; it replaced `devopsy-rsync` and
+`devopsy-util:1`, which `docker image rm devopsy-rsync:2 devopsy-util:1`
+removes), built on each server the first time, so ownership and the
+deploy user's permissions do not matter. Wherever it is used, an image a
+week old is built again, its base pulled, so what runs as root on your
+data gets alpine's fixes; a rebuild that fails (the registry out of
+reach) warns and goes on with the image there. **On one
 server**, one container copies between the two directories, without SSH,
 and a stream is written into the child's directory directly. **Across
 servers**, the parent's server starts an rsync daemon (read-only, serving
@@ -1115,7 +1206,7 @@ So, across servers:
 devopsy @develop --sync                         # asks for the environment's name
 devopsy @develop --sync --yes                   # CI
 devopsy @develop --sync --from @b/prod          # another environment of the project
-devopsy @develop --sync --yes -- --exclude=cache  # arguments for rsync
+devopsy @develop --sync --yes --accept-image database  # its own image on prod's data
 ```
 
 `--sync` asks you to type the environment's full name
@@ -1124,9 +1215,9 @@ and `--import` do,
 and so does `--release-sync` on a child already released; `--yes`
 skips it. First-release syncs never ask. `--from` copies from another
 environment of the project instead of the parent: an address, as after
-`devopsy`, with its `@` (devopsy takes it without one too). What follows
-`--` goes to rsync, and to the data capability's actions as
-`DEVOPSY_SYNC_ARGS`.
+`devopsy`, with its `@` (devopsy takes it without one too). A sync copies
+everything the labels say; what must never be copied is excluded by label
+(`devopsy.data.exclude`).
 
 **Starting a child over:** `devopsy @develop --reset` (same options as
 `--sync`) is a sync that first throws away everything a sync leaves on
@@ -1392,6 +1483,13 @@ value of each. devopsy adds `-o ClearAllForwardings=yes` to every session:
 it never needs the host's `LocalForward` lines, and each session would try
 to bind them again while another holds them.
 
+**Environments nobody releases:** floating tags (`mariadb:11.8`,
+`caddy:2-alpine`) and base images get their fixes with a release, which
+pulls them again (Images, above). An environment nobody releases for
+weeks keeps what it pulled last: schedule a release from CI, weekly,
+with the same restricted key (`devopsy @prod --release` in a scheduled
+job).
+
 **SSH settings:** a release opens several SSH sessions (checks, upload,
 activation, its log), each a new connection and handshake: noticeable
 through a jump host or VPN. `devopsy @<server> --ssh-config` prints a
@@ -1555,8 +1653,7 @@ lists them with their contracts):
     labels (at `finish ... go|abort` back up by then; at `finish child
     partial`, what stays down); a stopped `stream` service is in both. In
     a sync also `DEVOPSY_SYNC_FROM_TARGET` and `DEVOPSY_SYNC_TO_TARGET`
-    (the parent's and the child's addresses) and `DEVOPSY_SYNC_ARGS`
-    (what followed `--sync`'s `--`). The other `DEVOPSY_SYNC_*` variables
+    (the parent's and the child's addresses). The other `DEVOPSY_SYNC_*` variables
     a push sets are devopsy's own.
 
 ## License

@@ -54,9 +54,9 @@ type FlagGroup struct {
 // once for each. A new flag goes here.
 var Flags = []FlagGroup{
 	{"Releases", []Flag{
-		{Name: "--release", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
-		{Name: "--release-sync", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
-		{Name: "--release-no-sync", Args: "[--yes]", Scope: Target, Desc: "the same, never syncing"},
+		{Name: "--release", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "upload a release, switch to it, run it\n(a child's first one syncs from its parent)"},
+		{Name: "--release-sync", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "the same, and sync the parent's data in"},
+		{Name: "--release-no-sync", Args: "[--accept-image <svc>] [--yes]", Scope: Target, Desc: "the same, never syncing"},
 		{Name: "--release", Scope: Local, Desc: "locally, in place: prepare, images, run\n(defaults: release steps)"},
 		{Name: "--rollback", Args: "[--yes]", Scope: Target, Desc: "back to the previous release"},
 		{Name: "--releases", Args: "[remove <id|failed>... [--yes]]", Scope: Target, Desc: "the releases there; or remove some,\nwith the images only they hold"},
@@ -65,8 +65,8 @@ var Flags = []FlagGroup{
 		{Name: "--destroy", Args: "[--yes]", Scope: Local, Desc: "locally, in place: the destroy step\n(defaults: destroy)"},
 	}},
 	{"Data", []Flag{
-		{Name: "--sync", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "a child's data from its parent, then run"},
-		{Name: "--reset", Args: "[--from @<target>] [--yes]", Scope: Target, Desc: "a child wiped and synced anew, then run"},
+		{Name: "--sync", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "a child's data from its parent, then run"},
+		{Name: "--reset", Args: "[--from @<target>] [--accept-image <svc>] [--yes]", Scope: Target, Desc: "a child wiped and synced anew, then run"},
 		{Name: "--inherit", Scope: Target, Desc: "the parent's inherit: variables again"},
 		{Name: "--export", Args: "<service>", Scope: LocalOrTarget, Desc: "a service's data, to stdout"},
 		{Name: "--import", Args: "<service> [--yes] [--resolved]", Scope: LocalOrTarget, Desc: "a service's data, from stdin"},

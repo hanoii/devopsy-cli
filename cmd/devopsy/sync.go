@@ -25,6 +25,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/dotenv"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -43,8 +44,6 @@ type syncJob struct {
 	// to and port are where the parent's server reaches the child's
 	// (user@hostname), when they differ.
 	to, port string
-	// args go to rsync (after --sync's --).
-	args []string
 	// first: the child's first release, with no data of its own yet. Its
 	// inherited variables are written before the upload, so the variables
 	// check sees them, and stay if the sync fails: the next release is a
@@ -57,6 +56,10 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
+	// images are the parent's data images (images.Set.ParentData), read
+	// in the preflight: the child's side checks and takes them over, the
+	// push refuses when they changed since.
+	images string
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -73,7 +76,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, args []string, reset bool) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -86,7 +89,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 	if c.Release == nil || len(remote.StepArgs(c.Release.Run)) == 0 {
 		return nil, errors.New(missingSteps(c, "release"))
 	}
-	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), args: args, id: newSyncID(), reset: reset}
+	job := &syncJob{child: c, parent: p, projectName: projectName, parentName: p.ComposeName(), id: newSyncID(), reset: reset}
 	job.sameHost = sameHost(c.Host, p.Host)
 	if p.Address == c.Address || (job.sameHost && p.Path == c.Path) {
 		return nil, fmt.Errorf("@%s and its parent are the same environment (%s:%s)", c.Address, p.Host, p.Path)
@@ -115,7 +118,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 	if reset {
 		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
 	}
-	code, err := remote.SSH(p, remote.CurrentExistsScript(p, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
+	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +126,7 @@ func syncPreflight(c, p *remote.Target, projectName string, args []string, reset
 		return nil, fmt.Errorf("could not check the parent @%s (%d)", p.Address, code)
 	}
 	cur := remote.ParseCurrent(out.String())
+	job.images = remote.ParseParentData(out.String())
 	switch {
 	case !cur.Current:
 		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
@@ -385,10 +389,10 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 		remote.SyncToDirEnv:      base + "/current/.devopsy",
 		remote.SyncToProjectEnv:  job.projectName,
 		remote.SyncToTargetEnv:   job.child.Address,
-		remote.SyncArgsEnv:       strings.Join(job.args, " "),
 		remote.SyncFromTargetEnv: p.Address,
 		remote.SyncWatchEnv:      "1",
 		remote.HeartbeatEnv:      fmt.Sprint(int(remote.HeartbeatEvery().Seconds())),
+		images.SyncImagesSumEnv:  images.Sum(job.images),
 	}
 	if job.reset {
 		env[remote.SyncResetEnv] = "1"
@@ -580,9 +584,9 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if reset {
 		flag = "--reset"
 	}
-	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--yes] [-- <rsync args>...]"
+	usage := "usage: devopsy @" + targetRef(t) + " " + flag + " [--from @<address>] [--accept-image <service>[,<service>...]] [--yes]"
 	yes, from := false, ""
-	var rsyncArgs []string
+	var accept []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--yes", "-y":
@@ -593,9 +597,12 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			}
 			from = strings.TrimPrefix(args[i+1], "@")
 			i++
-		case "--":
-			rsyncArgs = args[i+1:]
-			i = len(args)
+		case "--accept-image":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return fail(usage)
+			}
+			accept = acceptImage(accept, args[i+1])
+			i++
 		default:
 			return fail(usage)
 		}
@@ -611,7 +618,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, rsyncArgs, reset)
+	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -639,8 +646,10 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Args: rsyncArgs, Inherit: len(p.Inherit) > 0, ID: job.id}
-	code := runSyncSession(job, remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
+	o := &remote.SyncOptions{From: p.Address, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images}
+	// --yes also lets the child's images through the check against the
+	// parent's data (img sync-check), as it does a release's.
+	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)
 
 	// The log goes with the release syncd into, after its own.
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("sync exited %d", code)))
@@ -793,19 +802,79 @@ func dockerOut(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// ensureUtilImage builds devopsy's util image on this host when missing.
+// ensureUtilImage gets devopsy's util image ready on this host: built
+// when missing, which fails what needs it when the build does; rebuilt,
+// its base pulled and nothing cached, once older than
+// remote.UtilImageMaxAge, so what runs as root on the data gets alpine's
+// fixes. A rebuild that fails only warns: the image there still works,
+// and a registry out of reach must not stop a sync, an import or
+// --destroy; the next use tries again. Two at once on a host are
+// harmless: a build tags the image only once complete, and the image a
+// rebuild replaced is removed without -f, so one a container still runs
+// stays.
 func ensureUtilImage(ctx context.Context) error {
-	if exec.CommandContext(ctx, "docker", "image", "inspect", remote.UtilImage).Run() == nil {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}} {{.Created}}", remote.UtilImage).Output()
+	if err != nil {
+		report.Info("building " + remote.UtilImage)
+		if err := buildUtilImage(ctx, false); err != nil {
+			return fmt.Errorf("building %s: %w", remote.UtilImage, err)
+		}
 		return nil
 	}
-	report.Info("building " + remote.UtilImage)
-	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs()...)
-	cmd.Stdin = strings.NewReader(strings.Join(remote.UtilDockerfile, "\n") + "\n")
-	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("building %s: %w", remote.UtilImage, err)
+	id, created, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	// A date Docker writes otherwise counts as old: a rebuild too many
+	// costs a minute, never a stale image.
+	if t, err := time.Parse(time.RFC3339Nano, created); err == nil && time.Since(t) < remote.UtilImageMaxAge {
+		return nil
+	}
+	report.Info("updating " + remote.UtilImage + ", built over a week ago")
+	if err := buildUtilImage(ctx, true); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		report.Warn("updating "+remote.UtilImage+" failed: going on with the one there", err.Error())
+		return nil
+	}
+	now, err := exec.CommandContext(ctx, "docker", "image", "inspect", "-f", "{{.Id}}", remote.UtilImage).Output()
+	if now := strings.TrimSpace(string(now)); err == nil && id != "" && now != "" && now != id {
+		// Untagged now; a container still running it keeps it.
+		_ = exec.CommandContext(ctx, "docker", "image", "rm", id).Run()
 	}
 	return nil
+}
+
+// buildUtilImage builds remote.UtilImage from its Dockerfile, refresh as
+// remote.BuildUtilImageArgs says. The Dockerfile goes in from a file,
+// never a pipe: a docker that exits before reading it (its daemon down)
+// would raise SIGPIPE, which interruptible takes for the operator's
+// interrupt, cancelling the whole command.
+func buildUtilImage(ctx context.Context, refresh bool) error {
+	f, err := os.CreateTemp("", "devopsy-util-*.Dockerfile")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if _, err := f.WriteString(strings.Join(remote.UtilDockerfile, "\n") + "\n"); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", remote.BuildUtilImageArgs(refresh)...)
+	cmd.Stdin = f
+	cmd.Stdout, cmd.Stderr = io.Discard, errOut // stdout: the image's id
+	return cmd.Run()
+}
+
+// runUtilImage is the hidden remote.UtilImageFlag: ensureUtilImage, for
+// a script about to use the image.
+func runUtilImage() int {
+	if err := ensureUtilImage(context.Background()); err != nil {
+		report.Fail(err)
+		return 1
+	}
+	return 0
 }
 
 // syncEnv reads the sync's variables in a push: the child's directory and
@@ -868,6 +937,16 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}()
 
+	// The data images the child's side checked and takes over: this
+	// side's must be the ones the preflight read (a release of this
+	// environment since would copy data another image wrote).
+	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
+		rel := remote.ReleaseFile(projectDir, "")
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
+		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
+			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
+		}
+	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		return fail(err.Error())
@@ -958,6 +1037,14 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
+		// Across servers the child's too, before anything stops here: a
+		// weekly rebuild there (a pull of its base) would otherwise lengthen
+		// this side's downtime, in its receive script.
+		if os.Getenv(remote.SyncToEnv) != "" {
+			if err := childUtilImage(ctx); err != nil {
+				return fail(err.Error())
+			}
+		}
 	}
 
 	set := cli.DataStops(services, cli.SyncParent, "")
@@ -1000,7 +1087,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// import's): what its holder decides from, answer or not.
 	code := 0
 	if len(dirs) > 0 {
-		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), strings.Fields(os.Getenv(remote.SyncArgsEnv)), len(streams) == 0); err != nil {
+		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), len(streams) == 0); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -1261,7 +1348,7 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, nil, len(streams) == 0, wipeScript())
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0, wipeScript())
 	}
 	if os.Getenv(remote.SyncResetEnv) != "" {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
@@ -1336,6 +1423,21 @@ func childServices(ctx context.Context, needs []string) ([]childService, string,
 	}
 	services, mark := parseChildServices(out.String())
 	return services, mark, nil
+}
+
+// childUtilImage gets the child's server's devopsy-util ready
+// (remote.UtilImageFlag) through --sync-exec, in a session of its own.
+func childUtilImage(ctx context.Context) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, remote.UtilImageFlag)
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("getting the child's server's %s ready: %w", remote.UtilImage, err)
+	}
+	return nil
 }
 
 // parseChildServices reads --sync-services list: per service its name,
@@ -1493,7 +1595,7 @@ func rsyncdConf(entries, files []string) string {
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, args []string, last bool) error {
+func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -1539,7 +1641,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 		}
 		for i, d := range present {
 			report.Info("rsync mnt/" + d)
-			run := append(append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...), args...)
+			run := append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...)
 			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
 			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
 			if slices.Contains(files, d) {
@@ -1611,7 +1713,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, args, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1644,13 +1746,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncArgsEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncArgsEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -2557,7 +2659,32 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 		if err != nil {
 			errs = append(errs, err)
 		}
-		if start := intersect(stop, exited); len(start) > 0 {
+		start := intersect(stop, exited)
+		// On a complete copy (create: finish go), a service whose image
+		// devopsy's compose file changed since its container was made (a
+		// sync took over the parent's image) is made again, with no
+		// other: compose start would run the old image on the new data.
+		// Never otherwise: an abort in a release that syncs restores the
+		// child's own data, which the release's images, not live, must
+		// not touch (the release goes back).
+		var recreate []string
+		if create {
+			recreate = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+		}
+		if len(recreate) > 0 {
+			report.Info("recreating " + strings.Join(recreate, " ") + " on the image its data now needs")
+			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, recreate...)...); err != nil {
+				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
+			}
+			var rest []string
+			for _, s := range start {
+				if !slices.Contains(recreate, s) {
+					rest = append(rest, s)
+				}
+			}
+			start = rest
+		}
+		if len(start) > 0 {
 			report.Info("starting " + strings.Join(start, " "))
 			if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose start: %w", err))
