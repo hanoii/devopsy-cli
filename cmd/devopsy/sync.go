@@ -933,9 +933,6 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "export")) {
 		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/%s/export", strings.Join(streams, ", "), cli.DataLabel, cli.DataStream, cli.DataCapability))
 	}
-	if msg := cli.SyncWholeNotice(services); msg != "" {
-		report.Warn(msg)
-	}
 	// A reset takes the child's services down before it copies: none
 	// runs under the copy.
 	var conflicts []string
@@ -1003,7 +1000,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// import's): what its holder decides from, answer or not.
 	code := 0
 	if len(dirs) > 0 {
-		if err := syncRsync(ctx, projectDir, dirs, strings.Fields(os.Getenv(remote.SyncArgsEnv)), len(streams) == 0); err != nil {
+		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), strings.Fields(os.Getenv(remote.SyncArgsEnv)), len(streams) == 0); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -1050,7 +1047,7 @@ func copiesService(projectDir string, services []cli.SyncService, streams []stri
 		want = s.Dirs
 	}
 	for _, d := range want {
-		if !(slices.Equal(copied, []string{"."}) || slices.Contains(copied, d)) || !fileExists(filepath.Join(mnt, d)) {
+		if !slices.Contains(copied, d) || !fileExists(filepath.Join(mnt, d)) {
 			missing = append(missing, d)
 		}
 	}
@@ -1264,14 +1261,16 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0, wipeScript())
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, nil, len(streams) == 0, wipeScript())
 	}
 	if os.Getenv(remote.SyncResetEnv) != "" {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
 	}
 	needs := remote.Needs(script)
-	if !slices.Contains(needs, remote.DataLabelsFeature) {
-		needs = append(needs, remote.DataLabelsFeature)
+	for _, f := range []string{remote.DataLabelsFeature, remote.MntOwnerFeature} {
+		if !slices.Contains(needs, f) {
+			needs = append(needs, f)
+		}
 	}
 	slices.Sort(needs)
 	return needs
@@ -1279,11 +1278,40 @@ func childNeeds(dirs, streams []string) []string {
 
 // childService is a line of the child's --sync-services list: a service,
 // its data label there (mnt, stream or none) and its stop word, its
-// containers' state (running, exited..., none without one) and its
-// entries of mnt.
+// containers' state (running, exited..., none without one), its
+// entries of mnt, and the owners of those it owns (entry to <uid>:<gid>,
+// cli.MntOwnerLabel).
 type childService struct {
 	Name, Transfer, Stop, State string
 	Dirs                        []string
+	Owners                      map[string]string
+}
+
+// childOwners are the owners of the child's entries, from its list: what
+// the rsync gives every file it writes there (--chown), so a parent's
+// owners never land on the child. The child's own check refuses two
+// owners on one entry.
+func childOwners(child []childService) map[string]string {
+	owners := map[string]string{}
+	for _, c := range child {
+		for e, o := range c.Owners {
+			owners[e] = o
+		}
+	}
+	return owners
+}
+
+// listOwners is a service's owners column in --sync-services list:
+// <entry>=<uid>:<gid> for each entry it owns, space separated (entries
+// have no whitespace, owners no =).
+func listOwners(s cli.SyncService) string {
+	var out []string
+	if s.Owner != "" {
+		for _, d := range s.Writable {
+			out = append(out, d+"="+s.Owner)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // listMark starts the list's line for the child's import mark, followed
@@ -1311,8 +1339,8 @@ func childServices(ctx context.Context, needs []string) ([]childService, string,
 }
 
 // parseChildServices reads --sync-services list: per service its name,
-// label (<method>+<stop word>), state and entries, and the import mark's
-// line (listMark), whose service it returns.
+// label (<method>+<stop word>), state, entries and owners (listOwners),
+// and the import mark's line (listMark), whose service it returns.
 func parseChildServices(out string) (services []childService, mark string) {
 	// Lines one by one: the last service's entries may be empty, its
 	// line ending in a tab.
@@ -1326,7 +1354,15 @@ func parseChildServices(out string) (services []childService, mark string) {
 			continue
 		}
 		transfer, stop, _ := strings.Cut(f[1], "+")
-		services = append(services, childService{Name: f[0], Transfer: transfer, Stop: cmp.Or(stop, cli.StopNever), State: f[2], Dirs: strings.Fields(f[3])})
+		c := childService{Name: f[0], Transfer: transfer, Stop: cmp.Or(stop, cli.StopNever), State: f[2], Dirs: strings.Fields(f[3]), Owners: map[string]string{}}
+		if len(f) > 4 {
+			for _, eo := range strings.Fields(f[4]) {
+				if i := strings.LastIndex(eo, "="); i > 0 {
+					c.Owners[eo[:i]] = eo[i+1:]
+				}
+			}
+		}
+		services = append(services, c)
 	}
 	return services, mark
 }
@@ -1385,10 +1421,10 @@ func syncConflicts(parent []cli.SyncService, child []childService) []string {
 	if len(dirs) == 0 {
 		return nil
 	}
-	copied := func(d string) bool { return d == "." || dirs[0] == "." || slices.Contains(dirs, d) }
+	copied := func(d string) bool { return slices.Contains(dirs, d) }
 	from := func(d string) string {
 		for _, s := range parent {
-			if s.Transfer == cli.DataMnt && (d == "." || slices.Contains(s.Dirs, d) || slices.Contains(s.Dirs, ".")) {
+			if s.Transfer == cli.DataMnt && slices.Contains(s.Dirs, d) {
 				return s.Name + " (" + cli.DataLabel + "=" + s.Transfer + ")"
 			}
 		}
@@ -1432,7 +1468,7 @@ func exitCode(err error) int {
 }
 
 // rsyncdConf serves the entries of mnt being copied, each as a module of
-// its name (`.`, all of mnt, as `mnt`), read-only, as root, so every
+// its name, read-only, as root, so every
 // owner's files are read; nothing else under mnt can be asked for (a
 // stream database's datadir, the directory of a service without data). The daemon
 // lives for one copy and publishes no port.
@@ -1444,17 +1480,20 @@ func rsyncdConf(entries, files []string) string {
 			conf += "[" + e + "]\npath = /mnt\ninclude = /" + e + "\nexclude = *\n"
 			continue
 		}
-		conf += "[" + remote.RsyncModule(e) + "]\npath = " + path.Join("/mnt", e) + "\n"
+		conf += "[" + e + "]\npath = " + path.Join("/mnt", e) + "\n"
 	}
 	return conf
 }
 
 // syncRsync copies dirs (entries of the parent's mnt) into the child's,
-// replacing what is there (--delete), as root in devopsy's util image.
+// replacing what is there (--delete), as root in devopsy's util image,
+// owners kept (--numeric-ids) unless the child's labels own the entry
+// (owners, from its list): then every file it writes is that owner's
+// (--chown).
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last bool) error {
+func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, args []string, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -1480,7 +1519,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	if len(present) == 0 {
 		return nil
 	}
-	rsync := []string{"rsync", "-a", "--delete", "--numeric-ids"}
+	rsync := slices.Clone(remote.RsyncCopy)
 
 	to := os.Getenv(remote.SyncToEnv)
 	if to == "" {
@@ -1509,6 +1548,9 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 				// until recreated.
 				src, dst = "/src/"+d, "/dst/"
 				run = append(run, "--inplace")
+			}
+			if o := owners[d]; o != "" {
+				run = append(run, "--chown="+o)
 			}
 			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
 				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
@@ -1569,7 +1611,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs, args []string, last
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, args, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, args, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1747,8 +1789,12 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		if err != nil {
 			return fail(err.Error())
 		}
+		// Two owners on one entry would leave the parent to pick one.
+		if _, err := cli.MntOwners(services); err != nil {
+			return fail(err.Error())
+		}
 		for _, s := range services {
-			fmt.Printf("%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "))
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s))
 		}
 		if m := readMark(base); m.IsImport() {
 			fmt.Printf("%s\t%s\n", listMark, m.From)
@@ -2390,7 +2436,7 @@ func wipeData(cwd, projectDir, base string) error {
 		who = "@" + to
 	}
 	report.Info("resetting " + who + ": every container and volume goes and mnt is emptied; its shared/.env stays")
-	if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+$"); err != nil {
+	if err := removeContainers(importContainers(cwd)); err != nil {
 		return err
 	}
 	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
@@ -2399,6 +2445,16 @@ func wipeData(cwd, projectDir, base string) error {
 	// Named by the sync, so a holder deciding meanwhile removes it
 	// (endWriters): no write outlives its sync.
 	if err := emptyMnt(context.Background(), projectDir, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-wipe"); err != nil {
+		return err
+	}
+	// Its owned entries back, as a release left them: finish go creates
+	// the services with data, and a stream's import brings its service
+	// up, on entries Docker would otherwise make root's.
+	owners, mnt, err := projectOwners(cwd)
+	if err == nil {
+		err = ownMnt(context.Background(), mnt, owners, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-owners")
+	}
+	if err != nil {
 		return err
 	}
 	rec, _ := readSyncRecord(cwd)

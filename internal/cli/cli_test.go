@@ -144,6 +144,108 @@ func TestBuildComposePassthrough(t *testing.T) {
 	}
 }
 
+// A command that starts containers reads labels (Plan.Starts) only when
+// a compose file's YAML may carry devopsy.mnt.owner: the label, or a
+// file it includes or extends; never a comment that says so
+// (cmd/devopsy's TestMntOwnersLocal runs one). Only the project's own
+// files, the ones the labels are read from: a -f the command adds is
+// in neither. Never for --dry-run, and never in a release on a server,
+// where --mnt-owners owns that (review of 2026-10-23, round 2: a
+// rollback's up failed on labels this devopsy could not read).
+func TestBuildStarts(t *testing.T) {
+	owned := minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n"
+	root := project(t, "p", map[string]string{"compose.yaml": minimalCompose, "extra.yaml": owned})
+	inRelease := project(t, "p", map[string]string{"compose.yaml": owned, "target.env": "COMPOSE_PROJECT_NAME=p-prod\n"})
+	ownedRoot := project(t, "p", map[string]string{"compose.yaml": owned})
+	for _, c := range []struct {
+		root, args string
+		starts     bool
+	}{
+		{root, "-f " + filepath.Join(root, ProjectDirName, "extra.yaml") + " up -d", false},
+		{inRelease, "up -d", false},
+		{ownedRoot, "--dry-run up -d", false},
+		{ownedRoot, "up --dry-run -d", false},
+		{ownedRoot, "up --dry-run=false -d", true},
+		{ownedRoot, "run --rm a -- sh --dry-run", true},
+		// Past run's service, everything is the container's command
+		// (compose stops parsing its own flags there, -- or not):
+		// `docker compose run --rm a echo ran --dry-run` prints "ran
+		// --dry-run" (checked with Compose on Docker 29.8), so the
+		// container starts and Docker makes a missing entry root's
+		// (review of 2026-10-23, round 4: dryRun took it for compose's).
+		{ownedRoot, "run --rm a composer update --dry-run", true},
+		{ownedRoot, "--profile x run --rm a sh --dry-run", true},
+		// Before the service it is compose's, and so is it anywhere
+		// after the other commands, up to a -- (each checked with Compose
+		// 5.5, by the containers left); a flag's value is never one, and
+		// the last one says, as compose parses a bool flag.
+		{ownedRoot, "run --rm --dry-run a sh", false},
+		{ownedRoot, "run --rm -e X --dry-run a sh", false},
+		{ownedRoot, "run --rm --name --dry-run a sh", true},
+		{ownedRoot, "run --rm --entrypoint=sh -u 1 --dry-run=true a", false},
+		{ownedRoot, "up -d a --dry-run", false},
+		{ownedRoot, "up -d a -- --dry-run", true},
+		{ownedRoot, "up --exit-code-from --dry-run", true},
+		{ownedRoot, "up --dry-run=0 -d", true},
+		{ownedRoot, "up --dry-run=T -d", false},
+		{ownedRoot, "--dry-run up --dry-run=false", true},
+		{ownedRoot, "restart a --dry-run", false},
+		// restart starts containers too, and Docker makes a missing bind
+		// source then, as root (checked with Compose on Docker 29: an
+		// entry removed while the service was stopped came back on
+		// restart; review of 2026-10-23, round 3).
+		{ownedRoot, "restart", true},
+	} {
+		plan, err := build(c.root, strings.Fields(c.args), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Starts != c.starts {
+			t.Errorf("%s in %s: Starts %v", c.args, c.root, plan.Starts)
+		}
+	}
+
+	// COMPOSE_FILE, in .devopsy/.env or the caller's environment, names
+	// files compose never reads: every command names the project's with
+	// -f (composeFiles), which compose prefers (checked with Compose 5.5:
+	// `-f a.yaml config` with COMPOSE_FILE=a.yaml:b.yaml leaves b.yaml
+	// out), ComposeConfig's included. So its labels are none, and
+	// mayOwnMnt reads exactly the files the command and the labels'
+	// reader run on (review of 2026-10-23, round 4, asked whether it
+	// missed COMPOSE_FILE's).
+	viaEnv := project(t, "p", map[string]string{"compose.yaml": minimalCompose, "extra.yaml": owned, "compose.override.yaml": minimalCompose, ".env": "COMPOSE_FILE=compose.yaml:extra.yaml\n"})
+	plan, err := build(viaEnv, []string{"up", "-d"}, []string{"COMPOSE_FILE=compose.yaml:extra.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(viaEnv, ProjectDirName)
+	if want := []string{"docker", "compose", "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml"), "up", "-d"}; plan.Starts || !slices.Equal(plan.Args, want) || !slices.Equal(composeFiles(dir), []string{want[3], want[5]}) {
+		t.Errorf("COMPOSE_FILE: Starts %v, args %q, composeFiles %q", plan.Starts, plan.Args, composeFiles(dir))
+	}
+
+	for compose, want := range map[string]bool{
+		minimalCompose: false,
+		"include:\n  - other.yaml\n" + minimalCompose:                                      true,
+		minimalCompose + "    extends: {file: base.yaml, service: app}\n":                  true,
+		minimalCompose + "    labels:\n      devopsy.mnt.owner: 1:1\n":                     true,
+		minimalCompose + "    labels: [\"devopsy.mnt.owner=1:1\"]\n":                       true,
+		"# include: and extends: in a comment\n" + minimalCompose:                          false,
+		minimalCompose + "    image: x # devopsy.mnt.owner, included\n":                    false,
+		minimalCompose + "    environment: {INCLUDED: extends}\n    # devopsy.mnt.owner\n": false,
+	} {
+		root := project(t, "p", map[string]string{"compose.yaml": compose})
+		for args, starts := range map[string]bool{"up -d": want, "--profile x run --rm a": want, "ps": false} {
+			plan, err := build(root, strings.Fields(args), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Starts != starts {
+				t.Errorf("%s with\n%s: Starts %v", args, compose, plan.Starts)
+			}
+		}
+	}
+}
+
 // A script in the arguments is only counted in the notice; -vv has it whole.
 func TestBuildNoticeScript(t *testing.T) {
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose, "config.yaml": "secrets: [API_TOKEN]\n"})

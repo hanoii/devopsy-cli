@@ -315,7 +315,11 @@ func destroyData(cwd string, step []string, color bool) int {
 		// An import a killed devopsy left may still extract into mnt
 		// (not Compose's, so down --remove-orphans leaves it), and its
 		// files as root would fail the removal of $base.
-		if err := removeContainers("name=^/?" + remote.ImportContainerPrefix + composeName(root) + "-[0-9]+$"); err != nil {
+		if err := removeContainers(importContainers(root)); err != nil {
+			return fail(err.Error() + ": nothing removed")
+		}
+		// And an owners' step's, which would chown in it as root.
+		if err := removeContainers(ownersContainers(root)); err != nil {
 			return fail(err.Error() + ": nothing removed")
 		}
 	}

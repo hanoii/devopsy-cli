@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -35,7 +37,8 @@ import (
 // ps lists them, and start refuses them, as Compose does. FAKE_ONEOFF
 // names services with a one-off container running (a hook's run --rm),
 // which ps lists under the service, labeled, as Compose does.
-// FAKE_APP_MOUNT2 is a second entry app mounts (/cache).
+// FAKE_APP_MOUNT2 is a second entry app mounts (/cache). FAKE_APP_OWNER
+// is app's devopsy.mnt.owner, FAKE_DB_OWNER db's.
 const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
@@ -78,11 +81,19 @@ st() {
 }
 # services after a compose command (stop, start, up -d --wait).
 after() { at=$1; shift; w=0; for a; do [ "$w" = 1 ] && echo "$a"; [ "$a" = "$at" ] && w=1; done; }
+# FAKE_APP_OWNER: app's devopsy.mnt.owner.
+applab=$(lab "${FAKE_APP:-mnt}")
+dblab=$(lab "${FAKE_DB:-mnt+own}")
+# FAKE_DB_OWNER: db's.
+[ -z "${FAKE_DB_OWNER:-}" ] || dblab="${dblab%\}},\"devopsy.mnt.owner\":\"$FAKE_DB_OWNER\"}"
+if [ -n "${FAKE_APP_OWNER:-}" ]; then
+  case $applab in '{}') applab="{\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; *) applab="${applab%\}},\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; esac
+fi
 app2=
 [ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$(lab "${FAKE_APP:-mnt}")" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$(lab "${FAKE_DB:-mnt+own}")" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   # down removes every container, until an up creates them again.
@@ -115,10 +126,18 @@ case "$*" in
   # left, listed by its label.
   "ps -aq --filter label=devopsy.data.parent="*) echo "${FAKE_STALE_DAEMON:-}" ;;
   # FAKE_IMPORT_CONTAINERS: containers an --import left
-  # (devopsy-import-<compose project>-<pid>), listed by its name filter.
-  "ps -aq --filter name=^/?devopsy-import-"*)
-    p=${4#name=^/?}; p=${p%%\[*}
-    for c in ${FAKE_IMPORT_CONTAINERS:-}; do case $c in "$p"*) case ${c#"$p"} in ''|*[!0-9]*) ;; *) echo "$c" ;; esac ;; esac; done ;;
+  # (devopsy-import-<compose project>-<pid>-extract|owners-<n>), and
+  # FAKE_OWNERS_CONTAINERS an owners' step's
+  # (devopsy-owners-<compose project>-<pid>-<n>), listed by a name filter,
+  # a regular expression, as Docker's. FAKE_SAME_NAME: a filter naming
+  # one container exactly finds it, as one a killed devopsy whose pid
+  # this one reuses left.
+  "ps -aq --filter name=^/?devopsy-"*)
+    f=${4#name=}
+    case $f in
+      *'[0-9]'*) for c in ${FAKE_IMPORT_CONTAINERS:-} ${FAKE_OWNERS_CONTAINERS:-}; do ! printf '%s\n' "$c" | grep -Eq -- "$f" || echo "$c"; done ;;
+      *) [ -z "${FAKE_SAME_NAME:-}" ] || { f=${f#^/?}; echo "${f%\$}"; } ;;
+    esac ;;
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
@@ -147,6 +166,15 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   "inspect "*) echo 172.17.0.9 ;;
+  # FAKE_NO_UTIL: the util image missing; FAIL_UTIL_BUILD: its build
+  # failing, as with a registry down.
+  "image inspect devopsy-util:"*) [ -z "${FAKE_NO_UTIL:-}" ] || exit 1 ;;
+  "build -q -t devopsy-util:"*) [ -z "${FAIL_UTIL_BUILD:-}" ] || { echo "failed to resolve source metadata for docker.io/library/alpine:3.22" >&2; exit 1; } ;;
+  # The owners' containers, one per entry (devopsy made it).
+  # FAKE_OWNERS_WAIT: each takes until $FAKE_OWNERS_WAIT.go exists.
+  "run --rm --name devopsy-owners-"*|"run --rm --name devopsy-sync-"*"-owners-"*|"run --rm --name devopsy-import-"*"-owners-"*)
+    if [ -n "${FAKE_OWNERS_WAIT:-}" ]; then : >"$FAKE_OWNERS_WAIT"; n=0; while [ ! -e "$FAKE_OWNERS_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    [ -z "${FAIL_OWNERS:-}" ] || exit "$FAIL_OWNERS" ;;
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
@@ -175,9 +203,12 @@ case "$*" in
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt) dst=${1%:/mnt} ;; -c) shift 3; break ;; esac; shift; done
-    for e; do if [ "$e" = . ]; then find "$dst" -mindepth 2 -maxdepth 2 -exec rm -rf {} +; find "$dst" -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +; elif [ -d "$dst/$e" ] && [ ! -L "$dst/$e" ]; then find "$dst/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done
-    exec tar -C "$dst" -xf - ;;
+    # One entry per container (--mount, its source the entry): emptied,
+    # then the members named after it extracted, as the util image does.
+    while [ $# -gt 0 ]; do case $1 in --mount) src=${2#type=bind,source=}; src=${src%%,target=*} ;; -c) shift 3; break ;; esac; shift; done
+    e=$1; shift
+    if [ -d "$src" ] && [ ! -L "$src" ]; then find "$src" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
+    exec tar -C "${src%/"$e"}" -xf - "$@" ;;
 esac
 exit 0
 `
@@ -374,8 +405,8 @@ func TestSyncSameHost(t *testing.T) {
 	// alone, keeps running. A first release then creates every labeled
 	// service, whatever containers it found.
 	order := []string{"shop-dev compose", "stop db", "shop-prod compose", "stop db",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/db/ /dst/db/",
-		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:1 rsync -a --delete --numeric-ids /src/storage/ /dst/storage/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/",
+		"run --rm --name devopsy-sync-", " -v " + s.mnt("prod") + ":/src:ro -v " + s.mnt("dev") + ":/dst devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/storage/ /dst/storage/",
 		"shop-prod compose", "start db", "shop-dev compose", "up -d --wait app db"}
 	rest := docker
 	for _, want := range order {
@@ -422,7 +453,7 @@ func TestSyncSameHost(t *testing.T) {
 	}
 	out, code = s.run(nil, "@dev", "--sync", "--yes", "--", "--exclude=css")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --exclude=css /src/storage/") {
+	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 --exclude=css /src/storage/") {
 		t.Fatalf("--sync (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "newer\n" {
@@ -570,14 +601,14 @@ func TestSyncFileEntry(t *testing.T) {
 
 	out, code := s.run(env, "@dev", "--release")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(docker, "devopsy-util:1 rsync -a --delete --numeric-ids --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
+	if code != 0 || !strings.Contains(docker, "devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --inplace /src/app.ini /dst/\n") || readString(filepath.Join(s.mnt("dev"), "app.ini")) != "[prod]\n" {
 		t.Fatalf("same server (%d):\n%s\n%s", code, out, docker)
 	}
 
 	env = append(env, "DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock")
 	out, code = s.run(env, "@devopsy@two:dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "--numeric-ids --inplace rsync://127.0.0.1:"} {
+	for _, want := range []string{"[app.ini]\npath = /mnt\ninclude = /app.ini\nexclude = *\n", "--numeric-ids --modify-window=-1 --inplace rsync://127.0.0.1:"} {
 		if code != 0 || !strings.Contains(docker, want) {
 			t.Fatalf("across servers (%d), missing %q:\n%s\n%s", code, want, out, docker)
 		}
@@ -658,7 +689,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if strings.Count(ssh, keep) != 6 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:1 rsync -a --delete --numeric-ids rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -669,6 +700,16 @@ func TestSyncDifferentHosts(t *testing.T) {
 		t.Errorf("vanished files across servers (%d):\n%s", code, out)
 	}
 	s.logs()
+	// An entry the child's labels own (its list says so) lands as its
+	// owner's (--chown), whatever the parent's files are; the rest keep
+	// theirs.
+	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
+	out, code = s.run(agent, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	os.Remove(s.log + ".shop-dev")
+	if code != 0 || !regexp.MustCompile(`--numeric-ids --modify-window=-1 --chown=10001:10001 rsync://127\.0\.0\.1:[0-9]+/storage/ /mnt/storage/`).MatchString(docker) || !regexp.MustCompile(`--numeric-ids --modify-window=-1 rsync://127\.0\.0\.1:[0-9]+/db/ /mnt/db/`).MatchString(docker) {
+		t.Errorf("an owned entry across servers (%d):\n%s\n%s", code, out, docker)
+	}
 
 	// A child's devopsy older than the parent's (lacking --say, which
 	// only the receive calls) refuses on the push's first session there,
@@ -1436,17 +1477,12 @@ func TestSyncLabels(t *testing.T) {
 		t.Errorf("finish without an answer: %v\n%s", err, out)
 	}
 
-	// An app mounting mnt whole copies the unlabeled db's entry too: a
-	// notice.
+	// An app labeled mnt mounting mnt whole is refused where labels are
+	// read, before anything stops: mnt whole is no entry.
 	out, code = s.run([]string{"FAKE_APP_MOUNT=", "FAKE_DB=none"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: warning: app copies mnt whole, db (no data: db) included: mount mnt's entries (./mnt/db) on app instead of ./mnt, so each copies by its own label") || !strings.Contains(docker, "rsync -a --delete --numeric-ids /src/./ /dst/./") {
-		t.Errorf("whole mnt notice (%d):\n%s\n%s", code, out, docker)
-	}
-	out, code = s.run([]string{"FAKE_APP_MOUNT="}, "@dev", "--sync", "--yes")
-	s.logs()
-	if code != 0 || strings.Contains(out, "copies mnt whole") {
-		t.Errorf("notice for an rsync db under mnt whole (%d):\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "service app: devopsy.data=mnt mounts ./mnt whole: mount its entries (./mnt/<name>)") || strings.Contains(docker, " stop ") || strings.Contains(docker, "rsync") {
+		t.Errorf("mnt whole (%d):\n%s\n%s", code, out, docker)
 	}
 	// A value devopsy does not know is an error, before anything stops;
 	// so is a label from before devopsy.data on the child alone: its
@@ -1869,7 +1905,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:1 tar -C /mnt -cf - --numeric-owner storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:2 tar -C /mnt -cf - --numeric-owner storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -1903,15 +1939,80 @@ func TestExportImport(t *testing.T) {
 	if err := os.Rename(real, filepath.Join(mnt, "storage")); err != nil {
 		t.Fatal(err)
 	}
-	// Its import empties the entries the tar carries, then extracts.
-	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
+	// Tars made member by member.
+	member := func(tw *tar.Writer, h *tar.Header, data string) {
+		h.Mode, h.Size = 0o644, int64(len(data))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reaching := func(members func(tw *tar.Writer)) []byte {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		members(tw)
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	// Its import empties each entry the tar carries, then extracts its
+	// members, in a container that mounts that entry alone, without a
+	// network, never all of mnt (review of 2026-10-23, round 3): the
+	// service whose entry it is runs meanwhile unless its stop label
+	// says otherwise (never, the default, here), and its owner can swap a
+	// directory the extraction just made for a link to ../<another
+	// entry> (renameat2's RENAME_EXCHANGE, or a link in place of a
+	// directory a tar implies without a member of its own, as tarOf's
+	// do): GNU tar follows it and writes the tar's files, as root, into
+	// that entry. Checked on alpine 3.22's tar with the app as 10001
+	// without capabilities, mounting only its entry: auth/htpasswd of
+	// another entry replaced with the tar's. Members are selected by the
+	// names the archive gives the entry (GNU tar matches ./storage/x only
+	// by ./storage), each read from the whole spool.
+	write(t, filepath.Join(mnt, "auth", "htpasswd"), "admin:secret\n", 0o644)
+	dotted := reaching(func(tw *tar.Writer) {
+		member(tw, &tar.Header{Name: "./storage/", Typeflag: tar.TypeDir}, "")
+		member(tw, &tar.Header{Name: "./storage/new.txt", Typeflag: tar.TypeReg}, "new\n")
+		member(tw, &tar.Header{Name: "storage/dir/htpasswd", Typeflag: tar.TypeReg}, "pwned\n")
+	})
+	if _, errs, code := s.runIO(nil, dotted, "--import", "app"); code != 0 || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" || readString(filepath.Join(mnt, "auth", "htpasswd")) != "admin:secret\n" {
 		t.Fatalf("--import rsync (%d):\n%s", code, errs)
 	}
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "-i -v "+mnt+":/mnt devopsy-util:1 sh -c ") || !strings.Contains(docker, "tar -C /mnt -xf - --numeric-owner --overwrite\n sh storage\n") {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 -i --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage devopsy-util:2 sh -c `).MatchString(docker) || !strings.Contains(docker, "exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- \"$@\"\n sh storage ./storage storage\n") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
+	}
+	// An entry that is a file: made empty when missing, for its
+	// container to mount, then written in place; one the tar carries as
+	// the other kind is refused before anything changes (the mount point
+	// could not be replaced).
+	file := []string{"FAKE_APP_MOUNT=/app.ini"}
+	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini": "[x]\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
+		t.Errorf("--import of a file entry (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, " -i --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini devopsy-util:2 ") || !strings.Contains(docker, " sh app.ini app.ini\n") {
+		t.Errorf("--import of a file entry:\n%s", docker)
+	}
+	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/app.ini as a directory, and it is a file here: nothing imported") || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
+		t.Errorf("--import of a directory over a file entry (%d):\n%s", code, errs)
+	}
+	s.logs()
+	// An entry its labels own goes to its owner once extracted, before
+	// the import counts as complete (a tar made anywhere carries its
+	// maker's owners), in a container that mounts that entry alone. Not
+	// on macOS, as before up (review of 2026-10-23, round 2): Docker
+	// Desktop's file sharing may refuse the chown, and any container
+	// user writes the Mac's files anyway.
+	_, errs, code = s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app")
+	docker, _ = s.logs()
+	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker)
+	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") || strings.Contains(docker, ":/mnt devopsy-util") {
+		t.Errorf("--import of an owned entry (%d), the owners' container %v:\n%s\n%s", code, owners, errs, docker)
 	}
 	// A truncated tar, or one carrying what the service does not mount,
 	// changes nothing.
@@ -1949,24 +2050,6 @@ func TestExportImport(t *testing.T) {
 	// never looks at link targets or member types, and with "." nothing
 	// is checked at all. FAIL_TAR keeps the fake from touching files: what
 	// counts is that the import's container never runs.
-	member := func(tw *tar.Writer, h *tar.Header, data string) {
-		h.Mode, h.Size = 0o644, int64(len(data))
-		if err := tw.WriteHeader(h); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tw.Write([]byte(data)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	reaching := func(members func(tw *tar.Writer)) []byte {
-		var b bytes.Buffer
-		tw := tar.NewWriter(&b)
-		members(tw)
-		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return b.Bytes()
-	}
 	for _, c := range []struct {
 		name  string
 		mount string
@@ -1983,13 +2066,79 @@ func TestExportImport(t *testing.T) {
 			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeLink, Linkname: "db/secret"}, "")
 			member(tw, &tar.Header{Name: "storage/h", Typeflag: tar.TypeReg}, "evil\n")
 		})},
-		{"../x into mnt whole", "", reaching(func(tw *tar.Writer) {
+		{"../x", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "../x", Typeflag: tar.TypeReg}, "evil\n")
+		})},
+		// mnt itself: its owner and mode are no entry's.
+		{"./", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "./", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "./storage/x", Typeflag: tar.TypeReg}, "fine\n")
+		})},
+		// Device nodes and FIFOs, anywhere (review of 2026-10-23, round
+		// 3): GNU tar as root makes them in shared/mnt on the host, where
+		// bind mounts are not nodev, and the owners' step then gives one
+		// to the entry's owner, the app's UID: a block device of the
+		// server's disk (b 8 0), 0666 in the tar, is the raw disk for any
+		// user on the host. A tar of an entry never needs one.
+		{"storage/disk a block device", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/disk", Typeflag: tar.TypeBlock, Devmajor: 8}, "")
+		})},
+		{"storage/tty a character device", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/tty", Typeflag: tar.TypeChar, Devmajor: 5}, "")
+		})},
+		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
+		})},
+		// A link out of mnt through another link of the tar (review of
+		// 2026-10-23, round 4): storage/x -> . never descends, so each
+		// x/.. pair path.Clean cancels climbs one directory for real.
+		// Judged lexically, storage/w's target was storage/etc/shadow,
+		// inside its entry; GNU tar extracts both links (checked in
+		// devopsy-util:2, one container mounting storage alone), and on
+		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
+		// root's, in the entry for whatever follows it on the host
+		// (Docker resolves a bind's source there). The ways a tar's links
+		// can lead are tarEntries' (TestTarLinks).
+		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
+			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
+		})},
+		// A link out of mnt through another link of the tar (review of
+		// 2026-10-23, round 4): storage/x -> . never descends, so each
+		// x/.. pair path.Clean cancels climbs one directory for real.
+		// Judged lexically, storage/w's target was storage/etc/shadow,
+		// inside its entry; GNU tar extracts both links (checked in
+		// devopsy-util:2, one container mounting storage alone), and on
+		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
+		// root's, in the entry for whatever follows it on the host
+		// (Docker resolves a bind's source there). The ways a tar's links
+		// can lead are tarEntries' (TestTarLinks).
+		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
+			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
+		})},
+		// Names no plain path, which each entry's extraction could not
+		// select its members by, and an entry both a file and a directory.
+		{"././storage/x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "././storage/x", Typeflag: tar.TypeReg}, "x\n")
+		})},
+		{"storage//x", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage//x", Typeflag: tar.TypeReg}, "x\n")
+		})},
+		{"storage a file and a directory", "/storage", reaching(func(tw *tar.Writer) {
+			member(tw, &tar.Header{Name: "storage", Typeflag: tar.TypeReg}, "x\n")
+			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeReg}, "x\n")
 		})},
 	} {
 		_, errs, code := s.runIO([]string{"FAIL_TAR=1", "FAKE_APP_MOUNT=" + c.mount}, c.tar, "--import", "app")
 		if docker, _ := s.logs(); code == 0 || strings.Contains(docker, "run --rm --name devopsy-import-") {
 			t.Errorf("a tar reaching out of its entries, %s (%d), the import's container ran:\n%s", c.name, code, errs)
+		}
+		if !strings.Contains(errs, "devopsy: error: the tar has a member ") || !strings.Contains(errs, ": nothing imported") {
+			t.Errorf("a tar reaching out of its entries, %s, not said so:\n%s", c.name, errs)
 		}
 	}
 	// Without data, unknown: refused.
@@ -2193,6 +2342,82 @@ func TestExportImport(t *testing.T) {
 		t.Errorf("the local entry was not replaced")
 	}
 	os.Remove(s.log + ".shop-prod")
+}
+
+// tarEntries follows the tar's own links to judge where a link leads,
+// as the kernel resolves it (tarLinks.check): relative links within
+// their entry pass, a way that leaves the entry at any point is refused,
+// however path.Clean reads it, and so are the members whose names would
+// not be where they land (review of 2026-10-23, round 4).
+func TestTarLinks(t *testing.T) {
+	sym := func(name, target string) *tar.Header {
+		return &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}
+	}
+	hard := func(name, target string) *tar.Header {
+		return &tar.Header{Name: name, Typeflag: tar.TypeLink, Linkname: target, Mode: 0o644}
+	}
+	file := func(name string) *tar.Header { return &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644} }
+	dir := func(name string) *tar.Header { return &tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: 0o755} }
+	for _, c := range []struct {
+		name    string
+		members []*tar.Header
+		refused string
+	}{
+		{"links within their entry", []*tar.Header{
+			dir("storage/"), dir("storage/sub/"), file("storage/sub/f"),
+			sym("storage/a", "sub/f"), sym("storage/sub/b", "../f"), sym("storage/self", "."),
+			sym("storage/c", "self/sub/./f"), sym("storage/d", "sub/"), sym("storage/sub/up", ".."),
+			sym("storage/e", "sub/up/sub/f"), sym("storage/dangling", "gone/away"),
+			hard("storage/h", "storage/sub/f"), hard("./storage/i", "./storage/sub/f"),
+		}, ""},
+		{"through a link to the entry, path.Clean inside", []*tar.Header{
+			dir("storage/"), sym("storage/x", "."), sym("storage/w", strings.Repeat("x/", 3)+strings.Repeat("../", 3)+"etc/shadow"),
+		}, "storage/w, whose target leads out of mnt/storage"},
+		{"through a link to a parent, path.Clean inside", []*tar.Header{
+			dir("storage/sub/"), sym("storage/sub/up", ".."), sym("storage/w", "sub/up/../x"),
+		}, "storage/w, whose target leads out of mnt/storage"},
+		{"a link in a subdirectory through another", []*tar.Header{
+			dir("storage/sub/"), sym("storage/x", "."), sym("storage/sub/up", "../x/.."),
+		}, "storage/sub/up, whose target leads out of mnt/storage"},
+		{"out and back through mnt", []*tar.Header{
+			file("storage/b"), sym("storage/a", "../storage/b"),
+		}, "storage/a, whose target leads out of mnt/storage"},
+		{"a loop", []*tar.Header{
+			sym("storage/a", "b"), sym("storage/b", "a"),
+		}, "follows more than 40 links"},
+		{"a member below a link", []*tar.Header{
+			sym("storage/x", "sub"), dir("storage/sub/"), file("storage/x/f"),
+		}, "storage/x/f is below the link storage/x"},
+		{"a link and a directory of one name", []*tar.Header{
+			sym("storage/x", "sub"), dir("storage/x/"),
+		}, "storage/x is a link and another member of the same name"},
+		{"a hard link to a link", []*tar.Header{
+			dir("storage/sub/"), file("storage/f"), sym("storage/sub/s", "../f"), hard("storage/h", "storage/sub/s"),
+		}, "storage/h is a hard link to the link storage/sub/s"},
+		{"a hard link below a link", []*tar.Header{
+			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
+		}, "storage/h is a hard link below the link storage/x"},
+	} {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for _, h := range c.members {
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		spool := filepath.Join(t.TempDir(), "spool")
+		write(t, spool, b.String(), 0o644)
+		_, err := tarEntries(spool)
+		switch {
+		case c.refused == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.refused != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
+			t.Errorf("%s: %v, want %q", c.name, err, c.refused)
+		}
+	}
 }
 
 // waitFile waits for a file to exist, up to 10 seconds.
@@ -2893,13 +3118,14 @@ func TestDestroyEndsWriters(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42-extract-0\nFAKE_OWNERS_CONTAINERS=devopsy-owners-shop-dev-42-0\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@dev", "--destroy", "--yes")
 	docker, _ := s.logs()
-	// And an --import's container a killed devopsy left: not Compose's.
-	rm, rmImport, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42"), strings.Index(docker, " down ")
-	if code != 0 || rm < 0 || rmImport < 0 || down < 0 || rm > down || rmImport > down {
+	// And an --import's container a killed devopsy left, and an owners'
+	// step's: not Compose's.
+	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
+	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
 	}
 }

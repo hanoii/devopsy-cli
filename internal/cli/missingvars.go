@@ -13,7 +13,9 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// composeFiles are the compose files devopsy runs a project with.
+// composeFiles are the compose files devopsy runs a project with, each
+// command's -f (loadedProject.compose): compose.yaml and its override,
+// never COMPOSE_FILE's, which compose ignores once -f names files.
 func composeFiles(projectDir string) []string {
 	files := []string{filepath.Join(projectDir, "compose.yaml")}
 	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {

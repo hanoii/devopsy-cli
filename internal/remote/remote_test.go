@@ -192,7 +192,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end") + StatusScript(tg) +
-		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true, "")
+		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, nil, true, "")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
 			t.Errorf("a sync's file not prefixed: %s", m[1])
@@ -245,9 +245,9 @@ func allScripts() map[string]string {
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataLabelsFeature}),
-		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "."}, nil, []string{"--exclude=x y"}, true, ""),
-		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
-		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, false, ""),
+		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, map[string]string{"storage": "10001:10001"}, []string{"--exclude=x y"}, true, ""),
+		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
+		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, map[string]string{"app.ini": "1:2"}, nil, false, ""),
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncArgsEnv: "--x 'y'", SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
@@ -282,6 +282,54 @@ func TestDataLabelsFeature(t *testing.T) {
 	// The parent's check carries the push's needs.
 	if s := CurrentExistsScript(&Target{Path: "app/prod"}, Needs(PushScript(&Target{Path: "app/prod"}, "app-prod", nil))); !strings.Contains(s, needsEnv+`="${`+needsEnv+`:-} `) || !strings.Contains(s, DataLabelsFeature) {
 		t.Errorf("the parent's check:\n%s", s)
+	}
+}
+
+// devopsy.mnt.owner in copies is a named feature: the push (whose rsync
+// applies the child's owners), the child's list (which says them) and
+// imports (which give what they extract away) need it; a release's
+// owners and mounts check are flags of their own.
+func TestMntOwnerFeature(t *testing.T) {
+	need := []string{"exec list", "import", "push", "resolved"}
+	for name, s := range allScripts() {
+		if got := slices.Contains(Needs(s), MntOwnerFeature); got != slices.Contains(need, name) {
+			t.Errorf("%s needs %s: %v", name, MntOwnerFeature, got)
+		}
+	}
+	for _, name := range []string{"activate", "activate+sync", "rollback+cmd"} {
+		if got := Needs(allScripts()[name]); !slices.Contains(got, "mnt-owners") || !slices.Contains(got, "check-mounts") {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
+// A sync copies no device node or FIFO into the child's mnt, as an mnt
+// import extracts none (errMember in cmd/devopsy): rsync -a is -D, and as
+// root in UtilImage it makes them on the child's host, where bind mounts
+// are not nodev, and --chown then gives them to the entry's owner, a
+// block device of the server's disk the raw disk for that UID. Checked
+// in devopsy-util:2: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
+// copied by RsyncCopy with --chown=10001:10001, land as `brw-r--r--
+// 10001 10001 8, 0 disk` and `prw-r--r-- 10001 10001 fifo` (review of
+// 2026-10-23, round 4). Both paths, the same server's and the receive
+// script, copy with RsyncCopy.
+func TestRsyncCopySkipsDevices(t *testing.T) {
+	devices := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-devices")
+	specials := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-specials")
+	if devices || specials {
+		t.Errorf("RsyncCopy %q copies device nodes (%v) and FIFOs or sockets (%v): rsync -a includes -D", RsyncCopy, devices, specials)
+	}
+}
+
+// The receive's rsync gives an entry the child owns to its owner
+// (--chown), and keeps the others' (--numeric-ids).
+func TestSyncReceiveOwners(t *testing.T) {
+	s := allScripts()["receive"]
+	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 $4 ") {
+		t.Errorf("receive:\n%s", s)
+	}
+	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {
+		t.Errorf("a file's owner:\n%s", s)
 	}
 }
 
@@ -348,7 +396,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
 	}
-	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", "sync-services"}) {
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", MntOwnerFeature, "sync-services"}) {
 		t.Errorf("needs, quoted: %v", got)
 	}
 }
@@ -571,6 +619,7 @@ if [ "${1:-} ${2:-}" = "--sync-services prepare" ] && [ -n "${FAKE_WRITE:-}" ]; 
 fi
 [ "$*" = "--sync-services finish partial" ] && { [ -e "$FAKE_ROOT/app/dev/.devopsy-sync.incomplete" ] || : >"$FAKE_ROOT/app/dev/.devopsy-sync.incomplete"; }
 [ "${1:-} ${2:-}" = "--sync-services prepare" ] && exit ${FAIL_PREPARE:-0}
+[ "$*" = --mnt-owners ] && exit ${FAIL_OWNERS:-0}
 exit 0
 `
 	write(t, filepath.Join(bin, "devopsy"), fake)
@@ -624,7 +673,7 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
-	if got := calls(root); got != "--check-names "+base+" from= to= args=\n--missing-vars from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
+	if got := calls(root); got != "--missing-vars from= to= args=\n--check-names "+base+" from= to= args=\n--check-mounts from= to= args=\n-- pull --ignore-buildable from= to= args=\n-- build --pull from= to= args=\n-- config --images from= to= args=\n--mnt-owners from= to= args=\n--sync-services prepare first from=vm1:prod to=vm2:dev args=-v"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev args=-v"+file+"\ndeploy from= to= args=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -638,6 +687,16 @@ exit 0
 	}
 	if got := calls(root); !strings.Contains(got, "--sync-services finish abort") || !strings.Contains(got, "--release-steps restart run") || strings.Contains(got, "deploy from") {
 		t.Errorf("abort calls:\n%s", got)
+	}
+
+	// The owners failing after the switch: no sync (nothing stopped,
+	// no marker), back to the previous release.
+	_, errOut, err = run(root, "21", "go\n", "FAIL_OWNERS=6")
+	if err == nil || current(root) != "releases/1/code" || strings.Contains(errOut, SyncMarker) || !strings.Contains(errOut, "giving the entries of mnt to their owners failed (6), current is back to 1") {
+		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(root), errOut)
+	}
+	if got := calls(root); strings.Contains(got, "--sync-services") || strings.Contains(got, "deploy from") {
+		t.Errorf("failed owners calls:\n%s", got)
 	}
 
 	// abort on a first release: nothing current, the directory kept
@@ -1056,6 +1115,7 @@ case "$*" in
     fi
     echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
+  --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
 esac
 exit 0
 `
@@ -1097,7 +1157,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --check-names "+base+"\n1: --missing-vars\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- pull --ignore-buildable\n1: -- build --pull\n1: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1126,11 +1186,20 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --check-names "+base+"\n3: --missing-vars\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- pull --ignore-buildable\n3: -- build --pull\n3: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\ncurrent: --mnt-owners restored\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "1" {
 		t.Errorf("after a failed run the images are not release 1's: %q %q", image(root, "app-prod-app"), image(root, "mariadb:11"))
+	}
+
+	// Giving mnt's entries to their owners fails: a failed run step,
+	// never run, and the previous release back, its own owners first.
+	if out, err := release("32", "FAIL_OWNERS=32"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "giving the entries of mnt to their owners failed (5), current is back to 1") {
+		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(), out)
+	}
+	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --release-steps restart run\n") {
+		t.Errorf("failed owners calls:\n%s", got)
 	}
 
 	// Another failed run, while another compose project runs the
@@ -1151,8 +1220,10 @@ exit 0
 	if out, err := run(root, script(build, "", true)); err != nil || current() != "releases/1/code" || image(root, "app-prod-app") != "1" {
 		t.Fatalf("rollback (%v), current %q, app %q:\n%s", err, current(), image(root, "app-prod-app"), out)
 	}
-	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
-		t.Errorf("rollback fetched images:\n%s", got)
+	// Its owners from its own labels, as a restored release: labels it
+	// cannot read only warn (cmd/devopsy's TestMntOwnersRelease).
+	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") || !strings.Contains(got, "current: --mnt-owners restored\n") {
+		t.Errorf("rollback fetched images, or gave owners as a release:\n%s", got)
 	}
 
 	// Pruning drops the bookmarks of the releases it removes.
@@ -1202,7 +1273,7 @@ exit 0
 	if out, err := run(root, script(image2, "1", false)); err != nil {
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --missing-vars\n1: -- pull\n1: -- config --images\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- pull\n1: -- config --images\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 }

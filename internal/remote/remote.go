@@ -786,10 +786,6 @@ done
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
-		// Another environment's compose project of the same name, or a
-		// network the project names that another project owns already:
-		// they would share it (cli.ProjectConflict, cli.NetworkConflicts).
-		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
 	}
 	if rollback {
 		s += `(cd "$code" && with_tty ` + Quote(steps("prepare")) + `) || not_live $?
@@ -799,6 +795,29 @@ done
 		s += step("prepare", `"$code"`, args, "not_live $?")
 	}
 	s += fmt.Sprintf("(cd \"$code\" && %s) || not_live $?\n", devopsyCall(projectName, []string{"--missing-vars"}, false))
+	if rollback {
+		// What the restored release's owners' step needs after the
+		// switch, and only that (its labels refuse nothing): the util
+		// image, which may have been pruned since, and no owned entry a
+		// link.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + ") || not_live 1\n"
+	}
+	if !rollback {
+		// The checks reading compose's configuration, which fails while a
+		// required variable is unset: after the prepare steps that make
+		// them (a first release's secrets) and --missing-vars, or they
+		// would pass unchecked. Another environment's compose project of
+		// the same name, or a network the project names that another
+		// project owns already: they would share it (cli.ProjectConflict,
+		// cli.NetworkConflicts).
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-names"}, false) + " \"$base\") || not_live 1\n"
+		// Mounts whose data would not be what the labels say: a writable
+		// one in the release's tree, data or an owner with no entry, an
+		// entry with two owners, ./mnt whole writable, an owned path
+		// through a link (cli.CheckMounts); and the util image the owners'
+		// step needs after the switch.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts"}, false) + ") || not_live 1\n"
+	}
 	// fetch_release: the release's images under the shared lock,
 	// undone before the lock goes on a failure or a signal, so no
 	// removal comes in between: a new release's own images are
@@ -919,14 +938,37 @@ devopsy --say info "current is now $id" || true
     fi
     get_images "$base/$prev" || devopsy --say warning "getting the images of ${prev#releases/} failed ($?): restarting it anyway"
 `
+	// Its entries of mnt to their owners, by its own labels: the new
+	// release's may have given them to others.
+	restart += `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
+`
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
+	// The entries of mnt created when missing and given to their owners
+	// (cli.MntOwnerLabel), right after the switch, from the labels of
+	// what is now current (a rollback's restored release's): it changes
+	// live data, so never before it. Before a sync, whose first one
+	// creates the services with data before its finish hook, and before
+	// the run step. A failure is a failed run step: the usual way back.
+	// A restored release's (restored: a rollback's, the restart's) labels
+	// that this devopsy cannot read only warn: a rollback never fails for
+	// them, as it never checks roles or imports.
+	ownersArgs := []string{"--mnt-owners"}
+	if rollback {
+		ownersArgs = append(ownersArgs, "restored")
+	}
+	owners := `(cd "$base/current" && ` + devopsyCall(projectName, ownersArgs, false) + `) || { status=$?; failed="giving the entries of mnt to their owners"; }
+`
 	s += "status=0\nfailed=run\n"
 	if sync != nil {
-		s += sync.exports(t) + `cd "$base/current"
+		s += owners + `if [ "$status" = 0 ]; then
+` + sync.exports(t) + `cd "$base/current"
 ` + syncBlock(projectName, "the release does not go live", true) + `cd "$base"
 [ "$status" = 0 ] || failed=sync
+else
+  [ -z "${` + InheritPendingEnv + `:-}" ] || rm -f "$` + InheritPendingEnv + `"
+fi
 `
 	}
 	// The server's log starts here, after the switch (signals ignored
@@ -936,6 +978,9 @@ devopsy --say info "current is now $id" || true
 	// push, so --log shows them in their place. PIPE is ignored again: a
 	// sync's end restores it.
 	s += "trap '' PIPE\n" + followOutput
+	if sync == nil {
+		s += owners
+	}
 	if rollback {
 		s += `if [ "$status" = 0 ]; then
   (cd "$base/current" && with_tty ` + Quote(steps("run")) + `) || status=$?
