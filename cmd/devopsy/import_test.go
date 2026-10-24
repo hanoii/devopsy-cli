@@ -989,6 +989,29 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 	}
 }
 
+// An import that pulls and bookmarks the export's image and holds its
+// service on it changes the server's images, as a sync's img sync-check
+// and sync-done do: under the server's image lock, shared (image_lock),
+// so a removal in another environment, which takes it exclusively, never
+// takes the image between its pull and its bookmark.
+func TestImportExportImagesImageLock(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	s.logs()
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(docker, "flock -n -s 8\n") {
+		t.Errorf("the import (%d) changed the server's images without their lock:\n%s\n%s", code, errs, docker)
+	}
+}
+
 // A pax global header is no member to archive/tar, but GNU tar applies
 // its records to every member after it (checked in devopsy-util:2, GNU
 // tar 1.35): a path or linkpath there renames members and retargets
