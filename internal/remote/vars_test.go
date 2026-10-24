@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -21,15 +22,26 @@ func runVarsScript(t *testing.T, root, script, stdin string) string {
 	return strings.ReplaceAll(out, LockedMarker+"\n", "")
 }
 
+// varsBin is the fakes' directory, written once: they never change, and
+// macOS takes seconds, under the parallel tests, for the first exec of
+// each new script.
+var varsBin = sync.OnceValues(func() (string, error) {
+	bin, err := os.MkdirTemp(filepath.Dir(realDevopsy), "vars-bin")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		return "", err
+	}
+	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
+	return bin, os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755)
+})
+
 // runVarsRaw runs script with stdin as given.
 func runVarsRaw(t *testing.T, root, script, stdin string) (string, error) {
 	t.Helper()
-	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	settings := "#!/bin/sh\n" + sayCase() + "[ \"$1\" != --stdin-guard ] || exec cat\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "devopsy"), []byte(settings), 0o755); err != nil {
+	bin, err := varsBin()
+	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", script)

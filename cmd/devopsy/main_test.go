@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,19 +40,30 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// fakeBin is a directory with a fake docker and this devopsy, written
+// once (fakeBinOnce): nothing writes into it, and macOS takes seconds,
+// under the parallel tests, for the first exec of each new script.
 func fakeBin(t *testing.T) string {
 	t.Helper()
-	bin := t.TempDir()
-	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// The custom commands below call devopsy recursively.
-	if err := os.Symlink(binary, filepath.Join(bin, "devopsy")); err != nil {
+	bin, err := fakeBinOnce()
+	if err != nil {
 		t.Fatal(err)
 	}
 	return bin
 }
+
+var fakeBinOnce = sync.OnceValues(func() (string, error) {
+	bin, err := os.MkdirTemp(filepath.Dir(binary), "bin")
+	if err != nil {
+		return "", err
+	}
+	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
+		return "", err
+	}
+	// The custom commands below call devopsy recursively.
+	return bin, os.Symlink(binary, filepath.Join(bin, "devopsy"))
+})
 
 // releaseFile is name beside the code/ that current points at.
 func releaseFile(t *testing.T, current, name string) string {
