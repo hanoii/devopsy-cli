@@ -1939,9 +1939,15 @@ func TestExportImport(t *testing.T) {
 	if err := os.Rename(real, filepath.Join(mnt, "storage")); err != nil {
 		t.Fatal(err)
 	}
-	// Tars made member by member.
+	// Tars made member by member. A directory needs its x bit: GNU tar
+	// sets a directory's mode once it leaves its members, by name, so
+	// ./storage at 0644 refused storage/dir/htpasswd on Linux, where
+	// macOS's bsdtar sets modes at the end.
 	member := func(tw *tar.Writer, h *tar.Header, data string) {
 		h.Mode, h.Size = 0o644, int64(len(data))
+		if h.Typeflag == tar.TypeDir {
+			h.Mode = 0o755
+		}
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
