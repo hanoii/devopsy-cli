@@ -25,3 +25,14 @@ jobs:
       # its slowdown, not on a race.
       - run: go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
       - run: shellcheck -s sh install.sh
+  # The operator's side runs on macOS: the same tests there (bash 3.2 and
+  # zsh come with it; fish's completion is checked on Linux).
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -count=1 ./...
