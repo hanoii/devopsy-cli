@@ -180,7 +180,7 @@ func TestShell(t *testing.T) {
 	defer func() { RunningServices = saved }()
 	RunningServices = func(*loadedProject) ([]string, error) { return []string{"b"}, nil }
 	if plan, err := build(bare, []string{"--shell"}, nil); err != nil || !slices.Contains(plan.Args, "b") {
-		t.Fatalf("only running: %v %q", err, plan)
+		t.Fatalf("only running: %v %+v", err, plan)
 	}
 
 	// The project's shell capability replaces it, with the arguments.

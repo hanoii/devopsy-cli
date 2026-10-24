@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
@@ -55,6 +56,123 @@ type Plan struct {
 	// Verbose lines are said at debug level (-v), before Notice. Secrets
 	// are masked.
 	Verbose []string
+	// Starts is set for a compose command that starts containers
+	// (startingCommands) locally, in a project whose compose files may
+	// carry MntOwnerLabel: the caller readies mnt's owned entries first.
+	// Never in a release on a server, where --mnt-owners gives them away
+	// at each switch, nor for --dry-run, which starts nothing.
+	Starts bool
+}
+
+// startingCommands are compose's commands that start or create
+// containers, whose bind mounts Docker creates when missing, as root:
+// watch starts the services first (unless --no-up), scale creates
+// containers, restart starts them again (an entry removed while they
+// were stopped comes back root's).
+var startingCommands = []string{"up", "start", "restart", "run", "create", "watch", "scale"}
+
+// composeValueFlags are compose's global flags that take a value as the
+// next argument.
+var composeValueFlags = []string{"--ansi", "--env-file", "-f", "--file", "--parallel", "--profile", "--progress", "-p", "--project-name", "--project-directory"}
+
+// composeCommand is the compose command in args (what follows docker
+// compose), past its global flags: "" without one.
+func composeCommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case slices.Contains(composeValueFlags, a):
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			return a
+		}
+	}
+	return ""
+}
+
+// commandValueFlags are the flags of compose's starting commands that
+// take a value as the next argument (compose 5.5's --help for each), so
+// dryRun never takes a value for a flag: run --name --dry-run names the
+// container --dry-run, and starts it.
+var commandValueFlags = map[string][]string{
+	"up":      {"--attach", "--exit-code-from", "--no-attach", "--pull", "--scale", "-t", "--timeout", "--wait-timeout"},
+	"start":   {"--wait-timeout"},
+	"restart": {"-t", "--timeout"},
+	"create":  {"--pull", "--scale"},
+	"run": {"--cap-add", "--cap-drop", "--entrypoint", "-e", "--env", "--env-from-file", "-l", "--label", "--name",
+		"-p", "--publish", "--pull", "-u", "--user", "-v", "--volume", "-w", "--workdir"},
+}
+
+// dryRun reports whether args (compose's command line) ask for
+// compose's --dry-run, a global flag that compose, as cobra parses its
+// flags, takes wherever its command's own flags go: before the command,
+// and after it up to a -- (up -d app --dry-run included), but for run
+// only before its service, past which everything is the container's
+// command (run --rm app composer update --dry-run starts app: checked
+// with Compose 5.5, review of 2026-10-23, round 4). Never a flag's value
+// (commandValueFlags, composeValueFlags, which compose takes after the
+// command too). The last one says, as a bool flag parses its value
+// (--dry-run=0 starts); a value compose cannot parse fails the command,
+// which starts nothing.
+func dryRun(args []string) bool {
+	dry, command := false, ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			return dry
+		case a == "--dry-run":
+			dry = true
+		case strings.HasPrefix(a, "--dry-run="):
+			v, err := strconv.ParseBool(strings.TrimPrefix(a, "--dry-run="))
+			dry = err != nil || v
+		case slices.Contains(composeValueFlags, a) || slices.Contains(commandValueFlags[command], a):
+			i++
+		case strings.HasPrefix(a, "-"):
+		case command == "":
+			command = a
+		case command == "run":
+			return dry
+		}
+	}
+	return dry
+}
+
+// mayOwnMnt reports whether files, the project's compose files
+// (composeFiles: what the labels are read from, ComposeConfig), may
+// carry MntOwnerLabel: the label, or a file they include or extend. A
+// file a command adds with -f is in neither, so it is never half seen.
+// Read as text, so a project without the label pays no compose config
+// before every command: YAML's keys only, comments left out (every
+// template's say "included" somewhere).
+func mayOwnMnt(files []string) bool {
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			// A comment starts a line or follows a blank.
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			for _, c := range []string{" #", "\t#"} {
+				if i := strings.Index(line, c); i >= 0 {
+					line = line[:i]
+				}
+			}
+			if strings.Contains(line, MntOwnerLabel) || strings.HasPrefix(line, "include:") || strings.HasPrefix(line, "extends:") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// starting sets plan.Starts for args, compose's command line after
+// docker compose (Plan.Starts).
+func (p *loadedProject) starting(plan *Plan, args []string) {
+	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && !dryRun(args) && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -355,8 +473,11 @@ its own release. A sync is an export of every service with data on the
 parent and an import of each on the child:
 
   devopsy.data=mnt     its entries of .devopsy/mnt rsynced (rsync -a
-                       --delete --numeric-ids, as root in devopsy's own
-                       image, devopsy-util, built on each server)
+                       --no-D --delete --numeric-ids --modify-window=-1:
+                       no device nodes or FIFOs, times to the nanosecond,
+                       as root in devopsy's own image, devopsy-util,
+                       built on each server), an entry the child owns as
+                       its owner's (devopsy.mnt.owner, --chown)
   devopsy.data=stream  the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
@@ -450,10 +571,7 @@ through SSH.
   devopsy.data=stream  the data capability's export <service> (a dump)
   devopsy.data=mnt     a tar of the entries of .devopsy/mnt it mounts
                        (devopsy.data.exclude honored), made as root in
-                       devopsy-util with numeric owners and modes. A
-                       service mounting ./mnt itself exports all of it,
-                       other services' and excluded entries included
-                       (devopsy says which)
+                       devopsy-util with numeric owners and modes
 
 Stopped meanwhile, then started again: the service when it is labeled
 devopsy.data.stop=own or always, every always service, and what depends
@@ -480,10 +598,10 @@ does anything change, and the file is removed afterwards.
                        unless stopped, and down again after if it was
   devopsy.data=mnt     a tar: each entry of mnt it carries is emptied,
                        then extracted as root in devopsy-util, owners and
-                       modes as they were. A truncated tar, or one
-                       carrying entries the service does not mount,
-                       changes nothing; one of ./mnt itself replaces all
-                       of mnt (devopsy says so)
+                       modes as they were, and an entry its labels own
+                       given to its owner (devopsy.mnt.owner). A
+                       truncated tar, or one carrying entries the service
+                       does not mount, changes nothing
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),
@@ -1134,6 +1252,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 		// The escape hatch: straight to docker compose, past project
 		// commands and the check for compose's commands.
 		plan := p.compose(args[1:])
+		p.starting(plan, args[1:])
 		secrets := p.newSecrets()
 		plan.running(secrets)
 		plan.Verbose = maskAll(secrets, verbose)
@@ -1182,6 +1301,7 @@ func Build(cwd string, args []string, environ []string) (*Plan, error) {
 	}
 
 	plan := p.compose(args)
+	p.starting(plan, args)
 	plan.running(secrets)
 	plan.Verbose = maskAll(secrets, verbose)
 	return plan, nil
@@ -1254,19 +1374,16 @@ func ColorForced(lookup func(string) (string, bool)) bool {
 	return v != "" && v != "0" && !strings.EqualFold(v, "false")
 }
 
-// compose plans `docker compose` with the project's files and args.
+// compose plans `docker compose` with the project's files and args,
+// named with -f (composeFiles), so compose never reads COMPOSE_FILE:
+// every command, ComposeConfig and mayOwnMnt run on the same files.
 func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
 	}
-	composeArgs = append(composeArgs, "-f", p.composeFile)
-	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
-		override := filepath.Join(p.dir, name)
-		if fi, err := os.Stat(override); err == nil && fi.Mode().IsRegular() {
-			composeArgs = append(composeArgs, "-f", override)
-			break
-		}
+	for _, file := range composeFiles(p.dir) {
+		composeArgs = append(composeArgs, "-f", file)
 	}
 	return &Plan{Path: "docker", Args: append(composeArgs, args...), Env: p.env.Environ()}
 }

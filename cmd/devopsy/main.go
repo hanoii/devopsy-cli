@@ -132,6 +132,10 @@ func run() int {
 	}
 	// A sync's parts on servers, run by its sessions (cmd/devopsy/sync.go).
 	switch args[0] {
+	case cli.CheckMountsFlag:
+		return runCheckMounts(cwd, args[1:])
+	case cli.MntOwnersFlag:
+		return runMntOwners(cwd, args[1:])
 	case cli.SyncPushFlag:
 		return runSyncPush(cwd, args[1:], color)
 	case cli.SyncExecFlag:
@@ -220,6 +224,14 @@ func run() int {
 			return 1
 		}
 		return 0
+	}
+	// Docker makes a missing bind mount's directory root's: the owned
+	// entries first (cli.MntOwnerLabel).
+	if plan.Starts {
+		if err := localMnt(cwd); err != nil {
+			report.Fail(err)
+			return 1
+		}
 	}
 	if notice := plan.Notice; notice != "" {
 		if verboseLevel > 1 && plan.NoticeFull != "" {

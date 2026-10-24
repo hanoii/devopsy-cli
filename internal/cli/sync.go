@@ -2,14 +2,18 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // DataLabel says the service has data and how it moves, in syncs and
@@ -26,6 +30,38 @@ const DataStopLabel = "devopsy.data.stop"
 // to the files, say. Ignored on stream and none, so a project can flip
 // DataLabel through a variable and keep it.
 const DataExcludeLabel = "devopsy.data.exclude"
+
+// MntOwnerLabel is the owner of the entries of mnt a service mounts
+// writable, <uid>:<gid> in numbers (names cannot be resolved from the
+// host): devopsy creates them and gives them to it wherever it creates
+// or writes entries (a release, a sync's rsync, an mnt --import, and
+// locally before compose starts anything). Explicit, never a default
+// from user: (changing that must not silently change the data's owner).
+const MntOwnerLabel = "devopsy.mnt.owner"
+
+// maxOwnerID is the largest uid or gid MntOwnerLabel takes: a uid_t
+// holds 32 bits, and its largest value, 4294967295, is chown's -1 ("leave
+// as is"), which coreutils refuses.
+const maxOwnerID = 1<<32 - 2
+
+// parseOwner reads MntOwnerLabel's value, <uid>:<gid> in decimal numbers
+// up to maxOwnerID, and returns it normalized (010001 is 10001), so
+// owners compare as numbers and every script and list says them alike.
+func parseOwner(v string) (string, bool) {
+	uid, gid, ok := strings.Cut(v, ":")
+	var ids [2]uint64
+	for i, n := range []string{uid, gid} {
+		if !ok || n == "" || strings.Trim(n, "0123456789") != "" {
+			return "", false
+		}
+		id, err := strconv.ParseUint(n, 10, 64)
+		if err != nil || id > maxOwnerID {
+			return "", false
+		}
+		ids[i] = id
+	}
+	return fmt.Sprintf("%d:%d", ids[0], ids[1]), true
+}
 
 // How a service's data moves, DataLabel's values.
 const (
@@ -73,6 +109,14 @@ const (
 	SyncServicesFlag = "--sync-services"
 )
 
+// The hidden flags of a release's mounts, run by its activation:
+// CheckMountsFlag in the new release before its switch (CheckMounts),
+// MntOwnersFlag in current right after it (MntOwnerLabel).
+const (
+	CheckMountsFlag = "--check-mounts"
+	MntOwnersFlag   = "--mnt-owners"
+)
+
 // DestroyDataFlag is --destroy's part where the project is, hidden: run in
 // a server's release by DestroyScript, and locally by --destroy itself.
 const DestroyDataFlag = "--destroy-data"
@@ -91,8 +135,8 @@ const (
 // SyncService is a service of the project as its data labels say: how
 // its data moves (Transfer, DataNone without any), when it is stopped
 // (Stop, and StopLabeled whether DataStopLabel is set), the entries of
-// mnt its binds hold ("." for mnt itself; a DataMnt service's without
-// its excluded ones, named in Excluded), the services it depends on and
+// mnt its binds hold (a DataMnt service's without its excluded ones,
+// named in Excluded), the services it depends on and
 // its restart policy. HasData is whether Transfer is not DataNone.
 type SyncService struct {
 	Name, Transfer string
@@ -104,6 +148,24 @@ type SyncService struct {
 	Restart        string
 	// Profiles are the service's compose profiles: none means always on.
 	Profiles []string
+	// Owner is its MntOwnerLabel, <uid>:<gid>, "" without one; Writable
+	// the entries of mnt it mounts writable (excluded ones too), which
+	// an owner covers: a read-only mount never claims an entry.
+	Owner    string
+	Writable []string
+	// TreeBinds are its writable bind mounts from inside the project's
+	// tree outside mnt, relative to the tree: they live in the release,
+	// and go with the next one (CheckMounts refuses them).
+	TreeBinds []string
+	// Binds are the sources of its bind mounts under mnt, relative to it
+	// (storage, storage/files), read-only ones too: one below an owned
+	// entry is refused (CheckMounts).
+	Binds []string
+	// WholeMnt is whether it mounts ./mnt whole writable, which a service
+	// without data or an owner may as far as parsing goes, and
+	// CheckMounts refuses: it would write every entry, which the child
+	// guard and the stop sets never see.
+	WholeMnt bool
 }
 
 // Active reports whether s is in a profile that is up, profiles being
@@ -122,6 +184,11 @@ func (s SyncService) Active(profiles string) bool {
 	return false
 }
 
+// ErrComposeConfig is ComposeConfig's failure: compose could not read
+// the project's files, which its own commands then say (no label's
+// fault: --check-mounts lets it through).
+var ErrComposeConfig = errors.New("docker compose config")
+
 // ComposeConfig prints the project's compose configuration as JSON, every
 // profile's services included: the project found from cwd, with its
 // environment over environ. Replaceable in tests.
@@ -136,7 +203,7 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("docker compose config: %v %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("%w: %v %s", ErrComposeConfig, err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
@@ -174,18 +241,24 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			Restart   string                     `json:"restart"`
 			Profiles  []string                   `json:"profiles"`
 			Volumes   []struct {
-				Type   string `json:"type"`
-				Source string `json:"source"`
+				Type     string `json:"type"`
+				Source   string `json:"source"`
+				ReadOnly bool   `json:"read_only"`
 			} `json:"volumes"`
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(out, &config); err != nil {
 		return nil, fmt.Errorf("docker compose config: %w", err)
 	}
+	// Resolved as far as it exists, as each source is below: a mnt not
+	// made yet is still where the sources resolve to.
 	mnts := []string{filepath.Join(projectDir, "mnt")}
-	if r, err := filepath.EvalSymlinks(mnts[0]); err == nil && r != mnts[0] {
+	if r := resolvePath(mnts[0]); r != mnts[0] {
 		mnts = append(mnts, r)
 	}
+	// The project's tree, its links resolved: on servers a release's
+	// code/, where shared/'s entries are links out of it.
+	tree := resolvePath(filepath.Dir(projectDir))
 	var services []SyncService
 	for name, s := range config.Services {
 		for _, o := range oldLabels {
@@ -241,11 +314,57 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				}
 			}
 		}
+		if v, ok := s.Labels[MntOwnerLabel]; ok {
+			owner, ok := parseOwner(v)
+			if !ok {
+				return nil, fmt.Errorf("service %s: %s=%s: <uid>:<gid> in numbers from 0 to %d, like 10001:10001 (names cannot be resolved from the host; a variable left unset?)", name, MntOwnerLabel, v, maxOwnerID)
+			}
+			cs.Owner = owner
+		}
 		for _, v := range s.Volumes {
 			if v.Type != "bind" {
 				continue
 			}
-			d := mntEntry(filepath.Clean(v.Source), mnts)
+			// What a bind is in mnt goes by its source as written (on
+			// servers through .devopsy/mnt, the link to shared/mnt); what
+			// the mounts check refuses goes by that and by where its
+			// links lead too (Docker mounts that), so a link in the
+			// release to below an owned entry, or one in shared/mnt into
+			// the release, is judged by where it leads.
+			src := filepath.Clean(v.Source)
+			r := resolvePath(src)
+			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
+			for _, rel := range []string{mntPath(src, mnts), mntPath(r, mnts)} {
+				if rel != "" && rel != "." && !slices.Contains(cs.Binds, rel) {
+					cs.Binds = append(cs.Binds, rel)
+				}
+			}
+			if rd == "" && !v.ReadOnly {
+				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
+					cs.TreeBinds = append(cs.TreeBinds, rel)
+				}
+			}
+			if rd == "." && d != "." {
+				cs.WholeMnt = cs.WholeMnt || !v.ReadOnly
+				continue
+			}
+			if d == "." {
+				// mnt whole is no entry: it would carry every other
+				// service's data, and give them one owner. A service
+				// without data may still mount it (a read-only tool):
+				// devopsy ignores that mount.
+				if cs.Transfer == DataMnt {
+					return nil, fmt.Errorf("service %s: %s=%s mounts ./mnt whole: mount its entries (./mnt/<name>), each for what it holds", name, DataLabel, DataMnt)
+				}
+				if cs.Owner != "" && !v.ReadOnly {
+					return nil, fmt.Errorf("service %s: %s=%s mounts ./mnt whole writable: mount its entries (./mnt/<name>), each for what it holds", name, MntOwnerLabel, cs.Owner)
+				}
+				cs.WholeMnt = cs.WholeMnt || !v.ReadOnly
+				continue
+			}
+			if d != "" && !v.ReadOnly && !slices.Contains(cs.Writable, d) {
+				cs.Writable = append(cs.Writable, d)
+			}
 			switch {
 			case d == "" || slices.Contains(cs.Dirs, d) || slices.Contains(cs.Excluded, d):
 			case slices.Contains(exclude, d):
@@ -256,6 +375,18 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		}
 		sort.Strings(cs.Dirs)
 		sort.Strings(cs.Excluded)
+		sort.Strings(cs.Writable)
+		sort.Strings(cs.TreeBinds)
+		sort.Strings(cs.Binds)
+		// The owners' list (the child's, for a sync) names entries split
+		// by spaces too.
+		if cs.Owner != "" {
+			for _, d := range cs.Writable {
+				if strings.ContainsFunc(d, unicode.IsSpace) {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name: rename it", name, d, MntOwnerLabel)
+				}
+			}
+		}
 		// Copies name entries in space-separated lists (the child's,
 		// exclude) and rsync modules: a name with whitespace would split.
 		if cs.Transfer == DataMnt {
@@ -276,23 +407,149 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 }
 
 // mntEntry is the top-level entry of mnt that source is or lies in, "."
-// for mnt itself, "" outside it.
+// for mnt itself (never an entry: parseSyncServices refuses or ignores
+// it), "" outside it.
 func mntEntry(source string, mnts []string) string {
+	rel := mntPath(source, mnts)
+	if rel == "" || rel == "." {
+		return rel
+	}
+	return strings.SplitN(rel, string(filepath.Separator), 2)[0]
+}
+
+// mntPath is source relative to mnt, "." for mnt itself, "" outside it.
+func mntPath(source string, mnts []string) string {
 	for _, m := range mnts {
 		rel, err := filepath.Rel(m, source)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
 		}
-		if rel == "." {
-			return "."
-		}
-		return strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		return rel
 	}
 	return ""
 }
 
+// resolvePath is p with its symbolic links resolved, as far as it
+// exists: what is missing (Docker creates a bind's source) is joined as
+// written, and a link whose target is missing is followed to where it
+// leads all the same (what it points to may be made later).
+func resolvePath(p string) string {
+	return resolveLinks(p, 0)
+}
+
+// resolveLinks is resolvePath, depth links followed so far: past 40 (a
+// loop) the path stays as it is.
+func resolveLinks(p string, depth int) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	rp := resolveLinks(parent, depth)
+	full := filepath.Join(rp, filepath.Base(p))
+	if t, err := os.Readlink(full); err == nil && depth < 40 {
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(rp, t)
+		}
+		return resolveLinks(t, depth+1)
+	}
+	return full
+}
+
+// MntOwners are the owners of the entries of mnt, entry to <uid>:<gid>
+// (MntOwnerLabel), from the services of every profile: each entry a
+// service with an owner mounts writable. Two services whose owners
+// differ on one entry are an error; one without an owner writing an
+// owned entry (a tool) is none.
+func MntOwners(services []SyncService) (map[string]string, error) {
+	owners := map[string]string{}
+	by := map[string]string{}
+	for _, s := range services {
+		if s.Owner == "" {
+			continue
+		}
+		for _, d := range s.Writable {
+			if o, ok := owners[d]; ok && o != s.Owner {
+				return nil, fmt.Errorf("./mnt/%s is written by %s (%s=%s) and %s (%s): one owner per entry", d, by[d], MntOwnerLabel, o, s.Name, s.Owner)
+			}
+			owners[d], by[d] = s.Owner, s.Name
+		}
+	}
+	return owners, nil
+}
+
+// CheckMounts refuses, before a release goes live, the mounts whose data
+// would not be what the labels say (services as SyncServices read them,
+// so ./mnt whole as data or an owner's is refused already): ./mnt whole
+// mounted writable by any other service, which writes every entry while
+// the child guard and the stop sets see none of it (read-only, a tool,
+// it is ignored); a writable bind mount from inside the project's tree
+// outside mnt, which goes with the next release; a service labeled
+// DataMnt that copies no entry of mnt (none mounted, or all excluded),
+// which a sync would take for nothing to copy; an MntOwnerLabel on one
+// that mounts no entry writable; an entry two owners write (MntOwners);
+// and a bind source below an owned entry (./mnt/storage/files), by any
+// service, read-only too: the entry's owner can replace that path with a
+// symbolic link, and Docker resolves a bind source on the host (a link
+// to / would mount the host's root).
+func CheckMounts(services []SyncService) error {
+	var bad []string
+	var fixes []report.Remedy
+	tree, data, owner, whole, below := false, false, false, false, false
+	owners, ownersErr := MntOwners(services)
+	for _, s := range services {
+		for _, b := range s.Binds {
+			if e, _, under := strings.Cut(b, string(filepath.Separator)); under && owners[e] != "" {
+				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below the owned entry ./mnt/%s (%s=%s): its owner can make that path a symbolic link, and Docker would mount what it points to on the host", s.Name, b, e, MntOwnerLabel, owners[e]))
+				below = true
+			}
+		}
+		if s.WholeMnt {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt whole writable: it would write every entry, and no sync or import sees it there", s.Name))
+			whole = true
+		}
+		for _, b := range s.TreeBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./%s writable: it is in the release, and the next one replaces it", s.Name, b))
+			tree = true
+		}
+		if s.Transfer == DataMnt && len(s.Dirs) == 0 {
+			bad = append(bad, fmt.Sprintf("%s is labeled %s=%s and copies no entry of mnt: a sync would copy nothing of it", s.Name, DataLabel, DataMnt))
+			data = true
+		}
+		if s.Owner != "" && len(s.Writable) == 0 {
+			bad = append(bad, fmt.Sprintf("%s has %s=%s and mounts no entry of mnt writable: it owns nothing", s.Name, MntOwnerLabel, s.Owner))
+			owner = true
+		}
+	}
+	if err := ownersErr; err != nil {
+		bad = append(bad, err.Error())
+		fixes = append(fixes, report.Fix("give the services writing an entry one "+MntOwnerLabel+" (a variable keeps them alike), or mount it read-only where it is only read (:ro)"))
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	if tree {
+		fixes = append(fixes, report.Fix("mount data from an entry of mnt (./mnt/<name>), which outlives releases, or read-only (:ro) what ships with the release"))
+	}
+	if data {
+		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name>, or label it "+DataLabel+"="+DataStream+" or "+DataNone))
+	}
+	if owner {
+		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
+	}
+	if whole {
+		fixes = append(fixes, report.Fix("mount the entries it writes (./mnt/<name>), or ./mnt read-only (:ro)"))
+	}
+	if below {
+		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
+	}
+	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
+}
+
 // SyncDirs are the entries of mnt a sync rsyncs: those of the services
-// labeled mnt, sorted; "." (all of mnt) subsumes the rest.
+// labeled mnt, sorted.
 func SyncDirs(services []SyncService) []string {
 	var dirs []string
 	for _, s := range services {
@@ -300,9 +557,6 @@ func SyncDirs(services []SyncService) []string {
 			continue
 		}
 		for _, d := range s.Dirs {
-			if d == "." {
-				return []string{"."}
-			}
 			if !slices.Contains(dirs, d) {
 				dirs = append(dirs, d)
 			}
@@ -310,52 +564,6 @@ func SyncDirs(services []SyncService) []string {
 	}
 	sort.Strings(dirs)
 	return dirs
-}
-
-// transferWord is how a message names a service's data label: "no data"
-// for none.
-func transferWord(s SyncService) string {
-	if s.Transfer == DataNone {
-		return "no data"
-	}
-	return s.Transfer
-}
-
-// SyncWholeNotice is a notice for a copy of mnt itself (an entry "."):
-// it includes the entries of the services without data or labeled
-// stream too, which their labels say not to copy, or to copy another
-// way. Empty when nothing is copied against a label.
-func SyncWholeNotice(services []SyncService) string {
-	dirs := SyncDirs(services)
-	if len(dirs) != 1 || dirs[0] != "." {
-		return ""
-	}
-	var whole, included, exclude []string
-	for _, s := range services {
-		switch {
-		case s.Transfer == DataMnt:
-			if slices.Contains(s.Dirs, ".") {
-				whole = append(whole, s.Name)
-			}
-		case len(s.Dirs) > 0:
-			included = append(included, s.Name+" ("+transferWord(s)+": "+strings.Join(s.Dirs, ", ")+")")
-			for _, d := range s.Dirs {
-				if d != "." && !slices.Contains(exclude, d) {
-					exclude = append(exclude, d)
-				}
-			}
-		}
-	}
-	if len(included) == 0 {
-		return ""
-	}
-	msg := fmt.Sprintf("%s copies mnt whole, %s included", strings.Join(whole, ", "), strings.Join(included, ", "))
-	if len(exclude) > 0 {
-		// An exclude on the service mounting ./mnt never matches: its one
-		// entry is "." itself.
-		msg += fmt.Sprintf(": mount mnt's entries (./mnt/%s) on %s instead of ./mnt, so each copies by its own label", exclude[0], strings.Join(whole, ", "))
-	}
-	return msg
 }
 
 // SyncFind is the service named name.

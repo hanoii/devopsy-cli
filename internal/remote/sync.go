@@ -69,9 +69,10 @@ const (
 )
 
 // ImportContainerPrefix and the compose project start the name of the
-// container an mnt --import writes through, then devopsy's pid: what the
-// next lock-taker removes when a killed devopsy left it, and --destroy
-// before emptying mnt.
+// container an mnt --import writes through, then devopsy's pid (and
+// -owners-<n> for those giving what it extracted to its owners): what
+// the next lock-taker removes when a killed devopsy left it, and
+// --destroy before emptying mnt.
 const ImportContainerPrefix = "devopsy-import-"
 
 // ImportMarker is the line devopsy --import on a server prints on stderr
@@ -267,11 +268,28 @@ var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "C
 // --export and --import, emptying mnt on --destroy. Its tag changes with
 // the Dockerfile: hosts never rebuild an image they have. It was
 // devopsy-rsync until October 2026: hosts keep that one until removed.
-const UtilImage = "devopsy-util:1"
+const UtilImage = "devopsy-util:2"
 
 // UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
-// tar, not busybox's: --numeric-owner and --overwrite as documented.
-var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar"}
+// tar, find and chown, not busybox's: tar's --numeric-owner and
+// --overwrite, find's -user and -group with numbers and -exec ... +,
+// chown -h, as documented.
+var UtilDockerfile = []string{"FROM alpine:3.22", "RUN apk add --no-cache rsync tar findutils coreutils"}
+
+// RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
+// server or across two: everything, owners as numbers, and what the
+// parent lacks removed. --modify-window=-1 compares modification times
+// to the nanosecond. Why: rsync skips a file whose size and time match,
+// and by default its time to the second, so a datadir both sides wrote
+// in the same second (the child's database stopping right before the
+// parent's) kept the child's tablespace files under the parent's
+// dictionary, a database that no longer opened its tables. --no-D takes
+// back -a's -D: device nodes, FIFOs and sockets are never copied (an mnt
+// import extracts none either, errMember in cmd/devopsy). Why: rsync as
+// root makes them on the child's host, where bind mounts are not nodev,
+// and --chown gave them to the entry's owner, a block device of the
+// server's disk the raw disk for that UID.
+var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
@@ -789,20 +807,13 @@ const RsyncVanished = 24
 // RsyncVanishedNotice follows "rsync mnt/<entry>: " on both paths.
 const RsyncVanishedNotice = "some files vanished during the copy (a running service removed them), the rest is copied"
 
-// RsyncModule is the daemon's module for an entry of mnt: its name, and
-// mnt for `.` (all of it).
-func RsyncModule(entry string) string {
-	if entry == "." {
-		return "mnt"
-	}
-	return entry
-}
-
 // SyncReceiveScript runs on the child's server, from the parent's over SSH
 // with a reverse forward of port to the parent's rsync daemon: one rsync
 // per entry of the child's mnt (toDir is its current .devopsy/, base its
-// directory), from the daemon's module of that name (RsyncModule), as
-// root in UtilImage, on the host's network to reach the forward.
+// directory), from the daemon's module of that name, as
+// root in UtilImage, on the host's network to reach the forward: owners
+// kept (--numeric-ids), or the child's for an entry it owns (owners,
+// --chown).
 // SyncStartedFile goes first, and with last (no stream follows)
 // a DoneLine once every entry is copied.
 //
@@ -812,7 +823,7 @@ func RsyncModule(entry string) string {
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files, args []string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, args []string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
 	if wipe != "" {
@@ -831,18 +842,23 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " rsync -a --delete --numeric-ids $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + strings.TrimSpace(quoteAll(args)+` "rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"`) + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
 }
 `
 	for _, d := range dirs {
-		src, dst, opts := RsyncModule(d)+"/", d+"/", ""
+		src, dst, opts := d+"/", d+"/", ""
 		if slices.Contains(files, d) {
 			// A file: its module serves it alone, into mnt, and in place
 			// (a container bind-mounts the file's inode).
 			src, dst, opts = d+"/"+d, "", "--inplace"
+		}
+		if o := owners[d]; o != "" {
+			// The child's owner for every file written (its labels,
+			// from its list).
+			opts = strings.TrimSpace(opts + " --chown=" + o)
 		}
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
 	}

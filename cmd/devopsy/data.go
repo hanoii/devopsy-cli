@@ -11,13 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -255,13 +256,6 @@ func runExport(cwd string, args []string, color bool) int {
 			return fail("the project's mnt: " + err.Error())
 		}
 		for _, d := range s.Dirs {
-			if d == "." {
-				entries = []string{"."}
-				if msg := wholeMntNotice(services, s, mnt, "carries"); msg != "" {
-					report.Warn(msg)
-				}
-				break
-			}
 			if _, err := os.Lstat(filepath.Join(mnt, d)); err != nil {
 				report.Info("mnt/" + d + " does not exist: skipped")
 				continue
@@ -309,41 +303,6 @@ func runExport(cwd string, args []string, color bool) int {
 	return code
 }
 
-// wholeMntNotice says what a tar of a service mounting mnt itself
-// carries (verb) beyond its label: every entry of mnt, other services'
-// and its excluded ones included, as SyncWholeNotice does for syncs.
-// Empty when mnt holds nothing.
-func wholeMntNotice(services []cli.SyncService, s cli.SyncService, mnt, verb string) string {
-	var entries []string
-	if list, err := os.ReadDir(mnt); err == nil {
-		for _, e := range list {
-			entries = append(entries, e.Name())
-		}
-	}
-	if len(entries) == 0 {
-		return ""
-	}
-	var others []string
-	for _, o := range services {
-		if o.Name == s.Name {
-			continue
-		}
-		for _, d := range o.Dirs {
-			if d != "." {
-				others = append(others, o.Name+"'s "+d+" ("+cmp.Or(map[string]string{cli.DataNone: "no data"}[o.Transfer], o.Transfer)+")")
-			}
-		}
-	}
-	for _, d := range s.Excluded {
-		others = append(others, d+" (its "+cli.DataExcludeLabel+")")
-	}
-	msg := fmt.Sprintf("%s mounts mnt whole, so the tar %s all of it (%s)", s.Name, verb, strings.Join(entries, ", "))
-	if len(others) > 0 {
-		msg += ": " + strings.Join(others, ", ") + " included"
-	}
-	return msg
-}
-
 // importSpool is where --import keeps stdin until it is complete: in a
 // release, the environment directory's StreamSpool (what a sync uses);
 // locally a temporary file under .devopsy/, which releases never upload.
@@ -371,12 +330,26 @@ func removeSpools(base, name string) {
 // maybe right after a member.
 var errNoTarEnd = errors.New("no end-of-archive blocks: cut short?")
 
+// tarEntry is a top-level entry of mnt an import's tar carries: its
+// name, the names the archive gives it (storage, ./storage), which its
+// extraction selects its members by (GNU tar matches ./storage/x only
+// by ./storage), and whether it is a file.
+type tarEntry struct {
+	name  string
+	forms []string
+	file  bool
+}
+
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
-// "." for mnt itself: a truncated archive fails here, before anything is
-// emptied. Read here, not by tar -t, which takes a tar cut at a member
+// sorted: a truncated archive fails here, before anything is emptied, and
+// so does one carrying mnt itself (./), whose owner and mode are no
+// entry's. Read here, not by tar -t, which takes a tar cut at a member
 // boundary for complete, its last member's zeros (a sparse file, a
-// database's pages) passing for the end-of-archive blocks.
-func tarEntries(spool string) ([]string, error) {
+// database's pages) passing for the end-of-archive blocks. A member's
+// name must be a plain path (storage/x, ./storage/x: no ././, //, or
+// /./), so that each entry's extraction selects its members by name
+// (tarEntry.forms), and an entry is a file or a directory, never both.
+func tarEntries(spool string) ([]tarEntry, error) {
 	f, err := os.Open(spool)
 	if err != nil {
 		return nil, err
@@ -387,8 +360,9 @@ func tarEntries(spool string) ([]string, error) {
 	// last.
 	r := &endReader{r: f}
 	tr := tar.NewReader(r)
-	seen := map[string]bool{}
-	across := ""
+	seen := map[string]*tarEntry{}
+	dirs := map[string]bool{}
+	var links tarLinks
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -407,45 +381,211 @@ func tarEntries(spool string) ([]string, error) {
 		}
 		p := strings.TrimPrefix(h.Name, "./")
 		if p == "" || p == "." || p == "./" {
-			seen["."] = true
-			continue
+			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
 		}
-		top, crosses, err := tarMember(h, p)
+		top, err := tarMember(h, p)
 		if err != nil {
 			return nil, err
 		}
-		seen[top] = true
-		if crosses != "" && across == "" {
-			across = crosses
+		if strings.TrimSuffix(p, "/") != path.Clean(p) {
+			return nil, fmt.Errorf("%w: %s is no plain path (tar -C mnt -cf - <entry>... writes them)", errMember, h.Name)
+		}
+		links.add(h, path.Clean(p))
+		e := seen[top]
+		if e == nil {
+			e = &tarEntry{name: top}
+			seen[top] = e
+		}
+		if form := strings.TrimSuffix(h.Name, "/")[:len(h.Name)-len(p)+len(top)]; !slices.Contains(e.forms, form) {
+			e.forms = append(e.forms, form)
+		}
+		if strings.TrimSuffix(p, "/") == top && h.Typeflag != tar.TypeDir {
+			e.file = true
+		} else {
+			dirs[top] = true
+		}
+		if e.file && dirs[top] {
+			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
 		}
 	}
-	if seen["."] {
-		return []string{"."}, nil
+	if err := links.check(); err != nil {
+		return nil, err
 	}
-	if across != "" {
-		return nil, fmt.Errorf("%w: %s", errOutside, across)
+	var entries []tarEntry
+	for _, e := range seen {
+		entries = append(entries, *e)
 	}
-	var entries []string
-	for e := range seen {
-		entries = append(entries, e)
-	}
-	sort.Strings(entries)
+	slices.SortFunc(entries, func(a, b tarEntry) int { return strings.Compare(a.name, b.name) })
 	return entries, nil
+}
+
+// tarLinks are the members of an import's tar as links see them, for a
+// check of the whole tar once it is read (check): tarMember judges each
+// link's target alone, lexically, which is right only while no
+// component of the way is a link. storage/x -> . plus storage/w ->
+// x/x/../../etc/shadow is storage/etc/shadow to path.Clean, and
+// /etc/shadow on the host (review of 2026-10-23, round 4).
+type tarLinks struct {
+	// names counts the members of each name (clean, without ./).
+	names map[string]int
+	// symlinks are the symbolic links, name to target; hard the hard
+	// links, name to target.
+	symlinks, hard map[string]string
+	// header is a member's name as the tar writes it, for messages.
+	header map[string]string
+}
+
+// add records the member h, its name clean.
+func (l *tarLinks) add(h *tar.Header, clean string) {
+	if l.names == nil {
+		l.names, l.symlinks, l.hard, l.header = map[string]int{}, map[string]string{}, map[string]string{}, map[string]string{}
+	}
+	l.names[clean]++
+	switch h.Typeflag {
+	case tar.TypeSymlink:
+		l.symlinks[clean] = h.Linkname
+	case tar.TypeLink:
+		l.hard[clean] = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
+	default:
+		return
+	}
+	l.header[clean] = h.Name
+}
+
+// maxLinks is how many links a target's walk follows (check): Linux's
+// own limit for one path, so a longer chain is one the kernel would not
+// follow either.
+const maxLinks = 40
+
+// check refuses links that lead out of their entry once the tar's own
+// links are followed, so a link out of mnt is refused however it is
+// written (errOutside):
+//
+//   - a member below a symbolic link of the tar (storage/x/f with
+//     storage/x a link), and a link with another member of its name: a
+//     tar writes neither (tar never descends into a link), and then
+//     every member's name is where it lands, which the walk relies on;
+//   - a symbolic link whose target, walked component by component from
+//     the link's directory and through every link of the tar on the way,
+//     as the kernel resolves it, leaves its entry at any point (a ..
+//     above it: storage/a -> ../storage/b too, which goes through mnt),
+//     or follows more than maxLinks links (a loop included);
+//   - a hard link whose target is below a link, or is a symbolic link
+//     itself: GNU tar links the symbolic link, whose relative target
+//     then leads elsewhere from the hard link's directory.
+//
+// A relative link within its entry (storage/a -> sub/f, storage/sub/b ->
+// ../f, storage/self -> .) passes. A component the tar does not carry is
+// a directory to the walk: the entry is emptied before the extraction,
+// so only the tar's links are there (what a running service makes there
+// itself is its own).
+func (l *tarLinks) check() error {
+	under := func(name string) string {
+		for i := range len(name) {
+			if name[i] != '/' {
+				continue
+			}
+			if _, ok := l.symlinks[name[:i]]; ok {
+				return name[:i]
+			}
+		}
+		return ""
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.names)) {
+		if link := under(name); link != "" {
+			return fmt.Errorf("%w: %s is below the link %s", errOutside, name, l.header[link])
+		}
+		if _, ok := l.symlinks[name]; ok && l.names[name] > 1 {
+			return fmt.Errorf("%w: %s is a link and another member of the same name", errOutside, l.header[name])
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.symlinks)) {
+		dir := strings.Split(path.Dir(name), "/")
+		hops := 0
+		if _, err := l.walk(dir, l.symlinks[name], &hops); err != nil {
+			return fmt.Errorf("%w: %s, whose target %s", errOutside, l.header[name], err)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(l.hard)) {
+		target := l.hard[name]
+		if link := under(target); link != "" {
+			return fmt.Errorf("%w: %s is a hard link below the link %s", errOutside, l.header[name], l.header[link])
+		}
+		if _, ok := l.symlinks[target]; ok {
+			return fmt.Errorf("%w: %s is a hard link to the link %s", errOutside, l.header[name], l.header[target])
+		}
+	}
+	return nil
+}
+
+// walk follows target from the directory dir (its components, its entry
+// first) as the kernel would, through the tar's symbolic links, its last
+// component's too, and returns where it leads. It fails when
+// the way leaves the entry (a .. above it, an absolute target) or
+// follows more than maxLinks links, hops counting them.
+func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error) {
+	if path.IsAbs(target) {
+		return nil, errors.New("is absolute")
+	}
+	at := slices.Clone(dir)
+	for _, c := range strings.Split(target, "/") {
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if len(at) <= 1 {
+				return nil, fmt.Errorf("leads out of mnt/%s", at[0])
+			}
+			at = at[:len(at)-1]
+			continue
+		}
+		at = append(at, c)
+		link, ok := l.symlinks[strings.Join(at, "/")]
+		if !ok {
+			continue
+		}
+		if *hops++; *hops > maxLinks {
+			return nil, fmt.Errorf("follows more than %d links", maxLinks)
+		}
+		var err error
+		if at, err = l.walk(at[:len(at)-1], link, hops); err != nil {
+			return nil, err
+		}
+	}
+	return at, nil
 }
 
 // errOutside is a tar whose members reach out of the entries of mnt
 // they are in: GNU tar extracts some through to another entry or out of
 // mnt, refuses others only after the entries were emptied, and a link
 // in place of an entry removes the directory a container bind-mounts.
-var errOutside = errors.New("a member reaches out of its entry")
+var errOutside = errors.New("a member reaching out of its entry")
+
+// errMember is a tar member devopsy never extracts, wherever it is: a
+// device node, which GNU tar as root makes on the host (bind mounts are
+// not nodev) for the owners' step to give to the entry's owner, a block
+// device of the server's disk the raw disk for that UID; a FIFO, which
+// a tar of data never needs either. Only files, directories and links
+// pass (tarTypes).
+var errMember = errors.New("a member devopsy does not extract")
+
+// tarTypes are the member types an mnt import extracts.
+var tarTypes = []byte{tar.TypeReg, tar.TypeRegA, tar.TypeGNUSparse, tar.TypeCont, tar.TypeDir, tar.TypeSymlink, tar.TypeLink}
 
 // tarMember checks a member (p, its name without ./) stays in its
 // top-level entry of mnt, and returns that entry. A path or a link out
-// of mnt, and a top-level entry that is no directory or file, are
-// errOutside; a link into another entry is crosses, refused unless the
-// tar carries all of mnt (".").
-func tarMember(h *tar.Header, p string) (top, crosses string, err error) {
-	outside := func() (string, string, error) { return "", "", fmt.Errorf("%w: %s", errOutside, h.Name) }
+// of its entry (into another entry too), and a top-level entry that is
+// no directory or file, are errOutside; a member of another type than
+// tarTypes (a device node, a FIFO) is errMember.
+func tarMember(h *tar.Header, p string) (top string, err error) {
+	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
+	if !slices.Contains(tarTypes, h.Typeflag) {
+		kind := map[byte]string{tar.TypeBlock: "a block device", tar.TypeChar: "a character device", tar.TypeFifo: "a FIFO"}[h.Typeflag]
+		if kind == "" {
+			kind = fmt.Sprintf("of type %q", h.Typeflag)
+		}
+		return "", fmt.Errorf("%w: %s is %s, which a tar of data never needs", errMember, h.Name, kind)
+	}
 	if path.IsAbs(p) || slices.Contains(strings.Split(p, "/"), "..") {
 		return outside()
 	}
@@ -467,15 +607,15 @@ func tarMember(h *tar.Header, p string) (top, crosses string, err error) {
 		}
 		target = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
 	default:
-		return top, "", nil
+		return top, nil
 	}
 	if target == ".." || strings.HasPrefix(target, "../") {
 		return outside()
 	}
 	if t, _, _ := strings.Cut(target, "/"); t != top {
-		return top, h.Name + " links into " + t, nil
+		return "", fmt.Errorf("%w: %s links into %s", errOutside, h.Name, t)
 	}
-	return top, "", nil
+	return top, nil
 }
 
 // endReader reads r and says whether its last read found the end of
@@ -491,22 +631,71 @@ func (e *endReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// emptyAndExtract empties each entry the tar carries (a sync's --delete:
-// what the source does not have goes) and extracts it, as root in the
-// rsync image so owners and modes come as they were. Directories are
-// emptied, never removed, and files overwritten in place: a running
-// container bind-mounts their inodes.
+// emptyAndExtract empties the entry of mnt $1 (a sync's --delete: what
+// the source does not have goes) and extracts the tar's members named
+// by the rest ($1 as the archive names it: storage, ./storage), as root
+// in the util image so owners and modes come as they were. A directory
+// is emptied, never removed, and a file overwritten in place: a running
+// container bind-mounts their inodes. It runs in a container that
+// mounts that entry alone (extractEntries).
 const emptyAndExtract = `set -eu
-for e; do
-  if [ "$e" = . ]; then
-    find /mnt -mindepth 2 -maxdepth 2 -exec rm -rf {} +
-    find /mnt -mindepth 1 -maxdepth 1 ! -type d -exec rm -f {} +
-  elif [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
-    find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  fi
-done
-exec tar -C /mnt -xf - --numeric-owner --overwrite
+e=$1; shift
+if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
+  find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
+exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 `
+
+// extractEntries empties and extracts each entry of mnt the tar in spool
+// carries (emptyAndExtract), in a util container of its own, named
+// name-extract-<n>, that mounts that entry alone, without a network, and
+// reads the whole spool for that entry's members. Why one per entry: the
+// service whose entry it is may run meanwhile (its stop label says, and
+// never is the default), and its owner can swap a directory the
+// extraction just made for a link to ../<another entry>, which GNU tar
+// follows as root; here it leads only into the entry itself or the
+// throwaway container, never another entry or the host (review of
+// 2026-10-23, round 3: one container mounting all of mnt let the app
+// plant files in another entry). A missing entry is made first, an
+// empty directory or file as the tar has it, for the container to mount.
+func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name string) error {
+	for i, e := range entries {
+		if err := readyEntry(mnt, e); err != nil {
+			return err
+		}
+		mount, err := bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name)
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(spool)
+		if err != nil {
+			return err
+		}
+		run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
+		err = dockerRunFresh(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, run...)
+		in.Close()
+		if err != nil {
+			return fmt.Errorf("extracting mnt/%s: %w", e.name, err)
+		}
+	}
+	return nil
+}
+
+// readyEntry makes the entry e of mnt when missing, as the tar has it: a
+// directory (makeEntry) or an empty file.
+func readyEntry(mnt string, e tarEntry) error {
+	if !e.file {
+		return makeEntry(mnt, e.name)
+	}
+	f, err := os.OpenFile(filepath.Join(mnt, e.name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
 
 // runImport implements devopsy --import <service> [--yes] [--resolved]:
 // stdin, spooled to a file until complete, into the service. --yes is
@@ -514,7 +703,7 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite
 //
 // Nothing is replaced until the data has fully arrived. Before the first
 // write a failure restores what was stopped; from it (devopsy asks Docker
-// to start the writer: the import hook, or the container that empties
+// to start the writer: the import hook, or the first container that empties
 // and extracts), on a target the environment is marked (an import's
 // mark, IncompleteImport) and what was stopped is recorded, both before
 // the write, and a failure keeps it all down, the imported service and
@@ -550,6 +739,11 @@ func runImport(cwd string, args []string, color bool) int {
 	}
 	if s.Transfer == cli.DataStream && !isExecutable(dataHookFile(projectDir, "import")) {
 		return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/import", name, cli.DataLabel, cli.DataStream, cli.DataCapability))
+	}
+	// What an mnt import extracts goes to its owner.
+	owners, err := cli.MntOwners(services)
+	if err != nil {
+		return fail(err.Error() + ": nothing imported")
 	}
 	// On a target the import keeps a mark and a record next to the
 	// release (none locally: a release in place has nothing to guard).
@@ -625,11 +819,12 @@ func runImport(cwd string, args []string, color bool) int {
 		return fail("nothing on stdin: nothing imported")
 	}
 
-	var entries []string
+	var entries []tarEntry
+	var names []string
 	var mnt string
 	if s.Transfer == cli.DataMnt {
-		if entries, err = tarEntries(spool); errors.Is(err, errOutside) {
-			return fail("the tar " + err.Error() + ": nothing imported")
+		if entries, err = tarEntries(spool); errors.Is(err, errOutside) || errors.Is(err, errMember) {
+			return fail("the tar has " + err.Error() + ": nothing imported")
 		} else if err != nil {
 			return fail("stdin is not a complete tar (" + err.Error() + "): nothing imported")
 		}
@@ -637,25 +832,29 @@ func runImport(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
-		if !slices.Contains(s.Dirs, ".") {
-			for _, e := range entries {
-				switch {
-				case slices.Contains(s.Excluded, e):
-					return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
-				case !slices.Contains(s.Dirs, e):
-					return fail(fmt.Sprintf("the tar carries mnt/%s, which %s does not bind-mount (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none")))
-				}
+		for _, t := range entries {
+			e := t.name
+			names = append(names, e)
+			switch {
+			case slices.Contains(s.Excluded, e):
+				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
+			case !slices.Contains(s.Dirs, e):
+				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s does not bind-mount (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none")))
 			}
 		}
 		if mnt, err = dataMnt(projectDir); err != nil {
 			return fail("the project's mnt: " + err.Error())
 		}
-		if e := symlinkEntry(mnt, entries); e != "" {
+		if e := symlinkEntry(mnt, names); e != "" {
 			return fail("mnt/" + e + " is a symlink: the import would not reach what it points to: make it a directory, mounting that there, to import into it: nothing imported")
 		}
-		if slices.Contains(entries, ".") {
-			if msg := wholeMntNotice(services, s, mnt, "replaces"); msg != "" {
-				report.Warn(msg)
+		for _, e := range entries {
+			if fi, err := os.Stat(filepath.Join(mnt, e.name)); err == nil && fi.IsDir() == e.file {
+				as, is := "a directory", "a file"
+				if e.file {
+					as, is = is, as
+				}
+				return fail(fmt.Sprintf("the tar carries mnt/%s as %s, and it is %s here: nothing imported", e.name, as, is))
 			}
 		}
 	}
@@ -727,9 +926,23 @@ func runImport(cwd string, args []string, color bool) int {
 				_ = recordWriter(cwd, 0, false, false)
 			}
 		} else {
-			report.Info("importing " + name + ": mnt/" + strings.Join(entries, ", mnt/") + " replaced")
-			run := append([]string{"-i", "-v", mnt + ":/mnt", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh"}, entries...)
-			err = dockerRunIO(ctx, fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()), in2, nil, run...)
+			report.Info("importing " + name + ": mnt/" + strings.Join(names, ", mnt/") + " replaced")
+			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+			err = extractEntries(ctx, mnt, spool, entries, cname)
+			// What it extracted goes to its owner before the import counts
+			// as complete: a tar made anywhere carries its maker's owners.
+			// Not locally on macOS, as localMnt: Docker Desktop's file
+			// sharing may refuse the chown, and both it and OrbStack let
+			// any container user write the Mac's files anyway.
+			owned := map[string]string{}
+			for _, e := range names {
+				if o := owners[e]; o != "" && (onTarget || runtime.GOOS != "darwin") {
+					owned[e] = o
+				}
+			}
+			if err == nil {
+				err = ownMnt(ctx, mnt, owned, cname+"-owners")
+			}
 		}
 	}
 	if err != nil {
@@ -857,13 +1070,49 @@ func runResolved(cwd, name string) int {
 		return fail(err.Error())
 	}
 	removeSpools(base, name)
+	again := report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved")
+	// What an mnt import may have extracted goes to its owners first, as
+	// a complete import does: a tar made anywhere carries its maker's
+	// owners, and the services would start on them.
+	if err := resolvedOwners(cwd, projectDir, services, name); err != nil {
+		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
+		return 1
+	}
 	if err := restoreServices(cwd, services, false, nil); err != nil {
-		report.Fail(fmt.Errorf("%w: the mark stays", err), report.Fix("fix what does not start, then run it again:", "devopsy @"+targetAddress(cwd)+" "+cli.ImportFlag+" "+name+" --resolved"))
+		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0
+}
+
+// resolvedOwners gives the owned entries of name, when it is an mnt
+// service, to their owners (ownMnt), in containers named as an import's
+// owners' are (importContainers), for --resolved.
+func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name string) error {
+	s, ok := cli.SyncFind(services, name)
+	if !ok || s.Transfer != cli.DataMnt {
+		return nil
+	}
+	owners, err := cli.MntOwners(services)
+	if err != nil {
+		return err
+	}
+	owned := map[string]string{}
+	for _, e := range s.Dirs {
+		if o := owners[e]; o != "" {
+			owned[e] = o
+		}
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+	mnt, err := dataMnt(projectDir)
+	if err != nil {
+		return err
+	}
+	return ownMnt(context.Background(), mnt, owned, fmt.Sprintf("%s%s-%d-owners", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()))
 }
 
 // chunk is a read of a stream: data, or its error.

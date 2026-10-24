@@ -3,6 +3,12 @@
 # util-linux, the deploy user in the docker group. Run privileged with a
 # volume on /var/lib/docker; its own dockerd starts with it. The operator runs the
 # same image as "operator": an ssh client, no daemons.
+#
+# devopsy-server's Docker step also installs apparmor, which this leaves
+# out on purpose: these servers are privileged Docker-in-Docker, and on
+# an AppArmor host (GitHub's Ubuntu runners among them) the inner dockerd
+# would start confining its containers with the host's profiles, which
+# changes what the suite tests from one host to the next.
 FROM debian:trixie
 RUN apt-get update -q \
  && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client git util-linux iptables iproute2 procps \

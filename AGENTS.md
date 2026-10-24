@@ -265,7 +265,8 @@ The section that covers each part is in parentheses.
   the operator's side of remote commands (`remote.go`, Releases; a
   local release in `release_local.go`), syncs and the servers'
   `--sync-*` flags (`sync.go`, Syncs), `--export` and `--import`
-  (`data.go`), the watcher and the heartbeat (`watch.go`,
+  (`data.go`), the owners of `mnt`'s entries and the mounts check
+  (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
   (`releaselog.go`), `--releases` and `--images`; tests run the built
   binary against a fake `docker` and `ssh`.
@@ -389,6 +390,13 @@ before changing anything".
   it, so the child's first session refuses for all of them. Not
   detected: a project command running `devopsy --export` itself (it
   fails loudly, without the upgrade line).
+- **The owners in copies are a named feature, `mnt-owner`,** found by
+  `--sync-push`, `--import` and `--sync-services list`: an older parent
+  would rsync the parent's owners, an older child list none, an older
+  server's import keep the tar's. `childNeeds` adds it as it does
+  `data-labels`. A release's owners and mounts check are flags of their
+  own (`--mnt-owners`, `--check-mounts`), so an activation on an older
+  server refuses by them.
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -486,19 +494,35 @@ step's rules):
 4. Links into the release: `shared/*`, `inherit.env`, `project.env` and
    `instance.env`, even when missing, so one created later applies.
 5. Releases only: `--prepare-release` when the compose files use role
-   or import labels (`PrepareScript`, Roles, exports and imports);
-   `--check-names`: containers of the same compose project from another
-   directory (`cli.ProjectConflict`: `-`-joined names coincide,
-   `a-b`/`c` and `a`/`b-c`), and a network the project names as its
-   own that another compose project owns (`cli.NetworkConflicts`:
-   Compose would silently share it; external networks are how a project
-   joins another's).
+   or import labels (`PrepareScript`, Roles, exports and imports).
 6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`: compose's
-   `${VAR:?}`/`${VAR?}` left unset).
+   `${VAR:?}`/`${VAR?}` left unset), then, releases only, the checks
+   that read compose's configuration, which fails while a required
+   variable is unset, so they come after what makes them (decided: before
+   prepare, a first release whose prepare makes its secrets, drupal11's
+   and the registry's, passed them unchecked): `--check-names`:
+   containers of the same compose project from another directory
+   (`cli.ProjectConflict`: `-`-joined names coincide, `a-b`/`c` and
+   `a`/`b-c`), and a network the project names as its own that another
+   compose project owns (`cli.NetworkConflicts`: Compose would silently
+   share it; external networks are how a project joins another's);
+   `--check-mounts` (`cli.CheckMounts`, Data, destroying and removing),
+   which also readies `UtilImage` when an entry is owned, so a registry
+   down refuses the release instead of failing it after its switch.
+   Rollbacks run `--check-mounts restored` in the release they restore
+   instead: no label refuses (unreadable ones warn), only what its
+   `--mnt-owners restored` needs, the util image and no owned entry a
+   link (review of 2026-10-23, round 2: an image pruned since failed the
+   rollback after its switch).
 7. The images (`fetch_release`, Images). `ServerLogFile` is created
    here, so a full disk fails the release before it goes live.
-8. `PendingFile` removed, `make_current`, the sync of a release that
-   syncs, `followOutput` (From the switch on), the run step.
+8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
+   destroying and removing; before the sync of a release that syncs,
+   after `followOutput` otherwise, and in a rollback from the restored
+   release's labels, `--mnt-owners restored`, where labels this devopsy
+   cannot read only warn: a failure is the run step's), the sync of a
+   release that syncs, `followOutput` (From the switch on), the run
+   step.
 9. A failed run or sync: `FailedFile`, what the release's containers
    were left as into the server's log (`failureReport`: each one's
    state and health, then the health checks and last logs of those
@@ -506,7 +530,8 @@ step's rules):
    recreates every container whose image or config changed, a tag
    rebuilt upstream included, so their evidence went with them and
    `--log` only said "unhealthy"), `current` back, the previous
-   release restarted with its own images (`get_images`) and run step
+   release restarted with its own images (`get_images`), owners
+   (`--mnt-owners restored`, a failure only said) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
    release it restored failed (decided: it did not come back up, so it
@@ -911,7 +936,157 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   and mounts"): never uploaded, `shared/mnt` created by the upload and
   linked like every `shared/` entry. Its contents and their ownership
   are the project's: only `--destroy`, an `--import` (its entries) and
-  a sync into a child remove anything in it.
+  a sync into a child remove anything in it, and only the owner label
+  changes an owner.
+- **`devopsy.mnt.owner=<uid>:<gid>` owns a service's writable entries**
+  (`cli.MntOwnerLabel`, parsed with the data labels into `Owner` and
+  `Writable`, every profile; `cli.MntOwners` maps entry to owner;
+  `cmd/devopsy/mnt.go`). Why: `shared/mnt` starts empty and the deploy
+  user's, Docker makes a missing bind source root's, the deploy user
+  cannot chown, and devopsy copies owners exactly, so every template
+  started as root for its mounts (an entrypoint's chown, an `init`
+  service) and files from elsewhere (an import, a sync, an upload by
+  hand) left a non-root app unable to write. Numbers only (names cannot
+  be resolved from the host), from 0 to 4294967294 and normalized
+  (`parseOwner`), so owners compare as numbers and every script and the
+  child's list say them alike. Why the range: past a `uid_t`'s 32 bits,
+  or 4294967295 (chown's -1), an owner passed the checks before the
+  switch and failed in `find` and `chown` after it. A read-only mount claims nothing (a log
+  reader); two owners on one entry are an error, an unlabeled writer of
+  an owned entry is none (a tool sharing it). Explicit, never from
+  `user:` (decided): changing that must not silently change the data's
+  owner, and a default needs rules for names, root, images that drop
+  privileges themselves and tools; a variable keeps the two alike.
+  Rejected: a shared group with setgid directories and default ACLs
+  (tar and rsync set owner and mode explicitly, a chmod sets the ACL
+  mask), capability hooks (none runs after an `mnt` import, a plain
+  `up` or an upload by hand), a root `init` service in every template.
+- **Where owners are applied,** always as root in `UtilImage`, one
+  container per owned entry that mounts that entry alone (`ownMnt`,
+  `--mount`, its source a CSV field), `--network none`, `chown -h` in
+  batches (`find -exec ... +`) and only what differs (`find \( ! -user
+  -o ! -group \)`, `chownEntry`), only files, directories and links
+  (`\( -type f -o -type d -o -type l \)`, in both looks: a device node
+  given to the entry's owner, a block device of the server's disk, is
+  its raw disk; review of 2026-10-23, round 4). Why one entry per container (decided,
+  review of 2026-10-23, round 2): a directory the app swaps for a link
+  during the scan can lead chown only into that entry or the throwaway
+  container, never another entry or the host, which is what `-execdir`
+  bought before at one chown per directory (measured on 20,200
+  directories of 40,201 inodes in `devopsy-util:2`, container
+  included: 15.3 s with `-execdir`, 0.34 s now). A missing entry is
+  made by devopsy first, 0755 (`makeEntry`; one that is a link is
+  refused there too). A scan that fails is looked at again, chowning
+  nothing, and fails only when something is left with another owner or
+  when that look fails itself (a directory find cannot read: review of
+  2026-10-23, round 2, it passed silently), `-ignore_readdir_race` on
+  both: the services may run meanwhile, and a file one removed after
+  find saw it failed the release after its switch (review of
+  2026-10-23; rsync's 24 is the same race). Applied: a release, right after
+  `make_current` (it changes live data, so never before; `--mnt-owners`,
+  a failure a failed run step, ignoring SIGTERM, SIGINT, SIGHUP and
+  SIGPIPE as `runImages` does, since nothing interrupts after the
+  switch and Go keeps no inherited ignored SIGTERM: review of
+  2026-10-23, round 3), `--network none`, missing entries made
+  0755 (only entries: a bind source below one is refused, below), and
+  every owned entry scanned whole (decided: what devopsy did
+  not write has the wrong owner deep under a correct top; measured 0.24
+  s warm, 0.75 s cold for 500,000 files; fallback for huge trees: `-type
+  d` only), and rollbacks and the restart after a failed run from the
+  restored release's labels (`--mnt-owners restored`: labels this
+  devopsy cannot read there, names from before a change, `./mnt` whole,
+  a compose error, are a warning and nothing is given away, for the
+  reason rollbacks never check roles or imports; review of 2026-10-23,
+  a rollback to a release with `devopsy.sync` labels failed; a chown
+  failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
+  the child's labels (Syncs); an `mnt` import, after its extracting
+  containers (`extractEntries`, below) in the entries' own, never
+  locally on macOS (review of 2026-10-23, round 2:
+  as before `up`, and Docker Desktop's file sharing may refuse a
+  chown); a reset, after `emptyMnt`;
+  locally before compose's `up`, `start`, `restart`, `run`,
+  `create`, `watch` and `scale` (review of 2026-10-23, round 3:
+  `restart` starts containers, and Docker makes a missing entry root's)
+  (`Plan.Starts`, only when the compose files' YAML has the label or an
+  `include:` or `extends:` key, comments left out: no compose config for
+  every command, and every template's comments say "included"; the
+  project's own files, the ones `ComposeConfig` reads labels from, so a
+  `-f` the command adds is half seen by neither; never for compose's
+  `--dry-run`, which is compose's only where cobra parses it: before
+  the command, after it up to a `--`, for `run` only before its service
+  (past it the container's command: `run --rm app composer update
+  --dry-run` starts app, review of 2026-10-23, round 4), never a flag's
+  value (`commandValueFlags`, `dryRun`), and never in a release on a server, `cli.InRelease`, where
+  `--mnt-owners` owns it: review of 2026-10-23, round 2, a rollback's
+  plain `up` failed on labels `--mnt-owners restored` only warned about;
+  labels that cannot be read are a warning and compose's command goes
+  on, since a label devopsy reads must never stop it, and so is an
+  owned entry that is a symbolic link, left as it is: review of
+  2026-10-23, round 3, `makeEntry` refused it and every `up` failed
+  before compose), only
+  missing paths made and, on Linux, an entry whose top is wrong given
+  away and scanned whole (one whose top is right is never scanned);
+  macOS never checks (Docker Desktop and OrbStack let any container user
+  write the Mac's files and show them the owner Docker asks for). Not a
+  stream's import (it writes as the service's user), restores, restarts
+  or reboots (owners persist). No flag to fix owners: a release does it.
+- **The mounts check refuses before the switch** (`--check-mounts`,
+  `cli.CheckMounts`, beside `--check-names` after the prepare steps and
+  `--missing-vars`, on the server: labels can come from its variables):
+  a writable bind from the project's tree outside `mnt` (`TreeBinds`:
+  it goes with the next release), `devopsy.data=mnt` copying no entry (none mounted, or all
+  excluded) or an owner of no writable entry (a sync said "nothing to
+  sync" and a child's first release went live on empty data), two
+  owners on one entry, `./mnt` whole mounted writable by any service
+  (`WholeMnt`, below), a bind source below an owned entry
+  (`Binds`), and an owned entry that is a symbolic link in `shared/mnt`
+  (`ownedLinks`: Docker would mount what
+  it points to, for the owners' step to give away; `makeEntry` refuses
+  one too, wherever owners are given). With an entry owned it readies `UtilImage`
+  (`ensureUtilImage`), so a registry down refuses the release rather
+  than failing `--mnt-owners` after the switch. Not checkable, so
+  documented: named volumes and absolute paths. It reads the labels
+  exactly as `--mnt-owners` does after the switch (`cli.SyncServices`,
+  the leftover `.devopsy/capabilities/sync/` included), so labels that
+  step could not read refuse the release here (review of 2026-10-23,
+  round 2: the check parsed compose's output itself, passed a leftover
+  sync capability, and the release failed after its switch). A compose
+  config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as
+  for `--check-names`: after `--missing-vars` that is a broken file,
+  which the run step names.
+  Each bind source counts as written and as where its links lead
+  (`resolvePath`: `filepath.EvalSymlinks` where it exists, else its
+  longest existing prefix, a link whose target is missing followed all
+  the same), both for `Binds` (the lexical one too: the owner's link
+  below its entry must not resolve the refusal away) and the resolved
+  one alone for `TreeBinds` and `WholeMnt`. Why (review of 2026-10-23,
+  round 3): the check was lexical, so a release-tree link to below an
+  owned entry, or a `shared/mnt` link into the release, passed. Links
+  into `shared/` lead out of the release tree, so they stay fine.
+- **A bind source below an owned entry is refused** (decided, review
+  of 2026-10-23, round 2), by any service, read-only too: the entry's
+  owner (the app, writing it) can replace `storage/files` with a
+  symbolic link, and Docker resolves a bind source on the host, so a
+  link to `/` would mount the host's root into the next container
+  started. The entry itself is a mount point no container can replace,
+  and the check refuses one that is a link. Before: devopsy made such
+  paths, its owner's (`OwnedPaths`, a directory at a time), which this
+  replaced; only top-level owned entries are made and scanned now. A
+  path below an entry nobody owns stays allowed (decided scope): such
+  an entry is the deploy user's, written from the host, while an owned
+  one is written by a container by design. Locally nothing refuses it.
+- **`./mnt` whole is no entry** (decided): refused where labels are read
+  as a `mnt` service's or an owned writable mount, writable on any other
+  by the mounts check, and ignored read-only (a tool), so nothing
+  downstream sees `.`. Why the check: such a service writes every entry,
+  and once its mount was no entry the child guard no longer saw it
+  (review of 2026-10-23: a sync rsynced under a running file manager).
+  Why no entry: no project
+  needs it, it gave every entry one owner and carried every service's
+  data, and its special cases (a sync's notice, the module `mnt`, an
+  import emptying every entry, links between entries allowed) caused a
+  review bug: a tar member `../x` into `.` emptied a container's root.
+  A tar carrying `./` itself is refused too.
 - **`--destroy` removes nothing unless everything before succeeded**
   (`DestroyScript`, both locks; asks for the target's name unless
   `--yes`): the hidden `--destroy-data` (`runDestroyData`) in
@@ -1210,10 +1385,6 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   flip the method and keep it. A mnt service's entry with whitespace in
   its name is refused: the child's list, exclude and rsync modules name
   entries split by spaces (decided over a new list format).
-- **A `.` entry (`./mnt` itself) subsumes the rest,** other services'
-  entries included: `--sync-push` says so (`SyncWholeNotice`, yellow
-  when the operator's terminal takes colors, `ColorEnv` passed with the
-  push's variables), only a notice: it never excludes by itself.
 - **The child guard: each side reads its own labels, and the parent
   checks the child's before changing anything.** `--sync-push` asks the
   child for `--sync-services list` (through `--sync-exec`, one more
@@ -1227,9 +1398,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   inherited variable cannot lag (the child reads the pending file,
   inherit below); one in the child's own `shared/.env` can still
   differ. The list (`runSyncServices`): per service `name`, `<method>+<stop
-  word>`, state, entries, tab separated, then `!import\t<service>` for
-  an import's mark (`listMark`); only a devopsy with `data-labels`
-  reads it, from a child checked for it.
+  word>`, state, entries, owners (`<entry>=<uid>:<gid>`, space
+  separated, `listOwners`), tab separated, then `!import\t<service>` for
+  an import's mark (`listMark`); only a devopsy with `data-labels` and
+  `mnt-owner` reads it, from a child checked for both (`childNeeds`).
+  The list refuses two owners on one entry.
 - **Rejected for these labels:** a `push` script with helpers (it only
   works from the parent's server to the child's, never for a file, a
   laptop or a relay; `export` and `import` give the same freedom and
@@ -1345,15 +1518,28 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Transport, SSH and environment
 
-- **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:1`;
+- **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:2`;
   built on each host from `UtilDockerfile` when missing; GNU tar for
-  `--export` and `--import` too), as root with `--numeric-ids`. Why:
-  owners and modes survive, and the deploy user's permissions do not
-  matter. Bump the tag whenever the Dockerfile changes: hosts never
+  `--export` and `--import` too, GNU find and chown for owners), as
+  root with `--numeric-ids`. Why: owners and modes survive, and the
+  deploy user's permissions do not matter. Never devices, FIFOs or
+  sockets (`--no-D`, taking back `-a`'s `-D`): as root rsync made them
+  on the child's host, where bind mounts are not nodev, and `--chown`
+  gave a block device to the entry's owner (review of 2026-10-23, round
+  4), as an `mnt` import refuses them (`errMember`). Times are compared to the
+  nanosecond (`RsyncCopy`, `--modify-window=-1`): to the second, rsync
+  skipped a datadir's files of the same size that both sides wrote in
+  the same second (the child stops right before the parent), and the
+  child's database opened its old tablespaces under the parent's
+  dictionary (found on a test server, 2026-10-23). An entry the child's labels
+  own gets `--chown=<uid>:<gid>` (`syncRsync`, the receive script's
+  options), from the child's list: the child's owner for every file
+  written, whatever the parent's are (a parent whose files were wrong,
+  an upload by hand there). Bump the tag whenever the Dockerfile changes: hosts never
   rebuild an image they have.
 - **Entries are the top-level entries of `mnt` that `rsync` services
   bind-mount** (`docker compose --profile '*' config`, lexical and
-  resolved paths; `.` subsumes the rest); one missing on the parent is
+  resolved paths); one missing on the parent is
   skipped with a notice, the child's left as it is. An entry that is a
   file on the parent is copied as one, `--inplace`, so the container
   bind-mounting it sees the new content (a bind mount is the file's
@@ -1361,8 +1547,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 - **Across servers the parent's daemon serves only what is copied:**
   named with the sync's id and labeled with the parent's `mnt`, so the
   next push from the parent, holding its sync lock, removes one an
-  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`, `RsyncModule`: the entry's name,
-  `mnt` for `.`), so nothing else under `mnt` can be asked for.
+  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`: the entry's name), so nothing else
+  under `mnt` can be asked for.
 - **rsync's exit 24** (files vanished during the copy) is a notice
   (`RsyncVanished`); any other failure aborts.
 - **The child's sessions from the parent never get the operator's
@@ -1420,7 +1606,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`remote.SyncInheritPending`; the id chosen by the operator's devopsy,
   `newSyncID`, since the file is written before the holder runs), named by
   `DEVOPSY_INTERNAL_INHERIT_FILE` (exported by the holder, set by
-  `--sync-exec`) for everything the sync runs on the child. Why: the
+  `--sync-exec`) for everything the sync runs on the child, and in a
+  release that syncs exported by the activation from before its prepare
+  steps, so the owners' step after the switch reads the labels with it
+  too (an owner inherited is the new one in that release, the entries
+  the sync does not copy included: `TestMntOwnersInherited`). Why: the
   child's labels follow an inherited variable in the same sync; written
   after the copy, they lagged one sync. `finish go` moves it into place
   (`mv -Tf`) before restoring services, the hook and the run step;
@@ -1482,9 +1672,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   either and restored (`stopSet`), interrupts and a stop that failed
   included (it may have stopped them all the same) up to the first
   write. A `stream` import of a service not stopped brings it up alone
-  and down again if it was down (`upFor`), an `up` that failed too. A
-  service mounting `./mnt` itself carries all of `mnt`, said
-  (`wholeMntNotice`).
+  and down again if it was down (`upFor`), an `up` that failed too. An
+  owned entry it extracted goes to its owner before the import counts
+  as complete, in a container of its own (`ownMnt`, named
+  `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
+  `importContainers` ends it with the extracting ones).
 - **An mnt import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
@@ -1494,13 +1686,46 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   service does not mount are refused, an excluded one by its label, and
   so is a member that reaches out of its entry (`tarMember`): a `..` or
   absolute path, a link out of `mnt`, a top-level entry that is no
-  directory or file, and a link into another entry unless the tar
-  carries all of `mnt`. Why: GNU tar extracted those through to another
-  entry, refused them only once the entries were emptied, or (`../x`
-  into `.`) emptied the container's root. Then each carried entry is emptied, never
-  removed (for `.`, every entry's contents and the files beside them),
-  and extracted with `--overwrite`. Why never removed: a running
-  container bind-mounts the directory's inode. An entry that is a
+  directory or file, a link into another entry, and `./`, `mnt` itself.
+  Why: GNU tar extracted those through to another entry, refused them
+  only once the entries were emptied, or (`../x` into `.`, before `.`
+  went) emptied the container's root. Where a link leads is judged
+  through the tar's own links, never lexically alone (`tarLinks.check`,
+  after the whole tar is read): a symbolic link's target is walked
+  component by component from its directory as the kernel resolves it,
+  following every link of the tar on the way (40 at most, Linux's own
+  limit), and refused when the way leaves its entry at any point (a `..`
+  above it, `../storage/b` going through `mnt` included), as are a
+  member below a link of the tar or sharing a link's name (a tar never
+  writes them, and then every name is where it lands) and a hard link
+  to a link or below one (GNU tar links the symbolic link itself, whose
+  relative target then leads elsewhere: checked in `devopsy-util:2`).
+  Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
+  `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
+  `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
+  carry is a directory to the walk: the entry is emptied first. Any member but files,
+  directories and links is refused too (`tarTypes`, `errMember`):
+  GNU tar as root makes device nodes on the host, where bind mounts
+  are not nodev, and the owners' step then gave one to the entry's
+  owner, a block device of the server's disk the raw disk for the
+  app's UID (review of 2026-10-23, round 3); FIFOs and anything else a
+  tar of data never needs went with them. Then each carried entry is
+  emptied, never removed, and extracted with `--overwrite`. Why never removed: a running
+  container bind-mounts the directory's inode. Each entry in a util
+  container of its own (`extractEntries`, `<ImportContainerPrefix><compose
+  name>-<pid>-extract-<n>`), `--network none`, that mounts that entry
+  alone (made first when missing, a directory or an empty file as the
+  tar has it; one of the other kind refused before anything changes)
+  and extracts only its members from the whole spool, by the names
+  the archive gives it (`tarEntry.forms`: GNU tar matches
+  `./storage/x` only by `./storage`, so member names must be plain
+  paths, `././` and `//` refused). Why (decided, review of 2026-10-23,
+  round 3): the service whose entry it is may run (`never` is the
+  default stop), and its owner swapped a directory the extraction had
+  just made for a link to `../<another entry>`, which GNU tar followed
+  as root, planting files in another entry (demonstrated); here a link
+  leads only into the entry or the throwaway container. Cost: the spool
+  is read once per entry. An entry that is a
   symlink is refused both ways: tar carries only the link (an export
   that succeeded empty), and the image's `/mnt` never reaches its
   target.
@@ -1569,7 +1794,20 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   only when it ran before the import: a writer line ends ` down` when
   `upFor` brought it up), run by an import of that service,
   `--resolved` and a child's prepare; `--destroy-data` removes the
-  containers too (not Compose's: `down --remove-orphans` leaves them).
+  containers too (not Compose's: `down --remove-orphans` leaves them),
+  and an owners' step's (`ownersContainers`).
+- **Containers named after devopsy's pid** (an import's extracting and
+  owners' ones, a release's and a local command's owners' ones,
+  `<ownersPrefix><compose name>-<pid>-<n>`) are started through
+  `dockerRunFresh`, which removes a container of that very name first:
+  only a devopsy killed outright whose pid this one reuses can have
+  left one, still running (`--rm` removes it once it ends), and docker
+  run would refuse the name (review of 2026-10-23, round 3). On a
+  server the next lock-taker removes the rest: an import's by
+  `importContainers` (above), a release's owners' by
+  `ownersContainers` in `--mnt-owners` before it scans, and both in
+  `--destroy-data`. Locally nothing holds a lock, so only the name's
+  own is removed: another terminal's owners' step may be running.
 - **While an import's mark is there, only its service can be
   imported** (`ImportScript`, in shell under the lock after its
   `settle`, before devopsy reads stdin, and again in Go), and any
@@ -1617,7 +1855,10 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   the imported service only when it ran before) and asks for the full
   name; a second session under the lock settles a killed holder's sync
   (`settleLeftover`, as `ImportScript` does), checks again, ends a
-  leftover writer, starts the record and only then
+  leftover writer, gives a `mnt` service's owned entries to their
+  owners (`resolvedOwners`, named as an import's owners' containers:
+  review of 2026-10-23, round 3, it started the services on the tar
+  maker's owners), starts the record and only then
   removes the mark and the record. On the server it is `devopsy
   --import <service> --resolved --yes` (`ResolvedScript`), so the
   `data-labels` regexp gates it. Not locally (decided): nothing there

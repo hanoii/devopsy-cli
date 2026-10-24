@@ -207,12 +207,12 @@ func TestSyncRsyncEntries(t *testing.T) {
 	}
 }
 
-// A service mounting ./mnt itself copies all of it on a child's first
-// release, an unlabeled service's entry included (said), and what the
-// parent lacks goes. Then the child guard: with that unlabeled service
-// running on the child, a sync refuses before the parent stops
-// anything, the child's data as it was and its services back.
-func TestSyncWholeMntGuard(t *testing.T) {
+// A child's first release copies what the labels say, and what the
+// parent lacks goes. Then the child guard: with an unlabeled service
+// mounting the copied entry running on the child, a sync refuses before
+// the parent stops anything, the child's data as it was and its
+// services back.
+func TestSyncChildGuard(t *testing.T) {
 	dir := project(t, "whole", map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
 		".devopsy/config.yaml": "project: whole\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
@@ -220,7 +220,7 @@ func TestSyncWholeMntGuard(t *testing.T) {
   all:
     image: busybox:1.37
     command: [sleep, infinity]
-    volumes: [./mnt:/all]
+    volumes: [./mnt/db:/all]
     labels: {devopsy.data: mnt, devopsy.data.stop: own}
   db:
     image: busybox:1.37
@@ -233,16 +233,13 @@ func TestSyncWholeMntGuard(t *testing.T) {
 		out, _ := srv(t, "cat whole/"+env+"/shared/mnt/db/stamp")
 		return strings.TrimSpace(out)
 	}
-	srv(t, "mkdir -p whole/prod/shared/mnt/db whole/dev/shared/mnt && echo one >whole/prod/shared/mnt/db/stamp && echo top >whole/prod/shared/mnt/top && echo extra >whole/dev/shared/mnt/extra")
+	srv(t, "mkdir -p whole/prod/shared/mnt/db whole/dev/shared/mnt/db && echo one >whole/prod/shared/mnt/db/stamp && echo extra >whole/dev/shared/mnt/db/extra")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
 	out, code := op(t, dir, "devopsy @dev --release")
-	if code != 0 || stamp("dev") != "one" || !exists(t, "whole/dev/shared/mnt/top") || exists(t, "whole/dev/shared/mnt/extra") {
-		t.Fatalf("dev's first release (%d), stamp %q, top %v, extra %v:\n%s", code, stamp("dev"), exists(t, "whole/dev/shared/mnt/top"), exists(t, "whole/dev/shared/mnt/extra"), out)
-	}
-	if !strings.Contains(out, "all copies mnt whole, db (no data: db) included") {
-		t.Errorf("no notice of what mnt whole includes:\n%s", out)
+	if code != 0 || stamp("dev") != "one" || exists(t, "whole/dev/shared/mnt/db/extra") {
+		t.Fatalf("dev's first release (%d), stamp %q, extra %v:\n%s", code, stamp("dev"), exists(t, "whole/dev/shared/mnt/db/extra"), out)
 	}
 
 	srv(t, "echo two >whole/prod/shared/mnt/db/stamp")
