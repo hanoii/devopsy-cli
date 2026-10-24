@@ -703,8 +703,15 @@ const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 // before devopsy reads stdin, so a dump is never sent only to be refused:
 // a sync's (only a sync completes it), and an import's of another service
 // (only its own completes it). While it holds the lock, SyncImportingFile
-// says an import runs (ImportRunning).
-func ImportScript(t *Target, projectName, service, end string) string {
+// says an import runs (ImportRunning). accept are the services
+// --accept-image named (ImagesAcceptEnv), space separated: an mnt
+// import whose export recorded an image its data never ran is refused
+// otherwise.
+func ImportScript(t *Target, projectName, service, end, accept string) string {
+	acceptLine := ""
+	if accept != "" {
+		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
+	}
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
@@ -720,7 +727,7 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     exit 1
   fi
 fi
-export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
 }
 
 // settleLeftover settles a sync's holder killed outright: its record's

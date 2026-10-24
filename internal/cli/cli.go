@@ -590,6 +590,7 @@ so data goes from one environment to another without a project command:
   devopsy --export database > database.sql
 `,
 	"--import": `Usage: devopsy [@<target>] --import <service> [--yes]
+       devopsy @<target> --import <service> [--accept-image <service>] [--yes]
        devopsy @<target> --import <service> --resolved [--yes]
 
 Replaces a service's data with stdin, what --export wrote, the way its
@@ -606,6 +607,16 @@ does anything change, and the file is removed afterwards.
                        given to its owner (devopsy.mnt.owner). A
                        truncated tar, or one carrying entries the service
                        does not mount, changes nothing
+
+An mnt tar from --export carries the images that ran on the data. On a
+target, a service whose image is pulled is checked against them before
+anything stops, as a sync checks its parent's: the export's image, or
+the same name, goes on, held on the export's image once the data is in;
+an image the data moved past, or a name (or another repository) it
+never ran, is refused. --accept-image <service> runs its own image on
+the data then, its history starting over. A tar without them (made by
+hand, by an older devopsy) and every import locally start the history
+over from the image that runs.
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),

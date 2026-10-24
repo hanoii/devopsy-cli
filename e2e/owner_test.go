@@ -119,4 +119,22 @@ func TestOwnerImport(t *testing.T) {
 			t.Errorf("%s is %s's, want 10001's", p, got)
 		}
 	}
+	// prod's export into dev carries the image that ran on the data, in
+	// the tar's first header, which the server's GNU tar skips: dev holds
+	// its data service on it, its history from an import line.
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --export data | devopsy @dev --import data --yes"); code != 0 {
+		t.Fatalf("prod's export into dev (%d):\n%s", code, out)
+	}
+	if got, _ := srv(t, "cat ownimport/dev/shared/mnt/data/sub/file"); strings.TrimSpace(got) != "imported" {
+		t.Errorf("dev's file: %q", got)
+	}
+	if h, _ := srv(t, "cat ownimport/dev/.devopsy-data-images"); !strings.Contains(h, "\tdata\timport\tbusybox:1.37\t") {
+		t.Errorf("dev's history:\n%s", h)
+	}
+	if c, _ := srv(t, "cat ownimport/dev/current/../devopsy-compose.yaml"); !strings.Contains(c, `image: "busybox@sha256:`) {
+		t.Errorf("dev's data service is not held:\n%s", c)
+	}
 }

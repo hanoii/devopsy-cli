@@ -579,14 +579,33 @@ func dataRandom(t *testing.T, seed int64) {
 	for step := 0; step < 40; step++ {
 		m = envs[rng.Intn(2)]
 		switch op := rng.Intn(12); op {
-		case 10: // a complete mnt import: the history starts over from what runs
+		case 10: // a complete mnt import
 			if m.cur == "" {
 				continue
 			}
-			if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
-				t.Fatalf("after %v: import: %v\n%s", log, err, out.String())
+			other := envs[0]
+			if other == m {
+				other = envs[1]
 			}
-			check(m.e.set.Name + " import")
+			// Of a tar without the export's images: the history starts over
+			// from what runs.
+			if other.cur == "" || rng.Intn(2) == 0 {
+				if err := m.e.set.Imported(m.base(), m.e.rel(m.cur), "database"); err != nil {
+					t.Fatalf("after %v: import: %v\n%s", log, err, out.String())
+				}
+				check(m.e.set.Name + " import")
+				continue
+			}
+			// Of the other's export: as a sync, the same checks.
+			accepted := rng.Intn(3) == 0
+			err := importInto(t, other, m, accepted)
+			if err != nil && !errors.Is(err, ErrRefused) {
+				t.Fatalf("after %v: import of %s's export: %v\n%s", log, other.e.set.Name, err, out.String())
+			}
+			if err == nil && !accepted && pulledData(m) && pulledData(other) && repoKey(other.e.svcs[other.cur][1].Ref) == repoKey(m.e.svcs[m.cur][1].Ref) && m.runs("database") != other.runs("database") {
+				t.Fatalf("after %v: %s's database runs %s after an import of %s's export, which runs %s", log, m.e.set.Name, m.runs("database"), other.e.set.Name, other.runs("database"))
+			}
+			check(m.e.set.Name + " import of " + other.e.set.Name + "'s export")
 		case 11: // a run step failing, its restart's images not restored (img hold)
 			if m.cur == "" {
 				continue
@@ -1755,5 +1774,118 @@ func TestRollbackBuiltDatabaseWithoutDigest(t *testing.T) {
 	h.write(m.base())
 	if err := m.rollback(r2); err != nil {
 		t.Errorf("rollback to a release that built its database (%v)\n%s", err, out.String())
+	}
+}
+
+// importInto imports what export's environment recorded of its database
+// (ExportData) into m, as --import does on a target: the check before
+// anything stops, then, the data in, the hold and the history, and the
+// service made again.
+func importInto(t *testing.T, export, m *sim, accept bool) error {
+	t.Helper()
+	data := DataFor(export.e.set.ExportData(export.base(), export.e.rel(export.cur), "database"), "database")
+	rel := m.e.rel(m.cur)
+	// Nothing recorded (a built database): as before, the history starts
+	// over from what runs it.
+	if data == "" {
+		return m.e.set.Imported(m.base(), rel, "database")
+	}
+	if accept {
+		m.e.set.Accept = map[string]bool{"database": true}
+	}
+	defer func() { m.e.set.Accept = nil }()
+	if err := m.e.set.ImportCheck(rel, data, "database"); err != nil {
+		return err
+	}
+	if err := m.e.set.ImportDone(m.base(), rel, data); err != nil {
+		return err
+	}
+	m.activation = true
+	m.up()
+	return m.e.set.Ran(m.base(), rel)
+}
+
+// An mnt export records the images that ran on its service's data, and
+// an import checks them as a sync checks its parent's: the same name on
+// an older image is held on the export's, its history the export's
+// (from an import line), so its next release goes forward from there; a
+// name the export's data never ran, or one in another repository (the
+// tar names it, whoever made it), is refused before anything stops,
+// unless --accept-image, which runs its own image, its history over.
+func TestImportTakesExportImage(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	data := prod.e.set.ExportData(prod.base(), prod.e.rel(prod.cur), "database")
+	if !strings.HasPrefix(data, "image\tdatabase\tmariadb:11.8\tI2\t") || !strings.Contains(data, "\nran\t") {
+		t.Fatalf("export data:\n%s", data)
+	}
+	if DataFor(data, "app") != "" || DataFor(data, "database") != data {
+		t.Errorf("DataFor:\n%q", DataFor(data, "database"))
+	}
+	if err := importInto(t, prod, stage, false); err != nil {
+		t.Fatalf("same name (%v)\n%s", err, out.String())
+	}
+	if stage.runs("database") != "I2" || holdsIn(stage.e.rel(stage.cur))["database"] != "mariadb@I2" {
+		t.Fatalf("after the import: runs %s, holds %v", stage.runs("database"), holdsIn(stage.e.rel(stage.cur)))
+	}
+	if got := strings.Join(stage.history("database"), " "); got != "import:I2" {
+		t.Errorf("history: %s", got)
+	}
+	d.publish("mariadb:11.8", "I3")
+	if _, err := stage.release(false, db118); err != nil || stage.runs("database") != "I3" {
+		t.Errorf("next release (%v): %s", err, stage.runs("database"))
+	}
+
+	// Another series: refused, naming --accept-image, nothing changed.
+	dev := newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.4", "I4")
+	dev.release(false, dbSvc("mariadb:11.4"))
+	out.Reset()
+	if err := importInto(t, prod, dev, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "never ran on the export's data") || !strings.Contains(out.String(), "devopsy @vm1:dev --import database --accept-image database") {
+		t.Fatalf("another series (%v):\n%s", err, out.String())
+	}
+	if dev.runs("database") != "I4" || holdsIn(dev.e.rel(dev.cur))["database"] != "mariadb@I4" {
+		t.Errorf("the refusal changed dev: runs %s, holds %v", dev.runs("database"), holdsIn(dev.e.rel(dev.cur)))
+	}
+	if err := importInto(t, prod, dev, true); err != nil || dev.runs("database") != "I4" {
+		t.Fatalf("accepted (%v): runs %s\n%s", err, dev.runs("database"), out.String())
+	}
+	if got := strings.Join(dev.history("database"), " "); got != "import:I4" {
+		t.Errorf("history after an accepted import: %s", got)
+	}
+
+	// Another repository, even the same image: refused.
+	other := newSim(t, d, "app-other", &out)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	other.release(false, dbSvc("mirror.example/mariadb:11.8"))
+	out.Reset()
+	if err := importInto(t, prod, other, false); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "from another repository than mirror.example/mariadb:11.8") {
+		t.Fatalf("another repository (%v):\n%s", err, out.String())
+	}
+}
+
+// Locally an export records the image its database's container runs,
+// with no history; a built or stopped-before-started one records none.
+func TestExportDataLocal(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app", &out)
+	d.publish("mariadb:11.8", "I1")
+	if err := d.Pull("mariadb:11.8"); err != nil {
+		t.Fatal(err)
+	}
+	d.containers = []container{{image: "I1", project: "app", ref: "mariadb:11.8", service: "database"}}
+	data := m.e.set.ExportData("", "", "database")
+	if !strings.HasPrefix(data, "image\tdatabase\tmariadb:11.8\tI1\t") || strings.Contains(data, "ran\t") {
+		t.Errorf("local export data: %q", data)
+	}
+	d.containers[0].state = "created"
+	if data := m.e.set.ExportData("", "", "database"); data != "" {
+		t.Errorf("never started: %q", data)
 	}
 }

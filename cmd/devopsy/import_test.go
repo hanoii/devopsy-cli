@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -889,5 +891,71 @@ func TestSyncResetNothingPresent(t *testing.T) {
 	docker, _ := s.logs()
 	if code == 0 && fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) {
 		t.Errorf("a reset that wiped nothing succeeded (%d), down: %v:\n%s\n%s", code, strings.Contains(docker, " down "), out, docker)
+	}
+}
+
+// An mnt export carries the images that ran on its data (a pax global
+// header, before the members), and an import on a target checks them
+// before anything stops, as a sync checks its parent's: the same name
+// goes on, held on the export's image, its history from an import line;
+// a name the data never ran is refused, nothing stopped or written,
+// unless --accept-image, which reaches the server's import. Locally
+// nothing is checked, so --accept-image there is an error.
+func TestImportExportImages(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:twelve=mariadb@sha256:twelve"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	h, err := tar.NewReader(bytes.NewReader(out)).Next()
+	if err != nil || h.Typeflag != tar.TypeXGlobalHeader || !strings.HasPrefix(h.PAXRecords[images.ExportKey], "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n") {
+		t.Fatalf("the export's first header (%v): %+v", err, h)
+	}
+	s.logs()
+
+	// The same name: imported, held on the export's image, and app,
+	// running through the import (no stop label), made again on it.
+	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
+	}
+	os.Remove(s.log + ".containers.shop-prod")
+	base := filepath.Join(s.root, "shop", "prod")
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
+		t.Errorf("not held on the export's image:\n%s", c)
+	}
+	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Errorf("history:\n%s", h)
+	}
+
+	// Another series here: refused before anything stops.
+	write(t, list, "mariadb:12\tsha256:twelve\tapp\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
+	s.logs()
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(errs, "app: mariadb:12 (") || !strings.Contains(errs, "never ran on the export's data") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
+		t.Fatalf("another series (%d):\n%s\n%s", code, errs, docker)
+	}
+	if _, errs, code := s.runIO(env, out, "@prod", "--import", "app", "--accept-image", "app", "--yes"); code != 0 || !strings.Contains(errs, "accepted (--accept-image)") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("accepted (%d):\n%s", code, errs)
+	}
+
+	// Locally: nothing to accept, and the header is no member.
+	if _, errs, code := s.runIO(nil, out, "--import", "app", "--accept-image", "app"); code == 0 || !strings.Contains(errs, "--accept-image is for a target") {
+		t.Errorf("--accept-image locally (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, out, "--import", "app"); code != 0 || readString(filepath.Join(s.dot, "mnt", "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a local import of it (%d):\n%s", code, errs)
 	}
 }

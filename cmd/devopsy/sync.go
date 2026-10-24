@@ -1077,7 +1077,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
 		code := fail(err.Error())
-		if err := restoreServices(cwd, services, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
 			fail(err.Error())
 		}
 		return finish(code, false)
@@ -1104,7 +1104,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}
 	copied := code == 0
-	if err := restoreServices(cwd, services, false, cli.StoppedNames(set)); err != nil {
+	if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
 		code = fail(err.Error())
 	}
 	return finish(code, copied)
@@ -2009,13 +2009,13 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.
 		_ = os.Remove(incomplete)
-		if err := restoreServices(cwd, services, true, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, true, true, cli.StoppedNames(set)); err != nil {
 			code = fail(err.Error())
 		}
 	case "abort":
 		// A first release's services are not created on empty data: it
 		// does not go live.
-		if err := restoreServices(cwd, services, false, cli.StoppedNames(set)); err != nil {
+		if err := restoreServices(cwd, services, false, false, cli.StoppedNames(set)); err != nil {
 			code = fail(err.Error())
 		}
 	case "partial":
@@ -2605,7 +2605,7 @@ const healthyTimeout = 5 * time.Minute
 // With create, a child's first release gets its data services and the
 // child side's set created (finish go): never on an abort, which leaves
 // it not live.
-func restoreServices(cwd string, services []cli.SyncService, create bool, fallback []string) error {
+func restoreServices(cwd string, services []cli.SyncService, create, recreate bool, fallback []string) error {
 	stop := fallback
 	var errs []error
 	// A child's first release had no containers: nothing was stopped,
@@ -2660,25 +2660,26 @@ func restoreServices(cwd string, services []cli.SyncService, create bool, fallba
 			errs = append(errs, err)
 		}
 		start := intersect(stop, exited)
-		// On a complete copy (create: finish go), a service whose image
-		// devopsy's compose file changed since its container was made (a
-		// sync took over the parent's image) is made again, with no
-		// other: compose start would run the old image on the new data.
-		// Never otherwise: an abort in a release that syncs restores the
-		// child's own data, which the release's images, not live, must
-		// not touch (the release goes back).
-		var recreate []string
-		if create {
-			recreate = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+		// On a complete copy (recreate: a sync's finish go, an import
+		// holding the export's image), a service whose image devopsy's
+		// compose file changed since its container was made (the copy
+		// took over the parent's or the export's image) is made again,
+		// with no other: compose start would run the old image on the new
+		// data. Never otherwise: an abort in a release that syncs
+		// restores the child's own data, which the release's images, not
+		// live, must not touch (the release goes back).
+		var again []string
+		if recreate {
+			again = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
 		}
-		if len(recreate) > 0 {
-			report.Info("recreating " + strings.Join(recreate, " ") + " on the image its data now needs")
-			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, recreate...)...); err != nil {
+		if len(again) > 0 {
+			report.Info("recreating " + strings.Join(again, " ") + " on the image its data now needs")
+			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
 			}
 			var rest []string
 			for _, s := range start {
-				if !slices.Contains(recreate, s) {
+				if !slices.Contains(again, s) {
 					rest = append(rest, s)
 				}
 			}

@@ -193,7 +193,7 @@ func TestNextReleaseID(t *testing.T) {
 func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
-		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end") + StatusScript(tg) +
+		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end", "") + StatusScript(tg) +
 		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true, "")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
@@ -255,7 +255,7 @@ func allScripts() map[string]string {
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
 		"export":          ExportScript(tg, "app-prod", "it's db"),
-		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n"),
+		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n", "database"),
 		"resolved check":  ResolvedCheckScript(tg),
 		"resolved":        ResolvedScript(tg, "app-prod", "it's db"),
 	}
@@ -417,7 +417,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
 	}
-	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", MntOwnerFeature, "sync-services"}) {
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", ExportImagesFeature, MntOwnerFeature, "sync-services"}) {
 		t.Errorf("needs, quoted: %v", got)
 	}
 }
@@ -2633,7 +2633,7 @@ func TestWaitBeatWithoutWatcher(t *testing.T) {
 // goes on: the sync is a way out.
 func TestImportMarkRefusals(t *testing.T) {
 	bin := t.TempDir()
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; exit; fi\necho \"ran: $*\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; exit; fi\necho \"ran: $* (accepted: ${"+ImagesAcceptEnv+":-})\"\n")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	for _, f := range []string{"devopsy", "flock"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
@@ -2686,18 +2686,22 @@ func TestImportMarkRefusals(t *testing.T) {
 		t.Errorf("an upload that syncs:\n%s", out)
 	}
 	// Imports: only db's own, before stdin is read.
-	if out, err := run(ImportScript(tg, "app-prod", "files", "END"), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "the import of db into @vm1:prod did not complete, and only db can be imported until one does: nothing imported") || !strings.Contains(out, "--import db --resolved") {
+	if out, err := run(ImportScript(tg, "app-prod", "files", "END", ""), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "the import of db into @vm1:prod did not complete, and only db can be imported until one does: nothing imported") || !strings.Contains(out, "--import db --resolved") {
 		t.Errorf("another service's import (%v):\n%s", err, out)
 	}
-	if out, err := run(ImportScript(tg, "app-prod", "db", "END"), "data"); err != nil || !strings.Contains(out, "ran: --import db --yes") {
+	if out, err := run(ImportScript(tg, "app-prod", "db", "END", ""), "data"); err != nil || !strings.Contains(out, "ran: --import db --yes (accepted: )") {
 		t.Errorf("its own import (%v):\n%s", err, out)
+	}
+	// What --accept-image named reaches the server's import.
+	if out, err := run(ImportScript(tg, "app-prod", "db", "END", "db"), "data"); err != nil || !strings.Contains(out, "ran: --import db --yes (accepted: db)") {
+		t.Errorf("an import with --accept-image (%v):\n%s", err, out)
 	}
 	if fileExists(filepath.Join(base, SyncImportingFile)) {
 		t.Errorf("the holding file stayed")
 	}
 	// A sync's mark: only a sync.
 	write(t, mark, IncompleteLine("2026-10-22 10:00:00", "vm1:live", IncompleteCopy, "the copy was cut"))
-	if out, err := run(ImportScript(tg, "app-prod", "db", "END"), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "only a sync completes it: nothing imported") || !strings.Contains(out, "$ devopsy @vm1:prod --sync") {
+	if out, err := run(ImportScript(tg, "app-prod", "db", "END", ""), "data"); err == nil || strings.Contains(out, "ran: --import") || !strings.Contains(out, "only a sync completes it: nothing imported") || !strings.Contains(out, "$ devopsy @vm1:prod --sync") {
 		t.Errorf("an import over a sync's mark (%v):\n%s", err, out)
 	}
 	if out, err := run(UploadScript(tg, false), ""); err == nil || !strings.Contains(out, "data is from a sync that did not complete") || !strings.Contains(out, "--sync") {

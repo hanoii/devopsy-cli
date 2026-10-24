@@ -56,7 +56,15 @@ var namedFeatures = []struct {
 	// copy the parent's owners, an older child list none, an older
 	// server's import keep the tar's.
 	{MntOwnerFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}list\b`)},
+	// The images that ran on an mnt service's data, in its export's tar
+	// (images.ExportKey), which an import checks and holds the service
+	// on. An older server would export without them and import as if
+	// none were there, unchecked.
+	{ExportImagesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(export|import)\b`)},
 }
+
+// ExportImagesFeature is the export's images' named feature.
+const ExportImagesFeature = "export-images"
 
 // MntOwnerFeature is devopsy.mnt.owner's named feature, for copies.
 const MntOwnerFeature = "mnt-owner"

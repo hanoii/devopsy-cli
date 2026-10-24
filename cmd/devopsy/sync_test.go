@@ -168,6 +168,13 @@ case "$*" in
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
+  # Images as devopsy's images rules inspect them (images.CLI): FAKE_IMAGES,
+  # space separated <id>=<registry digest>, found by id or by digest.
+  "image inspect --format {{json .}} "*)
+    for i in ${FAKE_IMAGES:-}; do
+      case $5 in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
+    done
+    echo "Error: No such image: $5" >&2; exit 1 ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
   # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
   # exited, its id ctr:<project>:<service>.
@@ -2224,7 +2231,7 @@ func TestExportImport(t *testing.T) {
 	if out, _, code := s.runIO(nil, nil, "--export", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --export <service>") {
 		t.Errorf("--export --help (%d):\n%s", code, out)
 	}
-	if out, _, code := s.runIO(nil, nil, "@prod", "--import", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --import <service> [--yes]\n       devopsy @<target> --import <service> --resolved [--yes]") {
+	if out, _, code := s.runIO(nil, nil, "@prod", "--import", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --import <service> [--yes]\n       devopsy @<target> --import <service> [--accept-image <service>] [--yes]\n       devopsy @<target> --import <service> --resolved [--yes]") {
 		t.Errorf("@prod --import --help (%d):\n%s", code, out)
 	}
 	s.logs()

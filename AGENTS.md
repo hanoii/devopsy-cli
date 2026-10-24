@@ -1610,8 +1610,22 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   differs from the release's `ComposeFile` (`images.Recreate`), before
   starting the rest: `compose start` would run the old image on the new
   data, the finish hook first. Only `mnt` copies: a stream goes through
-  the child's own image. A complete `mnt` `--import` or `--resolved`
-  starts the service's history over (`Imported`).
+  the child's own image. An `mnt` `--export` carries the same lines for
+  its service (`ExportData`: on a target `ParentData`'s, locally its
+  container's image) as a pax global header before GNU tar's members
+  (`exportHeader`, `images.ExportKey`; GNU tar and bsdtar skip it,
+  checked 2026-10-24), and an `--import` on a target reads it
+  (`tarRecord`, `DataFor`) and checks it before anything stops
+  (`ImportCheck`, the sync's check in its own words), holds the service
+  once the data is in (`ImportDone`, first line `import`) and makes it
+  again, stopped (`restoreServices`' recreate) or running
+  (`recreateRunning`). Only in the service's own repository (decided
+  2026-10-24): the header is whoever made the tar's, so an image from
+  another repository is a name the data never ran, never something to
+  hold. A tar without it, a local import and `--resolved` start the
+  history over (`Imported`). A named feature, `export-images`, found by
+  `--export` and `--import`: an older server would export without it and
+  import unchecked.
 - **Details the second review settled:** only `devopsy.data=mnt`
   services, as the parent's config resolves it now, are in
   `ParentData` (a stream, `none` or an unlabeled service copies no
