@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -985,5 +986,51 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 	}
 	if left := readString(filepath.Join(s.root, "shop", images.LeftFile)); strings.Contains(errs, "could not record") || !strings.Contains(left, "mariadb:11.8\tsha256:old") {
 		t.Errorf("mariadb:11.8 on sha256:old, which no release lists any more, is not recorded:\n%s\nrecord:\n%s", errs, left)
+	}
+}
+
+// A pax global header is no member to archive/tar, but GNU tar applies
+// its records to every member after it (checked in devopsy-util:2, GNU
+// tar 1.35): a path or linkpath there renames members and retargets
+// links the checks never saw, storage/b -> a extracted as storage/evil
+// -> /etc/shadow. The export's header carries its record alone; a global
+// header with anything GNU tar applies, first (beside the export's
+// record) or later, is refused before anything changes.
+func TestTarGlobalHeaders(t *testing.T) {
+	global := func(records map[string]string) *tar.Header {
+		return &tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: records}
+	}
+	record := "image\tapp\tmariadb:11.8\tsha256:a\tmariadb@sha256:a\n"
+	for _, c := range []struct {
+		name    string
+		members []*tar.Header
+	}{
+		{"a later global header", []*tar.Header{
+			global(map[string]string{images.ExportKey: record}),
+			{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+			global(map[string]string{"linkpath": "/etc/shadow", "path": "storage/evil"}),
+			{Name: "storage/b", Typeflag: tar.TypeSymlink, Linkname: "a", Mode: 0o777},
+		}},
+		{"the export's header with a linkpath", []*tar.Header{
+			global(map[string]string{images.ExportKey: record, "linkpath": "/etc/shadow"}),
+			{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "storage/b", Typeflag: tar.TypeSymlink, Linkname: "a", Mode: 0o777},
+		}},
+	} {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for _, h := range c.members {
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		spool := filepath.Join(t.TempDir(), "spool")
+		write(t, spool, b.String(), 0o644)
+		if es, err := tarEntries(spool); !errors.Is(err, errOutside) && !errors.Is(err, errMember) {
+			t.Errorf("%s: not refused (%v): %v", c.name, err, es)
+		}
 	}
 }
