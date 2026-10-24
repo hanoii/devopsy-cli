@@ -151,6 +151,23 @@ func (s *Set) ExportData(base, rel, service string) string {
 		}
 		return data
 	}
+	// Only a pulled data service: a built one's digest, which Docker's
+	// containerd store gives built images too, is a local build's, which
+	// no registry has.
+	if s.List == nil {
+		return ""
+	}
+	svcs, err := s.List("")
+	if err != nil {
+		return ""
+	}
+	pulled := false
+	for _, svc := range svcs {
+		pulled = pulled || (svc.Name == service && svc.Method == DataMnt && !svc.own(s.Mode))
+	}
+	if !pulled {
+		return ""
+	}
 	c, ok := s.containers()[service]
 	if !ok || !c.started() || c.Ref == "" {
 		return ""
@@ -163,7 +180,9 @@ func (s *Set) ExportData(base, rel, service string) string {
 }
 
 // DataFor is the part of an export's data that is service's: "" when it
-// has no image line for it (another service's export, none recorded).
+// has no complete image line for it (another service's export, none
+// recorded, a line without its reference, id or a digest, which nothing
+// could check or hold), so the import starts the history over.
 func DataFor(data, service string) string {
 	var b strings.Builder
 	found := false
@@ -171,7 +190,7 @@ func DataFor(data, service string) string {
 		kind, rest, _ := strings.Cut(line, "\t")
 		f := strings.Split(rest, "\t")
 		switch {
-		case kind == "image" && f[0] == service:
+		case kind == "image" && f[0] == service && len(f) > 3 && f[1] != "" && f[2] != "" && len(strings.Fields(f[3])) > 0:
 			found = true
 			b.WriteString(line)
 		case kind == "ran" && len(f) > 1 && f[1] == service:
@@ -353,6 +372,9 @@ func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 	var pulled []string
 	for _, e := range mine {
 		hold := s.localHold(e, ps[e.Service])
+		if w.importing {
+			hold = s.ownHold(e, ps[e.Service])
+		}
 		if hold == "" {
 			continue
 		}
@@ -404,6 +426,29 @@ func (s *Set) localHold(e entry, p *parentImage) string {
 	return p.hold()
 }
 
+// ownHold is localHold for an import: always in the repository of e's
+// own reference, whatever the export's digests name, so a record crafted
+// with another repository's digest (mariadb:11.8 with only
+// evil.example/x's) never makes the service pull or run that one: under
+// e's repository the registry serves only e's images.
+func (s *Set) ownHold(e entry, p *parentImage) string {
+	var holds []string
+	for _, d := range p.Image.Digests {
+		if digestOf(d) != "" {
+			holds = appendNew(holds, repoKey(e.Ref)+"@"+digestOf(d))
+		}
+	}
+	for _, h := range holds {
+		if _, err := s.Docker.Inspect(h); err == nil {
+			return h
+		}
+	}
+	if len(holds) == 0 {
+		return ""
+	}
+	return holds[0]
+}
+
 // syncPrefix names a listing's entry for a parent's image a sync got for
 // a service (SyncCheck): listed, so bookmarked and removed with the
 // release, never a service of its own.
@@ -415,7 +460,7 @@ const syncPrefix = "sync:"
 // is the parent's, which came with the data. from is the parent's
 // address.
 func (s *Set) SyncDone(base, rel, data, from string) error {
-	return s.syncDone(base, rel, data, SyncedFrom+from, Forced)
+	return s.syncDone(base, rel, data, SyncedFrom+from, Forced, false)
 }
 
 // ImportDone is SyncDone for a complete import of the data an export
@@ -423,12 +468,13 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 // history the export's, first line Imported; an accepted service runs
 // its own, its history starting over (Imported).
 func (s *Set) ImportDone(base, rel, data string) error {
-	return s.syncDone(base, rel, data, Imported, Imported)
+	return s.syncDone(base, rel, data, Imported, Imported, true)
 }
 
 // syncDone is SyncDone, the data's history's first line how first, an
-// accepted service's line how accepted.
-func (s *Set) syncDone(base, rel, data, first, accepted string) error {
+// accepted service's line how accepted; importing, held in the service's
+// own repository only (ownHold).
+func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) error {
 	ps := parseParentData(data)
 	es := readList(rel)
 	holds := holdsIn(rel)
@@ -484,6 +530,9 @@ func (s *Set) syncDone(base, rel, data, first, accepted string) error {
 			continue
 		}
 		hold := s.localHold(e, p)
+		if importing {
+			hold = s.ownHold(e, p)
+		}
 		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
 		n.Kind, n.Digest = KindData, hold
 		if n.ID == "" {

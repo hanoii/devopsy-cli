@@ -1827,6 +1827,11 @@ func TestImportTakesExportImage(t *testing.T) {
 	if DataFor(data, "app") != "" || DataFor(data, "database") != data {
 		t.Errorf("DataFor:\n%q", DataFor(data, "database"))
 	}
+	for _, bad := range []string{"image\tdatabase\tmariadb:11.8\n", "image\tdatabase\tmariadb:11.8\tI2\t\n", "image\tdatabase\t\tI2\tmariadb@I2\n"} {
+		if got := DataFor(bad, "database"); got != "" {
+			t.Errorf("DataFor of an incomplete line %q: %q", bad, got)
+		}
+	}
 	if err := importInto(t, prod, stage, false); err != nil {
 		t.Fatalf("same name (%v)\n%s", err, out.String())
 	}
@@ -1875,6 +1880,7 @@ func TestExportDataLocal(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app", &out)
+	m.e.set.List = func(string) ([]Service, error) { return []Service{db118}, nil }
 	d.publish("mariadb:11.8", "I1")
 	if err := d.Pull("mariadb:11.8"); err != nil {
 		t.Fatal(err)
