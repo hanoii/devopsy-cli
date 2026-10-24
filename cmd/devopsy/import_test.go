@@ -959,3 +959,31 @@ func TestImportExportImages(t *testing.T) {
 		t.Errorf("a local import of it (%d):\n%s", code, errs)
 	}
 }
+
+// An import holding its service on the export's image gives up the
+// listing's earlier pair (the name and the image it had), whose names go
+// to the project's record of what could not go yet (images.LeftFile), as
+// a sync's take-over records them: else nothing would ever remove them.
+func TestImportExportImagesRecordsLeft(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:old=mariadb@sha256:old", "FAKE_NAMES=mariadb:11.8=sha256:old"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	// prod now runs another image under the same name, which the name
+	// still points to.
+	write(t, list, "mariadb:11.8\tsha256:old\tapp\tdata\tmariadb@sha256:old\t\n", 0o644)
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if code != 0 {
+		t.Fatalf("the import (%d):\n%s", code, errs)
+	}
+	if left := readString(filepath.Join(s.root, "shop", images.LeftFile)); strings.Contains(errs, "could not record") || !strings.Contains(left, "mariadb:11.8\tsha256:old") {
+		t.Errorf("mariadb:11.8 on sha256:old, which no release lists any more, is not recorded:\n%s\nrecord:\n%s", errs, left)
+	}
+}

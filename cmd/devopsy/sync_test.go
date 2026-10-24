@@ -175,6 +175,10 @@ case "$*" in
       case $5 in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
     done
     echo "Error: No such image: $5" >&2; exit 1 ;;
+  # FAKE_NAMES: space separated <name>=<id>, the image a name points to
+  # (images.CLI's ID); any other name answers nothing.
+  "image inspect --format {{.Id}} "*)
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
   # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
   # exited, its id ctr:<project>:<service>.
