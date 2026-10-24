@@ -43,7 +43,8 @@ var (
 func TestMain(m *testing.M) {
 	flag.Parse()
 	switch lane := os.Getenv(laneEnv); {
-	case lane == "list":
+	case lane == "list", flag.Lookup("test.list").Value.String() != "":
+		// Only the names: go test -list starts no lanes.
 		os.Exit(m.Run())
 	case lane != "":
 		// A test of a lane runLanes started: its containers are there.
