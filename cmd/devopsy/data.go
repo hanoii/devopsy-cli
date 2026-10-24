@@ -482,7 +482,10 @@ const maxLinks = 40
 func (l *tarLinks) check() error {
 	under := func(name string) string {
 		for i := range len(name) {
-			if _, ok := l.symlinks[name[:i]]; ok && name[i] == '/' {
+			if name[i] != '/' {
+				continue
+			}
+			if _, ok := l.symlinks[name[:i]]; ok {
 				return name[:i]
 			}
 		}
