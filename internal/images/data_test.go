@@ -2098,3 +2098,24 @@ func TestImportHoldPrefersOwnRepositoryDigest(t *testing.T) {
 		t.Errorf("held on %q, want mariadb@I2\n%s", hold, out.String())
 	}
 }
+
+// --resolved after an import that never held its service (cut before
+// its data was in, or a tar without a record) starts the history over,
+// as before: the data is whatever is there. Every activation holds a
+// pulled data service on its history's last image (ComposeFile), so
+// Resolved's "already held" test cannot tell such an import from one
+// that ImportDone held: the release's own hold always matches.
+func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	dev := newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, db118)
+	if hold := holdsIn(dev.e.rel(dev.cur))["database"]; hold == "" {
+		t.Fatalf("the release holds nothing: %v", holdsIn(dev.e.rel(dev.cur)))
+	}
+	// An import cut after its first write, nothing held, then --resolved.
+	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database"); err != nil || strings.Join(dev.history("database"), " ") != "ran:I1 import:I1" {
+		t.Errorf("--resolved after an import that held nothing (%v): history %v, want ran:I1 import:I1", err, dev.history("database"))
+	}
+}
