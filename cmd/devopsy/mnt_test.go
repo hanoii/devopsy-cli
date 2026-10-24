@@ -27,6 +27,7 @@ import (
 // A child's first sync rsyncs into an entry the child owns as its owner
 // (--chown), from the child's labels only.
 func TestMntOwnersRelease(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	config := filepath.Join(s.dot, "config.yaml")
 	write(t, config, strings.Replace(readString(config), "  release: deploy\n", "  release: deploy\n  rollback: deploy\n", 1), 0o644)
@@ -171,6 +172,7 @@ func TestMntOwnersRelease(t *testing.T) {
 // SIGTERM, so the script's trap alone let a SIGTERM end it with entries
 // left as they were, as it would have runImages.
 func TestMntOwnersSignals(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	wait := filepath.Join(t.TempDir(), "owners")
 	cmd := exec.Command(binary, cli.MntOwnersFlag)
@@ -201,6 +203,7 @@ func TestMntOwnersSignals(t *testing.T) {
 // owned, it refuses one that is a symbolic link in shared/mnt, and
 // readies the util image the owners' step needs after the switch.
 func TestCheckMountsRelease(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	out, code := s.run([]string{"FAKE_APP_MOUNT=/../cache"}, "@prod", "--release")
 	if code == 0 || s.current("prod") != "" || strings.Contains(out, "deploy in") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release: it does not go live") || !strings.Contains(out, "app mounts ./.devopsy/cache writable: it is in the release, and the next one replaces it") || !strings.Contains(out, "not made current") {
@@ -261,6 +264,7 @@ func TestCheckMountsRelease(t *testing.T) {
 // emptied: the services it then creates, and a stream's import, would
 // otherwise find root's entries Docker made.
 func TestMntOwnersReset(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
@@ -283,6 +287,7 @@ func TestMntOwnersReset(t *testing.T) {
 // an owned entry the sync does not copy gets the new owner too (review
 // of 2026-10-23, round 4, asked whether it read the old inherit.env).
 func TestMntOwnersInherited(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [FAKE_APP_OWNER]}\n  dev: {parent: prod}\n", 0o644)
 	prodEnv := filepath.Join(s.root, "shop", "prod", "shared", ".env")
@@ -311,6 +316,7 @@ func TestMntOwnersInherited(t *testing.T) {
 // are read, never its comments (every template's say "included"
 // somewhere, which once made every local up pay a compose config).
 func TestMntOwnersLocal(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	compose := filepath.Join(s.dot, "compose.yaml")
 	write(t, compose, "# Every request's headers included; extends: nothing.\n"+readString(compose)+"    # devopsy.mnt.owner is not here\n    environment: {A: b} # nor devopsy.mnt.owner\n", 0o644)
@@ -401,6 +407,7 @@ func TestMntOwnersLocal(t *testing.T) {
 // another owner (review of 2026-10-23, round 4: the scan gave every kind
 // of file away, a device node to the entry's owner included).
 func TestMntScripts(t *testing.T) {
+	t.Parallel()
 	for name, script := range map[string]string{"ownEntry": ownEntry, "emptyAndExtract": emptyAndExtract} {
 		if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v\n%s", name, err, out)
@@ -500,6 +507,7 @@ exit ${st:-0}
 // entry made first when missing, and refused when it is a symbolic link
 // (Docker would mount what it points to).
 func TestOwnersMount(t *testing.T) {
+	t.Parallel()
 	if got, err := bindMount("/srv/mnt/a,b", "/mnt/a,b"); err != nil || got != `type=bind,"source=/srv/mnt/a,b","target=/mnt/a,b"` {
 		t.Errorf("bindMount: %q %v", got, err)
 	}

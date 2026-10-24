@@ -11,6 +11,7 @@ import (
 // incomplete one newer than current only by its id: its activation may
 // not have started yet.
 func TestChooseFailed(t *testing.T) {
+	t.Parallel()
 	rs := []remote.Release{
 		{ID: "6", Incomplete: true},
 		{ID: "5", Current: true},

@@ -41,6 +41,7 @@ var (
 // is built (own, whatever its data label), the database a pulled data
 // service, the proxy pulled; a listing from before them still reads.
 func TestRecordListing(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
@@ -91,6 +92,7 @@ func TestRecordListing(t *testing.T) {
 // stayed; an image the project builds that changed under the same name
 // in image mode is said to stay forward on a rollback.
 func TestRecordMoved(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
@@ -156,6 +158,7 @@ func TestRecordMoved(t *testing.T) {
 // its base's patches. Never in build mode, which rebuilds on every
 // release, nor for a third party's image.
 func TestRecordStale(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	now := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
@@ -180,6 +183,7 @@ func TestRecordStale(t *testing.T) {
 }
 
 func TestParseComposeConfig(t *testing.T) {
+	t.Parallel()
 	svcs, err := ParseComposeConfig([]byte(`{"name":"x-prod","services":{
 		"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"none"}},
 		"app":{"build":{"context":"."},"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs"},"volumes":[

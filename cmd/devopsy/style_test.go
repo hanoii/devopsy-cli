@@ -3,6 +3,7 @@ package main
 import "testing"
 
 func TestHelpColors(t *testing.T) {
+	t.Parallel()
 	s := style{on: true}
 	for in, want := range map[string]string{
 		"    @t --release [--yes]    upload": "    \033[0;35m@t\033[0m \033[0;36m--release [--yes]\033[0m    upload",

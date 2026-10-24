@@ -175,6 +175,7 @@ func TestVarsScripts(t *testing.T) {
 // others on their way into place: before, they sat 644 in the
 // temporary files until the chmod.
 func TestInheritWriteMode(t *testing.T) {
+	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "dev", Host: "h", Path: "app/dev"}
 	in := filepath.Join(root, "app", "dev", "shared", InheritFile+".tmp.in")
@@ -202,6 +203,7 @@ func TestInheritWriteMode(t *testing.T) {
 // empty or cut (cat into it truncated it first), and the file keeps its
 // mode, and a link stays a link.
 func TestVarsEditInPlace(t *testing.T) {
+	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod"}
 	shared := filepath.Join(root, "app", "prod", "shared")

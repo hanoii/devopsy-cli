@@ -113,6 +113,7 @@ func (s *importSetup) start(extra []string, stdin []byte, args ...string) (*exec
 // that service completes, which starts what the record holds and only
 // then removes both.
 func TestImportMarkOnTarget(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
@@ -203,6 +204,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 // a mark. A devopsy killed between the stop and that byte leaves the
 // record, so the next import restores what it stopped.
 func TestImportBeforeFirstWrite(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	write(t, s.log+".shop-prod", "FAKE_DB=mnt+own\n", 0o644)
 	// app depends on db: both down for db's import, both back.
@@ -254,6 +256,7 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 // after it says the import goes on, and it does; a session gone after it
 // (devopsy killed) leaves the import to complete on its own.
 func TestImportSession(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	// Interrupted while the server stops app, before the first write.
 	stop := filepath.Join(s.tmp, "stop")
@@ -308,6 +311,7 @@ func TestImportSession(t *testing.T) {
 // Linux, by its process group, recorded) and the project's import
 // containers before anything else, and goes on.
 func TestImportLeftoverWriter(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
@@ -389,6 +393,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 // included, and only then do the mark and the record go. One whose
 // start fails keeps both, and a second one works.
 func TestImportResolved(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	if _, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes"); code == 0 || !strings.Contains(out, "no import of db to resolve on @devopsy@one:prod") {
 		t.Errorf("without a mark (%d):\n%s", code, out)
@@ -447,6 +452,7 @@ func TestImportResolved(t *testing.T) {
 // the failure, never recorded) is not among them, and the prompt must
 // not say it was left stopped and starts now.
 func TestImportResolvedPromptRecord(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_DB_DOWN=1\n", 0o644)
 	if _, out, code := s.runIO(append(s.env, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || !s.mark().IsImport() || s.record() != "stop app\nstop worker\n" {
@@ -466,6 +472,7 @@ func TestImportResolvedPromptRecord(t *testing.T) {
 // upload's, what the session sent is not acted on (nothing stopped, no
 // bounce of the import set), after devopsy said nothing was imported.
 func TestImportCutWhileWaitingForLock(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	// A release lock held by another session: flock -n 9 fails and the
 	// wait lasts until the busy file goes.
@@ -496,6 +503,7 @@ func TestImportCutWhileWaitingForLock(t *testing.T) {
 // A service kept down that Docker would start again on its own (restart:
 // always) is said: a reboot would run it on the partial data.
 func TestImportRestartAlways(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_DB_RESTART=always\n", 0o644)
 	if _, out, code := s.runIO(append(s.env, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || !strings.Contains(out, "devopsy: warning: db has restart: always: Docker starts it again when its daemon starts (a reboot), on the data as it is") || strings.Contains(out, "app has restart") {
@@ -506,6 +514,7 @@ func TestImportRestartAlways(t *testing.T) {
 // What a prompt that replaces or removes an environment's data asks to
 // type: its full name, with the instance in a project that has them.
 func TestConfirmWord(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ config, address, want string }{
 		{"project: whoami\nenvironments:\n  prod: {}\n", "vm1:prod", "whoami/prod"},
 		{"project: shop\ninstances: true\nenvironments:\n  prod: {}\n", "vm1:eu/prod", "shop/eu/prod"},
@@ -531,6 +540,7 @@ func TestConfirmWord(t *testing.T) {
 // leaves the sync's mark, which only a sync clears: an import and
 // --resolved refuse, naming --sync.
 func TestSyncOverImportMark(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -583,6 +593,7 @@ func TestSyncOverImportMark(t *testing.T) {
 // prepare stopped, whose data the import never touched (db, own), runs
 // again, as it did before the sync.
 func TestSyncRefusedOverImportMark(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -646,6 +657,7 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 // child stops anything; a child's release that syncs, before its
 // upload), and nothing else does (a release that does not sync).
 func TestDataLabelsOlderServer(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -702,6 +714,7 @@ func TestDataLabelsOlderServer(t *testing.T) {
 // data, and a worker without labels that depends on an own database (up
 // creates dependencies, never dependents).
 func TestSyncFirstReleaseCreatesSet(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n", 0o644)
 	write(t, filepath.Join(s.dot, "capabilities", "data", "finish"), "#!/bin/sh\necho \"finish $1 $2\"\n", 0o755)
@@ -749,6 +762,7 @@ func TestSyncFirstReleaseCreatesSet(t *testing.T) {
 // the record says is down; settle with labels it cannot read (a release
 // from before them) warns and goes on, with what the record says.
 func TestDataStopEnv(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	caps := filepath.Join(s.dot, "capabilities", "data")
 	write(t, filepath.Join(caps, "prepare"), "#!/bin/sh\necho \"prepare $1 stop=$DEVOPSY_DATA_STOP\"\n", 0o755)
@@ -787,6 +801,7 @@ func TestDataStopEnv(t *testing.T) {
 // signal reaches devopsy's group, never the restore's compose, and
 // everything comes back.
 func TestRestoreSurvivesCtrlC(t *testing.T) {
+	t.Parallel()
 	s := newImportSetup(t)
 	start := filepath.Join(s.tmp, "start")
 	write(t, filepath.Join(s.dot, "mnt", "db", "x"), "x\n", 0o644)
@@ -818,6 +833,7 @@ func TestRestoreSurvivesCtrlC(t *testing.T) {
 // refuses, or has nothing to copy, wipes nothing; an environment without
 // a parent, and no terminal without --yes, refuse.
 func TestSyncReset(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -880,6 +896,7 @@ func TestSyncReset(t *testing.T) {
 // the child: it must not report a reset done with the child's data
 // untouched (the help: all of it goes).
 func TestSyncResetNothingPresent(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
@@ -904,6 +921,7 @@ func TestSyncResetNothingPresent(t *testing.T) {
 // unless --accept-image, which reaches the server's import. Locally
 // nothing is checked, so --accept-image there is an error.
 func TestImportExportImages(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
@@ -968,6 +986,7 @@ func TestImportExportImages(t *testing.T) {
 // to the project's record of what could not go yet (images.LeftFile), as
 // a sync's take-over records them: else nothing would ever remove them.
 func TestImportExportImagesRecordsLeft(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
@@ -998,6 +1017,7 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 // image between its pull and its bookmark. A removal holding it: the
 // import waits, says so, and touches no image until it is free.
 func TestImportExportImagesImageLock(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
@@ -1063,6 +1083,7 @@ func TestImportExportImagesImageLock(t *testing.T) {
 // header with anything GNU tar applies, first (beside the export's
 // record) or later, is refused before anything changes.
 func TestTarGlobalHeaders(t *testing.T) {
+	t.Parallel()
 	global := func(records map[string]string) *tar.Header {
 		return &tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: records}
 	}
@@ -1110,6 +1131,7 @@ func TestTarGlobalHeaders(t *testing.T) {
 // thing the hold is for), and Imported then starts the history over from
 // that old image, losing the export's record of what wrote the data.
 func TestImportResolvedKeepsExportImage(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
@@ -1156,6 +1178,7 @@ func TestImportResolvedKeepsExportImage(t *testing.T) {
 // (devopsy.data.stop=import, depending on it) starts: started first,
 // the app would run on the old image's database and see it restart.
 func TestImportRecreatesBeforeDependents(t *testing.T) {
+	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")

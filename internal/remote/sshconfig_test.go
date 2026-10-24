@@ -6,6 +6,7 @@ import (
 )
 
 func TestSSHDestination(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ in, user, host, port string }{
 		{"vm1", "", "vm1", ""},
 		{"devopsy@vm1", "devopsy", "vm1", ""},
@@ -21,6 +22,7 @@ func TestSSHDestination(t *testing.T) {
 }
 
 func TestSSHConfig(t *testing.T) {
+	t.Parallel()
 	// The target's user wins over ssh -G's; port 22 is left out.
 	got := SSHConfig(&Target{Name: "prod", Host: "devopsy@vm1"}, map[string]string{"hostname": "203.0.113.5", "port": "22", "user": "me"})
 	want := "Host vm1\n  Hostname 203.0.113.5\n  User devopsy\n\n"

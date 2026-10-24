@@ -191,6 +191,7 @@ var db118 = dbSvc("mariadb:11.8")
 // runs; rollbacks never take the database back, while the app goes back
 // exactly; a rollback after rollbacks still keeps the newest.
 func TestDataGoesForward(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -241,6 +242,7 @@ func TestDataGoesForward(t *testing.T) {
 // is refused before anything changes, the names the fetch moved put
 // back; --yes lets it through and starts the history over.
 func TestDataRefusals(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -302,6 +304,7 @@ func TestDataRefusals(t *testing.T) {
 // name holds now, held by nothing (a rollback's promise for images that
 // are not data), pulled when gone.
 func TestDataRollbackAcrossNames(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -345,6 +348,7 @@ func TestDataRollbackAcrossNames(t *testing.T) {
 // image: what ran is recorded before the restart, which keeps it; one
 // that failed before keeps the old one.
 func TestDataRestartKeepsWhatRan(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -389,6 +393,7 @@ func TestDataRestartKeepsWhatRan(t *testing.T) {
 // S13, S37: a failed fetch, or one cut off, puts the live release's own
 // names back and never a pulled one; the live database stays held.
 func TestDataUndoKeepsPulledNames(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -411,6 +416,7 @@ func TestDataUndoKeepsPulledNames(t *testing.T) {
 // S39 to S42: another environment's release, rollback or plain up never
 // moves this one's database, which only its own activations change.
 func TestDataOtherEnvironments(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
@@ -435,6 +441,7 @@ func TestDataOtherEnvironments(t *testing.T) {
 
 // S88: a container moved back outside devopsy is said, never recorded.
 func TestDataWentBackOutside(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -458,6 +465,7 @@ func TestDataWentBackOutside(t *testing.T) {
 // service column) and none of its own: what its container runs seeds
 // it, and a changed name is refused (S33, a service gaining its label).
 func TestDataSeed(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -479,6 +487,7 @@ func TestDataSeed(t *testing.T) {
 
 // --destroy-data forgets the history with the data.
 func TestRemoveHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -501,6 +510,7 @@ func TestRemoveHistory(t *testing.T) {
 // every kept release's bookmarks hold what it lists; once all goes,
 // nothing is left (rule 5).
 func TestDataRandom(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= int64(seeds(300)); seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) { dataRandom(t, seed) })
 	}
@@ -807,6 +817,7 @@ func seeds(n int) int {
 // --status names the services held by digest and those a plain up moved
 // off the image their activation gave them.
 func TestStatusLines(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
@@ -856,6 +867,7 @@ func syncInto(t *testing.T, parent, child *sim, yes bool) error {
 // history the parent's; its next release moves it forward; a chain
 // carries the history on.
 func TestSyncTakesParentImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev, pr := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out), newSim(t, d, "app-pr1", &out)
@@ -907,6 +919,7 @@ func TestSyncTakesParentImage(t *testing.T) {
 // anything stops, every sync, unless --yes; a child's local tag is
 // never trusted as newer: held on the parent's digest.
 func TestSyncRefusals(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -953,6 +966,7 @@ func TestSyncRefusals(t *testing.T) {
 // child's release's at once; one the registry no longer serves is
 // refused, nothing changed.
 func TestSyncPullsParentImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -996,6 +1010,7 @@ func TestSyncPullsParentImage(t *testing.T) {
 // S59, S60: a release that syncs checks against what it fetched; once
 // synced, a restart after its failed run keeps the parent's image.
 func TestSyncReleaseRecord(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1013,6 +1028,7 @@ func TestSyncReleaseRecord(t *testing.T) {
 // A complete import of a data service's files starts its history over
 // from what runs it.
 func TestImportedHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1035,6 +1051,7 @@ func TestImportedHistory(t *testing.T) {
 // forgetting what the data moved past: a tag pushed back afterwards
 // (S8) is let through without --yes, the database going back.
 func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1077,6 +1094,7 @@ func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
 // data never ran, and the history starts over at the old image,
 // forgetting what the data moved past (S8).
 func TestDataForcedReleaseFailingEarlyKeepsHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1130,6 +1148,7 @@ func TestDataForcedReleaseFailingEarlyKeepsHistory(t *testing.T) {
 // release never gave it (rule 4: no environment moves another's
 // images), a patch undone.
 func TestDataRefusalLeavesOthersNames(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
@@ -1165,6 +1184,7 @@ func TestDataRefusalLeavesOthersNames(t *testing.T) {
 // services on the newest image their data ran, never on what the
 // release's last activation held.
 func TestHoldData(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1184,6 +1204,7 @@ func TestHoldData(t *testing.T) {
 // child's own image, which keeps its history; a sync neither checks nor
 // takes over its image.
 func TestSyncStreamKeepsChildImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1219,6 +1240,7 @@ func labeled(t *testing.T, name, ref, data string) Service {
 // parent's under the same tag is held on the parent's older one after the
 // dump is imported into it, and one on another series is refused.
 func TestSyncStreamKeepsOwnImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1258,6 +1280,7 @@ func TestSyncStreamKeepsOwnImage(t *testing.T) {
 // release of its unchanged tag goes through, the child's (same tag, same
 // image, the same data) is refused as moved past.
 func TestSyncDriftedParentHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1292,6 +1315,7 @@ func TestSyncDriftedParentHistory(t *testing.T) {
 // in its repository, so the child's server pulls it from the parent's
 // registry, which it may not reach: the sync is refused, nothing wrong.
 func TestSyncMirrorSameDigest(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	d.strictRepo = true
 	var out bytes.Buffer
@@ -1332,6 +1356,7 @@ func TestSyncMirrorSameDigest(t *testing.T) {
 // own refusal puts it back (putNamesBack): another environment's plain up
 // on that name then runs the image this release was refused.
 func TestSyncReleaseRefusalPutsNamesBack(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out), newSim(t, d, "app-stage", &out)
@@ -1362,6 +1387,7 @@ func TestSyncReleaseRefusalPutsNamesBack(t *testing.T) {
 // moving forward needs --yes after every sync, where a tag moving under
 // an unchanged reference needs nothing (decision 6).
 func TestSyncChildKeepsItsReference(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1385,6 +1411,7 @@ func TestSyncChildKeepsItsReference(t *testing.T) {
 // A parent's history sent to a child is its newest lines only, whatever
 // its length: it rides in one argument.
 func TestParentDataBounded(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1406,6 +1433,7 @@ func TestParentDataBounded(t *testing.T) {
 // cannot tell which service runs a database: a sync refuses before
 // anything stops, naming the release that fixes it.
 func TestSyncOldChildListing(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1427,6 +1455,7 @@ func TestSyncOldChildListing(t *testing.T) {
 // (TestSyncOldChildListing). The first sync from prod after the server's
 // upgrade, before prod is released again.
 func TestSyncOldParentListing(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1451,6 +1480,7 @@ func TestSyncOldParentListing(t *testing.T) {
 // recreated (stopped and started) by a rollback that keeps its image,
 // where S24 keeps the very container.
 func TestDataRollbackKeepsContainerFullName(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1482,6 +1512,7 @@ func TestDataRollbackKeepsContainerFullName(t *testing.T) {
 // build: does not (rule 1; plan, part 8: "whatever the target's
 // reference").
 func TestDataRollbackFromBuiltDatabase(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1511,6 +1542,7 @@ func TestDataRollbackFromBuiltDatabase(t *testing.T) {
 // pull, though it runs that very image. The rollback is refused, and a
 // restart's up fails, the site down.
 func TestSyncMirrorRollbackHoldsLocalDigest(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	d.strictRepo = true
 	var out bytes.Buffer
@@ -1562,6 +1594,7 @@ func TestSyncMirrorRollbackHoldsLocalDigest(t *testing.T) {
 // repo@sha256 name that docker image prune never removes, so it stays on
 // the child's server for good (rule 5), however its releases go.
 func TestSyncRefusedPullLeavesNothing(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1616,6 +1649,7 @@ func TestSyncRefusedPullLeavesNothing(t *testing.T) {
 // A restore that fails on a later hold's pull leaves no image it pulled
 // by digest before: nothing would ever remove a name by digest alone.
 func TestRestoreFailingPullLeavesNothing(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1647,6 +1681,7 @@ func TestRestoreFailingPullLeavesNothing(t *testing.T) {
 // A parent's mnt service whose entries are all missing on the parent has
 // nothing a copy writes: the child keeps its own data, and its image.
 func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1681,6 +1716,7 @@ func acceptAll(svcs []Service) map[string]bool {
 // the copy, its history starting over from it; its own releases on that
 // series go on from there.
 func TestSyncAcceptedRunsOwnImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -1718,6 +1754,7 @@ func TestSyncAcceptedRunsOwnImage(t *testing.T) {
 // own builds after go through, and a project that always built its
 // database is never asked (S56).
 func TestBuiltDatabaseAfterPulled(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1750,6 +1787,7 @@ func TestBuiltDatabaseAfterPulled(t *testing.T) {
 // digest (Docker's classic store) rolls back to its build, from its
 // bookmark, never a pull of its build's name.
 func TestRollbackBuiltDatabaseWithoutDigest(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
@@ -1815,6 +1853,7 @@ func importInto(t *testing.T, export, m *sim, accept bool) error {
 // tar names it, whoever made it), is refused before anything stops,
 // unless --accept-image, which runs its own image, its history over.
 func TestImportTakesExportImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
@@ -1879,6 +1918,7 @@ func TestImportTakesExportImage(t *testing.T) {
 // Locally an export records the image its database's container runs,
 // with no history; a built or stopped-before-started one records none.
 func TestExportDataLocal(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app", &out)
@@ -1905,6 +1945,7 @@ func TestExportDataLocal(t *testing.T) {
 // mariadb:11.8 with only evil.example/x's digest must not make prod's
 // database pull and run evil.example/x.
 func TestImportHoldsOwnRepositoryOnly(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	d.strictRepo = true
 	var out bytes.Buffer
@@ -1933,6 +1974,7 @@ func TestImportHoldsOwnRepositoryOnly(t *testing.T) {
 // build's digest, which no registry has, refuses its import on a target
 // that pulls the service (image mode) unless --accept-image.
 func TestExportDataLocalBuilt(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app", &out)
@@ -1955,6 +1997,7 @@ func TestExportDataLocalBuilt(t *testing.T) {
 // repository and held on it, which lets the tar's maker choose what runs
 // on the data (localHold falls back to the record's first digest).
 func TestImportDigestFromAnotherRepository(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	d.strictRepo = true
 	var out bytes.Buffer
@@ -1986,6 +2029,7 @@ func TestImportDigestFromAnotherRepository(t *testing.T) {
 // what came after failed. Otherwise it starts the history over, as
 // before.
 func TestResolvedKeepsHeldHistory(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
@@ -2019,6 +2063,7 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 // anything stops, saying so and naming --accept-image, not only
 // Docker's words.
 func TestSyncParentImageOtherPlatform(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
@@ -2050,6 +2095,7 @@ func TestSyncParentImageOtherPlatform(t *testing.T) {
 // name wherever it points, and the listing's entry takes the record's id,
 // whatever the tar's maker wrote there.
 func TestImportRecordWithoutDigest(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	stage := newSim(t, d, "app-stage", &out)
@@ -2085,6 +2131,7 @@ func TestImportRecordWithoutDigest(t *testing.T) {
 // first digest tried under the own repository names nothing there, and
 // the import is refused for an image the registry serves.
 func TestImportHoldPrefersOwnRepositoryDigest(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	d.strictRepo = true
 	var out bytes.Buffer
@@ -2113,6 +2160,7 @@ func TestImportHoldPrefersOwnRepositoryDigest(t *testing.T) {
 // Resolved's "already held" test cannot tell such an import from one
 // that ImportDone held: the release's own hold always matches.
 func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	dev := newSim(t, d, "app-dev", &out)

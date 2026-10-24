@@ -9,6 +9,7 @@ import (
 )
 
 func TestLines(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		lv      Level
@@ -35,6 +36,7 @@ func TestLines(t *testing.T) {
 }
 
 func TestFail(t *testing.T) {
+	t.Parallel()
 	err := fmt.Errorf("environment dev: parent prod: %w", &Failure{Msg: "no server", Details: []string{"why"}, Fixes: []Remedy{Fix("set DEVOPSY_SERVER_PROD")}})
 	if err.Error() != "environment dev: parent prod: no server" {
 		t.Fatalf("message: %q", err.Error())
@@ -53,6 +55,7 @@ func TestFail(t *testing.T) {
 }
 
 func TestLogger(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	var teed []string
 	l := New(&out, false, 0).WithMask(func(s string) string { return strings.ReplaceAll(s, "hunter2", "***") }).Tee(func(s string) { teed = append(teed, s) })
@@ -80,6 +83,7 @@ func TestLogger(t *testing.T) {
 }
 
 func TestPrompts(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	l := New(&out, false, 0)
 	in := bufio.NewReader(strings.NewReader("yes\n\nwhoami\nprod\nno\n"))
@@ -113,6 +117,7 @@ func TestPrompts(t *testing.T) {
 }
 
 func TestPaint(t *testing.T) {
+	t.Parallel()
 	for line, want := range map[string]string{
 		"devopsy: pulling images":        cyan + "devopsy: pulling images" + reset,
 		"devopsy: nothing failed":        cyan + "devopsy: nothing failed" + reset,
@@ -140,6 +145,7 @@ func TestPaint(t *testing.T) {
 }
 
 func TestColorize(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	c := Colorize(&buf)
 	for _, chunk := range []string{"devopsy: stopping app\n Container x Stopping \n Container x ", "Started \ndevopsy: error: the copy failed (1)\nplain line\n#12 CACHED\n\x1b[32mkept\x1b[0m\ndeploy: https://x\nERROR: boom\nprogress 10%\r", "progress 100%\n", "tail"} {

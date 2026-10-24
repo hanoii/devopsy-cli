@@ -155,6 +155,7 @@ func TestSyncServices(t *testing.T) {
 // numbers only; two owners on one entry conflict, an unlabeled writer
 // does not.
 func TestMntOwners(t *testing.T) {
+	t.Parallel()
 	dot := filepath.Join(t.TempDir(), ProjectDirName)
 	parse := func(services string) ([]SyncService, error) {
 		return parseSyncServices([]byte(`{"services":{`+services+`}}`), dot)
@@ -237,6 +238,7 @@ func TestMntOwners(t *testing.T) {
 // ones, and shared/'s links out of it, stay), mnt data with no entry,
 // an owner of nothing.
 func TestCheckMounts(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "code")
 	dot := filepath.Join(root, ProjectDirName)
 	shared := filepath.Join(filepath.Dir(root), "shared")
@@ -312,6 +314,7 @@ func TestCheckMounts(t *testing.T) {
 // c.volumes_from, and d's required: false), so they count for the
 // services that stop with a stopped one.
 func TestSyncServicesImplicitDependencies(t *testing.T) {
+	t.Parallel()
 	out := []byte(`{"services":{
 "a":{"network_mode":"service:db","depends_on":{"db":{"condition":"service_started","restart":true,"required":true}}},
 "b":{"links":["db"],"depends_on":{"db":{"condition":"service_started","restart":true,"required":true}}},
@@ -331,6 +334,7 @@ func TestSyncServicesImplicitDependencies(t *testing.T) {
 // DataStops is the table of devopsy.data.stop per operation, the union
 // for a sync, and the services depending on a stopped one, transitively.
 func TestDataStops(t *testing.T) {
+	t.Parallel()
 	svc := func(name, data, stop string, deps ...string) SyncService {
 		return SyncService{Name: name, Transfer: data, Stop: stop, HasData: data != DataNone, DependsOn: deps}
 	}
@@ -415,6 +419,7 @@ func TestDataStops(t *testing.T) {
 // named; an explicit never, one in the set, and the imported one itself
 // are not.
 func TestUnlabeledDependents(t *testing.T) {
+	t.Parallel()
 	services := []SyncService{
 		{Name: "app", DependsOn: []string{"database"}, Stop: StopImport, StopLabeled: true},
 		{Name: "cron", DependsOn: []string{"worker"}},
@@ -436,6 +441,7 @@ func TestUnlabeledDependents(t *testing.T) {
 // Stream services go in depends_on order, dependencies first, through
 // services of any label, ties alphabetical; a cycle is an error.
 func TestSyncStreamOrder(t *testing.T) {
+	t.Parallel()
 	services := []SyncService{
 		{Name: "a", Transfer: DataStream, DependsOn: []string{"m"}},
 		{Name: "b", Transfer: DataStream},

@@ -71,6 +71,7 @@ func gitProject(t *testing.T) string {
 }
 
 func TestFilesImageMode(t *testing.T) {
+	t.Parallel()
 	root := gitProject(t)
 	got, err := Files(root, ModeImage)
 	if err != nil {
@@ -83,6 +84,7 @@ func TestFilesImageMode(t *testing.T) {
 }
 
 func TestFilesBuildMode(t *testing.T) {
+	t.Parallel()
 	root := gitProject(t)
 	got, err := Files(root, ModeBuild)
 	if err != nil {
@@ -103,6 +105,7 @@ func TestFilesBuildMode(t *testing.T) {
 // Pack carries git's modes, whatever the checkout's: a 0600 file (ddev's
 // Mutagen writes those) as 0644, an executable one as 0755.
 func TestPack(t *testing.T) {
+	t.Parallel()
 	root := gitProject(t)
 	for name, mode := range map[string]os.FileMode{"app.php": 0o600, "src/lib.php": 0o664, ".devopsy/commands/deploy": 0o700} {
 		if err := os.Chmod(filepath.Join(root, name), mode); err != nil {
@@ -158,6 +161,7 @@ func TestPack(t *testing.T) {
 }
 
 func TestNewRecord(t *testing.T) {
+	t.Parallel()
 	root := gitProject(t)
 	r := NewRecord(root, ModeBuild, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
 	if r.Time != "2026-10-05T12:00:00Z" || r.Commit == "" || r.Branch == "" || !r.Dirty {
@@ -172,6 +176,7 @@ func TestNewRecord(t *testing.T) {
 // or one past the newest when two land in one second or older ids came
 // from a clock ahead of it.
 func TestNextReleaseID(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 20, 12, 0, 0, 500, time.UTC)
 	for _, c := range []struct {
 		ids  []string
@@ -191,6 +196,7 @@ func TestNextReleaseID(t *testing.T) {
 // Every file a sync leaves in an environment's directory starts with
 // .devopsy-sync., so they read as one family there.
 func TestSyncFilesPrefixed(t *testing.T) {
+	t.Parallel()
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end", "") + StatusScript(tg) +
@@ -203,6 +209,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 }
 
 func TestQuote(t *testing.T) {
+	t.Parallel()
 	for _, s := range []string{"plain", "with space", "it's", `a"b$c\d`, "", "-n"} {
 		out, err := exec.Command("sh", "-c", "printf '%s' "+Quote(s)).Output()
 		if err != nil || string(out) != s {
@@ -266,6 +273,7 @@ func allScripts() map[string]string {
 // server refuses those before anything changes, and runs the rest:
 // settle, which every activation calls, stays out.
 func TestDataLabelsFeature(t *testing.T) {
+	t.Parallel()
 	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder plain", "import", "push", "resolved", "sync only"}
 	for name, s := range allScripts() {
 		got := slices.Contains(Needs(s), DataLabelsFeature)
@@ -293,6 +301,7 @@ func TestDataLabelsFeature(t *testing.T) {
 // imports (which give what they extract away) need it; a release's
 // owners and mounts check are flags of their own.
 func TestMntOwnerFeature(t *testing.T) {
+	t.Parallel()
 	need := []string{"exec list", "import", "push", "resolved"}
 	for name, s := range allScripts() {
 		if got := slices.Contains(Needs(s), MntOwnerFeature); got != slices.Contains(need, name) {
@@ -317,6 +326,7 @@ func TestMntOwnerFeature(t *testing.T) {
 // 2026-10-23, round 4). Both paths, the same server's and the receive
 // script, copy with RsyncCopy.
 func TestRsyncCopySkipsDevices(t *testing.T) {
+	t.Parallel()
 	devices := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-devices")
 	specials := !slices.Contains(RsyncCopy, "--no-D") && !slices.Contains(RsyncCopy, "--no-specials")
 	if devices || specials {
@@ -327,6 +337,7 @@ func TestRsyncCopySkipsDevices(t *testing.T) {
 // The receive's rsync gives an entry the child owns to its owner
 // (--chown), and keeps the others' (--numeric-ids).
 func TestSyncReceiveOwners(t *testing.T) {
+	t.Parallel()
 	s := allScripts()["receive"]
 	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 $4 ") {
 		t.Errorf("receive:\n%s", s)
@@ -344,6 +355,7 @@ func TestSyncReceiveOwners(t *testing.T) {
 // the parent's check (data), and the removals, whose img passes options
 // an older devopsy refuses.
 func TestDataImagesFeature(t *testing.T) {
+	t.Parallel()
 	for name, s := range allScripts() {
 		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove"
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
@@ -353,6 +365,7 @@ func TestDataImagesFeature(t *testing.T) {
 }
 
 func TestResetFeature(t *testing.T) {
+	t.Parallel()
 	tg := &Target{Path: "app/prod"}
 	for name, s := range allScripts() {
 		if name != "receive reset" && slices.Contains(Needs(s), ResetFeature) {
@@ -369,6 +382,7 @@ func TestResetFeature(t *testing.T) {
 }
 
 func TestScriptsParse(t *testing.T) {
+	t.Parallel()
 	for name, s := range allScripts() {
 		if out, err := exec.Command("sh", "-n", "-c", WithNeeds(s)).CombinedOutput(); err != nil {
 			t.Errorf("%s: %v\n%s\n%s", name, err, out, s)
@@ -380,6 +394,7 @@ func TestScriptsParse(t *testing.T) {
 // (featureFlags), so a server's devopsy that lacks one refuses the
 // scripts that call it, by name, and only those.
 func TestFeaturesCoverScripts(t *testing.T) {
+	t.Parallel()
 	have := " " + FeaturesList() + " "
 	for name, s := range allScripts() {
 		for _, f := range flagsCalled(s) {
@@ -423,6 +438,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 }
 
 func TestFormatReleases(t *testing.T) {
+	t.Parallel()
 	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
 		"20261004120000\t-\tfailed\t\t\n"
 	got := FormatReleases(out)
@@ -448,6 +464,7 @@ func fakeDevopsy(t *testing.T) string {
 }
 
 func TestPlainDirectories(t *testing.T) {
+	t.Parallel()
 	path := fakeDevopsy(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -512,6 +529,7 @@ func TestPlainDirectories(t *testing.T) {
 }
 
 func TestDirtyOutsideDevopsy(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -548,6 +566,7 @@ func TestDirtyOutsideDevopsy(t *testing.T) {
 // A new release runs devopsy --prepare-release before it becomes current,
 // only with role or import labels, and stops there when it fails.
 func TestPrepareScript(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	// The fake devopsy records where it ran, and fails in a FAIL directory.
 	fake := "#!/bin/sh\n" + sayCase() + "pwd > ran\n[ ! -f .devopsy/FAIL ]\n"
@@ -592,6 +611,7 @@ func TestPrepareScript(t *testing.T) {
 // A first release that fails before going live is marked failed, its
 // directory kept, whatever shared/ has: --destroy removes it.
 func TestPrepareScriptFirstRelease(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nexit 1\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
@@ -615,6 +635,7 @@ func TestPrepareScriptFirstRelease(t *testing.T) {
 // marker printed, and devopsy's answer decides: go finishes and runs the
 // run step; abort, or a failing prepare, restores and does not go live.
 func TestActivateSync(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	// The fake devopsy logs its calls (cwd basename and arguments), and fails
 	// --sync-services prepare when told.
@@ -942,6 +963,7 @@ exit 0
 // holder then took its watcher for fired: "the session ended while this
 // waited for the release lock", its operator there.
 func TestHolderArmedThroughRelease(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1028,6 +1050,7 @@ exit 0
 // them again. S73: nothing stops; the holder looks for an early answer
 // after the pull, before its prepare.
 func TestHolderAbortDuringPullStopsNothing(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1249,6 +1272,7 @@ func fakeImage(root, tag string) string {
 // step and a rollback restore a release's own images without building or
 // pulling, and pruning drops a release's bookmarks.
 func TestActivateImages(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	// The fake devopsy logs its calls (cwd basename and arguments); its
 	// pull and build put the release's id in the image store, and fail
@@ -1454,6 +1478,7 @@ exit 0
 // Pruning skips while the server's image lock is taken, naming who holds
 // it; --destroy then fails having removed nothing.
 func TestImagesRemoved(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=1\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1675,6 +1700,7 @@ exit 0
 // refused before its switch, the name its pull made gone again, and goes
 // through with --accept-image, which starts its data's history over (S3, S21).
 func TestActivateDataImages(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1751,6 +1777,7 @@ exit 0
 // the parent's history, unbounded, and any devopsy --images it runs
 // checks against a sync that is over.
 func TestSyncImagesNotInRunStep(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1791,6 +1818,7 @@ exit 0
 // rollback puts each back on its own image, and a ref by digest gets one
 // too, so docker image prune -f leaves a rollback's image alone.
 func TestBookmarksPerRef(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -1841,6 +1869,7 @@ exit 0
 // marked failed, 130), and a fetch whose session dropped without one leaves
 // its marker, which the next release recovers the same way.
 func TestFetchInterrupted(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -2051,6 +2080,7 @@ func fileExists(path string) bool {
 // Pruning counts only releases that went live: a failed one between those
 // kept stays, with its log, and older ones go.
 func TestActivatePruneFailed(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	// flock, mv -T, a fake docker, and the real --images.
@@ -2085,6 +2115,7 @@ func TestActivatePruneFailed(t *testing.T) {
 // A project's directory left with its .env and the record of images its
 // removals left is a leftover too; removing it says what is forgotten.
 func TestLeftoverImagesRecord(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
@@ -2116,6 +2147,7 @@ func TestLeftoverImagesRecord(t *testing.T) {
 // new one no longer makes, and one repository written two ways counts
 // as one: each name gets its own bookmark.
 func TestRebookmark(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n[ \"$*\" = \"-- config --format json\" ] && printf '%s' \"$LISTING\"\nexit 0\n")
 	fakeImageTools(t, bin)
@@ -2165,6 +2197,7 @@ func TestRebookmark(t *testing.T) {
 // --inherit reaches one released before the parent had inherit:. A sync's
 // variables stop at its end.
 func TestScriptsLockAndLinks(t *testing.T) {
+	t.Parallel()
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	if s := UploadScript(tg, false); !strings.Contains(s, `exec 9>"$base/.lock"`) {
 		t.Errorf("upload without the lock:\n%s", s)
@@ -2196,6 +2229,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 // release removing $base) is opened again: a lock on the removed file
 // keeps nothing out. Without create, a $base gone fails.
 func TestReleaseLockReopens(t *testing.T) {
+	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
 	base := filepath.Join(root, "app", "prod")
 	// The first flock "waits" while the file goes; later ones lock.
@@ -2280,6 +2314,7 @@ func TestReleaseLockReopens(t *testing.T) {
 // Ctrl-C, which nothing there takes (script in a session of its own).
 // GNU's tail only: as before without it.
 func TestAfterSwitchSurvives(t *testing.T) {
+	t.Parallel()
 	// The script's PATH, not the test's: a GNU tail from Homebrew is not
 	// the one it finds.
 	if exec.Command("/bin/sh", "-c", "PATH=/usr/bin:/bin tail --version").Run() != nil {
@@ -2419,6 +2454,7 @@ exit 0
 // release or environment went while it waited fails, and never makes
 // $base again.
 func TestActivateGoneAndNeighbours(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -2457,6 +2493,7 @@ exit 0
 // --status's last sync is the last copy that went through (SyncCopied),
 // whatever its run step did: a failed copy after it does not count.
 func TestStatusLastSync(t *testing.T) {
+	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; fi\nexit 0\n")
 	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
@@ -2492,6 +2529,7 @@ func TestStatusLastSync(t *testing.T) {
 // is neither expanded nor run by the line that says it runs, and the step
 // itself gets its arguments as written.
 func TestStepTextQuoted(t *testing.T) {
+	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -2523,6 +2561,7 @@ exit 0
 // A sync's files with its lock held are a sync running, not leftovers:
 // nothing refuses for them.
 func TestIncompleteCheckBusy(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("flock"); err != nil {
 		t.Skip("needs flock")
 	}
@@ -2556,6 +2595,7 @@ func TestIncompleteCheckBusy(t *testing.T) {
 // outright once the lock is free; "source" while a sync from it (or an
 // export) holds its sync lock. --releases marks the current release.
 func TestSyncStatusLines(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("flock"); err != nil {
 		t.Skip("needs flock")
 	}
@@ -2600,6 +2640,7 @@ func TestSyncStatusLines(t *testing.T) {
 // takes the session for gone itself, and goes the cancel way, rather
 // than waiting for good with its locks held.
 func TestWaitBeatWithoutWatcher(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	script := "set -eu\nws_armed=" + Quote(filepath.Join(dir, ".devopsy-watch.1")) + "\n: >\"$ws_armed\"\n" +
 		waitBeat(`{ echo gone; exit 3; }`) + "echo went on\n"
@@ -2632,6 +2673,7 @@ func TestWaitBeatWithoutWatcher(t *testing.T) {
 // over a sync's mark, before devopsy reads stdin. A release that syncs
 // goes on: the sync is a way out.
 func TestImportMarkRefusals(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \"$FAKE_ROOT\"; exit; fi\necho \"ran: $* (accepted: ${"+ImagesAcceptEnv+":-})\"\n")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
@@ -2751,6 +2793,7 @@ func TestImportMarkRefusals(t *testing.T) {
 // sync-done before sync_finish go), and records what ran after its run
 // step; a release that syncs takes them over the same way.
 func TestSyncImagesOrder(t *testing.T) {
+	t.Parallel()
 	tg := &Target{Name: "dev", Host: "h", Path: "app/dev", Mode: ModeImage}
 	o := &SyncOptions{From: "vm1:prod", ID: "1.2", Images: "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\n"}
 	holder := HolderScript(tg, "app-dev", o, true)
@@ -2783,6 +2826,7 @@ type oldParentDocker struct{ images.Docker }
 // since the sync started ... sync again", every sync, never saying what
 // fixes it.
 func TestParseParentDataKeepsOldParent(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	rel := filepath.Join(base, "releases", "20261023000000")
 	if err := os.MkdirAll(rel, 0o755); err != nil {
@@ -2812,6 +2856,7 @@ func TestParseParentDataKeepsOldParent(t *testing.T) {
 // regexp finds: on an older server they fail on a usage error after
 // taking the locks, instead of the prelude naming the upgrade.
 func TestImgOptionsNeedDataImages(t *testing.T) {
+	t.Parallel()
 	for name, s := range allScripts() {
 		if !strings.Contains(s, "'--mode'") {
 			continue
@@ -2856,6 +2901,7 @@ exit 0
 // lists. The fake's pull fails, as compose's would, when it sees a hold
 // on mariadb@I1 and the registry dropped it.
 func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
 	fakeImageTools(t, bin)
@@ -2903,6 +2949,7 @@ func TestRollbackFetchIgnoresOldHolds(t *testing.T) {
 // it, holding the database on the image before the one the failed
 // release ran on its data: the database goes back.
 func TestRestartFetchIgnoresOldHolds(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
 	fakeImageTools(t, bin)
@@ -2940,6 +2987,7 @@ func TestRestartFetchIgnoresOldHolds(t *testing.T) {
 // pull and build run before the release is undone, where a signal is
 // otherwise acted on at once ("not a build later").
 func TestFetchInterruptedDuringNames(t *testing.T) {
+	t.Parallel()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
@@ -2995,6 +3043,7 @@ exit 0
 // makes every sync's holder, and every release that syncs, fail to
 // start on the child's server ("Argument list too long").
 func TestSyncScriptsFitOneArgument(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i, svc := range []string{"database", "redis", "solr", "search"} {
 		ref := "registry.example.com/mirror/" + []string{"mariadb:11.8", "redis:8", "solr:9", "elasticsearch:8.19"}[i]

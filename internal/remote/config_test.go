@@ -349,6 +349,7 @@ func TestReleaseSettings(t *testing.T) {
 // A release keeps the target's count, else the server's, at most its
 // max_keep; the levels' .env files are linked.
 func TestActivateKeepAndLevels(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then printf 'root=%s\\nkeep=2\\nmax_keep=3\\nprotocol=8\\n' \""+root+"\"; exit; fi\n")
@@ -393,6 +394,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 
 // The schemas --debug schema prints are configs devopsy accepts.
 func TestSchemas(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "project.yaml"), ProjectSchema)
 	if _, err := readConfigFile(filepath.Join(dir, "project.yaml"), false); err != nil {
@@ -405,6 +407,7 @@ func TestSchemas(t *testing.T) {
 }
 
 func TestServers(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("project: app\nenvironments:\n  prod: {}\n  staging-eu: {}\n  \"pr-*\": {}\n"), 0o644); err != nil {
 		t.Fatal(err)

@@ -82,6 +82,7 @@ func write(t *testing.T, path, content string, mode os.FileMode) {
 }
 
 func TestEndToEnd(t *testing.T) {
+	t.Parallel()
 	// Resolved, as the binary sees its working directory (macOS /var symlink).
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -170,6 +171,7 @@ func TestEndToEnd(t *testing.T) {
 // `@target <subcommand> --help` explains and never touches the server, even
 // for a target that does not exist.
 func TestRemoteSubcommandHelp(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +229,7 @@ func TestRemoteSubcommandHelp(t *testing.T) {
 // Aliases refuse release and rollback before touching SSH, except from
 // their source, and work outside a project.
 func TestUserTargets(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	write(t, filepath.Join(home, "config.yaml"), "aliases:\n  vm1-traefik: {project: traefik, to: \"nowhere.invalid:main\"}\n", 0o644)
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -281,6 +284,7 @@ func TestUserTargets(t *testing.T) {
 
 // A target's host can come from the project's .env, read before connecting.
 func TestTargetHostFromDotenv(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -298,6 +302,7 @@ func TestTargetHostFromDotenv(t *testing.T) {
 
 // Builds from source (version "dev" here) never replace themselves.
 func TestUpgradeDevelopmentBuild(t *testing.T) {
+	t.Parallel()
 	out, code := runDevopsy(t, t.TempDir(), nil, "--upgrade")
 	if code == 0 || !strings.Contains(out, "development build") {
 		t.Errorf("(%d):\n%s", code, out)
@@ -309,6 +314,7 @@ func TestUpgradeDevelopmentBuild(t *testing.T) {
 }
 
 func TestTargetEnv(t *testing.T) {
+	t.Parallel()
 	tg := &remote.Target{Name: "prod", Env: map[string]string{"DEVOPSY_DOMAINS": "example.org"}}
 	got := string(targetEnv(tg, "app-prod", "0123abc"))
 	for _, want := range []string{"COMPOSE_PROJECT_NAME='app-prod'\n", "DEVOPSY_RELEASE_COMMIT='0123abc'\n", "DEVOPSY_DOMAINS='example.org'\n"} {
@@ -329,6 +335,7 @@ func TestTargetEnv(t *testing.T) {
 // With -v, each SSH session is printed; with -vv, also its script, the
 // project's secrets masked. devopsy on the server is verbose too.
 func TestRemoteVerbose(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -357,6 +364,7 @@ func TestRemoteVerbose(t *testing.T) {
 
 // --vars end to end, with an ssh that runs the script locally.
 func TestRemoteVars(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -470,6 +478,7 @@ func TestRemoteVars(t *testing.T) {
 }
 
 func TestCompletion(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dot := filepath.Join(root, ".devopsy")
 	write(t, filepath.Join(dot, "compose.yaml"), "services:\n  web:\n    image: busybox\n", 0o644)
@@ -505,6 +514,7 @@ func TestCompletion(t *testing.T) {
 // new release), the check of compose's required variables, the switch, run,
 // after (remote, then local). With an ssh that runs the scripts here.
 func TestReleaseSteps(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -699,6 +709,7 @@ func TestReleaseSteps(t *testing.T) {
 // COMPOSE_PROJECT_NAME, and a shell may export one: the target's own
 // name always wins.
 func TestNestedRemoteProjectName(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -720,6 +731,7 @@ func TestNestedRemoteProjectName(t *testing.T) {
 
 // --debug targets shows computed targets and where each value came from.
 func TestDebugTargets(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -768,6 +780,7 @@ func TestDebugTargets(t *testing.T) {
 
 // --debug env traces each variable: what sets it and what that overrides.
 func TestDebugEnv(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -835,6 +848,7 @@ func TestDebugEnv(t *testing.T) {
 // --prepare-release, --debug labels and --debug imports against a docker
 // that answers ps and inspect like a host running a proxy.
 func TestRolesEndToEnd(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -882,6 +896,7 @@ esac
 // Build mode uploads what git lists: outside a repository a release fails
 // before any session, the role check's included, and says how to fix it.
 func TestReleaseBuildModeNeedsGit(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -905,6 +920,7 @@ func TestReleaseBuildModeNeedsGit(t *testing.T) {
 // Instances, the server's release root, the project's .env, --environments and
 // --destroy, with an ssh that runs the scripts here.
 func TestInstancesEndToEnd(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1070,6 +1086,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 
 // --init writes a config once; --debug schema documents every key.
 func TestInitAndSchema(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "My_Shop")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1106,6 +1123,7 @@ func TestInitAndSchema(t *testing.T) {
 // what a Tab offers for targets with servers and instances (bash splits
 // words at ":"), and after one.
 func TestCompletionShells(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1186,6 +1204,7 @@ source "$1"; words=(${(z)2}); [[ $2 == *' ' ]] && words+=(''); CURRENT=${#words}
 // --ssh-keys edits the deploy user's authorized_keys on the server (here: HOME
 // under tmp, the fake ssh running the scripts locally).
 func TestRemoteSSHKeys(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1283,6 +1302,7 @@ func run2(t *testing.T, run func(string, ...string) (string, int), args ...strin
 // prepare, the variables check, the images as build mode gets them, run.
 // A step that only runs on a target refuses before anything runs.
 func TestLocalRelease(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1320,6 +1340,7 @@ func TestLocalRelease(t *testing.T) {
 // --destroy without a target runs defaults:' destroy step in place: with
 // --yes, or after the project's name at a terminal; never without either.
 func TestLocalDestroy(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1358,6 +1379,7 @@ func TestLocalDestroy(t *testing.T) {
 // after resolving every word: the current release, or a word naming none,
 // refuses them all; without a terminal it needs --yes.
 func TestReleasesRemove(t *testing.T) {
+	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

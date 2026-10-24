@@ -282,6 +282,7 @@ func services(refs []string) []Service {
 }
 
 func TestCksum(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("cksum"); err != nil {
 		t.Skip("no cksum")
 	}
@@ -299,6 +300,7 @@ func TestCksum(t *testing.T) {
 }
 
 func TestBookmarkPrefix(t *testing.T) {
+	t.Parallel()
 	if got := bookmarkPrefix("app-prod"); got != "devopsy-app-prod-" {
 		t.Errorf("short: %q", got)
 	}
@@ -324,6 +326,7 @@ func TestBookmarkPrefix(t *testing.T) {
 }
 
 func TestRepo(t *testing.T) {
+	t.Parallel()
 	for ref, want := range map[string]string{
 		"nginx":                     "nginx",
 		"nginx:1.27":                "nginx",
@@ -408,6 +411,7 @@ func (e *env) releases() []string {
 // recorded, a restore never moves a name another environment's container
 // uses, and once every release and container is gone, no image is left.
 func TestRandomHistory(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 200; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) { randomHistory(t, seed) })
 	}
@@ -729,6 +733,7 @@ func assertKept(t *testing.T, d *fakeDocker, before map[string]string, log []str
 // release ran the same image as mariadb:11: recorded, retried once the
 // container is gone.
 func TestRemoveLeavesUsedImage(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
@@ -754,6 +759,7 @@ func TestRemoveLeavesUsedImage(t *testing.T) {
 // still the environment's own: its rollback restores an image compose
 // never pulls (pull_policy: never) exactly.
 func TestRestoreFamiliarNames(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
@@ -773,6 +779,7 @@ func TestRestoreFamiliarNames(t *testing.T) {
 // postgres added) renames its bookmarks: the old one goes, and the name
 // it still lists is not recorded as dropped.
 func TestBookmarkRenamed(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	left := filepath.Join(t.TempDir(), LeftFile)
@@ -794,6 +801,7 @@ func TestBookmarkRenamed(t *testing.T) {
 // Docker failing midway stops a removal with an error, so the release
 // stays for the next one, which finishes it.
 func TestRemoveDockerFails(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	e := newEnv(t, d, "app-prod", filepath.Join(t.TempDir(), LeftFile), &out)
@@ -813,6 +821,7 @@ func TestRemoveDockerFails(t *testing.T) {
 // release holding it (a mirror), or by digest, is recorded when the
 // release goes, and removed once nothing holds it.
 func TestRemoveOtherRepository(t *testing.T) {
+	t.Parallel()
 	for _, c := range [][2]any{{"bitnami/redis:7", false}, {"bitnami/redis:7", true}, {"mirror.example/bitnami/redis@sha256:abc", false}, {"mirror.example/bitnami/redis@sha256:abc", true}, {"bitnami/redis@sha256:abc", false}, {"bitnami/redis@sha256:abc", true}} {
 		first, newestFirst := c[0].(string), c[1].(bool)
 		d := newFake()
@@ -844,6 +853,7 @@ func TestRemoveOtherRepository(t *testing.T) {
 // switch, never from the run step's up after: pulled by its digest, and
 // refused when the registry no longer has it.
 func TestRestoreDigestGone(t *testing.T) {
+	t.Parallel()
 	for _, served := range []bool{true, false} {
 		d := newFake()
 		var out bytes.Buffer
@@ -874,6 +884,7 @@ func TestRestoreDigestGone(t *testing.T) {
 // A name rewritten the same to Docker (docker.io/library/nginx:1 and
 // nginx:1) between two listings is not recorded as dropped.
 func TestBookmarkRespelled(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	left := filepath.Join(t.TempDir(), LeftFile)
@@ -889,6 +900,7 @@ func TestBookmarkRespelled(t *testing.T) {
 }
 
 func TestIsBookmark(t *testing.T) {
+	t.Parallel()
 	for tag, want := range map[string]bool{
 		"app:devopsy-app-prod-1":          true,
 		"reg:5000/app:devopsy-app-prod-1": true,
@@ -903,6 +915,7 @@ func TestIsBookmark(t *testing.T) {
 }
 
 func TestDigestNames(t *testing.T) {
+	t.Parallel()
 	if got := familiar("docker.io/library/nginx:1.27@sha256:abc"); got != "nginx@sha256:abc" {
 		t.Errorf("familiar: %q", got)
 	}
@@ -921,6 +934,7 @@ func TestDigestNames(t *testing.T) {
 // it for a holder and kept the name for it, and once the bookmark's
 // retry removed it, the name outlived every release.
 func TestRemoveAfterLeftBookmark(t *testing.T) {
+	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	left := filepath.Join(t.TempDir(), LeftFile)

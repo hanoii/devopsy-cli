@@ -22,6 +22,7 @@ func init() {
 }
 
 func TestParseCompletion(t *testing.T) {
+	t.Parallel()
 	got, err := parseCompletion([]byte("attach\tAttach\nup\tCreate and start\n:4\nCompletion ended with directive: ShellCompDirectiveNoFileComp\n"))
 	if err != nil || !slices.Equal(got, []string{"attach", "up"}) {
 		t.Fatalf("%q %v", got, err)

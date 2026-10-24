@@ -9,13 +9,17 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // The registry --context-hash asks for base images' digests is a fake:
 // baseAsked records what it was asked, baseMoved changes every answer (a
-// base patched upstream), baseDown makes it fail.
+// base patched upstream), baseDown makes it fail. Parallel tests ask it
+// at once, hence baseMu; only TestContextHashBaseImages, not parallel,
+// sets the others.
 var (
+	baseMu    sync.Mutex
 	baseAsked []string
 	baseMoved string
 	baseDown  error
@@ -23,6 +27,8 @@ var (
 
 func init() {
 	BaseDigest = func(ref string) (string, error) {
+		baseMu.Lock()
+		defer baseMu.Unlock()
 		baseAsked = append(baseAsked, ref)
 		if baseDown != nil {
 			return "", baseDown
@@ -129,6 +135,7 @@ func hashRepo(t *testing.T) *gitRepo {
 }
 
 func TestContextHashFollowsTheImageInputs(t *testing.T) {
+	t.Parallel()
 	r := hashRepo(t)
 	base := r.hash()
 	if len(base) != 64 {
@@ -182,6 +189,7 @@ func TestContextHashFollowsTheImageInputs(t *testing.T) {
 }
 
 func TestContextHashDockerignoreInContext(t *testing.T) {
+	t.Parallel()
 	r := newGitRepo(t, map[string]string{
 		".devopsy/compose.yaml": "services:\n  app:\n    build: ..\n",
 		"Dockerfile":            "FROM busybox\n",
@@ -201,6 +209,7 @@ func TestContextHashDockerignoreInContext(t *testing.T) {
 }
 
 func TestContextHashErrors(t *testing.T) {
+	t.Parallel()
 	r := newGitRepo(t, map[string]string{
 		".devopsy/compose.yaml": "services:\n  a:\n    build: ..\n  b:\n    build:\n      context: ..\n      additional_contexts:\n        x: ../x\n  c:\n    image: busybox\n",
 		"Dockerfile":            "FROM busybox\n",
@@ -257,6 +266,7 @@ FROM alpine:3
 // build's args, else their defaults; never a stage, scratch, a comment
 // or a heredoc's line; each once.
 func TestBaseImages(t *testing.T) {
+	t.Parallel()
 	want := []string{"alpine:3", "busybox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "debian:trixie"}
 	if got := baseImages(baseDockerfile, nil); !slices.Equal(got, want) {
 		t.Errorf("bases: %q, want %q", got, want)

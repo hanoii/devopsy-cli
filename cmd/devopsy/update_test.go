@@ -8,6 +8,7 @@ import (
 )
 
 func TestUpgradeCommand(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("root can write everywhere")
 	}
@@ -44,6 +45,7 @@ func TestUpgradeCommand(t *testing.T) {
 // Flags that need no project work where the working directory cannot be
 // read, like root's for a deploy user.
 func TestNoWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("root can read everywhere")
 	}

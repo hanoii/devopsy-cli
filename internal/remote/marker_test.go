@@ -15,6 +15,7 @@ import (
 // still become it, the rest handed over once whichever stream it came
 // on, and nothing after it with Cut.
 func TestLineMarker(t *testing.T) {
+	t.Parallel()
 	marker := SyncMarker
 	for name, c := range map[string]struct {
 		writes []string
@@ -93,6 +94,7 @@ func TestLineMarker(t *testing.T) {
 // A line one stream held while the marker came on the other goes before
 // that stream's next bytes.
 func TestLineMarkerHeld(t *testing.T) {
+	t.Parallel()
 	var out, errOut bytes.Buffer
 	m := &LineMarker{Prefix: SyncMarker}
 	o, e := m.Writer(&out), m.Writer(&errOut)

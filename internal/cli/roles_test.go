@@ -30,6 +30,7 @@ func container(project string, labels ...string) Container {
 }
 
 func TestProjectRoles(t *testing.T) {
+	t.Parallel()
 	root := project(t, "app", map[string]string{"compose.yaml": `services:
   web:
     image: x
@@ -197,6 +198,7 @@ func TestPrepareRelease(t *testing.T) {
 }
 
 func TestParseInspect(t *testing.T) {
+	t.Parallel()
 	host, err := parseInspect([]byte("abc {\"com.docker.compose.project\":\"shop\",\"devopsy.role\":\"proxy\"}\ndef null\n"))
 	if err != nil || len(host) != 2 || host[0].Project != "shop" || host[0].Labels[RoleLabel] != "proxy" || host[1].ID != "def" || host[1].Labels == nil {
 		t.Fatalf("%v %+v", err, host)
@@ -208,6 +210,7 @@ func TestParseInspect(t *testing.T) {
 
 // --debug imports: each running project's imports against its release.
 func TestImportStates(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(project(t, "shop", map[string]string{
 		"target.env": "COMPOSE_PROJECT_NAME='shop'\nOWN='x'\n" + ImportedMarker + "\nDEVOPSY_WILDCARD_DOMAIN='old.example.com'\n",
 		".env":       "MAIL=\n",
