@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -2432,10 +2433,20 @@ func TestExportImport(t *testing.T) {
 // as the kernel resolves it (tarLinks.check): relative links within
 // their entry pass, a way that leaves the entry at any point is refused,
 // however path.Clean reads it, and so are the members whose names would
-// not be where they land (review of 2026-10-23, round 4).
+// not be where they land (review of 2026-10-23, round 4). A pax global
+// header is no member, but GNU tar applies its records (linkpath, path,
+// size...) to every member after it, where archive/tar, which the check
+// reads the tar with, applies none (checked in devopsy-util:2, GNU tar
+// 1.35, 2026-10-24: a global linkpath made storage/x -> sub into storage/x
+// -> ../../../../etc): a global header carrying anything but the export's
+// own record (images.ExportKey), wherever it is, must be refused, or the
+// check judges links GNU tar never writes.
 func TestTarLinks(t *testing.T) {
 	sym := func(name, target string) *tar.Header {
 		return &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}
+	}
+	global := func(records map[string]string) *tar.Header {
+		return &tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: records}
 	}
 	hard := func(name, target string) *tar.Header {
 		return &tar.Header{Name: name, Typeflag: tar.TypeLink, Linkname: target, Mode: 0o644}
@@ -2481,6 +2492,17 @@ func TestTarLinks(t *testing.T) {
 		{"a hard link below a link", []*tar.Header{
 			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
 		}, "storage/h is a hard link below the link storage/x"},
+		{"the export's record alone in a global header", []*tar.Header{
+			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n"}),
+			dir("storage/"), sym("storage/x", "sub"),
+		}, ""},
+		{"a global linkpath beside the export's record", []*tar.Header{
+			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n", "linkpath": "../../../../etc"}),
+			dir("storage/"), sym("storage/x", "sub"),
+		}, "*"},
+		{"a global linkpath after a member", []*tar.Header{
+			dir("storage/"), global(map[string]string{"linkpath": "../../../../etc"}), sym("storage/x", "sub"),
+		}, "*"},
 	} {
 		var b bytes.Buffer
 		tw := tar.NewWriter(&b)
@@ -2498,7 +2520,10 @@ func TestTarLinks(t *testing.T) {
 		switch {
 		case c.refused == "" && err != nil:
 			t.Errorf("%s: refused: %v", c.name, err)
-		case c.refused != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
+		// "*": refused, however it is said.
+		case c.refused == "*" && !errors.Is(err, errOutside) && !errors.Is(err, errMember):
+			t.Errorf("%s: %v, want refused", c.name, err)
+		case c.refused != "" && c.refused != "*" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
 			t.Errorf("%s: %v, want %q", c.name, err, c.refused)
 		}
 	}
