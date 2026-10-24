@@ -1917,3 +1917,22 @@ func TestImportHoldsOwnRepositoryOnly(t *testing.T) {
 		t.Errorf("the database is held on %s, outside its own repository (%v)\n%s", hold, err, out.String())
 	}
 }
+
+// Locally, a database the project builds records no image, as
+// ExportData says (a built service has nothing to record): on Docker's
+// containerd store a built image carries registry digests too, which
+// alone never tell own from pulled (Service.own). Recorded, its local
+// build's digest, which no registry has, refuses its import on a target
+// that pulls the service (image mode) unless --accept-image.
+func TestExportDataLocalBuilt(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app", &out)
+	built := Service{Name: "database", Ref: "registry.example/app-database:dev", Build: true, Data: true, Method: DataMnt}
+	m.e.set.List = func(string) ([]Service, error) { return []Service{built}, nil }
+	d.pull(built.Ref, "B1") // a local build, its digest as containerd shows one
+	d.containers = []container{{image: "B1", project: "app", ref: built.Ref, service: "database"}}
+	if data := m.e.set.ExportData("", "", "database"); data != "" {
+		t.Errorf("a built database's local export records: %q", data)
+	}
+}
