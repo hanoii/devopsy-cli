@@ -205,6 +205,24 @@ func TestBuildStarts(t *testing.T) {
 		}
 	}
 
+	// COMPOSE_FILE, in .devopsy/.env or the caller's environment, names
+	// files compose never reads: every command names the project's with
+	// -f (composeFiles), which compose prefers (checked with Compose 5.5:
+	// `-f a.yaml config` with COMPOSE_FILE=a.yaml:b.yaml leaves b.yaml
+	// out), ComposeConfig's included. So its labels are none, and
+	// mayOwnMnt reads exactly the files the command and the labels'
+	// reader run on (review of 2026-10-23, round 4, asked whether it
+	// missed COMPOSE_FILE's).
+	viaEnv := project(t, "p", map[string]string{"compose.yaml": minimalCompose, "extra.yaml": owned, "compose.override.yaml": minimalCompose, ".env": "COMPOSE_FILE=compose.yaml:extra.yaml\n"})
+	plan, err := build(viaEnv, []string{"up", "-d"}, []string{"COMPOSE_FILE=compose.yaml:extra.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(viaEnv, ProjectDirName)
+	if want := []string{"docker", "compose", "-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.override.yaml"), "up", "-d"}; plan.Starts || !slices.Equal(plan.Args, want) || !slices.Equal(composeFiles(dir), []string{want[3], want[5]}) {
+		t.Errorf("COMPOSE_FILE: Starts %v, args %q, composeFiles %q", plan.Starts, plan.Args, composeFiles(dir))
+	}
+
 	for compose, want := range map[string]bool{
 		minimalCompose: false,
 		"include:\n  - other.yaml\n" + minimalCompose:                                      true,

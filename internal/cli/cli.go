@@ -1374,19 +1374,16 @@ func ColorForced(lookup func(string) (string, bool)) bool {
 	return v != "" && v != "0" && !strings.EqualFold(v, "false")
 }
 
-// compose plans `docker compose` with the project's files and args.
+// compose plans `docker compose` with the project's files and args,
+// named with -f (composeFiles), so compose never reads COMPOSE_FILE:
+// every command, ComposeConfig and mayOwnMnt run on the same files.
 func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
 	}
-	composeArgs = append(composeArgs, "-f", p.composeFile)
-	for _, name := range []string{"compose.override.yaml", "compose.override.yml"} {
-		override := filepath.Join(p.dir, name)
-		if fi, err := os.Stat(override); err == nil && fi.Mode().IsRegular() {
-			composeArgs = append(composeArgs, "-f", override)
-			break
-		}
+	for _, file := range composeFiles(p.dir) {
+		composeArgs = append(composeArgs, "-f", file)
 	}
 	return &Plan{Path: "docker", Args: append(composeArgs, args...), Env: p.env.Environ()}
 }
