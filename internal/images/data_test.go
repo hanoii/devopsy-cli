@@ -1942,3 +1942,39 @@ func TestExportDataLocalBuilt(t *testing.T) {
 		t.Errorf("a built database's local export records: %q", data)
 	}
 }
+
+// An export's record comes from whoever made the tar, so an import holds
+// its service only by a digest in the repository of the service's own
+// reference (ImportCheck), never on an image the record names elsewhere.
+// A record whose reference is the service's own name but whose digests
+// are all in another repository (Docker finds a digest only in the
+// repository named, strictRepo, so the own name never has it) must be
+// refused, or held in the own repository: never pulled from the other
+// repository and held on it, which lets the tar's maker choose what runs
+// on the data (localHold falls back to the record's first digest).
+func TestImportDigestFromAnotherRepository(t *testing.T) {
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	stage := newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, db118)
+	d.publish("evil.example/x:1", "I9")
+	data := "image\tdatabase\tmariadb:11.8\tI9\tevil.example/x@I9\n"
+	rel := stage.e.rel(stage.cur)
+	err := stage.e.set.ImportCheck(rel, data, "database")
+	if err == nil {
+		err = stage.e.set.ImportDone(stage.base(), rel, data)
+	}
+	if err != nil && !errors.Is(err, ErrRefused) {
+		t.Fatalf("import (%v)\n%s", err, out.String())
+	}
+	for n := range d.names {
+		if strings.HasPrefix(n, "evil.example/") {
+			t.Errorf("the import pulled %s, an image from a repository the record names, not the service's own\n%s", n, out.String())
+		}
+	}
+	if hold := holdsIn(rel)["database"]; hold != "" && repoKey(hold) != "mariadb" {
+		t.Errorf("database held on %s: an import holds only by a digest in its own repository (mariadb)\n%s", hold, out.String())
+	}
+}
