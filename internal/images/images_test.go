@@ -907,3 +907,38 @@ func TestDigestNames(t *testing.T) {
 		t.Errorf("familiar: %q", got)
 	}
 }
+
+// Found by TestDataRandom (seed 252, 2026-10-24): a bookmark recorded as
+// left (its release went while a container used its image) holds
+// nothing, since no release counts on it. A later release of the
+// project running that image again under a name in its repository took
+// it for a holder and kept the name for it, and once the bookmark's
+// retry removed it, the name outlived every release.
+func TestRemoveAfterLeftBookmark(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	left := filepath.Join(t.TempDir(), LeftFile)
+	stage, prod := newEnv(t, d, "app-stage", left, &out), newEnv(t, d, "app-prod", left, &out)
+	d.pull("mirror.example/mariadb:11.8", "sha256:1")
+	a := stage.newRelease("mirror.example/mariadb:11.8")
+	stage.set.Bookmark(stage.rel(a))
+	d.pull("mirror.example/mariadb:11.8", "sha256:2")
+	d.containers = []container{{image: "sha256:1"}}
+	if err := stage.set.Remove(stage.rel(a)); err != nil {
+		t.Fatal(err)
+	}
+	if len(readLeft(left)) != 1 {
+		t.Fatalf("the used image's bookmark is not recorded:\n%s", out.String())
+	}
+	d.pull("mirror.example/mariadb:11.8", "sha256:1") // pushed back
+	b := prod.newRelease("mirror.example/mariadb:11.8")
+	prod.set.Bookmark(prod.rel(b))
+	d.containers = nil
+	if err := prod.set.Remove(prod.rel(b)); err != nil {
+		t.Fatal(err)
+	}
+	prod.set.Prune()
+	if id, ok := d.names["mirror.example/mariadb:11.8"]; ok {
+		t.Errorf("mirror.example/mariadb:11.8 (%s) outlived every release: %v\n%s", id, d.names, out.String())
+	}
+}

@@ -782,7 +782,9 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   step's `up` would pull after it.
 - **A removal frees only what nothing else holds:** it untags the going
   release's bookmarks, then per image, from Docker's state: held by
-  another bookmark, it stays (its names in repositories no holder is
+  another bookmark (never one the record holds: its release went, so a
+  name kept for it outlived every release, found by `TestDataRandom`),
+  it stays (its names in repositories no holder is
   in, a mirror or a digest, are recorded, or they would outlive every
   release); used by a container, its names are recorded, never stripped
   (all but the last frees nothing and costs a pull); else its listed
