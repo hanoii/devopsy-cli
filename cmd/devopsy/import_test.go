@@ -306,6 +306,24 @@ func TestImportSession(t *testing.T) {
 	}
 }
 
+// The import's hook loads only once its group is in the record, so the
+// next lock-taker can end it: a devopsy killed between starting the hook
+// and recording it left a loader nobody knew of, which the next import
+// ran beside (seen on a loaded macOS runner). Recording it failing here,
+// the hook never runs and the import fails, its mark kept.
+//
+// Bug: the hook started first and the record came after, its failure
+// ignored, so the hook loaded unrecorded.
+func TestImportHookWaitsForItsRecord(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	env := append(slices.Clone(s.env), "FAKE_UP_MKDIR="+filepath.Join(s.base, syncState+".tmp"))
+	_, out, code := s.runIO(env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
+	if code == 0 || fileExists(s.imported) || fileExists(filepath.Join(s.tmp, "hook.pid")) || !s.mark().IsImport() || !strings.Contains(out, "recording the services to restore") {
+		t.Errorf("an unrecorded hook (%d), imported %v, mark %+v:\n%s", code, fileExists(s.imported), s.mark(), out)
+	}
+}
+
 // A devopsy killed outright mid-load leaves the mark and the record, its
 // hook loading on; the next import of that service ends that hook (on
 // Linux, by its process group, recorded) and the project's import

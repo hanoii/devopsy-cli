@@ -1159,10 +1159,13 @@ func dataHookEnv(services []cli.SyncService, stop []string) []string {
 // the project at cwd, with env over this process's: only when its file is
 // there, except export and import, which a stream service needs (their
 // callers check first). stdin nil is empty, stdout nil is errOut;
-// started, when not nil, gets its pid once it runs (its process group's).
-// Its own process group, all of it ended when ctx is (a pipeline's
-// commands too, a dump and what compresses it).
-func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdin io.Reader, stdout io.Writer, started func(pid int), args ...string) error {
+// started, when not nil, gets its pid (its process group's) before the
+// hook runs, and the hook runs only once it returned nil
+// (hookStartEnv): an import records its writer there, so no hook loads
+// unrecorded, whatever happens to this devopsy meanwhile. Its own
+// process group, all of it ended when ctx is (a pipeline's commands too,
+// a dump and what compresses it).
+func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdin io.Reader, stdout io.Writer, started func(pid int) error, args ...string) error {
 	if a := args[0]; a != "export" && a != "import" && !isExecutable(dataHookFile(projectDir, a)) {
 		return nil
 	}
@@ -1188,11 +1191,31 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
-	if err = cmd.Start(); err == nil {
-		if started != nil {
-			started(cmd.Process.Pid)
+	var gate, gated *os.File
+	if started != nil {
+		if gated, gate, err = os.Pipe(); err != nil {
+			return err
 		}
-		err = cmd.Wait()
+		defer gate.Close()
+		cmd.ExtraFiles = []*os.File{gated}
+		cmd.Env = append(cmd.Env, hookStartEnv+"=1")
+	}
+	err = cmd.Start()
+	if gated != nil {
+		gated.Close()
+	}
+	if err == nil {
+		if started != nil {
+			// No byte, the hook's devopsy runs nothing: a failed
+			// record, or this devopsy gone before writing it.
+			if err = started(cmd.Process.Pid); err == nil {
+				_, err = gate.Write([]byte{0})
+			}
+			gate.Close()
+		}
+		if werr := cmd.Wait(); err == nil {
+			err = werr
+		}
 	}
 	// What the hook left running in its group (a child it put in the
 	// background) ends with it: hooks run in the foreground, and nothing
@@ -1209,6 +1232,22 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 		return errors.New("interrupted")
 	}
 	return err
+}
+
+// hookStartEnv tells the devopsy runDataHook starts that its hook runs
+// only once a byte comes on fd 3, which runDataHook sends after started:
+// awaitHookStart, before anything else.
+const hookStartEnv = "DEVOPSY_INTERNAL_HOOK_START"
+
+// awaitHookStart reads the byte hookStartEnv announces and reports
+// whether it came; the variable goes, so nothing the hook runs sees it.
+func awaitHookStart() bool {
+	os.Unsetenv(hookStartEnv)
+	f := os.NewFile(3, "hook start")
+	defer f.Close()
+	var b [1]byte
+	n, _ := f.Read(b[:])
+	return n == 1
 }
 
 // syncStream copies a stream service: the parent's export writes its

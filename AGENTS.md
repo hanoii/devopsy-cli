@@ -1981,7 +1981,13 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   or sync restores it; a restore before the first write puts it back as
   it was); the mark (`IncompleteImport`, its second field the service:
   `markIncomplete`'s `from`) right before the writer; a `writer <pgid>`
-  line once the hook runs. A complete import restores the record's
+  line before the hook runs: the hook's devopsy, started in its own
+  group, waits for a byte on fd 3 that `runDataHook` sends once the
+  line is written (`hookStartEnv`, `awaitHookStart`), and runs nothing
+  without it (decided 2026-10-24: the line came after the start, its
+  failure ignored, so a devopsy killed in between left a loader nobody
+  recorded, which the next import ran beside; a loaded macOS runner
+  hit it). A complete import restores the record's
   `stop` lines (`restoreServices`, not `stopSet`'s set, empty on a
   retry) and only once all are healthy removes the mark (still its own:
   `clearImportMark`) and the record; a start that fails keeps both. On
@@ -2199,7 +2205,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`):
+  `SYNC_NEEDS`, `HOOK_START`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
   names.

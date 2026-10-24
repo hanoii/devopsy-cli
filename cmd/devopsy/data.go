@@ -1065,10 +1065,11 @@ func runImport(cwd string, args []string, color bool) int {
 		defer in2.Close()
 		if s.Transfer == cli.DataStream {
 			report.Info("importing " + name)
-			started := func(pid int) {
-				if onTarget {
-					_ = recordWriter(cwd, pid, true, !wasUp)
-				}
+			// On a target its group is recorded before it runs, so
+			// the next lock-taker can end it (endLeftoverImport).
+			var started func(pid int) error
+			if onTarget {
+				started = func(pid int) error { return recordWriter(cwd, pid, true, !wasUp) }
 			}
 			err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), in2, nil, started, "import", name)
 			if onTarget {

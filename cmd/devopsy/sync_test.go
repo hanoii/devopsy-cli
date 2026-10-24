@@ -158,6 +158,9 @@ case "$*" in
     # FAKE_UP_WAIT: an up that writes its caller's pid there and takes
     # until $FAKE_UP_WAIT.go exists.
     if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # FAKE_UP_MKDIR: an up that makes that directory (where a file
+    # devopsy writes next goes, so the write fails).
+    [ -z "${FAKE_UP_MKDIR:-}" ] || mkdir -p "$FAKE_UP_MKDIR"
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
     # depends on, too, unless --no-deps.
     ups=$(after --wait "$@" | grep -v '^--')

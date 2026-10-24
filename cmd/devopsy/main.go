@@ -41,6 +41,10 @@ func run() int {
 	// broken pipe when the session that called a server's devopsy is
 	// gone.
 	report.SetDefault(report.New(errOut, color, verboseLevel))
+	if os.Getenv(hookStartEnv) != "" && !awaitHookStart() {
+		report.Error("the data capability's hook did not run: the devopsy that started it could not record it, or is gone")
+		return 1
+	}
 
 	// These need no directory: they work anywhere, even where the working
 	// directory cannot be read (another user's, as root's is for a deploy
