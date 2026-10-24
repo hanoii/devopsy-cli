@@ -2275,6 +2275,7 @@ Findings that are not one area's.
 
 ```sh
 go vet ./... && go test -count=1 ./...
+go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
 
@@ -2331,7 +2332,10 @@ go test -tags e2e -count=1 -v -run '^TestSyncDestroy$' ./e2e   # one test, one l
 Short, never weaker: a test made faster checks the same things. Cut
 waiting, never an assertion or a case; a test that covers less to save
 time is a regression of the suite (Principles, "Every change carries
-its test").
+its test"). A way to make the suite faster without weakening a test is
+always welcome, whatever the task: take it, measure before and after
+(the same tests passing, `go test -v` results compared), and record it
+here.
 
 - **Never sleep for something to happen:** poll for it (`eventually`
   in `e2e/`, 250 ms; a loop on the file or the state in a unit test),
@@ -2351,37 +2355,67 @@ its test").
 - **Unit before e2e** (Principles): a scenario a fake can reproduce is
   seconds there, minutes in `e2e/`.
 
-Unit tests run in parallel: `t.Parallel()` first in every test, but
-those that set the environment (`t.Setenv`, which Go refuses in a
-parallel test) or a package's globals (`ComposeConfig`,
-`ComposeCommands`, a fake's state like `baseAsked`), which Go runs
-first, alone. A new test is parallel; rather than a global, pass what
-it changes (the command's `Env`, a root as an argument, as
-`TestVarsScripts` does).
+#### Unit tests run in parallel
 
-- **What parallel tests share is guarded or never changes:** a fake
-  several call at once takes a mutex (`baseMu`); fakes nothing changes
-  are written once per test binary (`fakeBin`, `varsBin`). Why once:
-  macOS takes seconds, under the parallel tests, for the first exec of
-  each new script. Fakes a test changes stay its own (the sync and
-  import setups').
-- **Two kinds of waits:** one for what the test then acts on (a hook
-  started, a lock waited for) is bounded by `startWait`, a minute: it
-  only decides how soon a test that never gets there fails, and a
-  loaded machine needs it (the holder tests' 10 s ran out on every
-  macOS run). One for what the test checks (the import's end after a
-  signal) keeps its own bound, never `startWait`: that bound is the
-  behavior.
+Every unit test runs beside the others of its package: Go runs the
+serial ones first, alone, then the parallel ones together, as many at
+once as the CPUs (`-parallel`), and the packages at once too.
+`TestTestsParallel` (`internal/report`) fails on a test that neither
+starts with `t.Parallel()` nor says why not; `e2e/` is outside it, its
+tests run on lanes instead (below). Writing a test:
+
+- **Parallel by default:** `t.Parallel()` is its first line, and
+  everything it changes is its own: a `t.TempDir()`, the command's
+  `Env` (never `t.Setenv` or `os.Setenv`), a root or a fake passed as
+  an argument.
+- **Serial only for a reason, said:** a test that sets the environment
+  (`t.Setenv`: Go panics in a parallel test) or a package-level
+  variable (a function swapped for a fake, `ComposeConfig`,
+  `ComposeCommands`) is serial, with a `// Not parallel: <what it
+  sets>` line in its doc comment, which the guard reads (a parallel
+  test assigning a package-level variable fails it too). Better than
+  a serial test: make what it changes an argument (`TestVarsScripts`
+  takes its release root). A helper that sets the environment or a
+  global makes every caller serial, so helpers take what they change
+  as parameters.
+- **What tests share is guarded or never changes:** a fake that
+  parallel tests call at once takes a mutex (`baseMu`); fakes nothing
+  changes are written once per test binary, read-only (`fakeBin`,
+  `varsBin`), so a test that writes into them fails at once; a test
+  that changes a fake has its own, in its `t.TempDir()` (the sync and
+  import setups write theirs per test).
+- **Two kinds of waits, never mixed up:** a wait for what the test then
+  acts on (a hook started, a lock waited for, before the signal it
+  sends) polls, bounded by `startWait`, a minute: the bound only
+  decides how soon a test that never gets there fails, and a passing
+  test never waits for it. A wait for what the test checks (the
+  import ended within 10 s of the signal, a release cancelled within
+  15 s) keeps its own bound, which is the behavior: never `startWait`,
+  never longer because a run was slow. One that fails under the
+  parallel load goes serial (`// Not parallel: it checks <the
+  latency>`), so it runs alone.
+- **The race detector** runs in CI over the packages that test in
+  process (all but `cmd/devopsy`, `internal/remote` and `e2e`; Checks):
+  a global two tests share shows there, a helper's included, which
+  the guard cannot see. Under it the script tests of the other two
+  fail on time (several times slower), not on a race; run it there
+  for a change to their in-process code and read only its race
+  reports.
 
 Measured 2026-10-24: on Linux with 4 CPUs, as CI's runners, 200 s
-serial to 50 s; on macOS (10 CPUs) 410 s to 145 s, most of the rest
-the first exec of each test's own fakes.
-`TestWaitBeatWithoutWatcher` takes 20 s by design: two beats past the
-longest quiet time. To see where the time goes:
+serial to 50 s, all CPUs busy; on macOS (10 CPUs) 410 s to 145 s,
+where most of what is left is the first exec of each new script
+(seconds under load: macOS checks every new executable), so the next
+lever there is fewer new scripts, the setups' fakes written once and
+copied only for a test that changes them. `TestWaitBeatWithoutWatcher`
+takes 20 s by design: two beats past the longest quiet time. To see
+where the time goes:
 
 ```sh
 go test -count=1 -v ./cmd/devopsy | grep -- '^--- ' | sort -t'(' -k2 -rn | head -20
 ```
+
+#### End to end on lanes
 
 End to end, the run takes about the larger of the slowest test
 (`TestSyncDestroy`, 144 s) and the tests' total over the lanes (about
