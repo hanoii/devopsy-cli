@@ -2273,20 +2273,26 @@ Findings that are not one area's.
 
 ## Checks
 
-```sh
-go vet ./... && go test -count=1 ./...
-go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)
-docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
-```
-
-Before tagging, run the tests on Linux too: CI does, and macOS hides
-differences that matter there (Gotchas). The caches keep reruns fast:
+Locally, run them on Linux in Docker: what servers run, where macOS
+hides differences that matter (Gotchas), and about three times faster
+(50 s against 150 s: macOS checks each new executable on its first
+run, and the tests write thousands of fake scripts). The caches keep
+reruns fast:
 
 ```sh
 docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
   -v devopsy-gocache:/root/.cache -v devopsy-gomod:/go/pkg/mod \
-  golang:1.26-trixie go test -count=1 ./...
+  golang:1.26-trixie sh -c 'go vet ./... && go test -count=1 ./... &&
+  go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)'
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
 ```
+
+CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for
+completion, the race detector and shellcheck) and on macOS, the
+operator's side, where some behave differently (owners never checked,
+no GNU `tail`). Run them on macOS too (`go vet ./... && go test
+-count=1 ./...`) for a change to what runs locally, rather than wait
+for CI.
 
 End to end, in Docker (`e2e/`, behind the `e2e` build tag): privileged
 Debian 13 containers with their own Docker and sshd as servers, an
