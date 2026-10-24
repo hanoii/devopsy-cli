@@ -928,7 +928,8 @@ func TestImportExportImages(t *testing.T) {
 	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+	docker, _ := s.logs()
+	if !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
 		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
 	}
 	os.Remove(s.log + ".containers.shop-prod")
@@ -945,7 +946,7 @@ func TestImportExportImages(t *testing.T) {
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
 	s.logs()
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
-	docker, _ := s.logs()
+	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(errs, "app: mariadb:12 (") || !strings.Contains(errs, "never ran on the export's data") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
 		t.Fatalf("another series (%d):\n%s\n%s", code, errs, docker)
 	}
@@ -1147,5 +1148,29 @@ func TestImportResolvedKeepsExportImage(t *testing.T) {
 	}
 	if h := readString(history); strings.Contains(h, "\tsha256:app\t") || !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
 		t.Errorf("--resolved started app's history over from the old image, losing the export's:\n%s", h)
+	}
+}
+
+// A database running through its import (devopsy.data.stop never) is
+// made again on the export's image before the app the import stopped
+// (devopsy.data.stop=import, depending on it) starts: started first,
+// the app would run on the old image's database and see it restart.
+func TestImportRecreatesBeforeDependents(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tdb\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), "rows\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own", "FAKE_DB=mnt", "FAKE_APP=mnt+import"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "db")
+	if code != 0 {
+		t.Fatalf("@prod --export db (%d):\n%s", code, errs)
+	}
+	write(t, s.log+".containers.shop-prod", "db sha256:before\n", 0o644)
+	s.logs()
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if i, j := strings.Index(docker, " up -d --no-deps --wait db\n"), strings.Index(docker, " start app\n"); code != 0 || i < 0 || j < i {
+		t.Errorf("app started (at %d) before db was made again on the export's image (at %d), import %d:\n%s\n%s", j, i, code, errs, docker)
 	}
 }

@@ -643,6 +643,24 @@ func (s *Set) Imported(base, rel, service string) error {
 	return h.write(base)
 }
 
+// Resolved is Imported for --resolved: nothing when the history's newest
+// image for service is the one rel holds it on already (an import held
+// it on its export's and took the export's history, and only what came
+// after failed: the data is complete, and starting over would forget
+// what wrote it), else Imported.
+func (s *Set) Resolved(base, rel, service string) error {
+	if hold := holdsIn(rel)[service]; hold != "" {
+		if last, ok := readHistory(base).last(service); ok {
+			for _, d := range last.Digests {
+				if digestOf(d) != "" && digestOf(d) == digestOf(hold) {
+					return nil
+				}
+			}
+		}
+	}
+	return s.Imported(base, rel, service)
+}
+
 // readHistoryText reads history lines from text.
 func readHistoryText(text string) history {
 	return parseHistory(text)

@@ -1619,7 +1619,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`ImportCheck`, the sync's check in its own words), holds the service
   once the data is in (`ImportDone`, first line `import`) and makes it
   again, stopped (`restoreServices`' recreate) or running
-  (`recreateRunning`). Only in the service's own repository (decided
+  (`recreateRunning`, before what the import stopped starts on it).
+  `--resolved` recreates the same way and keeps a history whose newest
+  image is the hold (`Resolved`): an import whose data completed and
+  held its service but failed after left both (review of 2026-10-24:
+  the old container started on the new data, its history over from the
+  old image). Only in the service's own repository (decided
   2026-10-24): the header is whoever made the tar's, so an image from
   another repository is a name the data never ran, never something to
   hold, and the hold is always `<own repository>@<digest>` (`ownHold`,

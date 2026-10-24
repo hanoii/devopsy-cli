@@ -1132,17 +1132,19 @@ func runImport(cwd string, args []string, color bool) int {
 			return fail(err.Error() + ": the import completed, and " + name + " is not held on the image that wrote its data: what it stopped stays down, and the mark until an import of " + name + " completes")
 		}
 	}
+	// Running through the import (devopsy.data.stop never): made again on
+	// the image that wrote its data before what it stopped starts again
+	// on it (an app, on the old image's restart).
+	if imgs != nil && !slices.Contains(stopped, name) {
+		if err := recreateRunning(cwd, rel, name); err != nil {
+			return fail(err.Error() + ": the import completed, and " + name + " still runs the image it had: the mark stays until an import of " + name + " completes")
+		}
+	}
 	if err := restoreServices(cwd, services, false, imgs != nil, nil); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
 	if imgs == nil {
-		importedImages(cwd, base, name, services)
-	} else if !slices.Contains(stopped, name) {
-		// Running through the import (devopsy.data.stop never): made again
-		// on the image that wrote its data.
-		if err := recreateRunning(cwd, rel, name); err != nil {
-			return fail(err.Error() + ": the import completed, and " + name + " still runs the image it had: the mark stays until an import of " + name + " completes")
-		}
+		importedImages(cwd, base, name, services, false)
 	}
 	clearImportMark(base, name)
 	return code
@@ -1181,13 +1183,18 @@ func recreateRunning(cwd, rel, name string) error {
 // imported (mnt), or accepted (--resolved): they came from elsewhere. A
 // stream's import goes through the service's own image, which keeps its
 // history.
-func importedImages(cwd, base, name string, services []cli.SyncService) {
+func importedImages(cwd, base, name string, services []cli.SyncService, resolved bool) {
 	for _, s := range services {
 		if s.Name != name || s.Transfer != cli.DataMnt {
 			continue
 		}
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
-		if err := set.Imported(base, remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name); err != nil {
+		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+		record := set.Imported
+		if resolved {
+			record = set.Resolved
+		}
+		if err := record(base, rel, name); err != nil {
 			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
 		}
 	}
@@ -1294,11 +1301,15 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	if err := restoreServices(cwd, services, false, false, nil); err != nil {
+	// Made again where devopsy's compose file holds a service on another
+	// image than its container's (an import that held it on its export's
+	// failed after): started, the old container would run the old image
+	// on the imported data.
+	if err := restoreServices(cwd, services, false, true, nil); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	importedImages(cwd, base, name, services)
+	importedImages(cwd, base, name, services, true)
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0

@@ -1978,3 +1978,30 @@ func TestImportDigestFromAnotherRepository(t *testing.T) {
 		t.Errorf("database held on %s: an import holds only by a digest in its own repository (mariadb)\n%s", hold, out.String())
 	}
 }
+
+// --resolved after an import that held its service on the export's image
+// and took its history keeps that history: the data is complete, only
+// what came after failed. Otherwise it starts the history over, as
+// before.
+func TestResolvedKeepsHeldHistory(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
+	d.publish("mariadb:11.8", "I1")
+	stage.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	if err := importInto(t, prod, stage, false); err != nil {
+		t.Fatal(err)
+	}
+	before := strings.Join(stage.history("database"), " ")
+	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database"); err != nil || strings.Join(stage.history("database"), " ") != before {
+		t.Errorf("--resolved after a held import (%v): history %v, was %s", err, stage.history("database"), before)
+	}
+	dev := newSim(t, d, "app-dev", &out)
+	dev.release(false, db118)
+	os.Remove(filepath.Join(dev.e.rel(dev.cur), ComposeFile))
+	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database"); err != nil || strings.Join(dev.history("database"), " ") != "ran:I2 import:I2" {
+		t.Errorf("--resolved with nothing held (%v): history %v", err, dev.history("database"))
+	}
+}
