@@ -1889,3 +1889,31 @@ func TestExportDataLocal(t *testing.T) {
 		t.Errorf("never started: %q", data)
 	}
 }
+
+// The export's record is whoever made the tar's: its reference may name
+// the service's own repository while its digests are another's only. The
+// image an import pulls and holds the service on must still be in the
+// service's own repository (ImportCheck): a tar naming
+// mariadb:11.8 with only evil.example/x's digest must not make prod's
+// database pull and run evil.example/x.
+func TestImportHoldsOwnRepositoryOnly(t *testing.T) {
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	d.publish("evil.example/x:1", "IX")
+	data := "image\tdatabase\tmariadb:11.8\tIX\tevil.example/x@IX\n"
+	rel := prod.e.rel(prod.cur)
+	err := prod.e.set.ImportCheck(rel, data, "database")
+	if err == nil {
+		err = prod.e.set.ImportDone(prod.base(), rel, data)
+	}
+	if d.images["IX"] {
+		t.Errorf("the import pulled evil.example/x's image (%v): names %v\n%s", err, d.names, out.String())
+	}
+	if hold := holdsIn(rel)["database"]; repoKey(hold) != "mariadb" {
+		t.Errorf("the database is held on %s, outside its own repository (%v)\n%s", hold, err, out.String())
+	}
+}
