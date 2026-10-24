@@ -273,6 +273,12 @@ func runExport(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 	}
+	// What ran on the data goes with it (images.ExportData), for an
+	// import to check as a sync checks a parent's.
+	var record string
+	if s.Transfer == cli.DataMnt {
+		record = exportRecord(cwd, projectDir, name)
+	}
 
 	set := cli.DataStops(services, cli.ExportOne, name)
 	_, restore, err := stopSet(cwd, set, false)
@@ -289,8 +295,13 @@ func runExport(cwd string, args []string, color bool) int {
 		err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), nil, os.Stdout, nil, "export", name)
 	} else {
 		report.Info("exporting " + name + ": a tar of mnt/" + strings.Join(entries, ", mnt/"))
-		run := append([]string{"-v", mnt + ":/mnt:ro", remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
-		err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
+		if record != "" {
+			err = exportHeader(os.Stdout, record)
+		}
+		if err == nil {
+			run := append([]string{"-v", mnt + ":/mnt:ro", remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
+			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
+		}
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -302,6 +313,96 @@ func runExport(cwd string, args []string, color bool) int {
 		code = fail(err.Error())
 	}
 	return code
+}
+
+// exportRecord is what an mnt export of name records of the images that
+// ran on its data: its release's on a target, its container's locally.
+func exportRecord(cwd, projectDir, name string) string {
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
+	if !cli.InRelease(projectDir) {
+		set.List = func(string) ([]images.Service, error) { return localServices(cwd) }
+		return set.ExportData("", "", name)
+	}
+	return set.ExportData(filepath.Dir(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name)
+}
+
+// localServices are the local project's services as compose resolves
+// them, for ExportData to tell a pulled data service from a built one.
+func localServices(cwd string) ([]images.Service, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	cmd := exec.Command(self, "--", "config", "--format", "json")
+	cmd.Dir, cmd.Stdout, cmd.Stderr = cwd, &out, errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("compose config: %w", err)
+	}
+	return images.ParseComposeConfig(out.Bytes())
+}
+
+// imagesShared takes the server's image lock shared (remote.ImagesLockEnv),
+// as a sync's img sync-check and sync-done do, for an import's check and
+// take-over of the export's image: a removal elsewhere, which takes it
+// exclusively, then never frees the image between its pull and its
+// bookmark. Waits up to 10 minutes, saying so; without the variable (a
+// local import) nothing to take.
+func imagesShared(ctx context.Context) (unlock func(), err error) {
+	path := os.Getenv(remote.ImagesLockEnv)
+	if path == "" {
+		return func() {}, nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("the server's image lock: %w", err)
+	}
+	unlock = func() { f.Close() }
+	deadline := time.Now().Add(10 * time.Minute)
+	for said := false; ; said = true {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			unlock()
+			return nil, fmt.Errorf("the server's image lock: %w", err)
+		}
+		if !said {
+			report.Info("waiting for the server's images, held by a removal, up to 10 minutes")
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			unlock()
+			return nil, errors.New("the server's images are still held after 10 minutes")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// exportHeader writes an export's record as the tar's first header, a
+// pax global one (images.ExportKey), which tar itself skips: GNU tar's
+// members follow, and the whole stays one archive any tar reads.
+func exportHeader(w io.Writer, record string) error {
+	tw := tar.NewWriter(w)
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{images.ExportKey: record}}); err != nil {
+		return err
+	}
+	return tw.Flush()
+}
+
+// tarRecord is the export's record in the tar at spool: its first
+// header's, when that is a pax global one; "" otherwise.
+func tarRecord(spool string) string {
+	f, err := os.Open(spool)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h, err := tar.NewReader(f).Next()
+	if err != nil || h.Typeflag != tar.TypeXGlobalHeader {
+		return ""
+	}
+	return h.PAXRecords[images.ExportKey]
 }
 
 // importSpool is where --import keeps stdin until it is complete: in a
@@ -364,6 +465,7 @@ func tarEntries(spool string) ([]tarEntry, error) {
 	seen := map[string]*tarEntry{}
 	dirs := map[string]bool{}
 	var links tarLinks
+	first := true
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -375,11 +477,26 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		// A pax global header (git archive writes one) is no member: tar
-		// itself skips it.
+		// A pax global header (git archive writes one) is no member, but
+		// GNU tar applies its records to every member after it: a path or
+		// a linkpath there renames members and retargets links these
+		// checks never saw (storage/b -> a extracted as storage/evil ->
+		// /etc/shadow, checked in devopsy-util:2). Only the first, and
+		// only with what tar applies to nothing: the export's record
+		// (images.ExportKey) and git's comment.
 		if h.Typeflag == tar.TypeXGlobalHeader {
+			if !first {
+				return nil, fmt.Errorf("%w: a pax global header after the first member (tar applies it to every member after it)", errMember)
+			}
+			for k := range h.PAXRecords {
+				if k != images.ExportKey && k != "comment" {
+					return nil, fmt.Errorf("%w: a pax global header with %s (tar applies it to every member)", errMember, k)
+				}
+			}
+			first = false
 			continue
 		}
+		first = false
 		p := strings.TrimPrefix(h.Name, "./")
 		if p == "" || p == "." || p == "./" {
 			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
@@ -720,9 +837,15 @@ func runImport(cwd string, args []string, color bool) int {
 		fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp[cli.ImportFlag]))
 		return 0
 	}
-	name, _, resolved, err := importArgs(args)
+	name, _, resolved, accept, err := importArgs(args)
 	if err != nil {
 		return fail(err.Error())
+	}
+	// On a server the operator's --accept-image comes as
+	// remote.ImagesAcceptEnv; locally nothing is held, so nothing to
+	// accept.
+	if len(accept) > 0 {
+		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are held on their data's images: locally nothing is checked")
 	}
 	if resolved {
 		return runResolved(cwd, name)
@@ -859,6 +982,31 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		}
 	}
+	// The images that ran on the data, when its export recorded them,
+	// are checked before anything stops, as a sync checks its parent's
+	// (images.ImportCheck), and the service is held on the export's once
+	// the data is in: on a target, where data services are held. A tar
+	// without them (by hand, an older devopsy) starts the history over.
+	var imgs *images.Set
+	var record string
+	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+	if s.Transfer == cli.DataMnt && onTarget {
+		if record = images.DataFor(tarRecord(spool), name); record != "" {
+			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages(),
+				Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv)}
+			unlock, err := imagesShared(ctx)
+			if err != nil {
+				return fail(err.Error() + ": nothing imported")
+			}
+			err = imgs.ImportCheck(rel, record, name)
+			unlock()
+			if errors.Is(err, images.ErrRefused) {
+				return 1
+			} else if err != nil {
+				return fail(err.Error() + ": nothing imported")
+			}
+		}
+	}
 
 	set := cli.DataStops(services, cli.ImportOne, name)
 	dependentNotices(cwd, services, []string{name}, set)
@@ -971,12 +1119,63 @@ func runImport(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
-	if err := restoreServices(cwd, services, false, nil); err != nil {
+	// Held on the export's image before anything starts on the data:
+	// started as it was, the service would run the image it had on data
+	// another wrote.
+	if imgs != nil {
+		unlock, err := imagesShared(context.Background())
+		if err == nil {
+			err = imgs.ImportDone(base, rel, record)
+			unlock()
+		}
+		if err != nil {
+			return fail(err.Error() + ": the import completed, and " + name + " is not held on the image that wrote its data: what it stopped stays down, and the mark until an import of " + name + " completes")
+		}
+	}
+	// Running through the import (devopsy.data.stop never): made again on
+	// the image that wrote its data before what it stopped starts again
+	// on it (an app, on the old image's restart).
+	if imgs != nil && !slices.Contains(stopped, name) {
+		if err := recreateRunning(cwd, rel, name); err != nil {
+			return fail(err.Error() + ": the import completed, and " + name + " still runs the image it had: the mark stays until an import of " + name + " completes")
+		}
+	}
+	if err := restoreServices(cwd, services, false, imgs != nil, nil); err != nil {
 		return fail(err.Error() + ": the import completed, and what it stopped did not all come back: the mark stays until it does (devopsy @" + targetAddress(cwd) + " --import " + name + " --resolved starts them)")
 	}
-	importedImages(cwd, base, name, services)
+	if imgs == nil {
+		importedImages(cwd, base, name, services, time.Time{})
+	}
 	clearImportMark(base, name)
 	return code
+}
+
+// acceptedImages are the services the operator's --accept-image named
+// (remote.ImagesAcceptEnv).
+func acceptedImages() map[string]bool {
+	m := map[string]bool{}
+	for _, svc := range strings.Fields(os.Getenv(remote.ImagesAcceptEnv)) {
+		m[svc] = true
+	}
+	return m
+}
+
+// recreateRunning makes name's container again when it runs and its
+// activation gave it another image than rel's ComposeFile now holds it
+// on (images.Recreate).
+func recreateRunning(cwd, rel, name string) error {
+	if !slices.Contains(images.Recreate(images.CLI{}, composeName(cwd), rel), name) {
+		return nil
+	}
+	running, err := servicesIn(cwd, "running")
+	if err != nil || !slices.Contains(running, name) {
+		return err
+	}
+	report.Info("recreating " + name + " on the image its data now needs")
+	if err := compose(cwd, errOut, "up", "-d", "--no-deps", "--wait", name); err != nil {
+		return fmt.Errorf("docker compose up: %w", err)
+	}
+	return nil
 }
 
 // importedImages starts the history of the images that ran on a pulled
@@ -984,13 +1183,18 @@ func runImport(cwd string, args []string, color bool) int {
 // imported (mnt), or accepted (--resolved): they came from elsewhere. A
 // stream's import goes through the service's own image, which keeps its
 // history.
-func importedImages(cwd, base, name string, services []cli.SyncService) {
+func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) {
 	for _, s := range services {
 		if s.Name != name || s.Transfer != cli.DataMnt {
 			continue
 		}
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
-		if err := set.Imported(base, remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name); err != nil {
+		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+		record := set.Imported
+		if !resolvedSince.IsZero() {
+			record = func(base, rel, name string) error { return set.Resolved(base, rel, name, resolvedSince) }
+		}
+		if err := record(base, rel, name); err != nil {
 			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
 		}
 	}
@@ -1097,11 +1301,19 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	if err := restoreServices(cwd, services, false, nil); err != nil {
+	// Made again where devopsy's compose file holds a service on another
+	// image than its container's (an import that held it on its export's
+	// failed after): started, the old container would run the old image
+	// on the imported data.
+	if err := restoreServices(cwd, services, false, true, nil); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	importedImages(cwd, base, name, services)
+	since := time.Time{}
+	if m := readMark(base); m != nil {
+		since, _ = time.Parse(time.DateTime, m.Since)
+	}
+	importedImages(cwd, base, name, services, since)
 	clearImportMark(base, name)
 	report.Info("resolved: " + name + "'s data is accepted as it is, and what the import kept down runs again")
 	return 0
@@ -1263,24 +1475,28 @@ func projectVar(cwd, key string) string {
 }
 
 // importArgs parses --import's arguments: <service> [--yes] [--resolved].
-func importArgs(args []string) (name string, yes, resolved bool, err error) {
-	usage := errors.New("usage: devopsy [@<target>] " + cli.ImportFlag + " <service> [--yes] [--resolved]")
-	for _, a := range args {
+func importArgs(args []string) (name string, yes, resolved bool, accept []string, err error) {
+	usage := errors.New("usage: devopsy [@<target>] " + cli.ImportFlag + " <service> [--accept-image <service>] [--yes] [--resolved]")
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--yes" || a == "-y":
 			yes = true
 		case a == "--resolved":
 			resolved = true
+		case a == "--accept-image" && i+1 < len(args):
+			i++
+			accept = acceptImage(accept, args[i])
 		case name == "" && !strings.HasPrefix(a, "-"):
 			name = a
 		default:
-			return "", false, false, usage
+			return "", false, false, nil, usage
 		}
 	}
-	if name == "" {
-		return "", false, false, usage
+	if name == "" || (resolved && len(accept) > 0) {
+		return "", false, false, nil, usage
 	}
-	return name, yes, resolved, nil
+	return name, yes, resolved, accept, nil
 }
 
 // runRemoteExport implements devopsy @<target> --export <service>: one
@@ -1325,7 +1541,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		report.Error(msg)
 		return 1
 	}
-	name, yes, resolved, err := importArgs(args)
+	name, yes, resolved, accept, err := importArgs(args)
 	if err != nil {
 		return fail(strings.Replace(err.Error(), "[@<target>]", "@"+targetRef(t), 1))
 	}
@@ -1407,7 +1623,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		// Gated: the data goes once the script holds the release lock,
 		// so a session cut while it waits leaves an empty stdin there,
 		// and nothing stops.
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end), r, nil, mw, false, nil)
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end, strings.Join(accept, " ")), r, nil, mw, false, nil)
 		done <- result{code, err}
 	}()
 	var res result

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -149,16 +150,19 @@ case "$*" in
     for s in $svcs; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
     for s in ${FAKE_ONEOFF:-}; do printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.project=%s,com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" "${COMPOSE_PROJECT_NAME:-}"; done ;;
-  *" up -d --wait "*)
+  # up -d --wait [--no-deps] <svc>... (upFor, a first release's create)
+  # and up -d --no-deps --wait <svc>... (a recreate on the image the data
+  # now needs).
+  *" up -d --wait "*|*" up -d --no-deps --wait "*)
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_WAIT: an up that writes its caller's pid there and takes
     # until $FAKE_UP_WAIT.go exists.
     if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # FAKE_UP_DEPS: as Compose does, an up of app starts db, which it
     # depends on, too, unless --no-deps.
-    ups=$(after --wait "$@")
+    ups=$(after --wait "$@" | grep -v '^--')
     case "$* " in
-      *" --no-deps "*) ups=$(after --no-deps "$@") ;;
+      *" --no-deps "*) ;;
       *) [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac ;;
     esac
     for s in $ups; do
@@ -168,6 +172,17 @@ case "$*" in
   "run --rm -d "*)
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
+  # Images as devopsy's images rules inspect them (images.CLI): FAKE_IMAGES,
+  # space separated <id>=<registry digest>, found by id or by digest.
+  "image inspect --format {{json .}} "*)
+    for i in ${FAKE_IMAGES:-}; do
+      case $5 in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
+    done
+    echo "Error: No such image: $5" >&2; exit 1 ;;
+  # FAKE_NAMES: space separated <name>=<id>, the image a name points to
+  # (images.CLI's ID); any other name answers nothing.
+  "image inspect --format {{.Id}} "*)
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
   # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
   # exited, its id ctr:<project>:<service>.
@@ -2224,7 +2239,7 @@ func TestExportImport(t *testing.T) {
 	if out, _, code := s.runIO(nil, nil, "--export", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --export <service>") {
 		t.Errorf("--export --help (%d):\n%s", code, out)
 	}
-	if out, _, code := s.runIO(nil, nil, "@prod", "--import", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --import <service> [--yes]\n       devopsy @<target> --import <service> --resolved [--yes]") {
+	if out, _, code := s.runIO(nil, nil, "@prod", "--import", "--help"); code != 0 || !strings.Contains(string(out), "Usage: devopsy [@<target>] --import <service> [--yes]\n       devopsy @<target> --import <service> [--accept-image <service>] [--yes]\n       devopsy @<target> --import <service> --resolved [--yes]") {
 		t.Errorf("@prod --import --help (%d):\n%s", code, out)
 	}
 	s.logs()
@@ -2421,10 +2436,20 @@ func TestExportImport(t *testing.T) {
 // as the kernel resolves it (tarLinks.check): relative links within
 // their entry pass, a way that leaves the entry at any point is refused,
 // however path.Clean reads it, and so are the members whose names would
-// not be where they land (review of 2026-10-23, round 4).
+// not be where they land (review of 2026-10-23, round 4). A pax global
+// header is no member, but GNU tar applies its records (linkpath, path,
+// size...) to every member after it, where archive/tar, which the check
+// reads the tar with, applies none (checked in devopsy-util:2, GNU tar
+// 1.35, 2026-10-24: a global linkpath made storage/x -> sub into storage/x
+// -> ../../../../etc): a global header carrying anything but the export's
+// own record (images.ExportKey), wherever it is, must be refused, or the
+// check judges links GNU tar never writes.
 func TestTarLinks(t *testing.T) {
 	sym := func(name, target string) *tar.Header {
 		return &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}
+	}
+	global := func(records map[string]string) *tar.Header {
+		return &tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: records}
 	}
 	hard := func(name, target string) *tar.Header {
 		return &tar.Header{Name: name, Typeflag: tar.TypeLink, Linkname: target, Mode: 0o644}
@@ -2470,6 +2495,17 @@ func TestTarLinks(t *testing.T) {
 		{"a hard link below a link", []*tar.Header{
 			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
 		}, "storage/h is a hard link below the link storage/x"},
+		{"the export's record alone in a global header", []*tar.Header{
+			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n"}),
+			dir("storage/"), sym("storage/x", "sub"),
+		}, ""},
+		{"a global linkpath beside the export's record", []*tar.Header{
+			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n", "linkpath": "../../../../etc"}),
+			dir("storage/"), sym("storage/x", "sub"),
+		}, "*"},
+		{"a global linkpath after a member", []*tar.Header{
+			dir("storage/"), global(map[string]string{"linkpath": "../../../../etc"}), sym("storage/x", "sub"),
+		}, "*"},
 	} {
 		var b bytes.Buffer
 		tw := tar.NewWriter(&b)
@@ -2487,7 +2523,10 @@ func TestTarLinks(t *testing.T) {
 		switch {
 		case c.refused == "" && err != nil:
 			t.Errorf("%s: refused: %v", c.name, err)
-		case c.refused != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
+		// "*": refused, however it is said.
+		case c.refused == "*" && !errors.Is(err, errOutside) && !errors.Is(err, errMember):
+			t.Errorf("%s: %v, want refused", c.name, err)
+		case c.refused != "" && c.refused != "*" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.refused)):
 			t.Errorf("%s: %v, want %q", c.name, err, c.refused)
 		}
 	}

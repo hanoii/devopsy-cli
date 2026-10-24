@@ -1,11 +1,14 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -14,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -889,5 +893,284 @@ func TestSyncResetNothingPresent(t *testing.T) {
 	docker, _ := s.logs()
 	if code == 0 && fileExists(filepath.Join(s.mnt("dev"), "storage", "old.txt")) {
 		t.Errorf("a reset that wiped nothing succeeded (%d), down: %v:\n%s\n%s", code, strings.Contains(docker, " down "), out, docker)
+	}
+}
+
+// An mnt export carries the images that ran on its data (a pax global
+// header, before the members), and an import on a target checks them
+// before anything stops, as a sync checks its parent's: the same name
+// goes on, held on the export's image, its history from an import line;
+// a name the data never ran is refused, nothing stopped or written,
+// unless --accept-image, which reaches the server's import. Locally
+// nothing is checked, so --accept-image there is an error.
+func TestImportExportImages(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:twelve=mariadb@sha256:twelve"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	h, err := tar.NewReader(bytes.NewReader(out)).Next()
+	if err != nil || h.Typeflag != tar.TypeXGlobalHeader || !strings.HasPrefix(h.PAXRecords[images.ExportKey], "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n") {
+		t.Fatalf("the export's first header (%v): %+v", err, h)
+	}
+	s.logs()
+
+	// The same name: imported, held on the export's image, and app,
+	// running through the import (no stop label), made again on it.
+	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
+	}
+	docker, _ := s.logs()
+	if !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
+	}
+	os.Remove(s.log + ".containers.shop-prod")
+	base := filepath.Join(s.root, "shop", "prod")
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
+		t.Errorf("not held on the export's image:\n%s", c)
+	}
+	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Errorf("history:\n%s", h)
+	}
+
+	// Another series here: refused before anything stops.
+	write(t, list, "mariadb:12\tsha256:twelve\tapp\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
+	s.logs()
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(errs, "app: mariadb:12 (") || !strings.Contains(errs, "never ran on the export's data") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
+		t.Fatalf("another series (%d):\n%s\n%s", code, errs, docker)
+	}
+	if _, errs, code := s.runIO(env, out, "@prod", "--import", "app", "--accept-image", "app", "--yes"); code != 0 || !strings.Contains(errs, "accepted (--accept-image)") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("accepted (%d):\n%s", code, errs)
+	}
+
+	// Locally: nothing to accept, and the header is no member.
+	if _, errs, code := s.runIO(nil, out, "--import", "app", "--accept-image", "app"); code == 0 || !strings.Contains(errs, "--accept-image is for a target") {
+		t.Errorf("--accept-image locally (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, out, "--import", "app"); code != 0 || readString(filepath.Join(s.dot, "mnt", "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a local import of it (%d):\n%s", code, errs)
+	}
+}
+
+// An import holding its service on the export's image gives up the
+// listing's earlier pair (the name and the image it had), whose names go
+// to the project's record of what could not go yet (images.LeftFile), as
+// a sync's take-over records them: else nothing would ever remove them.
+func TestImportExportImagesRecordsLeft(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	list := releaseFile(t, current, images.ListFile)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:old=mariadb@sha256:old", "FAKE_NAMES=mariadb:11.8=sha256:old"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	// prod now runs another image under the same name, which the name
+	// still points to.
+	write(t, list, "mariadb:11.8\tsha256:old\tapp\tdata\tmariadb@sha256:old\t\n", 0o644)
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
+	if code != 0 {
+		t.Fatalf("the import (%d):\n%s", code, errs)
+	}
+	if left := readString(filepath.Join(s.root, "shop", images.LeftFile)); strings.Contains(errs, "could not record") || !strings.Contains(left, "mariadb:11.8\tsha256:old") {
+		t.Errorf("mariadb:11.8 on sha256:old, which no release lists any more, is not recorded:\n%s\nrecord:\n%s", errs, left)
+	}
+}
+
+// An import that pulls and bookmarks the export's image and holds its
+// service on it changes the server's images, as a sync's img sync-check
+// and sync-done do: under the server's image lock, shared, so a removal
+// in another environment, which takes it exclusively, never takes the
+// image between its pull and its bookmark. A removal holding it: the
+// import waits, says so, and touches no image until it is free.
+func TestImportExportImagesImageLock(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	s.logs()
+	lock, err := os.OpenFile(filepath.Join(s.root, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	errFile := filepath.Join(t.TempDir(), "stderr")
+	cmd := exec.Command(binary, "@prod", "--import", "app", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), env...)
+	cmd.Stdin = bytes.NewReader(out)
+	ef, err := os.Create(errFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ef.Close()
+	cmd.Stdout, cmd.Stderr = ef, ef
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for start := time.Now(); !strings.Contains(readString(errFile), "waiting for the server's images"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > 20*time.Second {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the import never waited for the image lock:\n%s", readString(errFile))
+		}
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "image inspect --format {{json .}} mariadb") || strings.Contains(docker, " tag ") {
+		t.Errorf("the import touched the server's images while a removal held them:\n%s", docker)
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	select {
+	case err := <-done:
+		if err != nil || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+			t.Errorf("the import, once the lock was free (%v):\n%s", err, readString(errFile))
+		}
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("the import never went on once the lock was free:\n%s", readString(errFile))
+	}
+}
+
+// A pax global header is no member to archive/tar, but GNU tar applies
+// its records to every member after it (checked in devopsy-util:2, GNU
+// tar 1.35): a path or linkpath there renames members and retargets
+// links the checks never saw, storage/b -> a extracted as storage/evil
+// -> /etc/shadow. The export's header carries its record alone; a global
+// header with anything GNU tar applies, first (beside the export's
+// record) or later, is refused before anything changes.
+func TestTarGlobalHeaders(t *testing.T) {
+	global := func(records map[string]string) *tar.Header {
+		return &tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: records}
+	}
+	record := "image\tapp\tmariadb:11.8\tsha256:a\tmariadb@sha256:a\n"
+	for _, c := range []struct {
+		name    string
+		members []*tar.Header
+	}{
+		{"a later global header", []*tar.Header{
+			global(map[string]string{images.ExportKey: record}),
+			{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+			global(map[string]string{"linkpath": "/etc/shadow", "path": "storage/evil"}),
+			{Name: "storage/b", Typeflag: tar.TypeSymlink, Linkname: "a", Mode: 0o777},
+		}},
+		{"the export's header with a linkpath", []*tar.Header{
+			global(map[string]string{images.ExportKey: record, "linkpath": "/etc/shadow"}),
+			{Name: "storage/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "storage/b", Typeflag: tar.TypeSymlink, Linkname: "a", Mode: 0o777},
+		}},
+	} {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for _, h := range c.members {
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		spool := filepath.Join(t.TempDir(), "spool")
+		write(t, spool, b.String(), 0o644)
+		if es, err := tarEntries(spool); !errors.Is(err, errOutside) && !errors.Is(err, errMember) {
+			t.Errorf("%s: not refused (%v): %v", c.name, err, es)
+		}
+	}
+}
+
+// An import that completed and held its stopped service on the export's
+// image (ImportDone) but could not make it again (the recreate's up
+// failed) keeps the mark and the record, and names --resolved as what
+// starts them. --resolved then has to bring the service back on the
+// image its data now needs, as the import would have: compose start of
+// the old container runs the old image on the imported data (the very
+// thing the hold is for), and Imported then starts the history over from
+// that old image, losing the export's record of what wrote the data.
+func TestImportResolvedKeepsExportImage(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:app=mariadb@sha256:app", "FAKE_APP=mnt+own"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	s.logs()
+	// app, stopped for the import (own), its container on another image
+	// than the export's: made again on the export's once the data is in,
+	// which fails here.
+	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
+	base := filepath.Join(s.root, "shop", "prod")
+	history := filepath.Join(base, images.HistoryFile)
+	_, errs, code = s.runIO(append(env, "FAIL_UP=shop-prod"), out, "@prod", "--import", "app", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(errs, "did not all come back") || !strings.Contains(errs, "--import app --resolved") || readMark(base) == nil || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+		t.Fatalf("an import whose recreate failed (%d):\n%s\n%s", code, errs, docker)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
+		t.Fatalf("not held on the export's image:\n%s", c)
+	}
+	if h := readString(history); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Fatalf("history after the import:\n%s", h)
+	}
+	// --resolved, as the error says: app comes back on the hold.
+	_, errs, code = s.runIO(env, nil, "@prod", "--import", "app", "--resolved", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readMark(base) != nil {
+		t.Fatalf("--resolved (%d):\n%s\n%s", code, errs, docker)
+	}
+	if !strings.Contains(docker, " up -d --no-deps --wait app\n") || regexp.MustCompile(` start( \w+)* app\n`).MatchString(docker) {
+		t.Errorf("--resolved started app's old container, on the image it had, not made again on the export's image its data now needs:\n%s", docker)
+	}
+	if h := readString(history); strings.Contains(h, "\tsha256:app\t") || !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+		t.Errorf("--resolved started app's history over from the old image, losing the export's:\n%s", h)
+	}
+}
+
+// A database running through its import (devopsy.data.stop never) is
+// made again on the export's image before the app the import stopped
+// (devopsy.data.stop=import, depending on it) starts: started first,
+// the app would run on the old image's database and see it restart.
+func TestImportRecreatesBeforeDependents(t *testing.T) {
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tdb\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), "rows\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own", "FAKE_DB=mnt", "FAKE_APP=mnt+import"}
+	out, errs, code := s.runIO(env, nil, "@prod", "--export", "db")
+	if code != 0 {
+		t.Fatalf("@prod --export db (%d):\n%s", code, errs)
+	}
+	write(t, s.log+".containers.shop-prod", "db sha256:before\n", 0o644)
+	s.logs()
+	_, errs, code = s.runIO(env, out, "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	if i, j := strings.Index(docker, " up -d --no-deps --wait db\n"), strings.Index(docker, " start app\n"); code != 0 || i < 0 || j < i {
+		t.Errorf("app started (at %d) before db was made again on the export's image (at %d), import %d:\n%s\n%s", j, i, code, errs, docker)
 	}
 }

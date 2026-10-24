@@ -697,14 +697,39 @@ func ExportScript(t *Target, projectName, service string) string {
 // complete data.
 const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 
+// ImagesLeftEnv, ImagesLockEnv and ImagesModeEnv give an import on a
+// server what it needs to change the server's images (ImportScript):
+// the project's record (images.Set.Left), the image lock it takes,
+// shared, around its check and its take-over, and the environment's mode.
+const (
+	ImagesLeftEnv = "DEVOPSY_INTERNAL_IMAGES_LEFT"
+	ImagesLockEnv = "DEVOPSY_INTERNAL_IMAGES_LOCK"
+	ImagesModeEnv = "DEVOPSY_INTERNAL_IMAGES_MODE"
+)
+
 // ImportScript replaces service's data with stdin (devopsy --import), in
 // the target's current release under its release lock, as a sync holds it.
 // end is what the data must end with (ImportEndEnv). A mark refuses
 // before devopsy reads stdin, so a dump is never sent only to be refused:
 // a sync's (only a sync completes it), and an import's of another service
 // (only its own completes it). While it holds the lock, SyncImportingFile
-// says an import runs (ImportRunning).
-func ImportScript(t *Target, projectName, service, end string) string {
+// says an import runs (ImportRunning). accept are the services
+// --accept-image named (ImagesAcceptEnv), space separated: an mnt
+// import whose export recorded an image its data never ran is refused
+// otherwise.
+func ImportScript(t *Target, projectName, service, end, accept string) string {
+	acceptLine := ""
+	if accept != "" {
+		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
+	}
+	mode := t.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	// What an import holding the export's image needs of the server's
+	// images, as img gets it (releaseImages): the project's record, the
+	// image lock, the mode.
+	acceptLine += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + "\n"
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
@@ -720,7 +745,7 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     exit 1
   fi
 fi
-export ` + ImportEndEnv + "=" + Quote(end) + "\n" + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
 }
 
 // settleLeftover settles a sync's holder killed outright: its record's

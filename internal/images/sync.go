@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -31,6 +33,11 @@ const (
 // Lines, tab separated: "image", service, reference, id, digests; then
 // "ran" and a history line.
 func (s *Set) ParentData(base, rel string) string {
+	return s.parentData(base, rel, "")
+}
+
+// parentData is ParentData, of the service only when only is set.
+func (s *Set) parentData(base, rel, only string) string {
 	h := readHistory(base)
 	var cs map[string]Container
 	var b strings.Builder
@@ -44,6 +51,9 @@ func (s *Set) ParentData(base, rel string) string {
 	for _, svc := range svcs {
 		// A service whose entries are all missing here has nothing a
 		// copy writes: the child keeps its own data, and its image.
+		if only != "" && svc.Name != only {
+			continue
+		}
 		copied[svc.Name] = svc.Method == DataMnt && (!svc.EntriesKnown || hasEntry(rel, svc.Entries))
 		pulled = pulled || (svc.Method == DataMnt && !svc.Build && !svc.own(s.Mode))
 	}
@@ -121,6 +131,91 @@ func DecodeData(v string) (string, error) {
 	return string(b), err
 }
 
+// ExportKey is the PAX record an mnt export's tar carries its service's
+// data images in (ExportData): in one global header, before the
+// members, which tar itself skips.
+const ExportKey = "DEVOPSY.data-images"
+
+// ExportData is what an mnt export of service records of the images
+// that ran on its data, in ParentData's lines, for an import to check
+// as a sync checks the parent's (ImportCheck): on a target (rel, its
+// current release) what a sync's parent would send; locally (rel "")
+// the image its started container runs, when that has a registry
+// digest, with no history. Empty when there is nothing to record (a
+// built or stream service, no container, a release an older devopsy
+// recorded, which names no services).
+func (s *Set) ExportData(base, rel, service string) string {
+	if rel != "" {
+		data := s.parentData(base, rel, service)
+		if strings.HasPrefix(data, "old\t") {
+			s.say(report.WarnLevel, "%s: release %s predates devopsy's record of each service's image: the export carries no image, and an import starts its history over", service, filepath.Base(rel))
+			return ""
+		}
+		return data
+	}
+	// Only a pulled data service: a built one's digest, which Docker's
+	// containerd store gives built images too, is a local build's, which
+	// no registry has.
+	if s.List == nil {
+		return ""
+	}
+	svcs, err := s.List("")
+	if err != nil {
+		return ""
+	}
+	pulled := false
+	for _, svc := range svcs {
+		pulled = pulled || (svc.Name == service && svc.Method == DataMnt && !svc.own(s.Mode))
+	}
+	if !pulled {
+		return ""
+	}
+	c, ok := s.containers()[service]
+	if !ok || !c.started() || c.Ref == "" {
+		return ""
+	}
+	img, err := s.Docker.Inspect(c.Image)
+	if err != nil || len(img.Digests) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("image\t%s\t%s\t%s\t%s\n", service, c.Ref, img.ID, strings.Join(img.Digests, " "))
+}
+
+// hasDigest says whether digests, space separated, has a registry digest
+// (<repository>@sha256:...), not only names.
+func hasDigest(digests string) bool {
+	for _, d := range strings.Fields(digests) {
+		if digestOf(d) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// DataFor is the part of an export's data that is service's: "" when it
+// has no complete image line for it (another service's export, none
+// recorded, a line without its reference, id or a digest, which nothing
+// could check or hold), so the import starts the history over.
+func DataFor(data, service string) string {
+	var b strings.Builder
+	found := false
+	for _, line := range strings.SplitAfter(data, "\n") {
+		kind, rest, _ := strings.Cut(line, "\t")
+		f := strings.Split(rest, "\t")
+		switch {
+		case kind == "image" && f[0] == service && len(f) > 3 && f[1] != "" && f[2] != "" && hasDigest(f[3]):
+			found = true
+			b.WriteString(line)
+		case kind == "ran" && len(f) > 1 && f[1] == service:
+			b.WriteString(line)
+		}
+	}
+	if !found {
+		return ""
+	}
+	return b.String()
+}
+
 // parentImage is one image line of a ParentData, with the parent's
 // history for its service.
 type parentImage struct {
@@ -142,8 +237,14 @@ func parseParentData(data string) map[string]*parentImage {
 				continue
 			}
 			p := &parentImage{Service: f[0], Ref: f[1], Image: Image{ID: f[2]}}
+			// Registry digests only: a name in their place (a record made
+			// by hand) is nothing to hold by.
 			if len(f) > 3 {
-				p.Image.Digests = strings.Fields(f[3])
+				for _, d := range strings.Fields(f[3]) {
+					if digestOf(d) != "" {
+						p.Image.Digests = append(p.Image.Digests, d)
+					}
+				}
 			}
 			ps[p.Service] = p
 		case "ran":
@@ -180,9 +281,39 @@ func (s *Set) SyncCheck(rel, data string) error {
 	return err
 }
 
+// ImportCheck is SyncCheck for an import of one service's data, the
+// export's (ExportData, DataFor) in place of a parent's, before the
+// import stops anything. The export's data comes from whoever made the
+// tar, so it never chooses what runs: its image is held only by a digest
+// in the repository of the service's own reference, and one in another
+// repository is a name the data never ran (refused, unless accepted).
+func (s *Set) ImportCheck(rel, data, service string) error {
+	_, err := s.check(rel, data, "--import "+service, importWords)
+	return err
+}
+
+// checkWords are what a check says of the data's source and of where it
+// lands: a sync's parent and child, an import's export and environment.
+type checkWords struct {
+	importing bool
+	// source is the data's source, possessive ("the parent's"); nothing
+	// what is said when it refuses ("nothing changed").
+	source, nothing string
+}
+
+var (
+	syncWords   = checkWords{source: "the parent's", nothing: "nothing changed"}
+	importWords = checkWords{importing: true, source: "the export's", nothing: "nothing imported"}
+)
+
 // syncCheck is SyncCheck, returning the names of the images it refused;
 // again is the flag that runs it again (--sync, --release).
 func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
+	return s.check(rel, data, again, syncWords)
+}
+
+// check is syncCheck in w's words.
+func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
 	// A release recorded by an older devopsy names no services: which
@@ -194,6 +325,11 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 		return nil, ErrRefused
 	}
 	if len(ps) > 0 && len(es) > 0 && es[0].Service == "" {
+		if w.importing {
+			s.sayAll(report.ErrorLevel, "release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing imported", nil,
+				report.Fix("release it again first, then import:", "devopsy @"+cmp.Or(s.Address, "<target>")+" --release"))
+			return nil, ErrRefused
+		}
 		s.sayAll(report.ErrorLevel, "the child's release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing changed", nil,
 			report.Fix("release the child first, with the sync if you want it:", "devopsy @"+cmp.Or(s.Address, "<child>")+" --release-sync"))
 		return nil, ErrRefused
@@ -208,7 +344,11 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 		// Accepted: the child runs its own image on the parent's data
 		// (SyncDone), nothing of the parent's to check or pull.
 		if s.Accept[e.Service] {
-			s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image, %s, on the parent's data, its history starting over from it", e.Service, e.Ref)
+			data := "the parent's data"
+			if w.importing {
+				data = "the imported data"
+			}
+			s.say(report.WarnLevel, "%s: accepted (--accept-image): it runs its own image, %s, on %s, its history starting over from it", e.Service, e.Ref, data)
 			continue
 		}
 		mine = append(mine, e)
@@ -216,22 +356,30 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 		img := s.ownImage(e)
 		last := ran{Ref: p.Ref, ID: p.Image.ID, Digests: p.Image.Digests}
 		switch {
+		case w.importing && repoKey(p.Ref) != repoKey(e.Ref):
+			refused = append(refused, fmt.Sprintf("%s: the export's data last ran %s, from another repository than %s", e.Service, p.Ref, e.Ref))
 		case last.is(img), familiar(p.Ref) == familiar(e.Ref):
 		case p.History.movedPast(e.Service, img):
-			refused = append(refused, fmt.Sprintf("%s: %s (%s) is an image the parent's data moved past: it last ran %s", e.Service, e.Ref, shownEntry(e), last.shown()))
+			refused = append(refused, fmt.Sprintf("%s: %s (%s) is an image %s data moved past: it last ran %s", e.Service, e.Ref, shownEntry(e), w.source, last.shown()))
 		default:
 			known := false
 			for _, r := range p.History.window(e.Service) {
 				known = known || familiar(r.Ref) == familiar(e.Ref)
 			}
 			if !known {
-				refused = append(refused, fmt.Sprintf("%s: %s (%s) never ran on the parent's data, which last ran %s as %s", e.Service, e.Ref, shownEntry(e), last.shown(), p.Ref))
+				refused = append(refused, fmt.Sprintf("%s: %s (%s) never ran on %s data, which last ran %s as %s", e.Service, e.Ref, shownEntry(e), w.source, last.shown(), p.Ref))
 			}
 		}
 		if len(refused) > n {
 			refusedSvcs = append(refusedSvcs, e.Service)
 			refusedRefs = append(refusedRefs, e.Ref)
 		}
+	}
+	if len(refused) > 0 && w.importing {
+		s.sayAll(report.ErrorLevel, "this environment runs an image the export's data never ran, or moved past: nothing imported", refused,
+			report.Fix("release it with the export's image (the same name), then import"),
+			report.Fix("or, knowing its data takes it (an upgrade to try), run its own image on the imported data, its history starting over from it:", s.again(again, refusedSvcs)))
+		return refusedRefs, ErrRefused
 	}
 	if len(refused) > 0 {
 		s.sayAll(report.ErrorLevel, "the child runs images the parent's data never ran, or moved past: nothing changed", refused,
@@ -243,13 +391,27 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 	var pulled []string
 	for _, e := range mine {
 		hold := s.localHold(e, ps[e.Service])
+		if w.importing {
+			hold = s.ownHold(e, ps[e.Service])
+		}
 		if hold == "" {
 			continue
 		}
 		if _, err := s.Docker.Inspect(hold); err != nil {
 			if err := s.Docker.Pull(hold); err != nil {
-				s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: the parent's image %s could not be pulled here: nothing changed", e.Service, hold), []string{err.Error()},
-					report.Fix("the child's server needs the registry's image the parent's data last ran"))
+				fix := report.Fix("the child's server needs the registry's image the parent's data last ran")
+				if w.importing {
+					fix = report.Fix("this server needs the registry's image the export's data last ran, or its own accepted:", s.again(again, []string{e.Service}))
+				}
+				msg := fmt.Sprintf("%s: %s image %s could not be pulled here: %s", e.Service, w.source, hold, w.nothing)
+				// S72: the image is there, for other platforms only (a
+				// parent on amd64, a child on arm64): Docker's words say no
+				// more than that its manifest list has no match.
+				if otherPlatform(err) {
+					msg = fmt.Sprintf("%s: %s image %s has no build for this server's platform, %s/%s: %s", e.Service, w.source, hold, runtime.GOOS, runtime.GOARCH, w.nothing)
+					fix = report.Fix("build and push it for both platforms, or run this server's own image on the data, its history starting over from it:", s.again(again, []string{e.Service}))
+				}
+				s.sayAll(report.ErrorLevel, msg, []string{err.Error()}, fix)
 				// What it pulled before goes: a name by digest alone nothing
 				// would ever remove.
 				for _, p := range pulled {
@@ -258,7 +420,7 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 				return nil, ErrRefused
 			}
 			pulled = append(pulled, hold)
-			s.say(report.InfoLevel, "%s: pulled the parent's image %s", e.Service, hold)
+			s.say(report.InfoLevel, "%s: pulled %s image %s", e.Service, w.source, hold)
 		}
 		extra = append(extra, s.entryOf(Service{Name: syncPrefix + e.Service, Ref: hold}, hold))
 	}
@@ -291,6 +453,48 @@ func (s *Set) localHold(e entry, p *parentImage) string {
 	return p.hold()
 }
 
+// otherPlatform says whether a pull failed because the image has no
+// build for this platform: Docker's classic store and its containerd
+// store word it differently.
+func otherPlatform(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no matching manifest for") || strings.Contains(msg, "no match for platform")
+}
+
+// ownHold is localHold for an import: always in the repository of e's
+// own reference, whatever the export's digests name, so a record crafted
+// with another repository's digest (mariadb:11.8 with only
+// evil.example/x's) never makes the service pull or run that one: under
+// e's repository the registry serves only e's images.
+func (s *Set) ownHold(e entry, p *parentImage) string {
+	// The digests in e's own repository first: on Docker's classic store
+	// each repository's manifest has its own (an image pushed to a mirror
+	// too), and the registry serves e's repository only by its own.
+	var holds, others []string
+	for _, d := range p.Image.Digests {
+		if digestOf(d) == "" {
+			continue
+		}
+		if repoKey(d) == repoKey(e.Ref) {
+			holds = appendNew(holds, repoKey(e.Ref)+"@"+digestOf(d))
+		} else {
+			others = appendNew(others, repoKey(e.Ref)+"@"+digestOf(d))
+		}
+	}
+	for _, o := range others {
+		holds = appendNew(holds, o)
+	}
+	for _, h := range holds {
+		if _, err := s.Docker.Inspect(h); err == nil {
+			return h
+		}
+	}
+	if len(holds) == 0 {
+		return ""
+	}
+	return holds[0]
+}
+
 // syncPrefix names a listing's entry for a parent's image a sync got for
 // a service (SyncCheck): listed, so bookmarked and removed with the
 // release, never a service of its own.
@@ -302,6 +506,21 @@ const syncPrefix = "sync:"
 // is the parent's, which came with the data. from is the parent's
 // address.
 func (s *Set) SyncDone(base, rel, data, from string) error {
+	return s.syncDone(base, rel, data, SyncedFrom+from, Forced, false)
+}
+
+// ImportDone is SyncDone for a complete import of the data an export
+// recorded (ImportCheck): the service held on the export's image, its
+// history the export's, first line Imported; an accepted service runs
+// its own, its history starting over (Imported).
+func (s *Set) ImportDone(base, rel, data string) error {
+	return s.syncDone(base, rel, data, Imported, Imported, true)
+}
+
+// syncDone is SyncDone, the data's history's first line how first, an
+// accepted service's line how accepted; importing, held in the service's
+// own repository only (ownHold).
+func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) error {
 	ps := parseParentData(data)
 	es := readList(rel)
 	holds := holdsIn(rel)
@@ -352,11 +571,14 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 					kept = append(kept, r)
 				}
 			}
-			h = append(kept, ranOn(e.Service, Forced, e.Ref, img, s.now()))
+			h = append(kept, ranOn(e.Service, accepted, e.Ref, img, s.now()))
 			changed = true
 			continue
 		}
 		hold := s.localHold(e, p)
+		if importing {
+			hold = s.ownHold(e, p)
+		}
 		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
 		n.Kind, n.Digest = KindData, hold
 		if n.ID == "" {
@@ -397,7 +619,7 @@ func (s *Set) SyncDone(base, rel, data, from string) error {
 			}
 			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: ds})
 		}
-		w[0].How = SyncedFrom + from
+		w[0].How = first
 		h = append(kept, w...)
 		changed = true
 	}
@@ -465,6 +687,21 @@ func (s *Set) Imported(base, rel, service string) error {
 	h := readHistory(base)
 	h = append(h, ranOn(service, Imported, ref, img, s.now()))
 	return h.write(base)
+}
+
+// Resolved is Imported for --resolved, since the time of the import's
+// mark: nothing when the history's window starts with an import line
+// written since (the import held the service on its export's image and
+// took the export's history, and only what came after failed: the data
+// is complete, and starting over would forget what wrote it), else
+// Imported, as before. Neither the hold nor the newest line tells: every
+// release holds its data service, and an export's window ends with its
+// own lines.
+func (s *Set) Resolved(base, rel, service string, since time.Time) error {
+	if w := readHistory(base).window(service); len(w) > 0 && w[0].How == Imported && !since.IsZero() && w[0].Time >= since.Unix() {
+		return nil
+	}
+	return s.Imported(base, rel, service)
 }
 
 // readHistoryText reads history lines from text.

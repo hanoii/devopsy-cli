@@ -1127,14 +1127,27 @@ parent's data (dev on `mariadb:12`, prod on `11.8`), one command per
 sync. The parent's
 image is pulled on the child's server by its digest when missing, never
 taken from a local name, and a sync that cannot pull it is refused,
-nothing changed. Once the copy is complete the child holds the parent's
+nothing changed (one with no build for the child server's platform,
+saying so). Once the copy is complete the child holds the parent's
 exact image, takes over the parent's history of the images that ran on
 that data, and its stopped service is made again on it (`compose start`
 would start the old container on the new data), before `finish child
 go`. A parent released between the sync's start and its copy refuses the
-copy before stopping anything: sync again. A complete `--import` of a
-`mnt` service, or `--resolved`, starts that service's history over from
-the image that runs it.
+copy before stopping anything: sync again.
+
+An `--export` of a `mnt` service carries the images that ran on its data
+too (on a target, as a sync's parent sends them; locally, the image its
+container runs), in the tar's first header, which `tar` itself skips.
+An `--import` of it on a target checks them the same way before
+anything stops: the export's image, or another under the same name,
+goes on, the service held on the export's image once the data is in and
+made again on it; a name the data never ran, or one from another
+repository (the tar names it, whoever made it, so it never chooses what
+runs), is refused unless `--import <service> --accept-image <service>`,
+which runs its own image on the data, its history starting over. A tar
+without them (made by hand, by an older devopsy), every import locally,
+and `--resolved` start the service's history over from the image that
+runs it.
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits

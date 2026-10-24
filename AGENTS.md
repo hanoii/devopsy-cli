@@ -782,7 +782,9 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   step's `up` would pull after it.
 - **A removal frees only what nothing else holds:** it untags the going
   release's bookmarks, then per image, from Docker's state: held by
-  another bookmark, it stays (its names in repositories no holder is
+  another bookmark (never one the record holds: its release went, so a
+  name kept for it outlived every release, found by `TestDataRandom`),
+  it stays (its names in repositories no holder is
   in, a mirror or a digest, are recorded, or they would outlive every
   release); used by a container, its names are recorded, never stripped
   (all but the last frees nothing and costs a pull); else its listed
@@ -1608,8 +1610,47 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   differs from the release's `ComposeFile` (`images.Recreate`), before
   starting the rest: `compose start` would run the old image on the new
   data, the finish hook first. Only `mnt` copies: a stream goes through
-  the child's own image. A complete `mnt` `--import` or `--resolved`
-  starts the service's history over (`Imported`).
+  the child's own image. A pull refused for having no build for the
+  server's platform (S72: `otherPlatform`, both Docker stores' words)
+  says so, with its platform, and names `--accept-image`. An `mnt`
+  `--export` carries the same lines for
+  its service (`ExportData`: on a target `ParentData`'s, locally its
+  container's image) as a pax global header before GNU tar's members
+  (`exportHeader`, `images.ExportKey`; GNU tar and bsdtar skip it,
+  checked 2026-10-24), and an `--import` on a target reads it
+  (`tarRecord`, `DataFor`) and checks it before anything stops
+  (`ImportCheck`, the sync's check in its own words), holds the service
+  once the data is in (`ImportDone`, first line `import`) and makes it
+  again, stopped (`restoreServices`' recreate) or running
+  (`recreateRunning`, before what the import stopped starts on it).
+  `--resolved` recreates the same way and keeps the history when its
+  window starts with an `import` line written since the import's mark
+  (`Resolved`): an import whose data completed and held its service but
+  failed after left both (review of 2026-10-24: the old container
+  started on the new data, its history over from the old image).
+  Neither the hold nor the newest line tells (second round: every
+  release holds its data service, and an export's window ends with its
+  own lines), so otherwise it starts over, as before. Only in the service's own repository (decided
+  2026-10-24): the header is whoever made the tar's, so an image from
+  another repository is a name the data never ran, never something to
+  hold, and the hold is always `<own repository>@<digest>`, the record's
+  digest in that repository first (`ownHold`,
+  never `localHold`'s fallback to the record's repository: review of
+  2026-10-24, a reference of the service's repository with another's
+  digest pulled and ran that one). The check and the take-over run
+  under the server's image lock, shared, taken from Go in two short
+  windows (`imagesShared`), never across the load: a removal elsewhere
+  waits only for them. `ImportScript` passes the project's record, the
+  lock and the mode (`ImagesLeftEnv`, `ImagesLockEnv`, `ImagesModeEnv`),
+  as `img` gets them: without the record, the names the take-over gave
+  up leaked (review of 2026-10-24). A local export records only a
+  pulled data service (`List`: a built one's containerd digest is a
+  local build's). A record line without its reference, id or a registry
+  digest (`<repository>@sha256:...`, not a name) counts as none
+  (`DataFor`), and the record's parser keeps only such digests. A tar without it, a local import and
+  `--resolved` start the history over (`Imported`). A named feature, `export-images`, found by
+  `--export` and `--import`: an older server would export without it and
+  import unchecked.
 - **Details the second review settled:** only `devopsy.data=mnt`
   services, as the parent's config resolves it now, are in
   `ParentData` (a stream, `none` or an unlabeled service copies no
@@ -1880,7 +1921,12 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
   `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
   `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
-  carry is a directory to the walk: the entry is emptied first. Any member but files,
+  carry is a directory to the walk: the entry is emptied first. A pax
+  global header is no member to `archive/tar`, but GNU tar applies its
+  records to every member after it (a `path` or `linkpath` renames
+  members and retargets links these checks never saw: review of
+  2026-10-24, checked in `devopsy-util:2`): only one, first, holding only
+  the export's record (`images.ExportKey`) or git's `comment`. Any member but files,
   directories and links is refused too (`tarTypes`, `errMember`):
   GNU tar as root makes device nodes on the host, where bind mounts
   are not nodev, and the owners' step then gave one to the entry's

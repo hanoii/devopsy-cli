@@ -526,7 +526,7 @@ func (s *Set) others(img string, own map[string]bool) []string {
 	if err != nil {
 		return append(who, "Docker could not tell: "+err.Error())
 	}
-	return append(who, holding(tags, own)...)
+	return append(who, holding(tags, own, s.leftBookmarks()[img])...)
 }
 
 // Remove takes a going release's images: its bookmarks are untagged, and
@@ -581,6 +581,7 @@ func (s *Set) Remove(rel string) error {
 		refs[img] = appendNew(refs[img], es[i].Ref)
 	}
 	var stay, gone []string
+	dead := s.leftBookmarks()
 	for _, img := range order {
 		tags, err := s.Docker.Tags(img)
 		if errors.Is(err, ErrNoImage) {
@@ -608,7 +609,7 @@ func (s *Set) Remove(rel string) error {
 				rm = appendNew(rm, t)
 			}
 		}
-		if holders := holding(tags, mine); len(holders) > 0 {
+		if holders := holding(tags, mine, dead[img]); len(holders) > 0 {
 			// The releases holding it take the names in their own
 			// repositories when they go; the ones in others (a mirror
 			// beside bitnami/redis, a digest) would outlive them all:
@@ -662,11 +663,12 @@ func (s *Set) Remove(rel string) error {
 	return nil
 }
 
-// holding are the bookmarks among an image's tags that are not in mine.
-func holding(tags []string, mine map[string]bool) []string {
+// holding are the bookmarks among an image's tags that are not in mine
+// nor dead.
+func holding(tags []string, mine, dead map[string]bool) []string {
 	var hs []string
 	for _, t := range tags {
-		if isBookmark(t) && !mine[familiar(t)] {
+		if isBookmark(t) && !mine[familiar(t)] && !dead[familiar(t)] {
 			hs = append(hs, t)
 		}
 	}
@@ -821,7 +823,26 @@ func (s *Set) retry() {
 // it does.
 func (s *Set) held(img string) bool {
 	tags, err := s.Docker.Tags(img)
-	return err != nil || len(holding(tags, nil)) > 0
+	return err != nil || len(holding(tags, nil, s.leftBookmarks()[img])) > 0
+}
+
+// leftBookmarks are the bookmarks the project's record holds, per image
+// they were recorded on: their release went, or no longer counts on
+// them, so they hold nothing (retry removes them). Taken for holders, a
+// release of the project running that image again kept its names for
+// them, and once the retry removed the bookmark the names outlived every
+// release (found by TestDataRandom).
+func (s *Set) leftBookmarks() map[string]map[string]bool {
+	dead := map[string]map[string]bool{}
+	for _, l := range readLeft(s.Left) {
+		if isBookmark(l.ref) {
+			if dead[l.id] == nil {
+				dead[l.id] = map[string]bool{}
+			}
+			dead[l.id][familiar(l.ref)] = true
+		}
+	}
+	return dead
 }
 
 // used says whether a container uses an image; when Docker cannot tell,

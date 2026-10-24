@@ -125,8 +125,9 @@ func TestComplete(t *testing.T) {
 		// --export and --import: the service is the user's to type.
 		{[]string{"@prod", "--export", ""}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--export", "database", ""}, nil, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--import", "database", ""}, []string{"--yes", "--resolved"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--import", "database", "--yes", ""}, []string{"--resolved"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--import", "database", ""}, []string{"--yes", "--resolved", "--accept-image"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--import", "database", "--yes", ""}, []string{"--resolved", "--accept-image"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--import", "database", "--accept-image", ""}, []string{"web"}, nil, DirectiveNoFileComp},
 		{[]string{"--import", ""}, []string{"--help", "--yes"}, nil, DirectiveNoFileComp},
 		{[]string{"--export", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--rollback", "-"}, []string{"--help"}, nil, DirectiveNoFileComp},
