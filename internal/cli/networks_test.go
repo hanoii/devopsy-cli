@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// Not parallel: it sets ComposeConfig and NetworkOwner.
 func TestNetworkConflicts(t *testing.T) {
 	defer func(c func(string, []string) ([]byte, error), o func(string) (string, bool)) {
 		ComposeConfig, NetworkOwner = c, o
@@ -32,6 +33,7 @@ func TestNetworkConflicts(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets ComposeConfig and ProjectDirs.
 func TestProjectConflict(t *testing.T) {
 	defer func(c func(string, []string) ([]byte, error), d func(string) []string) {
 		ComposeConfig, ProjectDirs = c, d

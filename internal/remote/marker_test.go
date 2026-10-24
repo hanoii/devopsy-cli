@@ -109,6 +109,8 @@ func TestLineMarkerHeld(t *testing.T) {
 // Only a logged session filters SwitchMarker (and logs LogAnchor where it
 // was): any other is a plain passthrough, a shell's typing and an
 // export's data untouched.
+//
+// Not parallel: it sets DEVOPSY_SSH_COMMAND (t.Setenv).
 func TestSSHSwitchMarker(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nfor a; do s=$a; done\nexec sh -c \"$s\"\n")
@@ -141,6 +143,8 @@ func TestSSHSwitchMarker(t *testing.T) {
 // An ssh killed by a signal devopsy did not send reads as ssh's own lost
 // connection (255), through DEVOPSY_SSH_COMMAND too: what explains a lost
 // connection explains it.
+//
+// Not parallel: it sets DEVOPSY_SSH_COMMAND (t.Setenv).
 func TestSSHKilled(t *testing.T) {
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "fakessh"), "#!/bin/sh\nkill -9 $$\n")

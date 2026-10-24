@@ -53,6 +53,8 @@ func TestSSHConfig(t *testing.T) {
 }
 
 // A child's server is reached directly from the parent's: no proxies.
+//
+// Not parallel: it sets SSHEffective.
 func TestChildAddress(t *testing.T) {
 	old := SSHEffective
 	defer func() { SSHEffective = old }()

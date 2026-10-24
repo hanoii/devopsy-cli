@@ -7,6 +7,8 @@ import (
 
 // A devopsy inside a session with a heartbeat beats as that session does:
 // the push's import on another server is counted in the operator's beats.
+//
+// Not parallel: it sets HeartbeatEveryEnv and HeartbeatEnv (t.Setenv).
 func TestHeartbeatEvery(t *testing.T) {
 	t.Setenv(HeartbeatEveryEnv, "")
 	t.Setenv(HeartbeatEnv, "")

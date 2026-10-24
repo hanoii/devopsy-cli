@@ -69,6 +69,8 @@ func TestProjectRoles(t *testing.T) {
 
 // A release: the role must be free, imports go into target.env unless the
 // release's environment sets them, even empty.
+//
+// Not parallel: it sets Running, WaitForExporters and Progress.
 func TestPrepareRelease(t *testing.T) {
 	compose := `services:
   app:

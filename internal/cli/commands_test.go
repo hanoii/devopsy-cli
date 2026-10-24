@@ -35,6 +35,7 @@ func TestParseCompletion(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets ComposeCommands.
 func TestUnknownWord(t *testing.T) {
 	root := project(t, "app", map[string]string{
 		"compose.yaml":     minimalCompose,
@@ -79,6 +80,8 @@ func TestUnknownWord(t *testing.T) {
 
 // The cache answers known words without asking compose, and is refreshed
 // when a word is missing, as after a compose upgrade.
+//
+// Not parallel: it sets ComposeCommandsCache and ComposeCommands.
 func TestComposeCommandsCache(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "devopsy", "compose-commands")
 	savedCache, savedCommands := ComposeCommandsCache, ComposeCommands
@@ -106,6 +109,7 @@ func TestComposeCommandsCache(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets RunningServices.
 func TestShell(t *testing.T) {
 	compose := "services:\n  web:\n    image: x\n    labels:\n      - traefik.enable=true\n      - devopsy.shell=true\n  db:\n    image: y\n"
 	root := project(t, "app", map[string]string{"compose.yaml": compose})

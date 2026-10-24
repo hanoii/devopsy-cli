@@ -282,6 +282,8 @@ func TestBaseImages(t *testing.T) {
 // Base images are in the hash, by the digest their registry gives now:
 // a base that moved changes it, no answer fails it, and a base pinned by
 // digest, a stage or scratch is never asked about.
+//
+// Not parallel: it sets baseAsked, baseMoved and baseDown.
 func TestContextHashBaseImages(t *testing.T) {
 	t.Cleanup(func() { baseAsked, baseMoved, baseDown = nil, "", nil })
 	r := newGitRepo(t, map[string]string{

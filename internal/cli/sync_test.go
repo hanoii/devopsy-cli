@@ -14,6 +14,8 @@ import (
 // SyncServices reads compose's configuration: data and stop from the
 // labels, binds under mnt as their top-level entries, profile services
 // included, depends_on and the restart policy.
+//
+// Not parallel: it sets ComposeConfig.
 func TestSyncServices(t *testing.T) {
 	root := project(t, "app", map[string]string{"compose.yaml": minimalCompose})
 	dot := filepath.Join(root, ProjectDirName)

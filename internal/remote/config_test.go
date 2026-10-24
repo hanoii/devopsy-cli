@@ -11,6 +11,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv).
 func TestLoadTarget(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
@@ -50,6 +51,7 @@ environments:
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME and DEVOPSY_SERVER (t.Setenv).
 func TestServerAndInstanceVariables(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
@@ -91,6 +93,7 @@ func TestServerAndInstanceVariables(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME and DEVOPSY_INSTANCE (t.Setenv).
 func TestInstancesSetting(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	t.Setenv("DEVOPSY_INSTANCE", "")
@@ -134,6 +137,7 @@ func TestInstancesSetting(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv).
 func TestConfigErrors(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	for name, config := range map[string]string{
@@ -172,6 +176,7 @@ func TestConfigErrors(t *testing.T) {
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv).
 func TestDefaultsAndLocal(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
@@ -238,6 +243,7 @@ environments:
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv).
 func TestAliases(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
@@ -287,6 +293,8 @@ aliases:
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME, DEVOPSY_SERVER_PR and
+// DEVOPSY_SERVER_PR_9 (t.Setenv).
 func TestPatterns(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	dir := t.TempDir()
@@ -328,6 +336,7 @@ environments:
 	}
 }
 
+// Not parallel: it sets DEVOPSY_HOME and HOME (t.Setenv).
 func TestReleaseSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)
@@ -424,6 +433,9 @@ func TestServers(t *testing.T) {
 
 // Parents resolve one level, at the child's instance, on the server their
 // variables name, else the child's.
+//
+// Not parallel: it sets DEVOPSY_HOME and the server variables
+// (t.Setenv).
 func TestParents(t *testing.T) {
 	t.Setenv("DEVOPSY_HOME", t.TempDir())
 	for _, k := range []string{"DEVOPSY_SERVER", "DEVOPSY_INSTANCE", "DEVOPSY_SERVER_PROD"} {
@@ -534,6 +546,9 @@ environments:
 }
 
 // Server commands take a server alone, or any target for its server.
+//
+// Not parallel: it sets DEVOPSY_HOME, DEVOPSY_SERVER and
+// DEVOPSY_INSTANCE (t.Setenv).
 func TestServerTarget(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("DEVOPSY_HOME", home)

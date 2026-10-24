@@ -67,6 +67,7 @@ func delegated(t *testing.T, r Result) []string {
 	return args
 }
 
+// Not parallel: its setup sets DEVOPSY_HOME and HOME.
 func TestComplete(t *testing.T) {
 	root := setup(t)
 	cases := []struct {
@@ -181,6 +182,7 @@ func TestComplete(t *testing.T) {
 }
 
 func TestScripts(t *testing.T) {
+	t.Parallel()
 	for _, shell := range Shells {
 		script := Script(shell)
 		if !strings.Contains(script, "devopsy "+Flag) {
@@ -206,6 +208,8 @@ func TestScripts(t *testing.T) {
 
 // A user-level target with source completes as its source's project, from
 // any directory: its commands and its services for --shell.
+//
+// Not parallel: its setup sets DEVOPSY_HOME and HOME.
 func TestCompleteUserTargetSource(t *testing.T) {
 	root := setup(t)
 	home := os.Getenv("DEVOPSY_HOME")

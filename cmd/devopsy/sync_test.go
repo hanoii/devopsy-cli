@@ -3030,6 +3030,8 @@ func TestTrimSyncLog(t *testing.T) {
 
 // A write into the child claims the holder's gate first: once the holder
 // closed it (deciding), nothing is written into what it restored.
+//
+// Not parallel: it sets SyncIDEnv (t.Setenv).
 func TestClaimWrite(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv(remote.SyncIDEnv, "100.7")
