@@ -41,6 +41,9 @@ type fakeDocker struct {
 	// reference's repository, as Docker does (busybox@sha256:... never
 	// matches asdf@sha256:...); off, any repository's digest does.
 	strictRepo bool
+	// otherPlatform are images the registry has for another platform
+	// only: a pull fails as Docker's does.
+	otherPlatform map[string]bool
 }
 
 func (d *fakeDocker) failing(method string) error {
@@ -201,6 +204,9 @@ outer:
 func (d *fakeDocker) Pull(ref string) error {
 	if err := d.failing("Pull"); err != nil {
 		return err
+	}
+	if d.otherPlatform[digestOf(ref)] {
+		return fmt.Errorf("Error response from daemon: no matching manifest for linux/arm64/v8 in the manifest list entries")
 	}
 	if digest := digestOf(ref); digest != "" {
 		// By digest: only an image the registry has, kept as a name of

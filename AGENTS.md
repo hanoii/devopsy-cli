@@ -1610,7 +1610,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   differs from the release's `ComposeFile` (`images.Recreate`), before
   starting the rest: `compose start` would run the old image on the new
   data, the finish hook first. Only `mnt` copies: a stream goes through
-  the child's own image. An `mnt` `--export` carries the same lines for
+  the child's own image. A pull refused for having no build for the
+  server's platform (S72: `otherPlatform`, both Docker stores' words)
+  says so, with its platform, and names `--accept-image`. An `mnt`
+  `--export` carries the same lines for
   its service (`ExportData`: on a target `ParentData`'s, locally its
   container's image) as a pax global header before GNU tar's members
   (`exportHeader`, `images.ExportKey`; GNU tar and bsdtar skip it,

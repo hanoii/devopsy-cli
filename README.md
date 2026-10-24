@@ -1127,7 +1127,8 @@ parent's data (dev on `mariadb:12`, prod on `11.8`), one command per
 sync. The parent's
 image is pulled on the child's server by its digest when missing, never
 taken from a local name, and a sync that cannot pull it is refused,
-nothing changed. Once the copy is complete the child holds the parent's
+nothing changed (one with no build for the child server's platform,
+saying so). Once the copy is complete the child holds the parent's
 exact image, takes over the parent's history of the images that ran on
 that data, and its stopped service is made again on it (`compose start`
 would start the old container on the new data), before `finish child

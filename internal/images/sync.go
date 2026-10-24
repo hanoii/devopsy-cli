@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
@@ -384,7 +385,15 @@ func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 				if w.importing {
 					fix = report.Fix("this server needs the registry's image the export's data last ran, or its own accepted:", s.again(again, []string{e.Service}))
 				}
-				s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s image %s could not be pulled here: %s", e.Service, w.source, hold, w.nothing), []string{err.Error()}, fix)
+				msg := fmt.Sprintf("%s: %s image %s could not be pulled here: %s", e.Service, w.source, hold, w.nothing)
+				// S72: the image is there, for other platforms only (a
+				// parent on amd64, a child on arm64): Docker's words say no
+				// more than that its manifest list has no match.
+				if otherPlatform(err) {
+					msg = fmt.Sprintf("%s: %s image %s has no build for this server's platform, %s/%s: %s", e.Service, w.source, hold, runtime.GOOS, runtime.GOARCH, w.nothing)
+					fix = report.Fix("build and push it for both platforms, or run this server's own image on the data, its history starting over from it:", s.again(again, []string{e.Service}))
+				}
+				s.sayAll(report.ErrorLevel, msg, []string{err.Error()}, fix)
 				// What it pulled before goes: a name by digest alone nothing
 				// would ever remove.
 				for _, p := range pulled {
@@ -424,6 +433,14 @@ func (s *Set) localHold(e entry, p *parentImage) string {
 		}
 	}
 	return p.hold()
+}
+
+// otherPlatform says whether a pull failed because the image has no
+// build for this platform: Docker's classic store and its containerd
+// store word it differently.
+func otherPlatform(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no matching manifest for") || strings.Contains(msg, "no match for platform")
 }
 
 // ownHold is localHold for an import: always in the repository of e's

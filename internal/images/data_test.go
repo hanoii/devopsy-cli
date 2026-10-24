@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -2003,5 +2004,32 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	os.Remove(filepath.Join(dev.e.rel(dev.cur), ComposeFile))
 	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database"); err != nil || strings.Join(dev.history("database"), " ") != "ran:I2 import:I2" {
 		t.Errorf("--resolved with nothing held (%v): history %v", err, dev.history("database"))
+	}
+}
+
+// S72: the parent's image has no build for the child server's platform
+// (a parent on amd64, a child on arm64): the sync is refused before
+// anything stops, saying so and naming --accept-image, not only
+// Docker's words.
+func TestSyncParentImageOtherPlatform(t *testing.T) {
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:11.8", "I1")
+	dev.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	for n, i := range d.names {
+		if i == "I2" {
+			delete(d.names, n)
+		}
+	}
+	delete(d.images, "I2")
+	d.otherPlatform = map[string]bool{"I2": true}
+	out.Reset()
+	err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data)
+	if !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "has no build for this server's platform, "+runtime.GOOS+"/"+runtime.GOARCH+": nothing changed") || !strings.Contains(out.String(), "devopsy @vm1:dev --sync --accept-image database") || !strings.Contains(out.String(), "no matching manifest") {
+		t.Errorf("(%v):\n%s", err, out.String())
 	}
 }
