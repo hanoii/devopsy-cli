@@ -86,13 +86,15 @@ func TestMntOwnersRelease(t *testing.T) {
 
 	// The child's owner, never the parent's: dev owns storage, prod's
 	// labels say 10001:10001 too but count for nothing here.
+	// Looked for as an owner, uid:gid: a release id at 22:00:00 has
+	// 20000 in it.
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), "rows\n", 0o644)
 	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=20000:20000\n", 0o644)
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000") {
+	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000:20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -300,7 +302,7 @@ func TestMntOwnersInherited(t *testing.T) {
 	write(t, prodEnv, "FAKE_APP_OWNER=20002:20002\n", 0o600)
 	out, code := s.run([]string{"FAKE_APP_MOUNT2=/cache"}, "@dev", "--release-sync", "--yes")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 20002:20002, mnt/storage to 20002:20002") || !strings.Contains(docker, "chown_entry \"$1\" \"$2\"\n sh cache 20002:20002\n") || !strings.Contains(docker, "--chown=20002:20002 /src/storage/ /dst/storage/") || strings.Contains(docker, "10001") {
+	if code != 0 || !strings.Contains(out, "devopsy: giving mnt/cache to 20002:20002, mnt/storage to 20002:20002") || !strings.Contains(docker, "chown_entry \"$1\" \"$2\"\n sh cache 20002:20002\n") || !strings.Contains(docker, "--chown=20002:20002 /src/storage/ /dst/storage/") || strings.Contains(docker, "10001:10001") {
 		t.Errorf("a release that syncs, its owner inherited (%d):\n%s\n%s", code, out, docker)
 	}
 	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")); got != "FAKE_APP_OWNER='20002:20002'\n" {
