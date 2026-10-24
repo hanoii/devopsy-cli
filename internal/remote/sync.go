@@ -697,6 +697,16 @@ func ExportScript(t *Target, projectName, service string) string {
 // complete data.
 const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 
+// ImagesLeftEnv, ImagesLockEnv and ImagesModeEnv give an import on a
+// server what it needs to change the server's images (ImportScript):
+// the project's record (images.Set.Left), the image lock it takes,
+// shared, around its check and its take-over, and the environment's mode.
+const (
+	ImagesLeftEnv = "DEVOPSY_INTERNAL_IMAGES_LEFT"
+	ImagesLockEnv = "DEVOPSY_INTERNAL_IMAGES_LOCK"
+	ImagesModeEnv = "DEVOPSY_INTERNAL_IMAGES_MODE"
+)
+
 // ImportScript replaces service's data with stdin (devopsy --import), in
 // the target's current release under its release lock, as a sync holds it.
 // end is what the data must end with (ImportEndEnv). A mark refuses
@@ -712,6 +722,14 @@ func ImportScript(t *Target, projectName, service, end, accept string) string {
 	if accept != "" {
 		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
 	}
+	mode := t.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	// What an import holding the export's image needs of the server's
+	// images, as img gets it (releaseImages): the project's record, the
+	// image lock, the mode.
+	acceptLine += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + "\n"
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
 `, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"

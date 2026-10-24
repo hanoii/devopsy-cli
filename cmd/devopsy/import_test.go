@@ -991,9 +991,10 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 
 // An import that pulls and bookmarks the export's image and holds its
 // service on it changes the server's images, as a sync's img sync-check
-// and sync-done do: under the server's image lock, shared (image_lock),
-// so a removal in another environment, which takes it exclusively, never
-// takes the image between its pull and its bookmark.
+// and sync-done do: under the server's image lock, shared, so a removal
+// in another environment, which takes it exclusively, never takes the
+// image between its pull and its bookmark. A removal holding it: the
+// import waits, says so, and touches no image until it is free.
 func TestImportExportImagesImageLock(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
@@ -1006,9 +1007,49 @@ func TestImportExportImagesImageLock(t *testing.T) {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
 	}
 	s.logs()
-	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
-	if docker, _ := s.logs(); code != 0 || !strings.Contains(docker, "flock -n -s 8\n") {
-		t.Errorf("the import (%d) changed the server's images without their lock:\n%s\n%s", code, errs, docker)
+	lock, err := os.OpenFile(filepath.Join(s.root, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	errFile := filepath.Join(t.TempDir(), "stderr")
+	cmd := exec.Command(binary, "@prod", "--import", "app", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), env...)
+	cmd.Stdin = bytes.NewReader(out)
+	ef, err := os.Create(errFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ef.Close()
+	cmd.Stdout, cmd.Stderr = ef, ef
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for start := time.Now(); !strings.Contains(readString(errFile), "waiting for the server's images"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > 20*time.Second {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the import never waited for the image lock:\n%s", readString(errFile))
+		}
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, "image inspect --format {{json .}} mariadb") || strings.Contains(docker, " tag ") {
+		t.Errorf("the import touched the server's images while a removal held them:\n%s", docker)
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	select {
+	case err := <-done:
+		if err != nil || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+			t.Errorf("the import, once the lock was free (%v):\n%s", err, readString(errFile))
+		}
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("the import never went on once the lock was free:\n%s", readString(errFile))
 	}
 }
 

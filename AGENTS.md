@@ -1622,8 +1622,20 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`recreateRunning`). Only in the service's own repository (decided
   2026-10-24): the header is whoever made the tar's, so an image from
   another repository is a name the data never ran, never something to
-  hold. A tar without it, a local import and `--resolved` start the
-  history over (`Imported`). A named feature, `export-images`, found by
+  hold, and the hold is always `<own repository>@<digest>` (`ownHold`,
+  never `localHold`'s fallback to the record's repository: review of
+  2026-10-24, a reference of the service's repository with another's
+  digest pulled and ran that one). The check and the take-over run
+  under the server's image lock, shared, taken from Go in two short
+  windows (`imagesShared`), never across the load: a removal elsewhere
+  waits only for them. `ImportScript` passes the project's record, the
+  lock and the mode (`ImagesLeftEnv`, `ImagesLockEnv`, `ImagesModeEnv`),
+  as `img` gets them: without the record, the names the take-over gave
+  up leaked (review of 2026-10-24). A local export records only a
+  pulled data service (`List`: a built one's containerd digest is a
+  local build's). A record line without its reference, id or a digest
+  counts as none (`DataFor`). A tar without it, a local import and
+  `--resolved` start the history over (`Imported`). A named feature, `export-images`, found by
   `--export` and `--import`: an older server would export without it and
   import unchecked.
 - **Details the second review settled:** only `devopsy.data=mnt`
@@ -1896,7 +1908,12 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
   `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
   `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
-  carry is a directory to the walk: the entry is emptied first. Any member but files,
+  carry is a directory to the walk: the entry is emptied first. A pax
+  global header is no member to `archive/tar`, but GNU tar applies its
+  records to every member after it (a `path` or `linkpath` renames
+  members and retargets links these checks never saw: review of
+  2026-10-24, checked in `devopsy-util:2`): only one, first, holding only
+  the export's record (`images.ExportKey`) or git's `comment`. Any member but files,
   directories and links is refused too (`tarTypes`, `errMember`):
   GNU tar as root makes device nodes on the host, where bind mounts
   are not nodev, and the owners' step then gave one to the entry's

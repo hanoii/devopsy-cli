@@ -320,9 +320,63 @@ func runExport(cwd string, args []string, color bool) int {
 func exportRecord(cwd, projectDir, name string) string {
 	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
 	if !cli.InRelease(projectDir) {
+		set.List = func(string) ([]images.Service, error) { return localServices(cwd) }
 		return set.ExportData("", "", name)
 	}
 	return set.ExportData(filepath.Dir(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name)
+}
+
+// localServices are the local project's services as compose resolves
+// them, for ExportData to tell a pulled data service from a built one.
+func localServices(cwd string) ([]images.Service, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	cmd := exec.Command(self, "--", "config", "--format", "json")
+	cmd.Dir, cmd.Stdout, cmd.Stderr = cwd, &out, errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("compose config: %w", err)
+	}
+	return images.ParseComposeConfig(out.Bytes())
+}
+
+// imagesShared takes the server's image lock shared (remote.ImagesLockEnv),
+// as a sync's img sync-check and sync-done do, for an import's check and
+// take-over of the export's image: a removal elsewhere, which takes it
+// exclusively, then never frees the image between its pull and its
+// bookmark. Waits up to 10 minutes, saying so; without the variable (a
+// local import) nothing to take.
+func imagesShared(ctx context.Context) (unlock func(), err error) {
+	path := os.Getenv(remote.ImagesLockEnv)
+	if path == "" {
+		return func() {}, nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("the server's image lock: %w", err)
+	}
+	unlock = func() { f.Close() }
+	deadline := time.Now().Add(10 * time.Minute)
+	for said := false; ; said = true {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			unlock()
+			return nil, fmt.Errorf("the server's image lock: %w", err)
+		}
+		if !said {
+			report.Info("waiting for the server's images, held by a removal, up to 10 minutes")
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			unlock()
+			return nil, errors.New("the server's images are still held after 10 minutes")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // exportHeader writes an export's record as the tar's first header, a
@@ -411,6 +465,7 @@ func tarEntries(spool string) ([]tarEntry, error) {
 	seen := map[string]*tarEntry{}
 	dirs := map[string]bool{}
 	var links tarLinks
+	first := true
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -422,11 +477,26 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		// A pax global header (git archive writes one) is no member: tar
-		// itself skips it.
+		// A pax global header (git archive writes one) is no member, but
+		// GNU tar applies its records to every member after it: a path or
+		// a linkpath there renames members and retargets links these
+		// checks never saw (storage/b -> a extracted as storage/evil ->
+		// /etc/shadow, checked in devopsy-util:2). Only the first, and
+		// only with what tar applies to nothing: the export's record
+		// (images.ExportKey) and git's comment.
 		if h.Typeflag == tar.TypeXGlobalHeader {
+			if !first {
+				return nil, fmt.Errorf("%w: a pax global header after the first member (tar applies it to every member after it)", errMember)
+			}
+			for k := range h.PAXRecords {
+				if k != images.ExportKey && k != "comment" {
+					return nil, fmt.Errorf("%w: a pax global header with %s (tar applies it to every member)", errMember, k)
+				}
+			}
+			first = false
 			continue
 		}
+		first = false
 		p := strings.TrimPrefix(h.Name, "./")
 		if p == "" || p == "." || p == "./" {
 			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
@@ -922,8 +992,15 @@ func runImport(cwd string, args []string, color bool) int {
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 	if s.Transfer == cli.DataMnt && onTarget {
 		if record = images.DataFor(tarRecord(spool), name); record != "" {
-			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages()}
-			if err := imgs.ImportCheck(rel, record, name); errors.Is(err, images.ErrRefused) {
+			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages(),
+				Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv)}
+			unlock, err := imagesShared(ctx)
+			if err != nil {
+				return fail(err.Error() + ": nothing imported")
+			}
+			err = imgs.ImportCheck(rel, record, name)
+			unlock()
+			if errors.Is(err, images.ErrRefused) {
 				return 1
 			} else if err != nil {
 				return fail(err.Error() + ": nothing imported")
@@ -1046,7 +1123,12 @@ func runImport(cwd string, args []string, color bool) int {
 	// started as it was, the service would run the image it had on data
 	// another wrote.
 	if imgs != nil {
-		if err := imgs.ImportDone(base, rel, record); err != nil {
+		unlock, err := imagesShared(context.Background())
+		if err == nil {
+			err = imgs.ImportDone(base, rel, record)
+			unlock()
+		}
+		if err != nil {
 			return fail(err.Error() + ": the import completed, and " + name + " is not held on the image that wrote its data: what it stopped stays down, and the mark until an import of " + name + " completes")
 		}
 	}
