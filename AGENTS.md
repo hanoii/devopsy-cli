@@ -2277,7 +2277,69 @@ four lanes. CI runs two jobs of two lanes, half the tests each
 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # E2E_KEEP=1 keeps the containers
 E2E_BEAT=5 go test -tags e2e -count=1 -v -timeout 40m ./e2e   # the real timeouts
 E2E_LANES=1 go test -tags e2e -count=1 -v -timeout 60m ./e2e   # one after another
+go test -tags e2e -count=1 -v -run '^TestSyncDestroy$' ./e2e   # one test, one lane
 ```
+
+### Keeping tests short
+
+Short, never weaker: a test made faster checks the same things. Cut
+waiting, never an assertion or a case; a test that covers less to save
+time is a regression of the suite (Principles, "Every change carries
+its test").
+
+- **Never sleep for something to happen:** poll for it (`eventually`
+  in `e2e/`, 250 ms; a loop on the file or the state in a unit test),
+  so a test takes as long as the behavior, not the worst case. The 26
+  `sleep 1.1` between releases went once the server picked release ids
+  (2026-10-24); none is needed for ids, locks or files.
+- **Waits count in beats:** anything the heartbeat or a quiet time
+  bounds is shortened through `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`
+  (`HeartbeatEnv=1` in unit tests, `fast()` and `quiet()` in `e2e/`),
+  never by a constant of the test's own, so `E2E_BEAT=5` still runs it
+  with the real timeouts.
+- **One setup, reused:** extend the fake or the helper that exists
+  (`fakeBin`, the sync tests' docker that remembers stops and starts,
+  `realDevopsy` behind a file-per-tag docker, `project`, `twoReleases`)
+  rather than writing another; small images (`busybox:1.37`) for what
+  only needs to run.
+- **Unit before e2e** (Principles): a scenario a fake can reproduce is
+  seconds there, minutes in `e2e/`.
+
+Unit tests, measured 2026-10-24 on macOS (10 CPUs): `cmd/devopsy` 350
+s (108 tests; the 26 over 5 s are 56% of it), `internal/remote` 93 s
+(`TestWaitBeatWithoutWatcher` 21 s: two beats past the longest quiet
+time, by design), the rest under 15 s, at 40% of the CPUs: no test
+calls `t.Parallel`. Most could (each runs the binary or a script
+against fakes in its own `t.TempDir`), which is the next lever; what
+stops one is `t.Setenv` (one in `cmd/devopsy`, 34 in `internal/remote`),
+which Go refuses in a parallel test: set the command's `Env` instead.
+To see where the time goes:
+
+```sh
+go test -count=1 -v ./cmd/devopsy | grep -- '^--- ' | sort -t'(' -k2 -rn | head -20
+```
+
+End to end, the run takes about the larger of the slowest test
+(`TestSyncDestroy`, 144 s) and the tests' total over the lanes (about
+2400 s over 4); the slowest-first order keeps a long test from
+starting last. Writing one that runs on lanes:
+
+- **Only the globals:** `op`, `srv`, `srv2`, `server`, `operator`
+  (`lane.use` sets them per process), `secondServer(t)` for a test
+  across servers, `@server:` and `server2` as addresses. Never a
+  container or network name: they end with the lane's id.
+- **Its own project names:** a lane's tests share its server, so every
+  `project(t, name, ...)` name is unique in the suite (none repeats
+  today); name it after the test.
+- **Leave nothing behind:** what a test changes outside its project
+  (iptables, `tc`, the login shell, a process on the operator, a file
+  in the deploy user's home) is undone in `t.Cleanup`, and a new kind
+  of leftover goes into `resetLane` too: a cleanup never runs when a
+  test's process dies on its timeout, and the next test on the lane
+  must not see it. No test depends on another's state or on the order.
+- **Time it once:** a new test's time lands in `timesFile` after its
+  first run. One far longer than the rest bounds the whole run: split
+  it only into independent behaviors, each still checking all it did.
 
 What only a real setup shows (Traefik, certificates, the templates) is
 checked by hand: an OrbStack Debian 13 machine (`orb create
