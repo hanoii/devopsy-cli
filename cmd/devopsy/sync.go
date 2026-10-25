@@ -1631,6 +1631,49 @@ func exitCode(err error) int {
 	return 1
 }
 
+// rsyncEntry copies the entry d of the mnt srcMnt into dstMnt's, as
+// root in the util image (remote.RsyncCopy, opts after it), in a
+// container named name: a file entry in place (a container bind-mounts
+// the file's inode, and a replaced file would leave it reading the old
+// one until recreated). Files vanished during the copy (rsync's 24) are
+// a notice; a failure says the entry is half copied.
+func rsyncEntry(ctx context.Context, name, srcMnt, dstMnt, d string, file bool, opts ...string) error {
+	report.Info("rsync mnt/" + d)
+	run := append(append([]string{"-v", srcMnt + ":/src:ro", "-v", dstMnt + ":/dst", remote.UtilImage}, remote.RsyncCopy...), opts...)
+	src, dst := "/src/"+d+"/", "/dst/"+d+"/"
+	if file {
+		src, dst = "/src/"+d, "/dst/"
+		run = append(run, "--inplace")
+	}
+	return rsyncRun(ctx, name, append(run, src, dst), "mnt/"+d)
+}
+
+// rsyncVolume copies the named volume key from its mount src
+// (<name>:/src/<key>:ro) into dst's (<name or dir>:/dst/<key>), as
+// rsyncEntry copies an entry.
+func rsyncVolume(ctx context.Context, name, src, dst, key string) error {
+	report.Info("rsync volume " + key)
+	run := append([]string{"-v", src, "-v", dst, remote.UtilImage}, remote.RsyncCopy...)
+	return rsyncRun(ctx, name, append(run, "/src/"+key+"/", "/dst/"+key+"/"), "the volume "+key)
+}
+
+// rsyncRun runs args as the util container name, what being what it
+// copies, for its notices.
+func rsyncRun(ctx context.Context, name string, args []string, what string) error {
+	if err := dockerRun(ctx, name, args...); err != nil {
+		if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
+			report.Info("rsync " + what + ": " + remote.RsyncVanishedNotice)
+			return nil
+		}
+		report.Info(what + " " + remote.HalfCopiedNotice)
+		if ctx.Err() != nil {
+			return errors.New("interrupted")
+		}
+		return fmt.Errorf("rsync %s: %w", what, err)
+	}
+	return nil
+}
+
 // rsyncdConf serves the entries of mnt and the named volumes being
 // copied, each as a module of its name (the volumes mounted at
 // /vol/<key>), read-only, as root, so every owner's files are read;
@@ -1703,7 +1746,6 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 	if len(present) == 0 && len(volumes) == 0 {
 		return nil
 	}
-	rsync := slices.Clone(remote.RsyncCopy)
 	toProject := os.Getenv(remote.SyncToProjectEnv)
 
 	to := os.Getenv(remote.SyncToEnv)
@@ -1735,46 +1777,19 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 			}
 		}
 		for i, d := range present {
-			report.Info("rsync mnt/" + d)
-			run := append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...)
 			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
-			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
-			if slices.Contains(files, d) {
-				// In place: a container bind-mounts the file's inode,
-				// and a replaced file would leave it reading the old one
-				// until recreated.
-				src, dst = "/src/"+d, "/dst/"
-				run = append(run, "--inplace")
-			}
+			var opts []string
 			if o := owners[d]; o != "" {
-				run = append(run, "--chown="+o)
+				opts = append(opts, "--chown="+o)
 			}
-			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
-				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
-					report.Info("rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
-					continue
-				}
-				report.Info("mnt/" + d + " " + remote.HalfCopiedNotice)
-				if ctx.Err() != nil {
-					return errors.New("interrupted")
-				}
-				return fmt.Errorf("rsync mnt/%s: %w", d, err)
+			if err := rsyncEntry(ctx, name, parentMnt, childMnt, d, slices.Contains(files, d), opts...); err != nil {
+				return err
 			}
 		}
 		for i, v := range volumes {
-			report.Info("rsync volume " + v.Key)
 			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
-			run := append([]string{"-v", v.Name + ":/src/" + v.Key + ":ro", "-v", toProject + "_" + v.Key + ":/dst/" + v.Key, remote.UtilImage}, rsync...)
-			if err := dockerRun(ctx, name, append(run, "/src/"+v.Key+"/", "/dst/"+v.Key+"/")...); err != nil {
-				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
-					report.Info("rsync volume " + v.Key + ": " + remote.RsyncVanishedNotice)
-					continue
-				}
-				report.Info("the volume " + v.Key + " " + remote.HalfCopiedNotice)
-				if ctx.Err() != nil {
-					return errors.New("interrupted")
-				}
-				return fmt.Errorf("rsync volume %s: %w", v.Key, err)
+			if err := rsyncVolume(ctx, name, v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
+				return err
 			}
 		}
 		if last {
