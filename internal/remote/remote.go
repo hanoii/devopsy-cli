@@ -495,6 +495,8 @@ snap_root=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_root=//p')
 snap_max_keep=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_max_keep=//p')
 snaps="$base/snapshots"
 [ -z "$snap_root" ] || snaps="$snap_root"/` + Quote(t.Path) + `
+# The images' rules count a snapshot's bookmarks as the environment's own.
+export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 `
 }
 

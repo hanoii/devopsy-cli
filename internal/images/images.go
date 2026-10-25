@@ -15,6 +15,7 @@ package images
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -171,6 +172,12 @@ type Set struct {
 	// SyncData is a parent's ParentData, in a sync's activation or
 	// holder: Record and SyncCheck check the child against it.
 	SyncData string
+	// Base and Snapshots are the environment's directory and where its
+	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
+	// exports them): a snapshot's directory holds a release's listing
+	// and bookmarks as s<id> (idOf), and both kinds are the
+	// environment's own (own).
+	Base, Snapshots string
 
 	// built are the services with a build: section, data those with a
 	// devopsy.data label, from the last List.
@@ -445,7 +452,7 @@ func digestOf(ref string) string {
 // keep records a release's entries (ListFile) and tags each image with
 // its bookmark, giving up what an earlier listing of it no longer has.
 func (s *Set) keep(rel string, es []entry) error {
-	id := filepath.Base(rel)
+	id := s.idOf(rel)
 	old := readList(rel)
 	// A name and the image it had: a listing again under the same name
 	// may give it another image (a rollback holding a newer one), which
@@ -496,18 +503,49 @@ func (s *Set) keep(rel string, es []entry) error {
 	return nil
 }
 
-// own is every bookmark the environment's releases make, rel's siblings
-// and rel, as Docker shows them: what a restore may move without
-// changing another environment.
+// own is every bookmark the environment's releases and snapshots make,
+// rel's siblings and rel, as Docker shows them: what a restore may move
+// without changing another environment. Without a snapshot's own, every
+// rollback of a built image after a snapshot would take its bookmark for
+// another environment's, and leave the name on the newer image (third
+// review of the snapshots plan).
 func (s *Set) own(rel string) map[string]bool {
 	own := map[string]bool{}
 	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
+	if b := s.base(); b != "" {
+		more, _ := filepath.Glob(filepath.Join(b, "releases", "*"))
+		dirs = append(dirs, more...)
+	}
+	if sn := s.snapshots(); sn != "" {
+		more, _ := filepath.Glob(filepath.Join(sn, "*"))
+		dirs = append(dirs, more...)
+	}
 	for _, d := range dirs {
-		for _, b := range bookmarks(readList(d), s.Name, filepath.Base(d)) {
+		for _, b := range bookmarks(readList(d), s.Name, s.idOf(d)) {
 			own[familiar(b)] = true
 		}
 	}
 	return own
+}
+
+// SnapshotsEnv and BaseEnv are where an environment's snapshots go and
+// its directory, which every script exports (remote's basePrelude) for
+// the devopsy it runs: a Set without its own reads them.
+const (
+	SnapshotsEnv = "DEVOPSY_INTERNAL_SNAPSHOTS"
+	BaseEnv      = "DEVOPSY_INTERNAL_BASE"
+)
+
+func (s *Set) snapshots() string { return cmp.Or(s.Snapshots, os.Getenv(SnapshotsEnv)) }
+func (s *Set) base() string      { return cmp.Or(s.Base, os.Getenv(BaseEnv)) }
+
+// idOf is the id rel's bookmarks carry: a release's id, s<id> for a
+// snapshot's directory (the two kinds' ids may be equal).
+func (s *Set) idOf(rel string) string {
+	if sn := s.snapshots(); sn != "" && filepath.Clean(filepath.Dir(rel)) == filepath.Clean(sn) {
+		return "s" + filepath.Base(rel)
+	}
+	return filepath.Base(rel)
 }
 
 // others are who besides this environment uses an image: other compose
@@ -543,7 +581,7 @@ func (s *Set) others(img string, own map[string]bool) []string {
 // Docker other than a missing image stops it: the release must stay, so
 // the next removal finds its listing again.
 func (s *Set) Remove(rel string) error {
-	id := filepath.Base(rel)
+	id := s.idOf(rel)
 	es := readList(rel)
 	if len(es) == 0 {
 		return nil

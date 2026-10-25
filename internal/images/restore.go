@@ -281,7 +281,7 @@ func (s *Set) HoldData(base, rel string) error {
 // moves a pulled name back (another environment may run it), and the
 // live release's ComposeFile holds what must not move.
 func (s *Set) RestoreOwn(rel string) {
-	id := filepath.Base(rel)
+	id := s.idOf(rel)
 	es := readList(rel)
 	if len(es) == 0 {
 		return
