@@ -293,3 +293,27 @@ func TestRestoreMark(t *testing.T) {
 		t.Errorf("--status (%d):\n%s", code, out)
 	}
 }
+
+// --destroy says how many snapshots go, frees their bookmarks with the
+// releases', and removes them with everything else, the mirror (root's)
+// emptied as root first.
+func TestSnapshotDestroy(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	for range 2 {
+		if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 {
+			t.Fatalf("take (%d):\n%s", code, out)
+		}
+	}
+	s.logs()
+	out, code := s.run(nil, "@prod", "--destroy")
+	if code == 0 || !strings.Contains(out, "and its 2 snapshots") {
+		t.Errorf("--destroy's prompt (%d):\n%s", code, out)
+	}
+	out, code = s.run(nil, "@prod", "--destroy", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || fileExists(filepath.Join(s.root, "shop", "prod")) || !strings.Contains(docker, "-mirror ") {
+		t.Errorf("--destroy (%d):\n%s\n%s", code, out, docker)
+	}
+}

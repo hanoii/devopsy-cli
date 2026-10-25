@@ -904,7 +904,17 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)", t.Name, where),
+		// Its snapshots go too: how many, said.
+		snaps := ""
+		var out bytes.Buffer
+		if code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
+			if n := strings.Count(out.String(), "\n"); n == 1 {
+				snaps = ", and its snapshot"
+			} else if n > 1 {
+				snaps = fmt.Sprintf(", and its %d snapshots", n)
+			}
+		}
+		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps),
 			confirmWord(t), "nothing removed", false); err != nil {
 			report.Fail(err)
 			return 1

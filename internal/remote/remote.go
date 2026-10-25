@@ -2213,7 +2213,11 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "a snapshot of $base") + `
+` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -2229,6 +2233,10 @@ else
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
+# Its snapshots' bookmarks too, wherever the snapshot root puts them.
+for d in "$snaps"/*; do
+  [ ! -d "$d" ] || img remove "$d" || d_fail=1
+done
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
@@ -2240,6 +2248,8 @@ cd /
   devopsy --say error "could not remove everything in $base"
   exit 1
 }
+# Snapshots outside $base (the server's snapshot root): their directory.
+case "$snaps" in "$base"/*) ;; *) rm -rf "$snaps" || { devopsy --say error "could not remove $snaps"; exit 1; } ;; esac
 devopsy --say info "removed $base"
 `
 }

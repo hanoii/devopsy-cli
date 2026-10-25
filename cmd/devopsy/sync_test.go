@@ -289,6 +289,9 @@ case "$*" in
     if [ -n "$vsrc" ]; then mkdir -p "$vdst" && cp -R "$vsrc/." "$vdst"; exit $?; fi
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
+  "run --rm --name devopsy-destroy-"*"-mirror "*)
+    for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
+    rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-destroy-"*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;

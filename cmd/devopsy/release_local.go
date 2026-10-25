@@ -344,6 +344,12 @@ func destroyData(cwd string, step []string, color bool) int {
 		if err := images.RemoveHistory(base); err != nil {
 			return fail(err.Error())
 		}
+		// The snapshots' mirror, root's (rsync as root), as root.
+		if fileExists(filepath.Join(base, "snapshots", remote.SnapshotMirror)) {
+			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-mirror", os.Getpid()), "-v", filepath.Join(base, "snapshots")+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror); err != nil {
+				return fail("removing the snapshots' mirror: " + err.Error())
+			}
+		}
 	}
 	return 0
 }
