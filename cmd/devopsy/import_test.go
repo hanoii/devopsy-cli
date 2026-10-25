@@ -674,7 +674,7 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 // the upgrade line (an export, a sync: the parent's check, before the
 // child stops anything; a child's release that syncs, before its
 // upload), and nothing else does (a release that does not sync).
-func TestDataLabelsOlderServer(t *testing.T) {
+func TestDataCopyOlderServer(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
@@ -682,7 +682,7 @@ func TestDataLabelsOlderServer(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	old := filepath.Join(s.tmp, "old")
-	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.DataLabelsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.DataCopyFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	var env []string
 	for _, kv := range s.syncSetup.env {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
@@ -698,7 +698,7 @@ func TestDataLabelsOlderServer(t *testing.T) {
 		out, _ := cmd.CombinedOutput()
 		return string(out), cmd.ProcessState.ExitCode()
 	}
-	lacks := "the server's devopsy lacks what this needs (" + remote.DataLabelsFeature
+	lacks := "the server's devopsy lacks what this needs (" + remote.DataCopyFeature
 	s.logs()
 	for _, args := range [][]string{{"@prod", "--export", "db"}, {"@dev", "--sync", "--yes"}, {"@fresh", "--release"}} {
 		out, code := run(args...)
@@ -864,7 +864,7 @@ func TestSyncReset(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--reset", "--yes"); code == 0 || !strings.Contains(out, "is not a child") {
 		t.Errorf("a reset of an environment without a parent (%d):\n%s", code, out)
 	}
-	if out, code := s.run(nil, "@dev", "--reset"); code == 0 || !strings.Contains(out, "nothing reset") || !strings.Contains(out, "throws away all of @devopsy@one:dev's data") || !kept() {
+	if out, code := s.run(nil, "@dev", "--reset"); code == 0 || !strings.Contains(out, "nothing reset") || !strings.Contains(out, "throws away all of @devopsy@one:dev's data") || !strings.Contains(out, "data no copy carries included") || !kept() {
 		t.Errorf("a reset without --yes away from a terminal (%d):\n%s", code, out)
 	}
 	// The child's db a stream the parent copies raw: refused by the push

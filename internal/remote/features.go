@@ -34,12 +34,15 @@ var namedFeatures = []struct {
 	Name string
 	Uses *regexp.Regexp
 }{
-	// The devopsy.data labels: an older devopsy reads them as no label (a
-	// parent's "nothing to sync", an import refusing an "unlabeled"
-	// service), so every script reading labels needs it. Not settle,
+	// The data labels, devopsy.data=true|false and devopsy.data.copy: an
+	// older devopsy refuses them or reads them as no data (a parent's
+	// "nothing to sync", a child's first release live on empty data), so
+	// every script copying data needs it. Not an activation's: an older
+	// mounts check refuses the new values before the switch, and a
+	// project without data labels releases there as before. Not settle,
 	// which every activation calls (partialGuard), and which tolerates
 	// labels it cannot read.
-	{DataLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
+	{DataCopyFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|export|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}(prepare|finish|import|list)\b`)},
 	// --reset: the parent's push wipes the child at its first write,
 	// through the child's --sync-services wipe. An older parent would
 	// sync without wiping, an older child refuse the word.
@@ -56,7 +59,7 @@ var namedFeatures = []struct {
 	// copy the parent's owners, an older child list none, an older
 	// server's import keep the tar's.
 	{MntOwnerFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(sync-push|import)\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}list\b`)},
-	// The images that ran on an mnt service's data, in its export's tar
+	// The images that ran on a volumes service's data, in its export's tar
 	// (images.ExportKey), which an import checks and holds the service
 	// on. An older server would export without them and import as if
 	// none were there, unchecked.
@@ -75,8 +78,10 @@ const DataImagesFeature = "data-images"
 // ResetFeature is --reset's named feature.
 const ResetFeature = "reset"
 
-// DataLabelsFeature is the devopsy.data labels' named feature.
-const DataLabelsFeature = "data-labels"
+// DataCopyFeature is the data labels' named feature: devopsy.data=true
+// and devopsy.data.copy (the data-labels before it read devopsy.data as
+// the copy's method).
+const DataCopyFeature = "data-copy"
 
 // flagUse finds a devopsy flag a script calls, quoted or not (inside
 // with_tty's quotes too).

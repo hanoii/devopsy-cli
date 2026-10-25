@@ -22,7 +22,7 @@ func ownedProject(t *testing.T, name string, files map[string]string) string {
     user: "10001:10001"
     command: [sh, -c, "echo up >/data/started && exec sleep infinity"]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt, devopsy.mnt.owner: "10001:10001"}
+    labels: {devopsy.data: "true", devopsy.mnt.owner: "10001:10001"}
   tool:
     image: busybox:1.37
     profiles: [tools]

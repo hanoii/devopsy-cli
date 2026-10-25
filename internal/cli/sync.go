@@ -16,19 +16,24 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// DataLabel says the service has data and how it moves, in syncs and
-// --export and --import: DataMnt, DataStream or DataNone. Without it the
-// service has none, like DataNone.
+// DataLabel says whether the service has data: true, or false (and no
+// label) for none. How a copy carries it is DataCopyLabel's.
 const DataLabel = "devopsy.data"
+
+// DataCopyLabel says how a copy to another environment (a sync, --export
+// and --import) carries a service's data: CopyVolumes (the default),
+// CopyCustom or CopyNone. Ignored on a service without data, so a
+// project can flip DataLabel through a variable and keep it.
+const DataCopyLabel = "devopsy.data.copy"
 
 // DataStopLabel says when devopsy stops the service while data moves:
 // StopNever (the default), StopOwn, StopImport or StopAlways (DataStops).
 const DataStopLabel = "devopsy.data.stop"
 
-// DataExcludeLabel names entries of mnt a DataMnt service mounts that its
-// copies leave out anyway (comma or space separated): an access log next
-// to the files, say. Ignored on stream and none, so a project can flip
-// DataLabel through a variable and keep it.
+// DataExcludeLabel names entries of mnt a service with data mounts that
+// its copies leave out anyway (comma or space separated): an access log
+// next to the files, say. Ignored on a service without data, so a project
+// can flip DataLabel through a variable and keep it.
 const DataExcludeLabel = "devopsy.data.exclude"
 
 // MntOwnerLabel is the owner of the entries of mnt a service mounts
@@ -63,17 +68,18 @@ func parseOwner(v string) (string, bool) {
 	return fmt.Sprintf("%d:%d", ids[0], ids[1]), true
 }
 
-// How a service's data moves, DataLabel's values.
+// How a copy carries a service's data, DataCopyLabel's values.
 const (
-	// DataMnt: the entries of mnt it bind-mounts, rsynced between servers
-	// and a tar for --export and --import.
-	DataMnt = "mnt"
-	// DataStream: the data capability's export writes the data to stdout,
-	// and its import reads it from stdin.
-	DataStream = "stream"
-	// DataNone (and no label): the service has no data: neither copied
-	// nor touched.
-	DataNone = "none"
+	// CopyVolumes (the default): the entries of mnt it bind-mounts, as
+	// files, rsynced between servers and a tar for --export and --import.
+	CopyVolumes = "volumes"
+	// CopyCustom: the data capability's export writes the data to stdout,
+	// and its import reads it from stdin, devopsy carrying the bytes.
+	CopyCustom = "custom"
+	// CopyNone: never copied (a sync skips it and the child keeps its
+	// own, --export and --import refuse it); also what a service without
+	// data has.
+	CopyNone = "none"
 )
 
 // When devopsy stops a service while data moves, DataStopLabel's values:
@@ -93,12 +99,12 @@ const (
 // oldLabels are the labels and capability before devopsy.data, refused
 // where labels are read, with what replaces them (no migration).
 var oldLabels = []struct{ label, now string }{
-	{"devopsy.sync", DataLabel + " (rsync is " + DataMnt + ", no label or skip is " + DataNone + ")"},
+	{"devopsy.sync", DataLabel + "=true (rsync is the default " + DataCopyLabel + "=" + CopyVolumes + "), or false for skip"},
 	{"devopsy.sync.stop", DataStopLabel + " (true is " + StopOwn + ", or " + StopImport + " or " + StopAlways + "; false is " + StopNever + ", the default)"},
 	{"devopsy.sync.rsync.exclude", DataExcludeLabel},
 }
 
-// DataCapability is the capability that moves a stream service's data
+// DataCapability is the capability that moves a custom service's data
 // (export, import) and hooks into syncs (prepare, finish).
 const DataCapability = "data"
 
@@ -125,21 +131,21 @@ const DestroyDataFlag = "--destroy-data"
 // the release's own config, hidden: run by ActivateScript.
 const ReleaseStepsFlag = "--release-steps"
 
-// --export and --import move one service's data, the way its DataLabel
-// says, locally or with @<target> on a server.
+// --export and --import move one service's data, the way its
+// DataCopyLabel says, locally or with @<target> on a server.
 const (
 	ExportFlag = "--export"
 	ImportFlag = "--import"
 )
 
-// SyncService is a service of the project as its data labels say: how
-// its data moves (Transfer, DataNone without any), when it is stopped
-// (Stop, and StopLabeled whether DataStopLabel is set), the entries of
-// mnt its binds hold (a DataMnt service's without its excluded ones,
-// named in Excluded), the services it depends on and
-// its restart policy. HasData is whether Transfer is not DataNone.
+// SyncService is a service of the project as its data labels say:
+// whether it has data (HasData, DataLabel), how a copy carries it (Copy,
+// CopyNone without data), when it is stopped (Stop, and StopLabeled
+// whether DataStopLabel is set), the entries of mnt its binds hold (a
+// service with data's without its excluded ones, named in Excluded), the
+// services it depends on and its restart policy.
 type SyncService struct {
-	Name, Transfer string
+	Name, Copy     string
 	Stop           string
 	StopLabeled    bool
 	Dirs, Excluded []string
@@ -167,6 +173,10 @@ type SyncService struct {
 	// guard and the stop sets never see.
 	WholeMnt bool
 }
+
+// Copies reports whether a copy carries s's data: it has data, and its
+// DataCopyLabel is not CopyNone.
+func (s SyncService) Copies() bool { return s.Copy != CopyNone }
 
 // Active reports whether s is in a profile that is up, profiles being
 // what COMPOSE_PROFILES names (comma separated, * for all): an up naming
@@ -266,36 +276,52 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				return nil, fmt.Errorf("service %s: %s=%s: that label is now %s", name, o.label, v, o.now)
 			}
 		}
-		cs := SyncService{Name: name, Transfer: DataNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
+		cs := SyncService{Name: name, Copy: CopyNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
 		data, labeled := s.Labels[DataLabel]
 		if labeled {
 			// An empty value is an error: a variable left unset by accident
-			// must not stop copying silently.
+			// must not stop copying silently. The values before the copy
+			// label are errors naming what replaces them.
 			switch data {
-			case DataMnt, DataStream, DataNone:
-				cs.Transfer = data
+			case "true":
+				cs.HasData = true
+			case "false":
 			case "":
-				return nil, fmt.Errorf("service %s: %s is empty: %s, %s, or %s for no data (a variable left unset?)", name, DataLabel, DataMnt, DataStream, DataNone)
-			case "rsync", "files":
-				return nil, fmt.Errorf("service %s: %s=%s: %s now (its entries of mnt)", name, DataLabel, data, DataMnt)
-			case "skip":
-				return nil, fmt.Errorf("service %s: %s=%s: %s now (no data)", name, DataLabel, data, DataNone)
+				return nil, fmt.Errorf("service %s: %s is empty: true, or false for no data (a variable left unset?)", name, DataLabel)
+			case "mnt", "rsync", "files":
+				return nil, fmt.Errorf("service %s: %s=%s: %s=true now (its entries of mnt are the default %s=%s)", name, DataLabel, data, DataLabel, DataCopyLabel, CopyVolumes)
+			case "stream":
+				return nil, fmt.Errorf("service %s: %s=%s: %s=true and %s=%s now", name, DataLabel, data, DataLabel, DataCopyLabel, CopyCustom)
+			case "none", "skip":
+				return nil, fmt.Errorf("service %s: %s=%s: %s=false now (no data), or %s=true and %s=%s for data no copy carries", name, DataLabel, data, DataLabel, DataLabel, DataCopyLabel, CopyNone)
 			default:
-				return nil, fmt.Errorf("service %s: %s=%s: %s, %s or %s", name, DataLabel, data, DataMnt, DataStream, DataNone)
+				return nil, fmt.Errorf("service %s: %s=%s: true or false", name, DataLabel, data)
 			}
 		}
-		cs.HasData = cs.Transfer != DataNone
+		if v, ok := s.Labels[DataCopyLabel]; ok && cs.HasData {
+			switch v {
+			case CopyVolumes, CopyCustom, CopyNone:
+				cs.Copy = v
+			case "":
+				return nil, fmt.Errorf("service %s: %s is empty: %s, %s or %s (a variable left unset?)", name, DataCopyLabel, CopyVolumes, CopyCustom, CopyNone)
+			default:
+				return nil, fmt.Errorf("service %s: %s=%s: %s, %s or %s", name, DataCopyLabel, v, CopyVolumes, CopyCustom, CopyNone)
+			}
+		} else if cs.HasData {
+			cs.Copy = CopyVolumes
+		}
 		if v, ok := s.Labels[DataStopLabel]; ok {
 			switch v {
 			case StopNever, StopImport, StopAlways:
 			case StopOwn:
-				// own stops it for its own data: with none chosen (a
-				// variable), it has none to stop for; without any label
-				// it would never stop, which is not what own says.
+				// own stops it for its own data: with none chosen (false,
+				// or a copy of none, through a variable), no copy moves
+				// it; without any label it would never stop, which is not
+				// what own says.
 				if !labeled {
-					return nil, fmt.Errorf("service %s: %s=%s needs a %s label: own stops it while its own data moves (%s=%s or %s); %s=%s stops it while any data is imported", name, DataStopLabel, v, DataLabel, DataLabel, DataMnt, DataStream, DataStopLabel, StopImport)
+					return nil, fmt.Errorf("service %s: %s=%s needs a %s label: own stops it while its own data moves (%s=true); %s=%s stops it while any data is imported", name, DataStopLabel, v, DataLabel, DataLabel, DataStopLabel, StopImport)
 				}
-				if !cs.HasData {
+				if !cs.Copies() {
 					v = StopNever
 				}
 			case "true", "false":
@@ -306,7 +332,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			cs.Stop, cs.StopLabeled = v, true
 		}
 		var exclude []string
-		if cs.Transfer == DataMnt {
+		if cs.HasData {
 			exclude = strings.FieldsFunc(s.Labels[DataExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
 			for _, e := range exclude {
 				if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
@@ -353,8 +379,8 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				// service's data, and give them one owner. A service
 				// without data may still mount it (a read-only tool):
 				// devopsy ignores that mount.
-				if cs.Transfer == DataMnt {
-					return nil, fmt.Errorf("service %s: %s=%s mounts ./mnt whole: mount its entries (./mnt/<name>), each for what it holds", name, DataLabel, DataMnt)
+				if cs.HasData {
+					return nil, fmt.Errorf("service %s: %s=true mounts ./mnt whole: mount its entries (./mnt/<name>), each for what it holds", name, DataLabel)
 				}
 				if cs.Owner != "" && !v.ReadOnly {
 					return nil, fmt.Errorf("service %s: %s=%s mounts ./mnt whole writable: mount its entries (./mnt/<name>), each for what it holds", name, MntOwnerLabel, cs.Owner)
@@ -389,7 +415,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		}
 		// Copies name entries in space-separated lists (the child's,
 		// exclude) and rsync modules: a name with whitespace would split.
-		if cs.Transfer == DataMnt {
+		if cs.HasData {
 			for _, d := range append(slices.Clone(cs.Dirs), cs.Excluded...) {
 				if strings.ContainsFunc(d, unicode.IsSpace) {
 					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name: rename it", name, d)
@@ -486,8 +512,8 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // mounted writable by any other service, which writes every entry while
 // the child guard and the stop sets see none of it (read-only, a tool,
 // it is ignored); a writable bind mount from inside the project's tree
-// outside mnt, which goes with the next release; a service labeled
-// DataMnt that copies no entry of mnt (none mounted, or all excluded),
+// outside mnt, which goes with the next release; a service copied as
+// CopyVolumes that copies no entry of mnt (none mounted, or all excluded),
 // which a sync would take for nothing to copy; an MntOwnerLabel on one
 // that mounts no entry writable; an entry two owners write (MntOwners);
 // and a bind source below an owned entry (./mnt/storage/files), by any
@@ -514,8 +540,8 @@ func CheckMounts(services []SyncService) error {
 			bad = append(bad, fmt.Sprintf("%s mounts ./%s writable: it is in the release, and the next one replaces it", s.Name, b))
 			tree = true
 		}
-		if s.Transfer == DataMnt && len(s.Dirs) == 0 {
-			bad = append(bad, fmt.Sprintf("%s is labeled %s=%s and copies no entry of mnt: a sync would copy nothing of it", s.Name, DataLabel, DataMnt))
+		if s.Copy == CopyVolumes && len(s.Dirs) == 0 {
+			bad = append(bad, fmt.Sprintf("%s has data (%s=true, %s=%s) and copies no entry of mnt: a sync would copy nothing of it", s.Name, DataLabel, DataCopyLabel, CopyVolumes))
 			data = true
 		}
 		if s.Owner != "" && len(s.Writable) == 0 {
@@ -534,7 +560,7 @@ func CheckMounts(services []SyncService) error {
 		fixes = append(fixes, report.Fix("mount data from an entry of mnt (./mnt/<name>), which outlives releases, or read-only (:ro) what ships with the release"))
 	}
 	if data {
-		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name>, or label it "+DataLabel+"="+DataStream+" or "+DataNone))
+		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name>, or label it "+DataCopyLabel+"="+CopyCustom+" or "+CopyNone+", or "+DataLabel+"=false"))
 	}
 	if owner {
 		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
@@ -549,11 +575,11 @@ func CheckMounts(services []SyncService) error {
 }
 
 // SyncDirs are the entries of mnt a sync rsyncs: those of the services
-// labeled mnt, sorted.
+// copied as CopyVolumes, sorted.
 func SyncDirs(services []SyncService) []string {
 	var dirs []string
 	for _, s := range services {
-		if s.Transfer != DataMnt {
+		if s.Copy != CopyVolumes {
 			continue
 		}
 		for _, d := range s.Dirs {
@@ -576,11 +602,11 @@ func SyncFind(services []SyncService, name string) (SyncService, bool) {
 	return SyncService{}, false
 }
 
-// DataMntServices names the services labeled mnt.
-func DataMntServices(services []SyncService) []string {
+// DataVolumesServices names the services copied as CopyVolumes.
+func DataVolumesServices(services []SyncService) []string {
 	var names []string
 	for _, s := range services {
-		if s.Transfer == DataMnt {
+		if s.Copy == CopyVolumes {
 			names = append(names, s.Name)
 		}
 	}
@@ -622,7 +648,7 @@ func DataStops(services []SyncService, op DataOp, service string) []Stopped {
 		case StopImport:
 			return op == ImportOne || op == SyncChild
 		case StopOwn:
-			return (op == ExportOne || op == ImportOne) && s.Name == service || (op == SyncParent || op == SyncChild) && s.HasData
+			return (op == ExportOne || op == ImportOne) && s.Name == service || (op == SyncParent || op == SyncChild) && s.Copies()
 		}
 		return false
 	}
@@ -799,39 +825,39 @@ func dependsOn(services []SyncService) ([]string, error) {
 	return order, nil
 }
 
-// SyncStreamServices names the services labeled stream in compose's
-// depends_on order, dependencies first, ties alphabetical: a database
-// imported before what reads it. The order is over every service, so a
-// dependency through one without data counts too; a cycle (compose
-// refuses one already) is an error.
-func SyncStreamServices(services []SyncService) ([]string, error) {
+// SyncCustomServices names the services copied as CopyCustom in
+// compose's depends_on order, dependencies first, ties alphabetical: a
+// database imported before what reads it. The order is over every
+// service, so a dependency through one without data counts too; a cycle
+// (compose refuses one already) is an error.
+func SyncCustomServices(services []SyncService) ([]string, error) {
 	order, err := dependsOn(services)
 	if err != nil {
 		return nil, err
 	}
 	var names []string
 	for _, n := range order {
-		if s, _ := SyncFind(services, n); s.Transfer == DataStream {
+		if s, _ := SyncFind(services, n); s.Copy == CopyCustom {
 			names = append(names, n)
 		}
 	}
 	return names, nil
 }
 
-// DataLists are the values of DEVOPSY_DATA_MNT, DEVOPSY_DATA_STREAM and
-// DEVOPSY_DATA_STOP for the data capability: this side's services by
-// label, space-separated (stream in depends_on order when it has one),
-// and stop, the services this operation stops on this side. A stopped
-// stream service is in both stream and stop, so a script knows to run
-// --rm rather than exec.
-func DataLists(services []SyncService, stop []string) (mnt, stream, stops string) {
-	streams, err := SyncStreamServices(services)
+// DataLists are the values of DEVOPSY_DATA_VOLUMES, DEVOPSY_DATA_CUSTOM
+// and DEVOPSY_DATA_STOP for the data capability: this side's services by
+// how a copy carries them, space-separated (custom in depends_on order
+// when it has one), and stop, the services this operation stops on this
+// side. A stopped custom service is in both custom and stop, so a script
+// knows to run --rm rather than exec.
+func DataLists(services []SyncService, stop []string) (volumes, custom, stops string) {
+	customs, err := SyncCustomServices(services)
 	if err != nil {
 		for _, s := range services {
-			if s.Transfer == DataStream {
-				streams = append(streams, s.Name)
+			if s.Copy == CopyCustom {
+				customs = append(customs, s.Name)
 			}
 		}
 	}
-	return strings.Join(DataMntServices(services), " "), strings.Join(streams, " "), strings.Join(stop, " ")
+	return strings.Join(DataVolumesServices(services), " "), strings.Join(customs, " "), strings.Join(stop, " ")
 }

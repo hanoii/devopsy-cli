@@ -253,7 +253,7 @@ func allScripts() map[string]string {
 		"holder plain":    HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2"}, true),
 		"push":            PushScript(tg, "app-prod", map[string]string{SyncToEnv: "devopsy@h2", SyncToDirEnv: "/srv/it's/current/.devopsy"}),
 		"current":         CurrentExistsScript(tg, nil),
-		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataLabelsFeature}),
+		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataCopyFeature}),
 		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
 		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, map[string]string{"storage": "10001:10001"}, true, ""),
 		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
@@ -272,26 +272,26 @@ func allScripts() map[string]string {
 // read labels need it (an older devopsy reads them as none), so an older
 // server refuses those before anything changes, and runs the rest:
 // settle, which every activation calls, stays out.
-func TestDataLabelsFeature(t *testing.T) {
+func TestDataCopyFeature(t *testing.T) {
 	t.Parallel()
 	need := []string{"activate+sync", "export", "exec", "exec list", "holder", "holder plain", "import", "push", "resolved", "sync only"}
 	for name, s := range allScripts() {
-		got := slices.Contains(Needs(s), DataLabelsFeature)
+		got := slices.Contains(Needs(s), DataCopyFeature)
 		if got != slices.Contains(need, name) {
-			t.Errorf("%s needs %s: %v", name, DataLabelsFeature, got)
+			t.Errorf("%s needs %s: %v", name, DataCopyFeature, got)
 		}
 	}
 	// A project's remote step calling --export, rendered inside with_tty's
 	// quotes, reads labels too; settle alone does not.
 	steps := ActivateScript(&Target{Name: "prod", Host: "h", Path: "app/prod"}, "20261005120000", false, "app", Phases{Before: [][]string{{"--export", "db"}}, Run: []string{"deploy"}}, nil)
-	if !slices.Contains(Needs(steps), DataLabelsFeature) {
+	if !slices.Contains(Needs(steps), DataCopyFeature) {
 		t.Errorf("a step calling --export: %v", Needs(steps))
 	}
-	if got := Needs("devopsy '--sync-services' 'settle'"); slices.Contains(got, DataLabelsFeature) {
+	if got := Needs("devopsy '--sync-services' 'settle'"); slices.Contains(got, DataCopyFeature) {
 		t.Errorf("settle: %v", got)
 	}
 	// The parent's check carries the push's needs.
-	if s := CurrentExistsScript(&Target{Path: "app/prod"}, Needs(PushScript(&Target{Path: "app/prod"}, "app-prod", nil))); !strings.Contains(s, needsEnv+`="${`+needsEnv+`:-} `) || !strings.Contains(s, DataLabelsFeature) {
+	if s := CurrentExistsScript(&Target{Path: "app/prod"}, Needs(PushScript(&Target{Path: "app/prod"}, "app-prod", nil))); !strings.Contains(s, needsEnv+`="${`+needsEnv+`:-} `) || !strings.Contains(s, DataCopyFeature) {
 		t.Errorf("the parent's check:\n%s", s)
 	}
 }
@@ -432,7 +432,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
 	}
-	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataLabelsFeature, "export", ExportImagesFeature, MntOwnerFeature, "sync-services"}) {
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataCopyFeature, "export", ExportImagesFeature, MntOwnerFeature, "sync-services"}) {
 		t.Errorf("needs, quoted: %v", got)
 	}
 }
@@ -1706,7 +1706,7 @@ func TestActivateDataImages(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"mnt"}}}}' "$DB" ;;
+  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true"}}}}' "$DB" ;;
   "-- --profile * pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
 esac
 exit 0
@@ -1783,7 +1783,7 @@ func TestSyncImagesNotInRunStep(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"mnt"}}}}' ;;
+  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
   "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
   deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
 esac
@@ -2754,7 +2754,7 @@ func TestImportMarkRefusals(t *testing.T) {
 	// running only while its holding file is there with the lock held
 	// (never for another holder of the lock), the server's features.
 	write(t, mark, importMark)
-	cur := ParseCurrent("current\nincomplete\t" + importMark + "importing\n" + DataLabelsFeature + "\n")
+	cur := ParseCurrent("current\nincomplete\t" + importMark + "importing\n" + DataCopyFeature + "\n")
 	if !cur.Current || !cur.Importing || !cur.DataLabels || !cur.Mark.IsImport() || cur.Mark.From != "db" {
 		t.Errorf("parsed: %+v %+v", cur, cur.Mark)
 	}
@@ -2836,7 +2836,7 @@ func TestParseParentDataKeepsOldParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := &images.Set{Docker: oldParentDocker{}, Name: "app-prod", Out: io.Discard, List: func(string) ([]images.Service, error) {
-		return []images.Service{{Name: "database", Ref: "mariadb:11.8", Data: true, Method: images.DataMnt}}, nil
+		return []images.Service{{Name: "database", Ref: "mariadb:11.8", Data: true, Method: images.CopyVolumes}}, nil
 	}}
 	data := set.ParentData(base, rel)
 	if !strings.HasPrefix(data, "old\t") {
@@ -2877,7 +2877,7 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"mnt"}}}}' ;;
+  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
   "-- --profile * pull --ignore-buildable")
     # devopsy merges the release's own compose file, unless told not to.
     if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && [ -n "${GONE:-}" ] && grep -q "image: \"mariadb@$GONE\"" ../devopsy-compose.yaml 2>/dev/null; then

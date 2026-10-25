@@ -816,7 +816,7 @@ func TestDebugTargets(t *testing.T) {
 		t.Errorf("--yaml (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, filepath.Join(tmp, "app"), env, "--debug", "capabilities")
-	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") || !strings.Contains(out, "finish parent|child go|abort") || !strings.Contains(out, "environment:\n    every action gets DEVOPSY_DATA_MNT") {
+	if code != 0 || !strings.Contains(out, "open [service]") || !strings.Contains(out, "does not implement it") || !strings.Contains(out, "finish parent|child go|abort") || !strings.Contains(out, "environment:\n    every action gets DEVOPSY_DATA_VOLUMES") {
 		t.Errorf("capabilities (%d):\n%s", code, out)
 	}
 }
@@ -921,7 +921,7 @@ esac
 		t.Fatalf("--prepare-release (%d):\n%s\n%s", code, out, data)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "labels")
-	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.data=mnt|stream|none") || !strings.Contains(out, "devopsy.data.stop=never|own|import|always") || !strings.Contains(out, "devopsy.data.exclude=<entry>") {
+	if code != 0 || !strings.Contains(out, "role proxy  held by traefik-main") || !strings.Contains(out, "exports WILDCARD_DOMAIN=vm1.example.com") || !strings.Contains(out, `this release imported: "vm1.example.com"`) || !strings.Contains(out, "devopsy.data=true|false") || !strings.Contains(out, "devopsy.data.copy=volumes|custom|none") || !strings.Contains(out, "devopsy.data.stop=never|own|import|always") || !strings.Contains(out, "devopsy.data.exclude=<entry>") {
 		t.Errorf("--debug labels (%d):\n%s", code, out)
 	}
 	out, code = runDevopsy(t, rel, env, "--debug", "imports")

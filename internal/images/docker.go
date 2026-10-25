@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,7 +187,14 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 	svcs := make([]Service, 0, len(names))
 	for _, n := range names {
 		c := cfg.Services[n]
-		method, data := c.Labels[DataLabel]
+		// Data only with devopsy.data=true, its copy volumes unless its
+		// copy label says otherwise (cli.SyncServices refuses what is
+		// neither).
+		data := c.Labels[DataLabel] == "true"
+		method := ""
+		if data {
+			method = cmp.Or(c.Labels[DataCopyLabel], CopyVolumes)
+		}
 		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
@@ -220,10 +228,12 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 	return svcs, nil
 }
 
-// DataLabel is cli.DataLabel, which this package cannot import, and
-// DataMnt its value for a copy of the service's files (cli.DataMnt).
+// DataLabel and DataCopyLabel are cli's, which this package cannot
+// import, and CopyVolumes the copy of the service's files
+// (cli.CopyVolumes).
 const (
 	DataLabel        = "devopsy.data"
-	DataMnt          = "mnt"
+	DataCopyLabel    = "devopsy.data.copy"
+	CopyVolumes      = "volumes"
 	DataExcludeLabel = "devopsy.data.exclude"
 )

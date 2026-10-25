@@ -33,21 +33,25 @@ func TestSyncServices(t *testing.T) {
 	}
 	config := map[string]any{"services": map[string]any{
 		"app": map[string]any{
-			"labels":     map[string]string{DataLabel: "mnt", DataStopLabel: "import", DataExcludeLabel: "logs, cache"},
+			"labels":     map[string]string{DataLabel: "true", DataStopLabel: "import", DataExcludeLabel: "logs, cache"},
 			"volumes":    []any{bind(dot + "/mnt/storage/files"), bind(dot + "/mnt/logs"), bind("/etc/hosts"), map[string]string{"type": "volume", "source": "cache"}},
 			"depends_on": map[string]any{"database": map[string]any{"condition": "service_healthy"}},
 			"restart":    "always",
 		},
-		// The exclude label is ignored on a stream service, not an error.
 		"database": map[string]any{
-			"labels":  map[string]string{DataLabel: "stream", DataStopLabel: "never", DataExcludeLabel: "database/x"},
+			"labels":  map[string]string{DataLabel: "true", DataCopyLabel: "custom", DataStopLabel: "never"},
 			"volumes": []any{bind(dot + "/mnt/database")},
 		},
-		"goaccess": map[string]any{"profiles": []string{"tools"}, "labels": map[string]string{DataLabel: "mnt"}, "volumes": []any{bind(resolved + "/report")}},
-		"mntnot":   map[string]any{"volumes": []any{bind(dot + "/mntx/a")}},
-		// none: no data, its own (from a variable) ignored, and its exclude.
-		"plain":  map[string]any{"labels": map[string]string{DataLabel: "none", DataStopLabel: "own", DataExcludeLabel: "a/b"}, "volumes": []any{bind(dot + "/mnt/plain")}},
-		"search": map[string]any{"labels": map[string]string{DataLabel: "stream", DataStopLabel: "own"}, "volumes": []any{bind(dot + "/mnt/index")}, "depends_on": map[string]any{"database": map[string]any{}}},
+		"goaccess": map[string]any{"profiles": []string{"tools"}, "labels": map[string]string{DataLabel: "true"}, "volumes": []any{bind(resolved + "/report")}},
+		// Data no copy carries: own (from a variable) is never, its
+		// entries are still its own.
+		"kept": map[string]any{"labels": map[string]string{DataLabel: "true", DataCopyLabel: "none", DataStopLabel: "own"}, "volumes": []any{bind(dot + "/mnt/kept")}},
+		// A copy label without data is ignored, not an error.
+		"mntnot": map[string]any{"labels": map[string]string{DataCopyLabel: "pipe"}, "volumes": []any{bind(dot + "/mntx/a")}},
+		// false: no data, its own (from a variable) ignored, and its
+		// exclude.
+		"plain":  map[string]any{"labels": map[string]string{DataLabel: "false", DataStopLabel: "own", DataExcludeLabel: "a/b"}, "volumes": []any{bind(dot + "/mnt/plain")}},
+		"search": map[string]any{"labels": map[string]string{DataLabel: "true", DataCopyLabel: "custom", DataStopLabel: "own"}, "volumes": []any{bind(dot + "/mnt/index")}, "depends_on": map[string]any{"database": map[string]any{}}},
 		// No data and a stop: an app without data of its own.
 		"worker": map[string]any{"labels": map[string]string{DataStopLabel: "always"}},
 	}}
@@ -63,20 +67,21 @@ func TestSyncServices(t *testing.T) {
 	}
 	want := []SyncService{
 		// logs excluded by its label.
-		{Name: "app", Transfer: DataMnt, Stop: StopImport, StopLabeled: true, Dirs: []string{"storage"}, HasData: true, DependsOn: []string{"database"}, Restart: "always"},
-		{Name: "database", Transfer: DataStream, Stop: StopNever, StopLabeled: true, Dirs: []string{"database"}, HasData: true},
-		{Name: "goaccess", Transfer: DataMnt, Stop: StopNever, Dirs: []string{"report"}, HasData: true, Profiles: []string{"tools"}},
-		{Name: "mntnot", Transfer: DataNone, Stop: StopNever},
-		{Name: "plain", Transfer: DataNone, Stop: StopNever, StopLabeled: true, Dirs: []string{"plain"}},
-		{Name: "search", Transfer: DataStream, Stop: StopOwn, StopLabeled: true, Dirs: []string{"index"}, HasData: true, DependsOn: []string{"database"}},
-		{Name: "worker", Transfer: DataNone, Stop: StopAlways, StopLabeled: true},
+		{Name: "app", Copy: CopyVolumes, Stop: StopImport, StopLabeled: true, Dirs: []string{"storage"}, HasData: true, DependsOn: []string{"database"}, Restart: "always"},
+		{Name: "database", Copy: CopyCustom, Stop: StopNever, StopLabeled: true, Dirs: []string{"database"}, HasData: true},
+		{Name: "goaccess", Copy: CopyVolumes, Stop: StopNever, Dirs: []string{"report"}, HasData: true, Profiles: []string{"tools"}},
+		{Name: "kept", Copy: CopyNone, Stop: StopNever, StopLabeled: true, Dirs: []string{"kept"}, HasData: true},
+		{Name: "mntnot", Copy: CopyNone, Stop: StopNever},
+		{Name: "plain", Copy: CopyNone, Stop: StopNever, StopLabeled: true, Dirs: []string{"plain"}},
+		{Name: "search", Copy: CopyCustom, Stop: StopOwn, StopLabeled: true, Dirs: []string{"index"}, HasData: true, DependsOn: []string{"database"}},
+		{Name: "worker", Copy: CopyNone, Stop: StopAlways, StopLabeled: true},
 	}
 	if len(services) != len(want) {
 		t.Fatalf("services: %+v", services)
 	}
 	for i, s := range services {
 		w := want[i]
-		if s.Name != w.Name || s.Transfer != w.Transfer || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") || strings.Join(s.Profiles, ",") != strings.Join(w.Profiles, ",") {
+		if s.Name != w.Name || s.Copy != w.Copy || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") || strings.Join(s.Profiles, ",") != strings.Join(w.Profiles, ",") {
 			t.Errorf("%d: %+v, want %+v", i, s, w)
 		}
 	}
@@ -89,12 +94,12 @@ func TestSyncServices(t *testing.T) {
 		}
 	}
 	if got := strings.Join(SyncDirs(services), ","); got != "report,storage" {
-		t.Errorf("dirs, stream, none and excluded left out: %s", got)
+		t.Errorf("dirs, custom, none and excluded left out: %s", got)
 	}
-	if got := strings.Join(DataMntServices(services), ","); got != "app,goaccess" {
+	if got := strings.Join(DataVolumesServices(services), ","); got != "app,goaccess" {
 		t.Errorf("mnt: %s", got)
 	}
-	if s, ok := SyncFind(services, "search"); !ok || s.Transfer != DataStream {
+	if s, ok := SyncFind(services, "search"); !ok || s.Copy != CopyCustom {
 		t.Errorf("find: %+v %v", s, ok)
 	}
 	mnt, stream, stop := DataLists(services, []string{"worker", "app"})
@@ -102,43 +107,52 @@ func TestSyncServices(t *testing.T) {
 		t.Errorf("lists: %q %q %q", mnt, stream, stop)
 	}
 
-	// mnt whole is no entry: refused as a mnt service's, ignored on one
-	// without data (a read-only tool).
+	// mnt whole is no entry: refused as a service with data's, ignored on
+	// one without data (a read-only tool).
 	whole := `"volumes":[{"type":"bind","source":"` + dot + `/mnt"}]`
-	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"mnt"},`+whole+`}}}`), dot); err == nil || !strings.Contains(err.Error(), "service x: devopsy.data=mnt mounts ./mnt whole: mount its entries (./mnt/<name>)") {
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"true"},`+whole+`}}}`), dot); err == nil || !strings.Contains(err.Error(), "service x: devopsy.data=true mounts ./mnt whole: mount its entries (./mnt/<name>)") {
 		t.Errorf("mnt whole as data: %v", err)
 	}
 	if got, err := parseSyncServices([]byte(`{"services":{"x":{`+whole+`}}}`), dot); err != nil || len(got[0].Dirs) != 0 {
 		t.Errorf("mnt whole without data: %+v %v", got, err)
 	}
 	// An entry with whitespace in its name would split in the lists and
-	// modules that name it: refused on a mnt service, fine elsewhere.
+	// modules that name it: refused on a service with data, whatever its
+	// copy (a snapshot lists its entries too), fine without data.
 	spaced := `"volumes":[{"type":"bind","source":"` + dot + `/mnt/my files"}]`
-	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"mnt"},`+spaced+`}}}`), dot); err == nil || !strings.Contains(err.Error(), "service x: ./mnt/my files: an entry of mnt a copy carries cannot have whitespace") {
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"true"},`+spaced+`}}}`), dot); err == nil || !strings.Contains(err.Error(), "service x: ./mnt/my files: an entry of mnt a copy carries cannot have whitespace") {
 		t.Errorf("an entry with a space: %v", err)
 	}
-	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"stream"},`+spaced+`}}}`), dot); err != nil {
-		t.Errorf("an entry with a space on a stream service: %v", err)
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"true","devopsy.data.copy":"custom"},`+spaced+`}}}`), dot); err == nil {
+		t.Errorf("an entry with a space on a custom service: %v", err)
+	}
+	if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"false"},`+spaced+`}}}`), dot); err != nil {
+		t.Errorf("an entry with a space without data: %v", err)
 	}
 
 	// Values devopsy does not know are errors naming the service; the
-	// labels and values before devopsy.data name what replaces them; an
-	// empty devopsy.data (a variable left unset) is no way to turn
-	// copying off; own needs data to stop for.
+	// labels and values before devopsy.data.copy name what replaces them;
+	// an empty devopsy.data or copy (a variable left unset) is no way to
+	// turn copying off; own needs data to stop for.
 	for label, want := range map[string]string{
-		`"devopsy.data":"pause"`:                               "service db: devopsy.data=pause: mnt, stream or none",
-		`"devopsy.data":""`:                                    "service db: devopsy.data is empty: mnt, stream, or none for no data",
-		`"devopsy.data":"rsync"`:                               "service db: devopsy.data=rsync: mnt now",
-		`"devopsy.data":"files"`:                               "service db: devopsy.data=files: mnt now",
-		`"devopsy.data":"skip"`:                                "service db: devopsy.data=skip: none now",
-		`"devopsy.data":"mnt","devopsy.data.stop":"yes"`:       "service db: devopsy.data.stop=yes: never, own, import or always",
-		`"devopsy.data":"mnt","devopsy.data.stop":""`:          "service db: devopsy.data.stop=: never, own, import or always",
-		`"devopsy.data":"mnt","devopsy.data.stop":"true"`:      "(true was own, false never)",
-		`"devopsy.data.stop":"own"`:                            "service db: devopsy.data.stop=own needs a devopsy.data label",
-		`"devopsy.data":"mnt","devopsy.data.exclude":"a/b"`:    "service db: devopsy.data.exclude=a/b: entries of mnt only",
-		`"devopsy.sync":"rsync"`:                               "service db: devopsy.sync=rsync: that label is now devopsy.data (rsync is mnt, no label or skip is none)",
-		`"devopsy.data":"mnt","devopsy.sync.stop":"true"`:      "service db: devopsy.sync.stop=true: that label is now devopsy.data.stop (true is own",
-		`"devopsy.data":"mnt","devopsy.sync.rsync.exclude":""`: "service db: devopsy.sync.rsync.exclude=: that label is now devopsy.data.exclude",
+		`"devopsy.data":"pause"`:                                "service db: devopsy.data=pause: true or false",
+		`"devopsy.data":""`:                                     "service db: devopsy.data is empty: true, or false for no data",
+		`"devopsy.data":"mnt"`:                                  "service db: devopsy.data=mnt: devopsy.data=true now (its entries of mnt are the default devopsy.data.copy=volumes)",
+		`"devopsy.data":"stream"`:                               "service db: devopsy.data=stream: devopsy.data=true and devopsy.data.copy=custom now",
+		`"devopsy.data":"none"`:                                 "service db: devopsy.data=none: devopsy.data=false now (no data), or devopsy.data=true and devopsy.data.copy=none for data no copy carries",
+		`"devopsy.data":"rsync"`:                                "service db: devopsy.data=rsync: devopsy.data=true now",
+		`"devopsy.data":"files"`:                                "service db: devopsy.data=files: devopsy.data=true now",
+		`"devopsy.data":"skip"`:                                 "service db: devopsy.data=skip: devopsy.data=false now",
+		`"devopsy.data":"true","devopsy.data.copy":"mnt"`:       "service db: devopsy.data.copy=mnt: volumes, custom or none",
+		`"devopsy.data":"true","devopsy.data.copy":""`:          "service db: devopsy.data.copy is empty: volumes, custom or none",
+		`"devopsy.data":"true","devopsy.data.stop":"yes"`:       "service db: devopsy.data.stop=yes: never, own, import or always",
+		`"devopsy.data":"true","devopsy.data.stop":""`:          "service db: devopsy.data.stop=: never, own, import or always",
+		`"devopsy.data":"true","devopsy.data.stop":"true"`:      "(true was own, false never)",
+		`"devopsy.data.stop":"own"`:                             "service db: devopsy.data.stop=own needs a devopsy.data label",
+		`"devopsy.data":"true","devopsy.data.exclude":"a/b"`:    "service db: devopsy.data.exclude=a/b: entries of mnt only",
+		`"devopsy.sync":"rsync"`:                                "service db: devopsy.sync=rsync: that label is now devopsy.data=true (rsync is the default devopsy.data.copy=volumes), or false for skip",
+		`"devopsy.data":"true","devopsy.sync.stop":"true"`:      "service db: devopsy.sync.stop=true: that label is now devopsy.data.stop (true is own",
+		`"devopsy.data":"true","devopsy.sync.rsync.exclude":""`: "service db: devopsy.sync.rsync.exclude=: that label is now devopsy.data.exclude",
 	} {
 		if _, err := parseSyncServices([]byte(`{"services":{"db":{"labels":{`+label+`}}}}`), dot); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", label, err)
@@ -165,9 +179,9 @@ func TestMntOwners(t *testing.T) {
 	bind := func(src string, ro bool) string {
 		return fmt.Sprintf(`{"type":"bind","source":%q,"target":"/x","read_only":%v}`, dot+"/"+src, ro)
 	}
-	services, err := parse(`"app":{"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs","devopsy.mnt.owner":"10001:10001"},"volumes":[` + bind("mnt/storage", false) + `,` + bind("mnt/logs", false) + `,` + bind("mnt/config", true) + `]},
+	services, err := parse(`"app":{"labels":{"devopsy.data":"true","devopsy.data.exclude":"logs","devopsy.mnt.owner":"10001:10001"},"volumes":[` + bind("mnt/storage", false) + `,` + bind("mnt/logs", false) + `,` + bind("mnt/config", true) + `]},
 "goaccess":{"labels":{"devopsy.mnt.owner":"20000:20000"},"volumes":[` + bind("mnt/logs", true) + `,` + bind("mnt/report", false) + `]},
-"database":{"profiles":["db"],"labels":{"devopsy.data":"stream","devopsy.mnt.owner":"999:999"},"volumes":[` + bind("mnt/database", false) + `]},
+"database":{"profiles":["db"],"labels":{"devopsy.data":"true","devopsy.data.copy":"custom","devopsy.mnt.owner":"999:999"},"volumes":[` + bind("mnt/database", false) + `]},
 "sqlite":{"profiles":["tools"],"volumes":[` + bind("mnt/storage", false) + `]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -281,15 +295,15 @@ func TestCheckMounts(t *testing.T) {
 		}
 		return CheckMounts(parsed)
 	}
-	if err := check(`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `,` + bind(dot+"/mnt/logs/app", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
+	if err := check(`"app":{"labels":{"devopsy.data":"true"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `,` + bind(dot+"/mnt/logs/app", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
 		t.Errorf("read-only tree mounts, shared/'s links, mnt, absolute paths, mnt whole read-only, below an entry nobody owns: %v", err)
 	}
 	for services, want := range map[string]string{
-		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                             "app mounts ./src writable: it is in the release, and the next one replaces it",
-		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                          "app mounts ./.devopsy/cache/x writable",
-		`"app":{"labels":{"devopsy.data":"mnt"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app is labeled devopsy.data=mnt and copies no entry of mnt",
-		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                        "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
-		`"app":{"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app is labeled devopsy.data=mnt and copies no entry of mnt",
+		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                              "app mounts ./src writable: it is in the release, and the next one replaces it",
+		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                           "app mounts ./.devopsy/cache/x writable",
+		`"app":{"labels":{"devopsy.data":"true"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt",
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                         "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
+		`"app":{"labels":{"devopsy.data":"true","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt",
 		// A writable tool over all of mnt, which the child guard missed
 		// once its mount was no entry (review of 2026-10-23): a sync
 		// rsynced under it running.
@@ -322,7 +336,7 @@ func TestSyncServicesImplicitDependencies(t *testing.T) {
 "b":{"links":["db"],"depends_on":{"db":{"condition":"service_started","restart":true,"required":true}}},
 "c":{"volumes_from":["db"],"depends_on":{"db":{"condition":"service_started","required":true}}},
 "d":{"depends_on":{"db":{"condition":"service_healthy","required":false}}},
-"db":{"labels":{"devopsy.data":"mnt","devopsy.data.stop":"own"}}}}`)
+"db":{"labels":{"devopsy.data":"true","devopsy.data.stop":"own"}}}}`)
 	services, err := parseSyncServices(out, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -338,13 +352,13 @@ func TestSyncServicesImplicitDependencies(t *testing.T) {
 func TestDataStops(t *testing.T) {
 	t.Parallel()
 	svc := func(name, data, stop string, deps ...string) SyncService {
-		return SyncService{Name: name, Transfer: data, Stop: stop, HasData: data != DataNone, DependsOn: deps}
+		return SyncService{Name: name, Copy: data, Stop: stop, HasData: data != CopyNone, DependsOn: deps}
 	}
 	names := func(set []Stopped) string { return strings.Join(StoppedNames(set), ",") }
 
 	// The table: one service of each stop word, all with data, nothing
 	// depending on another.
-	table := []SyncService{svc("always", DataMnt, StopAlways), svc("import", DataMnt, StopImport), svc("never", DataMnt, StopNever), svc("own", DataMnt, StopOwn)}
+	table := []SyncService{svc("always", CopyVolumes, StopAlways), svc("import", CopyVolumes, StopImport), svc("never", CopyVolumes, StopNever), svc("own", CopyVolumes, StopOwn)}
 	for _, c := range []struct {
 		op      DataOp
 		service string
@@ -373,7 +387,7 @@ func TestDataStops(t *testing.T) {
 
 	// The union: two own databases, each down while the other is
 	// exported too.
-	two := []SyncService{svc("a", DataMnt, StopOwn), svc("b", DataStream, StopOwn), svc("app", DataNone, StopNever)}
+	two := []SyncService{svc("a", CopyVolumes, StopOwn), svc("b", CopyCustom, StopOwn), svc("app", CopyNone, StopNever)}
 	if got := names(DataStops(two, SyncParent, "")); got != "a,b" {
 		t.Errorf("union: %s", got)
 	}
@@ -384,10 +398,10 @@ func TestDataStops(t *testing.T) {
 	// Dependents follow: a database own, its app unlabeled; transitively
 	// (worker on app on database); dependencies first, with why.
 	shop := []SyncService{
-		svc("app", DataMnt, StopNever, "database"),
-		svc("cache", DataNone, StopNever),
-		svc("database", DataMnt, StopOwn),
-		svc("worker", DataNone, StopNever, "app"),
+		svc("app", CopyVolumes, StopNever, "database"),
+		svc("cache", CopyNone, StopNever),
+		svc("database", CopyVolumes, StopOwn),
+		svc("worker", CopyNone, StopNever, "app"),
 	}
 	set := DataStops(shop, ExportOne, "database")
 	if got := StoppingLine(set, StoppedNames(set)); got != "stopping database (own), app (depends on database), worker (depends on app)" {
@@ -402,7 +416,7 @@ func TestDataStops(t *testing.T) {
 	}
 	// A stream database (never) with the app import: the app and its
 	// worker for an import, nothing for an export.
-	shop[0].Stop, shop[2].Transfer, shop[2].Stop = StopImport, DataStream, StopNever
+	shop[0].Stop, shop[2].Copy, shop[2].Stop = StopImport, CopyCustom, StopNever
 	if got := StoppingLine(DataStops(shop, ImportOne, "database"), []string{"app", "worker"}); got != "stopping app (import), worker (depends on app)" {
 		t.Errorf("stream import: %s", got)
 	}
@@ -425,7 +439,7 @@ func TestUnlabeledDependents(t *testing.T) {
 	services := []SyncService{
 		{Name: "app", DependsOn: []string{"database"}, Stop: StopImport, StopLabeled: true},
 		{Name: "cron", DependsOn: []string{"worker"}},
-		{Name: "database", Transfer: DataStream, HasData: true},
+		{Name: "database", Copy: CopyCustom, HasData: true},
 		{Name: "quiet", DependsOn: []string{"database"}, Stop: StopNever, StopLabeled: true},
 		{Name: "solo"},
 		{Name: "worker", DependsOn: []string{"database"}},
@@ -445,19 +459,19 @@ func TestUnlabeledDependents(t *testing.T) {
 func TestSyncStreamOrder(t *testing.T) {
 	t.Parallel()
 	services := []SyncService{
-		{Name: "a", Transfer: DataStream, DependsOn: []string{"m"}},
-		{Name: "b", Transfer: DataStream},
-		{Name: "c", Transfer: DataStream},
-		{Name: "m", Transfer: DataMnt, DependsOn: []string{"z"}},
-		{Name: "z", Transfer: DataStream, DependsOn: []string{"missing"}},
+		{Name: "a", Copy: CopyCustom, DependsOn: []string{"m"}},
+		{Name: "b", Copy: CopyCustom},
+		{Name: "c", Copy: CopyCustom},
+		{Name: "m", Copy: CopyVolumes, DependsOn: []string{"z"}},
+		{Name: "z", Copy: CopyCustom, DependsOn: []string{"missing"}},
 	}
-	got, err := SyncStreamServices(services)
+	got, err := SyncCustomServices(services)
 	if err != nil || strings.Join(got, ",") != "b,c,z,a" {
 		t.Errorf("order: %v %v", got, err)
 	}
 	services[1].DependsOn = []string{"c"}
 	services[2].DependsOn = []string{"b"}
-	if _, err := SyncStreamServices(services); err == nil || !strings.Contains(err.Error(), "cycle among b, c") {
+	if _, err := SyncCustomServices(services); err == nil || !strings.Contains(err.Error(), "cycle among b, c") {
 		t.Errorf("cycle: %v", err)
 	}
 	// The lists still name them, alphabetically.

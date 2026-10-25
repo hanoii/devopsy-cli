@@ -476,21 +476,26 @@ Services opt in, with labels on compose services, read by each side from
 its own release. A sync is an export of every service with data on the
 parent and an import of each on the child:
 
-  devopsy.data=mnt     its entries of .devopsy/mnt rsynced (rsync -a
-                       --no-D --delete --numeric-ids --modify-window=-1:
-                       no device nodes or FIFOs, times to the nanosecond,
-                       as root in devopsy's own image, devopsy-util,
-                       built on each server), an entry the child owns as
-                       its owner's (devopsy.mnt.owner, --chown)
-  devopsy.data=stream  the parent's data capability's export writes it to
+  devopsy.data=true    it has data (false, or no label: none, neither
+                       copied nor touched), copied as:
+  devopsy.data.copy=volumes
+                       the default: its entries of .devopsy/mnt rsynced
+                       (rsync -a --no-D --delete --numeric-ids
+                       --modify-window=-1: no device nodes or FIFOs,
+                       times to the nanosecond, as root in devopsy's own
+                       image, devopsy-util, built on each server), an
+                       entry the child owns as its owner's
+                       (devopsy.mnt.owner, --chown)
+  devopsy.data.copy=custom
+                       the parent's data capability's export writes it to
                        stdout, into a file on the child's side; once the
                        export succeeded, the child's import reads it (a
                        database dumped and loaded)
-  devopsy.data=none    no data (as without the label): neither copied nor
-                       touched
+  devopsy.data.copy=none
+                       never copied: the child keeps its own
   devopsy.data.exclude=<entry>[,<entry>...]
-                       entries of mnt a mnt service mounts that are not
-                       copied through it anyway (an access log)
+                       entries of mnt a service with data mounts that are
+                       not copied through it anyway (an access log)
   devopsy.data.stop=never|own|import|always
                        when it is stopped, for the whole sync: never (the
                        default); own, while its own data moves (a

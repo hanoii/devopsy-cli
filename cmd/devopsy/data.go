@@ -33,30 +33,32 @@ import (
 )
 
 // --export and --import: one service's data, the way its devopsy.data
-// label says (stream through the data capability's export and import,
-// mnt as a tar of its entries of mnt), locally or in a target's current
+// copy label says (custom through the data capability's export and
+// import, volumes as a tar of its entries of mnt), locally or in a target's current
 // release (ExportScript, ImportScript run the same code there), with what
 // devopsy.data.stop says stopped meanwhile (cli.DataStops).
 
-// dataService finds name among services, with data: a service without
-// any has nothing to move.
+// dataService finds name among services, with data a copy carries: a
+// service without any, or whose copy is none, has nothing to move.
 func dataService(services []cli.SyncService, name string) (cli.SyncService, error) {
 	s, ok := cli.SyncFind(services, name)
 	switch {
 	case !ok:
 		var names []string
 		for _, s := range services {
-			if s.HasData {
+			if s.Copies() {
 				names = append(names, s.Name)
 			}
 		}
 		msg := "no service " + name + " in the project"
 		if len(names) > 0 {
-			msg += " (with " + cli.DataLabel + ": " + strings.Join(names, ", ") + ")"
+			msg += " (with data a copy carries: " + strings.Join(names, ", ") + ")"
 		}
 		return s, errors.New(msg)
 	case !s.HasData:
-		return s, fmt.Errorf("%s has no data: label it %s=%s or %s to say how its data moves", name, cli.DataLabel, cli.DataMnt, cli.DataStream)
+		return s, fmt.Errorf("%s has no data: label it %s=true (its entries of mnt are copied; %s=%s for the data capability's scripts)", name, cli.DataLabel, cli.DataCopyLabel, cli.CopyCustom)
+	case !s.Copies():
+		return s, fmt.Errorf("%s has data no copy carries (%s=%s): %s and %s leave it out", name, cli.DataCopyLabel, cli.CopyNone, cli.ExportFlag, cli.ImportFlag)
 	}
 	return s, nil
 }
@@ -247,10 +249,10 @@ func runExport(cwd string, args []string, color bool) int {
 
 	var entries []string
 	var mnt string
-	switch s.Transfer {
-	case cli.DataStream:
+	switch s.Copy {
+	case cli.CopyCustom:
 		if !isExecutable(dataHookFile(projectDir, "export")) {
-			return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/export", name, cli.DataLabel, cli.DataStream, cli.DataCapability))
+			return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/export", name, cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
 		}
 	default:
 		if mnt, err = dataMnt(projectDir); err != nil {
@@ -276,7 +278,7 @@ func runExport(cwd string, args []string, color bool) int {
 	// What ran on the data goes with it (images.ExportData), for an
 	// import to check as a sync checks a parent's.
 	var record string
-	if s.Transfer == cli.DataMnt {
+	if s.Copy == cli.CopyVolumes {
 		record = exportRecord(cwd, projectDir, name)
 	}
 
@@ -290,7 +292,7 @@ func runExport(cwd string, args []string, color bool) int {
 		return code
 	}
 	code := 0
-	if s.Transfer == cli.DataStream {
+	if s.Copy == cli.CopyCustom {
 		report.Info("exporting " + name)
 		err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), nil, os.Stdout, nil, "export", name)
 	} else {
@@ -861,8 +863,8 @@ func runImport(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if s.Transfer == cli.DataStream && !isExecutable(dataHookFile(projectDir, "import")) {
-		return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/import", name, cli.DataLabel, cli.DataStream, cli.DataCapability))
+	if s.Copy == cli.CopyCustom && !isExecutable(dataHookFile(projectDir, "import")) {
+		return fail(fmt.Sprintf("%s is labeled %s=%s: the project needs an executable .devopsy/capabilities/%s/import", name, cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
 	}
 	// What an mnt import extracts goes to its owner.
 	owners, err := cli.MntOwners(services)
@@ -946,7 +948,7 @@ func runImport(cwd string, args []string, color bool) int {
 	var entries []tarEntry
 	var names []string
 	var mnt string
-	if s.Transfer == cli.DataMnt {
+	if s.Copy == cli.CopyVolumes {
 		if entries, err = tarEntries(spool); errors.Is(err, errOutside) || errors.Is(err, errMember) {
 			return fail("the tar has " + err.Error() + ": nothing imported")
 		} else if err != nil {
@@ -990,7 +992,7 @@ func runImport(cwd string, args []string, color bool) int {
 	var imgs *images.Set
 	var record string
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
-	if s.Transfer == cli.DataMnt && onTarget {
+	if s.Copy == cli.CopyVolumes && onTarget {
 		if record = images.DataFor(tarRecord(spool), name); record != "" {
 			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages(),
 				Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv)}
@@ -1032,7 +1034,7 @@ func runImport(cwd string, args []string, color bool) int {
 	// record) stays up once its import completes. Whether it ran before
 	// says whether a failure records it (one down on purpose stays so).
 	wasUp := true
-	if s.Transfer == cli.DataStream && !slices.Contains(cli.StoppedNames(set), name) {
+	if s.Copy == cli.CopyCustom && !slices.Contains(cli.StoppedNames(set), name) {
 		var was string
 		if down, was, err = upFor(ctx, cwd, name, false, true); err != nil {
 			return before(fail(err.Error()))
@@ -1063,7 +1065,7 @@ func runImport(cwd string, args []string, color bool) int {
 	in2, err := os.Open(spool)
 	if err == nil {
 		defer in2.Close()
-		if s.Transfer == cli.DataStream {
+		if s.Copy == cli.CopyCustom {
 			report.Info("importing " + name)
 			// On a target its group is recorded before it runs, so
 			// the next lock-taker can end it (endLeftoverImport).
@@ -1186,7 +1188,7 @@ func recreateRunning(cwd, rel, name string) error {
 // history.
 func importedImages(cwd, base, name string, services []cli.SyncService, resolvedSince time.Time) {
 	for _, s := range services {
-		if s.Name != name || s.Transfer != cli.DataMnt {
+		if s.Name != name || s.Copy != cli.CopyVolumes {
 			continue
 		}
 		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
@@ -1325,7 +1327,7 @@ func runResolved(cwd, name string) int {
 // owners' are (importContainers), for --resolved.
 func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name string) error {
 	s, ok := cli.SyncFind(services, name)
-	if !ok || s.Transfer != cli.DataMnt {
+	if !ok || s.Copy != cli.CopyVolumes {
 		return nil
 	}
 	owners, err := cli.MntOwners(services)

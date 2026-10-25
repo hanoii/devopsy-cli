@@ -184,8 +184,9 @@ type Service struct {
 	// Ref is its image: image:, else the name compose gives a build
 	// (<compose name>-<service>).
 	Ref string
-	// Build: it has a build: section. Data: a devopsy.data label, any
-	// value, which is Method. NeverPull: pull_policy: never.
+	// Build: it has a build: section. Data: devopsy.data=true, Method
+	// how a copy carries it (devopsy.data.copy, volumes by default).
+	// NeverPull: pull_policy: never.
 	Build, Data, NeverPull bool
 	Method                 string
 	// Entries are the entries of mnt it bind-mounts, less its excluded

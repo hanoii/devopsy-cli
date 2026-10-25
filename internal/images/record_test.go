@@ -33,7 +33,7 @@ func (e *recEnv) release(svcs ...Service) string {
 
 var (
 	appSvc   = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true}
-	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true, Method: DataMnt} }
+	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true, Method: CopyVolumes} }
 	proxySvc = Service{Name: "alwaysup", Ref: "caddy:2-alpine"}
 )
 
@@ -185,25 +185,27 @@ func TestRecordStale(t *testing.T) {
 func TestParseComposeConfig(t *testing.T) {
 	t.Parallel()
 	svcs, err := ParseComposeConfig([]byte(`{"name":"x-prod","services":{
-		"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"none"}},
-		"app":{"build":{"context":"."},"labels":{"devopsy.data":"mnt","devopsy.data.exclude":"logs"},"volumes":[
+		"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.copy":"none"}},
+		"plain":{"image":"busybox","labels":{"devopsy.data":"false","devopsy.data.copy":"custom"}},
+		"app":{"build":{"context":"."},"labels":{"devopsy.data":"true","devopsy.data.exclude":"logs"},"volumes":[
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage/sub"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/logs"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/config"},
 			{"type":"volume","source":"cache"}]},
-		"whole":{"image":"busybox","labels":{"devopsy.data":"mnt"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
+		"whole":{"image":"busybox","labels":{"devopsy.data":"true"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
 		"tool":{"image":"local/tool","pull_policy":"never"},
 		"web":{"image":"caddy:2"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "mnt", Entries: []string{"storage"}, EntriesKnown: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "volumes", Entries: []string{"storage"}, EntriesKnown: true},
 		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
+		{Name: "plain", Ref: "busybox", EntriesKnown: true},
 		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},
 		{Name: "web", Ref: "caddy:2", EntriesKnown: true},
-		{Name: "whole", Ref: "busybox", Data: true, Method: "mnt", Entries: []string{"."}, EntriesKnown: true},
+		{Name: "whole", Ref: "busybox", Data: true, Method: "volumes", Entries: []string{"."}, EntriesKnown: true},
 	}
 	if len(svcs) != len(want) {
 		t.Fatalf("%+v", svcs)
