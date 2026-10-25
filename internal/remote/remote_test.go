@@ -266,6 +266,8 @@ func allScripts() map[string]string {
 		"resolved check":  ResolvedCheckScript(tg),
 		"resolved":        ResolvedScript(tg, "app-prod", "it's db"),
 		"snapshot":        SnapshotScript(tg, "app-prod", 3),
+		"snapshots":       SnapshotsScript(tg, "app-prod"),
+		"snapshots rm":    SnapshotsRemoveScript(tg, "app-prod", []string{"20261025120000"}),
 	}
 }
 

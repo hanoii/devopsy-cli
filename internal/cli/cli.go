@@ -824,6 +824,20 @@ or without the space for it. The environment's snapshots: manual keep
 (3) says how many stay, at most the server's snapshots: max_keep; where
 they go is the server's snapshots: root, else beside shared/.
 `,
+	"--snapshots": `Usage: devopsy @<target> --snapshots
+       devopsy @<target> --snapshots remove <id>... [--yes]
+
+Lists the environment's snapshots, newest first: id, kind, the release
+it was taken in, when, and its size; IN PROGRESS for one being taken
+now, INCOMPLETE for one cut off (the next snapshot finishes it when its
+data was complete, else removes it).
+
+remove takes snapshots away, each with the images only it holds, as a
+release's removal does. An id can be its start, when only one snapshot
+starts so; a word that names none or several refuses them all. Asks
+first at a terminal; --yes for scripts and CI. It waits for the
+snapshot lock, and up to 10 minutes for the server's images.
+`,
 	"--env": `Usage: devopsy @<target> --env [--show]
 
 The variables devopsy loads and computes in the current release, as

@@ -96,6 +96,21 @@ func TestSnapshotTake(t *testing.T) {
 		t.Errorf("kept: %v (the first %s)", ids, id)
 	}
 
+	// Listed newest first; removed by a unique prefix, with --yes; a word
+	// naming none refuses.
+	out, code = s.run(nil, "@prod", "--snapshots")
+	ids := manualSnapshots(snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")})
+	if code != 0 || !strings.HasPrefix(out, "SNAPSHOT        KIND    RELEASE         TAKEN                 SIZE\n"+ids[2]+"  manual  "+rel) || strings.Count(out, " manual ") != 3 {
+		t.Errorf("--snapshots (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "remove", "1999"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing removed") {
+		t.Errorf("remove a snapshot that is none (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "remove", ids[0], "--yes"); code != 0 || !strings.Contains(out, "removing snapshot "+ids[0]) || fileExists(filepath.Join(s.root, "shop", "prod", "snapshots", ids[0])) {
+		t.Errorf("remove (%d):\n%s", code, out)
+	}
+	s.logs()
+
 	// Off, and on a marked environment: refused, nothing stopped.
 	if out, code := s.run(nil, "@nosnap", "--snapshot"); code == 0 || !strings.Contains(out, "manual snapshots are off for nosnap") {
 		t.Errorf("manual: false (%d):\n%s", code, out)

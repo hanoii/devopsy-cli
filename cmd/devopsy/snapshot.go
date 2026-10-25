@@ -25,6 +25,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
+	"golang.org/x/term"
 )
 
 // A snapshot's steps on its server (remote.SnapshotScript holds the
@@ -145,6 +146,21 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " stopped <id> <release>")
 		}
 		return snapshotStopped(cwd, p, args[1], args[2])
+	case "list":
+		snapshotList(p)
+		return 0
+	case "remove":
+		if len(args) < 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " remove <id>...")
+		}
+		code := 0
+		for _, id := range args[1:] {
+			if err := removeSnapshot(cwd, p, id); err != nil {
+				report.Error(err.Error())
+				code = 1
+			}
+		}
+		return code
 	case "tar":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " tar <id>")
@@ -625,6 +641,78 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string) error {
 	return os.RemoveAll(dir)
 }
 
+// removeSnapshot removes the snapshot id by hand (--snapshots remove),
+// waiting for the server's images up to 10 minutes; one a restore's mark
+// names stays.
+func removeSnapshot(cwd string, p snapshotPaths, id string) error {
+	dir := filepath.Join(p.snaps, id)
+	if !remote.ReleaseIDFormat.MatchString(id) || !fileExists(filepath.Join(dir, remote.SnapshotManifest)) {
+		return errors.New("no snapshot " + id + ": nothing removed")
+	}
+	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
+		return errors.New("the restore of snapshot " + id + " did not complete: it stays until a restore completes (devopsy --snapshots restore " + id + " again)")
+	}
+	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
+		unlock, ok, err := imagesExclusiveNow()
+		if err != nil {
+			return err
+		}
+		if ok {
+			unlock()
+			break
+		}
+		if time.Since(start) > 10*time.Minute {
+			return errors.New("the server's images are still in use after 10 minutes: snapshot " + id + " stays")
+		}
+	}
+	report.Info("removing snapshot " + id)
+	return removeSnapshotDir(cwd, p, dir)
+}
+
+// snapshotList prints p's snapshots for SnapshotsScript, newest first:
+// id, kind, release, taken, size in bytes, state.
+func snapshotList(p snapshotPaths) {
+	ents, _ := os.ReadDir(p.snaps)
+	busy := false
+	if f, err := os.OpenFile(filepath.Join(p.base, remote.SnapshotLockFile), os.O_RDONLY, 0); err == nil {
+		busy = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
+		f.Close()
+	}
+	var lines []string
+	for _, e := range ents {
+		id, tmp := strings.CutSuffix(e.Name(), ".tmp")
+		if !e.IsDir() || !remote.ReleaseIDFormat.MatchString(id) {
+			continue
+		}
+		dir := filepath.Join(p.snaps, e.Name())
+		m, err := readManifest(dir)
+		if err != nil {
+			m = &manifest{}
+		}
+		var bytes int64
+		_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+			if err == nil && d.Type().IsRegular() {
+				if fi, err := d.Info(); err == nil {
+					bytes += fi.Size()
+				}
+			}
+			return nil
+		})
+		state := ""
+		if tmp {
+			state = "incomplete"
+			if busy {
+				state = "in progress"
+			}
+		}
+		lines = append(lines, strings.Join([]string{id, m.kind, m.release, m.taken, strconv.FormatInt(bytes, 10), state}, "\t"))
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(lines)))
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+}
+
 // imagesExclusiveNow takes the server's image lock exclusively when it is
 // free at once (ok false when busy).
 func imagesExclusiveNow() (unlock func(), ok bool, err error) {
@@ -710,6 +798,128 @@ func settleSnapshots(cwd, base string) error {
 		return os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
 	}
 	return rec.write(cwd)
+}
+
+// runSnapshots implements devopsy @<target> --snapshots [remove
+// <id>... [--yes]]: the snapshots there, or some removed.
+func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes]]"
+	yes := false
+	var words []string
+	for _, a := range args {
+		switch a {
+		case "--help", "-h":
+			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--snapshots"]))
+			return 0
+		case "--yes", "-y":
+			yes = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				report.Error(usage)
+				return 2
+			}
+			words = append(words, a)
+		}
+	}
+	if len(words) > 0 && (words[0] != "remove" || len(words) == 1) {
+		report.Error(usage)
+		return 2
+	}
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false)
+	if err != nil {
+		report.Fail(err)
+		return 1
+	}
+	if code != 0 {
+		return code
+	}
+	type snap struct{ id, kind, release, taken, size, state string }
+	var snaps []snap
+	// Lines one by one: a taken snapshot's state is empty, its line
+	// ending in a tab.
+	for _, line := range strings.Split(out.String(), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 6 {
+			continue
+		}
+		n, _ := strconv.ParseInt(f[4], 10, 64)
+		taken := f[3]
+		if tm, err := time.Parse(time.RFC3339, f[3]); err == nil {
+			taken = tm.UTC().Format("2006-01-02 15:04 UTC")
+		}
+		snaps = append(snaps, snap{f[0], f[1], f[2], taken, size(n), f[5]})
+	}
+	if len(words) == 0 {
+		if len(snaps) == 0 {
+			fmt.Println("no snapshots on " + t.Address + " (devopsy @" + targetRef(t) + " --snapshot takes one)")
+			return 0
+		}
+		fmt.Printf("%-15s %-7s %-15s %-21s %s\n", "SNAPSHOT", "KIND", "RELEASE", "TAKEN", "SIZE")
+		for _, s := range snaps {
+			line := fmt.Sprintf("%-15s %-7s %-15s %-21s %s", s.id, s.kind, s.release, s.taken, s.size)
+			if s.state != "" {
+				line += "  " + strings.ToUpper(s.state)
+			}
+			fmt.Println(line)
+		}
+		return 0
+	}
+	// Every word resolved first: an exact id, else a unique prefix; one
+	// that names none or several refuses them all.
+	var ids, picked []string
+	for _, s := range snaps {
+		if s.state == "" {
+			ids = append(ids, s.id)
+		}
+	}
+	for _, w := range words[1:] {
+		var match []string
+		for _, id := range ids {
+			if id == w {
+				match = []string{id}
+				break
+			}
+			if strings.HasPrefix(id, w) {
+				match = append(match, id)
+			}
+		}
+		switch {
+		case len(match) == 0:
+			report.Fail(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: nothing removed", t.Address, w), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
+			return 1
+		case len(match) > 1:
+			report.Fail(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): nothing removed", w, strings.Join(match, " "))})
+			return 1
+		}
+		if !slices.Contains(picked, match[0]) {
+			picked = append(picked, match[0])
+		}
+	}
+	if !yes {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			report.Fail(&report.Failure{
+				Msg:   "--snapshots remove asks first, and there is no terminal to ask at",
+				Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+targetRef(t)+" --snapshots "+strings.Join(args, " ")+" --yes")},
+			})
+			return 1
+		}
+		what := "this snapshot"
+		if len(picked) > 1 {
+			what = fmt.Sprintf("these %d snapshots", len(picked))
+		}
+		report.Info(fmt.Sprintf("this removes %s from %s:%s (%s), and the images no release or other snapshot holds", what, t.Host, t.Path, strings.Join(picked, ", ")))
+		if !report.Default().Confirm(stdinReader, "remove "+what+"?") {
+			report.Error("nothing removed")
+			return 1
+		}
+	}
+	code, err = remote.SSH(t, remote.SnapshotsRemoveScript(t, projectName, picked), bytes.NewReader(nil), os.Stdout, false)
+	if err != nil {
+		report.Fail(err)
+		return 1
+	}
+	return code
 }
 
 // takingSnapshot is the take's line naming the snapshot and the release

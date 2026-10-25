@@ -132,3 +132,36 @@ fo_tag="snapshot.$id"
 // environment's snapshots: manual keep, which the server's devopsy caps
 // by its own max_keep.
 const SnapshotKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_KEEP"
+
+// IncompleteRestore is the mark's code for a restore that did not
+// complete, its From the snapshot's id: that snapshot cannot be removed
+// meanwhile, by hand or by keep.
+const IncompleteRestore = "restore"
+
+// SnapshotsScript lists t's snapshots (--snapshot-step list), one line
+// each, tab separated: id, kind, the release it holds, when it was
+// taken, its size in bytes, and its state ("" taken, "in progress",
+// "incomplete"). Read-only: no lock.
+func SnapshotsScript(t *Target, projectName string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$snaps" ] || exit 0
+cd "$base/current" 2>/dev/null || cd "$base"
+` + devopsyCall(projectName, []string{SnapshotStepFlag, "list"}, true) + "\n"
+}
+
+// SnapshotsRemoveScript removes t's snapshots ids, under the snapshot
+// lock (waited for, as is the server's image lock): each with its
+// bookmarks, the images only it held freed as a release's removal does.
+// A snapshot a restore's mark names stays.
+func SnapshotsRemoveScript(t *Target, projectName string, ids []string) string {
+	mode := t.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	return "set -eu\n" + basePrelude(t) + `[ -d "$snaps" ] || { devopsy --say error "$base has no snapshots"; exit 1; }
+[ -L "$base/current" ] || { devopsy --say error "$base has no current release"; exit 1; }
+export ` + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "a snapshot of $base") + `
+cd "$base/current"
+` + devopsyCall(projectName, append([]string{SnapshotStepFlag, "remove"}, ids...), true) + "\n"
+}
