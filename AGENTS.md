@@ -1740,7 +1740,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Transport, SSH and environment
 
-- **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:2`;
+- **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:3`, with `zstd` for snapshots;
   built on each host from `UtilDockerfile` when missing; GNU tar for
   `--export` and `--import` too, GNU find and chown for owners), as
   root with `--numeric-ids`. Why: owners and modes survive, and the

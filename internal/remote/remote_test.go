@@ -320,7 +320,7 @@ func TestMntOwnerFeature(t *testing.T) {
 // root in UtilImage it makes them on the child's host, where bind mounts
 // are not nodev, and --chown then gives them to the entry's owner, a
 // block device of the server's disk the raw disk for that UID. Checked
-// in devopsy-util:2: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
+// in devopsy-util:3: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
 // copied by RsyncCopy with --chown=10001:10001, land as `brw-r--r--
 // 10001 10001 8, 0 disk` and `prw-r--r-- 10001 10001 fifo` (review of
 // 2026-10-23, round 4). Both paths, the same server's and the receive
