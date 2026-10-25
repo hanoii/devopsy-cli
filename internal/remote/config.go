@@ -99,6 +99,10 @@ type Target struct {
 	Destroy string `yaml:"destroy"`
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
+	// Snapshots is its snapshots: section, as written (merged over
+	// defaults key by key); SnapshotsManual what it resolves to.
+	Snapshots       *TargetSnapshots `yaml:"snapshots"`
+	SnapshotsManual SnapshotSetting  `yaml:"-"`
 	// Parent is the environment this one is a copy of (a concrete key of
 	// environments:): its first release syncs the parent's data, and
 	// --sync resyncs it. Empty: not a child.
@@ -172,6 +176,67 @@ type Level struct {
 type TargetReleases struct {
 	Keep int `yaml:"keep"`
 }
+
+// TargetSnapshots is an environment's snapshots: section: each kind of
+// snapshot, {enabled, keep}, true and false shorthand for {enabled: ...}
+// alone (decided 2026-10-25: defaults: can then give a keep without
+// turning a kind on everywhere). Only manual ones so far.
+type TargetSnapshots struct {
+	Manual *SnapshotKind `yaml:"manual"`
+}
+
+// SnapshotKind is one kind's settings as written: unset fields come from
+// what is below it (defaults, then the built-in DefaultManualSnapshots).
+type SnapshotKind struct {
+	Enabled *bool
+	Keep    int
+}
+
+// UnmarshalYAML reads true, false or {enabled, keep}.
+func (k *SnapshotKind) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		var b bool
+		if err := n.Decode(&b); err != nil {
+			return errors.New("true, false, or {enabled: true|false, keep: <n>}")
+		}
+		k.Enabled = &b
+		return nil
+	}
+	var m struct {
+		Enabled *bool `yaml:"enabled"`
+		Keep    *int  `yaml:"keep"`
+	}
+	if n.Kind != yaml.MappingNode {
+		return errors.New("true, false, or {enabled: true|false, keep: <n>}")
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if key := n.Content[i].Value; key != "enabled" && key != "keep" {
+			return fmt.Errorf("unknown key %q (enabled, keep)", key)
+		}
+	}
+	if err := n.Decode(&m); err != nil {
+		return errors.New("enabled: true or false, keep: a number")
+	}
+	// keep: ~ is a null (nullKeys), back to what is below.
+	if m.Keep != nil && *m.Keep < 1 {
+		return errors.New("keep is at least 1")
+	}
+	k.Enabled = m.Enabled
+	if m.Keep != nil {
+		k.Keep = *m.Keep
+	}
+	return nil
+}
+
+// SnapshotSetting is one kind resolved for an environment.
+type SnapshotSetting struct {
+	Enabled bool
+	Keep    int
+}
+
+// DefaultManualSnapshots is what an environment's manual snapshots are
+// when nothing says: on, three kept.
+var DefaultManualSnapshots = SnapshotSetting{Enabled: true, Keep: 3}
 
 // Steps are what --release or --rollback runs, in phases, so the upload,
 // the switch of `current` and the release lock are always where devopsy
@@ -326,6 +391,17 @@ type Releases struct {
 	// Keep is the default for projects; MaxKeep caps any project's.
 	Keep    int `yaml:"keep"`
 	MaxKeep int `yaml:"max_keep"`
+	// Snapshots is the machine's snapshots: section (ReleaseSettings fills
+	// it in).
+	Snapshots ServerSnapshots `yaml:"-"`
+}
+
+// ServerSnapshots is the user-level config's snapshots: section, on a
+// server: where snapshots go, Root ("" for each environment's
+// snapshots/), and MaxKeep, the cap on any environment's manual keep.
+type ServerSnapshots struct {
+	Root    string `yaml:"root"`
+	MaxKeep int    `yaml:"max_keep"`
 }
 
 // configFile is one config file as read.
@@ -336,6 +412,7 @@ type configFile struct {
 	secrets       []string
 	public        []string
 	releases      *Releases
+	snapshots     *ServerSnapshots
 	defaults      *Target
 	defaultsNulls map[string]bool
 	environments  map[string]*Target
@@ -397,6 +474,22 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				return nil, fmt.Errorf("%s: releases: keep and max_keep are at least 1", file)
 			}
 			f.releases, f.keep = &r, r.Keep
+		case key == "snapshots" && !user:
+			return nil, fmt.Errorf("%s: snapshots: goes under defaults: or an environment (snapshots: {manual: ...}); root and max_keep belong to each machine's user-level config", file)
+		case key == "snapshots":
+			var sn ServerSnapshots
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				if k := node.Content[i].Value; k != "root" && k != "max_keep" {
+					return nil, fmt.Errorf("%s: snapshots: unknown key %q (root, max_keep)", file, k)
+				}
+			}
+			if err := node.Decode(&sn); err != nil {
+				return nil, fmt.Errorf("%s: snapshots: %w", file, err)
+			}
+			if sn.MaxKeep < 0 {
+				return nil, fmt.Errorf("%s: snapshots: max_keep is at least 1", file)
+			}
+			f.snapshots = &sn
 		case key == "defaults" && !user:
 			t, nulls, err := decodeTarget(file, "defaults", &node)
 			if err != nil {
@@ -494,6 +587,10 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
 			case "mode", "env", "release", "rollback", "destroy", "releases":
+			case "snapshots":
+				if err := checkSnapshots(n.Content[i+1]); err != nil {
+					return nil, nil, fmt.Errorf("%s: %s: snapshots: %w", file, name, err)
+				}
 			case "parent":
 				if v := n.Content[i+1]; v.Tag != "!!null" && (v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value)) {
 					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern), or ~ for none", file, name)
@@ -505,7 +602,7 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, releases, parent, inherit)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, releases, snapshots, parent, inherit)", file, name, k)
 			}
 		}
 	}
@@ -527,6 +624,27 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	return t, nulls, nil
 }
 
+// checkSnapshots checks an environment's snapshots: keys: the kinds there
+// are; root and max_keep are each machine's own.
+func checkSnapshots(n *yaml.Node) error {
+	if n.Kind != yaml.MappingNode {
+		if n.Tag == "!!null" {
+			return nil
+		}
+		return errors.New("a mapping of kinds: manual")
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		switch k := n.Content[i].Value; k {
+		case "manual":
+		case "root", "max_keep":
+			return fmt.Errorf("%s belongs to each machine's user-level config (~/.config/devopsy/config.yaml there), never to a project", k)
+		default:
+			return fmt.Errorf("unknown key %q (manual)", k)
+		}
+	}
+	return nil
+}
+
 // origins marks every value t sets as coming from from.
 func origins(t *Target, from string) map[string]string {
 	o := map[string]string{}
@@ -540,6 +658,8 @@ func origins(t *Target, from string) map[string]string {
 	set("rollback", t.Rollback != nil)
 	set("destroy", t.Destroy != "")
 	set("keep", t.Releases != nil && t.Releases.Keep > 0)
+	set("snapshots.manual.enabled", t.Snapshots != nil && t.Snapshots.Manual != nil && t.Snapshots.Manual.Enabled != nil)
+	set("snapshots.manual.keep", t.Snapshots != nil && t.Snapshots.Manual != nil && t.Snapshots.Manual.Keep > 0)
 	set("parent", t.Parent != "")
 	set("inherit", t.Inherit != nil)
 	for k := range t.Env {
@@ -549,7 +669,9 @@ func origins(t *Target, from string) map[string]string {
 }
 
 // nullKeys lists what a target node sets to null, removing a default:
-// "env.KEY" for env's KEY: ~, "parent" and "inherit".
+// "env.KEY" for env's KEY: ~, "parent" and "inherit", and in snapshots:
+// "snapshots", "snapshots.<kind>" and "snapshots.<kind>.<key>" (back to
+// the built-in).
 func nullKeys(n *yaml.Node) map[string]bool {
 	nulls := map[string]bool{}
 	if n.Kind != yaml.MappingNode {
@@ -557,8 +679,20 @@ func nullKeys(n *yaml.Node) map[string]bool {
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k, v := n.Content[i].Value, n.Content[i+1]; {
-		case (k == "parent" || k == "inherit") && v.Tag == "!!null":
+		case (k == "parent" || k == "inherit" || k == "snapshots") && v.Tag == "!!null":
 			nulls[k] = true
+		case k == "snapshots" && v.Kind == yaml.MappingNode:
+			for j := 0; j+1 < len(v.Content); j += 2 {
+				kind, kv := v.Content[j].Value, v.Content[j+1]
+				if kv.Tag == "!!null" {
+					nulls["snapshots."+kind] = true
+				}
+				for l := 0; kv.Kind == yaml.MappingNode && l+1 < len(kv.Content); l += 2 {
+					if kv.Content[l+1].Tag == "!!null" {
+						nulls["snapshots."+kind+"."+kv.Content[l].Value] = true
+					}
+				}
+			}
 		case k == "env" && v.Kind == yaml.MappingNode:
 			for j := 0; j+1 < len(v.Content); j += 2 {
 				if v.Content[j+1].Tag == "!!null" {
@@ -629,6 +763,7 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	if t.Releases == nil {
 		t.Releases = base.Releases
 	}
+	t.Snapshots = mergeSnapshots(base.Snapshots, over.Snapshots, nulls)
 	if t.Parent == "" && !nulls["parent"] {
 		t.Parent = base.Parent
 	}
@@ -651,6 +786,61 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 		t.Env = env
 	}
 	return &t
+}
+
+// mergeSnapshots is over's snapshots: on base's, key by key; nulls
+// remove what is below (snapshots, snapshots.manual, snapshots.manual.keep).
+func mergeSnapshots(base, over *TargetSnapshots, nulls map[string]bool) *TargetSnapshots {
+	if nulls["snapshots"] {
+		base = nil
+	}
+	var b, o *SnapshotKind
+	if base != nil && !nulls["snapshots.manual"] {
+		b = base.Manual
+	}
+	if over != nil {
+		o = over.Manual
+	}
+	if b == nil && o == nil {
+		if over == nil && base == nil {
+			return nil
+		}
+		return &TargetSnapshots{}
+	}
+	m := SnapshotKind{}
+	if b != nil {
+		m = *b
+	}
+	if nulls["snapshots.manual.enabled"] {
+		m.Enabled = nil
+	}
+	if nulls["snapshots.manual.keep"] {
+		m.Keep = 0
+	}
+	if o != nil {
+		if o.Enabled != nil {
+			m.Enabled = o.Enabled
+		}
+		if o.Keep > 0 {
+			m.Keep = o.Keep
+		}
+	}
+	return &TargetSnapshots{Manual: &m}
+}
+
+// resolveSnapshots is what t's snapshots: comes to, on the built-in
+// defaults.
+func resolveSnapshots(t *Target) SnapshotSetting {
+	s := DefaultManualSnapshots
+	if t.Snapshots != nil && t.Snapshots.Manual != nil {
+		if m := t.Snapshots.Manual; m.Enabled != nil {
+			s.Enabled = *m.Enabled
+		}
+		if m := t.Snapshots.Manual; m.Keep > 0 {
+			s.Keep = m.Keep
+		}
+	}
+	return s
 }
 
 // Config is what a project's config files and the user-level one define.
@@ -823,6 +1013,9 @@ func ReleaseSettings() (Releases, error) {
 		if f != nil && f.releases != nil {
 			r = *f.releases
 		}
+		if f != nil && f.snapshots != nil {
+			r.Snapshots = *f.snapshots
+		}
 	}
 	if r.Root == "" {
 		home, err := os.UserHomeDir()
@@ -848,6 +1041,21 @@ func ReleaseSettings() (Releases, error) {
 		r.Keep = DefaultKeep
 	}
 	r.Keep = min(r.Keep, r.MaxKeep)
+	if r.Snapshots.MaxKeep == 0 {
+		r.Snapshots.MaxKeep = DefaultKeep
+	}
+	if sr := r.Snapshots.Root; sr != "" {
+		if strings.HasPrefix(sr, "~/") || sr == "~" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return r, err
+			}
+			r.Snapshots.Root = filepath.Join(home, strings.TrimPrefix(sr, "~"))
+		}
+		if !filepath.IsAbs(r.Snapshots.Root) {
+			return r, fmt.Errorf("snapshots: root must be an absolute directory: %s", sr)
+		}
+	}
 	return r, nil
 }
 
@@ -1350,6 +1558,7 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		t.Keep = project.Keep
 		t.From["keep"] = "releases: in " + filepath.Join(project.Dir, ConfigFile)
 	}
+	t.SnapshotsManual = resolveSnapshots(&t)
 	switch t.Mode {
 	case "":
 		// Build works for every project, image only for those that never

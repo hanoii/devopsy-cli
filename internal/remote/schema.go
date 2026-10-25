@@ -37,8 +37,8 @@ releases:
   keep: 5
 
 # What every environment takes unless it sets its own: mode, release,
-# rollback, destroy, releases, parent, inherit and env (env merges key by
-# key).
+# rollback, destroy, releases, snapshots, parent, inherit and env (env and
+# snapshots merge key by key).
 defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
@@ -77,6 +77,13 @@ defaults:
   # "" sets an empty value; ~ (null) removes a default.
   env:
     CERTRESOLVER: letsencrypt1
+  # Snapshots of the environment's data, code and the images that ran on
+  # them (devopsy @prod --snapshot, --snapshots). manual: on by default,
+  # 3 kept, never more than the server's snapshots: max_keep. true and
+  # false only turn a kind on or off; {keep: <n>} only counts; ~ goes back
+  # to the default.
+  snapshots:
+    manual: {keep: 3}
 
 # The environments: prod, staging... A name with * is a pattern (one or
 # more name characters): "pr-*" matches pr-12; an exact name wins, then the
@@ -102,6 +109,8 @@ environments:
   "pr-*":
     releases:
       keep: 1
+    snapshots:
+      manual: false
 
 # Targets: devopsy @[<server>:][<instance>/]<environment> ...
 #   @vm1:prod  @vm1:shop-demo/prod  @prod
@@ -143,5 +152,15 @@ releases:
   # Releases each environment keeps unless its project says otherwise.
   keep: 5
   # No project keeps more than this.
+  max_keep: 5
+
+# Snapshots of the environments on this machine (devopsy @<target>
+# --snapshot). Never from a project.
+snapshots:
+  # Where they go: <root>/<project>/[<instance>/]<environment>/. Default:
+  # each environment's own snapshots/, beside its shared/. A network
+  # volume keeps them off the data's disk.
+  root: /mnt/backups
+  # No environment keeps more manual snapshots than this. Default: 5.
   max_keep: 5
 `

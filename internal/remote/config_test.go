@@ -353,6 +353,80 @@ func TestReleaseSettings(t *testing.T) {
 	if _, err := ReleaseSettings(); err == nil {
 		t.Fatal("relative root")
 	}
+	// snapshots: where they go (each environment's own by default) and
+	// the cap on any environment's manual keep.
+	write(t, filepath.Join(home, ConfigFile), "snapshots:\n  root: ~/backups\n  max_keep: 8\n")
+	if r, err := ReleaseSettings(); err != nil || r.Snapshots.Root != filepath.Join(home, "backups") || r.Snapshots.MaxKeep != 8 {
+		t.Fatalf("snapshots: %+v %v", r, err)
+	}
+	for conf, want := range map[string]string{"snapshots:\n  root: rel\n": "snapshots: root must be an absolute directory", "snapshots:\n  keep: 2\n": `snapshots: unknown key "keep" (root, max_keep)`} {
+		write(t, filepath.Join(home, ConfigFile), conf)
+		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v", conf, err)
+		}
+	}
+}
+
+// snapshots: per environment, merged over defaults: key by key: true and
+// false only turn a kind on or off, keep only counts, ~ goes back to the
+// built-in (manual on, keep 3); a top-level snapshots: and a machine's
+// keys in a project are errors.
+//
+// Not parallel: it sets DEVOPSY_HOME (t.Setenv).
+func TestSnapshotSettings(t *testing.T) {
+	t.Setenv("DEVOPSY_HOME", t.TempDir())
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, ConfigFile), `
+project: app
+defaults:
+  snapshots:
+    manual: {keep: 4}
+environments:
+  prod:
+    snapshots:
+      manual: {keep: 10}
+  staging: {}
+  pr-*:
+    snapshots:
+      manual: false
+  off:
+    snapshots:
+      manual: {enabled: false}
+  back:
+    snapshots:
+      manual: {keep: ~}
+  none:
+    snapshots: ~
+`)
+	for env, want := range map[string]SnapshotSetting{
+		"prod":    {true, 10},
+		"staging": {true, 4},
+		"pr-1":    {false, 4},
+		"off":     {false, 4},
+		"back":    {true, 3},
+		"none":    {true, 3},
+	} {
+		tg, err := LoadTarget(dir, "vm1:"+env, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tg.SnapshotsManual != want {
+			t.Errorf("%s: %+v, want %+v", env, tg.SnapshotsManual, want)
+		}
+	}
+	for conf, want := range map[string]string{
+		"project: app\nsnapshots: {manual: true}\n":                                "snapshots: goes under defaults: or an environment",
+		"project: app\nenvironments:\n  prod: {snapshots: {root: /x}}\n":           "snapshots: root belongs to each machine's user-level config",
+		"project: app\nenvironments:\n  prod: {snapshots: {release: true}}\n":      `snapshots: unknown key "release" (manual)`,
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: {keep: 0}}}\n":  "keep is at least 1",
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: {every: 1}}}\n": `unknown key "every" (enabled, keep)`,
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: often}}\n":      "true, false, or {enabled: true|false, keep: <n>}",
+	} {
+		write(t, filepath.Join(dir, ConfigFile), conf)
+		if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v", conf, err)
+		}
+	}
 }
 
 // A release keeps the target's count, else the server's, at most its
@@ -593,5 +667,23 @@ func TestServerTarget(t *testing.T) {
 	}
 	if tg, err := ServerTarget("", "box", nil); err != nil || tg.Host != "vm9" {
 		t.Errorf("alias outside a project: %+v %v", tg, err)
+	}
+}
+
+// A script's $snaps is the environment's snapshots/, or its path under
+// the server's snapshot root.
+func TestPreludeSnapshotDir(t *testing.T) {
+	t.Parallel()
+	tg := &Target{Path: "app/prod", Address: "vm1:prod"}
+	for root, want := range map[string]string{"": "/srv/app/prod/snapshots", "/mnt/backups": "/mnt/backups/app/prod"} {
+		bin := t.TempDir()
+		write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\nprintf 'root=/srv\\nkeep=5\\nmax_keep=5\\nsnapshot_root="+root+"\\nsnapshot_max_keep=7\\nprotocol=8\\n'\n")
+		os.Chmod(filepath.Join(bin, "devopsy"), 0o755)
+		cmd := exec.Command("sh", "-c", basePrelude(tg)+`echo "$snaps $snap_max_keep"`)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != want+" 7" {
+			t.Errorf("root %q: %v %s", root, err, out)
+		}
 	}
 }

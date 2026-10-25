@@ -467,8 +467,9 @@ const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 const Protocol = 8
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
-// (--release-settings: its user-level config's releases:) and $base to the
-// target's directory: its path under $root. The
+// (--release-settings: its user-level config's releases:), $base to the
+// target's directory (its path under $root), and $snaps to where its
+// snapshots go, with $snap_max_keep (its snapshots:). The
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
 	// The detached update check would inherit the scripts' locks (fds 8
@@ -488,6 +489,12 @@ root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
+# Where this environment's snapshots go: the server's snapshot root, by
+# the same path, else its own snapshots/.
+snap_root=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_root=//p')
+snap_max_keep=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_max_keep=//p')
+snaps="$base/snapshots"
+[ -z "$snap_root" ] || snaps="$snap_root"/` + Quote(t.Path) + `
 `
 }
 

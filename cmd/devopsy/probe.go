@@ -88,7 +88,8 @@ func runPrepareRelease(cwd string, color bool) int {
 }
 
 // runReleaseSettings implements the hidden --release-settings, run by the
-// release scripts on a server: the machine's releases: settings, as
+// release scripts on a server: the machine's releases: and snapshots:
+// settings, as
 // key=value lines, the scripts' protocol it speaks (remote.Protocol) and
 // the features it has (remote.FeaturesList).
 func runReleaseSettings(color bool) int {
@@ -97,6 +98,6 @@ func runReleaseSettings(color bool) int {
 		report.Fail(err)
 		return 1
 	}
-	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, remote.Protocol, remote.FeaturesList())
+	fmt.Printf("root=%s\nkeep=%d\nmax_keep=%d\nsnapshot_root=%s\nsnapshot_max_keep=%d\nprotocol=%d\nfeatures=%s\n", r.Root, r.Keep, r.MaxKeep, r.Snapshots.Root, r.Snapshots.MaxKeep, remote.Protocol, remote.FeaturesList())
 	return 0
 }
