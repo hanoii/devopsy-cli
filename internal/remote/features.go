@@ -21,9 +21,9 @@ import (
 var featureFlags = []string{
 	"check-mounts", "check-names", "destroy-data", "export", "images",
 	"import", "missing-vars", "mnt-owners", "prepare-release",
-	"release-id", "release-settings", "release-steps", "say", "status",
-	"stdin-guard", "sync-push", "sync-services", "upgrade",
-	"util-image", "watch-session",
+	"release-id", "release-settings", "release-steps", "say",
+	"snapshot-step", "status", "stdin-guard", "sync-push",
+	"sync-services", "upgrade", "util-image", "watch-session",
 }
 
 // namedFeatures are behaviors of a flag that came after it, each found

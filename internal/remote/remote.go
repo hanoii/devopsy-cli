@@ -1178,7 +1178,7 @@ func firstDown(projectName string) string {
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
-  fo_tag="$(date -u '+%Y%m%d%H%M%S').$$"
+  fo_tag="${fo_tag:-$(date -u '+%Y%m%d%H%M%S').$$}"
   echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out" || true
   if [ -z "${sync_gone:-}" ]; then
     fo_off=$(wc -c <"$out")

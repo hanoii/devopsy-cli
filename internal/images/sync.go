@@ -33,11 +33,19 @@ const (
 // Lines, tab separated: "image", service, reference, id, digests; then
 // "ran" and a history line.
 func (s *Set) ParentData(base, rel string) string {
-	return s.parentData(base, rel, "")
+	return s.parentData(base, rel, "", false)
 }
 
-// parentData is ParentData, of the service only when only is set.
-func (s *Set) parentData(base, rel, only string) string {
+// SnapshotData is ParentData of every pulled data service whatever its
+// copy label (a snapshot takes them all as files), for a snapshot's
+// manifest: what a restore holds each on.
+func (s *Set) SnapshotData(base, rel string) string {
+	return s.parentData(base, rel, "", true)
+}
+
+// parentData is ParentData, of the service only when only is set, of
+// every data service with all.
+func (s *Set) parentData(base, rel, only string, all bool) string {
 	h := readHistory(base)
 	var cs map[string]Container
 	var b strings.Builder
@@ -56,8 +64,8 @@ func (s *Set) parentData(base, rel, only string) string {
 		}
 		// A named volume counts as there: one a service never ran with
 		// leaves no image to send anyway.
-		copied[svc.Name] = svc.Method == CopyVolumes && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
-		pulled = pulled || (svc.Method == CopyVolumes && !svc.Build && !svc.own(s.Mode))
+		copied[svc.Name] = (all && svc.Data || svc.Method == CopyVolumes) && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
+		pulled = pulled || (copied[svc.Name] && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
 	// A release an older devopsy recorded names no services: which one
@@ -148,7 +156,7 @@ const ExportKey = "DEVOPSY.data-images"
 // recorded, which names no services).
 func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
-		data := s.parentData(base, rel, service)
+		data := s.parentData(base, rel, service, false)
 		if strings.HasPrefix(data, "old\t") {
 			s.say(report.WarnLevel, "%s: release %s predates devopsy's record of each service's image: the export carries no image, and an import starts its history over", service, filepath.Base(rel))
 			return ""

@@ -265,6 +265,7 @@ func allScripts() map[string]string {
 		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n", "database"),
 		"resolved check":  ResolvedCheckScript(tg),
 		"resolved":        ResolvedScript(tg, "app-prod", "it's db"),
+		"snapshot":        SnapshotScript(tg, "app-prod", 3),
 	}
 }
 

@@ -195,6 +195,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
+	case "--snapshot":
+		return runSnapshot(t, projectName, args[1:], color)
+
 	case "--sync", "--reset":
 		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 

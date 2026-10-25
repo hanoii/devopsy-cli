@@ -164,6 +164,11 @@ type SyncService struct {
 	// tree outside mnt, relative to the tree: they live in the release,
 	// and go with the next one (CheckMounts refuses them).
 	TreeBinds []string
+	// OutsideBinds are its writable bind mounts from outside both the
+	// tree and mnt, as resolved (/var/lib/app): the project's own
+	// business, which no copy or snapshot carries (a snapshot refuses one
+	// on a service with data).
+	OutsideBinds []string
 	// Binds are the sources of its bind mounts under mnt, relative to it
 	// (storage, storage/files), read-only ones too: one below an owned
 	// entry is refused (CheckMounts).
@@ -425,8 +430,12 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				}
 			}
 			if rd == "" && !v.ReadOnly {
-				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
-					cs.TreeBinds = append(cs.TreeBinds, rel)
+				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+					if !slices.Contains(cs.TreeBinds, rel) {
+						cs.TreeBinds = append(cs.TreeBinds, rel)
+					}
+				} else if !slices.Contains(cs.OutsideBinds, r) {
+					cs.OutsideBinds = append(cs.OutsideBinds, r)
 				}
 			}
 			if rd == "." && d != "." {

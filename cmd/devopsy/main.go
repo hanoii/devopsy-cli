@@ -152,6 +152,8 @@ func run() int {
 		return runDestroyData(cwd, args[1:], color)
 	case cli.ReleaseStepsFlag:
 		return runReleaseSteps(cwd, args[1:], color)
+	case remote.SnapshotStepFlag:
+		return runSnapshotStep(cwd, args[1:])
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {

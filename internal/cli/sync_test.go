@@ -106,8 +106,8 @@ func TestSyncServices(t *testing.T) {
 	if db, _ := SyncFind(services, "database"); db.Volumes[0].Name != "app_dbdata" || db.Volumes[0].Driver != "local" || db.Volumes[0].Opts["type"] != "tmpfs" || db.Volumes[0].Labels["x"] != "1" {
 		t.Errorf("dbdata: %+v", db.Volumes[0])
 	}
-	if a, _ := SyncFind(services, "app"); !slices.Contains(a.Excluded, "cache") {
-		t.Errorf("app's excluded: %v", a.Excluded)
+	if a, _ := SyncFind(services, "app"); !slices.Contains(a.Excluded, "cache") || strings.Join(a.OutsideBinds, ",") != resolvePath("/etc/hosts") {
+		t.Errorf("app's excluded %v, its writable binds from outside the project %v", a.Excluded, a.OutsideBinds)
 	}
 	if got := strings.Join(SyncVolumes(services), ","); got != "" {
 		t.Errorf("custom and excluded volumes are not rsynced: %s", got)

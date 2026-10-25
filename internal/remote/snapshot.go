@@ -1,0 +1,134 @@
+package remote
+
+import (
+	"strconv"
+)
+
+// A snapshot is a copy of an environment's data (every service with
+// data's entries of mnt and named volumes, as files, whatever its copy
+// label), its code and the images that ran on them, taken with its
+// services with data stopped for one moment: a directory of its own
+// under the environment's snapshots (basePrelude's $snaps), named by
+// an id the server picks as it does a release's (ReleaseIDFlag), holding
+// one .tar.zst per entry or volume, the manifest, copies of the
+// environment's variables and image history, and a copy of the release
+// it was taken in (code/ and the files beside it, its images listing,
+// whose images it bookmarks as s<id>: images.Set.idOf).
+//
+// The data is copied twice into a mirror that stays, $base/snapshots/
+// .mirror, on the data's own filesystem: once while everything runs
+// (most of it, inconsistent), once stopped (only what changed since: the
+// downtime); the tars are made from the mirror afterwards, nobody
+// waiting. Only a directory renamed into place is a snapshot.
+const (
+	// SnapshotStepFlag is the hidden flag a snapshot's scripts call, in
+	// the current release, for each of their steps (runSnapshotStep).
+	SnapshotStepFlag = "--snapshot-step"
+	// SnapshotLockFile, in $base, is held by whatever writes the mirror
+	// or a snapshot's directory: a take's first pass and its tar, its
+	// stopped pass too (with the release and sync locks), a removal. One
+	// order everywhere: release lock, sync lock, snapshot lock, image
+	// lock, none waited for while a later one is held.
+	SnapshotLockFile = ".devopsy-snapshot.lock"
+	// SnapshotHoldingFile, in $base, says a take holds the snapshot
+	// lock: only with the lock busy (flock -n failing), never alone.
+	SnapshotHoldingFile = ".devopsy-snapshot.holding"
+	// SnapshotMirror is the mirror's directory in $base/snapshots: mnt/
+	// and volumes/, beside the data.
+	SnapshotMirror = ".mirror"
+	// SnapshotComplete, in the mirror, names the snapshot whose stopped
+	// pass completed it: a holder of the snapshot lock finding that
+	// snapshot's .tmp finishes its tars from the mirror.
+	SnapshotComplete = ".devopsy-complete"
+	// SnapshotManifest is a snapshot's manifest (SnapshotFormat first).
+	SnapshotManifest = "manifest"
+	// SnapshotFormat is the manifest's format: a restore refuses one it
+	// does not know, naming the upgrade.
+	SnapshotFormat = "1"
+	// SnapshotData holds a snapshot's tars, mnt.<entry>.tar.zst and
+	// volume.<key>.tar.zst, and its copies of the environment's
+	// shared/.env (shared.env), shared/inherit.env (inherit.env) and
+	// image history (data-images).
+	SnapshotData = "data"
+)
+
+// SnapshotScript takes a manual snapshot of t's current release, keeping
+// keep of them (at most the server's snapshot max_keep). One session:
+// watched as an activation is (WatchEnv), so before the end of its
+// stopped pass a session gone or a signal cancels it, the services
+// started again; past it, it finishes on its own, its output in the
+// current release's server log (followOutput, SwitchMarker), the
+// session following it.
+//
+// In order: the first pass into the mirror under the snapshot lock
+// alone (the release lock dropped, so no release waits minutes); then
+// the release lock, the sync lock (fd 5: a push or an export from this
+// environment stops the same services) and the snapshot lock again, the
+// mark checked, the id, the stopped pass (devopsy stops every service
+// with data and its dependents, copies what changed, starts them, and
+// writes the snapshot's manifest and code); then the release and sync
+// locks go, and the tars are made under the snapshot lock alone.
+func SnapshotScript(t *Target, projectName string, keep int) string {
+	mode := t.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	// A step, its word and then shell words as they are ("$id"). Up to
+	// the stopped pass's end each runs in the background, the script
+	// waiting: a signal the watcher sends the script alone (it leads no
+	// group outside sshd) reaches the step, which starts the services
+	// again.
+	call := func(word string, shellArgs []string, exec bool) string {
+		s := devopsyCall(projectName, []string{SnapshotStepFlag, word}, exec)
+		for _, a := range shellArgs {
+			s += " " + a
+		}
+		return s
+	}
+	step := func(word string, shellArgs ...string) string {
+		return `( ` + call(word, shellArgs, true) + ` ) &
+sb_pid=$!
+trap 'kill -TERM "$sb_pid" 2>/dev/null || true' INT TERM HUP
+sb=0
+wait "$sb_pid" || sb=$?
+while kill -0 "$sb_pid" 2>/dev/null; do sb=0; wait "$sb_pid" || sb=$?; done
+trap - INT TERM HUP
+[ "$sb" = 0 ] || exit "$sb"`
+	}
+	snapLock := `exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "another snapshot of $base") + `
+: >"$base/` + SnapshotHoldingFile + `"
+`
+	s := "set -eu\n" + basePrelude(t) + "exec 1>&2\n" + NoExit255
+	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + hintAddress(t) + ` --release')"; exit 1; }
+`
+	s += watchSession(false, true)
+	s += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
+export ` + SnapshotKeepEnv + `=` + strconv.Itoa(keep) + `
+umask 077
+mkdir -p "$snaps" "$base/snapshots/` + SnapshotMirror + `"
+cd "$base/current"
+`
+	refuse := markRefusal(t, "no snapshot taken", `"`+"a snapshot of it would restore as complete"+`"`, "exit 1")
+	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
+	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + "\n" + snapLock + refuse
+	s += `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
+id=$(devopsy ` + ReleaseIDFlag + ` "$snaps")
+devopsy --say info "taking snapshot $id of ${cur#releases/}"
+` + step("stopped", `"$id"`, `"$base/$cur"`) + `
+# Past the stopped pass the snapshot is consistent in the mirror: it
+# finishes on its own, whatever happens to the session.
+trap '' INT TERM HUP
+[ -z "${watch_pid:-}" ] || mv "$ws_armed" "$ws_armed.off" 2>/dev/null || true
+exec 9>&- 5>&-
+out="$base/$cur/` + ServerLogFile + `"
+fo_tag="snapshot.$id"
+` + followOutput + call("tar", []string{`"$id"`}, false) + "\n"
+	return s
+}
+
+// SnapshotKeepEnv is how many manual snapshots a take keeps: its
+// environment's snapshots: manual keep, which the server's devopsy caps
+// by its own max_keep.
+const SnapshotKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_KEEP"

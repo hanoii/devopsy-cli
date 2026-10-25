@@ -543,9 +543,22 @@ func (s *Set) base() string      { return cmp.Or(s.Base, os.Getenv(BaseEnv)) }
 // snapshot's directory (the two kinds' ids may be equal).
 func (s *Set) idOf(rel string) string {
 	if sn := s.snapshots(); sn != "" && filepath.Clean(filepath.Dir(rel)) == filepath.Clean(sn) {
-		return "s" + filepath.Base(rel)
+		// A snapshot being made (<id>.tmp) bookmarks as the snapshot
+		// it becomes: its leftover's removal frees them.
+		return "s" + strings.TrimSuffix(filepath.Base(rel), ".tmp")
 	}
 	return filepath.Base(rel)
+}
+
+// BookmarkFrom bookmarks the images release rel lists (ListFile) for
+// the snapshot directory dir (s<id>), listing them there too: what
+// Remove(dir) frees when the snapshot goes.
+func (s *Set) BookmarkFrom(dir, rel string) error {
+	es := readList(rel)
+	if len(es) == 0 {
+		return errors.New("release " + filepath.Base(rel) + " lists no images")
+	}
+	return s.keep(dir, es)
 }
 
 // others are who besides this environment uses an image: other compose

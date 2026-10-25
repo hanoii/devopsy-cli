@@ -805,6 +805,25 @@ cannot go back to a removed release; data in shared/ is never touched.
 Asks first at a terminal; --yes for scripts and CI. It waits for the
 release lock, and up to 10 minutes for releases using the server's images.
 `,
+	"--snapshot": `Usage: devopsy @<target> --snapshot
+
+Takes a snapshot of the environment: the data of every service with data
+(devopsy.data=true: its entries of mnt and named volumes, as files,
+whatever its copy label), the current release's code and the images
+that ran on them, and its shared/.env. Every service with data, and what
+depends on it, is stopped for the moment of the copy, all together: the
+data is first copied while everything runs, then again stopped, only
+what changed since (the downtime), then started; the compressed tars
+are made afterwards, nobody waiting.
+
+Before the services start again a Ctrl-C or a session gone cancels it,
+the services started again; past that it finishes on its own, its output
+in the server's log (devopsy @<target> --log). Refused on an environment
+whose data a sync or an import left incomplete, with nothing with data,
+or without the space for it. The environment's snapshots: manual keep
+(3) says how many stay, at most the server's snapshots: max_keep; where
+they go is the server's snapshots: root, else beside shared/.
+`,
 	"--env": `Usage: devopsy @<target> --env [--show]
 
 The variables devopsy loads and computes in the current release, as

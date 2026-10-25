@@ -70,6 +70,7 @@ var Flags = []FlagGroup{
 		{Name: "--inherit", Scope: Target, Desc: "the parent's inherit: variables again"},
 		{Name: "--export", Args: "<service>", Scope: LocalOrTarget, Desc: "a service's data, to stdout"},
 		{Name: "--import", Args: "<service> [--accept-image <svc>] [--yes] [--resolved]", Scope: LocalOrTarget, Desc: "a service's data, from stdin"},
+		{Name: "--snapshot", Scope: Target, Desc: "a snapshot: the data, code and images,\nits services stopped for the copy"},
 	}},
 	{"Variables", []Flag{
 		{Name: "--env", Scope: LocalOrTarget, Desc: "what devopsy loads and computes (.env)"},

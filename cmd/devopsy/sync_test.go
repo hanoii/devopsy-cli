@@ -262,12 +262,26 @@ case "$*" in
     m=${last2#rsync://127.0.0.1:*/}; m=${m%/}; f=${m#*/}; m=${m%%/*}
     grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
     if [ "$f" != "$m" ]; then cp "$src/$f" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
-  "run --rm --name devopsy-sync-"*)
+  # A snapshot's: its mirror's old entries removed, its tars (plain, not
+  # compressed) from the mirror to stdout, the data measured (du -sk:
+  # FAKE_DU kilobytes each, 4 by default).
+  "run --rm --name devopsy-snapshot-"*"-stale "*)
+    for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
+    for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
+  "run --rm --name devopsy-snapshot-"*"-tar "*)
+    [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
+    for a; do case $a in *:/m:ro) m=${a%:/m:ro} ;; esac; done
+    COPYFILE_DISABLE=1 exec tar -C "$m/$last2" -cf - -- "$last" ;;
+  "run --rm --network none "*" du -sk "*)
+    w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
+  "run --rm --name devopsy-sync-"*|"run --rm --name devopsy-snapshot-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
+    # FAKE_SLOW_STOPPED: a snapshot's stopped pass that takes 20 s.
+    case "$*" in *-stopped-*) [ -z "${FAKE_SLOW_STOPPED:-}" ] || { touch "$FAKE_SLOW_STOPPED"; exec sleep 20; } ;; esac
     # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>.
     vsrc= vdst=
-    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
+    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
     if [ -n "$vsrc" ]; then mkdir -p "$vdst" && cp -R "$vsrc/." "$vdst"; exit $?; fi
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
@@ -379,7 +393,7 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(home, "config.yaml"), "releases:\n  root: "+s.root+"\n", 0o644)
 	s.dot = filepath.Join(s.project, ".devopsy")
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
-	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
 	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\nif [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)

@@ -71,6 +71,14 @@ func dataService(services []cli.SyncService, name string) (cli.SyncService, erro
 // record back as it was: a devopsy killed after the stop leaves the
 // record, which the next complete import, --resolved or sync restores.
 func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, restore func() error, err error) {
+	return stopSetFor(cwd, set, record, "")
+}
+
+// stopSetFor is stopSet, recording each as a snapshot's line (snapshot
+// <id> <name>) with snapshot: what a take killed outright leaves for the
+// next settle to start (settleSnapshots), where a stop line would be kept
+// down.
+func stopSetFor(cwd string, set []cli.Stopped, record bool, snapshot string) (stopped []string, restore func() error, err error) {
 	restore = func() error { return nil }
 	if len(set) == 0 {
 		return nil, restore, nil
@@ -84,12 +92,20 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 		return nil, restore, nil
 	}
 	prior, hadRecord := readSyncRecord(cwd)
+	lines := func(rec *syncRecord) *[]string {
+		if snapshot != "" {
+			rec.snapID = snapshot
+			return &rec.snaps
+		}
+		return &rec.stops
+	}
 	if record {
 		rec := prior
-		rec.stops = slices.Clone(prior.stops)
+		rec.stops, rec.snaps = slices.Clone(prior.stops), slices.Clone(prior.snaps)
+		l := lines(&rec)
 		for _, name := range stopped {
-			if !slices.Contains(rec.stops, name) {
-				rec.stops = append(rec.stops, name)
+			if !slices.Contains(*l, name) {
+				*l = append(*l, name)
 			}
 		}
 		if err := rec.write(cwd); err != nil {
@@ -109,10 +125,15 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 		}
 		if record {
 			rec, _ := readSyncRecord(cwd)
-			rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool {
-				return slices.Contains(stopped, s) && !slices.Contains(prior.stops, s)
+			before := prior.stops
+			if snapshot != "" {
+				before = prior.snaps
+			}
+			l := lines(&rec)
+			*l = slices.DeleteFunc(*l, func(s string) bool {
+				return slices.Contains(stopped, s) && !slices.Contains(before, s)
 			})
-			if !hadRecord && !rec.first && len(rec.stops) == 0 && len(rec.writers) == 0 {
+			if !hadRecord && !rec.first && len(rec.stops) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
 				_ = os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
 				return nil
 			}

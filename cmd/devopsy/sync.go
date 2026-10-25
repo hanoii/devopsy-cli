@@ -2581,9 +2581,12 @@ const syncFirst = "first"
 // all: syncFirst), the services it stopped ("stop <name>" lines), those
 // of them a sync stopped itself, by its id ("own <sync id> <name>": what
 // a sync that writes nothing starts again; the rest is an earlier sync's
-// or import's, kept down) and an import's hook while it runs ("writer
+// or import's, kept down), an import's hook while it runs ("writer
 // <process group>", then " down" when its service was not running
-// before the import: writerDown).
+// before the import: writerDown), and what a snapshot's stopped pass
+// stopped ("snapshot <id> <name>": started again by its own end, or, a
+// take killed outright, by the next settle unless the environment is
+// marked: settleSnapshots).
 type syncRecord struct {
 	first      bool
 	stops      []string
@@ -2591,6 +2594,8 @@ type syncRecord struct {
 	ownID      string
 	writers    []int
 	writerDown bool
+	snaps      []string
+	snapID     string
 }
 
 // readSyncRecord reads the record; ok is false without one.
@@ -2610,6 +2615,11 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 			if id, svc, ok := strings.Cut(name, " "); ok && svc != "" {
 				rec.ownID = id
 				rec.own = append(rec.own, svc)
+			}
+		case action == "snapshot":
+			if id, svc, ok := strings.Cut(name, " "); ok && svc != "" && !slices.Contains(rec.snaps, svc) {
+				rec.snapID = id
+				rec.snaps = append(rec.snaps, svc)
 			}
 		case action == "writer":
 			pgid, down, _ := strings.Cut(name, " ")
@@ -2633,6 +2643,9 @@ func (rec syncRecord) write(cwd string) error {
 	}
 	for _, name := range rec.own {
 		b.WriteString("own " + rec.ownID + " " + name + "\n")
+	}
+	for _, name := range rec.snaps {
+		b.WriteString("snapshot " + rec.snapID + " " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
 		b.WriteString("writer " + strconv.Itoa(pgid))
@@ -2706,7 +2719,7 @@ func wipeData(cwd, projectDir, base string) error {
 		return err
 	}
 	rec, _ := readSyncRecord(cwd)
-	rec.first, rec.stops, rec.own = true, nil, nil
+	rec.first, rec.stops, rec.own, rec.snaps = true, nil, nil, nil
 	return rec.write(cwd)
 }
 
