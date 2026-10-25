@@ -285,6 +285,8 @@ type Record struct {
 	Commit string `json:"commit,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	Dirty  bool   `json:"dirty,omitempty"`
+	// Restore is the snapshot a restore made the release from.
+	Restore string `json:"restore,omitempty"`
 }
 
 // NewRecord describes a release made now from projectRoot.
@@ -696,6 +698,41 @@ func RemotePhases(steps *Steps) Phases {
 // prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
+	return activateScript(t, id, rollback, projectName, p, sync, nil)
+}
+
+// RestoreOptions are a full restore's (RestoreScript): the snapshot it
+// restores, by id.
+type RestoreOptions struct {
+	Snapshot string
+	// WithEnv brings the snapshot's shared/.env and inherit.env back
+	// (RestoreEnvEnv), By is who restores (the record's).
+	WithEnv bool
+	By      string
+}
+
+// RestoreEnvEnv and RestoreByEnv carry RestoreOptions' WithEnv and By to
+// the server's devopsy.
+const (
+	RestoreEnvEnv = "DEVOPSY_INTERNAL_RESTORE_ENV"
+	RestoreByEnv  = "DEVOPSY_INTERNAL_RESTORE_BY"
+)
+
+// RestoreScript restores t's snapshot r.Snapshot whole: a new release,
+// its id the server's, made from the snapshot's copy of its release, run
+// as a rollback runs the release it restores (no upload, its own steps,
+// --check-mounts restored, its images from its bookmarks), with the
+// snapshot's data written in the stretch a sync's copy would be, between
+// the images and the switch: the snapshot's tars checked whole before
+// anything stops, then the set stopped, each entry and volume emptied and
+// extracted, the data services held on the images that ran on it. Never
+// marks the release it leaves rolled back: a rollback after it goes back
+// there.
+func RestoreScript(t *Target, projectName string, r *RestoreOptions) string {
+	return activateScript(t, "", true, projectName, Phases{}, nil, r)
+}
+
+func activateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions, restore *RestoreOptions) string {
 	if !rollback && len(p.Run) == 0 {
 		// runRemote refuses a release without one (remote.Steps).
 		panic("remote.ActivateScript: a release without a run step")
@@ -728,14 +765,31 @@ if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shar
   image_unlock
 fi
 `
-	if rollback {
+	switch {
+	case restore != nil:
+		// A restore goes through a mark (a complete one clears it), as a
+		// release that syncs does. Its release: made from the snapshot's
+		// copy, pending until the switch, failed if it never goes live.
+		snapStep := func(word string, args ...string) string {
+			return "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
+		}
+		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
+[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
+[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
+export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
+export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
+id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
+` + NotLive + snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
+`
+	case rollback:
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
 		s += `id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
 devopsy --say info "rolling back to $id"
 ` + RollbackNotLive
-	} else {
+	default:
 		s += "id=" + Quote(id) + "\n" + NotLive
 	}
 	// On a pseudo-terminal when the operator has one (with_tty), as
@@ -750,7 +804,7 @@ code="$rel/` + CodeDir + `"
 	if sync == nil && !rollback {
 		s += partialGuard(t, projectName, "not_live 1")
 	}
-	if !rollback {
+	if !rollback || restore != nil {
 		// Held until the switch: --releases tells this release in
 		// progress from one cut off before (ReleasesScript), whatever
 		// else holds the release lock.
@@ -766,8 +820,14 @@ fi
 	// release's do. On a pseudo-terminal like a release's (with_tty,
 	// which may run them in script's own shell: the release's code
 	// exported for that).
+	// A restore's are the restored release's rollback:, else its
+	// release:, as a restart's are.
+	kind := "rollback"
+	if restore != nil {
+		kind = "restart"
+	}
 	steps := func(phase string) string {
-		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
+		return devopsyCall(projectName, []string{"--release-steps", kind, phase}, false)
 	}
 	if rollback {
 		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
@@ -827,6 +887,11 @@ done
 		// image, which may have been pruned since, and no owned entry a
 		// link.
 		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + ") || not_live 1\n"
+	}
+	if restore != nil {
+		// The snapshot's tars read and checked whole, before anything
+		// stops (devopsy's own, still checked: they sit on disk).
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "check-tars"}, false) + " \"$snap\") || not_live 1\n"
 	}
 	if !rollback {
 		// The checks reading compose's configuration, which fails while a
@@ -947,7 +1012,13 @@ if ! (umask 077; : >>"$out"); then
   not_live 1
 fi
 `
-	if !rollback {
+	if restore != nil {
+		// The data, once the images are ready and past the point a session
+		// gone cancels: before its first write a failure starts the set
+		// again; from it the set stays down under a restore mark.
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + " \"$snap\" \"$rel\") || not_live 1\n"
+	}
+	if !rollback || restore != nil {
 		s += `rm -f "$rel/` + PendingFile + `"
 exec 7<&-
 `
@@ -1049,7 +1120,7 @@ if [ "$status" != 0 ]; then
   exit "$status"
 fi
 `
-	if rollback {
+	if rollback && restore == nil {
 		// The release it left: never counted toward keep, never rolled back
 		// to again, its log kept until pruning takes it.
 		s += `: >"$base/$prev/` + RolledBackFile + `"

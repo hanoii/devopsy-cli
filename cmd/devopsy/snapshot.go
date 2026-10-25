@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -161,6 +162,27 @@ func runSnapshotStep(cwd string, args []string) int {
 			}
 		}
 		return code
+	case "make-release":
+		if len(args) != 3 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " make-release <snapshot> <release>")
+		}
+		if err := snapshotMakeRelease(cwd, p, args[1], args[2]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
+	case "check-tars":
+		if len(args) != 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-tars <snapshot>")
+		}
+		if err := snapshotCheckTars(cwd, p, args[1]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
+	case "restore-data":
+		if len(args) != 3 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release>")
+		}
+		return snapshotRestoreData(cwd, p, args[1], args[2])
 	case "tar":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " tar <id>")
@@ -803,7 +825,7 @@ func settleSnapshots(cwd, base string) error {
 // runSnapshots implements devopsy @<target> --snapshots [remove
 // <id>... [--yes]]: the snapshots there, or some removed.
 func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes]]"
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes] | restore <id> [--no-code] [--with-env] [--yes]]"
 	yes := false
 	var words []string
 	for _, a := range args {
@@ -813,6 +835,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			return 0
 		case "--yes", "-y":
 			yes = true
+		case "--no-code", "--with-env":
 		default:
 			if strings.HasPrefix(a, "-") {
 				report.Error(usage)
@@ -820,6 +843,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			}
 			words = append(words, a)
 		}
+	}
+	if len(words) > 0 && words[0] == "restore" {
+		return runRestore(t, projectName, args)
 	}
 	if len(words) > 0 && (words[0] != "remove" || len(words) == 1) {
 		report.Error(usage)
@@ -967,4 +993,460 @@ func snapshotWords(t *remote.Target) liveWords {
 		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the stopped pass ended: the server cancels the snapshot once it notices, within a minute, its services started again"},
 		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
 	}
+}
+
+// devopsyTargetLines are the lines devopsy writes into a release's
+// devopsy-target.env about where it runs, which a restore takes from the
+// current release, never the snapshot's (an imported snapshot names
+// another server): the rest, the config's env and the commit, are the
+// snapshot's, and its imports section the current release's too.
+var devopsyTargetLines = []string{"COMPOSE_PROJECT_NAME", "DEVOPSY_PROJECT", "DEVOPSY_INSTANCE", "DEVOPSY_ENVIRONMENT", "DEVOPSY_TARGET", "DEVOPSY_PARENT", "DEVOPSY_PARENT_TARGET"}
+
+// mergeTargetEnv is the restored release's devopsy-target.env: snap's
+// own lines but the ones devopsyTargetLines names, then current's of
+// those, then current's imports.
+func mergeTargetEnv(snap, current string) string {
+	split := func(s string) (lines []string, imports string) {
+		head, tail, found := strings.Cut(s, cli.ImportedMarker)
+		if found {
+			imports = cli.ImportedMarker + tail
+		}
+		return strings.Split(strings.TrimRight(head, "\n"), "\n"), imports
+	}
+	key := func(line string) string {
+		k, _, _ := strings.Cut(line, "=")
+		return strings.TrimSpace(k)
+	}
+	sl, _ := split(snap)
+	cl, imports := split(current)
+	var b strings.Builder
+	for _, l := range sl {
+		if l != "" && !slices.Contains(devopsyTargetLines, key(l)) {
+			b.WriteString(l + "\n")
+		}
+	}
+	for _, l := range cl {
+		if slices.Contains(devopsyTargetLines, key(l)) {
+			b.WriteString(l + "\n")
+		}
+	}
+	if imports != "" {
+		b.WriteString(imports)
+	}
+	return b.String()
+}
+
+// snapshotMakeRelease makes the restore's release rel from snapshot
+// snap's copy of its release: its code, its files but its logs, its
+// devopsy-target.env merged with the current release's (mergeTargetEnv),
+// a record naming the snapshot, pending until the switch, and the
+// snapshot's images bookmarked for it, which its images restore from.
+func snapshotMakeRelease(cwd string, p snapshotPaths, snap, rel string) error {
+	m, err := readManifest(snap)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
+	}
+	if m.format != remote.SnapshotFormat {
+		return fmt.Errorf("snapshot %s is of a format this devopsy does not know (%s): upgrade the server's devopsy", filepath.Base(snap), cmp.Or(m.format, "none"))
+	}
+	current, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return err
+	}
+	current = filepath.Dir(current)
+	if err := os.Mkdir(rel, 0o755); err != nil {
+		return err
+	}
+	if out, err := exec.Command("cp", "-a", filepath.Join(snap, remote.CodeDir), filepath.Join(rel, remote.CodeDir)).CombinedOutput(); err != nil {
+		return fmt.Errorf("copying the snapshot's code: %v %s", err, out)
+	}
+	files, _ := os.ReadDir(snap)
+	for _, f := range files {
+		switch name := f.Name(); {
+		case f.IsDir(), name == remote.SnapshotManifest, name == images.ListFile, name == remote.PendingFile:
+		case name == remote.TargetEnvFile:
+			s, _ := os.ReadFile(filepath.Join(snap, name))
+			c, _ := os.ReadFile(filepath.Join(current, name))
+			if err := os.WriteFile(filepath.Join(rel, name), []byte(mergeTargetEnv(string(s), string(c))), 0o644); err != nil {
+				return err
+			}
+		case name == remote.RecordFile:
+			var r remote.Record
+			data, _ := os.ReadFile(filepath.Join(snap, name))
+			_ = json.Unmarshal(data, &r)
+			r.Time, r.By, r.Restore = time.Now().UTC().Format(time.RFC3339), cmp.Or(os.Getenv(remote.RestoreByEnv), r.By), filepath.Base(snap)
+			if err := os.WriteFile(filepath.Join(rel, name), []byte(r.JSON()), 0o644); err != nil {
+				return err
+			}
+		default:
+			if err := copyFile(filepath.Join(snap, name), filepath.Join(rel, name)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(rel, remote.PendingFile), nil, 0o644); err != nil {
+		return err
+	}
+	unlock, err := imagesShared(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+	return set.BookmarkFrom(rel, snap)
+}
+
+// snapshotTar is one of a snapshot's tars: its file in data/, what it
+// holds (an entry of mnt, a file or not, or a volume) and its name.
+type snapshotTarFile struct {
+	file, name string
+	isFile     bool
+	volume     string
+}
+
+func snapshotTars(m *manifest) []snapshotTarFile {
+	var ts []snapshotTarFile
+	for _, e := range m.entries {
+		ts = append(ts, snapshotTarFile{file: "mnt." + e + ".tar.zst", name: e, isFile: slices.Contains(m.files, e)})
+	}
+	for _, k := range slices.Sorted(maps.Keys(m.volumes)) {
+		ts = append(ts, snapshotTarFile{file: "volume." + k + ".tar.zst", name: k, volume: m.volumes[k]})
+	}
+	return ts
+}
+
+// unzstd streams the tar file of snap's data/, decompressed in the util
+// image, to f; wait ends it.
+func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait func() error, err error) {
+	args := []string{"run", "--rm", "--name", name, "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData) + ":/s:ro", remote.UtilImage, "zstd", "-dcq", "/s/" + file}
+	trace(append([]string{"docker"}, args...))
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stderr = errOut
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	return out, cmd.Wait, nil
+}
+
+// snapshotCheckTars reads and checks each of snap's tars whole, as an
+// import checks its tar (tarEntriesIn: complete, nothing reaching out of
+// its entry, only files, directories and links), each carrying its own
+// entry or volume alone and of the kind the manifest says; and has the
+// images its data services ran there (pulled by digest when gone).
+func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
+	ctx, stop := interruptible()
+	defer stop()
+	m, err := readManifest(snap)
+	if err != nil {
+		return err
+	}
+	if m.format != remote.SnapshotFormat {
+		return fmt.Errorf("snapshot %s is of a format this devopsy does not know (%s): upgrade the server's devopsy", filepath.Base(snap), cmp.Or(m.format, "none"))
+	}
+	if err := ensureUtilImage(ctx); err != nil {
+		return err
+	}
+	for _, t := range snapshotTars(m) {
+		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+filepath.Base(snap)+"-check")
+		if err != nil {
+			return err
+		}
+		es, err := tarEntriesIn(r)
+		_, _ = io.Copy(io.Discard, r)
+		if werr := wait(); err == nil && werr != nil {
+			err = werr
+		}
+		switch {
+		case err != nil:
+		case len(es) != 1 || es[0].name != t.name:
+			err = errors.New("it carries something else than " + t.name)
+		case es[0].file != t.isFile:
+			err = errors.New("it carries " + t.name + " as another kind than the manifest says")
+		}
+		if err != nil {
+			return fmt.Errorf("snapshot %s's %s: %v: nothing restored", filepath.Base(snap), t.file, err)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
+	d := images.CLI{}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 5 || f[0] != "image" {
+			continue
+		}
+		if _, err := d.Inspect(f[3]); err == nil {
+			continue
+		}
+		repo := f[2]
+		if i := strings.LastIndexAny(repo, ":@"); i > strings.LastIndex(repo, "/") {
+			repo = repo[:i]
+		}
+		pulled := false
+		for _, dg := range strings.Fields(f[4]) {
+			if _, digest, ok := strings.Cut(dg, "@"); ok && d.Pull(repo+"@"+digest) == nil {
+				pulled = true
+				break
+			}
+		}
+		if !pulled {
+			return fmt.Errorf("the image %s's data ran when snapshot %s was taken (%s) is gone and could not be pulled by its digest: nothing restored", f[1], filepath.Base(snap), f[2])
+		}
+	}
+	return nil
+}
+
+// snapshotRestoreData writes snap's data into the environment, for the
+// release rel being restored, as an import writes its tar: the current
+// release's services with data and their dependents stopped (recorded),
+// a restore mark right before the first write, each entry and volume
+// emptied and extracted in its own util container, the data services
+// held on the images that ran on the data, with its history; then the
+// mark goes (it covers every service with data the restored code runs),
+// and so do its stop lines: the run step starts them.
+func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
+	fail := func(msg string) int {
+		report.Error(msg)
+		return 1
+	}
+	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+	ctx := context.Background()
+	id := filepath.Base(snap)
+	m, err := readManifest(snap)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if err := settleSnapshots(cwd, p.base); err != nil {
+		return fail(err.Error())
+	}
+	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		return fail(err.Error())
+	}
+	switch mk := readMark(p.base); {
+	case mk.IsImport():
+		if err := endLeftoverImport(cwd, p.base, services, mk.From); err != nil {
+			return fail(err.Error())
+		}
+	case mk != nil && mk.Code == remote.IncompleteRestore:
+		if err := removeContainers(importContainers(cwd)); err != nil {
+			return fail(err.Error())
+		}
+	}
+	mnt, err := dataMnt(projectDir)
+	if err != nil {
+		return fail("the project's mnt: " + err.Error())
+	}
+	// The restored code's volumes, for what makes one missing.
+	_, restored, _ := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
+	var names []string
+	for _, s := range services {
+		if s.HasData {
+			names = append(names, s.Name)
+		}
+	}
+	set := cli.WithDependents(services, names, "restore")
+	stopped, restore, err := stopSet(cwd, set, true)
+	if err != nil {
+		if rerr := restore(); rerr != nil {
+			report.Error(rerr.Error())
+		}
+		return fail(err.Error() + ": nothing restored")
+	}
+	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "the restore of snapshot "+id+" did not complete", false); err != nil {
+		if rerr := restore(); rerr != nil {
+			report.Error(rerr.Error())
+		}
+		return fail(err.Error() + ": nothing restored")
+	}
+	// From the mark on, the restore rule: whatever fails keeps the set
+	// down under the mark, its ways out a restore again or another.
+	cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+	for i, t := range snapshotTars(m) {
+		e := tarEntry{name: t.name, forms: []string{t.name}, file: t.isFile}
+		if t.volume != "" {
+			v := cli.Volume{Key: t.name, Name: t.volume}
+			for _, s := range restored {
+				if j := slices.IndexFunc(s.Volumes, func(x cli.Volume) bool { return x.Key == t.name }); j >= 0 {
+					v = s.Volumes[j]
+				}
+			}
+			e.volume = &v
+		}
+		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
+		r, wait, err := unzstd(ctx, snap, t.file, fmt.Sprintf("%s-unzstd-%d", cname, i))
+		if err == nil {
+			err = extractEntry(ctx, mnt, r, e, fmt.Sprintf("%s-extract-%d", cname, i), composeName(cwd))
+			// What the extraction left unread, so the decompression ends.
+			_, _ = io.Copy(io.Discard, r)
+			if werr := wait(); err == nil && werr != nil {
+				err = werr
+			}
+		}
+		if err != nil {
+			return fail(err.Error() + ": the services stay down: restore it again (devopsy --snapshots restore " + id + ")")
+		}
+	}
+	// The images that ran on the data, held, with their history.
+	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
+	if len(data) > 0 {
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+		unlock, err := imagesShared(ctx)
+		if err != nil {
+			return fail(err.Error())
+		}
+		err = set.ImportDone(p.base, rel, string(data))
+		unlock()
+		if err != nil {
+			return fail(err.Error())
+		}
+	}
+	if os.Getenv(remote.RestoreEnvEnv) != "" {
+		for from, to := range map[string]string{"shared.env": ".env", "inherit.env": remote.InheritFile} {
+			if src := filepath.Join(snap, remote.SnapshotData, from); fileExists(src) {
+				if err := copyFile(src, filepath.Join(p.base, "shared", to+".restoring")); err != nil {
+					return fail(err.Error())
+				}
+				if err := os.Rename(filepath.Join(p.base, "shared", to+".restoring"), filepath.Join(p.base, "shared", to)); err != nil {
+					return fail(err.Error())
+				}
+				report.Info("shared/" + to + " restored from the snapshot")
+			}
+		}
+	} else if keys := envKeysDiffer(filepath.Join(snap, remote.SnapshotData, "shared.env"), filepath.Join(p.base, "shared", ".env")); len(keys) > 0 {
+		report.Warn("the snapshot's shared/.env differs from the environment's in "+strings.Join(keys, ", ")+": kept as it is", "devopsy --snapshots restore "+id+" --with-env brings it back too")
+	}
+	_ = os.Remove(filepath.Join(p.base, remote.SyncIncompleteFile))
+	rec, _ := readSyncRecord(cwd)
+	rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(stopped, s) })
+	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
+		_ = os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
+	} else if err := rec.write(cwd); err != nil {
+		return fail(err.Error())
+	}
+	report.Info("snapshot " + id + "'s data is in")
+	return 0
+}
+
+// envKeysDiffer are the keys whose values differ between two .env files,
+// sorted (never the values).
+func envKeysDiffer(a, b string) []string {
+	read := func(p string) map[string]string {
+		m := map[string]string{}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return m
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(strings.TrimSpace(k), "#") {
+				m[strings.TrimSpace(k)] = v
+			}
+		}
+		return m
+	}
+	ma, mb := read(a), read(b)
+	var keys []string
+	for k, v := range ma {
+		if w, ok := mb[k]; !ok || w != v {
+			keys = append(keys, k)
+		}
+	}
+	for k := range mb {
+		if _, ok := ma[k]; !ok {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// restoringAs is a restore's line naming the release it makes, whose log
+// the session's is.
+var restoringAs = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `restoring snapshot [0-9]{14} as release ([0-9]{14})`)
+
+// runRestore implements devopsy @<target> --snapshots restore <id>
+// [--no-code] [--with-env] [--yes]: the snapshot's id resolved (a unique
+// prefix), the environment's full name asked for, then the restore's one
+// session, an activation's (liveSession), its log the new release's.
+func runRestore(t *remote.Target, projectName string, args []string) int {
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots restore <id> [--no-code] [--with-env] [--yes]"
+	var words []string
+	yes, noCode, withEnv := false, false, false
+	for _, a := range args {
+		switch a {
+		case "--yes", "-y":
+			yes = true
+		case "--no-code":
+			noCode = true
+		case "--with-env":
+			withEnv = true
+		default:
+			words = append(words, a)
+		}
+	}
+	if len(words) != 2 {
+		report.Error(usage)
+		return 2
+	}
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false)
+	if err != nil || code != 0 {
+		if err != nil {
+			report.Fail(err)
+		}
+		return max(code, 1)
+	}
+	var ids, match []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if f := strings.Split(line, "\t"); len(f) >= 6 && f[5] == "" {
+			ids = append(ids, f[0])
+		}
+	}
+	for _, id := range ids {
+		if id == words[1] {
+			match = []string{id}
+			break
+		}
+		if strings.HasPrefix(id, words[1]) {
+			match = append(match, id)
+		}
+	}
+	switch {
+	case len(match) == 0:
+		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: nothing restored", t.Address, words[1]), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
+		return 1
+	case len(match) > 1:
+		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): nothing restored", words[1], strings.Join(match, " "))})
+		return 1
+	}
+	id := match[0]
+	if noCode {
+		report.Error("--no-code is not built yet: restore the snapshot whole, its code included")
+		return 1
+	}
+	what := "snapshot " + id + "'s data, code and the images that ran on them"
+	if withEnv {
+		what += ", and its shared/.env"
+	}
+	if !yes {
+		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s, as a new release (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
+	rlog := newReleaseLog("restore", t)
+	log := report.Default().Tee(rlog.Line)
+	log.Info(fmt.Sprintf("restoring %s (%s:%s) from snapshot %s", t.Address, t.Host, t.Path, id))
+	code = liveSession(t, remote.RestoreScript(t, projectName, &remote.RestoreOptions{Snapshot: id, WithEnv: withEnv, By: remote.Whoami()}), rlog, log, releaseWords(t))
+	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
+	text := rlog.Text()
+	if m := restoringAs.FindSubmatch(text); m != nil {
+		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), false), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+			report.Warn("could not save the restore's log on the server")
+		}
+	}
+	return code
 }

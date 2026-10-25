@@ -511,6 +511,12 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return tarEntriesIn(f)
+}
+
+// tarEntriesIn is tarEntries of the tar f streams (a snapshot's,
+// decompressed on the way).
+func tarEntriesIn(f io.Reader) ([]tarEntry, error) {
 	// archive/tar ends at its end-of-archive blocks and at a plain end
 	// of file alike; only the first leaves a read that returned data
 	// last.
@@ -834,37 +840,46 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 // would, and mounted by name.
 func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
 	for i, e := range entries {
-		var mount string
-		var err error
-		if e.volume != nil {
-			// A volume: made when missing, as compose would, and mounted
-			// by name.
-			if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
-				return err
-			}
-			mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
-		} else {
-			if err := readyEntry(mnt, e); err != nil {
-				return err
-			}
-			if mount, err = bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name); err != nil {
-				return err
-			}
-		}
 		in, err := os.Open(spool)
 		if err != nil {
 			return err
 		}
-		run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
-		err = dockerRunFresh(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, run...)
+		err = extractEntry(ctx, mnt, in, e, fmt.Sprintf("%s-extract-%d", name, i), project)
 		in.Close()
 		if err != nil {
-			what := "mnt/" + e.name
-			if e.volume != nil {
-				what = "the volume " + e.name
-			}
-			return fmt.Errorf("extracting %s: %w", what, err)
+			return err
 		}
+	}
+	return nil
+}
+
+// extractEntry empties and extracts the entry or volume e from the tar
+// in, as extractEntries does each, in the util container name.
+func extractEntry(ctx context.Context, mnt string, in io.Reader, e tarEntry, name, project string) error {
+	var mount string
+	var err error
+	if e.volume != nil {
+		// A volume: made when missing, as compose would, and mounted
+		// by name.
+		if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
+			return err
+		}
+		mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
+	} else {
+		if err := readyEntry(mnt, e); err != nil {
+			return err
+		}
+		if mount, err = bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name); err != nil {
+			return err
+		}
+	}
+	run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
+	if err := dockerRunFresh(ctx, name, in, run...); err != nil {
+		what := "mnt/" + e.name
+		if e.volume != nil {
+			what = "the volume " + e.name
+		}
+		return fmt.Errorf("extracting %s: %w", what, err)
 	}
 	return nil
 }

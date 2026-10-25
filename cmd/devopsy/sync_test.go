@@ -265,6 +265,10 @@ case "$*" in
   # A snapshot's: its mirror's old entries removed, its tars (plain, not
   # compressed) from the mirror to stdout, the data measured (du -sk:
   # FAKE_DU kilobytes each, 4 by default).
+  # A snapshot's tar, decompressed (the fake's are plain tars).
+  "run --rm --name devopsy-snapshot-"*"-check "*|"run --rm --name devopsy-import-"*"-unzstd-"*)
+    for a; do case $a in *:/s:ro) sd=${a%:/s:ro} ;; esac; done
+    exec cat "$sd/${last#/s/}" ;;
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;

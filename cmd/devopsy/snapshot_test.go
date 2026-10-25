@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // tarNames are the member names of the tar at path.
@@ -164,5 +166,69 @@ func TestSnapshotInterrupt(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(base, "snapshots", "2*")); len(left) > 0 {
 		t.Errorf("snapshots left: %v", left)
+	}
+}
+
+// A full restore: a new release made from the snapshot's copy of its
+// release, its tars checked, the data written back between the images
+// and the switch (the services stopped, then started by its run step),
+// its record naming the snapshot; the release it leaves stays live, a
+// rollback target. --with-env brings shared/.env back; without it a
+// difference is said.
+func TestSnapshotRestore(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, "shared", ".env"), "DB_PASSWORD=old\n", 0o600)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	id, taken := m[1], m[2]
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "new.txt"), "new\n", 0o644)
+	write(t, filepath.Join(base, "shared", ".env"), "DB_PASSWORD=new\n", 0o600)
+	s.logs()
+
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", id[:12], "--yes")
+	docker, _ := s.logs()
+	r := restoringAs.FindStringSubmatch(out)
+	if code != 0 || r == nil || !strings.Contains(out, "deploy in shop-prod") {
+		t.Fatalf("restore (%d):\n%s\n%s", code, out, docker)
+	}
+	if got := readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")); got != "from prod\n" || fileExists(filepath.Join(s.mnt("prod"), "storage", "new.txt")) {
+		t.Errorf("storage after the restore: %q, new.txt kept %v", got, fileExists(filepath.Join(s.mnt("prod"), "storage", "new.txt")))
+	}
+	if s.current("prod") != "releases/"+r[1] || r[1] == taken {
+		t.Errorf("current %s, the restore's release %s (the snapshot's %s)", s.current("prod"), r[1], taken)
+	}
+	if rec := readString(filepath.Join(base, "releases", r[1], "devopsy-release.json")); !strings.Contains(rec, `"restore":"`+id+`"`) {
+		t.Errorf("the restore's record: %s", rec)
+	}
+	if fileExists(filepath.Join(base, "releases", taken, "rolled-back")) || fileExists(filepath.Join(base, "releases", taken, "devopsy-rolled-back")) {
+		t.Errorf("the release it left marked rolled back")
+	}
+	order := []string{"-check ", "stop db app", "-extract-", "deploy"}
+	rest := docker + out
+	for _, want := range order[:3] {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s", want, docker)
+		}
+		rest = rest[i+len(want):]
+	}
+	if readString(filepath.Join(base, "shared", ".env")) != "DB_PASSWORD=new\n" || !strings.Contains(out, "differs from the environment's in DB_PASSWORD") {
+		t.Errorf("shared/.env without --with-env: %q\n%s", readString(filepath.Join(base, "shared", ".env")), out)
+	}
+	if fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "stop ") {
+		t.Errorf("a mark or stop lines left:\n%s", readString(filepath.Join(base, ".devopsy-sync.services")))
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", id, "--with-env", "--yes"); code != 0 || readString(filepath.Join(base, "shared", ".env")) != "DB_PASSWORD=old\n" {
+		t.Errorf("--with-env (%d): %q\n%s", code, readString(filepath.Join(base, "shared", ".env")), out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", "1999", "--yes"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing restored") {
+		t.Errorf("a snapshot that is none (%d):\n%s", code, out)
 	}
 }
