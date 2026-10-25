@@ -64,11 +64,11 @@ func syncProjectWith(t *testing.T, name string, files map[string]string) string 
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.data: stream}
+    labels: {devopsy.data: "true", devopsy.data.copy: custom}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
@@ -118,11 +118,11 @@ func TestSyncNothingToCopy(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "${SYNC_DATA-mnt}", devopsy.data.stop: own}
+    labels: {devopsy.data: "${SYNC_DATA-true}", devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.data: "${SYNC_DB-stream}"}
+    labels: {devopsy.data: "${SYNC_DB-true}", devopsy.data.copy: custom}
 `,
 		".devopsy/commands/deploy":          "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": "#!/bin/sh\n[ ! -e \"$HOME/fail-export\" ] || exit 3\necho dump\n",
@@ -134,14 +134,14 @@ func TestSyncNothingToCopy(t *testing.T) {
 	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") {
 		t.Fatalf("no partial copy (%d):\n%s", code, out)
 	}
-	srv(t, "rm -f fail-export; printf 'SYNC_DATA=none\\nSYNC_DB=none\\n' >>nothing/prod/shared/.env")
+	srv(t, "rm -f fail-export; printf 'SYNC_DATA=false\\nSYNC_DB=false\\n' >>nothing/prod/shared/.env")
 	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code == 0 || !exists(t, "nothing/dev/.devopsy-sync.incomplete") || syncState(t, "nothing", "dev", "data") != "exited" || !strings.Contains(out, "nothing was copied, and the data is still an earlier sync's") || !strings.Contains(out, "$ devopsy @server:dev --reset") {
 		t.Errorf("a sync with nothing to copy (%d): marked %v, data %q:\n%s", code, exists(t, "nothing/dev/.devopsy-sync.incomplete"), syncState(t, "nothing", "dev", "data"), out)
 	}
 }
 
 // drupal11's shape with real Compose: a database copied as files
-// (devopsy.data=mnt, own) and an app without labels that depends on it,
+// (devopsy.data=true, own) and an app without labels that depends on it,
 // condition: service_healthy. A sync stops both on each side, in one
 // compose stop, and starts both again through the healthcheck; an export
 // of the database stops its app too, and an import brings both back.
@@ -155,7 +155,7 @@ func TestSyncDependents(t *testing.T) {
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
     healthcheck: {test: [CMD, "true"], interval: 1s, timeout: 2s, retries: 3}
-    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.stop: own}
   app:
     image: busybox:1.37
     command: [sleep, infinity]

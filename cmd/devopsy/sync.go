@@ -625,7 +625,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {
-			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), confirmWord(t), "nothing reset", false)
+			confirm = typeToGoOn(fmt.Sprintf("this throws away all of @%s's data (%s:%s: every container and volume, all of shared/mnt, data no copy carries included; shared/.env stays) and copies @%s's (%s:%s) into it, then reruns its release's run step there", t.Address, t.Host, t.Path, p.Address, p.Host, p.Path), confirmWord(t), "nothing reset", false)
 		}
 		if err := confirm; err != nil {
 			report.Fail(err)
@@ -890,7 +890,7 @@ func syncEnv(flag string) (toDir, toProject string, err error) {
 // runSyncPush implements the hidden --sync-push, on the parent's server
 // in its current release: the data capability's prepare parent, then the
 // parent side's set stopped (cli.DataStops), the entries of mnt its mnt
-// services bind-mount rsynced, each stream service exported into a spool
+// services bind-mount rsynced, each custom service exported into a spool
 // in the child's directory and imported there, the stopped services
 // started again, and finish parent go|abort.
 func runSyncPush(cwd string, args []string, color bool) int {
@@ -951,31 +951,32 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
-	streams, err := cli.SyncStreamServices(services)
+	streams, err := cli.SyncCustomServices(services)
 	if err != nil {
 		return fail(err.Error())
 	}
 	dirs := cli.SyncDirs(services)
+	vols := copiedVolumes(services)
 	// What the rsync would change under a running service of the child,
 	// left running by its own labels, and a stream the child would not
 	// import, are mismatches, not a sync: refused before anything stops.
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, err := childServices(ctx, childNeeds(dirs, streams))
+	child, mark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
 	if err != nil {
 		return fail(err.Error())
 	}
 	// A reset wipes the child whatever its mark: completed, it starts
 	// over from this side's data.
 	if mark != "" && !reset {
-		var childDirs []string
+		var childDirs, childVols []string
 		for _, c := range child {
 			if c.Name == mark {
-				childDirs = c.Dirs
+				childDirs, childVols = c.Dirs, c.Volumes
 			}
 		}
-		if missing, ok := copiesService(projectDir, services, streams, mark, childDirs); !ok {
+		if missing, ok := copiesService(ctx, projectDir, services, streams, mark, childDirs, childVols); !ok {
 			ref := os.Getenv(remote.SyncToTargetEnv)
 			var fixes []report.Remedy
 			for _, f := range remote.ImportFixes(ref, mark, true) {
@@ -983,34 +984,36 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			}
 			msg := "the import of " + mark + " into the child did not complete, and the parent does not copy " + mark + ": a sync completes it only by copying it: nothing changed"
 			if len(missing) > 0 {
-				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy ./mnt/" + strings.Join(missing, ", ./mnt/") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
+				msg = "the import of " + mark + " into the child did not complete, and the parent does not copy " + strings.Join(missing, ", ") + ", which the child's " + mark + " mounts: a sync completes it only by copying all of it: nothing changed"
 			}
 			report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
 			return 1
 		}
 	}
-	nothing := !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) || len(dirs) == 0 && len(streams) == 0
+	nothing := !slices.ContainsFunc(services, cli.SyncService.Copies) || len(dirs) == 0 && len(vols) == 0 && len(streams) == 0
 	if reset && !nothing && len(streams) == 0 {
-		// The rsync skips an entry missing here: with none present it
-		// would write nothing, and nothing wipes without a write.
+		// The rsync skips an entry or a volume missing here: with none
+		// present it would write nothing, and nothing wipes without a
+		// write.
 		mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
-		nothing = mnt == "" || !slices.ContainsFunc(dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })
+		nothing = (mnt == "" || !slices.ContainsFunc(dirs, func(d string) bool { return fileExists(filepath.Join(mnt, d)) })) &&
+			!slices.ContainsFunc(vols, func(v cli.Volume) bool { ok, _ := volumeExists(ctx, v.Name); return ok })
 	}
 	if nothing && reset {
 		// It would only empty the child: --destroy and a release do that.
-		return fail("the parent has no data to start the child over from (no service labeled " + cli.DataLabel + " with entries of mnt or a stream): nothing reset")
+		return fail("the parent has no data to start the child over from (no service with " + cli.DataLabel + "=true whose copy carries entries of mnt or named volumes, or runs its scripts): nothing reset")
 	}
-	if !slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData }) {
-		report.Info("nothing to sync: no service has data (" + cli.DataLabel + ")")
+	if !slices.ContainsFunc(services, cli.SyncService.Copies) {
+		report.Info("nothing to sync: no service has data a copy carries (" + cli.DataLabel + "=true, " + cli.DataCopyLabel + " not " + cli.CopyNone + ")")
 		return 0
 	}
-	if len(dirs) == 0 && len(streams) == 0 {
-		report.Info("nothing to sync: no bind mounts under .devopsy/mnt for the services labeled " + cli.DataLabel + "=" + cli.DataMnt)
+	if len(dirs) == 0 && len(vols) == 0 && len(streams) == 0 {
+		report.Info("nothing to sync: no bind mounts under .devopsy/mnt or named volumes for the services copied as " + cli.DataCopyLabel + "=" + cli.CopyVolumes)
 		return 0
 	}
 	// Everything that can refuse, before anything changes on this side.
 	if len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "export")) {
-		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/%s/export", strings.Join(streams, ", "), cli.DataLabel, cli.DataStream, cli.DataCapability))
+		return fail(fmt.Sprintf("%s labeled %s=%s: the parent's release needs an executable .devopsy/capabilities/%s/export", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
 	}
 	// A reset takes the child's services down before it copies: none
 	// runs under the copy.
@@ -1025,7 +1028,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		// in the child's own shared/.env wins over it.
 		fixes := []report.Remedy{report.Fix("label it alike on both sides (a variable the parent's inherit: names keeps them so; the child's own shared/.env wins over it)")}
 		if len(conflicts) > 0 {
-			fixes = append(fixes, report.Fix(cli.DataStopLabel+"="+cli.StopImport+" on the child's service, to stop it for the sync"), report.Fix(cli.DataLabel+"="+cli.DataMnt+" on the child's service, to copy under it running"))
+			fixes = append(fixes, report.Fix(cli.DataStopLabel+"="+cli.StopImport+" on the child's service, to stop it for the sync"), report.Fix(cli.DataLabel+"=true on the child's service ("+cli.DataCopyLabel+"="+cli.CopyVolumes+"), to copy under it running"))
 		}
 		report.Fail(&report.Failure{Msg: "the child's data labels do not match the parent's: nothing changed", Details: append(conflicts, mismatches...), Fixes: fixes})
 		return 1
@@ -1033,7 +1036,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	for _, msg := range stopMismatches(services, child) {
 		report.Warn(msg)
 	}
-	if len(dirs) > 0 {
+	if len(dirs)+len(vols) > 0 {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
@@ -1086,8 +1089,8 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// change and SyncDoneFile after the last (the rsync's or the last
 	// import's): what its holder decides from, answer or not.
 	code := 0
-	if len(dirs) > 0 {
-		if err := syncRsync(ctx, projectDir, dirs, childOwners(child), len(streams) == 0); err != nil {
+	if len(dirs)+len(vols) > 0 {
+		if err := syncRsync(ctx, projectDir, dirs, vols, childOwners(child), len(streams) == 0); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -1111,34 +1114,40 @@ func runSyncPush(cwd string, args []string, color bool) int {
 }
 
 // copiesService reports whether this side's copy writes all of service
-// on the child: a stream among streams, or a mnt service whose every
+// on the child: a custom one among streams, or a volumes one whose every
 // entry the child mounts (childDirs, from its list; this side's own
 // entries without them) this side copies and has (syncRsync skips a
 // missing one, and the copy of the others would complete, leaving what
 // a cut import half wrote there). missing are the entries it lacks.
-func copiesService(projectDir string, services []cli.SyncService, streams []string, service string, childDirs []string) (missing []string, ok bool) {
+func copiesService(ctx context.Context, projectDir string, services []cli.SyncService, streams []string, service string, childDirs, childVols []string) (missing []string, ok bool) {
 	s, found := cli.SyncFind(services, service)
 	switch {
-	case !found || !s.HasData:
+	case !found || !s.Copies():
 		return nil, false
-	case s.Transfer == cli.DataStream:
+	case s.Copy == cli.CopyCustom:
 		return nil, slices.Contains(streams, service)
 	}
 	mnt, err := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
 	if err != nil {
 		return nil, false
 	}
-	copied := cli.SyncDirs(services)
-	want := childDirs
-	if len(want) == 0 {
-		want = s.Dirs
+	copied, copiedVols := cli.SyncDirs(services), copiedVolumes(services)
+	want, wantVols := childDirs, childVols
+	if len(want) == 0 && len(wantVols) == 0 {
+		want, wantVols = s.Dirs, cli.VolumeKeys(s.Volumes)
 	}
 	for _, d := range want {
 		if !slices.Contains(copied, d) || !fileExists(filepath.Join(mnt, d)) {
-			missing = append(missing, d)
+			missing = append(missing, "./mnt/"+d)
 		}
 	}
-	return missing, len(want) > 0 && len(missing) == 0
+	for _, k := range wantVols {
+		i := slices.IndexFunc(copiedVols, func(v cli.Volume) bool { return v.Key == k })
+		if ok, _ := volumeExists(ctx, copiedVols[max(i, 0)].Name); i < 0 || !ok {
+			missing = append(missing, "the volume "+k)
+		}
+	}
+	return missing, len(want)+len(wantVols) > 0 && len(missing) == 0
 }
 
 // dataHookFile is the data capability's action in the project at
@@ -1148,16 +1157,16 @@ func dataHookFile(projectDir, action string) string {
 }
 
 // dataHookEnv are the variables every data capability action gets about
-// its own side: the services by label, and stop, what the operation
+// its own side: the services by how a copy carries them, and stop, what the operation
 // stops there (cli.DataLists).
 func dataHookEnv(services []cli.SyncService, stop []string) []string {
-	mnt, stream, stops := cli.DataLists(services, stop)
-	return []string{remote.DataMntEnv + "=" + mnt, remote.DataStreamEnv + "=" + stream, remote.DataStopEnv + "=" + stops}
+	volumes, custom, stops := cli.DataLists(services, stop)
+	return []string{remote.DataVolumesEnv + "=" + volumes, remote.DataCustomEnv + "=" + custom, remote.DataStopEnv + "=" + stops}
 }
 
 // runDataHook runs the data capability's action (args[0]) with args, in
 // the project at cwd, with env over this process's: only when its file is
-// there, except export and import, which a stream service needs (their
+// there, except export and import, which a custom service needs (their
 // callers check first). stdin nil is empty, stdout nil is errOut;
 // started, when not nil, gets its pid (its process group's) before the
 // hook runs, and the hook runs only once it returned nil
@@ -1250,7 +1259,7 @@ func awaitHookStart() bool {
 	return n == 1
 }
 
-// syncStream copies a stream service: the parent's export writes its
+// syncStream copies a custom service: the parent's export writes its
 // data into a spool file in the child's directory (on the same server
 // directly, across servers through an SSH session to the child), and only
 // once the export exited 0 does the child's --sync-services import read
@@ -1372,8 +1381,8 @@ func exportInto(ctx context.Context, cwd, projectDir, name string, env []string,
 }
 
 // childNeeds is what the sync's later sessions to the child's server
-// need of its devopsy (remote.Needs): the imports' and, with entries to
-// copy, the receive's, and the data labels always (every later session
+// need of its devopsy (remote.Needs): the imports' and, with entries or
+// volumes to copy (dirs), the receive's, and the data labels always (every later session
 // reads them), checked on the first session (childServices), so a
 // child's devopsy older than this one refuses before anything stops.
 func childNeeds(dirs, streams []string) []string {
@@ -1387,13 +1396,13 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, args)
 	}
 	if len(dirs) > 0 {
-		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, len(streams) == 0, wipeScript())
+		script += remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), "0", dirs, nil, nil, toProject, nil, len(streams) == 0, wipeScript())
 	}
 	if os.Getenv(remote.SyncResetEnv) != "" {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
 	}
 	needs := remote.Needs(script)
-	for _, f := range []string{remote.DataLabelsFeature, remote.MntOwnerFeature} {
+	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature} {
 		if !slices.Contains(needs, f) {
 			needs = append(needs, f)
 		}
@@ -1403,14 +1412,15 @@ func childNeeds(dirs, streams []string) []string {
 }
 
 // childService is a line of the child's --sync-services list: a service,
-// its data label there (mnt, stream or none) and its stop word, its
+// how a copy carries its data there (volumes, custom or none) and its
+// stop word, its
 // containers' state (running, exited..., none without one), its
-// entries of mnt, and the owners of those it owns (entry to <uid>:<gid>,
-// cli.MntOwnerLabel).
+// entries of mnt, the owners of those it owns (entry to <uid>:<gid>,
+// cli.MntOwnerLabel), and its named volumes, by key.
 type childService struct {
-	Name, Transfer, Stop, State string
-	Dirs                        []string
-	Owners                      map[string]string
+	Name, Copy, Stop, State string
+	Dirs, Volumes           []string
+	Owners                  map[string]string
 }
 
 // childOwners are the owners of the child's entries, from its list: what
@@ -1480,7 +1490,8 @@ func childUtilImage(ctx context.Context) error {
 }
 
 // parseChildServices reads --sync-services list: per service its name,
-// label (<method>+<stop word>), state, entries and owners (listOwners),
+// label (<copy>+<stop word>), state, entries, owners (listOwners) and
+// volumes,
 // and the import mark's line (listMark), whose service it returns.
 func parseChildServices(out string) (services []childService, mark string) {
 	// Lines one by one: the last service's entries may be empty, its
@@ -1494,8 +1505,8 @@ func parseChildServices(out string) (services []childService, mark string) {
 		if len(f) < 4 {
 			continue
 		}
-		transfer, stop, _ := strings.Cut(f[1], "+")
-		c := childService{Name: f[0], Transfer: transfer, Stop: cmp.Or(stop, cli.StopNever), State: f[2], Dirs: strings.Fields(f[3]), Owners: map[string]string{}}
+		copy, stop, _ := strings.Cut(f[1], "+")
+		c := childService{Name: f[0], Copy: copy, Stop: cmp.Or(stop, cli.StopNever), State: f[2], Dirs: strings.Fields(f[3]), Owners: map[string]string{}}
 		if len(f) > 4 {
 			for _, eo := range strings.Fields(f[4]) {
 				if i := strings.LastIndex(eo, "="); i > 0 {
@@ -1503,15 +1514,19 @@ func parseChildServices(out string) (services []childService, mark string) {
 				}
 			}
 		}
+		if len(f) > 5 {
+			c.Volumes = strings.Fields(f[5])
+		}
 		services = append(services, c)
 	}
 	return services, mark
 }
 
-// streamMismatches names the services one side streams and the other
-// does not: a parent stream the child does not label stream (its import
-// would refuse it, after the rsync and the streams before it), and a
-// child stream the parent copies as mnt (its import would never run).
+// streamMismatches names the services one side copies as custom and the
+// other does not: a parent custom one the child does not label custom
+// (its import would refuse it, after the rsync and the streams before
+// it), and a child custom one the parent copies as volumes (its import
+// would never run).
 // Refused before anything stops, with the way out (labelsAlike).
 func streamMismatches(parent []cli.SyncService, streams []string, child []childService) []string {
 	var out []string
@@ -1519,14 +1534,14 @@ func streamMismatches(parent []cli.SyncService, streams []string, child []childS
 		i := slices.IndexFunc(child, func(c childService) bool { return c.Name == name })
 		switch {
 		case i < 0:
-			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child has no service %s", name, cli.DataLabel, cli.DataStream, name))
-		case child[i].Transfer != cli.DataStream:
-			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child labels it %s=%s: its import would refuse it", name, cli.DataLabel, cli.DataStream, cli.DataLabel, child[i].Transfer))
+			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child has no service %s", name, cli.DataCopyLabel, cli.CopyCustom, name))
+		case child[i].Copy != cli.CopyCustom:
+			out = append(out, fmt.Sprintf("the parent streams %s (%s=%s) and the child copies it as %s: its import would refuse it", name, cli.DataCopyLabel, cli.CopyCustom, childCopy(child[i])))
 		}
 	}
 	for _, c := range child {
-		if p, ok := cli.SyncFind(parent, c.Name); ok && c.Transfer == cli.DataStream && p.Transfer == cli.DataMnt {
-			out = append(out, fmt.Sprintf("the child streams %s (%s=%s) and the parent copies it as %s (%s=%s): its import would never run", c.Name, cli.DataLabel, cli.DataStream, cli.DataMnt, cli.DataLabel, cli.DataMnt))
+		if p, ok := cli.SyncFind(parent, c.Name); ok && c.Copy == cli.CopyCustom && p.Copy == cli.CopyVolumes {
+			out = append(out, fmt.Sprintf("the child streams %s (%s=%s) and the parent copies it as files (%s=%s): its import would never run", c.Name, cli.DataCopyLabel, cli.CopyCustom, cli.DataCopyLabel, cli.CopyVolumes))
 		}
 	}
 	return out
@@ -1546,46 +1561,54 @@ func stopMismatches(parent []cli.SyncService, child []childService) []string {
 	return out
 }
 
-// syncListLabel is a service's label column in --sync-services list: its
-// data label (mnt, stream or none), + and its stop word.
+// syncListLabel is a service's label column in --sync-services list: how
+// a copy carries its data (volumes, custom, or none, which a service
+// without data has too), + and its stop word.
 func syncListLabel(s cli.SyncService) string {
-	return s.Transfer + "+" + s.Stop
+	return s.Copy + "+" + s.Stop
+}
+
+// childCopy says how the child's service c is copied, for a message.
+func childCopy(c childService) string {
+	if c.Copy == cli.CopyNone {
+		return "nothing (no data, or " + cli.DataCopyLabel + "=" + cli.CopyNone + ")"
+	}
+	return cli.DataCopyLabel + "=" + c.Copy
 }
 
 // syncConflicts names the child's services the rsync would change under:
 // running, with an entry the parent copies among their mounts, and not
-// labeled mnt there (which says so on purpose). One the child's side
-// stopped is not running any more; one labeled stream or without data is
-// left running, and the two sides disagree.
+// copied as volumes there (which says so on purpose). One the child's
+// side stopped is not running any more; one copied as custom, as none or
+// without data is left running, and the two sides disagree.
 func syncConflicts(parent []cli.SyncService, child []childService) []string {
-	dirs := cli.SyncDirs(parent)
-	if len(dirs) == 0 {
+	dirs, vols := cli.SyncDirs(parent), cli.SyncVolumes(parent)
+	if len(dirs)+len(vols) == 0 {
 		return nil
 	}
 	copied := func(d string) bool { return slices.Contains(dirs, d) }
 	from := func(d string) string {
 		for _, s := range parent {
-			if s.Transfer == cli.DataMnt && slices.Contains(s.Dirs, d) {
-				return s.Name + " (" + cli.DataLabel + "=" + s.Transfer + ")"
+			if s.Copy == cli.CopyVolumes && slices.Contains(s.Dirs, d) {
+				return s.Name + " (" + cli.DataCopyLabel + "=" + s.Copy + ")"
 			}
 		}
 		return "another service"
 	}
 	var conflicts []string
 	for _, c := range child {
-		if c.State != "running" && c.State != "restarting" || c.Transfer == cli.DataMnt {
+		if c.State != "running" && c.State != "restarting" || c.Copy == cli.CopyVolumes {
 			continue
 		}
-		for _, d := range c.Dirs {
-			if !copied(d) {
-				continue
-			}
-			label := "labeled " + cli.DataLabel + "=" + c.Transfer
-			if c.Transfer == cli.DataNone {
-				label = "without data (" + cli.DataLabel + "=" + cli.DataNone + " or no label)"
-			}
-			conflicts = append(conflicts, fmt.Sprintf("the child's %s is running, %s, and mnt/%s would change under it: the parent copies it for %s", c.Name, label, d, from(d)))
-			break
+		// One line per service: its first entry, else its first volume.
+		what := ""
+		if i := slices.IndexFunc(c.Dirs, copied); i >= 0 {
+			what = "mnt/" + c.Dirs[i] + " would change under it: the parent copies it for " + from(c.Dirs[i])
+		} else if i := slices.IndexFunc(c.Volumes, func(k string) bool { return slices.Contains(vols, k) }); i >= 0 {
+			what = "the volume " + c.Volumes[i] + " would change under it: the parent copies it"
+		}
+		if what != "" {
+			conflicts = append(conflicts, fmt.Sprintf("the child's %s is running, copied as %s, and %s", c.Name, childCopy(c), what))
 		}
 	}
 	return conflicts
@@ -1608,12 +1631,13 @@ func exitCode(err error) int {
 	return 1
 }
 
-// rsyncdConf serves the entries of mnt being copied, each as a module of
-// its name, read-only, as root, so every
-// owner's files are read; nothing else under mnt can be asked for (a
-// stream database's datadir, the directory of a service without data). The daemon
-// lives for one copy and publishes no port.
-func rsyncdConf(entries, files []string) string {
+// rsyncdConf serves the entries of mnt and the named volumes being
+// copied, each as a module of its name (the volumes mounted at
+// /vol/<key>), read-only, as root, so every owner's files are read;
+// nothing else under mnt can be asked for (a custom database's datadir,
+// the directory of a service without data). The daemon lives for one
+// copy and publishes no port.
+func rsyncdConf(entries, files, volumes []string) string {
 	conf := "uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n"
 	for _, e := range entries {
 		if slices.Contains(files, e) {
@@ -1623,18 +1647,25 @@ func rsyncdConf(entries, files []string) string {
 		}
 		conf += "[" + e + "]\npath = " + path.Join("/mnt", e) + "\n"
 	}
+	for _, v := range volumes {
+		conf += "[" + v + "]\npath = " + path.Join("/vol", v) + "\n"
+	}
 	return conf
 }
 
 // syncRsync copies dirs (entries of the parent's mnt) into the child's,
-// replacing what is there (--delete), as root in devopsy's util image,
-// owners kept (--numeric-ids) unless the child's labels own the entry
-// (owners, from its list): then every file it writes is that owner's
-// (--chown).
+// and vols (the parent's named volumes) into the child's volumes of the
+// same keys, replacing what is there (--delete), as root in devopsy's
+// util image, owners kept (--numeric-ids) unless the child's labels own
+// the entry (owners, from its list): then every file it writes is that
+// owner's (--chown). A volume keeps the owners it is copied with: its
+// files are its image's users'. The child's volumes are there already
+// (its prepare, or a reset's wipe, made them): one missing fails before
+// anything is written.
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map[string]string, last bool) error {
+func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli.Volume, owners map[string]string, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -1657,10 +1688,23 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 			files = append(files, d)
 		}
 	}
-	if len(present) == 0 {
+	var volumes []cli.Volume
+	for _, v := range vols {
+		ok, err := volumeExists(ctx, v.Name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			report.Info("the volume " + v.Key + " does not exist on this server: skipped")
+			continue
+		}
+		volumes = append(volumes, v)
+	}
+	if len(present) == 0 && len(volumes) == 0 {
 		return nil
 	}
 	rsync := slices.Clone(remote.RsyncCopy)
+	toProject := os.Getenv(remote.SyncToProjectEnv)
 
 	to := os.Getenv(remote.SyncToEnv)
 	if to == "" {
@@ -1669,6 +1713,18 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 			return fmt.Errorf("the child's mnt: %w", err)
 		}
 		toBase := os.Getenv(remote.SyncToBaseEnv)
+		if os.Getenv(remote.SyncResetEnv) == "" {
+			// Before the claim: nothing written when one is missing. (A
+			// reset's wipe takes them down with the rest at the claim,
+			// and makes them again.)
+			for _, v := range volumes {
+				if ok, err := volumeExists(ctx, toProject+"_"+v.Key); err != nil {
+					return err
+				} else if !ok {
+					return fmt.Errorf("the child's volume %s_%s is missing: nothing copied", toProject, v.Key)
+				}
+			}
+		}
 		first, err := claimWrite(toBase)
 		if err != nil {
 			return err
@@ -1705,6 +1761,22 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 				return fmt.Errorf("rsync mnt/%s: %w", d, err)
 			}
 		}
+		for i, v := range volumes {
+			report.Info("rsync volume " + v.Key)
+			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
+			run := append([]string{"-v", v.Name + ":/src/" + v.Key + ":ro", "-v", toProject + "_" + v.Key + ":/dst/" + v.Key, remote.UtilImage}, rsync...)
+			if err := dockerRun(ctx, name, append(run, "/src/"+v.Key+"/", "/dst/"+v.Key+"/")...); err != nil {
+				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
+					report.Info("rsync volume " + v.Key + ": " + remote.RsyncVanishedNotice)
+					continue
+				}
+				report.Info("the volume " + v.Key + " " + remote.HalfCopiedNotice)
+				if ctx.Err() != nil {
+					return errors.New("interrupted")
+				}
+				return fmt.Errorf("rsync volume %s: %w", v.Key, err)
+			}
+		}
 		if last {
 			return recordWrite(toBase, remote.DoneLine(os.Getenv(remote.SyncIDEnv)))
 		}
@@ -1717,8 +1789,14 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 	if err := removeContainers("label=" + parentLabel); err != nil {
 		return err
 	}
-	id, err := dockerOut(ctx, "run", "--rm", "-d", "--name", remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-daemon", "--label", parentLabel, "-v", parentMnt+":/mnt:ro", "-e", "RSYNCD_CONF="+rsyncdConf(present, files), remote.UtilImage,
-		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)
+	daemon := []string{"run", "--rm", "-d", "--name", remote.SyncContainerPrefix + os.Getenv(remote.SyncIDEnv) + "-daemon", "--label", parentLabel, "-v", parentMnt + ":/mnt:ro"}
+	var keys []string
+	for _, v := range volumes {
+		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
+		keys = append(keys, v.Key)
+	}
+	id, err := dockerOut(ctx, append(daemon, "-e", "RSYNCD_CONF="+rsyncdConf(present, files, keys), remote.UtilImage,
+		"sh", "-c", `printf "%s\n" "$RSYNCD_CONF" > /etc/rsyncd.conf && exec rsync --daemon --no-detach --config=/etc/rsyncd.conf`)...)
 	if err != nil || id == "" {
 		return fmt.Errorf("starting the rsync daemon: %v", err)
 	}
@@ -1752,7 +1830,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, owners map
 	// ClearAllForwardings here: it clears command-line forwardings too.
 	for attempt := 0; ; attempt++ {
 		port := fmt.Sprint(20000 + rand.IntN(40000))
-		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, owners, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
+		sshArgs := childSSHArgs(to, remote.SyncReceiveScript(toDir, os.Getenv(remote.SyncToBaseEnv), os.Getenv(remote.SyncIDEnv), port, present, files, keys, toProject, owners, last, wipeScript()), nil, "ExitOnForwardFailure=yes", "-R", "127.0.0.1:"+port+":"+ip+":873")
 		cmd := remote.SSHCommandContext(ctx, sshArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdin = nil
@@ -1935,7 +2013,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		for _, s := range services {
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s))
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "))
 		}
 		if m := readMark(base); m.IsImport() {
 			fmt.Printf("%s\t%s\n", listMark, m.From)
@@ -2015,8 +2093,8 @@ func runSyncServices(cwd string, args []string, color bool) int {
 				return fail(err.Error())
 			}
 		}
-		if streams, _ := cli.SyncStreamServices(services); len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "import")) {
-			return fail(fmt.Sprintf("%s labeled %s=%s: the child's release needs an executable .devopsy/capabilities/%s/import", strings.Join(streams, ", "), cli.DataLabel, cli.DataStream, cli.DataCapability))
+		if streams, _ := cli.SyncCustomServices(services); len(streams) > 0 && !isExecutable(dataHookFile(projectDir, "import")) {
+			return fail(fmt.Sprintf("%s labeled %s=%s: the child's release needs an executable .devopsy/capabilities/%s/import", strings.Join(streams, ", "), cli.DataCopyLabel, cli.CopyCustom, cli.DataCapability))
 		}
 		if err := runDataHook(context.Background(), cwd, projectDir, env, nil, nil, nil, "prepare", "child"); err != nil {
 			return fail("the data capability's prepare child: " + err.Error())
@@ -2026,11 +2104,17 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		// copied, unknown here).
 		var data []string
 		for _, s := range services {
-			if s.HasData {
+			if s.Copies() {
 				data = append(data, s.Name)
 			}
 		}
 		dependentNotices(cwd, services, data, set)
+		// The volumes a copy writes into, made when missing (a first
+		// release, a volume added since) as compose would: the parent's
+		// rsync never makes one.
+		if err := ensureVolumes(context.Background(), composeName(cwd), copiedVolumes(services)); err != nil {
+			return fail(err.Error())
+		}
 		if err := stopServices(cwd, set); err != nil {
 			return fail(err.Error())
 		}
@@ -2248,8 +2332,8 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 		ctx = watchSession(ctx)
 	}
 	s, ok := cli.SyncFind(services, name)
-	if !ok || s.Transfer != cli.DataStream {
-		return fail(fmt.Sprintf("the child's %s is not labeled %s=%s: the parent's export of it has nowhere to go", name, cli.DataLabel, cli.DataStream))
+	if !ok || s.Copy != cli.CopyCustom {
+		return fail(fmt.Sprintf("the child's %s is not labeled %s=%s: the parent's export of it has nowhere to go", name, cli.DataCopyLabel, cli.CopyCustom))
 	}
 	f, err := os.Open(spool)
 	if err != nil {
@@ -2590,10 +2674,18 @@ func wipeData(cwd, projectDir, base string) error {
 	}
 	// Its owned entries back, as a release left them: finish go creates
 	// the services with data, and a stream's import brings its service
-	// up, on entries Docker would otherwise make root's.
+	// up, on entries Docker would otherwise make root's. Its volumes
+	// too, for the rsync to write into.
 	owners, mnt, err := projectOwners(cwd)
 	if err == nil {
 		err = ownMnt(context.Background(), mnt, owners, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-owners")
+	}
+	if err != nil {
+		return err
+	}
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err == nil {
+		err = ensureVolumes(context.Background(), composeName(cwd), copiedVolumes(services))
 	}
 	if err != nil {
 		return err
@@ -2671,7 +2763,7 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 		children := cli.StoppedNames(cli.DataStops(services, cli.SyncChild, ""))
 		profiles := composeProfiles(cwd)
 		for _, s := range services {
-			if (s.HasData || slices.Contains(children, s.Name)) && s.Active(profiles) {
+			if (s.Copies() || slices.Contains(children, s.Name)) && s.Active(profiles) {
 				created = append(created, s.Name)
 			}
 		}

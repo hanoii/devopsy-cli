@@ -9,7 +9,7 @@ import (
 
 // sqliteProject is a project with prod and dev, its child, whose two
 // services hold real SQLite databases moved by the data capability as
-// dumps (devopsy.data=stream): db runs during a sync (its export and
+// dumps (devopsy.data.copy=custom): db runs during a sync (its export and
 // import exec into it), app depends on it and is stopped for the sync
 // (devopsy.data.stop=own: its scripts use run --rm). An export fails
 // halfway, after part of its dump, while ~/fail-export-<service> exists;
@@ -24,13 +24,13 @@ func sqliteProject(t *testing.T, name string) string {
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/db:/data]
-    labels: {devopsy.data: stream}
+    labels: {devopsy.data: "true", devopsy.data.copy: custom}
   app:
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/app:/data]
     depends_on: [db]
-    labels: {devopsy.data: stream, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.copy: custom, devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": `#!/bin/sh

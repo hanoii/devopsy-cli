@@ -52,11 +52,11 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
-    labels: {devopsy.data: stream}
+    labels: {devopsy.data: "true", devopsy.data.copy: custom}
   slow:
     build: {context: ./slow, args: {WAIT: "${BUILD_WAIT:-0}"}}
     command: [sleep, infinity]

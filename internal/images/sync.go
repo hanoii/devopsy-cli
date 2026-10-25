@@ -54,8 +54,10 @@ func (s *Set) parentData(base, rel, only string) string {
 		if only != "" && svc.Name != only {
 			continue
 		}
-		copied[svc.Name] = svc.Method == DataMnt && (!svc.EntriesKnown || hasEntry(rel, svc.Entries))
-		pulled = pulled || (svc.Method == DataMnt && !svc.Build && !svc.own(s.Mode))
+		// A named volume counts as there: one a service never ran with
+		// leaves no image to send anyway.
+		copied[svc.Name] = svc.Method == CopyVolumes && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
+		pulled = pulled || (svc.Method == CopyVolumes && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
 	// A release an older devopsy recorded names no services: which one
@@ -142,7 +144,7 @@ const ExportKey = "DEVOPSY.data-images"
 // current release) what a sync's parent would send; locally (rel "")
 // the image its started container runs, when that has a registry
 // digest, with no history. Empty when there is nothing to record (a
-// built or stream service, no container, a release an older devopsy
+// built or custom service, no container, a release an older devopsy
 // recorded, which names no services).
 func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
@@ -165,7 +167,7 @@ func (s *Set) ExportData(base, rel, service string) string {
 	}
 	pulled := false
 	for _, svc := range svcs {
-		pulled = pulled || (svc.Name == service && svc.Method == DataMnt && !svc.own(s.Mode))
+		pulled = pulled || (svc.Name == service && svc.Method == CopyVolumes && !svc.own(s.Mode))
 	}
 	if !pulled {
 		return ""

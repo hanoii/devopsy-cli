@@ -583,7 +583,7 @@ func dataRandom(t *testing.T, seed int64) {
 	svcs := func() []Service {
 		db := dbSvc(refs[rng.Intn(len(refs))])
 		if rng.Intn(6) == 0 {
-			db = Service{Name: "database", Ref: m.e.set.Name + "-database", Build: true, Data: true, Method: DataMnt}
+			db = Service{Name: "database", Ref: m.e.set.Name + "-database", Build: true, Data: true, Method: CopyVolumes}
 		}
 		return []Service{{Name: "app", Ref: m.e.set.Name + "-app", Build: true}, db, proxySvc}
 	}
@@ -1200,7 +1200,7 @@ func TestHoldData(t *testing.T) {
 	}
 }
 
-// A database streamed (devopsy.data=stream): its dump goes through the
+// A database streamed (devopsy.data.copy=custom): its dump goes through the
 // child's own image, which keeps its history; a sync neither checks nor
 // takes over its image.
 func TestSyncStreamKeepsChildImage(t *testing.T) {
@@ -1208,7 +1208,7 @@ func TestSyncStreamKeepsChildImage(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	stream := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: "stream"}
+	stream := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: "custom"}
 	d.publish("mariadb:11.8", "I1")
 	dev.release(false, stream)
 	d.publish("mariadb:11.8", "I2")
@@ -1221,11 +1221,11 @@ func TestSyncStreamKeepsChildImage(t *testing.T) {
 	}
 }
 
-// labeled is a service as compose config gives it: image ref, and a
-// devopsy.data label with value data.
-func labeled(t *testing.T, name, ref, data string) Service {
+// labeled is a service as compose config gives it: image ref, with data
+// (devopsy.data=true) its copy carries as copy (devopsy.data.copy).
+func labeled(t *testing.T, name, ref, copy string) Service {
 	t.Helper()
-	svcs, err := ParseComposeConfig([]byte(`{"name":"app","services":{"` + name + `":{"image":"` + ref + `","labels":{"devopsy.data":"` + data + `"}}}}`))
+	svcs, err := ParseComposeConfig([]byte(`{"name":"app","services":{"` + name + `":{"image":"` + ref + `","labels":{"devopsy.data":"true","devopsy.data.copy":"` + copy + `"}}}}`))
 	if err != nil || len(svcs) != 1 {
 		t.Fatalf("compose config: %v", err)
 	}
@@ -1244,7 +1244,7 @@ func TestSyncStreamKeepsOwnImage(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	db := labeled(t, "database", "mariadb:11.8", "stream")
+	db := labeled(t, "database", "mariadb:11.8", "custom")
 	d.publish("mariadb:11.8", "I1")
 	prod.release(false, db)
 	// mariadb:11.8 moves on; dev's release takes it: its data runs I2.
@@ -1266,7 +1266,7 @@ func TestSyncStreamKeepsOwnImage(t *testing.T) {
 	// A child on another series, with a stream database: no check.
 	stage := newSim(t, d, "app-stage", &out)
 	d.publish("mariadb:11.4", "J1")
-	stage.release(false, labeled(t, "database", "mariadb:11.4", "stream"))
+	stage.release(false, labeled(t, "database", "mariadb:11.4", "custom"))
 	out.Reset()
 	if err := syncInto(t, prod, stage, false); err != nil {
 		t.Errorf("a stream sync into a child on another series refused (%v):\n%s", err, out.String())
@@ -1516,7 +1516,7 @@ func TestDataRollbackFromBuiltDatabase(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
-	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: CopyVolumes}
 	r1, err := m.release(false, appSvc, built)
 	if err != nil {
 		m.fail("r1: %v", err)
@@ -1598,7 +1598,7 @@ func TestSyncRefusedPullLeavesNothing(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	search := func(ref string) Service { return Service{Name: "search", Ref: ref, Data: true, Method: DataMnt} }
+	search := func(ref string) Service { return Service{Name: "search", Ref: ref, Data: true, Method: CopyVolumes} }
 	d.publish("mariadb:11.8", "I1")
 	d.publish("elasticsearch:8", "E1")
 	dev.release(false, db118, search("elasticsearch:8"))
@@ -1653,7 +1653,7 @@ func TestRestoreFailingPullLeavesNothing(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
-	a, b := Service{Name: "a", Ref: "mariadb:11.8", Data: true, Method: DataMnt}, Service{Name: "b", Ref: "postgres:17", Data: true, Method: DataMnt}
+	a, b := Service{Name: "a", Ref: "mariadb:11.8", Data: true, Method: CopyVolumes}, Service{Name: "b", Ref: "postgres:17", Data: true, Method: CopyVolumes}
 	d.publish("mariadb:11.8", "A1")
 	d.publish("postgres:17", "B1")
 	r1, _ := m.release(false, a, b)
@@ -1678,14 +1678,15 @@ func TestRestoreFailingPullLeavesNothing(t *testing.T) {
 	}
 }
 
-// A parent's mnt service whose entries are all missing on the parent has
-// nothing a copy writes: the child keeps its own data, and its image.
+// A parent's volumes service whose entries are all missing on the parent
+// has nothing a copy writes: the child keeps its own data, and its image;
+// a named volume counts as there.
 func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
 	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	db := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: DataMnt, Entries: []string{"database"}, EntriesKnown: true}
+	db := Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: CopyVolumes, Entries: []string{"database"}, EntriesKnown: true}
 	d.publish("mariadb:11.8", "I1")
 	prod.release(false, db)
 	d.publish("mariadb:11.8", "I2")
@@ -1696,6 +1697,12 @@ func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
 	os.MkdirAll(filepath.Join(prod.e.rel(prod.cur), codeDir, ".devopsy", "mnt", "database"), 0o755)
 	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); !strings.Contains(data, "image\tdatabase\t") {
 		t.Errorf("a service with its entry on the parent missing from its data:\n%s", data)
+	}
+	// Its data in a named volume: copied, whatever its entries.
+	vol := newSim(t, d, "vol-prod", &out)
+	vol.release(false, Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: CopyVolumes, Volumes: []string{"dbdata"}, EntriesKnown: true})
+	if data := vol.e.set.ParentData(vol.base(), vol.e.rel(vol.cur)); !strings.Contains(data, "image\tdatabase\t") {
+		t.Errorf("a service whose data is a named volume missing from its data:\n%s", data)
 	}
 }
 
@@ -1758,7 +1765,7 @@ func TestBuiltDatabaseAfterPulled(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
-	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: CopyVolumes}
 	d.publish("mariadb:11.8", "I1")
 	m.release(false, db118)
 	out.Reset()
@@ -1776,7 +1783,7 @@ func TestBuiltDatabaseAfterPulled(t *testing.T) {
 	}
 	// Never pulled: never asked.
 	other := newSim(t, d, "app-other", &out)
-	ob := Service{Name: "database", Ref: "app-other-database", Build: true, Data: true, Method: DataMnt}
+	ob := Service{Name: "database", Ref: "app-other-database", Build: true, Data: true, Method: CopyVolumes}
 	other.release(false, ob)
 	if _, err := other.release(false, ob); err != nil || len(readHistory(other.base())) != 0 {
 		t.Errorf("a database always built (%v), history %v", err, readHistory(other.base()))
@@ -1791,7 +1798,7 @@ func TestRollbackBuiltDatabaseWithoutDigest(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app-prod", &out)
-	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: DataMnt}
+	built := Service{Name: "database", Ref: "app-prod-database", Build: true, Data: true, Method: CopyVolumes}
 	d.publish("mariadb:11.8", "I1")
 	m.release(false, db118)
 	r2, err := m.release(true, built)
@@ -1978,7 +1985,7 @@ func TestExportDataLocalBuilt(t *testing.T) {
 	d := newFake()
 	var out bytes.Buffer
 	m := newSim(t, d, "app", &out)
-	built := Service{Name: "database", Ref: "registry.example/app-database:dev", Build: true, Data: true, Method: DataMnt}
+	built := Service{Name: "database", Ref: "registry.example/app-database:dev", Build: true, Data: true, Method: CopyVolumes}
 	m.e.set.List = func(string) ([]Service, error) { return []Service{built}, nil }
 	d.pull(built.Ref, "B1") // a local build, its digest as containerd shows one
 	d.containers = []container{{image: "B1", project: "app", ref: built.Ref, service: "database"}}

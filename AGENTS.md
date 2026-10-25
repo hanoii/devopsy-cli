@@ -379,17 +379,21 @@ before changing anything".
   on) makes either refusal a warning and goes on: the operator's own
   risk, for a local build ahead of the servers. A server with no
   `features=` is older than 8, so only the protocol's warning shows.
-- **The data labels are a named feature, `data-labels`, not a
-  protocol bump:** an older devopsy reads `devopsy.data` as no label (a
-  parent's "nothing to sync" that a holder takes for `go`: a child's
-  first release live on empty data), so every script that reads labels
-  needs it: `--sync-push`, `--export`, `--import` (and `--resolved`
+- **The data labels are a named feature, `data-copy`, not a
+  protocol bump:** an older devopsy refuses `devopsy.data=true` or
+  reads the copy label as no label (a parent's "nothing to sync" that a
+  holder takes for `go`: a child's first release live on empty data),
+  so every script that copies data needs it: `--sync-push`, `--export`, `--import` (and `--resolved`
   through it), `--sync-services prepare|finish|import|list`, quoted or
   inside `with_tty`'s quotes (a project's remote step calling
   `--export` is gated, rightly). Not `settle`, which every activation
-  calls (`partialGuard`) and which only warns on labels it cannot read.
-  A bump would refuse every release, `--status` and `--log` on a server
-  lacking only the labels. What refuses before anything changes: the
+  calls (`partialGuard`) and which only warns on labels it cannot read,
+  nor an activation: an older `--check-mounts` refuses the new values
+  before the switch, and a project without data labels releases there
+  as before. A bump would refuse every release, `--status` and `--log`
+  on a server lacking only the labels. It replaced `data-labels`
+  (`devopsy.data=mnt|stream|none`, the method in one label) when the
+  label split (2026-10-25). What refuses before anything changes: the
   parent's `CurrentExistsScript` carries the push's needs (`extra`,
   before the holder stops the child's set); the child's prints whether
   its server has the feature, and the operator refuses only a release
@@ -401,7 +405,7 @@ before changing anything".
   `--sync-push`, `--import` and `--sync-services list`: an older parent
   would rsync the parent's owners, an older child list none, an older
   server's import keep the tar's. `childNeeds` adds it as it does
-  `data-labels`. A release's owners and mounts check are flags of their
+  `data-copy`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
 - **The images' history and holds are a named feature, `data-images`,**
@@ -726,8 +730,8 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   digest and version: what a removal decides from even after a bookmark
   went.
 - **Data only goes forward** (`history.go`, `record.go`,
-  `restore.go`): a pulled data service (`KindData`: a `devopsy.data`
-  label, any value, no `build:`, pulled) never runs an image older than
+  `restore.go`): a pulled data service (`KindData`: `devopsy.data=true`,
+  whatever its copy, no `build:`, pulled) never runs an image older than
   the newest its data ran. No version ordering (no field is common to
   images, checked 2026-10-23): the environment's `HistoryFile`
   (`$base/.devopsy-data-images`) keeps every image that ran on each such
@@ -1048,7 +1052,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   privileges themselves and tools; a variable keeps the two alike.
   Rejected: a shared group with setgid directories and default ACLs
   (tar and rsync set owner and mode explicitly, a chmod sets the ACL
-  mask), capability hooks (none runs after an `mnt` import, a plain
+  mask), capability hooks (none runs after a `volumes` import, a plain
   `up` or an upload by hand), a root `init` service in every template.
 - **Where owners are applied,** always as root in `UtilImage`, one
   container per owned entry that mounts that entry alone (`ownMnt`,
@@ -1088,7 +1092,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   reason rollbacks never check roles or imports; review of 2026-10-23,
   a rollback to a release with `devopsy.sync` labels failed; a chown
   failing on labels read stays a failure); a sync's rsync, `--chown` per entry from
-  the child's labels (Syncs); an `mnt` import, after its extracting
+  the child's labels (Syncs); a `volumes` import, after its extracting
   containers (`extractEntries`, below) in the entries' own, never
   locally on macOS (review of 2026-10-23, round 2:
   as before `up`, and Docker Desktop's file sharing may refuse a
@@ -1123,7 +1127,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   `cli.CheckMounts`, beside `--check-names` after the prepare steps and
   `--missing-vars`, on the server: labels can come from its variables):
   a writable bind from the project's tree outside `mnt` (`TreeBinds`:
-  it goes with the next release), `devopsy.data=mnt` copying no entry (none mounted, or all
+  it goes with the next release), data copied as `volumes` with no entry (none mounted, or all
   excluded) or an owner of no writable entry (a sync said "nothing to
   sync" and a child's first release went live on empty data), two
   owners on one entry, `./mnt` whole mounted writable by any service
@@ -1134,7 +1138,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   one too, wherever owners are given). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
-  documented: named volumes and absolute paths. It reads the labels
+  documented: absolute paths. It reads the labels
   exactly as `--mnt-owners` does after the switch (`cli.SyncServices`,
   the leftover `.devopsy/capabilities/sync/` included), so labels that
   step could not read refuse the release here (review of 2026-10-23,
@@ -1165,7 +1169,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   an entry is the deploy user's, written from the host, while an owned
   one is written by a container by design. Locally nothing refuses it.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
-  as a `mnt` service's or an owned writable mount, writable on any other
+  as a data service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
   downstream sees `.`. Why the check: such a service writes every entry,
   and once its mount was no entry the child guard no longer saw it
@@ -1398,25 +1402,41 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 ### Labels and the child guard
 
 - **One set of labels for every copy** (`internal/cli/sync.go`):
-  `devopsy.data=mnt|stream|none` (`cli.DataLabel`), `devopsy.data.exclude`
-  and `devopsy.data.stop=never|own|import|always` (`DataStopLabel`),
-  for syncs, `--export`/`--import` and later snapshots. Why: one boolean,
-  `devopsy.sync.stop=true`, answered three questions (down while its own
-  data is copied? while any data is imported? for every copy?), so
-  `--import database` of a dump left the app serving during the load,
-  and a child's app ran while its database was reloaded. `mnt`, not
-  `rsync` (only the transport) or `files` (reads as `./mnt/files`).
-- **Values:** no label is no data, like `none`; an empty value is an
-  error (decided: a variable left unset by accident must fail, not stop
-  copying; `none` turns copying off). `stop` defaults to `never` for
-  both methods (every stop is visible in compose.yaml), applies to
-  services without data too (an app needing `import`), and `never` is
-  accepted explicitly (a variable sets it; it silences the dependents
-  notice). `own` without any `devopsy.data` label is an error (it would
-  never stop); with `none` it is ignored (a variable chose `none`).
-  The labels before these, their old values (`rsync`, `files`, `skip`)
-  and anything left in `.devopsy/capabilities/sync/` are errors naming
-  what replaces them, only where labels are read (`parseSyncServices`,
+  `devopsy.data=true|false` (`cli.DataLabel`: whether it has data,
+  `HasData`), `devopsy.data.copy=volumes|custom|none` (`DataCopyLabel`:
+  how a copy carries it, `Copy`, `CopyNone` without data; `Copies()`),
+  `devopsy.data.exclude` and `devopsy.data.stop=never|own|import|always`
+  (`DataStopLabel`), for syncs, `--export`/`--import` and later
+  snapshots. Why the stop label: one boolean, `devopsy.sync.stop=true`,
+  answered three questions (down while its own data is copied? while
+  any data is imported? for every copy?), so `--import database` of a
+  dump left the app serving during the load, and a child's app ran
+  while its database was reloaded. Why two labels for data (decided
+  2026-10-25): `devopsy.data=mnt|stream|none` said both whether and how,
+  `stream` named devopsy's side of the plumbing, and a snapshot, which
+  takes every service with data as files whatever its copy, would have
+  read one label two ways; `custom` says whose job the copy is.
+  Rejected: `pipe` (the mechanism again, and devopsy never pipes an
+  export into an import), `scripts` (`copy=scripts` reads "copy the
+  scripts"), `mnt` (the copy carries named volumes too, once they are
+  data), `rsync` (only the transport) or `files` (reads as
+  `./mnt/files`).
+- **Values:** no label is no data, like `false`; an empty value is an
+  error, on either label (decided: a variable left unset by accident
+  must fail, not stop copying; `copy=none` turns copying off, and
+  `false` says there is no data). The copy label is ignored on a
+  service without data (a variable flips `devopsy.data`). `copy=none`
+  is data all the same: images only go forward, `--reset` empties it,
+  and a sync leaves the child's own, `--export` and `--import` refuse
+  it. `stop` defaults to `never` for every copy (every stop is visible
+  in compose.yaml), applies to services without data too (an app
+  needing `import`), and `never` is accepted explicitly (a variable
+  sets it; it silences the dependents notice). `own` without any
+  `devopsy.data` label is an error (it would never stop); with `false`
+  or `copy=none` it is ignored (a variable chose it: no copy moves that
+  data). The labels before these, their old values (`mnt`, `stream`,
+  `none`, `rsync`, `files`, `skip`) and anything left in
+  `.devopsy/capabilities/sync/` are errors naming what replaces them, only where labels are read (`parseSyncServices`,
   `SyncServices`), never in `Build`: a rollback to an older release, or
   the restart after a failed one, runs a plain `up`.
 - **The stop set is a pure function** (`cli.DataStops`: the operation,
@@ -1442,12 +1462,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   and why (`cli.StoppingLine`). Rejected: stopping dependents of an
   imported service with no `import` value (implicit; an import of the
   app's own storage still needs a label).
-- **One invariant for stream scripts:** a service in the set is down
-  (`DEVOPSY_DATA_STOP` says so); a stream service not in it is up for
+- **One invariant for custom scripts:** a service in the set is down
+  (`DEVOPSY_DATA_STOP` says so); a custom service not in it is up for
   its import (`upFor`, always `--no-deps` for `--import`: a retry's set
   is empty, since nothing runs, so "only with a set" would start a
   half-imported dependency; a sync keeps `!rec.first || len(rec.stops)
-  > 0`). No exception for streams, a dependent's included: a script
+  > 0`). No exception for custom ones, a dependent's included: a script
   needing its server refuses.
 - **A running dependent without a stop label is named** on `--import` and
   a child's prepare (`cli.UnlabeledDependents`, filtered by what runs):
@@ -1468,28 +1488,28 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   app back on half a database. A notice names one in a kept-down set
   (`restartAlwaysNotice`); the templates use `unless-stopped`.
 - **`devopsy.data.exclude`** (`DataExcludeLabel`, entries of `mnt`,
-  comma or space separated) drops entries from a mnt service's `Dirs`
-  at parse time, so every consumer (copy, guard, list) agrees. On
-  `stream` and `none` it is ignored, not validated, so a variable can
-  flip the method and keep it. A mnt service's entry with whitespace in
-  its name is refused: the child's list, exclude and rsync modules name
+  comma or space separated) drops entries from a data service's `Dirs`
+  at parse time, whatever its copy (a snapshot leaves them out too), so
+  every consumer (copy, guard, list) agrees. Without data it is ignored,
+  not validated, so a variable can flip `devopsy.data` and keep it. A
+  data service's entry with whitespace in its name is refused: the child's list, exclude and rsync modules name
   entries split by spaces (decided over a new list format).
 - **The child guard: each side reads its own labels, and the parent
   checks the child's before changing anything.** `--sync-push` asks the
   child for `--sync-services list` (through `--sync-exec`, one more
   session across servers) and refuses (`syncConflicts`) when a child
   service mounting a copied entry is running or restarting and not
-  `mnt` there (one the child stopped is down already), and
-  (`streamMismatches`) when a parent `stream` service is not `stream`
-  on the child, whose import would refuse it after the rsync, or a
-  child `stream` service is `mnt` on the parent. A stop word differing
+  copied as `volumes` there (one the child stopped is down already),
+  and (`streamMismatches`) when a parent `custom` service is not
+  `custom` on the child, whose import would refuse it after the rsync,
+  or a child `custom` service is `volumes` on the parent. A stop word differing
   between the sides is named (`stopMismatches`). A label from an
   inherited variable cannot lag (the child reads the pending file,
   inherit below); one in the child's own `shared/.env` can still
-  differ. The list (`runSyncServices`): per service `name`, `<method>+<stop
-  word>`, state, entries, owners (`<entry>=<uid>:<gid>`, space
+  differ. The list (`runSyncServices`): per service `name`, `<copy>+<stop
+  word>` (`none` without data too), state, entries, owners (`<entry>=<uid>:<gid>`, space
   separated, `listOwners`), tab separated, then `!import\t<service>` for
-  an import's mark (`listMark`); only a devopsy with `data-labels` and
+  an import's mark (`listMark`); only a devopsy with `data-copy` and
   `mnt-owner` reads it, from a child checked for both (`childNeeds`).
   The list refuses two owners on one entry.
 - **Rejected for these labels:** a `push` script with helpers (it only
@@ -1525,13 +1545,13 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   database.
 - **The parent's side** (`runSyncPush`): the checks (labels, the
   child's import mark (below), the `export` script when a service is
-  `stream`, the child guard, the util image) before anything, then `prepare parent`, on the same server a
+  `custom`, the child guard, the util image) before anything, then `prepare parent`, on the same server a
   refusal when the child's gate is gone already (its holder decided),
   stop, rsync, streams, start (healthy), `finish parent go|abort`. A
   failing prepare aborts before its side stops anything.
 - **Hooks run from Go** (`runDataHook`, `--capability data ...` in its
   own process group), only where their file is (`export` and `import`
-  are required for a `stream` service), with that side's label lists
+  are required for a `custom` service), with that side's label lists
   and the operation's set (`cli.DataLists`, `dataHookEnv`:
   `DEVOPSY_DATA_STOP` from labels at prepare, export, import and
   `finish ... go|abort`, from the record at `finish child partial` and
@@ -1609,10 +1629,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   --no-deps --wait`) a service whose container's `devopsy.digest` label
   differs from the release's `ComposeFile` (`images.Recreate`), before
   starting the rest: `compose start` would run the old image on the new
-  data, the finish hook first. Only `mnt` copies: a stream goes through
+  data, the finish hook first. Only `volumes` copies: a `custom` one goes through
   the child's own image. A pull refused for having no build for the
   server's platform (S72: `otherPlatform`, both Docker stores' words)
-  says so, with its platform, and names `--accept-image`. An `mnt`
+  says so, with its platform, and names `--accept-image`. A `volumes`
   `--export` carries the same lines for
   its service (`ExportData`: on a target `ParentData`'s, locally its
   container's image) as a pax global header before GNU tar's members
@@ -1651,9 +1671,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `--resolved` start the history over (`Imported`). A named feature, `export-images`, found by
   `--export` and `--import`: an older server would export without it and
   import unchecked.
-- **Details the second review settled:** only `devopsy.data=mnt`
+- **Details the second review settled:** only `devopsy.data.copy=volumes`
   services, as the parent's config resolves it now, are in
-  `ParentData` (a stream, `none` or an unlabeled service copies no
+  `ParentData` (a `custom`, `none` or an unlabeled service copies no
   files). The holder checks and pulls while its watcher is still armed,
   so an abort or a session gone during a long pull stops nothing. The
   parent's image is held by its digest in the child's own repository
@@ -1698,7 +1718,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Streams
 
-- **An import only ever reads a complete export:** per `stream`
+- **An import only ever reads a complete export:** per `custom`
   service, in `depends_on` order over every service
   (`SyncStreamServices`: dependencies first, ties alphabetical, a cycle
   an error), the parent runs the capability's `export <service>`
@@ -1728,7 +1748,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   sockets (`--no-D`, taking back `-a`'s `-D`): as root rsync made them
   on the child's host, where bind mounts are not nodev, and `--chown`
   gave a block device to the entry's owner (review of 2026-10-23, round
-  4), as an `mnt` import refuses them (`errMember`). Times are compared to the
+  4), as a `volumes` import refuses them (`errMember`). Times are compared to the
   nanosecond (`RsyncCopy`, `--modify-window=-1`): to the second, rsync
   skipped a datadir's files of the same size that both sides wrote in
   the same second (the child stops right before the parent), and the
@@ -1755,17 +1775,42 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   implementation, in Go: the receive script once built it in shell, and
   a weekly check there would need GNU `date` (macOS runs the scripts in
   tests); an older child refuses the sync, naming the upgrade.
-- **Entries are the top-level entries of `mnt` that `rsync` services
+- **Entries are the top-level entries of `mnt` that `volumes` services
   bind-mount** (`docker compose --profile '*' config`, lexical and
   resolved paths); one missing on the parent is
   skipped with a notice, the child's left as it is. An entry that is a
   file on the parent is copied as one, `--inplace`, so the container
   bind-mounting it sees the new content (a bind mount is the file's
   inode); across servers its module is `/mnt` filtered to it.
+- **A service with data's named volumes are data too** (decided
+  2026-10-25: a named volume is a host directory as well, and a copy or
+  a snapshot that skipped a database kept in one would look complete).
+  `cli.SyncService.Volumes`, by compose key, every service's (the child
+  guard sees a tool on one), less a data service's excluded ones
+  (`devopsy.data.exclude` names keys too). Each is copied into the other
+  side's volume of that key (`<compose project>_<key>`: on a data
+  service, `external:` and a fixed `name:` are refused where labels are
+  read, another project's or every environment's data, and so is a key
+  named like an entry a data service mounts, since tars and rsync
+  modules name both by name), in a util container mounting both by name
+  on the same server, through the daemon's module of the key
+  (`/vol/<key>`) and the receive script's `copyvol` across. A volume
+  keeps its copied owners (`devopsy.mnt.owner` owns entries). Docker
+  makes a missing volume a container mounts, unlabeled, and compose then
+  warns "not created by Docker Compose" on every up, so devopsy makes it
+  first with compose's two labels, project and key, and the volume's
+  driver, options and labels (`ensureVolumes`; checked on compose
+  v5.5.0, no warning; compose's own config hash is left out): the
+  child's prepare, a reset's wipe after its `down --volumes`, and an
+  import before extracting. A missing child volume fails a copy before
+  its claim, nothing written. The child's list carries each service's
+  volumes (a sixth field), for the guard and `copiesService`; the
+  images' `ParentData` counts a service with a volume as copied (one a
+  service never ran with leaves no image to send anyway).
 - **Across servers the parent's daemon serves only what is copied:**
   named with the sync's id and labeled with the parent's `mnt`, so the
   next push from the parent, holding its sync lock, removes one an
-  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`: the entry's name), so nothing else
+  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`: the entry's name) and per volume (its key, mounted at `/vol/<key>`), so nothing else
   under `mnt` can be asked for.
 - **rsync's exit 24** (files vanished during the copy) is a notice
   (`RsyncVanished`); any other failure aborts.
@@ -1882,26 +1927,29 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
 `writers.go`, scope `[@t]`.
 
 - **The label decides how, and it is the contract:** a service without
-  data is refused. `stream`: the capability's `export` and `import`
-  (`runDataHook`, the lists in their environment). `mnt`: a tar of
+  data, or a copy of `none`, is refused. `custom`: the capability's
+  `export` and `import` (`runDataHook`, the lists in their
+  environment). `volumes`: a tar of
   the service's entries of `mnt` (exclude honored, file entries
   included) made in `UtilImage` as root with `--numeric-owner`. The
   set (`cli.DataStops`, `ExportOne` or `ImportOne`) is stopped around
   either and restored (`stopSet`), interrupts and a stop that failed
   included (it may have stopped them all the same) up to the first
-  write. A `stream` import of a service not stopped brings it up alone
+  write. A `custom` import of a service not stopped brings it up alone
   and down again if it was down (`upFor`), an `up` that failed too. An
   owned entry it extracted goes to its owner before the import counts
   as complete, in a container of its own (`ownMnt`, named
   `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
   `importContainers` ends it with the extracting ones).
-- **An mnt import checks the whole tar before changing anything**
+- **A `volumes` import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
   writer adds: `tar -t` takes a tar cut at a member boundary for
   complete, and the last member's own zeros (a sparse file, a
-  database's pages) pass a check of the spool's last bytes; entries the
-  service does not mount are refused, an excluded one by its label, and
+  database's pages) pass a check of the spool's last bytes; top-level
+  names the service neither mounts from `mnt` nor as a volume (by key:
+  `tarEntry.volume`, extracted into the volume by name, one carried as
+  a file refused) are refused, an excluded one by its label, and
   so is a member that reaches out of its entry (`tarMember`): a `..` or
   absolute path, a link out of `mnt`, a top-level entry that is no
   directory or file, a link into another entry, and `./`, `mnt` itself.
@@ -2048,7 +2096,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   keeps any mark when nothing was written), so from then on only a sync
   clears it. A sync clears an import's mark only by copying that
   service: the push refuses before stopping anything on the parent
-  otherwise (`copiesService`: a stream, or for a mnt service every
+  otherwise (`copiesService`: a `custom` one, or for a `volumes` one every
   entry the child's service mounts, from the child's list, copied and
   present on the parent: with any one, a sync completed over a
   half-written entry the parent lacks and cleared the mark), and a sync
@@ -2084,13 +2132,13 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   the imported service only when it ran before) and asks for the full
   name; a second session under the lock settles a killed holder's sync
   (`settleLeftover`, as `ImportScript` does), checks again, ends a
-  leftover writer, gives a `mnt` service's owned entries to their
+  leftover writer, gives a `volumes` service's owned entries to their
   owners (`resolvedOwners`, named as an import's owners' containers:
   review of 2026-10-23, round 3, it started the services on the tar
   maker's owners), starts the record and only then
   removes the mark and the record. On the server it is `devopsy
   --import <service> --resolved --yes` (`ResolvedScript`), so the
-  `data-labels` regexp gates it. Not locally (decided): nothing there
+  `data-copy` regexp gates it. Not locally (decided): nothing there
   tells a failed import's stops from deliberate ones. Rejected names:
   `--accept`, `--force` (`mariadb --force`), `--continue`, `--fake`,
   `--clear`, `--repair`.

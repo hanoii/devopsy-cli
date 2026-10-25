@@ -349,7 +349,7 @@ const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
 // --sync-push's own, set for it by the push session; the data capability
 // gets SyncFromTargetEnv, SyncToTargetEnv and its side's
-// lists (DataMntEnv, DataStreamEnv, DataStopEnv).
+// lists (DataVolumesEnv, DataCustomEnv, DataStopEnv).
 const (
 	// SyncToEnv is the child's server, user@hostname as the parent's
 	// server reaches it; empty when both are the same host.
@@ -366,13 +366,13 @@ const (
 	SyncToTargetEnv  = "DEVOPSY_SYNC_TO_TARGET"
 	// SyncFromTargetEnv is the parent's address.
 	SyncFromTargetEnv = "DEVOPSY_SYNC_FROM_TARGET"
-	// DataMntEnv and DataStreamEnv name a side's services labeled
-	// devopsy.data=mnt and devopsy.data=stream (depends_on order), and
+	// DataVolumesEnv and DataCustomEnv name a side's services copied as
+	// devopsy.data.copy=volumes and custom (depends_on order), and
 	// DataStopEnv what the operation stops on that side (cli.DataStops),
 	// space-separated, for the data capability's actions (cli.DataLists).
-	DataMntEnv    = "DEVOPSY_DATA_MNT"
-	DataStreamEnv = "DEVOPSY_DATA_STREAM"
-	DataStopEnv   = "DEVOPSY_DATA_STOP"
+	DataVolumesEnv = "DEVOPSY_DATA_VOLUMES"
+	DataCustomEnv  = "DEVOPSY_DATA_CUSTOM"
+	DataStopEnv    = "DEVOPSY_DATA_STOP"
 	// SyncNeedsEnv is, for --sync-exec, what the sync's later sessions
 	// to the child need of its devopsy (remote.Needs), space-separated:
 	// checked on the first (ChildCheck).
@@ -440,7 +440,7 @@ func syncFinish(projectName string) string {
 }
 
 // syncPrepare readies the child's current release to be written:
-// --sync-services prepare checks the stream services have an import,
+// --sync-services prepare checks the custom services have an import,
 // runs the data capability's prepare child and stops the child side's
 // set (cli.DataStops). A failure sets $status and restores what it
 // changed.
@@ -795,7 +795,7 @@ const SyncStateFile = ".devopsy-sync.services"
 // parent was released. Then "incomplete", a tab and the mark's line when
 // a sync or an import left its data partial (SyncIncompleteFile;
 // "incomplete" alone for a sync's files no holder settled), "importing"
-// while an import runs, and DataLabelsFeature when the server's devopsy
+// while an import runs, and DataCopyFeature when the server's devopsy
 // has it: a release that does not sync refuses before uploading, and one
 // that syncs on a server without it. extra are needs to check besides
 // the script's own (the push's, for a parent).
@@ -807,7 +807,7 @@ func CurrentExistsScript(t *Target, extra []string) string {
 	return "set -eu\n" + needs + basePrelude(t) + `if [ -d "$base/current/.devopsy" ]; then echo current; else echo none; fi
 ` + IncompleteCheck + `
 if ` + ImportRunning + `; then echo importing; fi
-case "$server_features" in *" ` + DataLabelsFeature + ` "*) echo ` + DataLabelsFeature + ` ;; esac
+case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeature + ` ;; esac
 `
 }
 
@@ -845,7 +845,7 @@ func ClaimWriteScript(base, id string) string {
 
 // Current is CurrentExistsScript's output: Mark nil without one (Code
 // empty for a sync's files no holder settled), Importing while an import
-// runs, DataLabels whether the server's devopsy has DataLabelsFeature.
+// runs, DataLabels whether the server's devopsy has DataCopyFeature.
 type Current struct {
 	Current, Importing, DataLabels bool
 	Mark                           *Incomplete
@@ -863,7 +863,7 @@ func ParseCurrent(out string) Current {
 			c.Mark = ParseMark(value)
 		case "importing":
 			c.Importing = true
-		case DataLabelsFeature:
+		case DataCopyFeature:
 			c.DataLabels = true
 		}
 	}
@@ -907,7 +907,10 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // directory), from the daemon's module of that name, as
 // root in UtilImage, on the host's network to reach the forward: owners
 // kept (--numeric-ids), or the child's for an entry it owns (owners,
-// --chown).
+// --chown); then one per named volume (volumes, by key), from the
+// module of its key into the child's volume of that key
+// (<toProject>_<key>), which must be there before anything is written
+// (the child's prepare, or a reset's wipe, makes it).
 // SyncStartedFile goes first, and with last (no stream follows)
 // a DoneLine once every entry is copied.
 //
@@ -917,9 +920,18 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []string, toProject string, owners map[string]string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
+	if wipe == "" {
+		// Before the claim: nothing written when a volume is missing. (A
+		// reset's wipe takes them down with the rest, and makes them
+		// again.)
+		for _, v := range volumes {
+			name := Quote(toProject + "_" + v)
+			claim = "docker volume inspect " + name + " >/dev/null 2>&1 || { devopsy --say error \"the child's volume \"" + name + "\" is missing: nothing copied\"; exit 1; }\n" + claim
+		}
+	}
 	if wipe != "" {
 		// A reset: the first write wipes the child first.
 		open := Quote(path.Join(base, SyncOpenFile(id)))
@@ -941,6 +953,14 @@ copy() {
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
 }
+copyvol() {
+  mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
+  devopsy --say info "rsync volume $1"
+  docker run --rm --name "$rs_name" --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
+    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
+    devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
+  }
+}
 `
 	for _, d := range dirs {
 		src, dst, opts := d+"/", d+"/", ""
@@ -955,6 +975,9 @@ copy() {
 			opts = strings.TrimSpace(opts + " --chown=" + o)
 		}
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
+	}
+	for _, v := range volumes {
+		script += "copyvol " + Quote(v) + " " + Quote(toProject+"_"+v) + "\n"
 	}
 	if last {
 		// Appended to the record, never created: once the holder took it,

@@ -23,7 +23,7 @@ func TestSyncInheritedLabel(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: "${SYNC_DATA:-mnt}", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.copy: "${SYNC_DATA:-volumes}", devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy":           "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export":  "#!/bin/sh\nexec cat \"$DEVOPSY_PROJECT_DIR/mnt/data/stamp\"\n",
@@ -35,18 +35,18 @@ func TestSyncInheritedLabel(t *testing.T) {
 		out, _ := srv(t, "cat inhl/dev/shared/inherit.env")
 		return strings.TrimSpace(out)
 	}
-	srv(t, "rm -f inhl.log; mkdir -p inhl/prod/shared/mnt/data && echo one >inhl/prod/shared/mnt/data/stamp && echo SYNC_DATA=mnt >inhl/prod/shared/.env")
+	srv(t, "rm -f inhl.log; mkdir -p inhl/prod/shared/mnt/data && echo one >inhl/prod/shared/mnt/data/stamp && echo SYNC_DATA=volumes >inhl/prod/shared/.env")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
-	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 || syncStamp(t, "inhl", "dev") != "one" || !strings.Contains(inherited(), "mnt") {
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 || syncStamp(t, "inhl", "dev") != "one" || !strings.Contains(inherited(), "volumes") {
 		t.Fatalf("dev's first release (%d), stamp %q, inherited %q:\n%s", code, syncStamp(t, "inhl", "dev"), inherited(), out)
 	}
 
-	srv(t, "echo SYNC_DATA=stream >inhl/prod/shared/.env && echo two >inhl/prod/shared/mnt/data/stamp")
+	srv(t, "echo SYNC_DATA=custom >inhl/prod/shared/.env && echo two >inhl/prod/shared/mnt/data/stamp")
 	out, code := op(t, dir, "devopsy @dev --sync --yes")
 	imported, _ := srv(t, "cat inhl.log 2>/dev/null")
-	if code != 0 || syncStamp(t, "inhl", "dev") != "two" || !strings.Contains(imported, "import data") || !strings.Contains(inherited(), "stream") {
+	if code != 0 || syncStamp(t, "inhl", "dev") != "two" || !strings.Contains(imported, "import data") || !strings.Contains(inherited(), "custom") {
 		t.Fatalf("a sync streaming what the last one rsynced (%d), stamp %q, imports %q, inherited %q:\n%s", code, syncStamp(t, "inhl", "dev"), imported, inherited(), out)
 	}
 	if exists(t, "inhl/dev/.devopsy-sync.inherit.env") {
@@ -55,9 +55,9 @@ func TestSyncInheritedLabel(t *testing.T) {
 
 	// Back to rsync on the parent, whose prepare then fails: nothing
 	// written, the child's variables as they were.
-	srv(t, "echo SYNC_DATA=mnt >inhl/prod/shared/.env && echo three >inhl/prod/shared/mnt/data/stamp && touch fail-prepare-inhl")
+	srv(t, "echo SYNC_DATA=volumes >inhl/prod/shared/.env && echo three >inhl/prod/shared/mnt/data/stamp && touch fail-prepare-inhl")
 	out, code = op(t, dir, "devopsy @dev --sync --yes")
-	if code == 0 || syncStamp(t, "inhl", "dev") != "two" || !strings.Contains(inherited(), "stream") || exists(t, "inhl/dev/.devopsy-sync.inherit.env") || exists(t, "inhl/dev/.devopsy-sync.incomplete") {
+	if code == 0 || syncStamp(t, "inhl", "dev") != "two" || !strings.Contains(inherited(), "custom") || exists(t, "inhl/dev/.devopsy-sync.inherit.env") || exists(t, "inhl/dev/.devopsy-sync.incomplete") {
 		t.Errorf("an aborted sync (%d), stamp %q, inherited %q, pending %v, marked %v:\n%s", code, syncStamp(t, "inhl", "dev"), inherited(), exists(t, "inhl/dev/.devopsy-sync.inherit.env"), exists(t, "inhl/dev/.devopsy-sync.incomplete"), out)
 	}
 	if syncState(t, "inhl", "dev", "data") != "running" || syncState(t, "inhl", "prod", "data") != "running" {
@@ -150,12 +150,12 @@ func TestSyncRsyncEntries(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files, ./mnt/logs:/logs, ./mnt/gone:/gone]
-    labels: {devopsy.data: mnt, devopsy.data.exclude: logs}
+    labels: {devopsy.data: "true", devopsy.data.exclude: logs}
   conf:
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/app.ini:/etc/app.ini]
-    labels: {devopsy.data: mnt}
+    labels: {devopsy.data: "true"}
 `,
 				".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 			})
@@ -221,7 +221,7 @@ func TestSyncChildGuard(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/db:/all]
-    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.stop: own}
   db:
     image: busybox:1.37
     command: [sleep, infinity]
@@ -276,7 +276,7 @@ func TestSyncReleaseInheritsRequired(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt}
+    labels: {devopsy.data: "true"}
 `
 	dir := project(t, name, map[string]string{
 		".devopsy/.env":            "DEVOPSY_SERVER=server\n",

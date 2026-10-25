@@ -20,7 +20,7 @@ func TestExportDropSilently(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})

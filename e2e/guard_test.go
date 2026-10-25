@@ -18,7 +18,7 @@ func guardProject(t *testing.T, name string) string {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/data:/data]
-    labels: {devopsy.data: mnt}
+    labels: {devopsy.data: "true"}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})

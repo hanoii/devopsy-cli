@@ -560,7 +560,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			// for none: refused here, before the upload; a release that
 			// does not sync goes on.
 			if syncs && !cur.DataLabels {
-				msg := "the server's devopsy lacks what this needs (" + remote.DataLabelsFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
+				msg := "the server's devopsy lacks what this needs (" + remote.DataCopyFeature + "): upgrade it (" + remote.UpgradeHint(t) + ")"
 				if os.Getenv(remote.ProtocolCheckEnv) != "warn" {
 					report.Fail(&report.Failure{Msg: msg + ", or set " + remote.ProtocolCheckEnv + "=warn to go on at your own risk: nothing changed"})
 					return 1
