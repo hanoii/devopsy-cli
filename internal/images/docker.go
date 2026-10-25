@@ -199,14 +199,18 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
 		}
-		// The entries of mnt it bind-mounts (. for mnt whole), less those
-		// its exclude label names: what a sync copies for it.
+		// The entries of mnt it bind-mounts (. for mnt whole), and its
+		// named volumes, less those its exclude label names: what a sync
+		// copies for it.
 		svc.EntriesKnown = true
 		excluded := map[string]bool{}
 		for _, x := range strings.FieldsFunc(c.Labels[DataExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' }) {
 			excluded[x] = true
 		}
 		for _, v := range c.Volumes {
+			if v.Type == "volume" && v.Source != "" && !excluded[v.Source] && !slices.Contains(svc.Volumes, v.Source) {
+				svc.Volumes = append(svc.Volumes, v.Source)
+			}
 			if v.Type != "bind" {
 				continue
 			}

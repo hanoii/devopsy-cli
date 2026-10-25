@@ -54,7 +54,9 @@ func (s *Set) parentData(base, rel, only string) string {
 		if only != "" && svc.Name != only {
 			continue
 		}
-		copied[svc.Name] = svc.Method == CopyVolumes && (!svc.EntriesKnown || hasEntry(rel, svc.Entries))
+		// A named volume counts as there: one a service never ran with
+		// leaves no image to send anyway.
+		copied[svc.Name] = svc.Method == CopyVolumes && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
 		pulled = pulled || (svc.Method == CopyVolumes && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)

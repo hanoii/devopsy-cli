@@ -200,7 +200,7 @@ func TestSyncFilesPrefixed(t *testing.T) {
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Project: &Project{Name: "app"}}
 	scripts := HolderScript(tg, "app-prod", &SyncOptions{From: "vm1:prod"}, true) + PushScript(tg, "app-prod", nil) +
 		ExportScript(tg, "app-prod", "db") + ImportScript(tg, "app-prod", "db", "end", "") + StatusScript(tg) +
-		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, true, "")
+		ClaimWriteScript("$base", "1.2") + SyncReceiveScript("/x/current/.devopsy", "$base", "1.2", "1", []string{"a"}, nil, nil, "", nil, true, "")
 	for _, m := range regexp.MustCompile(`\$base/(\.[A-Za-z0-9_.-]*sync[A-Za-z0-9_.-]*)`).FindAllStringSubmatch(scripts, -1) {
 		if !strings.HasPrefix(m[1], ".devopsy-sync.") {
 			t.Errorf("a sync's file not prefixed: %s", m[1])
@@ -255,9 +255,9 @@ func allScripts() map[string]string {
 		"current":         CurrentExistsScript(tg, nil),
 		"current parent":  CurrentExistsScript(tg, []string{"sync-push", DataCopyFeature}),
 		"parent check":    ParentCheckScript(tg, "app-prod", []string{"sync-push"}),
-		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, map[string]string{"storage": "10001:10001"}, true, ""),
-		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
-		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, map[string]string{"app.ini": "1:2"}, false, ""),
+		"receive":         SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage", "logs"}, nil, []string{"dbdata"}, "it's-dev", map[string]string{"storage": "10001:10001"}, true, ""),
+		"receive reset":   SyncReceiveScript("/srv/it's/current/.devopsy", "/srv/it's", "1.2", "20001", []string{"storage"}, nil, []string{"dbdata"}, "app-dev", nil, true, SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "wipe"})),
+		"receive bare":    SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"storage", "app.ini"}, []string{"app.ini"}, nil, "", map[string]string{"app.ini": "1:2"}, false, ""),
 		"exec":            SyncExecScript("/srv/it's/current/.devopsy", "app-dev", map[string]string{SyncFromTargetEnv: "vm1:prod"}, []string{"--sync-services", "import", "db"}),
 		"exec list":       SyncExecScript("/srv/it's/current/.devopsy", "app-dev", nil, []string{"--sync-services", "list"}),
 		"child check":     ChildCheck("devopsy@h2:dev", "cat > x", []string{"say", "sync-services"}),
@@ -405,7 +405,7 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	}
 	// The receive script gets the util image ready on the child's server
 	// before using it, which an older devopsy there lacks.
-	if got := Needs(SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"db"}, nil, nil, true, "")); !slices.Contains(got, "util-image") {
+	if got := Needs(SyncReceiveScript("/srv/app/current/.devopsy", "/srv/app", "1.2", "20001", []string{"db"}, nil, nil, "", nil, true, "")); !slices.Contains(got, "util-image") {
 		t.Errorf("receive script needs: %v", got)
 	}
 	// The operator's own command is no need of the script's.

@@ -907,7 +907,10 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // directory), from the daemon's module of that name, as
 // root in UtilImage, on the host's network to reach the forward: owners
 // kept (--numeric-ids), or the child's for an entry it owns (owners,
-// --chown).
+// --chown); then one per named volume (volumes, by key), from the
+// module of its key into the child's volume of that key
+// (<toProject>_<key>), which must be there before anything is written
+// (the child's prepare, or a reset's wipe, makes it).
 // SyncStartedFile goes first, and with last (no stream follows)
 // a DoneLine once every entry is copied.
 //
@@ -917,9 +920,18 @@ const RsyncVanishedNotice = "some files vanished during the copy (a running serv
 // TCP to give up, writing again if the link comes back; sshd sends
 // nothing on a quiet forward, and rsync's own --timeout counts its
 // keepalives into the forward's local socket.
-func SyncReceiveScript(toDir, base, id, port string, dirs, files []string, owners map[string]string, last bool, wipe string) string {
+func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []string, toProject string, owners map[string]string, last bool, wipe string) string {
 	started := Quote(path.Join(base, SyncStartedFile))
 	claim := ClaimWriteScript(base, id)
+	if wipe == "" {
+		// Before the claim: nothing written when a volume is missing. (A
+		// reset's wipe takes them down with the rest, and makes them
+		// again.)
+		for _, v := range volumes {
+			name := Quote(toProject + "_" + v)
+			claim = "docker volume inspect " + name + " >/dev/null 2>&1 || { devopsy --say error \"the child's volume \"" + name + "\" is missing: nothing copied\"; exit 1; }\n" + claim
+		}
+	}
 	if wipe != "" {
 		// A reset: the first write wipes the child first.
 		open := Quote(path.Join(base, SyncOpenFile(id)))
@@ -941,6 +953,14 @@ copy() {
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
 }
+copyvol() {
+  mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
+  devopsy --say info "rsync volume $1"
+  docker run --rm --name "$rs_name" --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
+    [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
+    devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
+  }
+}
 `
 	for _, d := range dirs {
 		src, dst, opts := d+"/", d+"/", ""
@@ -955,6 +975,9 @@ copy() {
 			opts = strings.TrimSpace(opts + " --chown=" + o)
 		}
 		script += "copy " + Quote(d) + " " + Quote(src) + " " + Quote(dst) + " " + Quote(opts) + "\n"
+	}
+	for _, v := range volumes {
+		script += "copyvol " + Quote(v) + " " + Quote(toProject+"_"+v) + "\n"
 	}
 	if last {
 		// Appended to the record, never created: once the holder took it,

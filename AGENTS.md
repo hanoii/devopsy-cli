@@ -1138,7 +1138,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   one too, wherever owners are given). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
-  documented: named volumes and absolute paths. It reads the labels
+  documented: absolute paths. It reads the labels
   exactly as `--mnt-owners` does after the switch (`cli.SyncServices`,
   the leftover `.devopsy/capabilities/sync/` included), so labels that
   step could not read refuse the release here (review of 2026-10-23,
@@ -1775,17 +1775,42 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   implementation, in Go: the receive script once built it in shell, and
   a weekly check there would need GNU `date` (macOS runs the scripts in
   tests); an older child refuses the sync, naming the upgrade.
-- **Entries are the top-level entries of `mnt` that `rsync` services
+- **Entries are the top-level entries of `mnt` that `volumes` services
   bind-mount** (`docker compose --profile '*' config`, lexical and
   resolved paths); one missing on the parent is
   skipped with a notice, the child's left as it is. An entry that is a
   file on the parent is copied as one, `--inplace`, so the container
   bind-mounting it sees the new content (a bind mount is the file's
   inode); across servers its module is `/mnt` filtered to it.
+- **A service with data's named volumes are data too** (decided
+  2026-10-25: a named volume is a host directory as well, and a copy or
+  a snapshot that skipped a database kept in one would look complete).
+  `cli.SyncService.Volumes`, by compose key, every service's (the child
+  guard sees a tool on one), less a data service's excluded ones
+  (`devopsy.data.exclude` names keys too). Each is copied into the other
+  side's volume of that key (`<compose project>_<key>`: on a data
+  service, `external:` and a fixed `name:` are refused where labels are
+  read, another project's or every environment's data, and so is a key
+  named like an entry a data service mounts, since tars and rsync
+  modules name both by name), in a util container mounting both by name
+  on the same server, through the daemon's module of the key
+  (`/vol/<key>`) and the receive script's `copyvol` across. A volume
+  keeps its copied owners (`devopsy.mnt.owner` owns entries). Docker
+  makes a missing volume a container mounts, unlabeled, and compose then
+  warns "not created by Docker Compose" on every up, so devopsy makes it
+  first with compose's two labels, project and key, and the volume's
+  driver, options and labels (`ensureVolumes`; checked on compose
+  v5.5.0, no warning; compose's own config hash is left out): the
+  child's prepare, a reset's wipe after its `down --volumes`, and an
+  import before extracting. A missing child volume fails a copy before
+  its claim, nothing written. The child's list carries each service's
+  volumes (a sixth field), for the guard and `copiesService`; the
+  images' `ParentData` counts a service with a volume as copied (one a
+  service never ran with leaves no image to send anyway).
 - **Across servers the parent's daemon serves only what is copied:**
   named with the sync's id and labeled with the parent's `mnt`, so the
   next push from the parent, holding its sync lock, removes one an
-  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`: the entry's name), so nothing else
+  earlier push left (its devopsy killed outright); one module per entry (`rsyncdConf`: the entry's name) and per volume (its key, mounted at `/vol/<key>`), so nothing else
   under `mnt` can be asked for.
 - **rsync's exit 24** (files vanished during the copy) is a notice
   (`RsyncVanished`); any other failure aborts.
@@ -1916,13 +1941,15 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   as complete, in a container of its own (`ownMnt`, named
   `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
   `importContainers` ends it with the extracting ones).
-- **An mnt import checks the whole tar before changing anything**
+- **A `volumes` import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
   writer adds: `tar -t` takes a tar cut at a member boundary for
   complete, and the last member's own zeros (a sparse file, a
-  database's pages) pass a check of the spool's last bytes; entries the
-  service does not mount are refused, an excluded one by its label, and
+  database's pages) pass a check of the spool's last bytes; top-level
+  names the service neither mounts from `mnt` nor as a volume (by key:
+  `tarEntry.volume`, extracted into the volume by name, one carried as
+  a file refused) are refused, an excluded one by its label, and
   so is a member that reaches out of its entry (`tarMember`): a `..` or
   absolute path, a link out of `mnt`, a top-level entry that is no
   directory or file, a link into another entry, and `./`, `mnt` itself.

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -172,6 +173,31 @@ type SyncService struct {
 	// CheckMounts refuses: it would write every entry, which the child
 	// guard and the stop sets never see.
 	WholeMnt bool
+	// Volumes are the named volumes it mounts, by compose key, sorted (a
+	// service with data's without the ones its exclude label names, in
+	// Excluded with its entries): a service with data's are its data as
+	// its entries of mnt are, copied as files the same way.
+	Volumes []Volume
+}
+
+// Volume is a named volume of the project: its compose key, the name
+// Docker knows it by (always <compose project>_<key>: a fixed name: or
+// external: on a service with data is refused, it would be another
+// project's or every environment's), and what Docker creates it with
+// (driver:, driver_opts:, labels:), for devopsy to make it as compose
+// would where a copy writes into one missing.
+type Volume struct {
+	Key, Name, Driver string
+	Opts, Labels      map[string]string
+}
+
+// VolumeKeys are the keys of vs.
+func VolumeKeys(vs []Volume) []string {
+	keys := make([]string, 0, len(vs))
+	for _, v := range vs {
+		keys = append(keys, v.Key)
+	}
+	return keys
 }
 
 // Copies reports whether a copy carries s's data: it has data, and its
@@ -245,6 +271,14 @@ func SyncServices(cwd string, environ []string) (projectDir string, services []S
 // resolved): both count. depends_on is a map keyed by service.
 func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	var config struct {
+		Name    string `json:"name"`
+		Volumes map[string]struct {
+			Name       string            `json:"name"`
+			External   bool              `json:"external"`
+			Driver     string            `json:"driver"`
+			DriverOpts map[string]string `json:"driver_opts"`
+			Labels     map[string]string `json:"labels"`
+		} `json:"volumes"`
 		Services map[string]struct {
 			Labels    map[string]string          `json:"labels"`
 			DependsOn map[string]json.RawMessage `json:"depends_on"`
@@ -336,7 +370,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			exclude = strings.FieldsFunc(s.Labels[DataExcludeLabel], func(r rune) bool { return r == ',' || r == ' ' })
 			for _, e := range exclude {
 				if e == "." || e == ".." || strings.ContainsAny(e, "/\\") {
-					return nil, fmt.Errorf("service %s: %s=%s: entries of mnt only, like files or logs", name, DataExcludeLabel, s.Labels[DataExcludeLabel])
+					return nil, fmt.Errorf("service %s: %s=%s: entries of mnt or named volumes only, like files or logs", name, DataExcludeLabel, s.Labels[DataExcludeLabel])
 				}
 			}
 		}
@@ -348,6 +382,31 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			cs.Owner = owner
 		}
 		for _, v := range s.Volumes {
+			if v.Type == "volume" && v.Source != "" {
+				// A named volume (an anonymous one has no source, and dies
+				// with its container): data on a service with data, by its
+				// key; refused there when it is not the environment's own.
+				if slices.ContainsFunc(cs.Volumes, func(x Volume) bool { return x.Key == v.Source }) || slices.Contains(cs.Excluded, v.Source) {
+					continue
+				}
+				if slices.Contains(exclude, v.Source) {
+					cs.Excluded = append(cs.Excluded, v.Source)
+					continue
+				}
+				top := config.Volumes[v.Source]
+				whose := ""
+				switch {
+				case top.External:
+					whose = "external"
+				case top.Name != "" && config.Name != "" && top.Name != config.Name+"_"+v.Source:
+					whose = "named " + top.Name
+				}
+				if cs.HasData && whose != "" {
+					return nil, fmt.Errorf("service %s: %s=true mounts the volume %s, which is %s: a copy into it would write another project's data, or every environment's: give the environment its own (no name:, not external:), or leave it out (%s=%s)", name, DataLabel, v.Source, whose, DataExcludeLabel, v.Source)
+				}
+				cs.Volumes = append(cs.Volumes, Volume{Key: v.Source, Name: cmp.Or(top.Name, v.Source), Driver: top.Driver, Opts: top.DriverOpts, Labels: top.Labels})
+				continue
+			}
 			if v.Type != "bind" {
 				continue
 			}
@@ -401,6 +460,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		}
 		sort.Strings(cs.Dirs)
 		sort.Strings(cs.Excluded)
+		sort.Slice(cs.Volumes, func(i, j int) bool { return cs.Volumes[i].Key < cs.Volumes[j].Key })
 		sort.Strings(cs.Writable)
 		sort.Strings(cs.TreeBinds)
 		sort.Strings(cs.Binds)
@@ -429,6 +489,27 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		services = append(services, cs)
 	}
 	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
+	// A copy names entries and volumes side by side (a tar's top level,
+	// the rsync modules): a volume of a service with data named like an
+	// entry of mnt a service with data mounts would be both.
+	entries := map[string]string{}
+	for _, cs := range services {
+		if cs.HasData {
+			for _, d := range cs.Dirs {
+				entries[d] = cs.Name
+			}
+		}
+	}
+	for _, cs := range services {
+		if !cs.HasData {
+			continue
+		}
+		for _, v := range cs.Volumes {
+			if by, ok := entries[v.Key]; ok {
+				return nil, fmt.Errorf("service %s: the volume %s is named like the entry ./mnt/%s %s mounts: a copy carries both by that name: rename one", cs.Name, v.Key, v.Key, by)
+			}
+		}
+	}
 	return services, nil
 }
 
@@ -540,8 +621,8 @@ func CheckMounts(services []SyncService) error {
 			bad = append(bad, fmt.Sprintf("%s mounts ./%s writable: it is in the release, and the next one replaces it", s.Name, b))
 			tree = true
 		}
-		if s.Copy == CopyVolumes && len(s.Dirs) == 0 {
-			bad = append(bad, fmt.Sprintf("%s has data (%s=true, %s=%s) and copies no entry of mnt: a sync would copy nothing of it", s.Name, DataLabel, DataCopyLabel, CopyVolumes))
+		if s.Copy == CopyVolumes && len(s.Dirs) == 0 && len(s.Volumes) == 0 {
+			bad = append(bad, fmt.Sprintf("%s has data (%s=true, %s=%s) and copies no entry of mnt or named volume: a sync would copy nothing of it", s.Name, DataLabel, DataCopyLabel, CopyVolumes))
 			data = true
 		}
 		if s.Owner != "" && len(s.Writable) == 0 {
@@ -560,7 +641,7 @@ func CheckMounts(services []SyncService) error {
 		fixes = append(fixes, report.Fix("mount data from an entry of mnt (./mnt/<name>), which outlives releases, or read-only (:ro) what ships with the release"))
 	}
 	if data {
-		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name>, or label it "+DataCopyLabel+"="+CopyCustom+" or "+CopyNone+", or "+DataLabel+"=false"))
+		fixes = append(fixes, report.Fix("bind-mount its data from ./mnt/<name> or a named volume, or label it "+DataCopyLabel+"="+CopyCustom+" or "+CopyNone+", or "+DataLabel+"=false"))
 	}
 	if owner {
 		fixes = append(fixes, report.Fix("remove the label, or mount its data writable from ./mnt/<name>"))
@@ -590,6 +671,24 @@ func SyncDirs(services []SyncService) []string {
 	}
 	sort.Strings(dirs)
 	return dirs
+}
+
+// SyncVolumes are the named volumes a sync rsyncs, by key: those of the
+// services copied as CopyVolumes, sorted.
+func SyncVolumes(services []SyncService) []string {
+	var keys []string
+	for _, s := range services {
+		if s.Copy != CopyVolumes {
+			continue
+		}
+		for _, v := range s.Volumes {
+			if !slices.Contains(keys, v.Key) {
+				keys = append(keys, v.Key)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // SyncFind is the service named name.

@@ -248,6 +248,7 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 
 	var entries []string
+	var vols []cli.Volume
 	var mnt string
 	switch s.Copy {
 	case cli.CopyCustom:
@@ -265,8 +266,19 @@ func runExport(cwd string, args []string, color bool) int {
 			}
 			entries = append(entries, d)
 		}
-		if len(entries) == 0 {
-			return fail("nothing to export: " + name + " bind-mounts nothing that exists under .devopsy/mnt")
+		for _, v := range s.Volumes {
+			ok, err := volumeExists(ctx, v.Name)
+			if err != nil {
+				return fail(err.Error())
+			}
+			if !ok {
+				report.Info("the volume " + v.Key + " does not exist: skipped")
+				continue
+			}
+			vols = append(vols, v)
+		}
+		if len(entries) == 0 && len(vols) == 0 {
+			return fail("nothing to export: " + name + " mounts nothing that exists under .devopsy/mnt, nor a named volume")
 		}
 		if e := symlinkEntry(mnt, entries); e != "" {
 			return fail("mnt/" + e + " is a symlink: a tar would carry only the link: make it a directory, mounting what it points to there, to export it")
@@ -296,12 +308,28 @@ func runExport(cwd string, args []string, color bool) int {
 		report.Info("exporting " + name)
 		err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), nil, os.Stdout, nil, "export", name)
 	} else {
-		report.Info("exporting " + name + ": a tar of mnt/" + strings.Join(entries, ", mnt/"))
+		var what []string
+		for _, e := range entries {
+			what = append(what, "mnt/"+e)
+		}
+		for _, v := range vols {
+			what = append(what, "the volume "+v.Key)
+		}
+		report.Info("exporting " + name + ": a tar of " + strings.Join(what, ", "))
 		if record != "" {
 			err = exportHeader(os.Stdout, record)
 		}
 		if err == nil {
-			run := append([]string{"-v", mnt + ":/mnt:ro", remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"}, entries...)
+			// Volumes at the tar's top level by their key, beside the
+			// entries (cli.SyncServices refuses a key named like one).
+			run := []string{"-v", mnt + ":/mnt:ro"}
+			for _, v := range vols {
+				run = append(run, "-v", v.Name+":/vol/"+v.Key+":ro")
+			}
+			run = append(append(run, remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"), entries...)
+			if len(vols) > 0 {
+				run = append(append(run, "-C", "/vol"), cli.VolumeKeys(vols)...)
+			}
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 		}
 	}
@@ -442,6 +470,9 @@ type tarEntry struct {
 	name  string
 	forms []string
 	file  bool
+	// volume is the named volume the entry is, by the service's labels
+	// (its key is name): extracted into it, never into mnt.
+	volume *cli.Volume
 }
 
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
@@ -777,15 +808,27 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 // throwaway container, never another entry or the host (review of
 // 2026-10-23, round 3: one container mounting all of mnt let the app
 // plant files in another entry). A missing entry is made first, an
-// empty directory or file as the tar has it, for the container to mount.
-func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name string) error {
+// empty directory or file as the tar has it, for the container to mount;
+// a named volume (project's, by its key) is made when missing as compose
+// would, and mounted by name.
+func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
 	for i, e := range entries {
-		if err := readyEntry(mnt, e); err != nil {
-			return err
-		}
-		mount, err := bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name)
-		if err != nil {
-			return err
+		var mount string
+		var err error
+		if e.volume != nil {
+			// A volume: made when missing, as compose would, and mounted
+			// by name.
+			if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
+				return err
+			}
+			mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
+		} else {
+			if err := readyEntry(mnt, e); err != nil {
+				return err
+			}
+			if mount, err = bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name); err != nil {
+				return err
+			}
 		}
 		in, err := os.Open(spool)
 		if err != nil {
@@ -795,7 +838,11 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 		err = dockerRunFresh(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, run...)
 		in.Close()
 		if err != nil {
-			return fmt.Errorf("extracting mnt/%s: %w", e.name, err)
+			what := "mnt/" + e.name
+			if e.volume != nil {
+				what = "the volume " + e.name
+			}
+			return fmt.Errorf("extracting %s: %w", what, err)
 		}
 	}
 	return nil
@@ -958,14 +1005,20 @@ func runImport(cwd string, args []string, color bool) int {
 		if err := ensureUtilImage(ctx); err != nil {
 			return fail(err.Error())
 		}
-		for _, t := range entries {
+		for i, t := range entries {
 			e := t.name
-			names = append(names, e)
+			v := slices.IndexFunc(s.Volumes, func(v cli.Volume) bool { return v.Key == e })
 			switch {
 			case slices.Contains(s.Excluded, e):
-				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
+				return fail(fmt.Sprintf("the tar carries %s, which %s's %s leaves out here: nothing imported", e, name, cli.DataExcludeLabel))
+			case v >= 0 && t.file:
+				return fail(fmt.Sprintf("the tar carries %s as a file, and it is the volume %s here: nothing imported", e, e))
+			case v >= 0:
+				entries[i].volume = &s.Volumes[v]
 			case !slices.Contains(s.Dirs, e):
-				return fail(fmt.Sprintf("the tar carries mnt/%s, which %s does not bind-mount (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none")))
+				return fail(fmt.Sprintf("the tar carries %s, which %s neither bind-mounts from mnt (%s) nor mounts as a volume (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none"), cmp.Or(strings.Join(cli.VolumeKeys(s.Volumes), ", "), "none")))
+			default:
+				names = append(names, e)
 			}
 		}
 		if mnt, err = dataMnt(projectDir); err != nil {
@@ -975,6 +1028,9 @@ func runImport(cwd string, args []string, color bool) int {
 			return fail("mnt/" + e + " is a symlink: the import would not reach what it points to: make it a directory, mounting that there, to import into it: nothing imported")
 		}
 		for _, e := range entries {
+			if e.volume != nil {
+				continue
+			}
 			if fi, err := os.Stat(filepath.Join(mnt, e.name)); err == nil && fi.IsDir() == e.file {
 				as, is := "a directory", "a file"
 				if e.file {
@@ -1080,7 +1136,7 @@ func runImport(cwd string, args []string, color bool) int {
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(names, ", mnt/") + " replaced")
 			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
-			err = extractEntries(ctx, mnt, spool, entries, cname)
+			err = extractEntries(ctx, mnt, spool, entries, cname, composeName(cwd))
 			// What it extracted goes to its owner before the import counts
 			// as complete: a tar made anywhere carries its maker's owners.
 			// Not locally on macOS, as localMnt: Docker Desktop's file

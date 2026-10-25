@@ -962,7 +962,8 @@ release here too. With an entry owned, it also builds `devopsy-util`
 when the server lacks it, so a registry that cannot be reached refuses
 the release before it goes live.
 
-Named volumes and absolute paths are not checked. `--destroy` empties
+Absolute paths are not checked (a service with data's named volumes are
+its data, below). `--destroy` empties
 `shared/mnt` as root in `devopsy-util`, and forgets the history of the
 images that ran on the data. Back up `shared/.env`, `shared/mnt`
 (databases as dumps) and `.devopsy-data-images` beside them.
@@ -997,7 +998,16 @@ them.
   tar. Both as root in `devopsy-util`. Device nodes, FIFOs and sockets
   are never copied, nor given to an owner: as root, rsync and tar would
   make them on the server, where a block device given to the app's UID
-  is its raw disk.
+  is its raw disk. Its named volumes too (a database's datadir in
+  `dbdata:/var/lib/mysql`), each by its compose key: copied into the
+  other environment's volume of that key (`<project>_<key>`, the name
+  compose gives it), which devopsy makes when missing as compose would
+  (its driver, options and labels), and carried in a tar at its top
+  level by the key, beside the entries. A volume keeps the owners it is
+  copied with (its image's users; `devopsy.mnt.owner` owns entries of
+  `mnt`). Refused on a service with data: an `external:` volume or one
+  with a fixed `name:` (another project's, or every environment's), and
+  a key named like an entry of `mnt` a service with data mounts.
 - `custom`: the data capability's `export <service>` writes it to
   stdout (a database dump), and its `import <service>` reads it from
   stdin (a load), devopsy carrying the bytes.
@@ -1011,8 +1021,9 @@ An empty `devopsy.data.copy` is an error too; on a service without data
 it is ignored, so a variable can flip `devopsy.data` and keep it.
 
 `devopsy.data.exclude=<entry>[,<entry>...]` on a service with data names
-entries of `mnt` it mounts that are not copied through it anyway: an
-access log next to the site's files (`./mnt/logs`). On a service
+entries of `mnt` or named volumes (by key) it mounts that are not
+copied through it anyway: an access log next to the site's files
+(`./mnt/logs`), a cache in a volume. On a service
 without data it is ignored. The entries a service with data mounts
 cannot have whitespace in their names: copies refuse them.
 
@@ -1306,14 +1317,15 @@ refuses when it is in `DEVOPSY_DATA_STOP`.
 writes a service's data to stdout, and `devopsy [@<target>] --import
 <service>` replaces it with stdin, the way its copy label says: a
 `custom` one through the capability's `export` and `import`, a `volumes`
-one as a tar
-of its entries of `mnt` (made and extracted as root in `devopsy-util`,
+one as a tar of its entries of `mnt` and its named volumes (made and
+extracted as root in `devopsy-util`,
 numeric owners and modes kept; an import empties each entry the tar
 carries first, as a sync's `--delete` does, and extracts it in a
 container without a network that mounts that entry alone, so a running
 service that swaps a directory for a link meanwhile can lead the
-extraction nowhere else; an entry its labels own is given to its owner
-once extracted). What its stop labels say is
+extraction nowhere else; a volume the same way, made first when
+missing; an entry its labels own is given to its owner once
+extracted). What its stop labels say is
 stopped around either (an export: the service if `own` or `always`, every
 `always` one; an import: the service if `own`, `import` or `always`, every
 `import` and `always` one; with what depends on them), and comes back

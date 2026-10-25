@@ -190,8 +190,10 @@ type Service struct {
 	Build, Data, NeverPull bool
 	Method                 string
 	// Entries are the entries of mnt it bind-mounts, less its excluded
-	// ones (. for mnt whole); EntriesKnown: read from compose's config.
+	// ones (. for mnt whole), Volumes its named volumes by key, less its
+	// excluded ones; EntriesKnown: read from compose's config.
 	Entries      []string
+	Volumes      []string
 	EntriesKnown bool
 }
 

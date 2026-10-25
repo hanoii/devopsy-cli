@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +32,14 @@ func TestSyncServices(t *testing.T) {
 	bind := func(src string) map[string]string {
 		return map[string]string{"type": "bind", "source": src, "target": "/x"}
 	}
-	config := map[string]any{"services": map[string]any{
+	// Named volumes by their key: the environment's own as compose names
+	// them (<project>_<key>), an external one only on a service without
+	// data.
+	config := map[string]any{"name": "app", "volumes": map[string]any{
+		"dbdata": map[string]any{"name": "app_dbdata", "driver": "local", "driver_opts": map[string]string{"type": "tmpfs"}, "labels": map[string]string{"x": "1"}},
+		"cache":  map[string]any{"name": "app_cache"},
+		"shared": map[string]any{"name": "shared", "external": true},
+	}, "services": map[string]any{
 		"app": map[string]any{
 			"labels":     map[string]string{DataLabel: "true", DataStopLabel: "import", DataExcludeLabel: "logs, cache"},
 			"volumes":    []any{bind(dot + "/mnt/storage/files"), bind(dot + "/mnt/logs"), bind("/etc/hosts"), map[string]string{"type": "volume", "source": "cache"}},
@@ -40,14 +48,14 @@ func TestSyncServices(t *testing.T) {
 		},
 		"database": map[string]any{
 			"labels":  map[string]string{DataLabel: "true", DataCopyLabel: "custom", DataStopLabel: "never"},
-			"volumes": []any{bind(dot + "/mnt/database")},
+			"volumes": []any{bind(dot + "/mnt/database"), map[string]string{"type": "volume", "source": "dbdata"}, map[string]string{"type": "volume", "source": ""}},
 		},
 		"goaccess": map[string]any{"profiles": []string{"tools"}, "labels": map[string]string{DataLabel: "true"}, "volumes": []any{bind(resolved + "/report")}},
 		// Data no copy carries: own (from a variable) is never, its
 		// entries are still its own.
 		"kept": map[string]any{"labels": map[string]string{DataLabel: "true", DataCopyLabel: "none", DataStopLabel: "own"}, "volumes": []any{bind(dot + "/mnt/kept")}},
 		// A copy label without data is ignored, not an error.
-		"mntnot": map[string]any{"labels": map[string]string{DataCopyLabel: "pipe"}, "volumes": []any{bind(dot + "/mntx/a")}},
+		"mntnot": map[string]any{"labels": map[string]string{DataCopyLabel: "pipe"}, "volumes": []any{bind(dot + "/mntx/a"), map[string]string{"type": "volume", "source": "shared"}}},
 		// false: no data, its own (from a variable) ignored, and its
 		// exclude.
 		"plain":  map[string]any{"labels": map[string]string{DataLabel: "false", DataStopLabel: "own", DataExcludeLabel: "a/b"}, "volumes": []any{bind(dot + "/mnt/plain")}},
@@ -84,6 +92,25 @@ func TestSyncServices(t *testing.T) {
 		if s.Name != w.Name || s.Copy != w.Copy || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") || strings.Join(s.Profiles, ",") != strings.Join(w.Profiles, ",") {
 			t.Errorf("%d: %+v, want %+v", i, s, w)
 		}
+	}
+	// Volumes: cache excluded by app's label, dbdata the database's with
+	// what Docker makes it with, an anonymous one none, shared kept on a
+	// service without data.
+	vols := map[string]string{}
+	for _, s := range services {
+		vols[s.Name] = strings.Join(VolumeKeys(s.Volumes), ",")
+	}
+	if vols["app"] != "" || vols["database"] != "dbdata" || vols["mntnot"] != "shared" {
+		t.Errorf("volumes: %v", vols)
+	}
+	if db, _ := SyncFind(services, "database"); db.Volumes[0].Name != "app_dbdata" || db.Volumes[0].Driver != "local" || db.Volumes[0].Opts["type"] != "tmpfs" || db.Volumes[0].Labels["x"] != "1" {
+		t.Errorf("dbdata: %+v", db.Volumes[0])
+	}
+	if a, _ := SyncFind(services, "app"); !slices.Contains(a.Excluded, "cache") {
+		t.Errorf("app's excluded: %v", a.Excluded)
+	}
+	if got := strings.Join(SyncVolumes(services), ","); got != "" {
+		t.Errorf("custom and excluded volumes are not rsynced: %s", got)
 	}
 	// A service in a profile is up only with it (COMPOSE_PROFILES).
 	goaccess, _ := SyncFind(services, "goaccess")
@@ -130,6 +157,24 @@ func TestSyncServices(t *testing.T) {
 		t.Errorf("an entry with a space without data: %v", err)
 	}
 
+	// A volume on a service with data must be the environment's own, and
+	// never named like an entry of mnt a service with data mounts.
+	vol := func(top, mount string) string {
+		return `{"name":"app","volumes":{` + top + `},"services":{"db":{"labels":{"devopsy.data":"true"},"volumes":[{"type":"volume","source":"v"}` + mount + `]}}}`
+	}
+	for config, want := range map[string]string{
+		vol(`"v":{"name":"v","external":true}`, ""):                              "service db: devopsy.data=true mounts the volume v, which is external: a copy into it would write another project's data, or every environment's",
+		vol(`"v":{"name":"fixed"}`, ""):                                          "mounts the volume v, which is named fixed",
+		vol(`"v":{"name":"app_v"}`, `,{"type":"bind","source":"`+dot+`/mnt/v"}`): "service db: the volume v is named like the entry ./mnt/v db mounts: a copy carries both by that name",
+	} {
+		if _, err := parseSyncServices([]byte(config), dot); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", config, err)
+		}
+	}
+	if got, err := parseSyncServices([]byte(vol(`"v":{"name":"app_v"}`, "")), dot); err != nil || strings.Join(SyncVolumes(got), ",") != "v" {
+		t.Errorf("a volume of a service with data: %+v %v", got, err)
+	}
+
 	// Values devopsy does not know are errors naming the service; the
 	// labels and values before devopsy.data.copy name what replaces them;
 	// an empty devopsy.data or copy (a variable left unset) is no way to
@@ -149,7 +194,7 @@ func TestSyncServices(t *testing.T) {
 		`"devopsy.data":"true","devopsy.data.stop":""`:          "service db: devopsy.data.stop=: never, own, import or always",
 		`"devopsy.data":"true","devopsy.data.stop":"true"`:      "(true was own, false never)",
 		`"devopsy.data.stop":"own"`:                             "service db: devopsy.data.stop=own needs a devopsy.data label",
-		`"devopsy.data":"true","devopsy.data.exclude":"a/b"`:    "service db: devopsy.data.exclude=a/b: entries of mnt only",
+		`"devopsy.data":"true","devopsy.data.exclude":"a/b"`:    "service db: devopsy.data.exclude=a/b: entries of mnt or named volumes only",
 		`"devopsy.sync":"rsync"`:                                "service db: devopsy.sync=rsync: that label is now devopsy.data=true (rsync is the default devopsy.data.copy=volumes), or false for skip",
 		`"devopsy.data":"true","devopsy.sync.stop":"true"`:      "service db: devopsy.sync.stop=true: that label is now devopsy.data.stop (true is own",
 		`"devopsy.data":"true","devopsy.sync.rsync.exclude":""`: "service db: devopsy.sync.rsync.exclude=: that label is now devopsy.data.exclude",
@@ -298,12 +343,15 @@ func TestCheckMounts(t *testing.T) {
 	if err := check(`"app":{"labels":{"devopsy.data":"true"},"volumes":[` + bind(root+"/src", true) + `,` + bind(dot+"/Caddyfile", true) + `,` + bind(dot+"/conf/x", false) + `,` + bind(dot+"/mnt/storage", false) + `,` + bind("/var/run/docker.sock", false) + `,` + bind(dot+"/mnt/logs/app", false) + `]},"tool":{"volumes":[` + bind(dot+"/mnt", true) + `]}`); err != nil {
 		t.Errorf("read-only tree mounts, shared/'s links, mnt, absolute paths, mnt whole read-only, below an entry nobody owns: %v", err)
 	}
+	if err := check(`"db":{"labels":{"devopsy.data":"true"},"volumes":[{"type":"volume","source":"dbdata","target":"/var/lib/mysql"}]}`); err != nil {
+		t.Errorf("data in a named volume alone: %v", err)
+	}
 	for services, want := range map[string]string{
 		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                              "app mounts ./src writable: it is in the release, and the next one replaces it",
 		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                           "app mounts ./.devopsy/cache/x writable",
-		`"app":{"labels":{"devopsy.data":"true"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt",
+		`"app":{"labels":{"devopsy.data":"true"},"volumes":[` + bind(root+"/src", true) + `]}`:                              "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt or named volume",
 		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/a", true) + `]}`:                         "app has devopsy.mnt.owner=1:1 and mounts no entry of mnt writable: it owns nothing",
-		`"app":{"labels":{"devopsy.data":"true","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt",
+		`"app":{"labels":{"devopsy.data":"true","devopsy.data.exclude":"a"},"volumes":[` + bind(dot+"/mnt/a", false) + `]}`: "app has data (devopsy.data=true, devopsy.data.copy=volumes) and copies no entry of mnt or named volume",
 		// A writable tool over all of mnt, which the child guard missed
 		// once its mount was no entry (review of 2026-10-23): a sync
 		// rsynced under it running.

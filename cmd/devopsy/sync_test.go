@@ -107,13 +107,26 @@ if [ -n "${FAKE_APP_OWNER:-}" ]; then
 fi
 app2=
 [ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
+# FAKE_DB_VOLUME: a named volume db mounts, by key, the environment's own
+# (<project>_<key>); FAKE_APP_VOLUME one app mounts. Volumes are
+# directories of $DOCKER_LOG.vol, by name.
+dbvol= appvol= topvols=
+[ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME"); }
+[ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_APP_VOLUME"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
+vols="$DOCKER_LOG.vol"
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{"labels":%s,"restart":"%s","volumes":[{"type":"bind","source":"%s/mnt/db"}%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dir" "$dbvol" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+  "volume inspect --format {{.Name}} "*)
+    [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
+    echo "$5" ;;
+  "volume create "*) mkdir -p "$vols/$last" ;;
   # FAKE_NETWORK_OWNER: every network exists and is that project's.
   "network inspect "*) [ -n "${FAKE_NETWORK_OWNER:-}" ] || exit 1; echo "$FAKE_NETWORK_OWNER" ;;
   # down removes every container, until an up creates them again.
-  *" down "*) rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; for s in $svcs; do echo "$s"; done > "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}" ;;
+  *" down "*)
+    rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; for s in $svcs; do echo "$s"; done > "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}"
+    case "$* " in *" --volumes "*) rm -rf "$vols/${COMPOSE_PROJECT_NAME:-}"_* ;; esac ;;
   *" stop "*)
     # FAKE_STOP_WAIT: a stop that takes until $FAKE_STOP_WAIT.go exists.
     if [ -n "${FAKE_STOP_WAIT:-}" ]; then : >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
@@ -185,7 +198,8 @@ case "$*" in
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
     done ;;
   "run --rm -d "*)
-    for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
+    : >"$DOCKER_LOG.daemonvols"
+    for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; *:/vol/*:ro) v=${a%:ro}; echo "${v##*/} ${a%%:*}" >> "$DOCKER_LOG.daemonvols" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   # Images as devopsy's images rules inspect them (images.CLI): FAKE_IMAGES,
   # space separated <id>=<registry digest>, found by id or by digest.
@@ -232,6 +246,14 @@ case "$*" in
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
+  "run --rm --name devopsy-sync-"*"-receive --network host "*" rsync://127.0.0.1:"*"/vol/"*)
+    # A volume, from the daemon's mount of it.
+    [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
+    m=${last2#rsync://127.0.0.1:*/}; m=${m%/}
+    grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
+    from=$(grep "^$m " "$DOCKER_LOG.daemonvols" | cut -d' ' -f2)
+    for a; do case $a in *:/vol/*) to=${a%%:*} ;; esac; done
+    mkdir -p "$vols/$to" && cp -R "$vols/$from/." "$vols/$to" ;;
   "run --rm --name devopsy-sync-"*"-receive --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
@@ -243,7 +265,10 @@ case "$*" in
   "run --rm --name devopsy-sync-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
-    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; esac; done
+    # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>.
+    vsrc= vdst=
+    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
+    if [ -n "$vsrc" ]; then mkdir -p "$vdst" && cp -R "$vsrc/." "$vdst"; exit $?; fi
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
   "run --rm --name devopsy-destroy-"*)
@@ -251,7 +276,11 @@ case "$*" in
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; --numeric-owner) shift; break ;; esac; shift; done
+    # Volumes (-v <name>:/vol/<key>:ro) copied under a directory of their
+    # own, which tar's -C /vol then names.
+    vroot="$DOCKER_LOG.vroot"; rm -rf "$vroot"; mkdir -p "$vroot"
+    while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; *:/vol/*:ro) v=${1%:ro}; cp -R "$vols/${1%%:*}" "$vroot/${v##*/}" ;; --numeric-owner) shift; break ;; esac; shift; done
+    set -- $(for a; do [ "$a" = /vol ] && echo "$vroot" || echo "$a"; done)
     COPYFILE_DISABLE=1 exec tar -C "$src" -cf - "$@" ;;
   "run --rm --name devopsy-import-"*)
     # Which of the release's lock descriptors the client got.
@@ -259,9 +288,15 @@ case "$*" in
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted, as the util image does.
-    while [ $# -gt 0 ]; do case $1 in --mount) src=${2#type=bind,source=}; src=${src%%,target=*} ;; -c) shift 3; break ;; esac; shift; done
+    vol=
+    while [ $# -gt 0 ]; do case $1 in --mount) case $2 in type=volume,*) vol=1; src=${2#type=volume,source=}; src="$vols/${src%%,target=*}" ;; *) src=${2#type=bind,source=}; src=${src%%,target=*} ;; esac ;; -c) shift 3; break ;; esac; shift; done
     e=$1; shift
     if [ -d "$src" ] && [ ! -L "$src" ]; then find "$src" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
+    if [ -n "$vol" ]; then
+      # A volume (its mount, by name): what the members under its key hold.
+      t="$DOCKER_LOG.vtmp"; rm -rf "$t"; mkdir -p "$t" "$src"
+      tar -C "$t" -xf - "$@" && cp -R "$t/$e/." "$src/"; exit $?
+    fi
     exec tar -C "${src%/"$e"}" -xf - "$@" ;;
 esac
 exit 0
@@ -2149,7 +2184,7 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(nil, whole[:700], "--import", "app"); code == 0 || !strings.Contains(errs, "stdin is not a complete tar") || readString(filepath.Join(mnt, "storage", "new.txt")) != "new\n" {
 		t.Errorf("truncated tar (%d):\n%s", code, errs)
 	}
-	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/db, which app does not bind-mount (storage): nothing imported") {
+	if _, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries db, which app neither bind-mounts from mnt (storage) nor mounts as a volume (none): nothing imported") {
 		t.Errorf("foreign entry (%d):\n%s", code, errs)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-import-") && strings.Contains(docker, "sh -c") {

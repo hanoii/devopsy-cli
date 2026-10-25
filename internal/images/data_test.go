@@ -1678,8 +1678,9 @@ func TestRestoreFailingPullLeavesNothing(t *testing.T) {
 	}
 }
 
-// A parent's mnt service whose entries are all missing on the parent has
-// nothing a copy writes: the child keeps its own data, and its image.
+// A parent's volumes service whose entries are all missing on the parent
+// has nothing a copy writes: the child keeps its own data, and its image;
+// a named volume counts as there.
 func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1696,6 +1697,12 @@ func TestSyncMissingEntryKeepsChildImage(t *testing.T) {
 	os.MkdirAll(filepath.Join(prod.e.rel(prod.cur), codeDir, ".devopsy", "mnt", "database"), 0o755)
 	if data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur)); !strings.Contains(data, "image\tdatabase\t") {
 		t.Errorf("a service with its entry on the parent missing from its data:\n%s", data)
+	}
+	// Its data in a named volume: copied, whatever its entries.
+	vol := newSim(t, d, "vol-prod", &out)
+	vol.release(false, Service{Name: "database", Ref: "mariadb:11.8", Data: true, Method: CopyVolumes, Volumes: []string{"dbdata"}, EntriesKnown: true})
+	if data := vol.e.set.ParentData(vol.base(), vol.e.rel(vol.cur)); !strings.Contains(data, "image\tdatabase\t") {
+		t.Errorf("a service whose data is a named volume missing from its data:\n%s", data)
 	}
 }
 

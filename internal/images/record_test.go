@@ -187,12 +187,14 @@ func TestParseComposeConfig(t *testing.T) {
 	svcs, err := ParseComposeConfig([]byte(`{"name":"x-prod","services":{
 		"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.copy":"none"}},
 		"plain":{"image":"busybox","labels":{"devopsy.data":"false","devopsy.data.copy":"custom"}},
-		"app":{"build":{"context":"."},"labels":{"devopsy.data":"true","devopsy.data.exclude":"logs"},"volumes":[
+		"app":{"build":{"context":"."},"labels":{"devopsy.data":"true","devopsy.data.exclude":"logs tmp"},"volumes":[
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/storage/sub"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt/logs"},
 			{"type":"bind","source":"/srv/x/prod/current/.devopsy/config"},
-			{"type":"volume","source":"cache"}]},
+			{"type":"volume","source":"cache"},
+			{"type":"volume","source":"tmp"},
+			{"type":"volume","source":""}]},
 		"whole":{"image":"busybox","labels":{"devopsy.data":"true"},"volumes":[{"type":"bind","source":"/srv/x/prod/current/.devopsy/mnt"}]},
 		"tool":{"image":"local/tool","pull_policy":"never"},
 		"web":{"image":"caddy:2"}}}`))
@@ -200,7 +202,7 @@ func TestParseComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "volumes", Entries: []string{"storage"}, EntriesKnown: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "volumes", Entries: []string{"storage"}, Volumes: []string{"cache"}, EntriesKnown: true},
 		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
 		{Name: "plain", Ref: "busybox", EntriesKnown: true},
 		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},
