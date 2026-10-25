@@ -170,6 +170,15 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail(err.Error())
 		}
 		return 0
+	case "check-fit":
+		if len(args) != 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-fit <snapshot>")
+		}
+		if err := snapshotCheckFit(cwd, p, args[1]); err != nil {
+			report.Fail(err)
+			return 1
+		}
+		return 0
 	case "check-tars":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-tars <snapshot>")
@@ -539,6 +548,14 @@ type manifest struct {
 	format, kind, release, taken string
 	entries, files               []string
 	volumes                      map[string]string
+	// services are its services with data, each with its entries and
+	// volumes' keys.
+	services []manifestService
+}
+
+type manifestService struct {
+	name             string
+	entries, volumes []string
 }
 
 func readManifest(dir string) (*manifest, error) {
@@ -567,6 +584,8 @@ func readManifest(dir string) (*manifest, error) {
 			}
 		case fs[0] == "volume" && len(fs) > 2:
 			m.volumes[fs[1]] = fs[2]
+		case fs[0] == "service" && len(fs) > 4:
+			m.services = append(m.services, manifestService{name: fs[1], entries: strings.Fields(fs[3]), volumes: strings.Fields(fs[4])})
 		}
 	}
 	return m, sc.Err()
@@ -1199,6 +1218,67 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 	return nil
 }
 
+// snapshotCheckFit refuses a --no-code restore whose snapshot the current
+// release's labels do not fit, naming each mismatch (devopsy would have
+// to guess which service to stop, hold on the snapshot's image and give
+// the files to): a data service of the snapshot gone or without data
+// now, an entry or a volume it held that no service of that name mounts
+// now, or one another service with data mounts now; and on a marked
+// environment one that leaves a service with data of the current labels
+// out (the run step would start it on its half-written data).
+func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
+	m, err := readManifest(snap)
+	if err != nil {
+		return err
+	}
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		return err
+	}
+	var bad []string
+	covered := map[string]bool{}
+	for _, ms := range m.services {
+		cur, ok := cli.SyncFind(services, ms.name)
+		if !ok || !cur.HasData {
+			bad = append(bad, "the snapshot has data for "+ms.name+", which the current release has no service with data of")
+			continue
+		}
+		covered[ms.name] = true
+		for _, e := range ms.entries {
+			if !slices.Contains(cur.Dirs, e) {
+				bad = append(bad, ms.name+" held mnt/"+e+", which it no longer mounts")
+			}
+			for _, o := range services {
+				if o.Name != ms.name && o.HasData && slices.Contains(o.Dirs, e) {
+					bad = append(bad, "mnt/"+e+", "+ms.name+"'s in the snapshot, is "+o.Name+"'s now")
+				}
+			}
+		}
+		for _, k := range ms.volumes {
+			if !slices.Contains(cli.VolumeKeys(cur.Volumes), k) {
+				bad = append(bad, ms.name+" held the volume "+k+", which it no longer mounts")
+			}
+			for _, o := range services {
+				if o.Name != ms.name && o.HasData && slices.Contains(cli.VolumeKeys(o.Volumes), k) {
+					bad = append(bad, "the volume "+k+", "+ms.name+"'s in the snapshot, is "+o.Name+"'s now")
+				}
+			}
+		}
+	}
+	if readMark(p.base) != nil {
+		for _, s := range services {
+			if s.HasData && !covered[s.Name] {
+				bad = append(bad, "the environment is marked, and the snapshot has no data for "+s.Name+", which would run on what is there")
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &report.Failure{Msg: "snapshot " + filepath.Base(snap) + " does not fit the current release's labels: nothing restored", Details: bad,
+		Fixes: []report.Remedy{report.Fix("restore it whole, its code included:", "devopsy @"+targetAddress(cwd)+" --snapshots restore "+filepath.Base(snap))}}
+}
+
 // snapshotRestoreData writes snap's data into the environment, for the
 // release rel being restored, as an import writes its tar: the current
 // release's services with data and their dependents stopped (recorded),
@@ -1363,6 +1443,23 @@ func envKeysDiffer(a, b string) []string {
 	return keys
 }
 
+// restoringUnder is a --no-code restore's line naming the release whose
+// log the session's is appended to.
+var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `restoring snapshot [0-9]{14}'s data under ([0-9]{14})`)
+
+// restoreDataWords are what liveSession says of a --no-code restore: past
+// the disarm it writes the data, on its own.
+func restoreDataWords(t *remote.Target) liveWords {
+	w := releaseWords(t)
+	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	w.goesOn = []string{"interrupted: the restore goes on on @" + t.Address + ", writing the data", logs + "; Ctrl-C again ends the session, not the restore"}
+	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
+	w.lostAfter = []string{"the connection to @" + t.Address + " was lost while it wrote the data: the restore goes on there", logs}
+	w.lostBefore = []string{"the connection to @" + t.Address + " failed or was lost before the restore wrote anything: the server cancels it once it notices"}
+	w.hadGone = []string{"it was writing the data already, and went on", logs}
+	return w
+}
+
 // restoringAs is a restore's line naming the release it makes, whose log
 // the session's is.
 var restoringAs = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `restoring snapshot [0-9]{14} as release ([0-9]{14})`)
@@ -1423,11 +1520,10 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		return 1
 	}
 	id := match[0]
-	if noCode {
-		report.Error("--no-code is not built yet: restore the snapshot whole, its code included")
-		return 1
-	}
 	what := "snapshot " + id + "'s data, code and the images that ran on them"
+	if noCode {
+		what = "snapshot " + id + "'s data and the images that ran on it, under its current release"
+	}
 	if withEnv {
 		what += ", and its shared/.env"
 	}
@@ -1440,7 +1536,19 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 	rlog := newReleaseLog("restore", t)
 	log := report.Default().Tee(rlog.Line)
 	log.Info(fmt.Sprintf("restoring %s (%s:%s) from snapshot %s", t.Address, t.Host, t.Path, id))
-	code = liveSession(t, remote.RestoreScript(t, projectName, &remote.RestoreOptions{Snapshot: id, WithEnv: withEnv, By: remote.Whoami()}), rlog, log, releaseWords(t))
+	opts := &remote.RestoreOptions{Snapshot: id, WithEnv: withEnv, By: remote.Whoami()}
+	if noCode {
+		code = liveSession(t, remote.RestoreDataScript(t, projectName, opts), rlog, log, restoreDataWords(t))
+		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
+		text := rlog.Text()
+		if m := restoringUnder.FindSubmatch(text); m != nil {
+			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+				report.Warn("could not save the restore's log on the server")
+			}
+		}
+		return code
+	}
+	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {

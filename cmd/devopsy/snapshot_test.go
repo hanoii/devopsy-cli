@@ -317,3 +317,37 @@ func TestSnapshotDestroy(t *testing.T) {
 		t.Errorf("--destroy (%d):\n%s\n%s", code, out, docker)
 	}
 }
+
+// --no-code: the snapshot's data under the current release, which stays
+// current, its run step run again; refused, naming each mismatch, when
+// the current labels do not fit the snapshot's.
+func TestSnapshotRestoreNoCode(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	id := m[1]
+	current := s.current("prod")
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", id, "--no-code", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" || s.current("prod") != current || !strings.Contains(out, "deploy in shop-prod") {
+		t.Fatalf("--no-code (%d), current %s (was %s):\n%s\n%s", code, s.current("prod"), current, out, docker)
+	}
+	if i, j := strings.Index(docker, "stop db app"), strings.Index(docker, "-extract-"); i < 0 || j < i {
+		t.Errorf("stopped before the extraction:\n%s", docker)
+	}
+
+	// db without data now: the snapshot does not fit.
+	s.labels("FAKE_DB=none")
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", id, "--no-code", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "snapshot "+id+" does not fit the current release's labels: nothing restored") || !strings.Contains(out, "the snapshot has data for db, which the current release has no service with data of") || strings.Contains(docker, " stop ") {
+		t.Errorf("a mismatch (%d):\n%s\n%s", code, out, docker)
+	}
+}

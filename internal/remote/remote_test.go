@@ -268,6 +268,8 @@ func allScripts() map[string]string {
 		"snapshot":        SnapshotScript(tg, "app-prod", 3),
 		"snapshots":       SnapshotsScript(tg, "app-prod"),
 		"snapshots rm":    SnapshotsRemoveScript(tg, "app-prod", []string{"20261025120000"}),
+		"restore":         RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000", WithEnv: true, By: "me"}),
+		"restore data":    RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
 	}
 }
 
@@ -360,7 +362,7 @@ func TestSyncReceiveOwners(t *testing.T) {
 func TestDataImagesFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove"
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove" || strings.HasPrefix(name, "restore")
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}

@@ -2,6 +2,7 @@ package remote
 
 import (
 	"strconv"
+	"strings"
 )
 
 // A snapshot is a copy of an environment's data (every service with
@@ -164,4 +165,54 @@ exec 6>"$base/` + SnapshotLockFile + `"
 ` + lockWait(6, false, "a snapshot of $base") + `
 cd "$base/current"
 ` + devopsyCall(projectName, append([]string{SnapshotStepFlag, "remove"}, ids...), true) + "\n"
+}
+
+// RestoreDataScript restores the data of t's snapshot r.Snapshot under
+// the current release (--no-code): never an activation, with no release
+// to make, fail or switch back to. In order: the watcher, the release,
+// sync and snapshot locks, the checks (the current labels fit the
+// snapshot's manifest, the tars whole), the disarm (a session gone up to
+// it cancels, nothing changed), the data step as a full restore's, then
+// the deployed run step again, its output in the current release's
+// server log, as a sync's.
+func RestoreDataScript(t *Target, projectName string, r *RestoreOptions) string {
+	mode := t.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	step := func(word string, args ...string) string {
+		return "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
+	}
+	s := prelude(t, false) + "exec 1>&2\n" + NoExit255
+	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
+snap="$snaps"/` + Quote(r.Snapshot) + `
+[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + r.Snapshot + `"; exit 1; }
+export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(mode) + ` ` + RestoreByEnv + `=` + Quote(r.By)
+	if r.WithEnv {
+		s += " " + RestoreEnvEnv + "=1"
+	}
+	s += `
+` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "a snapshot of $base") + `
+cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
+devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
+` + step("check-fit", `"$snap"`) + ` || exit 1
+` + step("check-tars", `"$snap"`) + ` || exit 1
+if [ -n "${watch_pid:-}" ]; then
+` + waitBeat(`{ devopsy --say error "the session ended: nothing restored"; exit 1; }`) + `fi
+trap '' INT TERM HUP PIPE
+# From here it goes on whatever happens to the session: the output to the
+# current release's server log, which the session follows.
+out="$base/$cur/` + ServerLogFile + `"
+` + followOutput + step("restore-data", `"$snap"`, `"$base/$cur"`) + ` || exit 1
+exec 6>&- 5>&-
+rs=0
+(cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", t.ComposeName(), "--mode", mode, "--address", hintAddress(t)}, false) + ` --left ` + leftPath(t) + ` "$@"; }
+img ran "$base" "$base/$cur" || true
+exit "$rs"
+`
+	return s
 }
