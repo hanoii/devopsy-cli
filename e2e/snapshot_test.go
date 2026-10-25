@@ -35,10 +35,10 @@ volumes:
 
 var takenID = regexp.MustCompile(`snapshot ([0-9]{14}) taken`)
 
-// A manual take with real Docker: the data of every service with data
+// A manual take and a full restore with real Docker: the data of every service with data
 // (a named volume whatever its copy label, an entry of mnt), as
 // zstd-compressed tars any tar reads, the services running again after.
-func TestSnapshotTake(t *testing.T) {
+func TestSnapshotTakeRestore(t *testing.T) {
 	dir := snapshotProject(t, "snaptake")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
@@ -67,5 +67,29 @@ func TestSnapshotTake(t *testing.T) {
 	}
 	if out, _ := op(t, dir, "devopsy @prod --log"); !strings.Contains(out, "snapshot "+m[1]+" taken") {
 		t.Errorf("the take's tar in the log:\n%s", out)
+	}
+
+	// Changed, then restored whole: the volume and the entry as they were
+	// (what came since gone), the services running on the restored
+	// release, db held on the image that ran on its data.
+	if out, code := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d -v \"$PWD/snaptake/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo changed >/d/table && echo later >/f/b.jpg'"); code != 0 {
+		t.Fatalf("changing the data: %s", out)
+	}
+	out, code = op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --yes")
+	if code != 0 || !strings.Contains(out, "snapshot "+m[1]+"'s data is in") {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+	table, _ := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d busybox:1.37 cat /d/table")
+	files, _ := srv(t, "ls snaptake/prod/shared/mnt/files")
+	if strings.TrimSpace(table) != "rows" || strings.TrimSpace(files) != "a.jpg" {
+		t.Errorf("after the restore: table %q, files %q", table, files)
+	}
+	for _, svc := range []string{"db", "app"} {
+		if state := syncState(t, "snaptake", "prod", svc); state != "running" {
+			t.Errorf("%s after the restore: %s", svc, state)
+		}
+	}
+	if compose, _ := srv(t, "cat snaptake/prod/current/../devopsy-compose.yaml"); !strings.Contains(compose, "busybox@sha256:") {
+		t.Errorf("db not held on its data's image:\n%s", compose)
 	}
 }
