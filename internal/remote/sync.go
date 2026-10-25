@@ -151,6 +151,9 @@ type Incomplete struct{ Since, From, Code, Why string }
 // IsImport reports an import's mark: From is its service.
 func (m *Incomplete) IsImport() bool { return m != nil && m.Code == IncompleteImport }
 
+// IsRestore reports a restore's mark: From is its snapshot's id.
+func (m *Incomplete) IsRestore() bool { return m != nil && m.Code == IncompleteRestore }
+
 // ImportFixes are the ways out of an import of service that did not
 // complete, ref the address as typed, child whether it has a parent: the
 // import again from a complete file (on a child, or a sync), or
@@ -165,6 +168,31 @@ func ImportFixes(ref, service string, child bool) [][2]string {
 	}
 	return append(fixes,
 		[2]string{"or go on with the data as it is (to fix it by hand first: devopsy @" + ref + " up -d --no-deps " + service + ", then --shell " + service + "):", "devopsy @" + ref + " --import " + service + " --resolved"})
+}
+
+// RestoreFixes are the ways out of a restore of snapshot that did not
+// complete, ref the address as typed, child whether it has a parent: the
+// same restore again (it empties and extracts everything again),
+// another snapshot, a reset on a child. Each a text and its command.
+func RestoreFixes(ref, snapshot string, child bool) [][2]string {
+	fixes := [][2]string{
+		{"restore it again:", "devopsy @" + ref + " --snapshots restore " + snapshot},
+		{"or another snapshot:", "devopsy @" + ref + " --snapshots"},
+	}
+	if child {
+		fixes = append(fixes, ResetFix(ref))
+	}
+	return fixes
+}
+
+// restoreFixLines are RestoreFixes as --say's details, the snapshot the
+// shell's $snapshot.
+func restoreFixLines(t *Target, snapshot string) string {
+	var lines []string
+	for _, f := range RestoreFixes(hintAddress(t), "$"+snapshot, t.Parent != "") {
+		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
+	}
+	return strings.Join(lines, " ")
 }
 
 // ResetFix is the way out that starts a child over from its parent.
@@ -199,6 +227,9 @@ func markRefusal(t *Target, what, syncFix, refuse string) string {
   if [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
     mr_service=$(cut -f2 ` + mark + ` 2>/dev/null) || true
     devopsy --say error "the import of $mr_service into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + importFixLines(t, "mr_service") + `
+  elif [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+    mr_snapshot=$(cut -f2 ` + mark + ` 2>/dev/null) || true
+    devopsy --say error "the restore of snapshot $mr_snapshot into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + restoreFixLines(t, "mr_snapshot") + `
   else
     devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + what + `: ` + IncompleteWhy + `" ` + syncFix + `
   fi
@@ -519,6 +550,8 @@ func syncBlock(projectName, failed string, release bool) string {
         printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
       elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         devopsy --say error "nothing was copied, and the data is still from an import of $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes that service, and ` + failed + `" || true
+      elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        devopsy --say error "nothing was copied, and the data is still from a restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes every service of it, and ` + failed + `" || true
       else
         devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, start the child over from it:" "` + report.CmdMark + `devopsy @$` + SyncToTargetEnv + ` --reset" || true
       fi
@@ -739,7 +772,10 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
-  if [ "$im_code" != ` + IncompleteImport + ` ]; then
+  if [ "$im_code" = ` + IncompleteRestore + ` ]; then
+    devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixLines(t, "im_service") + `
+    exit 1
+  elif [ "$im_code" != ` + IncompleteImport + ` ]; then
     devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
@@ -754,7 +790,7 @@ export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(pro
 // writers end first, and its data becomes a sync's mark (replacing an
 // import's), which the checks after it see. Under the release lock.
 func settleLeftover(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
 `

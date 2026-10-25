@@ -468,6 +468,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					for _, f := range remote.ImportFixes(releaseRef(t), cur.Mark.From, true) {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
+				} else if cur.Mark.IsRestore() {
+					msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
+					fixes = nil
+					for _, f := range remote.RestoreFixes(releaseRef(t), cur.Mark.From, t.Parent != "") {
+						fixes = append(fixes, report.Fix(f[0], f[1]))
+					}
 				} else if !current {
 					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
 				}

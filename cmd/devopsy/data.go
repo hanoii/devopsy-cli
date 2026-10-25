@@ -252,9 +252,18 @@ func runExport(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	// On a target, what a snapshot's take killed outright left stopped
+	// starts again first (ExportScript holds the release lock).
+	if cli.InRelease(projectDir) {
+		if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+			return fail(err.Error())
+		}
+	}
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(cwd), remote.SyncIncompleteFile)); err == nil {
 		if m := remote.ParseMark(string(data)); m.IsImport() {
 			report.Warn("the import of " + m.From + " into this environment did not complete: exporting the data as it is")
+		} else if m.IsRestore() {
+			report.Warn("the restore of snapshot " + m.From + " into this environment did not complete: exporting the data as it is")
 		} else {
 			report.Warn("this environment's data is from a sync that did not complete: exporting it anyway")
 		}
@@ -966,6 +975,9 @@ func runImport(cwd string, args []string, color bool) int {
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
 		if m := readMark(base); m != nil {
+			if m.IsRestore() {
+				return fail("the restore of snapshot " + m.From + " did not complete, and only a restore completes it: nothing imported")
+			}
 			if !m.IsImport() {
 				return fail("this environment's data is from a sync that did not complete, and only a sync completes it: nothing imported")
 			}
@@ -1374,6 +1386,8 @@ func runResolved(cwd, name string) int {
 	switch {
 	case m == nil:
 		return fail("no import of " + name + " to resolve: the environment has no mark")
+	case m.IsRestore():
+		return fail("the restore of snapshot " + m.From + " did not complete: --resolved is for imports; restore it again (--snapshots restore " + m.From + ")")
 	case !m.IsImport():
 		return fail("this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved")
 	case m.From != name:
@@ -1812,6 +1826,13 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return fail("an import into @" + t.Address + " still runs: nothing resolved (devopsy @" + targetRef(t) + " --status shows it)")
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
+	case mark.IsRestore():
+		var fixes []report.Remedy
+		for _, f := range remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "") {
+			fixes = append(fixes, report.Fix(f[0], f[1]))
+		}
+		report.Fail(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
+		return 1
 	case !mark.IsImport() || settle:
 		reset := remote.ResetFix(targetRef(t))
 		report.Fail(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), report.Fix(reset[0], reset[1])}})

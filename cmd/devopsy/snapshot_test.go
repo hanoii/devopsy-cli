@@ -232,3 +232,64 @@ func TestSnapshotRestore(t *testing.T) {
 		t.Errorf("a snapshot that is none (%d):\n%s", code, out)
 	}
 }
+
+// A take killed outright leaves its snapshot lines: the next release's
+// settle starts those services (nothing else would), unless the
+// environment is marked, which keeps them down.
+func TestSnapshotLeftoverLines(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	record := filepath.Join(base, ".devopsy-sync.services")
+	write(t, record, "snapshot 20261025000000 db\nsnapshot 20261025000000 app\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+	out, code := s.run(nil, "@prod", "--release")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "starting what snapshot 20261025000000, cut off, left stopped: db app") || !strings.Contains(docker, "start db app") || fileExists(record) {
+		t.Errorf("settled (%d), record %q:\n%s\n%s", code, readString(record), out, docker)
+	}
+
+	// Marked: the lines stay, the services down.
+	write(t, record, "snapshot 20261025000000 db\n", 0o644)
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), "2026-10-25 00:00:00\t20261024000000\trestore\tthe restore of snapshot 20261024000000 did not complete\n", 0o644)
+	out, code = s.run(nil, "@prod", "--export", "db")
+	if !strings.Contains(readString(record), "snapshot 20261025000000 db") || strings.Contains(out, "left stopped") {
+		t.Errorf("a marked environment's lines (%d), record %q:\n%s", code, readString(record), out)
+	}
+}
+
+// A restore's mark refuses what a sync's or an import's does, with its
+// own ways out (the restore again, another snapshot), and keeps the
+// snapshot it names.
+func TestRestoreMark(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), "2026-10-25 00:00:00\t"+m[1]+"\trestore\tthe restore of snapshot "+m[1]+" did not complete\n", 0o644)
+	s.logs()
+	for args, want := range map[string]string{
+		"--release":                             "the restore of snapshot " + m[1] + " into @devopsy@one:prod did not complete",
+		"--import db --yes":                     "the restore of snapshot " + m[1] + " into @devopsy@one:prod did not complete, and only a restore completes it: nothing imported",
+		"--import db --resolved --yes":          "--resolved is for imports",
+		"--snapshot":                            "the restore of snapshot " + m[1] + " into @devopsy@one:prod did not complete",
+		"--snapshots remove " + m[1] + " --yes": "the restore of snapshot " + m[1] + " did not complete: it stays",
+	} {
+		o, c := s.run(nil, append([]string{"@prod"}, strings.Fields(args)...)...)
+		if c == 0 || !strings.Contains(o, want) {
+			t.Errorf("%s (%d):\n%s", args, c, o)
+		}
+	}
+	if !strings.Contains(readString(filepath.Join(base, remote.SyncIncompleteFile)), "restore") {
+		t.Errorf("the mark went")
+	}
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "the restore of snapshot "+m[1]+" did not complete") {
+		t.Errorf("--status (%d):\n%s", code, out)
+	}
+}

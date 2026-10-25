@@ -1038,6 +1038,9 @@ devopsy --say info "current is now $id" || true
       if [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         rs_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
         devopsy --say warning "not restarting ${prev#releases/}: the import of $rs_service did not complete, and nothing runs on its data until one does" ` + importFixLines(t, "rs_service") + `
+      elif [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        rs_snapshot=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
+        devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixLines(t, "rs_snapshot") + `
       else
         devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
@@ -1354,7 +1357,7 @@ exec 4<&-
 // it; or on an import that did not complete, with its own ways out. A
 // holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
-	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; }; then
+	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; }; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 ` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)

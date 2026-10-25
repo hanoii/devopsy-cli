@@ -134,6 +134,8 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		return nil, fmt.Errorf("an import into the parent @%s (%s:%s) is running: sync once it is done (devopsy @%s --status shows it)", p.Address, p.Host, p.Path, targetRef(p))
 	case cur.Mark.IsImport():
 		return nil, fmt.Errorf("the import of %s into the parent @%s (%s:%s) did not complete: import it again, or devopsy @%s --import %s --resolved, then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
+	case cur.Mark.IsRestore():
+		return nil, fmt.Errorf("the restore of snapshot %s into the parent @%s (%s:%s) did not complete: restore it again (devopsy @%s --snapshots restore %s), then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
 	case cur.Mark != nil:
 		return nil, fmt.Errorf("the parent @%s (%s:%s) holds data from a sync that did not complete: sync it first (devopsy @%s --sync)", p.Address, p.Host, p.Path, targetRef(p))
 	}
@@ -2050,6 +2052,11 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	// on: its data may be anything from untouched to complete, never
 	// finished by finish child go.
 	settle := func() int {
+		// What a take killed outright left stopped starts again first,
+		// unless the environment is marked.
+		if err := settleSnapshots(cwd, base); err != nil {
+			return fail(err.Error())
+		}
 		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
 		if !fileExists(started) && !fileExists(taken) {
 			return 0
@@ -2102,9 +2109,14 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		// An import a killed devopsy left may still load: ended, and what
-		// it stops recorded, before anything streams into it.
+		// it stops recorded, before anything streams into it; a restore's
+		// extracting containers likewise.
 		if m := readMark(base); m.IsImport() {
 			if err := endLeftoverImport(cwd, base, services, m.From); err != nil {
+				return fail(err.Error())
+			}
+		} else if m.IsRestore() {
+			if err := removeContainers(importContainers(cwd)); err != nil {
 				return fail(err.Error())
 			}
 		}
