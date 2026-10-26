@@ -914,7 +914,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		// runs there).
 		snaps := ""
 		var out bytes.Buffer
-		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
+		if code, err := remote.SSHStreams(context.Background(), t, remote.Bounded, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
 			n := 0
 			for _, line := range strings.Split(out.String(), "\n") {
 				if len(strings.Split(line, "\t")) >= 6 {

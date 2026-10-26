@@ -351,6 +351,10 @@ func TestSnapshotDestroy(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "and its 2 snapshots") {
 		t.Errorf("--destroy's prompt (%d):\n%s", code, out)
 	}
+	// Its count's session is bounded: a dead host never holds the prompt.
+	if _, ssh := s.logs(); !strings.Contains(ssh, "ConnectTimeout=") {
+		t.Errorf("--destroy's count, unbounded:\n%s", ssh)
+	}
 	out, code = s.run(nil, "@prod", "--destroy", "--yes")
 	docker, _ := s.logs()
 	if code != 0 || fileExists(filepath.Join(s.root, "shop", "prod")) || !strings.Contains(docker, "-mirror ") {
