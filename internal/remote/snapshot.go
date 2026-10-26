@@ -222,7 +222,8 @@ img ran "$base" "$base/$cur" || true
 if [ "$rs" = 0 ]; then
   ` + step("restored", `"$snap"`) + ` || rs=1
 else
-  devopsy --say error "the run step failed ($rs): the restore stays marked: restore it again" || true
+` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
+  devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true
 fi
 exit "$rs"
 `

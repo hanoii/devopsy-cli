@@ -2304,8 +2304,9 @@ settled every rule here after nine reviews (2026-10-25).
   longer its own or another's now; on a marked environment, a current
   data service the snapshot lacks, or any of its entries and volumes, as
   a sync clears a mark: review of 2026-10-25), the tars checked, `waitBeat`, then
-  the data step and the deployed run step again, then `restored`, the
-  output followed from the disarm on.
+  the data step and the deployed run step again, then `restored` (a run
+  step that fails takes down what it started, `firstDown`, as a full
+  restore's does: round 3), the output followed from the disarm on.
 - **A restore's mark** (`remote.IncompleteRestore`, its `From` the
   snapshot): every reader branches on it (`markRefusal`, the restart
   skip, `syncBlock`, `ImportScript`, the operator's release check, the
