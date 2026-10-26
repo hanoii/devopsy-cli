@@ -3085,3 +3085,25 @@ func TestSnapshotTakeRefusesLeavingBindsBeforeStopping(t *testing.T) {
 		t.Errorf("a take on data with a link out of its entry at a bind source (%d) left %q stopped:\n%s\n%s", code, stopped, out, docker)
 	}
 }
+
+// An export on a target stops its set (db, own, and app, which depends
+// on it) and starts it again on the same data: with a bind source
+// leading out of its entry through a link there, the start gate refuses
+// that start, so the export must refuse before it stops anything, never
+// leave the services down after a read of the data.
+func TestExportRefusesLeavingBindsBeforeStopping(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	_, errs, code := s.runIO(nil, nil, "@prod", "--export", "db")
+	docker, _ := s.logs()
+	stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod"))
+	if stopped != "" || strings.Contains(docker, " stop ") {
+		t.Errorf("an export on data with a link out of its entry at a bind source (%d) left %q stopped:\n%s\n%s", code, stopped, errs, docker)
+	}
+}
