@@ -730,3 +730,31 @@ func TestSnapshotRestoreNoCodeMarkEntries(t *testing.T) {
 		t.Errorf("the mark cleared (%d), app's mnt/uploads as the cut import left it:\n%s", code, out)
 	}
 }
+
+// An entry that is another kind now than the snapshot holds it (a
+// directory where its tar has a file) cannot be extracted over: the
+// directory is the container's mount point. A restore refuses it before
+// anything stops, as an import does, rather than after its mark, where
+// every restore again fails the same way with the services down.
+func TestSnapshotRestoreEntryKind(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT=/app.ini\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "app.ini"), "[prod]\n", 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if err := os.Remove(filepath.Join(s.mnt("prod"), "app.ini")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "app.ini", "conf.d"), "[now]\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code == 0 || strings.Contains(docker, " stop ") || fileExists(filepath.Join(s.root, "shop", "prod", remote.SyncIncompleteFile)) {
+		t.Errorf("mnt/app.ini a directory, a file in the snapshot: not refused before stopping (%d):\n%s\n%s", code, out, docker)
+	}
+}
