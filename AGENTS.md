@@ -3014,4 +3014,8 @@ out ./devopsy ps`).
 Tag `vX.Y.Z` on `main` and push the tag: the release workflow tests,
 and GoReleaser publishes the binaries and `checksums.txt`.
 Conventional commits (`feat:`, `fix:`, `docs:`, `build:`...), with no
-attribution trailers: no `Co-Authored-By`, no session links.
+attribution trailers: no `Co-Authored-By`, no session links. Any word
+with an `@` in a commit message goes in backticks (`devopsy @prod
+--release`, `@<target>`, `deploy@host`), in the docs too: the release
+notes are the commits' subjects, and GitHub links a bare `@name` to that
+user.
