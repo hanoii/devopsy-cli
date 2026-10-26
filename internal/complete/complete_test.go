@@ -101,6 +101,8 @@ func TestComplete(t *testing.T) {
 		{[]string{"@b/"}, []string{"@b/prod", "@b/staging"}, nil, DirectiveNoFileComp},
 		{[]string{"@vm1:b/prod", "--sh"}, []string{"--shell", "--shell-host"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--"}, []string{"--release", "--release-sync", "--release-no-sync", "--rollback", "--releases", "--log", "--destroy", "--sync", "--reset", "--inherit", "--export", "--import", "--snapshot", "--snapshots", "--env", "--vars", "--vars-instance", "--vars-project", "--status", "--shell", "--shell-host", "--environments", "--debug", "--ssh-keys", "--ssh-config", "--upgrade", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--snapshots", ""}, []string{"restore", "remove", "export", "import", "--help"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--snapshots", "restore", "2026", "--"}, []string{"--no-code", "--with-env", "--yes", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--ssh-keys", ""}, []string{"list", "add", "remove"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", ""}, []string{"remove", "--help"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--releases", "remove", ""}, []string{"failed", "--yes", "--help"}, nil, DirectiveNoFileComp},
