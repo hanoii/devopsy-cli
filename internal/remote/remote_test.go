@@ -1374,7 +1374,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "3" {
@@ -1386,7 +1386,7 @@ exit 0
 	if out, err := release("32", "FAIL_OWNERS=32"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "giving the entries of mnt to their owners failed (5), current is back to 1") {
 		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(), out)
 	}
-	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored\ncurrent: --release-steps restart run\n") {
+	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n") {
 		t.Errorf("failed owners calls:\n%s", got)
 	}
 

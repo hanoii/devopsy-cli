@@ -1159,15 +1159,23 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   check), and a sync's `finish go` before it starts anything (a copy
   that brings one is kept as one its finish refused: `IncompleteFinish`,
   nothing started; review round 4); the restart after a failed run step
-  runs `--check-mounts restored` first, and keeps the previous release
-  down when it refuses. And the net under all of them (decided after
+  runs `--check-mounts restored restart` first, and keeps the previous
+  release down when it refuses (what the failed run step started runs
+  on, from its code, until a release goes live: said, with the
+  `--release` to run once the link is gone). And the net under all of them (decided after
   review round 5, whose every hole was a start no check per flow
   preceded): on a server nothing in a release starts while a bind source
   leads out of its entry, whatever brought the link
   (`cli.Plan.StartsInRelease`, `checkStartBinds`, in main before a
   project's command execs and in `composeRun` for devopsy's own starts:
-  compose's starting commands, `--dry-run` aside). Cost: one compose
-  config read per start in a release; labels it cannot read only warn.
+  compose's starting commands and `cp`, which mounts bind sources
+  afresh, `--dry-run` aside). Cost: one compose config read per start
+  in a release; labels it cannot read only warn. What stops services to
+  start them again on the same data (a take, a release snapshot's
+  stopped pass, `--export`, a sync's push on the parent) runs it before
+  it stops anything, never only at the start (review: a take stopped
+  them, the gate refused their start, the snapshot was lost); its
+  message carries the links in its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
   an aliased base path) is judged by where it lands in mnt
@@ -1707,7 +1715,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   named another repository made it the data's newest image, which a
   rollback then pulled and ran), every line kept: they are also what
   the data moved past, by identity (round 5: dropped, a mirror's tag
-  gone back ran an older image on the data). The check and the take-over run
+  gone back ran an older image on the data); its first line is timed at
+  the import, so `--resolved` keeps it (the export's time, when its
+  environment first ran the image, came before any mark here). The check and the take-over run
   under the server's image lock, shared, taken from Go in two short
   windows (`imagesShared`), never across the load: a removal elsewhere
   waits only for them. `ImportScript` passes the project's record, the

@@ -682,6 +682,13 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	how := takeCopy(ctx, cwd, p, d)
 	mirror := how == "mirror"
 	tmp := filepath.Join(p.snaps, id+".tmp")
+	// What it stops it starts again on the same data: refused before
+	// anything stops when that start would be (checkStartBinds), never
+	// after (review: the services stayed down, the snapshot lost).
+	if err := checkStartBinds(cwd); err != nil {
+		report.Fail(err)
+		return 1
+	}
 	stopped, restore, err := stopSetFor(cwd, set, true, id)
 	switch {
 	case err != nil:
@@ -1940,7 +1947,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) e
 	// restore's start would mount from the host (a --no-code restore runs
 	// no mounts check: review).
 	if restore {
-		if err := cli.CheckLeavingBinds(services, restoredEntries(m, services), true); err != nil {
+		if err := cli.CheckLeavingBinds(services, restoredEntries(m, services), "the restore: nothing restored"); err != nil {
 			return err
 		}
 	}
@@ -2197,9 +2204,10 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 		return err
 	}
 	_ = os.RemoveAll(tmp)
-	// The images it lists that this server has, bookmarked for it; the
-	// rest come back at its restore, pulled by digest or built from its
-	// code.
+	// Its listing as the snapshot's (BookmarkFrom): its ids cleared
+	// (FilterImported), it tags nothing, and its images come back at its
+	// restore, pulled by digest in each service's own repository or built
+	// from its code.
 	unlock, err := imagesShared(context.Background())
 	if err != nil {
 		return err

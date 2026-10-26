@@ -1105,8 +1105,8 @@ exec 7<&-
 	// No bind source of it may lead out of its entry through a link in
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
-	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: its mounts check refuses the data as it is"
+	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
       exit "$status"
     fi
 `

@@ -755,6 +755,13 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 			}
 		}
 		w[0].How = first
+		if importing {
+			// The time it was imported: --resolved keeps a history whose
+			// first line came since the import's mark (Resolved), and the
+			// export's own time is when its environment first ran that
+			// image, before any mark here (review).
+			w[0].Time = s.now().Unix()
+		}
 		h = append(kept, w...)
 		changed = true
 	}

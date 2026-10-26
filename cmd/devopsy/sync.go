@@ -1111,6 +1111,11 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			return finish(fail("the child's side ended already ("+base+"): nothing copied"), false)
 		}
 	}
+	// The parent starts again on its own data what it stops: refused
+	// before anything stops when that start would be (checkStartBinds).
+	if err := checkStartBinds(cwd); err != nil {
+		return finish(fail(err.Error()), false)
+	}
 	if err := stopServices(cwd, set); err != nil {
 		// What it stopped before failing comes back: restoring reads the
 		// containers' state, not what stopping did.
@@ -2221,7 +2226,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		// finish refused it (review: the data outlives the checks of
 		// the release it was checked in).
 		if _, now, err := cli.SyncServices(cwd, os.Environ()); err == nil {
-			if lerr := cli.CheckLeavingBinds(now, nil, false); lerr != nil {
+			if lerr := cli.CheckLeavingBinds(now, nil, "the copy: nothing started"); lerr != nil {
 				var bad []string
 				for _, s := range now {
 					bad = append(bad, s.LeavingBinds...)

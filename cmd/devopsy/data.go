@@ -325,6 +325,14 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 
 	set := cli.DataStops(services, cli.ExportOne, name)
+	// On a target what it stops it starts again on the same data: refused
+	// before anything stops when that start would be (checkStartBinds).
+	if cli.InRelease(cwd) {
+		if err := checkStartBinds(cwd); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	_, restore, err := stopSet(cwd, set, false)
 	if err != nil {
 		code := fail(err.Error())

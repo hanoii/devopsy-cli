@@ -258,7 +258,9 @@ func checkStartBinds(cwd string) error {
 	if len(bad) == 0 {
 		return nil
 	}
-	return &report.Failure{Msg: "nothing started", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, a sync's, or one made by hand), or bind-mount where it leads explicitly")}}
+	// The message whole in its first line: callers wrap it (docker
+	// compose start: ...), which keeps only that.
+	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": remove the link in shared/mnt (a restored snapshot's, a sync's, or one made by hand), or bind-mount where it leads explicitly"}
 }
 
 // mntOwnersRestored is --mnt-owners' word for a restored release
@@ -292,13 +294,20 @@ func runCheckMounts(cwd string, args []string) int {
 	// A restore's: the entries its snapshot carries are replaced, so the
 	// links in them now are no matter (the snapshot's own are checked in
 	// its tars); the rest stay as they are.
+	// The restart after a failed run step names itself (restart), a
+	// restore its snapshot, a rollback nothing.
 	var m *manifest
-	if len(args) == 2 {
+	what := "the rollback: it does not go live"
+	switch {
+	case len(args) == 2 && args[1] == "restart":
+		what = "the restart of the release before: it stays down until a release whose mounts it accepts"
+	case len(args) == 2:
 		var err error
 		if m, err = readManifest(args[1]); err != nil {
 			report.Fail(err)
 			return 1
 		}
+		what = "the restore: nothing restored"
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	var carried []string
@@ -321,7 +330,7 @@ func runCheckMounts(cwd string, args []string) int {
 	case !restored:
 		err = cli.CheckMounts(services)
 	default:
-		err = cli.CheckLeavingBinds(services, carried, len(args) == 2)
+		err = cli.CheckLeavingBinds(services, carried, what)
 	}
 	if err == nil {
 		err = checkOwned(projectDir, services)

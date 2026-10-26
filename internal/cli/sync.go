@@ -677,9 +677,10 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // nothing, since Docker would mount that of the host whatever release
 // runs (a restored snapshot's link outlives the code it was checked in:
 // review).
-// A restore's (restore) skips the entries its snapshot carries (carried):
-// they are replaced, their links checked in its tars.
-func CheckLeavingBinds(services []SyncService, carried []string, restore bool) error {
+// A restore's skips the entries its snapshot carries (carried): they are
+// replaced, their links checked in its tars. what is the refusal's own
+// words (the rollback: it does not go live).
+func CheckLeavingBinds(services []SyncService, carried []string, what string) error {
 	var bad []string
 	for _, s := range services {
 		for _, l := range s.LeavingBinds {
@@ -691,10 +692,6 @@ func CheckLeavingBinds(services []SyncService, carried []string, restore bool) e
 	}
 	if len(bad) == 0 {
 		return nil
-	}
-	what := "the rollback: it does not go live"
-	if restore {
-		what = "the restore: nothing restored"
 	}
 	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
 }
