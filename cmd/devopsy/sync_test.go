@@ -3693,3 +3693,36 @@ func TestExportNothingRunningIgnoresLeavingBinds(t *testing.T) {
 		t.Errorf("an export with its set down on data with a link out of its entry at a bind source (%d), %d bytes:\n%s\n%s", code, len(stdout), errs, docker)
 	}
 }
+
+// A restore's mark is cleared only by a sync whose parent checked it
+// (remote.CheckedDoneLine): only that copies every service of the
+// snapshot. The check is the holder's (syncDecision), which is the
+// operator's script: a v0.51.0 operator's holder takes any done line for
+// go, and runs this devopsy's --sync-services finish go on the child,
+// which removes the mark whatever the record says. With a v0.51.0 parent
+// too (which reads the child's !restore lines as a service, and copies
+// what its own labels say), a copy that left some of the snapshot's
+// services partial clears the mark and starts them. The child's finish
+// go, which is this devopsy's, must keep a restore's mark when the
+// record it is given has no checked line.
+func TestSyncFinishGoKeepsUncheckedRestoreMark(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "dev")
+	mark := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, mark, remote.IncompleteLine("2026-10-25 00:00:00", "20261025000001", remote.IncompleteRestore, "the restore of snapshot 20261025000001 did not complete"), 0o644)
+	// What a v0.51.0 parent's last write leaves, taken by the holder.
+	write(t, filepath.Join(base, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.DoneLine("1.2")+"\n", 0o644)
+	write(t, filepath.Join(base, syncState), "", 0o644)
+	cmd := exec.Command(binary, "--sync-services", "finish", "go")
+	cmd.Dir = filepath.Join(base, "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir, remote.SyncIDEnv+"=1.2", remote.SyncFromTargetEnv+"=devopsy@one:prod")
+	out, _ := cmd.CombinedOutput()
+	if data, err := os.ReadFile(mark); err != nil || !strings.Contains(string(data), "\t"+remote.IncompleteRestore+"\t") {
+		t.Errorf("finish go over a restore's mark, from a copy no parent checked, cleared it (%q):\n%s", data, out)
+	}
+}
