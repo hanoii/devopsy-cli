@@ -2372,3 +2372,28 @@ func TestSnapshotDataServiceWithoutFiles(t *testing.T) {
 		}
 	}
 }
+
+// A release snapshot whose tars are being made from the mirror, detached
+// after its release went live, is one being taken: --snapshots says IN
+// PROGRESS, never INCOMPLETE, which its help says is one cut off.
+func TestReleaseSnapshotTarListedInProgress(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}")
+	s.releaseProd(nil)
+	started := filepath.Join(t.TempDir(), "started")
+	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started}, "@prod", "--release"); code != 0 {
+		t.Fatalf("the second release (%d):\n%s", code, out)
+	}
+	for start := time.Now(); !fileExists(started) && time.Since(start) < startWait; time.Sleep(50 * time.Millisecond) {
+	}
+	if !fileExists(started) {
+		t.Fatal("the release snapshot's detached tar never started")
+	}
+	out, code := s.run(nil, "@prod", "--snapshots")
+	write(t, started+".go", "", 0o644)
+	s.waitReleaseTars()
+	if code != 0 || strings.Contains(out, "INCOMPLETE") || !strings.Contains(out, "IN PROGRESS") {
+		t.Errorf("--snapshots while a release snapshot's tars are made (%d):\n%s", code, out)
+	}
+}
