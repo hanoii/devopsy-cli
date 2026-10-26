@@ -342,6 +342,10 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 	}
 	id := m[1]
 	current := s.current("prod")
+	// What it asks before: no release is made.
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", id, "--no-code"); code == 0 || !strings.Contains(out, "under its current release") || strings.Contains(out, "as a new release") {
+		t.Errorf("--no-code's prompt (%d) says it restores as a new release:\n%s", code, out)
+	}
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
 	s.logs()
 	out, code = s.run(nil, "@prod", "--snapshots", "restore", id, "--no-code", "--yes")
