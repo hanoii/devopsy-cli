@@ -2392,12 +2392,16 @@ settled every rule here after nine reviews (2026-10-25).
   for a release's `keep`; what it holds from the release replaced, in
   `$base/current`): an activation replacing a current release, and a
   restore, full or `--no-code`, takes one of the data it replaces.
-  `releaseSnapshotSetup` before the fetch: the effective releases
+  `releaseSnapshotSetup` before the fetch: a killed holder's files
+  settled (`settleSync`: a release that syncs runs no `partialGuard`),
+  the server's image lock, record and mode exported (the bookmarks and
+  the detached pruning hold the lock: review), the effective releases
   `keep` checked (1 would prune the snapshot with its own release;
   `releases: keep: 1` with them on is a config error too), the sync and
   snapshot locks (release, sync, snapshot, then the fetch's image lock),
-  `release-check` (3: skipped, said: a marked environment, nothing with
-  data; else the space check), the id, the server log made, `not_live`'s
+  `release-check` (the leftovers first, as a take's: a detached tar
+  killed outright left a `.tmp` only a take settled; 3: skipped, said: a
+  marked environment, nothing with data; else the space check), the id, the server log made, `not_live`'s
   hook (settle starts the record's `snapshot` lines). Inside
   `fetch_release`, before its disarm (so a session gone or a signal
   still cancels): the mirror's first pass beside the fetch (a
@@ -2419,8 +2423,12 @@ settled every rule here after nine reviews (2026-10-25).
   snapshots). At the switch
   `release-record live` turns the `snapshot` lines into the release's
   `stop` lines (a release that syncs runs a settle past the switch,
-  which would start them), and once the run step ended `release-record
-  done` removes them. A restore's data step turns them into its own
+  which would start them), and once something started them, the run
+  step or the restart of the release before, `release-record done`
+  removes them (a cut sync's copy or a failed restore keeps them down,
+  the record saying so: review). A `--no-code` restore traps INT, TERM
+  and HUP around its release snapshot, so a cancel starts the set again
+  (`rd_unsnap`) rather than killing the shell. A restore's data step turns them into its own
   (kept down under its mark). Without a mirror the stopped pass writes
   the tars, so a release is down for them: the reason for `mirror:
   true` or reflinks with large data. Rollbacks take none.
