@@ -1754,6 +1754,48 @@ func TestRestoreNoCodeInterruptDuringReleaseSnapshot(t *testing.T) {
 	}
 }
 
+// A release snapshot's detached tar killed outright (a reboot) leaves
+// its <id>.tmp, bookmarked, which only a holder of the snapshot lock
+// settles: finished from the mirror when the marker names it, else
+// removed with its bookmarks. The next release holds that lock for its
+// own snapshot, and an environment with release snapshots alone may
+// never see a manual take: it must settle the leftover too, or the .tmp
+// and the images its bookmarks keep stay for good, listed INCOMPLETE.
+func TestReleaseSnapshotSettlesLeftoverTmp(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}")
+	s.releaseProd(nil)
+	snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("the second release (%d):\n%s", code, out)
+	}
+	var rs []releaseSnapshot
+	for start := time.Now(); time.Since(start) < startWait && len(rs) != 1; time.Sleep(100 * time.Millisecond) {
+		rs = releaseSnapshots(snaps)
+	}
+	if len(rs) != 1 {
+		t.Fatalf("release snapshots after the second release: %+v", rs)
+	}
+	// A release snapshot's tar killed before its rename, the mirror's
+	// marker naming a later one since: nobody's. An id of its own, older,
+	// so the next take's id never coincides with it.
+	left := "20200101000000"
+	if out, err := exec.Command("cp", "-a", filepath.Join(snaps.snaps, rs[0].id), filepath.Join(snaps.snaps, left+".tmp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("the third release (%d):\n%s", code, out)
+	}
+	// Settled by the activation or by its detached tar right after it.
+	for start := time.Now(); fileExists(filepath.Join(snaps.snaps, left+".tmp")); time.Sleep(100 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			out, _ := s.run(nil, "@prod", "--snapshots")
+			t.Fatalf("the cut take's %s.tmp left by the release after it:\n%s", left, out)
+		}
+	}
+}
+
 // A release snapshot's detached tar prunes once the activation ended, and
 // removing a snapshot frees images: only under the server's image lock,
 // exclusive, as every removal of images is (another environment's fetch
