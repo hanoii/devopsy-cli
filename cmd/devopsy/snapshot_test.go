@@ -641,3 +641,67 @@ func TestSnapshotRestoreNoCodeOwners(t *testing.T) {
 		t.Errorf("--no-code (%d): mnt/db not given to 10002:10002 after its extraction:\n%s\n%s", code, out, docker)
 	}
 }
+
+// An imported snapshot is untrusted: its manifest's volume lines name the
+// Docker volume a restore empties and extracts into as root, so one that
+// is not this environment's own (another project's database) is refused,
+// at the import or before anything stops, and that volume stays as it is.
+func TestSnapshotImportForeignVolume(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	// The export, its manifest naming another project's volume for a key
+	// no service mounts, with a tar of that key.
+	var inner bytes.Buffer
+	iw := tar.NewWriter(&inner)
+	_ = iw.WriteHeader(&tar.Header{Name: "evil/", Typeflag: tar.TypeDir, Mode: 0o755})
+	_ = iw.WriteHeader(&tar.Header{Name: "evil/x", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2})
+	_, _ = iw.Write([]byte("x\n"))
+	_ = iw.Close()
+	var crafted bytes.Buffer
+	tw := tar.NewWriter(&crafted)
+	for tr := tar.NewReader(bytes.NewReader(exported)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(tr)
+		if h.Name == m[1]+"/manifest" {
+			data = append(data, []byte("volume\tevil\tshop-other_db\n")...)
+			h.Size = int64(len(data))
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(data)
+	}
+	_ = tw.WriteHeader(&tar.Header{Name: m[1] + "/data/volume.evil.tar.zst", Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(inner.Len())})
+	_, _ = tw.Write(inner.Bytes())
+	_ = tw.Close()
+	precious := filepath.Join(s.log+".vol", "shop-other_db", "precious")
+	write(t, precious, "another project's rows\n", 0o644)
+
+	_, errs, code = s.runIO(nil, crafted.Bytes(), "@prod", "--snapshots", "import")
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if code != 0 || im == nil {
+		return // refused at the import
+	}
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", im[1], "--yes")
+	docker, _ := s.logs()
+	if !fileExists(precious) {
+		t.Errorf("the restore (%d) emptied shop-other_db, another project's volume:\n%s\n%s", code, out, docker)
+	}
+}
