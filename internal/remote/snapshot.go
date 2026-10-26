@@ -228,8 +228,42 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 ` + releaseImages(projectName, t, mode) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
-if [ -n "${watch_pid:-}" ]; then
-` + waitBeat(`{ devopsy --say error "the session ended: nothing restored"; exit 1; }`) + `fi
+`
+	// With release snapshots on, the data it replaces first, as a
+	// release's: what it stops stays down for the data step, and anything
+	// that ends this before it starts them again (rd_unsnap).
+	unsnap := ""
+	if t.SnapshotsRelease.Enabled {
+		s += `export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
+rs_id=
+rs=0
+` + step("release-check") + ` || rs=$?
+case $rs in
+  0) rs_id=$(devopsy ` + ReleaseIDFlag + ` "$snaps") ;;
+  3) ;;
+  *) exit 1 ;;
+esac
+rd_unsnap() {
+  if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
+  fi
+}
+if [ -n "$rs_id" ]; then
+  (umask 077; : >>"$base/$cur/` + ServerLogFile + `") || exit 1
+  ` + step("mirror") + ` || exit 1
+  ` + step("release-stopped", `"$rs_id"`, `"$base/$cur"`, `"$base/$cur"`) + ` || { rd_unsnap; exit 1; }
+  rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+  if command -v setsid >/dev/null 2>&1; then
+    base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$base/$cur/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+  else
+    base="$base" rs_id="$rs_id" sh -c "$rs_tar" </dev/null >>"$base/$cur/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+  fi
+fi
+`
+		unsnap = "rd_unsnap; "
+	}
+	s += `if [ -n "${watch_pid:-}" ]; then
+` + waitBeat(`{ `+unsnap+`devopsy --say error "the session ended: nothing restored"; exit 1; }`) + `fi
 trap '' INT TERM HUP PIPE
 # From here it goes on whatever happens to the session: the output to the
 # current release's server log, which the session follows.

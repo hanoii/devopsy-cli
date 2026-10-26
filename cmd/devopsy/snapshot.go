@@ -1830,6 +1830,22 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 		return fail(err.Error() + ": nothing restored")
 	}
+	// What a snapshot of the data it replaces left stopped (release
+	// snapshots on) is the restore's from here: kept down under its mark.
+	if rec, ok := readSyncRecord(cwd); ok && len(rec.snaps) > 0 {
+		for _, name := range rec.snaps {
+			if !slices.Contains(rec.stops, name) {
+				rec.stops = append(rec.stops, name)
+			}
+		}
+		rec.snaps, rec.snapID = nil, ""
+		if err := rec.write(cwd); err != nil {
+			if rerr := restore(); rerr != nil {
+				report.Error(rerr.Error())
+			}
+			return fail(err.Error() + ": nothing restored")
+		}
+	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		if rerr := restore(); rerr != nil {
 			report.Error(rerr.Error())

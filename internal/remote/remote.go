@@ -939,7 +939,9 @@ done
 	// inside the stretch that cancels, leaving the services stopped for
 	// the run step to start under the new code, and its tars from the
 	// mirror after, detached (release-tar).
-	releaseSnap := !rollback && restore == nil && t.SnapshotsRelease.Enabled
+	// A restore takes one too, of the data it replaces (its first write
+	// turns the snapshot's lines into its own: restore-data).
+	releaseSnap := (!rollback || restore != nil) && t.SnapshotsRelease.Enabled
 	if releaseSnap {
 		s += releaseSnapshotSetup(t, projectName)
 	}

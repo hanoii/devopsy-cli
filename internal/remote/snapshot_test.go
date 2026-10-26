@@ -163,21 +163,30 @@ exit 0
 	}
 }
 
-// Only a release with release snapshots on takes one, never a rollback
-// or a restore, and it needs a server with release snapshots
-// (release-snapshots), which a release without them never does.
+// With release snapshots on, a release and a restore (full or
+// --no-code) take one of the data they replace, never a rollback, and
+// need a server with release snapshots (release-snapshots), which
+// nothing without them does.
 func TestReleaseSnapshotScripts(t *testing.T) {
 	t.Parallel()
 	on := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage, SnapshotsRelease: SnapshotSetting{Enabled: true, Keep: 1}}
 	off := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage}
 	phases := Phases{Run: []string{"deploy"}}
-	if s := ActivateScript(on, "20261025120000", false, "app-prod", phases, nil); !slices.Contains(Needs(s), ReleaseSnapshotsFeature) {
-		t.Errorf("a release with release snapshots needs %v", Needs(s))
+	r := &RestoreOptions{Snapshot: "20261025120000"}
+	for name, s := range map[string]string{
+		"release":   ActivateScript(on, "20261025120000", false, "app-prod", phases, nil),
+		"restore":   RestoreScript(on, "app-prod", r),
+		"--no-code": RestoreDataScript(on, "app-prod", r),
+	} {
+		if !slices.Contains(Needs(s), ReleaseSnapshotsFeature) {
+			t.Errorf("%s with release snapshots needs %v", name, Needs(s))
+		}
 	}
 	for name, s := range map[string]string{
-		"off":      ActivateScript(off, "20261025120000", false, "app-prod", phases, nil),
-		"rollback": ActivateScript(on, "", true, "app-prod", Phases{}, nil),
-		"restore":  RestoreScript(on, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+		"off":           ActivateScript(off, "20261025120000", false, "app-prod", phases, nil),
+		"rollback":      ActivateScript(on, "", true, "app-prod", Phases{}, nil),
+		"restore off":   RestoreScript(off, "app-prod", r),
+		"--no-code off": RestoreDataScript(off, "app-prod", r),
 	} {
 		if slices.Contains(Needs(s), ReleaseSnapshotsFeature) || strings.Contains(s, "release-check") {
 			t.Errorf("%s takes a release snapshot", name)

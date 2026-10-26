@@ -1590,3 +1590,46 @@ func TestSnapshotLeftoverCutTar(t *testing.T) {
 		t.Errorf("the finished snapshot %s is listed but does not restore (%d):\n%s", left, code, out)
 	}
 }
+
+// With release snapshots on, a restore, full or --no-code, first takes a
+// snapshot of the data it replaces, of the release current then: the
+// restore undone by restoring that one. Its data comes back, its record
+// clean, the restored snapshot kept.
+func TestRestoreTakesReleaseSnapshot(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{}, {"--no-code"}} {
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: {enabled: true, keep: all}}}")
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("%v: take (%d):\n%s", args, code, out)
+		}
+		write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+		before := s.current("prod")
+		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+			t.Fatalf("%v: restore (%d):\n%s", args, code, out)
+		}
+		var rs []releaseSnapshot
+		for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+			if rs = releaseSnapshots(snaps); len(rs) == 1 {
+				break
+			}
+		}
+		if len(rs) != 1 || "releases/"+rs[0].release != before {
+			t.Fatalf("%v: release snapshots %+v, want one of %s:\n%s", args, rs, before, out)
+		}
+		if got := strings.Join(tarNames(t, filepath.Join(snaps.snaps, rs[0].id, "data", "mnt.storage.tar.zst")), " "); !strings.Contains(got, "storage/file.txt") {
+			t.Errorf("%v: the replaced data's tar: %s", args, got)
+		}
+		if rec := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")); rec != "" || fileExists(filepath.Join(s.root, "shop", "prod", remote.SyncIncompleteFile)) {
+			t.Errorf("%v: the record or the mark left:\n%s", args, rec)
+		}
+		if !fileExists(filepath.Join(snaps.snaps, m[1], remote.SnapshotManifest)) {
+			t.Errorf("%v: the restored snapshot went", args)
+		}
+	}
+}
