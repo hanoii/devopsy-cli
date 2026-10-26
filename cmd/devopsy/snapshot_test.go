@@ -2057,7 +2057,9 @@ func TestSnapshotReflinkCloneFails(t *testing.T) {
 // a restore's check refuses any member but files, directories and links.
 // Data holding a hard link to a symbolic link (a tree made with cp -al,
 // GNU ln's default -P on a link) likewise: GNU tar archives the second
-// name as a hard link to the link, which a restore's check refuses.
+// name as a hard link to the link, which a restore's check refuses. And
+// symbolic links whose target is absolute or leaves the entry, which the
+// restore's check (an import's) refuses, while the take holds them.
 func TestSnapshotFIFORestores(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -2071,6 +2073,16 @@ func TestSnapshotFIFORestores(t *testing.T) {
 			}
 			// link(2) on a symbolic link links the link itself, as ln -P.
 			return os.Link(filepath.Join(storage, "current"), filepath.Join(storage, "current.bak"))
+		}},
+		// Links an application makes as it sees its files in the container:
+		// absolute (to where the entry is mounted there, or anywhere),
+		// dangling, or relative to a sibling mount. Data like any other: a
+		// take holds them, and its restore must give them back.
+		{"an absolute symbolic link", func(storage string) error {
+			return os.Symlink("/var/www/files/file.txt", filepath.Join(storage, "latest"))
+		}},
+		{"a relative symbolic link out of its entry", func(storage string) error {
+			return os.Symlink("../cache/thumb.png", filepath.Join(storage, "thumb"))
 		}},
 	} {
 		for _, env := range [][]string{nil, {"FAKE_REFLINK=1"}} {
