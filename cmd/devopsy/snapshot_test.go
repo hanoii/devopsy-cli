@@ -2895,3 +2895,34 @@ func TestSnapshotImportPullsOwnRepository(t *testing.T) {
 		t.Errorf("the --no-code restore (%d) pulled or bookmarked an image of the repository the snapshot names:\n%s\n%s", code, docker, out)
 	}
 }
+
+// A restore holds a pulled data service on the image its data ran when
+// the snapshot was taken (ImportDone, devopsy-compose.yaml), and its
+// run step's up makes the container again on it. A run step that leaves
+// that service stopped (one that ups only some services, what
+// startLeftDown is for) leaves its container the one from before, on
+// another image: a plain compose start runs that image on the restored
+// data, against the hold and the history, where an import's restore
+// makes it again first (restoreServices, images.Recreate).
+func TestRestoredStartsOnHeldImage(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	// As the restore's data step leaves it: db held on the snapshot's
+	// image, its container the one from before (another image), stopped
+	// by the restore and still down after the run step.
+	write(t, filepath.Join(base, s.current("prod"), "devopsy-compose.yaml"),
+		"services:\n  \"db\":\n    image: \"y@sha256:snap\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:snap\"\n", 0o644)
+	write(t, s.log+".containers.shop-prod", "db y@sha256:old\n", 0o644)
+	write(t, filepath.Join(base, ".devopsy-sync.services"), "stop db\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\n", 0o644)
+	cmd := exec.Command(binary, remote.SnapshotStepFlag, "restored", filepath.Join(base, "snapshots", "20261026000000"))
+	cmd.Dir = filepath.Join(base, "current")
+	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-prod", "PWD="+cmd.Dir)
+	out, err := cmd.CombinedOutput()
+	docker, _ := s.logs()
+	if err != nil || strings.Contains(docker, " start db") && !strings.Contains(docker, "up -d --no-deps --wait db") {
+		t.Errorf("restored (%v): db started on its container's old image, never made again on the image its restored data is held on:\n%s\n%s", err, out, docker)
+	}
+}
