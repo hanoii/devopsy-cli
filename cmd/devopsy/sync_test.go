@@ -583,10 +583,17 @@ func TestSyncSameHost(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--sync"); code == 0 || !strings.Contains(out, "add --yes to go on without asking") {
 		t.Fatalf("--sync without a terminal (%d):\n%s", code, out)
 	}
+	s.logs()
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
-	docker, _ = s.logs()
+	docker, ssh = s.logs()
 	if code != 0 || !strings.Contains(out, "syncing into") || !strings.Contains(out, "deploy in shop-dev") || !strings.Contains(docker, "--numeric-ids --modify-window=-1 /src/storage/") {
 		t.Fatalf("--sync (%d):\n%s\n%s", code, out, docker)
+	}
+	// Four sessions, as before snapshots: the parent's check, the holder,
+	// the push and the log's save. A child no restore marked needs no
+	// look at its mark first.
+	if n := strings.Count(ssh, "\n"); n != 4 {
+		t.Errorf("--sync opened %d sessions, want 4:\n%s", n, ssh)
 	}
 	if got := readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")); got != "newer\n" {
 		t.Errorf("not resynced: %q", got)
