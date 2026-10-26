@@ -995,7 +995,8 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 		if len(missing) > 0 {
 			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
-				Fixes: []report.Remedy{report.Fix("restore it again on the child, or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
+					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
 			return 1
 		}
 	}

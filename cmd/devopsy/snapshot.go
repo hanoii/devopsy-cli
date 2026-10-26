@@ -166,7 +166,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		code := 0
 		for _, id := range args[1:] {
 			if err := removeSnapshot(cwd, p, id); err != nil {
-				report.Error(err.Error())
+				report.Fail(err)
 				code = 1
 			}
 		}
@@ -758,7 +758,7 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 		return errors.New("no snapshot " + id + ": nothing removed")
 	}
 	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
-		return errors.New("the restore of snapshot " + id + " did not complete: it stays until a restore completes (devopsy --snapshots restore " + id + " again)")
+		return &report.Failure{Msg: "the restore of snapshot " + id + " did not complete: it stays until a restore completes", Fixes: restoreRemedies(cwd, id)}
 	}
 	report.Info("removing snapshot " + id)
 	return removeSnapshotDir(cwd, p, dir, 10*time.Minute)
@@ -1341,7 +1341,7 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: io.Discard, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
-	report.Info("imported snapshot " + old + " as " + id + " (taken " + m.taken + " in release " + m.release + "): devopsy --snapshots restore " + id)
+	report.Info("imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", "to restore it:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id)
 	return nil
 }
 
@@ -1582,7 +1582,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			}
 		}
 		if err != nil {
-			return fail(err.Error() + ": the services stay down: restore it again (devopsy --snapshots restore " + id + ")")
+			report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
+			return 1
 		}
 	}
 	// What it extracted goes to its owner, as an import's does: the tar
@@ -1594,7 +1595,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 	}
 	if err := ownMnt(ctx, mnt, owned, cname+"-owners"); err != nil {
-		return fail(err.Error() + ": the services stay down: restore it again (devopsy --snapshots restore " + id + ")")
+		report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
+		return 1
 	}
 	// The images that ran on the data, held, with their history.
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
@@ -1627,7 +1629,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		if len(keys) == 0 {
 			in = ""
 		}
-		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "devopsy --snapshots restore "+id+" --with-env brings it back too")
+		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id+" --with-env")
 	}
 	// The mark and the record stay until the run step has started the set
 	// (restored): a shell killed before it leaves the set down, marked.
@@ -1692,6 +1694,16 @@ func (l *lenientWriter) Write(p []byte) (int, error) {
 		_, l.err = l.w.Write(p)
 	}
 	return len(p), nil
+}
+
+// restoreRemedies are a restore mark's ways out, as commands that work
+// copied (the environment's address).
+func restoreRemedies(cwd, id string) []report.Remedy {
+	var rs []report.Remedy
+	for _, f := range remote.RestoreFixes(targetAddress(cwd), id, projectVar(cwd, "DEVOPSY_PARENT") != "") {
+		rs = append(rs, report.Fix(f[0], f[1]))
+	}
+	return rs
 }
 
 // snapshotRestored completes a restore once its run step went through:

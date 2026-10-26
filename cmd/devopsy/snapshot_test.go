@@ -493,7 +493,7 @@ func TestSnapshotRestoreCut(t *testing.T) {
 	if code == 0 || !strings.Contains(mark, "\t"+m[1]+"\trestore\t") || s.current("prod") != current || strings.Contains(docker[strings.Index(docker, "stop db app"):], " start ") {
 		t.Fatalf("a cut restore (%d), mark %q, current %s (was %s):\n%s\n%s", code, mark, s.current("prod"), current, out, docker)
 	}
-	if !strings.Contains(out, "restore it again (devopsy --snapshots restore "+m[1]+")") {
+	if !regexp.MustCompile(`restore it again:\n.*\$ devopsy @\S+ --snapshots restore ` + m[1]).MatchString(out) {
 		t.Errorf("the cut restore's way out not said:\n%s", out)
 	}
 	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
