@@ -435,3 +435,34 @@ func TestSyncRestoreMark(t *testing.T) {
 		t.Errorf("a sync copying it all (%d), marked %v:\n%s", code, fileExists(mark), out)
 	}
 }
+
+// A restore cut after its first write keeps what it stopped down, the
+// environment marked (a restore's mark, its snapshot named), the
+// release not live; the same restore again empties and extracts it all,
+// and clears the mark.
+func TestSnapshotRestoreCut(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	current := s.current("prod")
+	base := filepath.Join(s.root, "shop", "prod")
+	s.logs()
+	out, code = s.run([]string{"FAIL_TAR=2"}, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	mark := readString(filepath.Join(base, remote.SyncIncompleteFile))
+	if code == 0 || !strings.Contains(mark, "\t"+m[1]+"\trestore\t") || s.current("prod") != current || strings.Contains(docker[strings.Index(docker, "stop db app"):], " start ") {
+		t.Fatalf("a cut restore (%d), mark %q, current %s (was %s):\n%s\n%s", code, mark, s.current("prod"), current, out, docker)
+	}
+	if !strings.Contains(out, "restore it again (devopsy --snapshots restore "+m[1]+")") {
+		t.Errorf("the cut restore's way out not said:\n%s", out)
+	}
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	if code != 0 || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || s.current("prod") == current {
+		t.Errorf("the restore again (%d), marked %v:\n%s", code, fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)
+	}
+}
