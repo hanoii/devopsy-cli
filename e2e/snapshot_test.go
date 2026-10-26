@@ -93,3 +93,43 @@ func TestSnapshotTakeRestore(t *testing.T) {
 		t.Errorf("db not held on its data's image:\n%s", compose)
 	}
 }
+
+// A snapshot exported from one server and imported on another, where
+// the environment was just released: restored there with its
+// shared/.env, its data in its volume and its entry.
+func TestSnapshotMoveServers(t *testing.T) {
+	secondServer(t)
+	dir := snapshotProject(t, "snapmove")
+	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	if out, code := srv(t, "echo SECRET=s3cret >>snapmove/prod/shared/.env && docker run --rm -v snapmove-prod_dbdata:/d -v \"$PWD/snapmove/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo rows >/d/table && echo pic >/f/a.jpg'"); code != 0 {
+		t.Fatalf("writing the data: %s", out)
+	}
+	out, code := op(t, dir, "devopsy @server:prod --snapshot")
+	m := takenID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @server2:prod --release"); code != 0 {
+		t.Fatalf("prod on server2 (%d):\n%s", code, out)
+	}
+	out, code = op(t, dir, "devopsy @server:prod --snapshots export "+m[1]+" | devopsy @server2:prod --snapshots import")
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(out)
+	if code != 0 || im == nil {
+		t.Fatalf("export into import (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, "devopsy @server2:prod --snapshots restore "+im[1]+" --with-env --yes"); code != 0 {
+		t.Fatalf("restore on server2 (%d):\n%s", code, out)
+	}
+	table, _ := srv2(t, "docker run --rm -v snapmove-prod_dbdata:/d busybox:1.37 cat /d/table")
+	env, _ := srv2(t, "cat snapmove/prod/shared/.env")
+	files, _ := srv2(t, "ls snapmove/prod/shared/mnt/files")
+	target, _ := srv2(t, "grep '^DEVOPSY_TARGET=' snapmove/prod/current/../devopsy-target.env")
+	if strings.TrimSpace(table) != "rows" || !strings.Contains(env, "SECRET=s3cret") || strings.TrimSpace(files) != "a.jpg" || !strings.Contains(target, "server2") {
+		t.Errorf("on server2: table %q, env %q, files %q, target %q", table, env, files, target)
+	}
+	if state := srv2State(t, "snapmove", "prod", "db"); state != "running" {
+		t.Errorf("db on server2: %s", state)
+	}
+}
