@@ -1274,6 +1274,10 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 			err = errors.New("it carries something else than " + t.name)
 		case es[0].file != t.isFile:
 			err = errors.New("it carries " + t.name + " as another kind than the manifest says")
+		case !slices.Equal(es[0].forms, []string{t.name}):
+			// A take names members plainly; the extraction matches by that
+			// name alone (GNU tar takes ./storage/x only by ./storage).
+			err = errors.New("it names " + t.name + "'s members otherwise than " + t.name + "/...")
 		}
 		if err != nil {
 			return fmt.Errorf("snapshot %s's %s: %v: nothing restored", filepath.Base(snap), t.file, err)

@@ -2253,7 +2253,9 @@ settled every rule here after nine reviews (2026-10-25).
   `release:` (`--release-steps restart`), `--check-mounts restored`; the
   tars checked whole before anything stops (`check-tars`: `zstd -dc`
   into `tarEntriesIn`, the import's checks, one entry per tar, of the
-  manifest's kind; a data image gone pulled by its digest), each only
+  manifest's kind, its members named plainly as a take names them: the
+  extraction matches by that name alone; a data image gone pulled by its
+  digest), each only
   where the restored code's services with data have it, a volume by the
   name compose gives its key there, never the manifest's, whose names
   must be single names (`readManifest`; review of 2026-10-25: an
