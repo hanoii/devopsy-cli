@@ -589,7 +589,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// Gated: the project goes once the server holds the release lock.
 		// The server names the release (remote.UploadScript), on stdout.
 		var idOut bytes.Buffer
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(upCtx)), t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
+		// What its activation needs is checked here too, before anything
+		// is uploaded (its id is the server's: any one gives the same
+		// needs).
+		var syncOpts *remote.SyncOptions
+		if job != nil {
+			syncOpts = &remote.SyncOptions{}
+		}
+		upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
+		code, err := remote.SSHStreams(upSession, t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
 		id := strings.TrimSpace(idOut.String())
 		pr.Close()
 		upInterrupted := upCtx.Err() != nil

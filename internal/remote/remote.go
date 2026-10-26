@@ -2077,7 +2077,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		// (ChildCheck).
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
-	script = WithNeeds(script)
+	script = WithNeeds(script, alsoNeeds(ctx)...)
 	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
 		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
@@ -2438,10 +2438,8 @@ else
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
-# Its snapshots' bookmarks too, wherever the snapshot root puts them.
-for d in "$snaps"/*; do
-  [ ! -d "$d" ] || img remove "$d" || d_fail=1
-done
+# Its snapshots, their bookmarks and directory, wherever the snapshot
+# root puts them, went with --destroy-data, on the server's devopsy.
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
@@ -2453,8 +2451,6 @@ cd /
   devopsy --say error "could not remove everything in $base"
   exit 1
 }
-# Snapshots outside $base (the server's snapshot root): their directory.
-case "$snaps" in "$base"/*) ;; *) rm -rf "$snaps" || { devopsy --say error "could not remove $snaps"; exit 1; } ;; esac
 devopsy --say info "removed $base"
 `
 }

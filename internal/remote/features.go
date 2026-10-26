@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"context"
 	"regexp"
 	"slices"
 	"strings"
@@ -68,25 +69,20 @@ var namedFeatures = []struct {
 	// it replaces calls --snapshot-step's release words, which a devopsy
 	// with manual snapshots only refuses as usage once the locks are held.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--snapshot-step[ '\\]{1,8}release-`)},
-	// The mounts check's words after restored: restart (the restart after
-	// a failed run step) and a restore's snapshot, which an older devopsy
-	// refuses as usage, after the switch (review: the previous release was
-	// never restarted). Every activation calls it, so every release needs
-	// a server that has it.
-	{LeavingBindsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
-	// The util image a script runs (UtilImage, by its tag): an older
-	// devopsy's --util-image readies its own tag, and a script of this one
-	// runs this tag after it, a sync's receive after its claim (review:
-	// the copy then counted as cut). childNeeds carries it to the child's
-	// first session, so an older child refuses before anything stops.
-	{UtilImageFeature, regexp.MustCompile(regexp.QuoteMeta(UtilImage))},
+	// What came with v0.52.0 beside release snapshots, under their name,
+	// which v0.52.0 reports (a name of their own would refuse a v0.52.0
+	// server that runs them fine: review): the mounts check's words after
+	// restored, restart (the restart after a failed run step) and a
+	// restore's snapshot, which v0.51.0 refuses as usage after the switch
+	// (review: the previous release was never restarted); and the util
+	// image a script runs, devopsy-util:3, whose tag a v0.51.0 child's
+	// --util-image never readies, where a sync's receive runs it after its
+	// claim (the copy then counted as cut). childNeeds carries the latter
+	// to the child's first session, so an older child refuses before
+	// anything stops. Bump the tag here with UtilImage's.
+	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
+	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
 }
-
-// LeavingBindsFeature is the mounts check's restart and restore words'.
-const LeavingBindsFeature = "leaving-binds"
-
-// UtilImageFeature names the util image's tag a script runs.
-var UtilImageFeature = strings.Replace(UtilImage, "devopsy-util:", "util-image-", 1)
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"
@@ -117,7 +113,9 @@ var flagUse = regexp.MustCompile(`devopsy[ '\\]{1,8}--([a-z][a-z-]*)`)
 func FeaturesList() string {
 	names := append([]string{}, featureFlags...)
 	for _, f := range namedFeatures {
-		names = append(names, f.Name)
+		if !slices.Contains(names, f.Name) {
+			names = append(names, f.Name)
+		}
 	}
 	slices.Sort(names)
 	return strings.Join(names, " ")
@@ -162,7 +160,33 @@ func Needs(script string) []string {
 const needsEnv = "devopsy_needs"
 
 // WithNeeds is script with its needs (Needs) in front, for the prelude's
-// check.
-func WithNeeds(script string) string {
-	return needsEnv + "=" + Quote(strings.Join(Needs(script), " ")) + "\n" + script
+// check, and also's (the needs of scripts a later session will send).
+func WithNeeds(script string, also ...string) string {
+	needs := Needs(script)
+	for _, n := range also {
+		if !slices.Contains(needs, n) {
+			needs = append(needs, n)
+		}
+	}
+	return needsEnv + "=" + Quote(strings.Join(needs, " ")) + "\n" + script
+}
+
+type alsoNeedsKey struct{}
+
+// WithAlsoNeeds has SSHStreams check, in this session, what the scripts
+// of later sessions need too: an upload checks its activation's, so a
+// server lacking one refuses before the release is uploaded (review: it
+// refused only at the activation, a pending release and an instance's
+// directory left).
+func WithAlsoNeeds(ctx context.Context, scripts ...string) context.Context {
+	var needs []string
+	for _, s := range scripts {
+		needs = append(needs, Needs(s)...)
+	}
+	return context.WithValue(ctx, alsoNeedsKey{}, needs)
+}
+
+func alsoNeeds(ctx context.Context) []string {
+	needs, _ := ctx.Value(alsoNeedsKey{}).([]string)
+	return needs
 }

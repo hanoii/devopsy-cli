@@ -235,7 +235,9 @@ func TestReleaseSnapshotScripts(t *testing.T) {
 		"restore off":   RestoreScript(off, "app-prod", r),
 		"--no-code off": RestoreDataScript(off, "app-prod", r),
 	} {
-		if slices.Contains(Needs(s), ReleaseSnapshotsFeature) || strings.Contains(s, "release-check") {
+		// Its feature they may need all the same: what came with it (the
+		// mounts check's words after restored) is under its name.
+		if strings.Contains(s, "release-check") || strings.Contains(s, "release-stopped") {
 			t.Errorf("%s takes a release snapshot", name)
 		}
 	}
