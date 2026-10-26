@@ -480,3 +480,22 @@ func TestSnapshotSpace(t *testing.T) {
 		t.Errorf("too big (%d):\n%s\n%s", code, out, docker)
 	}
 }
+
+// Pruning after a take never removes the snapshot a restore's mark names:
+// a restore that did not complete is run again from it (a take's tar
+// runs under the snapshot lock alone, after the release lock went, so a
+// restore may be writing meanwhile).
+func TestPruneKeepsRestoreMarkedSnapshot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	p := snapshotPaths{base: base, snaps: filepath.Join(base, "snapshots"), mirror: filepath.Join(base, "snapshots", remote.SnapshotMirror)}
+	ids := []string{"20261025000001", "20261025000002", "20261025000003", "20261025000004"}
+	for _, id := range ids {
+		write(t, filepath.Join(p.snaps, id, remote.SnapshotManifest), "format\t1\nkind\tmanual\n", 0o600)
+	}
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-25 00:00:00", ids[0], remote.IncompleteRestore, "the restore of snapshot "+ids[0]+" did not complete"), 0o644)
+	pruneSnapshots(filepath.Join(base, "current"), p)
+	if !fileExists(filepath.Join(p.snaps, ids[0])) {
+		t.Errorf("the snapshot the restore's mark names (%s) was pruned; left: %v", ids[0], manualSnapshots(p))
+	}
+}
