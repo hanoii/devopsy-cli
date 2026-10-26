@@ -1264,8 +1264,17 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	if !pruneGone(cwd, p, wait) {
 		return
 	}
+	// One per release, its newest: a failed or retried release takes
+	// another of the same one, and keep counts releases, never copies.
 	var kept []string
-	for _, rs := range releaseSnapshots(p) {
+	all := releaseSnapshots(p)
+	for i, rs := range all {
+		if rs.id != marked && slices.ContainsFunc(all[i+1:], func(o releaseSnapshot) bool { return o.release == rs.release }) {
+			if !remove(rs.id, "a newer one of release "+rs.release+" is kept") {
+				return
+			}
+			continue
+		}
 		kept = append(kept, rs.id)
 	}
 	for n := len(kept); rkeep != remote.KeepAll && n > rkeep; n-- {
