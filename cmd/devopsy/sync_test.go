@@ -3763,3 +3763,50 @@ func TestOlderServerActivationRefusesBeforeUpload(t *testing.T) {
 		t.Errorf("a release refused for %s left a release directory behind (%d releases, %d before):\n%s", remote.ReleaseSnapshotsFeature, len(after), len(before), out)
 	}
 }
+
+// A v0.52.0 child's --sync-services prepare already skips the start
+// gate's check under a reset when the holder says it is one
+// (SyncResetEnv): that prepare is this one, unchanged since v0.52.0
+// (git diff v0.52.0 -- cmd/devopsy/sync.go touches only runSync's
+// options and finish go), and what came after v0.52.0 is the holder's
+// export alone (SyncOptions.exports). A v0.51.0 child's prepare has no
+// such check. So both run this devopsy's reset's holder as this one's
+// does, and reset-holder, which only names the export, refuses a reset
+// they would carry out: here the server's devopsy is this one without
+// reset-holder in its features, which is v0.52.0's for everything the
+// reset runs on it, and the reset of TestSyncResetWipesLeavingBind is
+// refused, naming an upgrade it does not need.
+func TestV052ChildRunsReset(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT2=/cache/public\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("dev"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("dev"), "cache", "public")); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(filepath.Dir(s.root), "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ResetHolderFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	var env []string
+	for _, kv := range s.env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			kv = "PATH=" + old + ":" + v
+		}
+		env = append(env, kv)
+	}
+	s.logs()
+	cmd := exec.Command(binary, "@dev", "--reset", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("")
+	outb, _ := cmd.CombinedOutput()
+	out, code := string(outb), cmd.ProcessState.ExitCode()
+	if code != 0 || strings.Contains(out, "lacks what this needs") || fileExists(filepath.Join(s.mnt("dev"), "cache")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a reset on a child whose prepare skips the check under a reset, as v0.52.0's does (%d):\n%s", code, out)
+	}
+}
