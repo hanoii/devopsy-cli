@@ -915,7 +915,13 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		snaps := ""
 		var out bytes.Buffer
 		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
-			if n := strings.Count(out.String(), "\n"); n == 1 {
+			n := 0
+			for _, line := range strings.Split(out.String(), "\n") {
+				if len(strings.Split(line, "\t")) >= 6 {
+					n++
+				}
+			}
+			if n == 1 {
 				snaps = ", and its snapshot"
 			} else if n > 1 {
 				snaps = fmt.Sprintf(", and its %d snapshots", n)

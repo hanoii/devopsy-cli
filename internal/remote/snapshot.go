@@ -16,11 +16,14 @@ import (
 // it was taken in (code/ and the files beside it, its images listing,
 // whose images it bookmarks as s<id>: images.Set.idOf).
 //
-// The data is copied twice into a mirror that stays, $base/snapshots/
-// .mirror, on the data's own filesystem: once while everything runs
-// (most of it, inconsistent), once stopped (only what changed since: the
-// downtime); the tars are made from the mirror afterwards, nobody
-// waiting. Only a directory renamed into place is a snapshot.
+// Without a mirror (the default) the tars are written from the stopped
+// data, the downtime the time they take. With one (the environment's
+// snapshots: {mirror: true}, unless the server's says false), the data
+// is copied twice into a mirror that stays, .mirror among the
+// environment's snapshots: once while everything runs (most of it,
+// inconsistent), once stopped (only what changed since: the downtime);
+// the tars are made from the mirror afterwards, nobody waiting. Only a
+// directory renamed into place is a snapshot.
 const (
 	// SnapshotStepFlag is the hidden flag a snapshot's scripts call, in
 	// the current release, for each of their steps (runSnapshotStep).
@@ -34,8 +37,9 @@ const (
 	// SnapshotHoldingFile, in $base, says a take holds the snapshot
 	// lock: only with the lock busy (flock -n failing), never alone.
 	SnapshotHoldingFile = ".devopsy-snapshot.holding"
-	// SnapshotMirror is the mirror's directory in $base/snapshots: mnt/
-	// and volumes/, beside the data.
+	// SnapshotMirror is the mirror's directory among the environment's
+	// snapshots (under the snapshot root): mnt/ and volumes/, root's. Only
+	// an environment with snapshots: {mirror: true} keeps one.
 	SnapshotMirror = ".mirror"
 	// SnapshotComplete, in the mirror, names the snapshot whose stopped
 	// pass completed it: a holder of the snapshot lock finding that
@@ -117,9 +121,9 @@ trap - INT TERM HUP
 `
 	s += watchSession(false, true)
 	s += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
-export ` + SnapshotKeepEnv + `=` + strconv.Itoa(keep) + `
+export ` + SnapshotKeepEnv + `=` + strconv.Itoa(keep) + ` ` + SnapshotMirrorEnv + `=` + map[bool]string{true: "1", false: "0"}[t.SnapshotsMirror] + `
 umask 077
-mkdir -p "$snaps" "$base/snapshots/` + SnapshotMirror + `"
+mkdir -p "$snaps"
 cd "$base/current"
 `
 	refuse := markRefusal(t, "no snapshot taken", `"`+"a snapshot of it would restore as complete"+`"`, "exit 1")
@@ -145,6 +149,11 @@ fo_tag="snapshot.$id"
 // environment's snapshots: manual keep, which the server's devopsy caps
 // by its own max_keep.
 const SnapshotKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_KEEP"
+
+// SnapshotMirrorEnv is 1 when a take's environment asks for a mirror
+// (snapshots: {mirror: true}), sent by the operator as its keep is; the
+// server's snapshots: {mirror: false} still wins.
+const SnapshotMirrorEnv = "DEVOPSY_INTERNAL_SNAPSHOT_MIRROR"
 
 // IncompleteRestore is the mark's code for a restore that did not
 // complete, its From the snapshot's id: that snapshot cannot be removed

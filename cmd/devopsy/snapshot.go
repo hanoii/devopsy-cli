@@ -36,8 +36,8 @@ import (
 // is: remote's package comment of SnapshotScript.
 
 // snapshotPaths are where a snapshot's steps work: the environment's
-// directory, where its snapshots go and the mirror (on the data's own
-// filesystem, under $base/snapshots/ whatever the snapshot root).
+// directory, where its snapshots go, and among them the mirror, when
+// its takes keep one (takeMirror).
 type snapshotPaths struct{ base, snaps, mirror string }
 
 func snapshotPathsOf(cwd string) snapshotPaths {
@@ -53,7 +53,31 @@ func snapshotPathsOf(cwd string) snapshotPaths {
 			}
 		}
 	}
-	return snapshotPaths{base: base, snaps: snaps, mirror: filepath.Join(base, "snapshots", remote.SnapshotMirror)}
+	return snapshotPaths{base: base, snaps: snaps, mirror: filepath.Join(snaps, remote.SnapshotMirror)}
+}
+
+// takeMirror says whether a take keeps a mirror: its environment asks
+// (remote.SnapshotMirrorEnv, snapshots: {mirror: true}) and the server
+// does not turn mirrors off (its snapshots: {mirror: false}); refused
+// says the server refused one asked for.
+func takeMirror() (mirror, refused bool) {
+	if os.Getenv(remote.SnapshotMirrorEnv) != "1" {
+		return false, false
+	}
+	if r, err := remote.ReleaseSettings(); err == nil && r.Snapshots.MirrorsOff() {
+		return false, true
+	}
+	return true, false
+}
+
+// removeMirror removes the environment's mirror, root's, as root: a take
+// without one finds it left from when it had one.
+func removeMirror(ctx context.Context, cwd string, p snapshotPaths) error {
+	if _, err := os.Lstat(p.mirror); err != nil {
+		return nil
+	}
+	report.Info("removing the snapshots' mirror: this environment keeps none (snapshots: {mirror: true} keeps one)")
+	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unmirror", "--network", "none", "-v", p.snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror)
 }
 
 // snapshotData is what a snapshot takes: every service with data, its
@@ -134,7 +158,11 @@ func runSnapshotStep(cwd string, args []string) int {
 		if err != nil {
 			return fail(err.Error())
 		}
-		if err := snapshotCheck(ctx, p, d); err != nil {
+		mirror, refused := takeMirror()
+		if refused {
+			report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
+		}
+		if err := snapshotCheck(ctx, p, d, mirror); err != nil {
 			report.Fail(err)
 			return 1
 		}
@@ -145,6 +173,13 @@ func runSnapshotStep(cwd string, args []string) int {
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
 			return fail(err.Error())
+		}
+		if mirror, _ := takeMirror(); !mirror {
+			// No first pass: the stopped one writes the tars.
+			if err := removeMirror(ctx, cwd, p); err != nil {
+				return fail("removing the snapshots' mirror: " + err.Error())
+			}
+			return 0
 		}
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
 		if err := copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-mirror"); err != nil {
@@ -245,7 +280,7 @@ func runSnapshotStep(cwd string, args []string) int {
 // service with data writing a bind from outside the project (no copy or
 // snapshot carries it), and too little space for the mirror and the
 // tars, the data measured as root in the util image (volumes are root's).
-func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData) error {
+func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror bool) error {
 	if len(d.data) == 0 {
 		return errors.New("nothing to snapshot: no service has data (" + cli.DataLabel + "=true)")
 	}
@@ -265,25 +300,19 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData) error 
 	if err != nil {
 		return err
 	}
-	mirrored, err := duDirs(ctx, p.mirror)
-	if err != nil {
-		return err
-	}
-	// The mirror takes what it lacks, the tars at most the data again
-	// (compressed, usually far less); a tenth more each, a margin.
-	needMirror := max(data-mirrored, 0) * 11 / 10
-	needTars := data * 11 / 10
-	if sameDevice(p.mirror, p.snaps) {
-		if free := freeBytes(p.mirror); free < needMirror+needTars {
-			return fmt.Errorf("not enough space for a snapshot at %s: %s needed (the data is %s), %s free: nothing stopped", p.mirror, size(needMirror+needTars), size(data), size(free))
+	// The tars at most the data again (compressed, usually far less), and
+	// a mirror, kept among the snapshots, what it lacks; a tenth more
+	// each, a margin.
+	need := data * 11 / 10
+	if mirror {
+		mirrored, err := duDirs(ctx, p.mirror)
+		if err != nil {
+			return err
 		}
-		return nil
+		need += max(data-mirrored, 0) * 11 / 10
 	}
-	if free := freeBytes(p.mirror); free < needMirror {
-		return fmt.Errorf("not enough space for the snapshot's mirror at %s: %s needed (the data is %s), %s free: nothing stopped", p.mirror, size(needMirror), size(data), size(free))
-	}
-	if free := freeBytes(p.snaps); free < needTars {
-		return fmt.Errorf("not enough space for a snapshot at %s: %s needed (the data is %s), %s free: nothing stopped", p.snaps, size(needTars), size(data), size(free))
+	if free := freeBytes(p.snaps); free < need {
+		return fmt.Errorf("not enough space for a snapshot at %s: %s needed (the data is %s), %s free: nothing stopped", p.snaps, size(need), size(data), size(free))
 	}
 	return nil
 }
@@ -354,25 +383,6 @@ func freeBytes(dir string) int64 {
 			return 0
 		}
 	}
-}
-
-func sameDevice(a, b string) bool {
-	dev := func(p string) (uint64, bool) {
-		for d := p; ; d = filepath.Dir(d) {
-			if fi, err := os.Stat(d); err == nil {
-				if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-					return uint64(st.Dev), true
-				}
-				return 0, false
-			}
-			if d == filepath.Dir(d) {
-				return 0, false
-			}
-		}
-	}
-	da, oka := dev(a)
-	db, okb := dev(b)
-	return oka && okb && da == db
 }
 
 // size is n bytes for people.
@@ -463,33 +473,54 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
 		names = append(names, s.Name)
 	}
 	set := cli.WithDependents(d.services, names, "snapshot")
+	mirror, _ := takeMirror()
+	tmp := filepath.Join(p.snaps, id+".tmp")
 	_, restore, err := stopSetFor(cwd, set, true, id)
-	if err == nil {
+	switch {
+	case err != nil:
+	case mirror:
 		err = copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-stopped")
+		if err == nil {
+			err = os.WriteFile(filepath.Join(p.mirror, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
+		}
+	default:
+		// No mirror: the tars, from the stopped data, are the downtime.
+		report.Info("writing snapshot " + id + "'s tars, the services stopped")
+		err = dataTars(ctx, cwd, d, tmp, id)
 	}
-	if err == nil {
-		err = os.WriteFile(filepath.Join(p.mirror, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
+	undo := func() {
+		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
+		if !mirror {
+			_ = os.RemoveAll(tmp)
+		}
 	}
 	if rerr := restore(); rerr != nil {
-		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
+		undo()
 		if err != nil {
 			report.Error(err.Error())
 		}
 		return fail(rerr.Error() + ": no snapshot taken")
 	}
 	if err != nil {
-		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
+		undo()
 		if ctx.Err() != nil {
 			return fail("interrupted: no snapshot taken, the services started again")
 		}
 		return fail(err.Error() + ": no snapshot taken")
 	}
-	// The mirror holds the snapshot: from here on nothing interrupts.
+	// The mirror, or the tars, hold the snapshot: from here on nothing
+	// interrupts.
 	stopSig()
 	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-	tmp := filepath.Join(p.snaps, id+".tmp")
 	if err := writeSnapshotDir(cwd, p, d, tmp, id, rel); err != nil {
 		return fail(err.Error())
+	}
+	if !mirror {
+		// Complete already: the tar step only prunes.
+		if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
+			return fail(err.Error())
+		}
+		report.Info("snapshot " + id + " taken")
 	}
 	return 0
 }
@@ -636,10 +667,13 @@ func readManifest(dir string) (*manifest, error) {
 }
 
 // snapshotTar makes a snapshot's tars from the mirror, one .tar.zst per
-// entry and volume, under nice, as root in the util image (the mirror is
-// root's) writing to stdout, which devopsy writes as the deploy user's,
-// then renames <id>.tmp into place: only then is it a snapshot.
+// entry and volume (tarInto), then renames <id>.tmp into place: only
+// then is it a snapshot. A take without a mirror wrote its tars while
+// stopped and renamed it already (dataTars).
 func snapshotTar(cwd string, p snapshotPaths, id string) error {
+	if fileExists(filepath.Join(p.snaps, id, remote.SnapshotManifest)) {
+		return nil
+	}
 	tmp := filepath.Join(p.snaps, id+".tmp")
 	m, err := readManifest(tmp)
 	if err != nil {
@@ -649,28 +683,17 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	tar := func(dir, name, file string) error {
-		out, err := os.OpenFile(filepath.Join(tmp, remote.SnapshotData, file), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		err = dockerRunIO(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-tar", nil, out, "--network", "none", "-v", p.mirror+":/m:ro", remote.UtilImage,
-			"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0`, "sh", dir, name)
-		if err != nil {
-			return fmt.Errorf("the tar of %s/%s: %w", dir, name, err)
-		}
-		return out.Close()
-	}
+	name := "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-tar"
+	mount := []string{"-v", p.mirror + ":/m:ro"}
 	for _, e := range m.entries {
 		report.Info("snapshot " + id + ": mnt/" + e)
-		if err := tar("mnt", e, "mnt."+e+".tar.zst"); err != nil {
+		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "mnt."+e+".tar.zst"), mount, "mnt", e); err != nil {
 			return err
 		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(m.volumes)) {
 		report.Info("snapshot " + id + ": the volume " + k)
-		if err := tar("volumes", k, "volume."+k+".tar.zst"); err != nil {
+		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "volume."+k+".tar.zst"), mount, "volumes", k); err != nil {
 			return err
 		}
 	}
@@ -679,6 +702,51 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 	}
 	report.Info("snapshot " + id + " taken")
 	return nil
+}
+
+// dataTars writes a take's tars into tmp from d itself, its services
+// stopped: a take without a mirror. The data's entries and volumes are
+// mounted read-only where the mirror has them (/m/mnt, /m/volumes/<key>),
+// so the tars are the same.
+func dataTars(ctx context.Context, cwd string, d *snapshotData, tmp, id string) error {
+	if err := os.MkdirAll(filepath.Join(tmp, remote.SnapshotData), 0o700); err != nil {
+		return err
+	}
+	if err := ensureUtilImage(ctx); err != nil {
+		return err
+	}
+	name := "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-tar"
+	for _, e := range d.entries {
+		report.Info("snapshot " + id + ": mnt/" + e)
+		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "mnt."+e+".tar.zst"), []string{"-v", d.mnt + ":/m/mnt:ro"}, "mnt", e); err != nil {
+			return err
+		}
+	}
+	for _, v := range d.volumes {
+		report.Info("snapshot " + id + ": the volume " + v.Key)
+		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "volume."+v.Key+".tar.zst"), []string{"-v", v.Name + ":/m/volumes/" + v.Key + ":ro"}, "volumes", v.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// tarInto writes file, the tar of /m/<dir>/<entry> compressed, from a
+// util container (name) with mounts, under nice, as root (the mirror and
+// the volumes are root's), to stdout, which devopsy writes as the deploy
+// user's.
+func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry string) error {
+	out, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage,
+		"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0`, "sh", dir, entry)
+	if err := dockerRunIO(ctx, name, nil, out, args...); err != nil {
+		return fmt.Errorf("the tar of %s/%s: %w", dir, entry, err)
+	}
+	return out.Close()
 }
 
 // snapshotLeftovers is what a snapshot lock's holder does first: a take
@@ -704,9 +772,21 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 		id := strings.TrimSuffix(filepath.Base(tmp), ".tmp")
 		// Complete but for its tars: its manifest, written last, and the
 		// images listing a restore needs.
-		if fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && fileExists(filepath.Join(tmp, images.ListFile)) && strings.TrimSpace(string(marker)) == id {
+		complete := fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && fileExists(filepath.Join(tmp, images.ListFile))
+		if complete && strings.TrimSpace(string(marker)) == id {
 			report.Info("finishing snapshot " + id + ", cut off after its stopped pass")
 			if err := snapshotTar(cwd, p, id); err != nil {
+				return err
+			}
+			continue
+		}
+		// A take without a mirror writes its manifest after its tars: one
+		// cut before its rename is complete.
+		if m, err := readManifest(tmp); complete && err == nil && !slices.ContainsFunc(snapshotTars(m), func(t snapshotTarFile) bool {
+			return !fileExists(filepath.Join(tmp, remote.SnapshotData, t.file))
+		}) {
+			report.Info("finishing snapshot " + id + ", cut off before its rename")
+			if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
 				return err
 			}
 			continue
@@ -808,6 +888,11 @@ func snapshotList(p snapshotPaths) {
 	sort.Sort(sort.Reverse(sort.StringSlice(lines)))
 	for _, l := range lines {
 		fmt.Println(l)
+	}
+	// Whether a mirror is kept (root's: its size is not the deploy user's
+	// to read), on a line of its own the snapshots' parsers skip.
+	if _, err := os.Lstat(p.mirror); err == nil {
+		fmt.Println("mirror\tkept")
 	}
 }
 
@@ -984,6 +1069,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	}
 	type snap struct{ id, kind, release, taken, size, state string }
 	var snaps []snap
+	mirrored := strings.Contains(out.String(), "mirror\tkept\n")
 	// Lines one by one: a taken snapshot's state is empty, its line
 	// ending in a tab.
 	for _, line := range strings.Split(out.String(), "\n") {
@@ -1010,6 +1096,11 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 				line += "  " + strings.ToUpper(s.state)
 			}
 			fmt.Println(line)
+		}
+		if mirrored {
+			fmt.Println("a mirror of the data is kept beside them: a take is down only for what changed since its first pass")
+		} else {
+			fmt.Println("no mirror: a take is down while its tars are written (snapshots: {mirror: true} keeps one)")
 		}
 		return 0
 	}

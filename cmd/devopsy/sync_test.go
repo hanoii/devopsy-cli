@@ -275,9 +275,19 @@ case "$*" in
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
+  "run --rm --name devopsy-snapshot-"*"-unmirror "*)
+    for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
+    rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-snapshot-"*"-tar "*)
     [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
-    for a; do case $a in *:/m:ro) m=${a%:/m:ro} ;; esac; done
+    # FAKE_SLOW_TAR: a tar that takes until $FAKE_SLOW_TAR.go exists.
+    if [ -n "${FAKE_SLOW_TAR:-}" ]; then : >"$FAKE_SLOW_TAR"; n=0; while [ ! -e "$FAKE_SLOW_TAR.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # From the mirror (-v <mirror>:/m:ro), or a take without one from the
+    # data itself: -v <mnt>:/m/mnt:ro, -v <volume>:/m/volumes/<key>:ro.
+    m= vn=
+    for a; do case $a in *:/m:ro) m=${a%:/m:ro} ;; *:/m/mnt:ro) m=${a%:/m/mnt:ro}/.. ;; *:/m/volumes/*:ro) vn=${a%%:*} ;; esac; done
+    if [ -n "$vn" ]; then st=$(mktemp -d); cp -R "$vols/$vn" "$st/$last"; COPYFILE_DISABLE=1 tar -C "$st" -cf - -- "$last"; r=$?; rm -rf "$st"; exit $r; fi
+    case $m in */..) m=${m%/..}; COPYFILE_DISABLE=1 exec tar -C "$m" -cf - -- "$last" ;; esac
     COPYFILE_DISABLE=1 exec tar -C "$m/$last2" -cf - -- "$last" ;;
   "run --rm --network none "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;

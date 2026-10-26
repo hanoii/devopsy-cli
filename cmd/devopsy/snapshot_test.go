@@ -50,6 +50,7 @@ var snapshotID = regexp.MustCompile(`taking snapshot ([0-9]{14}) of ([0-9]{14})`
 func TestSnapshotTake(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
+	s.mirrored("prod")
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=secret\n", 0o600)
 
@@ -151,43 +152,50 @@ func TestSnapshotTake(t *testing.T) {
 // again, their snapshot lines go, and no snapshot is left.
 func TestSnapshotInterrupt(t *testing.T) {
 	t.Parallel()
-	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	started := filepath.Join(t.TempDir(), "started")
-	outFile, err := os.CreateTemp(t.TempDir(), "out")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(binary, "@prod", "--snapshot")
-	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_STOPPED="+started)
-	cmd.Stdin = strings.NewReader("")
-	cmd.Stdout, cmd.Stderr = outFile, outFile
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
-		if time.Since(start) > startWait {
-			_ = cmd.Process.Kill()
-			t.Fatalf("the stopped pass never started:\n%s", readString(outFile.Name()))
+	// With a mirror, during its stopped rsync; without one, during the
+	// tars it writes while stopped.
+	for _, slow := range []string{"FAKE_SLOW_STOPPED", "FAKE_SLOW_TAR"} {
+		s := newSyncSetup(t)
+		if slow == "FAKE_SLOW_STOPPED" {
+			s.mirrored("prod")
 		}
-	}
-	start := time.Now()
-	_ = cmd.Process.Signal(syscall.SIGINT)
-	_ = cmd.Wait()
-	out := readString(outFile.Name())
-	if cmd.ProcessState.ExitCode() != 130 || time.Since(start) > 15*time.Second || !strings.Contains(out, "cancelling the snapshot") {
-		t.Fatalf("interrupt (%d, %s):\n%s", cmd.ProcessState.ExitCode(), time.Since(start), out)
-	}
-	base := filepath.Join(s.root, "shop", "prod")
-	for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
-		if time.Since(start) > 15*time.Second {
-			t.Fatalf("the services not started again, or their snapshot lines left:\n%s\n%s", readString(s.log), readString(filepath.Join(base, ".devopsy-sync.services")))
+		s.releaseProd(nil)
+		started := filepath.Join(t.TempDir(), "started")
+		outFile, err := os.CreateTemp(t.TempDir(), "out")
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if left, _ := filepath.Glob(filepath.Join(base, "snapshots", "2*")); len(left) > 0 {
-		t.Errorf("snapshots left: %v", left)
+		cmd := exec.Command(binary, "@prod", "--snapshot")
+		cmd.Dir = s.project
+		cmd.Env = append(append([]string{}, s.env...), slow+"="+started)
+		cmd.Stdin = strings.NewReader("")
+		cmd.Stdout, cmd.Stderr = outFile, outFile
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
+			if time.Since(start) > startWait {
+				_ = cmd.Process.Kill()
+				t.Fatalf("%s: the stopped pass never started:\n%s", slow, readString(outFile.Name()))
+			}
+		}
+		start := time.Now()
+		_ = cmd.Process.Signal(syscall.SIGINT)
+		_ = cmd.Wait()
+		out := readString(outFile.Name())
+		if cmd.ProcessState.ExitCode() != 130 || time.Since(start) > 15*time.Second || !strings.Contains(out, "cancelling the snapshot") {
+			t.Fatalf("%s: interrupt (%d, %s):\n%s", slow, cmd.ProcessState.ExitCode(), time.Since(start), out)
+		}
+		base := filepath.Join(s.root, "shop", "prod")
+		for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
+			if time.Since(start) > 15*time.Second {
+				t.Fatalf("%s: the services not started again, or their snapshot lines left:\n%s\n%s", slow, readString(s.log), readString(filepath.Join(base, ".devopsy-sync.services")))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if left, _ := filepath.Glob(filepath.Join(base, "snapshots", "2*")); len(left) > 0 {
+			t.Errorf("%s: snapshots left: %v", slow, left)
+		}
 	}
 }
 
@@ -330,6 +338,7 @@ func TestRestoreMark(t *testing.T) {
 func TestSnapshotDestroy(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
+	s.mirrored("prod")
 	s.releaseProd(nil)
 	for range 2 {
 		if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 {
@@ -1226,6 +1235,7 @@ func TestRecoverFetchBeforeData(t *testing.T) {
 func TestSnapshotReleaseDuringFirstPass(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
+	s.mirrored("prod")
 	s.releaseProd(nil)
 	base := filepath.Join(s.root, "shop", "prod")
 	old := s.current("prod")
@@ -1275,5 +1285,78 @@ func TestSyncPushKeepsParentSnapshotLines(t *testing.T) {
 	}
 	if !started && !strings.Contains(readString(record), "snapshot 20261025000000 db") {
 		t.Errorf("the parent's snapshot lines went with the push's record, db and app left down with nothing to start them:\n%s\n%s", out, docker)
+	}
+}
+
+// mirrored gives env snapshots: {mirror: true} in the setup's config.
+func (s *syncSetup) mirrored(env string) {
+	s.t.Helper()
+	conf := filepath.Join(s.dot, "config.yaml")
+	data := readString(conf)
+	if !strings.Contains(data, "\n  "+env+": {}\n") {
+		s.t.Fatalf("no %s: {} in the setup's config:\n%s", env, data)
+	}
+	write(s.t, conf, strings.Replace(data, "\n  "+env+": {}\n", "\n  "+env+": {snapshots: {mirror: true}}\n", 1), 0o644)
+}
+
+// Without a mirror (the default): no first pass, the tars written from
+// the stopped data, nothing kept beside them; the snapshot restores as
+// one taken with a mirror does. A take of it cut before its rename is
+// finished by the next; an environment that stops keeping a mirror has
+// its old one removed; the server's snapshots: {mirror: false} wins over
+// an environment's mirror: true, said; --snapshots says which.
+func TestSnapshotNoMirror(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	snaps := filepath.Join(base, "snapshots")
+	out, code := s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil || strings.Contains(docker, "-mirror-") || fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+		t.Fatalf("take (%d), a first pass or a mirror:\n%s\n%s", code, out, docker)
+	}
+	rest := docker
+	for _, want := range []string{"stop db app", "-tar ", "start db app"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order, the tars while stopped:\n%s", want, docker)
+		}
+		rest = rest[i+len(want):]
+	}
+	if got := strings.Join(tarNames(t, filepath.Join(snaps, m[1], "data", "mnt.storage.tar.zst")), " "); !strings.Contains(got, "storage/file.txt") {
+		t.Errorf("storage's tar: %s", got)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots"); code != 0 || !strings.Contains(out, "no mirror: a take is down while its tars are written") {
+		t.Errorf("--snapshots (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+
+	// Cut after its manifest, before its rename: complete, renamed.
+	cut := remote.NextReleaseID(time.Now(), manualSnapshots(snapshotPaths{snaps: snaps}))
+	if out, err := exec.Command("cp", "-a", filepath.Join(snaps, m[1]), filepath.Join(snaps, cut+".tmp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 || !strings.Contains(out, "finishing snapshot "+cut+", cut off before its rename") || !fileExists(filepath.Join(snaps, cut, remote.SnapshotManifest)) {
+		t.Errorf("the cut take not finished (%d):\n%s", code, out)
+	}
+
+	// With a mirror, then without: its mirror goes.
+	s.mirrored("prod")
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 || !fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+		t.Fatalf("a take with a mirror (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots"); code != 0 || !strings.Contains(out, "a mirror of the data is kept beside them") {
+		t.Errorf("--snapshots with a mirror (%d):\n%s", code, out)
+	}
+	server := filepath.Join(filepath.Dir(s.root), "home", "config.yaml")
+	write(t, server, readString(server)+"snapshots:\n  mirror: false\n", 0o644)
+	out, code = s.run(nil, "@prod", "--snapshot")
+	if code != 0 || !strings.Contains(out, "this server keeps no snapshot mirrors") || !strings.Contains(out, "removing the snapshots' mirror") || fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+		t.Errorf("the server's mirror: false (%d):\n%s", code, out)
 	}
 }
