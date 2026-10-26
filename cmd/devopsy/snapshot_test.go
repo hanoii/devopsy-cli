@@ -2808,7 +2808,7 @@ func TestSnapshotEntryLeadingDash(t *testing.T) {
 	write(t, filepath.Join(s.mnt("prod"), "-files", "a.jpg"), "pic\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@prod", "--snapshot")
-	if code == 0 || !strings.Contains(out, "./mnt/-files: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it") {
+	if code == 0 || !strings.Contains(out, "./mnt/-files: an entry of mnt a copy carries cannot have whitespace in its name, start with a dash or be ! or (: rename it") {
 		t.Errorf("a take of mnt/-files (%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {

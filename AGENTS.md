@@ -1595,7 +1595,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   with a dash too (an owned one as well, and a data service's volume
   key), since find, chown and tar take
   entries as arguments (decided over `./` prefixes in every tool: a
-  snapshot's take failed on find's predicate, review).
+  snapshot's take failed on find's predicate, review), and one named
+  `!` or `(`, which GNU find takes for its expression (`argName`;
+  review after v0.52.1: an export of `!` wrote none of its files).
 - **The child guard: each side reads its own labels, and the parent
   checks the child's before changing anything.** `--sync-push` asks the
   child for `--sync-services list` (through `--sync-exec`, one more

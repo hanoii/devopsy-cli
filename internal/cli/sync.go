@@ -510,20 +510,21 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		// starting with a dash would be an option.
 		if cs.Owner != "" {
 			for _, d := range cs.Writable {
-				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name or start with a dash: rename it", name, d, MntOwnerLabel)
+				if !argName(d) {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name, start with a dash or be ! or (: rename it", name, d, MntOwnerLabel)
 				}
 			}
 		}
 		// Copies name entries in space-separated lists (the child's,
 		// exclude) and rsync modules: a name with whitespace would split.
-		// The tools that carry them (find for a snapshot's tar, tar for
-		// --export) take entries as arguments: a name starting with a
-		// dash would be an option (find: unknown predicate).
+		// The tools that carry them (find for a snapshot's tar and for
+		// --export's) take entries as arguments: a name starting with a
+		// dash would be an option (find: unknown predicate), and ! or (
+		// find's expression (review: an export of ! wrote no files).
 		if cs.HasData {
 			for _, d := range append(slices.Clone(cs.Dirs), cs.Excluded...) {
-				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it", name, d)
+				if !argName(d) {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name, start with a dash or be ! or (: rename it", name, d)
 				}
 			}
 			// A named volume's key, the same: a take's find and --export's
@@ -656,6 +657,13 @@ func resolveLinks(p string, depth int) string {
 		return resolveLinks(t, depth+1)
 	}
 	return full
+}
+
+// argName is whether an entry's name passes as an argument to find, tar
+// and chown and in a space-separated list: no whitespace, no leading
+// dash (an option), and neither ! nor ( (find's expression).
+func argName(d string) bool {
+	return !strings.ContainsFunc(d, unicode.IsSpace) && !strings.HasPrefix(d, "-") && d != "!" && d != "("
 }
 
 // MntOwners are the owners of the entries of mnt, entry to <uid>:<gid>

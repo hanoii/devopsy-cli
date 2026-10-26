@@ -1047,8 +1047,9 @@ entries of `mnt` or named volumes (by key) it mounts that are not
 copied through it anyway: an access log next to the site's files
 (`./mnt/logs`), a cache in a volume. On a service
 without data it is ignored. The entries a service with data mounts,
-and its named volumes' keys, cannot have whitespace in their names or
-start with a dash, nor an entry a `devopsy.mnt.owner` owns: releases,
+and its named volumes' keys, cannot have whitespace in their names,
+start with a dash or be `!` or `(`, nor an entry a `devopsy.mnt.owner`
+owns: releases,
 copies and snapshots refuse them.
 
 `devopsy.data.stop` says when devopsy stops the service while data

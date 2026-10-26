@@ -3834,32 +3834,26 @@ func TestImportAppAbsoluteLink(t *testing.T) {
 }
 
 // --export lists each entry's files with find, the entries its starting
-// points (cd /x && find "$@" ...): GNU find takes a first argument that
-// is ! or ( as the start of its expression, not a path, so an entry
-// named ! (one a copy carries may have any name but whitespace or a
-// leading dash) makes find fail on the entries after it, or, alone,
-// negate the types test over the current directory and list nothing: the
-// export fails, or writes a tar without the entry's files. A snapshot's
-// tar names its entry the same way (find "$2"). The entry's files must
-// be in the tar.
+// points (cd /x && find "$@" ...), and a snapshot's tar names its entry
+// the same way (find "$2"): GNU find takes a first argument that is ! or
+// ( as the start of its expression, not a path, so an entry named ! made
+// find fail on the entries after it, or, alone, negate the types test
+// over the current directory and list nothing: the export wrote a tar
+// without the entry's files (review). Refused where labels are read, as
+// a leading dash is, before anything stops.
 func TestExportEntryNamedBang(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
-	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/!\n", 0o644)
 	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/!\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "!", "f"), "bang\n", 0o644)
-	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
-	var names []string
-	tr := tar.NewReader(bytes.NewReader(out))
-	for {
-		h, err := tr.Next()
-		if err != nil {
-			break
-		}
-		names = append(names, h.Name)
+	s.logs()
+	_, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code == 0 || !strings.Contains(errs, "./mnt/!: an entry of mnt a copy carries cannot have whitespace in its name, start with a dash or be ! or (: rename it") {
+		t.Errorf("an export of app, whose entries are ! and storage (%d):\n%s", code, errs)
 	}
-	if code != 0 || !slices.Contains(names, "!/f") {
-		t.Errorf("an export of app, whose entries are ! and storage (%d), wrote a tar of %q:\n%s", code, names, errs)
+	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+		t.Errorf("a refused export stopped something:\n%s", docker)
 	}
 }
 
