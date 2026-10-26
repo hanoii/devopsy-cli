@@ -1650,6 +1650,49 @@ func TestReleaseSnapshotCases(t *testing.T) {
 			}
 		}
 	})
+	t.Run("keep all, the data before a failed run step kept", func(t *testing.T) {
+		t.Parallel()
+		if _, err := os.Stat("/proc/self/cwd"); err != nil {
+			t.Skip("waiting for the detached tar reads /proc")
+		}
+		// A release whose run step fails halfway (a migration gone wrong:
+		// the reason for release snapshots, README) leaves the data as it
+		// wrote it, and the release before restarts on it. Its snapshot is
+		// then the only copy of the data before the migration; the release
+		// tried again takes another of the same release, of the migrated
+		// data, and keep: all must not trade the first for it.
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 5}, snapshots: {release: {enabled: true, keep: all}}}")
+		s.releaseProd(nil)
+		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+		if out, code := s.run([]string{"FAKE_FAIL_DEPLOY=1"}, "@prod", "--release"); code == 0 {
+			t.Fatalf("a release whose run step fails (%d):\n%s", code, out)
+		}
+		s.waitReleaseTars()
+		before := releaseSnapshots(snaps)
+		if len(before) != 1 {
+			t.Fatalf("release snapshots after the failed release: %+v", before)
+		}
+		// What the failed run step wrote, which the release before now runs on.
+		write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "half migrated\n", 0o644)
+		out, code := s.run(nil, "@prod", "--release")
+		if code != 0 {
+			t.Fatalf("the release tried again (%d):\n%s", code, out)
+		}
+		s.waitReleaseTars()
+		if !fileExists(filepath.Join(snaps.snaps, before[0].id, remote.SnapshotManifest)) {
+			logs, _ := filepath.Glob(filepath.Join(s.root, "shop", "prod", "releases", "*", remote.ServerLogFile))
+			var said []string
+			for _, l := range logs {
+				for _, line := range strings.Split(readString(l), "\n") {
+					if strings.Contains(line, "removing snapshot "+before[0].id) {
+						said = append(said, line)
+					}
+				}
+			}
+			t.Errorf("snapshot %s, the only copy of the data before the failed run step wrote it, removed with keep: all (now %+v): %s", before[0].id, releaseSnapshots(snaps), strings.Join(said, "; "))
+		}
+	})
 	t.Run("pruned once off", func(t *testing.T) {
 		t.Parallel()
 		if _, err := os.Stat("/proc/self/cwd"); err != nil {
