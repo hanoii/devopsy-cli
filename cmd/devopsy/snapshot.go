@@ -684,8 +684,15 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	tmp := filepath.Join(p.snaps, id+".tmp")
 	// What it stops it starts again on the same data: refused before
 	// anything stops when that start would be (checkStartBinds), never
-	// after (review: the services stayed down, the snapshot lost).
-	if err := checkStartBinds(cwd); err != nil {
+	// after (review: the services stayed down, the snapshot lost). A
+	// release snapshot's are started by the new release's run step,
+	// under its code: judged by that code (review: the old one's refused
+	// a release that dropped the bind).
+	gated := cwd
+	if next != "" {
+		gated = filepath.Join(next, remote.CodeDir)
+	}
+	if err := checkStartBinds(gated); err != nil {
 		report.Fail(err)
 		return 1
 	}

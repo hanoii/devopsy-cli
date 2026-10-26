@@ -1171,11 +1171,16 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   compose's starting commands and `cp`, which mounts bind sources
   afresh, `--dry-run` aside). Cost: one compose config read per start
   in a release; labels it cannot read only warn. What stops services to
-  start them again on the same data (a take, a release snapshot's
-  stopped pass, `--export`, a sync's push on the parent) runs it before
-  it stops anything, never only at the start (review: a take stopped
-  them, the gate refused their start, the snapshot was lost); its
-  message carries the links in its first line, which callers wrap.
+  start them again runs the same check before it stops anything, never
+  only at the start (review: a take stopped them, the gate refused their
+  start, the snapshot was lost): a take and an export, a sync's push on
+  the parent, all on the same data; a release snapshot's stopped pass
+  in the new release's code, whose run step starts them; an `--import`
+  but for the entries its tar replaces; a sync's child side but under
+  `--reset` (its wipe removes the link; which entries the copy replaces
+  is the parent's to say, so one there is refused too); a restore in
+  the entries it keeps (`check-tars`). Its message carries the links in
+  its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
   an aliased base path) is judged by where it lands in mnt

@@ -2199,6 +2199,17 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			}
 		}
 		dependentNotices(cwd, services, data, set)
+		// A link in the child's data making a bind source lead out of its
+		// entry would have finish go refuse the copy, the parent stopped
+		// for nothing: refused before anything stops (review), but under
+		// --reset, whose wipe removes it. Which entries the copy replaces
+		// is the parent's to say: one there is refused too, said.
+		if os.Getenv(remote.SyncResetEnv) == "" {
+			if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
+				report.Fail(err)
+				return 1
+			}
+		}
 		// The volumes a copy writes into, made when missing (a first
 		// release, a volume added since) as compose would: the parent's
 		// rsync never makes one.

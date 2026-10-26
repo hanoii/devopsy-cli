@@ -288,7 +288,7 @@ const mntOwnersRestored = "restored"
 func runCheckMounts(cwd string, args []string) int {
 	restored := len(args) > 0 && args[0] == mntOwnersRestored
 	if len(args) > 0 && !restored || len(args) > 2 {
-		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored + " [<snapshot>]")
+		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored + " [<snapshot> | restart]")
 		return 2
 	}
 	// A restore's: the entries its snapshot carries are replaced, so the

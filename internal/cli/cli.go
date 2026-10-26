@@ -823,8 +823,9 @@ release lock, and up to 10 minutes for releases using the server's images.
 Takes a snapshot of the environment: the data of every service with data
 (devopsy.data=true: its entries of mnt and named volumes, as files,
 whatever its copy label), the current release's code and the images
-that ran on them, and its shared/.env. Every service with data, and what
-depends on it, is stopped for the moment of the copy, all together.
+that ran on them, and its shared/.env. Every service with data, any
+service writing what it copies, and what depends on them, is stopped
+for the moment of the copy, all together.
 Where the data clones by reflinks (XFS, btrfs), the copy is a clone,
 seconds, and the tars are made from it afterwards. Otherwise the
 compressed tars are written while stopped (the downtime), unless the
@@ -838,7 +839,9 @@ the services started again; past that it finishes on its own, its output
 in the server's log (devopsy @<target> --log). Refused on an environment
 whose data a sync, an import or a restore left incomplete, with nothing
 with data, with a service with data writing a bind from outside the
-project, with snapshots: {manual: false}, or without the space for it.
+project or mounting no entry or named volume, with a bind source a
+link in its entry leads out of it, with snapshots: {manual: false}, or
+without the space for it.
 The server's snapshots: {mirror: false} keeps any environment from
 keeping a mirror. The environment's snapshots: manual keep
 (3) says how many stay, at most the server's snapshots: max_keep; where

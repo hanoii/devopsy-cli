@@ -1533,7 +1533,8 @@ stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, one with
 data and no entry or named volume (a database in an anonymous volume:
-a snapshot would hold nothing of it), too little
+a snapshot would hold nothing of it), a bind source a link in its entry
+leads out of it (the services could not start again), too little
 space for the tars, and a mirror when it keeps one (measured first, a
 tenth to spare).
 

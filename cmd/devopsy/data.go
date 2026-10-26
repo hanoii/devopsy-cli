@@ -327,7 +327,7 @@ func runExport(cwd string, args []string, color bool) int {
 	set := cli.DataStops(services, cli.ExportOne, name)
 	// On a target what it stops it starts again on the same data: refused
 	// before anything stops when that start would be (checkStartBinds).
-	if cli.InRelease(cwd) {
+	if cli.InRelease(projectDir) {
 		if err := checkStartBinds(cwd); err != nil {
 			report.Fail(err)
 			return 1
@@ -1193,6 +1193,23 @@ func runImport(cwd string, args []string, color bool) int {
 
 	set := cli.DataStops(services, cli.ImportOne, name)
 	dependentNotices(cwd, services, []string{name}, set)
+	// What it stops it starts again: refused before anything stops when a
+	// bind source leads out of its entry through a link in what the
+	// import keeps (the start gate would refuse that start, the set left
+	// down under the mark: review); the entries its tar replaces are no
+	// matter.
+	if onTarget {
+		var carried []string
+		for _, e := range entries {
+			if e.volume == nil {
+				carried = append(carried, e.name)
+			}
+		}
+		if err := cli.CheckLeavingBinds(services, carried, "the import: nothing imported"); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	// Up to the first write, a failure brings back what was stopped (and
 	// a stream's up undone).
