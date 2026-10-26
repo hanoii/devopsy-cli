@@ -1527,11 +1527,15 @@ step, refused when its labels no longer fit the snapshot's (a service
 gone, or an entry another service mounts now): restore it whole then.
 `shared/.env` comes back only with `--with-env`; without it, the keys
 that differ are named. The prompt asks for the environment's full name
-(`--yes` for CI). A restore cut after its first write keeps what it
-stopped down, the environment marked as an import's would be, until the
-same restore again (it writes everything again), another snapshot,
-`--destroy`, or on a child `--reset` (a `--sync` too, when the parent
-copies every service of the snapshot).
+(`--yes` for CI). A restore completes once its run step went through.
+One cut after its first write keeps what it stopped down, and one whose
+run step fails takes down what that step started (current goes back,
+the previous release not restarted on the snapshot's data), the
+environment marked as an import's would be, until the same restore
+again (it writes everything again), its data alone under the current
+release (`--no-code`), another snapshot, `--destroy`, or on a child
+`--reset` (a `--sync` too, when the parent copies every service of the
+snapshot).
 
 `--snapshots export <id>` writes a snapshot as one tar to stdout (`|
 aws s3 cp - s3://...`: devopsy owns no storage of its own), and

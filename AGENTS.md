@@ -2280,7 +2280,11 @@ settled every rule here after nine reviews (2026-10-25).
   stopped go, the record whole, only once the run step went through
   (`restored`; review of 2026-10-25: cleared by the data step, a shell
   killed before the run step left the set down unmarked, and a restore
-  run again left the cut one's stop lines). Never marks the
+  run again left the cut one's stop lines); a run step that fails takes
+  down what it started (`firstDown`) before current goes back, and the
+  restart skips the marked environment (round 2: the failed step's
+  services ran on the restored data), `RestoreFixes` naming `--no-code`.
+  Never marks the
   release it leaves rolled back: a rollback after it goes back there.
   `--with-env` brings `shared/.env` and `inherit.env` back; without it the
   keys that differ are said.

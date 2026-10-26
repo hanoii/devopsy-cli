@@ -1043,7 +1043,8 @@ func TestSnapshotRestoreRunFailsLeavesNothingHalf(t *testing.T) {
 	if code == 0 || s.current("prod") != before {
 		t.Fatalf("a restore whose run step fails (%d), current %s (was %s):\n%s", code, s.current("prod"), before, out)
 	}
-	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	// Stopped or taken down (the fake's down records what it removed).
+	stopped := append(strings.Fields(readString(s.log+".stopped.shop-prod")), strings.Fields(readString(s.log+".down.shop-prod"))...)
 	restarted := strings.Contains(docker, "--release-steps restart run") || strings.Contains(out, "restarting "+strings.TrimPrefix(before, "releases/")+" with its own run step")
 	if !restarted && (!slices.Contains(stopped, "db") || !slices.Contains(stopped, "app")) {
 		t.Errorf("the previous release not restarted, and the failed run step's services left running on the restored data (stopped: %v), current %s:\n%s", stopped, s.current("prod"), out)

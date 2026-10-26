@@ -1124,10 +1124,18 @@ fi
 	}
 	// What ran on the data, failed or not, before a restart replaces it:
 	// the history the next activation's checks and holds go by.
+	// A restore whose run step failed keeps its mark, so the previous
+	// release is not restarted (the restart skips a marked environment):
+	// what the failed step started goes down too, never left running on
+	// the restored data (review of 2026-10-25, round 2).
+	restoreDown := ""
+	if restore != nil {
+		restoreDown = firstDown(projectName)
+	}
 	s += `img ran "$base" "$rel" || true
 if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
-` + failureReport(projectName) + `  if [ -n "$prev" ]; then
+` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else

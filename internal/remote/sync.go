@@ -177,6 +177,7 @@ func ImportFixes(ref, service string, child bool) [][2]string {
 func RestoreFixes(ref, snapshot string, child bool) [][2]string {
 	fixes := [][2]string{
 		{"restore it again:", "devopsy @" + ref + " --snapshots restore " + snapshot},
+		{"or its data alone, under the current release:", "devopsy @" + ref + " --snapshots restore " + snapshot + " --no-code"},
 		{"or another snapshot:", "devopsy @" + ref + " --snapshots"},
 	}
 	if child {
