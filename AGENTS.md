@@ -423,12 +423,19 @@ before changing anything".
   this one's after its claim (the copy counted as cut); names of their
   own refused every v0.52.0 server, which runs both (review after
   v0.52.0). Every activation needs it, and `childNeeds` carries the tag
-  to the child's first session. `reset-holder` is a reset's holder's
-  (`SyncResetEnv` in its text): a v0.52.0 child's prepare ran the start
-  gate's check under a reset and refused the reset it named as the way
-  out. An upload checks its activation's needs too
-  (`remote.WithAlsoNeeds`): refused only at the activation, a pending
-  release and an instance's directory were left. Not caught by the
+  to the child's first session. A reset needs nothing new: v0.52.0's
+  child already skips the check under `SyncResetEnv`, which v0.52.0's
+  holder never exported (a feature for it refused v0.52.0 children that
+  run the reset right: review). The activation's needs are checked in
+  the first session to the server too (`remote.WithAlsoNeeds`: the role
+  check, a new instance's, a child's current, and the upload): refused
+  only at the activation, a pending release and an instance's directory
+  were left, and before the instance's prompt or a child's inherited
+  variables are written now; a release opening no session before its
+  upload runs its local before steps first (accepted: no session of
+  its own for it). Only the plain activation's: a sync's are checked
+  where it is decided, and a release that does not sync runs on a
+  server lacking them. Not caught by the
   newer side, accepted: an older parent's receive on a newer child runs
   the older util tag after its claim; upgrade parents and children
   together.
@@ -440,7 +447,11 @@ before changing anything".
   (`snapshotBookmark`: an older script exports no `SnapshotsEnv`, and a
   rollback left a built name on the newer image); `--destroy-data`
   removes the snapshots, their bookmarks and directory, wherever the
-  snapshot root puts them (`snapshotsOf`: an older script never did).
+  snapshot root puts them (`snapshotsOf`: an older script never did),
+  recording what cannot go in the project's record (`ImagesLeftEnv`,
+  which the destroy script exports); the destroy script still does it
+  too, for a v0.52.0 server's `--destroy-data`, which does not (a
+  removal found gone is nothing).
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
