@@ -115,6 +115,26 @@ func TestSnapshotTake(t *testing.T) {
 	}
 	s.logs()
 
+	// A take cut off leaves its .tmp: INCOMPLETE, and IN PROGRESS only
+	// while a take holds the snapshot lock, never a removal or a restore,
+	// which hold it too (no holding file: snapshotLock removes a take's).
+	cut := filepath.Join(s.root, "shop", "prod", "snapshots", remote.NextReleaseID(time.Now(), ids)+".tmp")
+	write(t, filepath.Join(cut, remote.SnapshotManifest), "format\t1\nkind\tmanual\n", 0o600)
+	lock, err := os.OpenFile(filepath.Join(s.root, "shop", "prod", remote.SnapshotLockFile), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@prod", "--snapshots")
+	lock.Close()
+	os.RemoveAll(cut)
+	if code != 0 || !strings.Contains(out, "INCOMPLETE") || strings.Contains(out, "IN PROGRESS") {
+		t.Errorf("a cut take's snapshot while another holds the snapshot lock (%d):\n%s", code, out)
+	}
+	s.logs()
+
 	// Off, and on a marked environment: refused, nothing stopped.
 	if out, code := s.run(nil, "@nosnap", "--snapshot"); code == 0 || !strings.Contains(out, "manual snapshots are off for nosnap") {
 		t.Errorf("manual: false (%d):\n%s", code, out)
