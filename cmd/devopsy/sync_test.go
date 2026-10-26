@@ -3777,3 +3777,24 @@ func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
 		t.Errorf("the release wrote %s before the server refused it (inherit.env: %v):\n%s", dev, fileExists(filepath.Join(dev, "shared", remote.InheritFile)), out)
 	}
 }
+
+// A sync's push checks the parent's start gate before it stops the
+// parent's set, for the start that follows, as an export does: with the
+// set down already (app and db exited, a parent in maintenance) it stops
+// nothing there and starts nothing, so a link out of its entry at a bind
+// source on the parent is no reason to refuse the copy.
+func TestSyncPushNothingRunningIgnoresLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".stopped.shop-prod", "app\ndb\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--release")
+	if code != 0 || strings.Contains(out, "nothing started") || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a child's first release from a parent with its set down and a link out of its entry at a bind source (%d):\n%s", code, out)
+	}
+}
