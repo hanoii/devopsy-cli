@@ -275,6 +275,20 @@ case "$*" in
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
+  # FAKE_REFLINK: the data clones by reflinks (it does not by default).
+  "run --rm --name devopsy-snapshot-"*"-reflink "*)
+    [ -n "${FAKE_REFLINK:-}" ] || exit 1 ;;
+  # A reflink clone: -v <mnt>:/m/mnt:ro, -v <volume>:/m/volumes/<key>:ro,
+  # -v <clone>:/c; copied as cp -a would.
+  "run --rm --name devopsy-snapshot-"*"-clone "*)
+    m= c=
+    for a; do case $a in *:/m/mnt:ro) m=${a%:/m/mnt:ro} ;; *:/c) c=${a%:/c} ;; esac; done
+    mkdir -p "$c/mnt" "$c/volumes"
+    for e in $(printf '%s\n' "$last" | sed -n 's|^cp -a --reflink=always "/m/mnt/\([^"]*\)" /c/mnt/$|\1|p'); do cp -Rp "$m/$e" "$c/mnt/"; done
+    for a; do case $a in *:/m/volumes/*:ro) vn=${a%%:*}; k=${a#*:/m/volumes/}; k=${k%:ro}; mkdir -p "$c/volumes/$k"; cp -Rp "$vols/$vn/." "$c/volumes/$k/" ;; esac; done ;;
+  "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
+    for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
+    rm -rf "$sd/${last#/s/}" ;;
   "run --rm --name devopsy-snapshot-"*"-unmirror "*)
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
     rm -rf "$sd/.mirror" ;;

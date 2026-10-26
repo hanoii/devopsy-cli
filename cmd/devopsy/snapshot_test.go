@@ -1633,3 +1633,75 @@ func TestRestoreTakesReleaseSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// Where the data clones by reflinks, a take clones it while stopped (no
+// first pass, whatever its mirror setting), makes the tars from the clone
+// once the services are back, and removes the clone; a mirror left from
+// before goes. A take cut after its clone is finished from it by the
+// next; a release's snapshot clones the same way.
+func TestSnapshotReflink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.mirrored("prod")
+	s.releaseProd(nil)
+	snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+	// A mirror from a take before the data moved onto reflinks.
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 || !fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+		t.Fatalf("a take with a mirror (%d):\n%s", code, out)
+	}
+	s.logs()
+	reflink := []string{"FAKE_REFLINK=1"}
+	out, code := s.run(reflink, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil || strings.Contains(docker, "-mirror-0") || !strings.Contains(out, "removing the snapshots' mirror") || fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+		t.Fatalf("take (%d), a first pass or the mirror kept:\n%s\n%s", code, out, docker)
+	}
+	rest := docker
+	for _, want := range []string{"-reflink ", "stop db app", "-clone ", "start db app", "-tar ", "-unclone "} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s", want, docker)
+		}
+		rest = rest[i+len(want):]
+	}
+	if got := strings.Join(tarNames(t, filepath.Join(snaps, m[1], "data", "mnt.storage.tar.zst")), " "); !strings.Contains(got, "storage/file.txt") || !strings.Contains(readString(filepath.Join(snaps, m[1], remote.SnapshotManifest)), "copy\treflink\n") || fileExists(filepath.Join(s.root, "shop", "prod", "snapshots", ".clone", m[1])) {
+		t.Errorf("the snapshot from its clone: %s\n%s", got, readString(filepath.Join(snaps, m[1], remote.SnapshotManifest)))
+	}
+	if out, code := s.run(reflink, "@prod", "--snapshots"); code != 0 || !strings.Contains(out, "the last take cloned the data by reflinks") {
+		t.Errorf("--snapshots (%d):\n%s", code, out)
+	}
+
+	// Cut after its clone: finished from it.
+	cut := remote.NextReleaseID(time.Now(), manualSnapshots(snapshotPaths{snaps: snaps}))
+	if out, err := exec.Command("cp", "-a", filepath.Join(snaps, m[1]), filepath.Join(snaps, cut+".tmp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	tars, _ := filepath.Glob(filepath.Join(snaps, cut+".tmp", "data", "*.tar.zst"))
+	for _, f := range tars {
+		os.Remove(f)
+	}
+	clone := filepath.Join(snaps, ".clone", cut)
+	write(t, filepath.Join(clone, "mnt", "storage", "file.txt"), "cloned\n", 0o644)
+	write(t, filepath.Join(clone, "mnt", "db", "ibdata"), "rows\n", 0o644)
+	write(t, filepath.Join(clone, remote.SnapshotComplete), cut+"\n", 0o600)
+	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || !strings.Contains(out, "finishing snapshot "+cut) || !fileExists(filepath.Join(snaps, cut, "data", "mnt.storage.tar.zst")) || fileExists(clone) {
+		t.Errorf("the cut take not finished from its clone (%d):\n%s", code, out)
+	}
+
+	// A release's snapshot, cloned.
+	s2 := newSyncSetup(t)
+	s2.snapshotted("prod", "true", false)
+	s2.releaseProd(nil)
+	s2.logs()
+	if out, code := s2.run(reflink, "@prod", "--release"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+	docker, _ = s2.logs()
+	snaps2 := snapshotPaths{snaps: filepath.Join(s2.root, "shop", "prod", "snapshots")}
+	for start := time.Now(); len(releaseSnapshots(snaps2)) == 0 && time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+	}
+	if rs := releaseSnapshots(snaps2); len(rs) != 1 || !strings.Contains(docker, "-clone ") {
+		t.Errorf("a release's snapshot, cloned: %+v\n%s", rs, docker)
+	}
+}

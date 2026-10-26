@@ -70,6 +70,119 @@ func takeMirror() (mirror, refused bool) {
 	return true, false
 }
 
+// fileText is path's content, "" when it cannot be read.
+func fileText(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
+}
+
+// snapshotCheckCopy is snapshotCheck for the way the take copies d,
+// saying it: a clone by reflinks, else the mirror or none, warned when
+// the server refused a mirror asked for.
+func snapshotCheckCopy(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) error {
+	how := takeCopy(ctx, cwd, p, d)
+	switch _, refused := takeMirror(); {
+	case how == "reflink":
+		report.Info("the data clones by reflinks: the services stop for the clone, seconds")
+	case refused:
+		report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
+	}
+	return snapshotCheck(ctx, p, d, how == "mirror")
+}
+
+// snapshotClone, in the environment's own snapshots/ directory (the
+// release root's filesystem, whatever the snapshot root), holds a take's
+// reflink clone of the data while its tars are made: <id>/mnt, <id>/volumes
+// and <id>/.devopsy-complete once the stopped pass completed it.
+const snapshotClone = ".clone"
+
+// clone is the clones' directory.
+func (p snapshotPaths) clone() string { return filepath.Join(p.base, "snapshots", snapshotClone) }
+
+// takeCopy is how a take copies d: reflink when every entry and volume
+// clones into the clone's place by reflinks (reflinks), else mirror when
+// it keeps one (takeMirror), else none. Reflinks need no mirror: a take
+// that clones removes one left over.
+func takeCopy(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) string {
+	if reflinks(ctx, cwd, p, d) {
+		return "reflink"
+	}
+	if mirror, _ := takeMirror(); mirror {
+		return "mirror"
+	}
+	return "none"
+}
+
+// reflinks says whether d's entries and volumes clone into the clone's
+// place by reflinks (the same XFS or btrfs, say): one regular file of
+// each tried with cp --reflink=always, as root in the util image, the
+// copy removed at once (an entry or volume without a file has nothing to
+// try). Read-only on the data; nothing stops.
+func reflinks(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) bool {
+	if len(d.entries)+len(d.volumes) == 0 {
+		return false
+	}
+	if err := os.MkdirAll(p.clone(), 0o700); err != nil {
+		return false
+	}
+	mounts, srcs := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", p.clone() + ":/c"}, []string{}
+	for _, e := range d.entries {
+		srcs = append(srcs, "/m/mnt/"+e)
+	}
+	for _, v := range d.volumes {
+		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
+		srcs = append(srcs, "/m/volumes/"+v.Key)
+	}
+	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", `t=/c/.reflink.$$
+for src; do
+  f=$(find "$src" -type f -print -quit 2>/dev/null) || f=
+  [ -n "$f" ] || continue
+  cp --reflink=always "$f" "$t" 2>/dev/null || { rm -f "$t"; exit 1; }
+  rm -f "$t"
+done`, "sh")
+	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-reflink", append(args, srcs...)...) == nil
+}
+
+// cloneData clones d into the clone's <id>, by reflinks, as root in the
+// util image (owners and modes kept: cp -a), then marks it complete.
+func cloneData(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData, id string) error {
+	dir := filepath.Join(p.clone(), id)
+	mounts := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", dir + ":/c"}
+	script := `set -e
+mkdir -p /c/mnt /c/volumes
+`
+	for _, e := range d.entries {
+		script += `cp -a --reflink=always "/m/mnt/` + e + `" /c/mnt/
+`
+	}
+	for _, v := range d.volumes {
+		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
+		script += `mkdir -p "/c/volumes/` + v.Key + `"
+cp -a --reflink=always "/m/volumes/` + v.Key + `/." "/c/volumes/` + v.Key + `/"
+`
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-clone", append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", script)...); err != nil {
+		return fmt.Errorf("the reflink clone: %w", err)
+	}
+	return os.WriteFile(filepath.Join(dir, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
+}
+
+// removeClone removes the clone of id (every clone, id ""), root's, as
+// root.
+func removeClone(ctx context.Context, cwd string, p snapshotPaths, id string) error {
+	target := "/s/" + snapshotClone
+	if id != "" {
+		target += "/" + id
+	}
+	if _, err := os.Lstat(filepath.Join(p.base, "snapshots", strings.TrimPrefix(target, "/s/"))); err != nil {
+		return nil
+	}
+	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unclone", "--network", "none", "-v", filepath.Join(p.base, "snapshots")+":/s", remote.UtilImage, "rm", "-rf", target)
+}
+
 // removeMirror removes the environment's mirror, root's, as root: a take
 // without one finds it left from when it had one.
 func removeMirror(ctx context.Context, cwd string, p snapshotPaths) error {
@@ -158,11 +271,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		if err != nil {
 			return fail(err.Error())
 		}
-		mirror, refused := takeMirror()
-		if refused {
-			report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
-		}
-		if err := snapshotCheck(ctx, p, d, mirror); err != nil {
+		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
 			report.Fail(err)
 			return 1
 		}
@@ -174,8 +283,9 @@ func runSnapshotStep(cwd string, args []string) int {
 		if err != nil {
 			return fail(err.Error())
 		}
-		if mirror, _ := takeMirror(); !mirror {
-			// No first pass: the stopped one writes the tars.
+		if takeCopy(ctx, cwd, p, d) != "mirror" {
+			// No first pass: the stopped one clones the data or writes the
+			// tars.
 			if err := removeMirror(ctx, cwd, p); err != nil {
 				return fail("removing the snapshots' mirror: " + err.Error())
 			}
@@ -269,11 +379,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			report.Info("no release snapshot: no service has data (" + cli.DataLabel + "=true)")
 			return 3
 		}
-		mirror, refused := takeMirror()
-		if refused {
-			report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
-		}
-		if err := snapshotCheck(ctx, p, d, mirror); err != nil {
+		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
 			report.Fail(err)
 			return 1
 		}
@@ -536,11 +642,15 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		names = append(names, s.Name)
 	}
 	set := cli.WithDependents(d.services, names, "snapshot")
-	mirror, _ := takeMirror()
+	how := takeCopy(ctx, cwd, p, d)
+	mirror := how == "mirror"
 	tmp := filepath.Join(p.snaps, id+".tmp")
 	stopped, restore, err := stopSetFor(cwd, set, true, id)
 	switch {
 	case err != nil:
+	case how == "reflink":
+		// A clone by reflinks: seconds whatever the size; the tars after.
+		err = cloneData(ctx, cwd, p, d, id)
 	case mirror:
 		err = copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-stopped")
 		if err == nil {
@@ -559,7 +669,10 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	}
 	undo := func() {
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
-		if !mirror {
+		switch how {
+		case "reflink":
+			_ = removeClone(context.Background(), cwd, p, id)
+		case "none":
 			_ = os.RemoveAll(tmp)
 		}
 	}
@@ -594,10 +707,10 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 			return fail(err.Error())
 		}
 	}
-	if err := writeSnapshotDir(cwd, p, d, tmp, id, rel, kind); err != nil {
+	if err := writeSnapshotDir(cwd, p, d, tmp, id, rel, kind, how); err != nil {
 		return fail(err.Error())
 	}
-	if !mirror {
+	if how == "none" {
 		// Complete already: the tar step only prunes.
 		if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
 			return fail(err.Error())
@@ -608,7 +721,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 }
 
 // writeSnapshotDir makes the snapshot's directory tmp but its tars.
-func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel, kind string) error {
+func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel, kind, how string) error {
 	if err := os.MkdirAll(filepath.Join(tmp, remote.SnapshotData), 0o700); err != nil {
 		return err
 	}
@@ -637,7 +750,7 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 		}
 	}
 	var m strings.Builder
-	fmt.Fprintf(&m, "format\t%s\nkind\t%s\nrelease\t%s\ntaken\t%s\n", remote.SnapshotFormat, kind, filepath.Base(rel), time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&m, "format\t%s\nkind\t%s\nrelease\t%s\ntaken\t%s\ncopy\t%s\n", remote.SnapshotFormat, kind, filepath.Base(rel), time.Now().UTC().Format(time.RFC3339), how)
 	for _, s := range d.data {
 		var es []string
 		for _, e := range s.Dirs {
@@ -692,7 +805,8 @@ func copyFile(from, to string) error {
 
 // manifest is a snapshot's manifest, read.
 type manifest struct {
-	format, kind, release, taken string
+	// copy is how the take copied the data: reflink, mirror or none.
+	format, kind, release, taken, copy string
 	entries, files               []string
 	volumes                      map[string]string
 	// services are its services with data, each with its entries and
@@ -718,6 +832,8 @@ func readManifest(dir string) (*manifest, error) {
 		switch {
 		case fs[0] == "format" && len(fs) > 1:
 			m.format = fs[1]
+		case fs[0] == "copy" && len(fs) > 1:
+			m.copy = fs[1]
 		case fs[0] == "kind" && len(fs) > 1:
 			m.kind = fs[1]
 		case fs[0] == "release" && len(fs) > 1:
@@ -766,7 +882,13 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 		return err
 	}
 	name := "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-tar"
+	// From its clone when it has one, else from the mirror.
+	clone := filepath.Join(p.clone(), id)
+	cloned := strings.TrimSpace(fileText(filepath.Join(clone, remote.SnapshotComplete))) == id
 	mount := []string{"-v", p.mirror + ":/m:ro"}
+	if cloned {
+		mount = []string{"-v", clone + ":/m:ro"}
+	}
 	for _, e := range m.entries {
 		report.Info("snapshot " + id + ": mnt/" + e)
 		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "mnt."+e+".tar.zst"), mount, "mnt", e); err != nil {
@@ -781,6 +903,11 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 	}
 	if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
 		return err
+	}
+	if cloned {
+		if err := removeClone(ctx, cwd, p, id); err != nil {
+			report.Warn("removing snapshot " + id + "'s clone: " + err.Error())
+		}
 	}
 	report.Info("snapshot " + id + " taken")
 	return nil
@@ -855,7 +982,8 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 		// Complete but for its tars: its manifest, written last, and the
 		// images listing a restore needs.
 		complete := fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && fileExists(filepath.Join(tmp, images.ListFile))
-		if complete && strings.TrimSpace(string(marker)) == id {
+		cloned := strings.TrimSpace(fileText(filepath.Join(p.clone(), id, remote.SnapshotComplete))) == id
+		if complete && (strings.TrimSpace(string(marker)) == id || cloned) {
 			report.Info("finishing snapshot " + id + ", cut off after its stopped pass")
 			if err := snapshotTar(cwd, p, id); err != nil {
 				return err
@@ -874,6 +1002,16 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 		report.Info("removing snapshot " + id + ", cut off before it was complete")
 		if err := removeSnapshotDir(cwd, p, tmp, 0); err != nil {
 			report.Warn(err.Error())
+		}
+	}
+	// A clone whose take is gone (renamed and its clone not removed, or
+	// removed with its .tmp) is nobody's.
+	clones, _ := os.ReadDir(p.clone())
+	for _, c := range clones {
+		if c.IsDir() && !fileExists(filepath.Join(p.snaps, c.Name()+".tmp")) {
+			if err := removeClone(context.Background(), cwd, p, c.Name()); err != nil {
+				report.Warn("removing a leftover clone: " + err.Error())
+			}
 		}
 	}
 	return nil
@@ -963,7 +1101,7 @@ func snapshotList(p snapshotPaths) {
 				state = "in progress"
 			}
 		}
-		lines = append(lines, strings.Join([]string{id, m.kind, m.release, m.taken, strconv.FormatInt(bytes, 10), state}, "\t"))
+		lines = append(lines, strings.Join([]string{id, m.kind, m.release, m.taken, strconv.FormatInt(bytes, 10), state, m.copy}, "\t"))
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(lines)))
 	for _, l := range lines {
@@ -1243,7 +1381,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	if code != 0 {
 		return code
 	}
-	type snap struct{ id, kind, release, taken, size, state string }
+	type snap struct{ id, kind, release, taken, size, state, copy string }
 	var snaps []snap
 	mirrored := strings.Contains(out.String(), "mirror\tkept\n")
 	// Lines one by one: a taken snapshot's state is empty, its line
@@ -1258,7 +1396,11 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		if tm, err := time.Parse(time.RFC3339, f[3]); err == nil {
 			taken = tm.UTC().Format("2006-01-02 15:04 UTC")
 		}
-		snaps = append(snaps, snap{f[0], f[1], f[2], taken, size(n), f[5]})
+		how := ""
+		if len(f) > 6 {
+			how = f[6]
+		}
+		snaps = append(snaps, snap{f[0], f[1], f[2], taken, size(n), f[5], how})
 	}
 	if len(words) == 0 {
 		if len(snaps) == 0 {
@@ -1273,10 +1415,13 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			}
 			fmt.Println(line)
 		}
-		if mirrored {
+		switch {
+		case snaps[0].copy == "reflink":
+			fmt.Println("the last take cloned the data by reflinks: down for seconds")
+		case mirrored:
 			fmt.Println("a mirror of the data is kept beside them: a take is down only for what changed since its first pass")
-		} else {
-			fmt.Println("no mirror: a take is down while its tars are written (snapshots: {mirror: true} keeps one)")
+		default:
+			fmt.Println("no mirror: a take is down while its tars are written (snapshots: {mirror: true} keeps one, reflinks need none)")
 		}
 		return 0
 	}
