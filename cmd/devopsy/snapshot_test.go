@@ -3051,3 +3051,28 @@ func TestRestoredStartsOnHeldImage(t *testing.T) {
 		t.Errorf("restored (%v): db started on its container's old image, never made again on the image its restored data is held on:\n%s\n%s", err, out, docker)
 	}
 }
+
+// A take stops every service with data and its dependents, then starts
+// them again: on data where a bind source already leads out of its entry
+// through a link (left by hand, or by a release before the mounts check
+// refused it), the start gate refuses that start, so the take must
+// refuse before it stops anything (principle: check everything before
+// changing anything), never leave the environment's services down after
+// a snapshot, a read-only operation.
+func TestSnapshotTakeRefusesLeavingBindsBeforeStopping(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	// app, without data, depends on db: a take stops it with db.
+	write(t, s.log+".shop-prod", "FAKE_APP=none\nFAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code := s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod"))
+	if stopped != "" {
+		t.Errorf("a take on data with a link out of its entry at a bind source (%d) left %q stopped:\n%s\n%s", code, stopped, out, docker)
+	}
+}
