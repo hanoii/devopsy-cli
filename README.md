@@ -29,8 +29,8 @@ code, so every project works the same way.
   plain `docker compose` sees what devopsy runs, but for the one file of
   devopsy's own a release adds on a server (`devopsy-compose.yaml`: the
   image each service was given, the ones held by digest).
-- **Not a local development tool like DDEV.** No per-framework setup, router
-  or snapshots: it runs the compose project you write.
+- **Not a local development tool like DDEV.** No per-framework setup or
+  router: it runs the compose project you write.
 - **Not a build system.** Images are built however you like: on the server
   by compose, or in CI and pushed to a registry.
 
