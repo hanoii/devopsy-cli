@@ -432,6 +432,55 @@ func TestCheckMounts(t *testing.T) {
 	}
 }
 
+// The mounts check and the start gate resolve a bind source's links as
+// the deploy user, and Docker resolves it as root. A directory below an
+// entry the deploy user cannot search hides a link in it from
+// resolvePath, which then takes the path as written, so a bind source
+// that leads out of its entry passes both, and Docker mounts that of the
+// host at the next start. Such a directory is an import's to make: a tar
+// is extracted as root with the modes and owners it carries (storage/priv
+// 0700, the app's UID, which then makes the link in it), and ownMnt
+// changes nothing of an entry nobody owns, below which a bind source is
+// allowed. The check must refuse, or fail, a bind source it cannot
+// resolve, never pass it.
+func TestLeavingBindsUnreadableDirectory(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root searches every directory: run as another user")
+	}
+	root := filepath.Join(t.TempDir(), "code")
+	dot := filepath.Join(root, ProjectDirName)
+	shared := filepath.Join(filepath.Dir(root), "shared")
+	priv := filepath.Join(shared, "mnt", "storage", "priv")
+	for _, d := range []string{priv, dot} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(shared, "mnt"), filepath.Join(dot, "mnt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(priv, "public")); err != nil {
+		t.Fatal(err)
+	}
+	// No search permission, as a 0700 directory of another user has none
+	// for the deploy user.
+	if err := os.Chmod(priv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(priv, 0o755) })
+	parsed, err := parseSyncServices([]byte(`{"services":{"app":{"volumes":[{"type":"bind","source":"`+dot+`/mnt/storage/priv/public","target":"/x","read_only":false}]}}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckMounts(parsed); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "storage/priv/public") {
+		t.Errorf("a bind source a link leads out of its entry, in a directory the deploy user cannot search: the mounts check lets Docker mount the host's root: %v %q", err, report.Details(err))
+	}
+	if err := CheckLeavingBinds(parsed, nil, "the start"); err == nil {
+		t.Errorf("a bind source a link leads out of its entry, in a directory the deploy user cannot search: the start gate lets Docker mount the host's root")
+	}
+}
+
 // Compose lists the implicit dependencies under depends_on too (as
 // docker compose v5.5.0 prints a.network_mode service:db, b.links,
 // c.volumes_from, and d's required: false), so they count for the
