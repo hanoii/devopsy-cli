@@ -941,10 +941,10 @@ the secrets its compose file requires), the mounts check refuses
   release, and the next one replaces it. Read-only ones, configuration
   shipped with the release, are fine, and so are files from `shared/`
   linked into it;
-- data copied as `volumes` (`devopsy.data=true`, the default copy) or
-  `devopsy.mnt.owner` on a service that mounts no entry of `mnt`
-  (writable, for the owner), or whose
-  `devopsy.data.exclude` leaves all of them out: a sync would copy
+- data copied as `volumes` (`devopsy.data=true`, the default copy) on
+  a service that mounts no entry of `mnt` and no named volume, or whose
+  `devopsy.data.exclude` leaves all of them out, and `devopsy.mnt.owner`
+  on one that mounts no entry of `mnt` writable: a sync would copy
   nothing of it, and a child's first release go live on empty data;
 - one entry written by services with different owners;
 - `./mnt` whole as a data or owned entry, refused wherever labels are
@@ -1125,8 +1125,10 @@ checkout's). What moves is what the labels say:
   read it, the child's service up (devopsy starts it, alone, unless it
   stopped it); the file goes afterwards. A cut export never reaches the
   import. One service after the other, in compose's `depends_on` order
-  (dependencies first). Both sides must copy the service as `custom`, or
-  the parent refuses before it stops anything. A label from an inherited
+  (dependencies first). A service the parent streams must be `custom` on
+  the child too, and one the child streams must not be copied as files
+  (`volumes`) on the parent, or the parent refuses before it stops
+  anything. A label from an inherited
   variable (`devopsy.data.copy=${DATA_DATABASE:-volumes}`, `inherit:
   [DATA_DATABASE]`) follows the parent's in the same sync: change it on
   the parent, then `--sync`.
@@ -1154,8 +1156,9 @@ anything of its own, the parent looks at the child's services and
 refuses when one that mounts a copied entry is still running there,
 copied as `custom` or `none`, or without data (one the child stopped is
 not running; `volumes` on the child says a running copy is wanted). The child restores
-its services, nothing was copied. A service streamed on one side and not
-the other is refused the same way (a label the child sets in its own
+its services, nothing was copied. A service the parent streams that the
+child does not, or one the child streams that the parent copies as
+files, is refused the same way (a label the child sets in its own
 `shared/.env` can still differ).
 
 **Images with the data.** A copy of a pulled data service's files
@@ -1307,7 +1310,8 @@ and no other environment on the child's server is touched. On a first
 release this happens before the upload, so the variables check finds
 them (they stay if the sync fails: the next release is a first one
 again). On `--sync` and a later `--release-sync` it happens before the
-copy too, into a pending file (`<environment>/.devopsy-sync.inherit.env`)
+copy too, into a pending file (`<environment>/.devopsy-sync.inherit.<sync id>.env`,
+one per sync)
 that everything the sync runs on the child reads in place of
 `shared/inherit.env`, labels included, so a label from an inherited
 variable follows the parent's in the same sync; once the copy is in it
@@ -1839,8 +1843,10 @@ lists them with their contracts):
     child's: `go` once it completed, even when a service of the parent's
     did not come back (that fails the command, said). Its data is never
     written, and its stopped services are started again. The child's says what the copy did
-    to its data: `go`, complete; `abort`, nothing of the parent's written;
-    `partial`, written in part (Logs and failures, above). After `go` and
+    to its data: `go`, complete; `abort`, nothing of the parent's written,
+    on data that was complete; `partial`, written in part, or nothing
+    written onto data an earlier sync, an import or a restore left
+    incomplete (Logs and failures, above). After `go` and
     `abort` devopsy has started its stopped services and waited for them
     to be healthy; after `partial` they stay down, and the hook must not
     start them. On the child after `go` it is where a copy of production

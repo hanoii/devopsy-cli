@@ -545,15 +545,17 @@ from the parent's as ssh -G resolves it locally (no ProxyCommand or ProxyJump).
 A CI key needs restrict,agent-forwarding,port-forwarding (--ssh-keys add --restricted).
 
 The parent comes from the child's instance and the usual server variables
-(DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), else the child's server. Before
-copying, the variables the parent's inherit: names are copied from its
-server's .env files into the child's, at the same level (shared/.env, the
-instance's or the project's .env); names are printed, never values. On a
-re-sync they go to a pending file the sync reads (labels from them follow
-the parent's at once) and replace shared/inherit.env once the copy is in.
+(DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
+without one the sync fails naming the variable, or --from names it.
+Before copying, the variables the parent's inherit: names are read from
+its server's .env files (shared/.env, then the instance's and the
+project's, nearest first) and written as the child's shared/inherit.env;
+names are printed, never values. On a re-sync they go to a pending file
+the sync reads (labels from them follow the parent's at once) and
+replace shared/inherit.env once the copy is in.
 
 The data capability (capabilities/data): prepare and finish on both
-sides, export on the parent's and import on the child's for the stream
+sides, export on the parent's and import on the child's for the custom
 services (devopsy --debug capabilities). Asks for the environment's name,
 unless --yes. The log goes with the current release: devopsy @<target>
 --log. One service alone, from anywhere to anywhere: --export, --import.
@@ -571,8 +573,8 @@ nothing else fixes: a sync or an import that did not complete, a copy
 of what the parent no longer has.
 
   --from @<target>  start over from another environment of the project
+  --accept-image <service>,...  as for --sync
   --yes             do not ask for the environment's name (CI)
-  -- args...        as for --sync
 
 Everything a sync checks comes first, and the child is wiped only at
 its first write: a parent that refuses or cannot be reached leaves it
@@ -584,23 +586,25 @@ name, unless --yes.
 `,
 	"--export": `Usage: devopsy [@<target>] --export <service>
 
-Writes a service's data to stdout, the way its devopsy.data label says;
+Writes a service's data to stdout, the way its devopsy.data.copy label says;
 everything devopsy says goes to stderr. With a target, in its current
 release on the server, under a shared hold of its release lock (a
 release waits) and its sync lock (a sync from it waits), the data coming
 through SSH.
 
-  devopsy.data=stream  the data capability's export <service> (a dump)
-  devopsy.data=mnt     a tar of the entries of .devopsy/mnt it mounts
-                       (devopsy.data.exclude honored), made as root in
-                       devopsy-util with numeric owners and modes
+  custom   the data capability's export <service> (a dump)
+  volumes  a tar of the entries of .devopsy/mnt it mounts and its named
+           volumes (devopsy.data.exclude honored), made as root in
+           devopsy-util with numeric owners and modes: files,
+           directories and links only
 
 Stopped meanwhile, then started again: the service when it is labeled
 devopsy.data.stop=own or always, every always service, and what depends
 on those (devopsy says what and why). An export of a database labeled
 own, copied as files, stops its app too.
 
-A service without data is refused. --import reads what --export writes,
+A service without data (no devopsy.data=true), or with
+devopsy.data.copy=none, is refused. --import reads what --export writes,
 so data goes from one environment to another without a project command:
 
   devopsy @prod --export database | devopsy --import database
@@ -612,21 +616,21 @@ so data goes from one environment to another without a project command:
        devopsy @<target> --import <service> --resolved [--yes]
 
 Replaces a service's data with stdin, what --export wrote, the way its
-devopsy.data label says. stdin goes to a file first (under .devopsy/
+devopsy.data.copy label says. stdin goes to a file first (under .devopsy/
 locally, next to the environment on a server); only once it is all there
 does anything change, and the file is removed afterwards.
 
-  devopsy.data=stream  the data capability's import <service> reads it,
-                       with the service brought up first (--no-deps)
-                       unless stopped, and down again after if it was
-  devopsy.data=mnt     a tar: each entry of mnt it carries is emptied,
-                       then extracted as root in devopsy-util, owners and
-                       modes as they were, and an entry its labels own
-                       given to its owner (devopsy.mnt.owner). A
-                       truncated tar, or one carrying entries the service
-                       does not mount, changes nothing
+  custom   the data capability's import <service> reads it, with the
+           service brought up first (--no-deps) unless stopped, and
+           down again after if it was
+  volumes  a tar: each entry of mnt and named volume it carries is
+           emptied, then extracted as root in devopsy-util, owners and
+           modes as they were, and an entry its labels own given to its
+           owner (devopsy.mnt.owner). A truncated tar, one carrying
+           entries the service does not mount, or one whose links make
+           a bind source lead out of its entry, changes nothing
 
-An mnt tar from --export carries the images that ran on the data. On a
+A volumes tar from --export carries the images that ran on the data. On a
 target, a service whose image is pulled is checked against them before
 anything stops, as a sync checks its parent's: the export's image, or
 the same name, goes on, held on the export's image once the data is in;
