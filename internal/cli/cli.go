@@ -811,9 +811,11 @@ Takes a snapshot of the environment: the data of every service with data
 (devopsy.data=true: its entries of mnt and named volumes, as files,
 whatever its copy label), the current release's code and the images
 that ran on them, and its shared/.env. Every service with data, and what
-depends on it, is stopped for the moment of the copy, all together,
-while the compressed tars are written (the downtime). With the
-environment's snapshots: {mirror: true} a mirror of the data is kept
+depends on it, is stopped for the moment of the copy, all together.
+Where the data clones by reflinks (XFS, btrfs), the copy is a clone,
+seconds, and the tars are made from it afterwards. Otherwise the
+compressed tars are written while stopped (the downtime), unless the
+environment's snapshots: {mirror: true} keeps a mirror of the data
 beside the snapshots: the data is first copied into it while everything
 runs, then again stopped, only what changed since (the downtime), and
 the tars are made from it afterwards, nobody waiting.

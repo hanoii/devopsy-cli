@@ -84,7 +84,9 @@ defaults:
   # to the default. mirror: true keeps a copy of the data beside the
   # snapshots, so a take is down only for what changed since its first
   # pass (files that rarely change); off by default, each take down
-  # while its tars are written, and nothing kept but them. release: a
+  # while its tars are written, and nothing kept but them. Where the
+  # data clones by reflinks, takes clone it instead, whatever this says,
+  # and a mirror goes. release: a
   # snapshot of the data each release replaces, taken right before its
   # switch, belonging to the release before (off by default; keep 1,
   # or all: every one whose release is kept; never with releases: keep:

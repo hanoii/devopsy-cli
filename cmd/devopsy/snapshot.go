@@ -84,6 +84,12 @@ func snapshotCheckCopy(ctx context.Context, cwd string, p snapshotPaths, d *snap
 	switch _, refused := takeMirror(); {
 	case how == "reflink":
 		report.Info("the data clones by reflinks: the services stop for the clone, seconds")
+		// The clone shares the data's blocks only until the services write
+		// over them, then takes room of its own on the data's filesystem
+		// while the tars are made: said when that room is short.
+		if data, err := duData(ctx, d); err == nil && freeBytes(p.clone()) < data {
+			report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while its tars are made", size(freeBytes(p.clone())), size(data), p.clone()))
+		}
 	case refused:
 		report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
 	}
