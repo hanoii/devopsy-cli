@@ -2193,6 +2193,65 @@ func TestSnapshotFIFORestores(t *testing.T) {
 	}
 }
 
+// A snapshot's symbolic links may lead anywhere, but not where Docker
+// follows them on the host: a bind source below an entry nobody owns
+// (allowed: such an entry is the deploy user's, written from the host,
+// the mounts check's decided scope). An imported snapshot is anyone's
+// tar (--snapshots import checks it as a restore does, anyTarget), and a
+// --no-code restore runs none of its code: its tar making
+// mnt/storage/public, which web bind-mounts, a link to / has Docker
+// mount the host's root (or /var/run, with the Docker socket) into that
+// container at its next start. Before anyTarget the restore's check
+// refused it, as an import's does.
+func TestRestoreLinkAtBindSource(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	// app has data in mnt/storage (no owner) and binds mnt/storage/public
+	// too, as a web server beside it would.
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	// The snapshot's tar of storage, as a crafted one has it (the fake's
+	// tars are plain): storage/public -> /.
+	tarFile := filepath.Join(s.root, "shop", "prod", "snapshots", m[1], "data", "mnt.storage.tar.zst")
+	data, err := os.ReadFile(tarFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	for tr := tar.NewReader(bytes.NewReader(data)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(tw, tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "storage/public", Typeflag: tar.TypeSymlink, Linkname: "/", Mode: 0o777}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	write(t, tarFile, b.String(), 0o600)
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
+		t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
+	}
+}
+
 // A restore with release snapshots on whose data step refuses, nothing
 // restored (here mnt/storage a file now, a directory in the snapshot),
 // leaves the services running: what its snapshot of the data it replaces
