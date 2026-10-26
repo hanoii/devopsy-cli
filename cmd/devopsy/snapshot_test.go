@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
@@ -549,5 +550,37 @@ func TestSnapshotImportLeftover(t *testing.T) {
 	}
 	if fileExists(left) {
 		t.Errorf("the killed import's directory left behind: %s", left)
+	}
+}
+
+// A take killed outright after its stopped pass, before it bookmarked
+// the release's images: the next take finishes its .tmp from the mirror
+// when the manifest is there. What it finishes must restore (a snapshot
+// without the release's images listing cannot), else it is no snapshot.
+func TestSnapshotLeftoverWithoutListing(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+	left := remote.NextReleaseID(time.Now(), []string{m[1]})
+	if out, err := exec.Command("cp", "-a", filepath.Join(snaps, m[1]), filepath.Join(snaps, left+".tmp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	os.Remove(filepath.Join(snaps, left+".tmp", images.ListFile))
+	write(t, filepath.Join(snaps, remote.SnapshotMirror, remote.SnapshotComplete), left+"\n", 0o600)
+	s.logs()
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 {
+		t.Fatalf("the take after it (%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(snaps, left)) {
+		return
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", left, "--yes"); code != 0 {
+		t.Errorf("the finished snapshot %s is listed but does not restore (%d):\n%s", left, code, out)
 	}
 }
