@@ -414,18 +414,33 @@ before changing anything".
   `data-copy`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
-- **The mounts check's words after `restored` are a named feature,
-  `leaving-binds`** (`restart` for the restart after a failed run step,
-  a restore's snapshot), and **the util image's tag is one,
-  `util-image-<n>`** (found by `UtilImage` in a script's text): an older
-  devopsy refused the words as usage after the switch, so the previous
-  release was never restarted, and readied its own tag where a sync's
-  receive ran this one's after its claim, the copy counted as cut
-  (review after v0.52.0). Every activation needs the first; `childNeeds`
-  carries the second to the child's first session, so an older child
-  refuses before anything stops. An older parent's receive on a newer
-  child cannot be caught by the newer side: upgrade parents and children
+- **What came with v0.52.0 is under `release-snapshots`, which v0.52.0
+  reports:** the mounts check's words after `restored` (`restart`, a
+  restore's snapshot) and `devopsy-util:3` in a script's text (bump it
+  in `namedFeatures` with `UtilImage`). A v0.51.0 devopsy refused the
+  words as usage after the switch (the previous release never
+  restarted) and readied its own util tag where a sync's receive ran
+  this one's after its claim (the copy counted as cut); names of their
+  own refused every v0.52.0 server, which runs both (review after
+  v0.52.0). Every activation needs it, and `childNeeds` carries the tag
+  to the child's first session. `reset-holder` is a reset's holder's
+  (`SyncResetEnv` in its text): a v0.52.0 child's prepare ran the start
+  gate's check under a reset and refused the reset it named as the way
+  out. An upload checks its activation's needs too
+  (`remote.WithAlsoNeeds`): refused only at the activation, a pending
+  release and an instance's directory were left. Not caught by the
+  newer side, accepted: an older parent's receive on a newer child runs
+  the older util tag after its claim; upgrade parents and children
   together.
+- **What an older operator's scripts leave out, the server does
+  itself:** a child's `finish go` keeps a restore's mark unless the
+  record has this sync's `CheckedLine` (an older holder took a plain
+  done line for go); `--images` counts a bookmark tagged
+  `<prefix>s<id>` as this environment's snapshot's by its name
+  (`snapshotBookmark`: an older script exports no `SnapshotsEnv`, and a
+  rollback left a built name on the newer image); `--destroy-data`
+  removes the snapshots, their bookmarks and directory, wherever the
+  snapshot root puts them (`snapshotsOf`: an older script never did).
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
