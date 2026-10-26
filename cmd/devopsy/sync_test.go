@@ -275,6 +275,10 @@ case "$*" in
   # A snapshot's tar, decompressed (the fake's are plain tars) into the
   # FIFO of -v <dir>:/o.
   "run --rm --name devopsy-snapshot-"*"-check "*)
+    # FAKE_STALE_CHECK: a check's container a devopsy killed outright
+    # left, blocked on opening its FIFO: Docker refuses the name until
+    # that container is removed (rm -f), as for any name in use.
+    [ -z "${FAKE_STALE_CHECK:-}" ] || grep -q " rm -f .*-check$" "$DOCKER_LOG" || { echo "docker: Error response from daemon: Conflict. The container name \"/$4\" is already in use by container \"stale\"." >&2; exit 125; }
     for a; do case $a in *:/s:ro) sd=${a%:/s:ro} ;; *:/o) o=${a%:/o} ;; esac; done
     exec cat "$sd/$last" >"$o/tar" ;;
   "run --rm --name devopsy-snapshot-"*"-stale "*)

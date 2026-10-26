@@ -2571,6 +2571,33 @@ func TestReleaseSnapshotTarListedInProgress(t *testing.T) {
 	}
 }
 
+// A restore's check reads each tar through a FIFO its util container
+// writes (unzstd). A devopsy killed outright (SIGKILL, its group killed)
+// after docker run started but before the container opened the FIFO
+// leaves that container blocked on the open for good: no reader comes,
+// --rm never fires, and it keeps the check's name, which is the same for
+// every check of that snapshot (no pid in it). Every later check of the
+// snapshot must still run, as an import's extracting containers do
+// (dockerRunFresh: one of that very name removed first), else the
+// snapshot cannot be restored or imported until someone runs docker rm
+// -f by hand. FAKE_SAME_NAME lists a container of the exact name asked
+// for, FAKE_STALE_CHECK refuses the name until it is removed.
+func TestSnapshotCheckStaleContainer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+	out, code = s.run([]string{"FAKE_STALE_CHECK=1", "FAKE_SAME_NAME=1"}, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a restore with a stale check container of its name left (%d):\n%s", code, out)
+	}
+}
+
 // A take is one consistent moment of the data it holds: a service with no
 // data label that mounts one of its entries writable (a worker writing
 // app's files, db here, with app's mnt/db) and depends on no service
