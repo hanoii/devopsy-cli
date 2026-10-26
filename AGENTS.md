@@ -2353,7 +2353,8 @@ settled every rule here after nine reviews (2026-10-25).
   archive/tar to its end-of-archive blocks, since GNU tar takes a stream
   cut at a member's boundary for complete: round 2), checked whole as a restore checks (`imported`),
   renamed under a new id, its images bookmarked where the server has
-  them. Images stay out of exports (a member of the outer tar needs its
+  them, a release snapshot made a manual one (its release is not there,
+  and pruning would take it for one whose release went: review). Images stay out of exports (a member of the outer tar needs its
   size first, so `docker save` would spool gigabytes on the server): a
   restore pulls the pulled ones by digest and builds the
   built ones from the snapshot's code.

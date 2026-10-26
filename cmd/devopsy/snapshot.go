@@ -1750,6 +1750,15 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 		}
 	}
 	id := remote.NextReleaseID(time.Now(), ids)
+	// Imported, it is a snapshot someone chose to bring, as a take is: a
+	// release snapshot's release is not here, and pruning would take it for
+	// one whose release went.
+	if m.kind != "manual" {
+		mf := filepath.Join(dir, remote.SnapshotManifest)
+		if err := os.WriteFile(mf, []byte(strings.Replace(fileText(mf), "\nkind\t"+m.kind+"\n", "\nkind\tmanual\n", 1)), 0o600); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(dir, filepath.Join(p.snaps, id)); err != nil {
 		return err
 	}
