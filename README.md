@@ -1032,9 +1032,10 @@ it is ignored, so a variable can flip `devopsy.data` and keep it.
 entries of `mnt` or named volumes (by key) it mounts that are not
 copied through it anyway: an access log next to the site's files
 (`./mnt/logs`), a cache in a volume. On a service
-without data it is ignored. The entries a service with data mounts
-cannot have whitespace in their names or start with a dash: copies and
-snapshots refuse them.
+without data it is ignored. The entries a service with data mounts,
+and its named volumes' keys, cannot have whitespace in their names or
+start with a dash, nor an entry a `devopsy.mnt.owner` owns: releases,
+copies and snapshots refuse them.
 
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:
@@ -1505,7 +1506,8 @@ from the clone afterwards, nobody waiting; the clone then goes, and a
 mirror left from before with it. `--snapshots` says how the last take
 copied. A snapshot holds files, directories and symbolic links
 (wherever they lead, an app's absolute ones included: a restore makes
-them as they were and follows none), sparse files with their holes:
+them as they were and follows none, and refuses one where a service
+bind-mounts a path, which Docker would follow), sparse files with their holes:
 FIFOs, sockets and device nodes are left out (no restore takes them),
 and hard links come back as files of their own. Plain
 `tar.zst` files, one per entry or volume, restorable by hand

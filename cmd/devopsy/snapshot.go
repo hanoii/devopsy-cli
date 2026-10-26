@@ -1861,6 +1861,14 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
+	// The bind sources below entries of the code that will run (cwd: the
+	// current release for --no-code, the restored one for a full
+	// restore): a link the snapshot puts at one, or above one, is one
+	// Docker would follow on the host at the service's next start.
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		return err
+	}
 	for _, t := range snapshotTars(m) {
 		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+composeName(cwd)+"-"+filepath.Base(snap)+"-check")
 		if err != nil {
@@ -1881,6 +1889,8 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 			// A take names members plainly; the extraction matches by that
 			// name alone (GNU tar takes ./storage/x only by ./storage).
 			err = errors.New("it names " + t.name + "'s members otherwise than " + t.name + "/...")
+		case t.volume == "":
+			err = linkAtBind(es[0].links, services)
 		}
 		if err != nil {
 			return fmt.Errorf("snapshot %s's %s: %v: nothing restored", filepath.Base(snap), t.file, err)
@@ -1890,6 +1900,25 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
 	if err := set.SnapshotPull(snap, string(data)); err != nil {
 		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
+	}
+	return nil
+}
+
+// linkAtBind refuses a snapshot's symbolic link (links, clean names
+// under mnt) at a bind source of services or above one: a snapshot's
+// links may lead anywhere (tarEntriesIn's anyTarget), and Docker
+// resolves a bind source on the host, so storage/public -> / mounts the
+// host's root into the service binding ./mnt/storage/public (review:
+// the mounts check allows a bind below an entry nobody owns).
+func linkAtBind(links []string, services []cli.SyncService) error {
+	for _, s := range services {
+		for _, b := range s.Binds {
+			for _, l := range links {
+				if b == l || strings.HasPrefix(b, l+"/") {
+					return fmt.Errorf("%w: %s is a symbolic link where %s bind-mounts mnt/%s, which Docker would follow on the host", errOutside, l, s.Name, b)
+				}
+			}
+		}
 	}
 	return nil
 }

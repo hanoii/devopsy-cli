@@ -1504,7 +1504,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   not validated, so a variable can flip `devopsy.data` and keep it. A
   data service's entry with whitespace in its name is refused: the child's list, exclude and rsync modules name
   entries split by spaces (decided over a new list format); one starting
-  with a dash too (an owned one as well), since find, chown and tar take
+  with a dash too (an owned one as well, and a data service's volume
+  key), since find, chown and tar take
   entries as arguments (decided over `./` prefixes in every tool: a
   snapshot's take failed on find's predicate, review).
 - **The child guard: each side reads its own labels, and the parent
@@ -2011,7 +2012,9 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   leads only into the entry or the throwaway container. Cost: the spool
   is read once per entry. The spool (a snapshot's restore: its
   `.tar.zst`, decompressed there) is mounted read-only into the
-  container and read there, never sent on its stdin: Docker's stream
+  container and read there (what tar leaves past its end blocks
+  drained, or zstd's SIGPIPE failed the pipe: a tar of large records,
+  review), never sent on its stdin: Docker's stream
   ran at 8 MB/s on a small DigitalOcean Droplet, a restore of 1 GiB
   down 131 s against some 9 (measured 2026-10-26). An entry that is a
   symlink is refused both ways: tar carries only the link (an export
@@ -2343,8 +2346,13 @@ settled every rule here after nine reviews (2026-10-25).
   target, which is the data's own wherever it leads (`anyTarget`:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
-  made every snapshot unrestorable), one entry per tar, of the
-  manifest's kind, its members named plainly as a take names them: the
+  made every snapshot unrestorable), but none at or above a bind
+  source of the code that will run (`linkAtBind`: Docker resolves a
+  bind source on the host, and the mounts check allows one below an
+  entry nobody owns; review round 2: an imported snapshot's
+  `storage/public -> /` mounted the host's root), checked in that code
+  (`$code` for a full restore, current for `--no-code`), one entry per
+  tar, of the manifest's kind, its members named plainly as a take names them: the
   extraction matches by that name alone; a data image gone pulled by its
   digest in the service's own repository as the snapshot's listing names
   it, what the hold then takes: `SnapshotPull`, `ownHolds`, never a

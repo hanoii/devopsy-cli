@@ -503,6 +503,8 @@ type tarEntry struct {
 	// volume is the named volume the entry is, by the service's labels
 	// (its key is name): extracted into it, never into mnt.
 	volume *cli.Volume
+	// links are its symbolic links' names, clean (storage/public).
+	links []string
 }
 
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
@@ -587,6 +589,9 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 		}
 		if form := strings.TrimSuffix(h.Name, "/")[:len(h.Name)-len(p)+len(top)]; !slices.Contains(e.forms, form) {
 			e.forms = append(e.forms, form)
+		}
+		if h.Typeflag == tar.TypeSymlink {
+			e.links = append(e.links, path.Clean(p))
 		}
 		if strings.TrimSuffix(p, "/") == top && h.Typeflag != tar.TypeDir {
 			e.file = true
@@ -853,7 +858,10 @@ if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
 case $src in
-  *.zst) zstd -dcq -- "$src" | tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+  *.zst)
+    # What tar leaves unread past its end blocks (a tar of large records)
+    # is drained: zstd killed by SIGPIPE would fail the pipe.
+    zstd -dcq -- "$src" | { s=0; tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" || s=$?; cat >/dev/null; exit "$s"; } ;;
   *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
 esac
 `

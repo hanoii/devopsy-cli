@@ -896,8 +896,9 @@ done
 	}
 	if restore != nil {
 		// The snapshot's tars read and checked whole, before anything
-		// stops (devopsy's own, still checked: they sit on disk).
-		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "check-tars"}, false) + " \"$snap\") || not_live 1\n"
+		// stops (devopsy's own, still checked: they sit on disk), in the
+		// restored code, whose binds the restored data meets.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "check-tars"}, false) + " \"$snap\") || not_live 1\n"
 	}
 	if !rollback {
 		// The checks reading compose's configuration, which fails while a

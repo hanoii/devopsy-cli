@@ -494,6 +494,13 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it", name, d)
 				}
 			}
+			// A named volume's key, the same: a take's find and --export's
+			// tar name it as an argument (compose takes -data as a key).
+			for _, v := range cs.Volumes {
+				if strings.ContainsFunc(v.Key, unicode.IsSpace) || strings.HasPrefix(v.Key, "-") {
+					return nil, fmt.Errorf("service %s: the volume %s: a named volume a copy carries cannot have whitespace in its key or start with a dash: rename it", name, v.Key)
+				}
+			}
 		}
 		for dep := range s.DependsOn {
 			cs.DependsOn = append(cs.DependsOn, dep)
