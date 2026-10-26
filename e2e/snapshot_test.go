@@ -112,7 +112,8 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	if out, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:3 sh -c 'cd /tmp && zstd -dc /s/mnt.files.tar.zst | tar -xpf - --numeric-owner && tar -b 2048 --numeric-owner -cf - files | zstd -q' >"+snap+"/data/mnt.files.new && mv "+snap+"/data/mnt.files.new "+snap+"/data/mnt.files.tar.zst"); code != 0 {
 		t.Fatalf("remaking the files' tar with 1 MiB records: %s", out)
 	}
-	if out, code := srv(t, "rm -f snaptake/prod/shared/mnt/files/a.jpg"); code != 0 {
+	// The entry is its owner's: removed as the app would, in a container.
+	if out, code := srv(t, "docker run --rm -v \"$PWD/snaptake/prod/shared/mnt/files:/f\" busybox:1.37 rm -f /f/a.jpg"); code != 0 {
 		t.Fatalf("removing a.jpg: %s", out)
 	}
 	out, code = op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --no-code --yes")
