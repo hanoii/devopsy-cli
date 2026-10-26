@@ -1089,6 +1089,10 @@ exec 7<&-
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
+	if releaseSnap {
+		restart += `    [ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+`
+	}
 	// The entries of mnt created when missing and given to their owners
 	// (cli.MntOwnerLabel), right after the switch, from the labels of
 	// what is now current (a rollback's restored release's): it changes
@@ -1149,7 +1153,10 @@ fi
 		restoreDown = firstDown(projectName)
 	}
 	if releaseSnap {
-		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+		// Only once something started them: the run step, else the restart
+		// of the release before (below). A cut sync's copy or a failed
+		// restore keeps them down, its record saying so.
+		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
 `
 	}
 	s += `img ran "$base" "$rel" || true
