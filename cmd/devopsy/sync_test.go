@@ -3672,3 +3672,24 @@ func TestSyncResetWipesLeavingBind(t *testing.T) {
 		t.Errorf("a reset of a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v, cache there %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), fileExists(filepath.Join(s.mnt("dev"), "cache")), out, docker)
 	}
 }
+
+// An export on a target checks the start gate before it stops its set,
+// for the start that follows: with the set down already (app and db
+// exited) it stops nothing and starts nothing, so a link out of its
+// entry at a bind source is no reason to refuse the read of the data.
+func TestExportNothingRunningIgnoresLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".stopped.shop-prod", "app\ndb\n", 0o644)
+	s.logs()
+	stdout, errs, code := s.runIO(nil, nil, "@prod", "--export", "db")
+	docker, _ := s.logs()
+	if code != 0 || len(stdout) == 0 || strings.Contains(docker, " stop ") || strings.Contains(docker, " start ") {
+		t.Errorf("an export with its set down on data with a link out of its entry at a bind source (%d), %d bytes:\n%s\n%s", code, len(stdout), errs, docker)
+	}
+}
