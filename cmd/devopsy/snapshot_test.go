@@ -1030,29 +1030,34 @@ func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 // What the failed run step started must not be left running on it then,
 // under the restored release's config while current is the previous
 // release: either the previous release comes back, as after any failed
-// run step, or nothing runs, as the mark says.
+// run step, or nothing runs, as the mark says. A --no-code restore whose
+// run step fails stays marked too, and what that step started must not
+// run on the marked data either.
 func TestSnapshotRestoreRunFailsLeavesNothingHalf(t *testing.T) {
 	t.Parallel()
-	s := newSyncSetup(t)
-	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME\"\n[ -z \"${FAKE_UP_THEN_FAIL:-}\" ] || { devopsy up -d --wait app db; exit 3; }\n", 0o755)
-	s.releaseProd(nil)
-	out, code := s.run(nil, "@prod", "--snapshot")
-	m := snapshotID.FindStringSubmatch(out)
-	if code != 0 || m == nil {
-		t.Fatalf("take (%d):\n%s", code, out)
-	}
-	before := s.current("prod")
-	s.logs()
-	out, code = s.run([]string{"FAKE_UP_THEN_FAIL=1"}, "@prod", "--snapshots", "restore", m[1], "--yes")
-	docker, _ := s.logs()
-	if code == 0 || s.current("prod") != before {
-		t.Fatalf("a restore whose run step fails (%d), current %s (was %s):\n%s", code, s.current("prod"), before, out)
-	}
-	// Stopped or taken down (the fake's down records what it removed).
-	stopped := append(strings.Fields(readString(s.log+".stopped.shop-prod")), strings.Fields(readString(s.log+".down.shop-prod"))...)
-	restarted := strings.Contains(docker, "--release-steps restart run") || strings.Contains(out, "restarting "+strings.TrimPrefix(before, "releases/")+" with its own run step")
-	if !restarted && (!slices.Contains(stopped, "db") || !slices.Contains(stopped, "app")) {
-		t.Errorf("the previous release not restarted, and the failed run step's services left running on the restored data (stopped: %v), current %s:\n%s", stopped, s.current("prod"), out)
+	for _, args := range [][]string{{}, {"--no-code"}} {
+		s := newSyncSetup(t)
+		write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME\"\n[ -z \"${FAKE_UP_THEN_FAIL:-}\" ] || { devopsy up -d --wait app db; exit 3; }\n", 0o755)
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("take (%d):\n%s", code, out)
+		}
+		before := s.current("prod")
+		s.logs()
+		out, code = s.run([]string{"FAKE_UP_THEN_FAIL=1"}, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		docker, _ := s.logs()
+		mark := readString(filepath.Join(s.root, "shop", "prod", remote.SyncIncompleteFile))
+		if code == 0 || s.current("prod") != before || !strings.Contains(mark, "\t"+remote.IncompleteRestore+"\t") {
+			t.Fatalf("%v: a restore whose run step fails (%d), current %s (was %s), mark %q:\n%s", args, code, s.current("prod"), before, mark, out)
+		}
+		// Stopped or taken down (the fake's down records what it removed).
+		stopped := append(strings.Fields(readString(s.log+".stopped.shop-prod")), strings.Fields(readString(s.log+".down.shop-prod"))...)
+		restarted := strings.Contains(docker, "--release-steps restart run") || strings.Contains(out, "restarting "+strings.TrimPrefix(before, "releases/")+" with its own run step")
+		if !restarted && (!slices.Contains(stopped, "db") || !slices.Contains(stopped, "app")) {
+			t.Errorf("%v: the environment marked, and the failed run step's services left running on the restored data (stopped: %v), current %s:\n%s", args, stopped, s.current("prod"), out)
+		}
 	}
 }
 
