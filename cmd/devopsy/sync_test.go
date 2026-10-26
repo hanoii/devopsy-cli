@@ -2875,6 +2875,29 @@ func TestSyncImportCancelled(t *testing.T) {
 	}
 }
 
+// A sync copies the parent's symbolic links as they are, and the child's
+// services start on them. Here mnt/storage/public, a bind source of app
+// below an entry nobody owns (as a web server beside it binds), is a link
+// to / in the parent's data (its app wrote it, or a restored snapshot's
+// data had it): Docker mounts the host's root at the child's next start.
+// A release and a rollback refuse such a bind over such a link (the
+// mounts check); the data a sync brings must not start without the same
+// check.
+func TestSyncLinkAtBindSource(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels("FAKE_APP_MOUNT2=/storage/public")
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run(nil, "@dev", "--release")
+	docker, _ := s.logs()
+	if target, err := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "public")); code == 0 && err == nil && target == "/" {
+		t.Errorf("the child's first release (%d) went live with mnt/storage/public, a bind source of app below its entry, the parent's link to %s: Docker mounts that path of the host:\n%s\n%s", code, target, out, docker)
+	}
+}
+
 // A child's first release with a stream and an rsync service left
 // running: the stream's import keeps its new container up, and finish
 // creates every labeled service before its hook, which sanitizes through
