@@ -96,8 +96,10 @@ func SnapshotScript(t *Target, projectName string, keep int) string {
 		}
 		return s
 	}
+	// Each step in the release current is when it starts: a release may
+	// switch current while the first pass runs, with no lock held.
 	step := func(word string, shellArgs ...string) string {
-		return `( ` + call(word, shellArgs, true) + ` ) &
+		return `( cd "$base/current" && ` + call(word, shellArgs, true) + ` ) &
 sb_pid=$!
 trap 'kill -TERM "$sb_pid" 2>/dev/null || true' INT TERM HUP
 sb=0
@@ -251,8 +253,7 @@ mkdir -p "$snaps"
 ` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"
 rm -rf "$tmp"
 mkdir -p "$tmp"
-cd "$base/current"
-devopsy ` + StdinGuardFlag + ` | ` + devopsyCall(projectName, []string{SnapshotStepFlag, "receive"}, false) + ` "$tmp" || { rm -rf "$tmp"; exit 1; }
-` + devopsyCall(projectName, []string{SnapshotStepFlag, "imported"}, false) + ` "$tmp" || { s=$?; rm -rf "$tmp"; exit "$s"; }
+devopsy ` + StdinGuardFlag + ` | (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "receive"}, false) + ` "$tmp") || { rm -rf "$tmp"; exit 1; }
+(cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "imported"}, false) + ` "$tmp") || { s=$?; rm -rf "$tmp"; exit "$s"; }
 `
 }

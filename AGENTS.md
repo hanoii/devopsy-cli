@@ -2217,6 +2217,11 @@ settled every rule here after nine reviews (2026-10-25).
   the newer image: `TestSnapshotBookmarks`); scripts export
   `DEVOPSY_INTERNAL_SNAPSHOTS` and `DEVOPSY_INTERNAL_BASE`
   (`basePrelude`), which a `Set` reads when its own fields are empty.
+- **Each step in the release current is when it starts** (a take's
+  steps and an import's `cd "$base/current"` in their subshell): the
+  first pass holds no release lock, and a release switching current
+  meanwhile left the stopped pass on the old release's labels with the
+  new one's code (round 3).
 - **Locks, one order everywhere:** release (fd 9), sync (fd 5 in
   snapshot scripts: `image_lock` and `syncSourceLock` use 8), snapshot
   (`.devopsy-snapshot.lock`, fd 6), image; none waited for while a later
