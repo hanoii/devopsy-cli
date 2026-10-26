@@ -2080,21 +2080,38 @@ func TestSnapshotReflinkCloneFails(t *testing.T) {
 // queue's public/pickup, say): a take with a mirror leaves it out (the
 // mirror's rsync --no-D), one without a mirror or by reflinks tars it, and
 // a restore's check refuses any member but files, directories and links.
+// Data holding a hard link to a symbolic link (a tree made with cp -al,
+// GNU ln's default -P on a link) likewise: GNU tar archives the second
+// name as a hard link to the link, which a restore's check refuses.
 func TestSnapshotFIFORestores(t *testing.T) {
 	t.Parallel()
-	for _, env := range [][]string{nil, {"FAKE_REFLINK=1"}} {
-		s := newSyncSetup(t)
-		s.releaseProd(nil)
-		if out, err := exec.Command("mkfifo", filepath.Join(s.mnt("prod"), "storage", "pickup")).CombinedOutput(); err != nil {
-			t.Fatalf("%v %s", err, out)
-		}
-		out, code := s.run(env, "@prod", "--snapshot")
-		m := snapshotID.FindStringSubmatch(out)
-		if code != 0 || m == nil {
-			continue
-		}
-		if out, code := s.run(env, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 {
-			t.Errorf("%v: snapshot %s taken, its restore refused (%d):\n%s", env, m[1], code, out)
+	for _, c := range []struct {
+		name string
+		make func(storage string) error
+	}{
+		{"a FIFO", func(storage string) error { return syscall.Mkfifo(filepath.Join(storage, "pickup"), 0o644) }},
+		{"a hard link to a symbolic link", func(storage string) error {
+			if err := os.Symlink("file.txt", filepath.Join(storage, "current")); err != nil {
+				return err
+			}
+			// link(2) on a symbolic link links the link itself, as ln -P.
+			return os.Link(filepath.Join(storage, "current"), filepath.Join(storage, "current.bak"))
+		}},
+	} {
+		for _, env := range [][]string{nil, {"FAKE_REFLINK=1"}} {
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			if err := c.make(filepath.Join(s.mnt("prod"), "storage")); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			out, code := s.run(env, "@prod", "--snapshot")
+			m := snapshotID.FindStringSubmatch(out)
+			if code != 0 || m == nil {
+				continue
+			}
+			if out, code := s.run(env, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 {
+				t.Errorf("%s, %v: snapshot %s taken, its restore refused (%d):\n%s", c.name, env, m[1], code, out)
+			}
 		}
 	}
 }
