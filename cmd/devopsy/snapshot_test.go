@@ -2401,6 +2401,28 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); code == 0 && err == nil && s.current("prod") == before {
 		t.Errorf("the rollback to %s, which binds mnt/storage/public, went live on the restored link to %s: Docker mounts that path of the host:\n%s", before, target, out)
 	}
+
+	// A full restore is no rollback, though it runs a rollback's mounts
+	// check (--check-mounts restored) against the data it is about to
+	// replace: with such a link in the data now, and a snapshot of
+	// storage taken before it, the restore that would put storage back
+	// whole (the link gone) must go through, or at least say what it
+	// refuses, a restore, not a rollback the operator never asked for.
+	s = newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	out, code = s.run(nil, "@prod", "--snapshot")
+	m = snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	if strings.Contains(out, "refuses the rollback") {
+		t.Errorf("the full restore of a snapshot without the link (%d) refused as a rollback:\n%s", code, out)
+	}
 }
 
 // A restore with release snapshots on whose data step refuses, nothing
