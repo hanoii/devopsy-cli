@@ -1720,6 +1720,9 @@ func (r Release) Line() string {
 			src += "+dirty"
 		}
 	}
+	if r.Record.Restore != "" {
+		src += ", restore of snapshot " + r.Record.Restore
+	}
 	status := ""
 	switch {
 	case r.Failed:

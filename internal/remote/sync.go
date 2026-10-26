@@ -927,6 +927,10 @@ const SyncRunning = `{ [ -e "$base/` + SyncHoldingFile + `" ] && ` + LockBusy + 
 // export of it holds its sync lock ($base set).
 const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/` + SyncLockFile + `" true; } 2>/dev/null`
 
+// SnapshotRunning succeeds while a snapshot is taken (its holding file,
+// and its lock held), $base set.
+const SnapshotRunning = `{ [ -e "$base/` + SnapshotHoldingFile + `" ] && ! flock -n -s "$base/` + SnapshotLockFile + `" true; } 2>/dev/null`
+
 // LockBusy succeeds while something holds the environment's release
 // lock ($base set): a sync's files are its own then, not leftovers.
 const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 2>/dev/null`

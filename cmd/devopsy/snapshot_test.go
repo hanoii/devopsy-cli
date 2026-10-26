@@ -207,6 +207,9 @@ func TestSnapshotRestore(t *testing.T) {
 	if rec := readString(filepath.Join(base, "releases", r[1], "devopsy-release.json")); !strings.Contains(rec, `"restore":"`+id+`"`) {
 		t.Errorf("the restore's record: %s", rec)
 	}
+	if out, code := s.run(nil, "@prod", "--releases"); code != 0 || !strings.Contains(out, ", restore of snapshot "+id) {
+		t.Errorf("--releases (%d):\n%s", code, out)
+	}
 	if fileExists(filepath.Join(base, "releases", taken, "rolled-back")) || fileExists(filepath.Join(base, "releases", taken, "devopsy-rolled-back")) {
 		t.Errorf("the release it left marked rolled back")
 	}

@@ -44,7 +44,8 @@ cd "$base/current" && exec devopsy --status
 
 // partialStatus prints StatusScript's sync lines: "syncing" while a
 // sync's holder holds the lock, "importing" while an import does,
-// "source" while a sync from it (or an export) holds its sync lock, and
+// "snapshot" while a snapshot is taken, else "source" while a sync from
+// it (or an export) holds its sync lock, and
 // the partial line: the mark's content, or empty for a sync's files
 // nobody settled yet. A sync is checked first: a --release-sync of an
 // import-marked child reads "syncing".
@@ -53,7 +54,9 @@ var partialStatus = `if ` + SyncRunning + `; then
 elif ` + ImportRunning + `; then
   echo importing
 fi
-if ` + SourceBusy + `; then
+if ` + SnapshotRunning + `; then
+  echo snapshot
+elif ` + SourceBusy + `; then
   echo source
 fi
 if [ -e "$base/` + SyncIncompleteFile + `" ]; then

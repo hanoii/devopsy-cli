@@ -120,7 +120,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
-	syncing, source, importing := false, false, false
+	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
 	id := ""
@@ -162,6 +162,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			importing = true
 		case "source":
 			source = true
+		case "snapshot":
+			snapshotting = true
 		}
 	}
 	if id != "" {
@@ -205,6 +207,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	}
 	if source {
 		fmt.Println("data        a sync or an export from it is running")
+	}
+	if snapshotting {
+		fmt.Println("data        a snapshot of it is being taken")
 	}
 	switch {
 	case mark.IsImport() && importing:
