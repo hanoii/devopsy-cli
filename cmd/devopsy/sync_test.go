@@ -3641,3 +3641,34 @@ func TestSyncChildRefusesLeavingBindsBeforeStopping(t *testing.T) {
 		t.Errorf("a sync into a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), out, docker)
 	}
 }
+
+// The child's check before stopping names --reset as the way to start
+// the child over without the link, and a reset skips it, since its wipe
+// removes the link: here dev's app binds mnt/cache/public, a link to /
+// in an entry the parent has not, so a sync is refused, and the reset
+// wipes it and copies prod's data, nothing left stopped or marked.
+func TestSyncResetWipesLeavingBind(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT2=/cache/public\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("dev"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("dev"), "cache", "public")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "devopsy @devopsy@one:dev --reset") {
+		t.Fatalf("a sync into a child with a link out of its entry at a bind source (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ := s.logs()
+	stoppedDev, stoppedProd := strings.TrimSpace(readString(s.log+".stopped.shop-dev")), strings.TrimSpace(readString(s.log+".stopped.shop-prod"))
+	if code != 0 || !strings.Contains(docker, " down ") || !strings.Contains(docker, "-wipe ") || stoppedDev != "" || stoppedProd != "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) || fileExists(filepath.Join(s.mnt("dev"), "cache")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a reset of a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v, cache there %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), fileExists(filepath.Join(s.mnt("dev"), "cache")), out, docker)
+	}
+}
