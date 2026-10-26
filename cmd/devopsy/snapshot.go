@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -1530,8 +1531,12 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 				report.Info("shared/" + to + " restored from the snapshot")
 			}
 		}
-	} else if keys := envKeysDiffer(filepath.Join(snap, remote.SnapshotData, "shared.env"), filepath.Join(p.base, "shared", ".env")); len(keys) > 0 {
-		report.Warn("the snapshot's shared/.env differs from the environment's in "+strings.Join(keys, ", ")+": kept as it is", "devopsy --snapshots restore "+id+" --with-env brings it back too")
+	} else if keys, differs := envKeysDiffer(filepath.Join(snap, remote.SnapshotData, "shared.env"), filepath.Join(p.base, "shared", ".env")); differs {
+		in := " in " + strings.Join(keys, ", ")
+		if len(keys) == 0 {
+			in = ""
+		}
+		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "devopsy --snapshots restore "+id+" --with-env brings it back too")
 	}
 	_ = os.Remove(filepath.Join(p.base, remote.SyncIncompleteFile))
 	rec, _ := readSyncRecord(cwd)
@@ -1546,23 +1551,23 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 }
 
 // envKeysDiffer are the keys whose values differ between two .env files,
-// sorted (never the values).
-func envKeysDiffer(a, b string) []string {
-	read := func(p string) map[string]string {
-		m := map[string]string{}
+// sorted, read with compose's parser (never the values: a line of a
+// value over several lines is no key). differs without keys is a file
+// that does not parse.
+func envKeysDiffer(a, b string) (keys []string, differs bool) {
+	read := func(p string) ([]byte, map[string]string, bool) {
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return m
+			return nil, map[string]string{}, true
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(strings.TrimSpace(k), "#") {
-				m[strings.TrimSpace(k)] = v
-			}
-		}
-		return m
+		m, err := dotenv.UnmarshalBytesWithLookup(data, nil)
+		return data, m, err == nil
 	}
-	ma, mb := read(a), read(b)
-	var keys []string
+	da, ma, oka := read(a)
+	db, mb, okb := read(b)
+	if !oka || !okb {
+		return nil, !bytes.Equal(da, db)
+	}
 	for k, v := range ma {
 		if w, ok := mb[k]; !ok || w != v {
 			keys = append(keys, k)
@@ -1574,7 +1579,7 @@ func envKeysDiffer(a, b string) []string {
 		}
 	}
 	sort.Strings(keys)
-	return keys
+	return keys, len(keys) > 0
 }
 
 // restoringUnder is a --no-code restore's line naming the release whose
