@@ -296,6 +296,22 @@ func TestSnapshotLeftoverLines(t *testing.T) {
 	if !strings.Contains(readString(record), "snapshot 20261025000000 db") || strings.Contains(out, "left stopped") {
 		t.Errorf("a marked environment's lines (%d), record %q:\n%s", code, readString(record), out)
 	}
+
+	// A line naming a service the current release no longer has (a
+	// release killed between its switch and release-record live, its code
+	// without the service): compose start refuses a service it lacks, as
+	// restoreServices knows. The rest starts and the line goes, or every
+	// export, sync, take and restore of the environment fails at its
+	// settle until someone edits the record by hand.
+	os.Remove(filepath.Join(base, remote.SyncIncompleteFile))
+	write(t, record, "snapshot 20261025000000 db\nsnapshot 20261025000000 worker\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--export", "db")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(docker, "start db") || fileExists(record) {
+		t.Errorf("a snapshot line of a service the release lacks (%d), record %q:\n%s\n%s", code, readString(record), out, docker)
+	}
 }
 
 // A restore's mark refuses what a sync's or an import's does, with its
