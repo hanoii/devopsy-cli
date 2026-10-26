@@ -3810,3 +3810,46 @@ func TestV052ChildRunsReset(t *testing.T) {
 		t.Errorf("a reset on a child whose prepare skips the check under a reset, as v0.52.0's does (%d):\n%s", code, out)
 	}
 }
+
+// An upload checks its activation's needs (remote.WithAlsoNeeds), so a
+// server lacking one refuses before anything changes: before the upload,
+// but only then, after everything else a release does first. A child's
+// first release to a server lacking release-snapshots (a v0.51.0 one,
+// where every activation is refused) runs its local before steps (the
+// project's: a build and push, a notice) and writes the parent's
+// inherited variables into the child's shared/inherit.env, creating its
+// directory, and only then is refused: the needs are known before any
+// session, and the server's devopsy says what it has in the first one
+// (the child's current check), so nothing of the release should run on
+// a server that refuses it.
+func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY]}\n  dev: {parent: prod, release: {before: [local: deploy], run: deploy}}\n", 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "SHARED_KEY=from-prod\n", 0o644)
+	old := filepath.Join(filepath.Dir(s.root), "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ReleaseSnapshotsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	var env []string
+	for _, kv := range s.env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			kv = "PATH=" + old + ":" + v
+		}
+		env = append(env, kv)
+	}
+	cmd := exec.Command(binary, "@dev", "--release")
+	cmd.Dir = s.project
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("")
+	outb, _ := cmd.CombinedOutput()
+	out, code := string(outb), cmd.ProcessState.ExitCode()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
+		t.Fatalf("a child's first release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
+	}
+	if strings.Contains(out, "running 'devopsy deploy' locally (before)") {
+		t.Errorf("the release ran its local before step before the server refused it:\n%s", out)
+	}
+	if dev := filepath.Join(s.root, "shop", "dev"); fileExists(dev) {
+		t.Errorf("the release wrote %s before the server refused it (inherit.env: %v):\n%s", dev, fileExists(filepath.Join(dev, "shared", remote.InheritFile)), out)
+	}
+}
