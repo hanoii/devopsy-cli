@@ -9,11 +9,16 @@ import (
 )
 
 // snapshotProject is a database in a named volume and an app's files in
-// an entry of mnt, both with data.
-func snapshotProject(t *testing.T, name string) string {
+// an entry of mnt, both with data; prod keeps a snapshot mirror when
+// mirror says so.
+func snapshotProject(t *testing.T, name string, mirror bool) string {
+	prod := "{}"
+	if mirror {
+		prod = "{snapshots: {mirror: true}}"
+	}
 	return project(t, name, map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
-		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: " + prod + "\n",
 		".devopsy/compose.yaml": `services:
   db:
     image: busybox:1.37
@@ -39,7 +44,8 @@ var takenID = regexp.MustCompile(`snapshot ([0-9]{14}) taken`)
 // (a named volume whatever its copy label, an entry of mnt), as
 // zstd-compressed tars any tar reads, the services running again after.
 func TestSnapshotTakeRestore(t *testing.T) {
-	dir := snapshotProject(t, "snaptake")
+	// No mirror (the default): the tars written from the stopped data.
+	dir := snapshotProject(t, "snaptake", false)
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
@@ -99,7 +105,8 @@ func TestSnapshotTakeRestore(t *testing.T) {
 // shared/.env, its data in its volume and its entry.
 func TestSnapshotMoveServers(t *testing.T) {
 	secondServer(t)
-	dir := snapshotProject(t, "snapmove")
+	// With a mirror: two passes, the tars made from it after.
+	dir := snapshotProject(t, "snapmove", true)
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
@@ -110,6 +117,9 @@ func TestSnapshotMoveServers(t *testing.T) {
 	m := takenID.FindStringSubmatch(out)
 	if code != 0 || m == nil {
 		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if out, code := srv(t, "docker run --rm -v \"$PWD/snapmove/prod/snapshots/.mirror:/m:ro\" busybox:1.37 cat /m/volumes/dbdata/table"); code != 0 || strings.TrimSpace(out) != "rows" {
+		t.Errorf("the mirror lacks the database's volume (%d): %s", code, out)
 	}
 	if out, code := op(t, dir, "devopsy @server2:prod --release"); code != 0 {
 		t.Fatalf("prod on server2 (%d):\n%s", code, out)
