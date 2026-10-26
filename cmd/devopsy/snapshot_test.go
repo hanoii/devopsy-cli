@@ -273,6 +273,12 @@ func TestSnapshotRestore(t *testing.T) {
 	if fileExists(filepath.Join(base, "releases", taken, "rolled-back")) || fileExists(filepath.Join(base, "releases", taken, "devopsy-rolled-back")) {
 		t.Errorf("the release it left marked rolled back")
 	}
+	// The fake's deploy starts nothing: what the restore stopped, running
+	// before it, is started once the run step ended, as a release's
+	// snapshot does (startLeftDown), never left down with its record gone.
+	if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); len(down) > 0 {
+		t.Errorf("%v left stopped after the run step, the record %q:\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out)
+	}
 	order := []string{"-check ", "stop db app", "-extract-", "deploy"}
 	rest := docker + out
 	for _, want := range order[:3] {
@@ -434,6 +440,12 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 	}
 	if i, j := strings.Index(docker, "stop db app"), strings.Index(docker, "-extract-"); i < 0 || j < i {
 		t.Errorf("stopped before the extraction:\n%s", docker)
+	}
+	// The fake's deploy starts nothing: what the restore stopped, running
+	// before it, is started once the run step ended, as a release's
+	// snapshot does (startLeftDown), never left down with its record gone.
+	if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); len(down) > 0 {
+		t.Errorf("--no-code: %v left stopped after the run step, the record %q:\n%s", down, readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")), out)
 	}
 
 	// db without data now: the snapshot does not fit.
