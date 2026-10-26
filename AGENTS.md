@@ -1246,7 +1246,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   one alone for `TreeBinds` and `WholeMnt`. Why (review of 2026-10-23,
   round 3): the check was lexical, so a release-tree link to below an
   owned entry, or a `shared/mnt` link into the release, passed. Links
-  into `shared/` lead out of the release tree, so they stay fine.
+  into `shared/` lead out of the release tree, so they stay fine. A
+  bind source below an entry that the deploy user cannot resolve (a
+  directory on the way it cannot search: an import's tar sets the modes
+  and owners it carries) counts as leading out of it, `LeavingBinds`'
+  "somewhere unknown": Docker resolves it as root (review after
+  v0.52.1: a 0700 directory of the app's hid a link to `/`).
 - **A bind source below an owned entry is refused** (decided, review
   of 2026-10-23, round 2), by any service, read-only too: the entry's
   owner (the app, writing it) can replace `storage/files` with a

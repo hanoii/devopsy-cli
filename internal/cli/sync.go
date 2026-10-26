@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -441,8 +442,16 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			r := resolvePath(src)
 			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
 			if rel := mntPath(src, mnts); d != "" && d != "." && rel != d {
-				if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); !within(r, er) {
-					if l := rel + " -> " + r; !slices.Contains(cs.LeavingBinds, l) {
+				// A directory on the way the deploy user cannot search
+				// hides its links, which Docker, as root, follows: such a
+				// source counts as leading out (review: an import's 0700
+				// directory, the app's, hid a link to /).
+				to := r
+				if _, err := os.Lstat(r); errors.Is(err, fs.ErrPermission) {
+					to = "somewhere unknown (" + err.Error() + ")"
+				}
+				if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); to != r || !within(r, er) {
+					if l := rel + " -> " + to; !slices.Contains(cs.LeavingBinds, l) {
 						cs.LeavingBinds = append(cs.LeavingBinds, l)
 					}
 				}
