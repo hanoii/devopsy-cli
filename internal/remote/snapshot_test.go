@@ -114,3 +114,50 @@ exit 0
 		t.Errorf("after a restore that did not go live, app-prod-app holds %q's image, not the live release 2's:\n%s", got, out)
 	}
 }
+
+// A --no-code restore lets go of the sync and snapshot locks once its
+// data is in, before the deployed run step, which may take minutes: an
+// export of a snapshot, a removal or a take's first pass need not wait
+// for it. Nothing it started meanwhile may keep them: the tail that
+// follows its output to the session (followOutput) runs to the script's
+// end.
+func TestRestoreDataReleasesLocksForRunStep(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("no flock")
+	}
+	if err := exec.Command("tail", "--version").Run(); err != nil {
+		t.Skip("no GNU tail: followOutput does not tail")
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+case "$*" in
+  "--release-steps release run")
+    for l in .devopsy-snapshot.lock .devopsy-sync.lock; do
+      if flock -n "$FAKE_BASE/$l" true; then echo "$l free"; else echo "$l held"; fi >>"$FAKE_ROOT/locks"
+    done ;;
+esac
+exit 0
+`)
+	if err := os.Chmod(filepath.Join(bin, "devopsy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
+	base := filepath.Join(root, tg.Path)
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if err := os.Symlink("releases/1/"+CodeDir, filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(base, "snapshots", "20261025000000", SnapshotManifest), "format\t1\nkind\tmanual\n")
+	cmd := exec.Command("sh", "-c", RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025000000"}))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "FAKE_BASE=" + base}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("restore (%v):\n%s", err, out)
+	}
+	if got := readFile(filepath.Join(root, "locks")); got != ".devopsy-snapshot.lock free\n.devopsy-sync.lock free\n" {
+		t.Errorf("during the run step, after the script let them go:\n%s", got)
+	}
+}
