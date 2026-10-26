@@ -1424,3 +1424,119 @@ func TestReleaseSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// env sets env's YAML in the setup's config (prod: {} by default).
+func (s *syncSetup) envConfig(env, yaml string) {
+	s.t.Helper()
+	conf := filepath.Join(s.dot, "config.yaml")
+	data := readString(conf)
+	if !strings.Contains(data, "\n  "+env+": {}\n") {
+		s.t.Fatalf("no %s: {} in the setup's config:\n%s", env, data)
+	}
+	write(s.t, conf, strings.Replace(data, "\n  "+env+": {}\n", "\n  "+env+": "+yaml+"\n", 1), 0o644)
+}
+
+// A release snapshot skipped with nothing with data, said; refused, before
+// anything stops, on a server keeping one release; a release interrupted
+// during its stopped pass cancelled, its services started again and no
+// half snapshot kept; and pruned once its release is gone.
+func TestReleaseSnapshotCases(t *testing.T) {
+	t.Parallel()
+	t.Run("no data", func(t *testing.T) {
+		t.Parallel()
+		s := newSyncSetup(t)
+		s.snapshotted("prod", "true", false)
+		write(t, s.log+".shop-prod", "FAKE_APP=none\nFAKE_DB=none\n", 0o644)
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--release")
+		docker, _ := s.logs()
+		if code != 0 || !strings.Contains(out, "no release snapshot: no service has data") || strings.Contains(docker, " stop ") {
+			t.Errorf("(%d):\n%s\n%s", code, out, docker)
+		}
+	})
+	t.Run("keep 1", func(t *testing.T) {
+		t.Parallel()
+		s := newSyncSetup(t)
+		s.snapshotted("prod", "true", false)
+		s.releaseProd(nil)
+		server := filepath.Join(filepath.Dir(s.root), "home", "config.yaml")
+		write(t, server, readString(server)+"  keep: 1\n", 0o644)
+		before := s.current("prod")
+		out, code := s.run(nil, "@prod", "--release")
+		docker, _ := s.logs()
+		if code == 0 || !strings.Contains(out, "this server keeps 1 release") || strings.Contains(docker, " stop ") || s.current("prod") != before {
+			t.Errorf("(%d):\n%s\n%s", code, out, docker)
+		}
+	})
+	t.Run("interrupted", func(t *testing.T) {
+		t.Parallel()
+		s := newSyncSetup(t)
+		s.snapshotted("prod", "true", false)
+		s.releaseProd(nil)
+		before := s.current("prod")
+		started := filepath.Join(t.TempDir(), "started")
+		outFile, err := os.CreateTemp(t.TempDir(), "out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(binary, "@prod", "--release")
+		cmd.Dir = s.project
+		cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_TAR="+started)
+		cmd.Stdin = strings.NewReader("")
+		cmd.Stdout, cmd.Stderr = outFile, outFile
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
+			if time.Since(start) > startWait {
+				_ = cmd.Process.Kill()
+				t.Fatalf("the stopped pass never started:\n%s", readString(outFile.Name()))
+			}
+		}
+		start := time.Now()
+		_ = cmd.Process.Signal(syscall.SIGINT)
+		_ = cmd.Wait()
+		out := readString(outFile.Name())
+		base := filepath.Join(s.root, "shop", "prod")
+		for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
+			if time.Since(start) > 15*time.Second {
+				t.Fatalf("the services not started again, or their snapshot lines left:\n%s\n%s", out, readString(filepath.Join(base, ".devopsy-sync.services")))
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if cmd.ProcessState.ExitCode() == 0 || s.current("prod") != before {
+			t.Errorf("not cancelled (%d), current %s (was %s):\n%s", cmd.ProcessState.ExitCode(), s.current("prod"), before, out)
+		}
+		// The signal reaches the script alone here (no sshd leads its
+		// group), so the stopped pass may finish first: a complete
+		// snapshot of the release before is right then, a half one never.
+		if left, _ := filepath.Glob(filepath.Join(base, "snapshots", "*.tmp")); len(left) > 0 {
+			t.Errorf("a half snapshot left: %v", left)
+		}
+	})
+	t.Run("pruned", func(t *testing.T) {
+		t.Parallel()
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 2}, snapshots: {release: true}}")
+		s.releaseProd(nil)
+		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+		var second string
+		for i := range 2 {
+			if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+				t.Fatalf("release %d (%d):\n%s", i+2, code, out)
+			}
+			if i == 0 {
+				second = s.current("prod")
+			}
+		}
+		// The third release prunes the first: its snapshot goes with it,
+		// once the detached tar's pruning ran after the activation.
+		var rs []releaseSnapshot
+		for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+			if rs = releaseSnapshots(snaps); len(rs) == 1 && "releases/"+rs[0].release == second {
+				return
+			}
+		}
+		t.Errorf("release snapshots %+v, want one, of %s", rs, second)
+	})
+}
