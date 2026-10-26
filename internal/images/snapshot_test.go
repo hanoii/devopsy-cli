@@ -71,3 +71,26 @@ func TestSnapshotBookmarkLength(t *testing.T) {
 		}
 	}
 }
+
+// A restore's check pulls a data service's missing image only in the
+// service's own repository, as the snapshot's listing names it, the
+// image the restore's hold then takes (ownHold): an imported snapshot's
+// record naming another repository's digest pulls nothing of it.
+func TestSnapshotPullOwnRepositoryOnly(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	rel := prod.e.rel(prod.cur)
+	d.publish("evil.example/x:1", "IX")
+	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tIX\tevil.example/x@IX\n"); err == nil || d.images["IX"] {
+		t.Errorf("another repository's digest: pulled %v (%v)\n%s", d.images["IX"], err, out.String())
+	}
+	d.publish("mariadb:11.8", "I2")
+	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tI2\tmariadb@I2\n"); err != nil || !d.images["I2"] {
+		t.Errorf("its own repository's digest: pulled %v (%v)\n%s", d.images["I2"], err, out.String())
+	}
+}

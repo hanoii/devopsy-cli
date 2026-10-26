@@ -1289,29 +1289,9 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 		}
 	}
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
-	d := images.CLI{}
-	for _, line := range strings.Split(string(data), "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) < 5 || f[0] != "image" {
-			continue
-		}
-		if _, err := d.Inspect(f[3]); err == nil {
-			continue
-		}
-		repo := f[2]
-		if i := strings.LastIndexAny(repo, ":@"); i > strings.LastIndex(repo, "/") {
-			repo = repo[:i]
-		}
-		pulled := false
-		for _, dg := range strings.Fields(f[4]) {
-			if _, digest, ok := strings.Cut(dg, "@"); ok && d.Pull(repo+"@"+digest) == nil {
-				pulled = true
-				break
-			}
-		}
-		if !pulled {
-			return fmt.Errorf("the image %s's data ran when snapshot %s was taken (%s) is gone and could not be pulled by its digest: nothing restored", f[1], filepath.Base(snap), f[2])
-		}
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	if err := set.SnapshotPull(snap, string(data)); err != nil {
+		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
 	}
 	return nil
 }

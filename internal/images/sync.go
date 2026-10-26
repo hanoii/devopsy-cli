@@ -477,6 +477,21 @@ func otherPlatform(err error) bool {
 // evil.example/x's) never makes the service pull or run that one: under
 // e's repository the registry serves only e's images.
 func (s *Set) ownHold(e entry, p *parentImage) string {
+	holds := ownHolds(e, p)
+	for _, h := range holds {
+		if _, err := s.Docker.Inspect(h); err == nil {
+			return h
+		}
+	}
+	if len(holds) == 0 {
+		return ""
+	}
+	return holds[0]
+}
+
+// ownHolds are the references ownHold chooses from, in its order: p's
+// digests in e's own repository.
+func ownHolds(e entry, p *parentImage) []string {
 	// The digests in e's own repository first: on Docker's classic store
 	// each repository's manifest has its own (an image pushed to a mirror
 	// too), and the registry serves e's repository only by its own.
@@ -494,15 +509,38 @@ func (s *Set) ownHold(e entry, p *parentImage) string {
 	for _, o := range others {
 		holds = appendNew(holds, o)
 	}
-	for _, h := range holds {
-		if _, err := s.Docker.Inspect(h); err == nil {
-			return h
+	return holds
+}
+
+// SnapshotPull gets the images a restore of snap will hold its data
+// services on (data, the snapshot's record of them, SnapshotData) when
+// this server lacks them: pulled by digest in each service's own
+// repository, as snap's listing names it, exactly what the restore's
+// hold then takes (ownHold), never a repository the record names (an
+// imported snapshot's record is anyone's). A service the listing does
+// not have, or whose image no digest brings, is refused.
+func (s *Set) SnapshotPull(snap, data string) error {
+	ps := parseParentData(data)
+	for _, e := range readList(snap) {
+		p := ps[e.Service]
+		if e.Kind != KindData || p == nil || p.Image.ID == "" {
+			continue
+		}
+		if _, err := s.Docker.Inspect(p.Image.ID); err == nil {
+			continue
+		}
+		pulled := false
+		for _, h := range ownHolds(e, p) {
+			if _, err := s.Docker.Inspect(h); err == nil || s.Docker.Pull(h) == nil {
+				pulled = true
+				break
+			}
+		}
+		if !pulled {
+			return fmt.Errorf("the image %s's data ran when the snapshot was taken (%s) is gone and could not be pulled by its digest in %s: nothing restored", e.Service, p.Ref, repoKey(e.Ref))
 		}
 	}
-	if len(holds) == 0 {
-		return ""
-	}
-	return holds[0]
+	return nil
 }
 
 // syncPrefix names a listing's entry for a parent's image a sync got for
