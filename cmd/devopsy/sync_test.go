@@ -3798,3 +3798,31 @@ func TestSyncPushNothingRunningIgnoresLeavingBinds(t *testing.T) {
 		t.Errorf("a child's first release from a parent with its set down and a link out of its entry at a bind source (%d):\n%s", code, out)
 	}
 }
+
+// An app writes links in its own data that point where it sees that data
+// in its container (storage/latest -> /app/storage/file.txt): a sync
+// copies them as they are, a snapshot's restore takes them (anyTarget:
+// "an app's absolute links made every snapshot unrestorable"), and an
+// --import extracts each entry in a container that mounts that entry
+// alone, as a restore does. So the same data moved by --export and
+// --import is no reason to refuse: the tar devopsy's own export made of
+// it must import.
+func TestImportAppAbsoluteLink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.Symlink("/app/storage/file.txt", filepath.Join(s.mnt("prod"), "storage", "latest")); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	if l, _ := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "latest")); code != 0 || l != "/app/storage/file.txt" {
+		t.Errorf("prod's storage, with a link the app wrote to where it sees its data, into dev (%d), the link %q:\n%s", code, l, errs)
+	}
+}
