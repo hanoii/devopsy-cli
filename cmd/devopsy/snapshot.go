@@ -372,9 +372,14 @@ func runSnapshotStep(cwd string, args []string) int {
 		return 0
 	case "release-check":
 		// Before a release's fetch: whether it takes the snapshot of what
-		// it replaces (3: skipped, said), and whether it would fit.
+		// it replaces (3: skipped, said), and whether it would fit. It
+		// holds the snapshot lock: what a take or a detached tar killed
+		// outright left is settled first, as a manual take's leftovers.
 		ctx, stop := interruptible()
 		defer stop()
+		if err := snapshotLeftovers(cwd, p); err != nil {
+			report.Warn("a leftover snapshot: " + err.Error())
+		}
 		if readMark(p.base) != nil {
 			report.Info("no release snapshot: the environment is marked, and a snapshot of its data would restore as complete")
 			return 3
