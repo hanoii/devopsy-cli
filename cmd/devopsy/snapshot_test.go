@@ -1890,6 +1890,9 @@ func TestReleaseSnapshotPruneHoldsImageLock(t *testing.T) {
 	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started}, "@prod", "--release"); code != 0 {
 		t.Fatalf("the third release (%d):\n%s", code, out)
 	}
+	// The tar is detached: the release may return before it gets there.
+	for start := time.Now(); !fileExists(started) && time.Since(start) < startWait; time.Sleep(50 * time.Millisecond) {
+	}
 	if !fileExists(started) || fileExists(filepath.Join(s.root, "shop", "prod", "releases", first)) {
 		t.Fatalf("the detached tar not started (%v), or the first release kept (%v)", fileExists(started), fileExists(filepath.Join(s.root, "shop", "prod", "releases", first)))
 	}
