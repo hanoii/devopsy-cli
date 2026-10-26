@@ -2308,6 +2308,15 @@ func TestStartRefusesLeavingBinds(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "nothing started") || !strings.Contains(out, "app mounts ./mnt/storage/public -> / through a symbolic link out of its entry") || strings.Contains(docker, " up -d") {
 		t.Errorf("an up with mnt/storage/public a link to / (%d):\n%s\n%s", code, out, docker)
 	}
+	// compose cp mounts the container's bind sources on the host afresh,
+	// running or stopped (Docker 29.8: a file copied into a bind whose
+	// source became a link to / landed in the host's /tmp as root), so it
+	// is a start to the gate too.
+	out, code = s.run(nil, "@prod", "cp", "file.txt", "app:/tmp/file.txt")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "app mounts ./mnt/storage/public -> / through a symbolic link out of its entry") || strings.Contains(docker, " cp ") {
+		t.Errorf("a cp with mnt/storage/public a link to / (%d):\n%s\n%s", code, out, docker)
+	}
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
