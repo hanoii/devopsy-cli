@@ -286,6 +286,9 @@ case "$*" in
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
     # FAKE_SLOW_STOPPED: a snapshot's stopped pass that takes 20 s.
     case "$*" in *-stopped-*) [ -z "${FAKE_SLOW_STOPPED:-}" ] || { touch "$FAKE_SLOW_STOPPED"; exec sleep 20; } ;; esac
+    # $DOCKER_LOG.mirrorhook: what happens on the server while a take's
+    # first pass copies (a release switching current), run once.
+    case "$*" in *-mirror-0\ *) [ ! -f "$DOCKER_LOG.mirrorhook" ] || { sh "$DOCKER_LOG.mirrorhook"; rm -f "$DOCKER_LOG.mirrorhook"; } ;; esac
     # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>.
     vsrc= vdst=
     for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done

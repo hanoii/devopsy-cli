@@ -1177,3 +1177,36 @@ func TestRecoverFetchBeforeData(t *testing.T) {
 		t.Errorf("a sync's holder ran over a cut fetch, not recovered:\n%s", out)
 	}
 }
+
+// A take's first pass holds no release lock, so a release may switch
+// current meanwhile; its stopped pass, once it holds the lock, takes the
+// release current is then (its code, its listing, the manifest's
+// release), and must read that release's labels too: the snapshot's
+// data is what the code it holds mounts, and its stop set what runs.
+// The script went into current once, before the first pass, and the
+// later steps run in the release it pointed to then.
+func TestSnapshotReleaseDuringFirstPass(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	old := s.current("prod")
+	write(t, filepath.Join(s.mnt("prod"), "files", "upload.txt"), "new layout\n", 0o644)
+	// The new release: app mounts mnt/files now, not mnt/storage (its
+	// labels, read through current).
+	write(t, s.log+".mirrorhook", `set -e
+cp -a "`+filepath.Join(base, old)+`" "`+filepath.Join(base, "releases", "29990101000000")+`"
+rm "`+filepath.Join(base, "current")+`"
+ln -s releases/29990101000000/code "`+filepath.Join(base, "current")+`"
+echo FAKE_APP_MOUNT=/files > "`+s.log+`.current.shop-prod"
+`, 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil || s.current("prod") != "releases/29990101000000" {
+		t.Fatalf("take (%d), current %s:\n%s", code, s.current("prod"), out)
+	}
+	manifest := readString(filepath.Join(base, "snapshots", m[1], "manifest"))
+	if !strings.Contains(manifest, "release\t29990101000000\n") || !strings.Contains(manifest, "entry\tfiles\t") || strings.Contains(manifest, "entry\tstorage\t") {
+		t.Errorf("the snapshot holds release 29990101000000's code, and the data of %s's labels:\n%s", old, manifest)
+	}
+}
