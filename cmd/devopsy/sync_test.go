@@ -3927,7 +3927,13 @@ func TestImportExportHardLinks(t *testing.T) {
 	}
 	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
 	dev := s.mnt("dev")
-	if l, _ := os.Readlink(filepath.Join(dev, "storage", "b")); code != 0 || readString(filepath.Join(dev, "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(dev, "cache", "dup")) != "from prod\n" || l != "file.txt" {
+	// storage/b as prod has it: a link on Linux, its target's copy on
+	// macOS.
+	want := "file.txt"
+	if fi, err := os.Lstat(filepath.Join(storage, "b")); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		want = ""
+	}
+	if l, _ := os.Readlink(filepath.Join(dev, "storage", "b")); code != 0 || readString(filepath.Join(dev, "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(dev, "cache", "dup")) != "from prod\n" || l != want {
 		t.Errorf("prod's storage and cache, with a hard link to a link and one across the entries, into dev (%d), storage/b %q:\n%s", code, l, errs)
 	}
 }
