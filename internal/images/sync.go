@@ -33,11 +33,19 @@ const (
 // Lines, tab separated: "image", service, reference, id, digests; then
 // "ran" and a history line.
 func (s *Set) ParentData(base, rel string) string {
-	return s.parentData(base, rel, "")
+	return s.parentData(base, rel, "", false)
 }
 
-// parentData is ParentData, of the service only when only is set.
-func (s *Set) parentData(base, rel, only string) string {
+// SnapshotData is ParentData of every pulled data service whatever its
+// copy label (a snapshot takes them all as files), for a snapshot's
+// manifest: what a restore holds each on.
+func (s *Set) SnapshotData(base, rel string) string {
+	return s.parentData(base, rel, "", true)
+}
+
+// parentData is ParentData, of the service only when only is set, of
+// every data service with all.
+func (s *Set) parentData(base, rel, only string, all bool) string {
 	h := readHistory(base)
 	var cs map[string]Container
 	var b strings.Builder
@@ -56,8 +64,8 @@ func (s *Set) parentData(base, rel, only string) string {
 		}
 		// A named volume counts as there: one a service never ran with
 		// leaves no image to send anyway.
-		copied[svc.Name] = svc.Method == CopyVolumes && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
-		pulled = pulled || (svc.Method == CopyVolumes && !svc.Build && !svc.own(s.Mode))
+		copied[svc.Name] = (all && svc.Data || svc.Method == CopyVolumes) && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
+		pulled = pulled || (copied[svc.Name] && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
 	// A release an older devopsy recorded names no services: which one
@@ -148,7 +156,7 @@ const ExportKey = "DEVOPSY.data-images"
 // recorded, which names no services).
 func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
-		data := s.parentData(base, rel, service)
+		data := s.parentData(base, rel, service, false)
 		if strings.HasPrefix(data, "old\t") {
 			s.say(report.WarnLevel, "%s: release %s predates devopsy's record of each service's image: the export carries no image, and an import starts its history over", service, filepath.Base(rel))
 			return ""
@@ -469,6 +477,21 @@ func otherPlatform(err error) bool {
 // evil.example/x's) never makes the service pull or run that one: under
 // e's repository the registry serves only e's images.
 func (s *Set) ownHold(e entry, p *parentImage) string {
+	holds := ownHolds(e, p)
+	for _, h := range holds {
+		if _, err := s.Docker.Inspect(h); err == nil {
+			return h
+		}
+	}
+	if len(holds) == 0 {
+		return ""
+	}
+	return holds[0]
+}
+
+// ownHolds are the references ownHold chooses from, in its order: p's
+// digests in e's own repository.
+func ownHolds(e entry, p *parentImage) []string {
 	// The digests in e's own repository first: on Docker's classic store
 	// each repository's manifest has its own (an image pushed to a mirror
 	// too), and the registry serves e's repository only by its own.
@@ -486,15 +509,100 @@ func (s *Set) ownHold(e entry, p *parentImage) string {
 	for _, o := range others {
 		holds = appendNew(holds, o)
 	}
-	for _, h := range holds {
-		if _, err := s.Docker.Inspect(h); err == nil {
-			return h
+	return holds
+}
+
+// SnapshotPull gets the images a restore of snap will hold its data
+// services on (data, the snapshot's record of them, SnapshotData) when
+// this server lacks them: pulled by digest in each service's own
+// repository, as snap's listing names it, exactly what the restore's
+// hold then takes (ownHold), never a repository the record names (an
+// imported snapshot's record is anyone's). A service the listing does
+// not have, or whose image no digest brings, is refused. Each image it
+// pulls is bookmarked as the snapshot's at once (its listing's name), so
+// another environment's removal meanwhile, which takes an image's names
+// no bookmark holds, never strips it before the restore's data step
+// holds it (review); the caller holds the server's image lock, shared.
+func (s *Set) SnapshotPull(snap, data string) error {
+	ps := parseParentData(data)
+	es := readList(snap)
+	names := bookmarks(es, s.Name, s.idOf(snap))
+	for i, e := range es {
+		p := ps[e.Service]
+		if e.Kind != KindData || p == nil || p.Image.ID == "" {
+			continue
+		}
+		// There already only when its own repository has it by digest,
+		// never by the record's id (an imported record's is anyone's).
+		pulled := ""
+		for _, h := range ownHolds(e, p) {
+			if _, err := s.Docker.Inspect(h); err == nil {
+				pulled = h
+				break
+			}
+		}
+		for _, h := range ownHolds(e, p) {
+			if pulled == "" && s.Docker.Pull(h) == nil {
+				pulled = h
+			}
+		}
+		if pulled == "" {
+			return fmt.Errorf("the image %s's data ran when the snapshot was taken (%s) is gone and could not be pulled by its digest in %s: nothing restored", e.Service, p.Ref, repoKey(e.Ref))
+		}
+		// Only a snapshot among the environment's (s<id>): an import's,
+		// checked where it was extracted, bookmarks its images once it
+		// is in place (BookmarkFrom), and a bookmark of its directory's
+		// id would name a release nothing ever removes.
+		if !strings.HasPrefix(s.idOf(snap), "s") {
+			continue
+		}
+		if err := s.Docker.Tag(pulled, names[i]); err != nil {
+			return fmt.Errorf("bookmarking %s as %s: %w: nothing restored", pulled, names[i], err)
 		}
 	}
-	if len(holds) == 0 {
-		return ""
+	return nil
+}
+
+// FilterImported keeps of an imported snapshot's listing (snap's, anyone's
+// file) only the entries of a service the current release (cur) lists
+// too, in that one's repository: what a later pull (SnapshotPull's own
+// repository), its bookmarks (BookmarkFrom) and its removal take names
+// from (review: a crafted listing had the server pull and tag another
+// repository's image, and its removal strip names of images nothing
+// else held).
+//
+// An entry of a service the current release lists under another
+// repository (a snapshot moved from another environment, whose own
+// images are named after its compose project, a mirror's name) is kept
+// under the current one's repository, its tag, digest and id as they
+// were: never dropped, or a full restore of it would find a listing of
+// nothing, nor kept elsewhere (review).
+func FilterImported(snap, cur string) error {
+	repos := map[string]string{}
+	for _, e := range readList(cur) {
+		if e.Service != "" {
+			repos[e.Service] = repoOf(e.Ref)
+		}
 	}
-	return holds[0]
+	var kept []entry
+	for _, e := range readList(snap) {
+		repo, ok := repos[e.Service]
+		if e.Service == "" || !ok {
+			continue
+		}
+		e.Ref = repo + e.Ref[len(repoOf(e.Ref)):]
+		if e.Digest != "" {
+			e.Digest = repo + e.Digest[len(repoOf(e.Digest)):]
+		}
+		// Its id is the other server's word: bookmarked by it, any local
+		// image of another repository it names would be tagged into the
+		// service's, which Docker's containerd store then resolves by
+		// digest there (review round 5). Without, nothing is tagged until
+		// a restore pulls it by digest in that repository, or builds it.
+		e.ID = ""
+		kept = append(kept, e)
+	}
+	return writeList(snap, kept)
 }
 
 // syncPrefix names a listing's entry for a parent's image a sync got for
@@ -602,12 +710,32 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		// the child does (its mirror, its pin), so the child's own name
 		// moving forward needs nothing.
 		w := append(history{}, p.History.window(e.Service)...)
+		img, ref := p.Image, p.Ref
+		if importing {
+			// An export's record is whoever made the tar's (an imported
+			// snapshot's too): the line it adds keeps only digests in the
+			// service's own repository and names the hold when the
+			// record's name is another repository's, and the window ends
+			// on a line in that repository (below), so the data's newest
+			// image a rollback later holds is never another repository's
+			// (review). Every line stays: they are also what the data
+			// moved past, by identity (a mirror's name of an image the
+			// upstream's lines recorded: review round 5, dropped, a tag
+			// gone back ran an older image on the data).
+			img.Digests = inRepo(img.Digests, repoKey(e.Ref))
+			if len(img.Digests) == 0 && hold != "" {
+				img.Digests = []string{hold}
+			}
+			if repoKey(ref) != repoKey(e.Ref) {
+				ref = hold
+			}
+		}
 		known := false
 		for _, r := range w {
-			known = known || r.is(p.Image)
+			known = known || r.is(img)
 		}
 		if !known {
-			w = append(w, ranOn(e.Service, Ran, p.Ref, p.Image, s.now()))
+			w = append(w, ranOn(e.Service, Ran, ref, img, s.now()))
 		}
 		// Only when the child's own name holds the very image (a mirror):
 		// another series --yes let through stays one its data never ran.
@@ -621,7 +749,19 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 			}
 			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: ds})
 		}
+		if importing && hold != "" {
+			if last := w[len(w)-1]; repoKey(last.hold()) != repoKey(e.Ref) {
+				w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: hold, ID: img.ID, Digests: []string{hold}})
+			}
+		}
 		w[0].How = first
+		if importing {
+			// The time it was imported: --resolved keeps a history whose
+			// first line came since the import's mark (Resolved), and the
+			// export's own time is when its environment first ran that
+			// image, before any mark here (review).
+			w[0].Time = s.now().Unix()
+		}
 		h = append(kept, w...)
 		changed = true
 	}
@@ -636,6 +776,17 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		return err
 	}
 	return writeCompose(rel, out, holds)
+}
+
+// inRepo are of digests (<repository>@sha256:...) those in repo.
+func inRepo(digests []string, repo string) []string {
+	var out []string
+	for _, d := range digests {
+		if repoKey(d) == repo {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // Recreate are the services of rel whose container its activation gave

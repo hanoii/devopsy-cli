@@ -164,10 +164,21 @@ type SyncService struct {
 	// tree outside mnt, relative to the tree: they live in the release,
 	// and go with the next one (CheckMounts refuses them).
 	TreeBinds []string
+	// OutsideBinds are its writable bind mounts from outside both the
+	// tree and mnt, as resolved (/var/lib/app): the project's own
+	// business, which no copy or snapshot carries (a snapshot refuses one
+	// on a service with data).
+	OutsideBinds []string
 	// Binds are the sources of its bind mounts under mnt, relative to it
 	// (storage, storage/files), read-only ones too: one below an owned
 	// entry is refused (CheckMounts).
 	Binds []string
+	// LeavingBinds are its bind sources below an entry of mnt that a
+	// symbolic link in the entry leads out of it (storage/public -> /),
+	// as "<source> -> <where it leads>": Docker mounts that of the host
+	// (CheckMounts refuses them). A link to the entry itself (an entry on
+	// another disk) is the entry's place, never one.
+	LeavingBinds []string
 	// WholeMnt is whether it mounts ./mnt whole writable, which a service
 	// without data or an owner may as far as parsing goes, and
 	// CheckMounts refuses: it would write every entry, which the child
@@ -417,16 +428,37 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			// release to below an owned entry, or one in shared/mnt into
 			// the release, is judged by where it leads.
 			src := filepath.Clean(v.Source)
+			// A source that reaches mnt through links (the release tree's
+			// files -> .devopsy/mnt/storage/files, a base path aliased) is
+			// judged by its path in mnt, found before the links in mnt are
+			// followed: resolved whole, a link there leading out of mnt lost
+			// it, and with it every rule below (review).
+			if mntPath(src, mnts) == "" {
+				if in := throughMnt(src, mnts); in != "" {
+					src = in
+				}
+			}
 			r := resolvePath(src)
 			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
+			if rel := mntPath(src, mnts); d != "" && d != "." && rel != d {
+				if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); !within(r, er) {
+					if l := rel + " -> " + r; !slices.Contains(cs.LeavingBinds, l) {
+						cs.LeavingBinds = append(cs.LeavingBinds, l)
+					}
+				}
+			}
 			for _, rel := range []string{mntPath(src, mnts), mntPath(r, mnts)} {
 				if rel != "" && rel != "." && !slices.Contains(cs.Binds, rel) {
 					cs.Binds = append(cs.Binds, rel)
 				}
 			}
 			if rd == "" && !v.ReadOnly {
-				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") && !slices.Contains(cs.TreeBinds, rel) {
-					cs.TreeBinds = append(cs.TreeBinds, rel)
+				if rel, err := filepath.Rel(tree, r); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+					if !slices.Contains(cs.TreeBinds, rel) {
+						cs.TreeBinds = append(cs.TreeBinds, rel)
+					}
+				} else if !slices.Contains(cs.OutsideBinds, r) {
+					cs.OutsideBinds = append(cs.OutsideBinds, r)
 				}
 			}
 			if rd == "." && d != "." {
@@ -465,20 +497,31 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		sort.Strings(cs.TreeBinds)
 		sort.Strings(cs.Binds)
 		// The owners' list (the child's, for a sync) names entries split
-		// by spaces too.
+		// by spaces too, and find and chown take them as arguments: one
+		// starting with a dash would be an option.
 		if cs.Owner != "" {
 			for _, d := range cs.Writable {
-				if strings.ContainsFunc(d, unicode.IsSpace) {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name: rename it", name, d, MntOwnerLabel)
+				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name or start with a dash: rename it", name, d, MntOwnerLabel)
 				}
 			}
 		}
 		// Copies name entries in space-separated lists (the child's,
 		// exclude) and rsync modules: a name with whitespace would split.
+		// The tools that carry them (find for a snapshot's tar, tar for
+		// --export) take entries as arguments: a name starting with a
+		// dash would be an option (find: unknown predicate).
 		if cs.HasData {
 			for _, d := range append(slices.Clone(cs.Dirs), cs.Excluded...) {
-				if strings.ContainsFunc(d, unicode.IsSpace) {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name: rename it", name, d)
+				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it", name, d)
+				}
+			}
+			// A named volume's key, the same: a take's find and --export's
+			// tar name it as an argument (compose takes -data as a key).
+			for _, v := range cs.Volumes {
+				if strings.ContainsFunc(v.Key, unicode.IsSpace) || strings.HasPrefix(v.Key, "-") {
+					return nil, fmt.Errorf("service %s: the volume %s: a named volume a copy carries cannot have whitespace in its key or start with a dash: rename it", name, v.Key)
 				}
 			}
 		}
@@ -522,6 +565,47 @@ func mntEntry(source string, mnts []string) string {
 		return rel
 	}
 	return strings.SplitN(rel, string(filepath.Separator), 2)[0]
+}
+
+// throughMnt is p with its symbolic links followed one at a time,
+// outermost first, up to the first path in one of mnts, "" when none
+// is (or past 40 links): where a bind source lands in mnt before the
+// links in mnt lead it on.
+func throughMnt(p string, mnts []string) string {
+	for range 40 {
+		if mntPath(p, mnts) != "" {
+			return p
+		}
+		parts := strings.Split(strings.TrimPrefix(p, string(filepath.Separator)), string(filepath.Separator))
+		moved := false
+		for i := range parts {
+			q := string(filepath.Separator) + filepath.Join(parts[:i+1]...)
+			t, err := os.Readlink(q)
+			if err != nil {
+				continue
+			}
+			if !filepath.IsAbs(t) {
+				t = filepath.Join(filepath.Dir(q), t)
+			}
+			p = filepath.Join(append([]string{t}, parts[i+1:]...)...)
+			moved = true
+			break
+		}
+		if !moved {
+			return ""
+		}
+	}
+	return ""
+}
+
+// mntRoot is the one of mnts source is in, "" outside them.
+func mntRoot(source string, mnts []string) string {
+	for _, m := range mnts {
+		if within(source, m) {
+			return m
+		}
+	}
+	return ""
 }
 
 // mntPath is source relative to mnt, "." for mnt itself, "" outside it.
@@ -587,6 +671,31 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 	return owners, nil
 }
 
+// CheckLeavingBinds refuses the bind sources a symbolic link in their
+// entry leads out of it (SyncService.LeavingBinds), alone: a rollback's
+// check (--check-mounts restored), whose labels otherwise refuse
+// nothing, since Docker would mount that of the host whatever release
+// runs (a restored snapshot's link outlives the code it was checked in:
+// review).
+// A restore's skips the entries its snapshot carries (carried): they are
+// replaced, their links checked in its tars. what is the refusal's own
+// words (the rollback: it does not go live).
+func CheckLeavingBinds(services []SyncService, carried []string, what string) error {
+	var bad []string
+	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			if e, _, _ := strings.Cut(l, string(filepath.Separator)); slices.Contains(carried, e) {
+				continue
+			}
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
+}
+
 // CheckMounts refuses, before a release goes live, the mounts whose data
 // would not be what the labels say (services as SyncServices read them,
 // so ./mnt whole as data or an owner's is refused already): ./mnt whole
@@ -600,13 +709,18 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // and a bind source below an owned entry (./mnt/storage/files), by any
 // service, read-only too: the entry's owner can replace that path with a
 // symbolic link, and Docker resolves a bind source on the host (a link
-// to / would mount the host's root).
+// to / would mount the host's root); and a bind source a link in its
+// entry leads out of it (LeavingBinds), whoever made it.
 func CheckMounts(services []SyncService) error {
 	var bad []string
 	var fixes []report.Remedy
-	tree, data, owner, whole, below := false, false, false, false, false
+	tree, data, owner, whole, below, leaving := false, false, false, false, false, false
 	owners, ownersErr := MntOwners(services)
 	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+			leaving = true
+		}
 		for _, b := range s.Binds {
 			if e, _, under := strings.Cut(b, string(filepath.Separator)); under && owners[e] != "" {
 				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below the owned entry ./mnt/%s (%s=%s): its owner can make that path a symbolic link, and Docker would mount what it points to on the host", s.Name, b, e, MntOwnerLabel, owners[e]))
@@ -651,6 +765,9 @@ func CheckMounts(services []SyncService) error {
 	}
 	if below {
 		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
+	}
+	if leaving {
+		fixes = append(fixes, report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly"))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }

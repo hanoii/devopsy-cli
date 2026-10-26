@@ -29,7 +29,7 @@ func TestSyncVolumes(t *testing.T) {
 		t.Fatalf("first release (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
 	order := []string{"volume create --label com.docker.compose.project=shop-dev --label com.docker.compose.volume=dbdata shop-dev_dbdata", "shop-dev compose", "stop db",
-		"-rsync-v0 -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:2 rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/dbdata/ /dst/dbdata/"}
+		"-rsync-v0 -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
 	if !strings.Contains(out, "devopsy: rsync volume dbdata\n") {
 		t.Errorf("the volume's copy not said:\n%s", out)
 	}
@@ -51,7 +51,7 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "newer\n" {
 		t.Fatalf("across servers (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --network host -v shop-dev_dbdata:/vol/dbdata devopsy-util:2 rsync", "/dbdata/ /vol/dbdata/"} {
+	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --network host -v shop-dev_dbdata:/vol/dbdata devopsy-util:3 rsync", "/dbdata/ /vol/dbdata/"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("across servers, missing %q in:\n%s", want, docker)
 		}
@@ -95,7 +95,7 @@ func TestExportImportVolumes(t *testing.T) {
 
 	out, errs, code := s.runIO(env, nil, "--export", "db")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "-v shop_dbdata:/vol/dbdata:ro devopsy-util:2 tar -C /mnt -cf - --numeric-owner db -C /vol dbdata\n") {
+	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "-v shop_dbdata:/vol/dbdata:ro devopsy-util:3 tar -C /mnt -cf - --numeric-owner db -C /vol dbdata\n") {
 		t.Fatalf("--export (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string

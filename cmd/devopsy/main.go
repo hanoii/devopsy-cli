@@ -152,6 +152,8 @@ func run() int {
 		return runDestroyData(cwd, args[1:], color)
 	case cli.ReleaseStepsFlag:
 		return runReleaseSteps(cwd, args[1:], color)
+	case remote.SnapshotStepFlag:
+		return runSnapshotStep(cwd, args[1:])
 	}
 	updateNotice(color)
 	if strings.HasPrefix(args[0], "@") {
@@ -235,6 +237,12 @@ func run() int {
 	// entries first (cli.MntOwnerLabel).
 	if plan.Starts {
 		if err := localMnt(cwd); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
+	if plan.StartsInRelease {
+		if err := checkStartBinds(cwd); err != nil {
 			report.Fail(err)
 			return 1
 		}

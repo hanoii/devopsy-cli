@@ -2,6 +2,8 @@ package images
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -127,6 +129,13 @@ func (d *fakeDocker) Tag(src, dst string) error {
 		return err
 	}
 	d.names[familiar(dst)] = id
+	// As Docker's containerd store: a pulled image tagged into another
+	// repository gets that repository's digest name too (RepoDigests
+	// lists it), and repo@digest then finds it there (checked on Docker
+	// 28 with the containerd store, 2026-10-26).
+	if len(d.digests[id]) > 0 {
+		d.digests[id] = appendNew(d.digests[id], repoKey(dst)+"@"+id)
+	}
 	return nil
 }
 
@@ -316,12 +325,51 @@ func TestBookmarkPrefix(t *testing.T) {
 	if p2 == p3 || len(p2) != len("devopsy-")+85+1+8+1 {
 		t.Errorf("long names: %q %q", p2, p3)
 	}
-	// The longest tag: prefix, a 14-digit id, - and a 10-digit cksum.
+	// The longest tag: prefix, a 14-digit id, - and a 10-digit cksum (a
+	// snapshot's: TestSnapshotBookmarkLength).
 	if n := len(p2) + 14 + 1 + 10; n > 128 {
 		t.Errorf("a tag can reach %d characters", n)
 	}
 	if bookmarkPrefix(long2) != p2 {
 		t.Errorf("not stable")
+	}
+}
+
+// A release the previous devopsy bookmarked, of an environment whose
+// compose name is long (94 characters and more: cut to 85 and hashed
+// before), is still the environment's own once the server's devopsy is
+// upgraded: its removal frees its image, as it did before.
+func TestBookmarkLongNameKept(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{strings.Repeat("a", 94), strings.Repeat("b", 100)} {
+		d := newFake()
+		var out bytes.Buffer
+		e := newEnv(t, d, name, filepath.Join(t.TempDir(), LeftFile), &out)
+		d.pull("mariadb:11", "sha256:1")
+		id := e.newRelease("mariadb:11")
+		e.set.Bookmark(e.rel(id))
+		// The bookmark as the devopsy before snapshots made it.
+		old := name
+		if len(name) > 94 {
+			sum := sha256.Sum256([]byte(name))
+			old = name[:85] + "-" + hex.EncodeToString(sum[:4])
+		}
+		if err := d.Tag("mariadb:"+bookmarkPrefix(name)+id, "mariadb:devopsy-"+old+"-"+id); err != nil {
+			t.Fatal(err)
+		}
+		if bookmarkPrefix(name) != "devopsy-"+old+"-" {
+			if err := d.Remove("mariadb:" + bookmarkPrefix(name) + id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d.Remove("mariadb:11")
+		if err := e.set.Remove(e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		e.set.Prune()
+		if len(d.images) != 0 {
+			t.Errorf("%d characters: the release's image stays after its removal: %v\n%s", len(name), d.names, out.String())
+		}
 	}
 }
 

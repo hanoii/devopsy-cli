@@ -2042,11 +2042,15 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
 	d.publish("mariadb:11.8", "I1")
 	stage.release(false, db118)
+	// prod's history written a week before the export, as on a server:
+	// the import's mark (--resolved's since) is the import's own time.
+	prod.e.set.Now = func() time.Time { return time.Now().Add(-7 * 24 * time.Hour) }
 	d.publish("mariadb:11.8", "I2")
 	prod.release(false, db118)
 	// prod's history two lines, so the import's window ends with a run's.
 	d.publish("mariadb:11.8", "I3")
 	prod.release(false, db118)
+	since := time.Now().UTC().Truncate(time.Second)
 	if err := importInto(t, prod, stage, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2054,7 +2058,7 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	if !strings.HasSuffix(before, "ran:I3") {
 		t.Fatalf("the import's history: %s", before)
 	}
-	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(stage.history("database"), " ") != before {
+	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database", since); err != nil || strings.Join(stage.history("database"), " ") != before {
 		t.Errorf("--resolved after a held import (%v): history %v, was %s", err, stage.history("database"), before)
 	}
 	// Held as every release holds it, its newest line a run's: over.
@@ -2179,5 +2183,164 @@ func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
 	// An import cut after its first write, nothing held, then --resolved.
 	if err := dev.e.set.Resolved(dev.base(), dev.e.rel(dev.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(dev.history("database"), " ") != "ran:I1 import:I1" {
 		t.Errorf("--resolved after an import that held nothing (%v): history %v, want ran:I1 import:I1", err, dev.history("database"))
+	}
+}
+
+// A snapshot's record of its data images (data/images) and an export's
+// header are whoever made them: an import or a restore holds the service
+// in its own repository only (ownHold), but the history it takes over
+// from the record decides what a later rollback or restart holds the
+// service on (Restore, HoldData: the history's last). A record whose
+// image line names another repository (a restore checks none: no
+// ImportCheck), or whose history ends on one (an --import's check reads
+// the image line only), must not leave the data's newest image in that
+// repository: a rollback then pulls evil.example/x by its digest and
+// runs it on the database.
+func TestImportedHistoryOwnRepositoryOnly(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		data  string
+		check bool
+	}{
+		"restore, its image line elsewhere": {data: "image\tdatabase\tevil.example/x:1\tIX\tevil.example/x@IX\n"},
+		"import, its history ending elsewhere": {check: true, data: "image\tdatabase\tmariadb:11.8\tI1\tmariadb@I1\n" +
+			"ran\t1\tdatabase\tran\tmariadb:11.8\tI1\tmariadb@I1\n" +
+			"ran\t2\tdatabase\tran\tevil.example/x:1\tIX\tevil.example/x@IX\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := newFake()
+			d.strictRepo = true
+			var out bytes.Buffer
+			prod := newSim(t, d, "app-prod", &out)
+			d.publish("mariadb:11.8", "I1")
+			r1, _ := prod.release(false, appSvc, db118)
+			prod.release(false, appSvc, db118)
+			d.publish("evil.example/x:1", "IX")
+			rel := prod.e.rel(prod.cur)
+			var err error
+			if c.check {
+				err = prod.e.set.ImportCheck(rel, c.data, "database")
+			}
+			if err == nil {
+				err = prod.e.set.ImportDone(prod.base(), rel, c.data)
+			}
+			if err != nil {
+				return // refused: nothing taken over
+			}
+			if last, ok := readHistory(prod.base()).last("database"); ok && repoKey(last.hold()) != "mariadb" {
+				t.Errorf("the data's newest image is %s, from the record, outside the service's own repository", last.hold())
+			}
+			if err := prod.rollback(r1); err == nil && (d.images["IX"] || prod.runs("database") == "IX") {
+				t.Errorf("a rollback after it pulled and ran evil.example/x on the database (runs %s)\n%s", prod.runs("database"), out.String())
+			}
+		})
+	}
+}
+
+// A data service's history remembers every image its data ran by the
+// image, whatever the name it ran as: an environment that moved to a
+// mirror of its series (mirror.example/mariadb:11.8, the image it ran
+// already, so no --accept-image) still knows its data moved past I1,
+// which ran as mariadb:11.8. A restore of its own snapshot (data/images,
+// ImportDone) keeps that knowledge: its record's lines in the upstream
+// repository are no newest image to hold, but they are what the data
+// moved past. The mirror's tag going back to I1 must then be refused as
+// it was before the restore, never run on the data I2 wrote.
+func TestRestoredHistoryKeepsWhatDataMovedPast(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	mirror := dbSvc("mirror.example/mariadb:11.8")
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	if _, err := prod.release(false, mirror); err != nil || prod.runs("database") != "I2" {
+		t.Fatalf("the move to the mirror, the same image (%v): runs %s\n%s", err, prod.runs("database"), out.String())
+	}
+	rel := prod.e.rel(prod.cur)
+	data := prod.e.set.SnapshotData(prod.base(), rel)
+	// The tag moving back before the restore: refused.
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	if _, err := prod.release(false, mirror); !errors.Is(err, ErrRefused) {
+		t.Fatalf("before the restore, the mirror's tag back on I1 (%v): runs %s\n%s", err, prod.runs("database"), out.String())
+	}
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	if err := prod.e.set.ImportDone(prod.base(), rel, data); err != nil {
+		t.Fatalf("the restore's data step: %v\n%s", err, out.String())
+	}
+	prod.activation = true
+	prod.up()
+	if err := prod.e.set.Ran(prod.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	out.Reset()
+	if _, err := prod.release(false, mirror); !errors.Is(err, ErrRefused) || prod.runs("database") != "I2" {
+		t.Errorf("after the restore of its own snapshot, the mirror's tag back on I1, an image the data moved past (%v): runs %s, history %v\n%s", err, prod.runs("database"), prod.history("database"), out.String())
+	}
+}
+
+// An imported snapshot's listing and record are whoever made them. The
+// import keeps the listing's entries of the current release's services
+// under that release's repository (FilterImported) and bookmarks them by
+// id where the server has them (BookmarkFrom, keep: by id). A crafted
+// entry naming, by its id and digest, an image the server has of another
+// repository (a public image's id is public: traefik's, the proxy's) is
+// then tagged into the service's own repository, and Docker's containerd
+// store resolves mariadb@<that digest> to it from then on (checked on
+// Docker 28: once an image has a name in a repository, repo@digest finds
+// it there and RepoDigests lists it). SnapshotPull finds the id present
+// and pulls nothing, and the --no-code restore's hold in the service's
+// own repository (ownHold), which is meant to keep an untrusted
+// snapshot's images to that repository, runs that image on the
+// database: an image never pulled as mariadb's, whatever its name.
+func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, appSvc, db118)
+	// An image of another repository on the server: the proxy's.
+	d.pull("traefik:v3.7", "IT")
+	snaps := filepath.Join(t.TempDir(), "snapshots")
+	snap := filepath.Join(snaps, "20261026000001")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot's listing, crafted: database on traefik's image, named
+	// as mariadb's; its record the same.
+	if err := writeList(snap, []entry{{Ref: "mariadb:11.8", ID: "IT", Service: "database", Kind: KindData, Digest: "mariadb@IT"}}); err != nil {
+		t.Fatal(err)
+	}
+	data := "image\tdatabase\tmariadb:11.8\tIT\tmariadb@IT\n"
+	rel := prod.e.rel(prod.cur)
+	prod.e.set.Snapshots, prod.e.set.Base = snaps, prod.base()
+	// The import: the listing cut to the current release's services and
+	// repositories, then bookmarked where the server has the images.
+	if err := FilterImported(snap, rel); err != nil {
+		t.Fatal(err)
+	}
+	if err := prod.e.set.BookmarkFrom(snap, snap); err != nil {
+		t.Fatal(err)
+	}
+	// The --no-code restore: its check pulls what is gone, its data step
+	// holds the database on the record's image, then the run step.
+	if err := prod.e.set.SnapshotPull(snap, data); err != nil {
+		return // refused before anything stops: no such image in mariadb
+	}
+	if err := prod.e.set.ImportDone(prod.base(), rel, data); err != nil {
+		return // refused: nothing taken over
+	}
+	prod.activation = true
+	prod.up()
+	tags, _ := d.Tags("IT")
+	if prod.runs("database") == "IT" || holdsIn(rel)["database"] == "mariadb@IT" {
+		t.Errorf("the --no-code restore of an imported snapshot runs traefik's image on the database (hold %s, traefik's names %v): the listing's id named it, and the import tagged it as mariadb's\n%s", holdsIn(rel)["database"], tags, out.String())
 	}
 }

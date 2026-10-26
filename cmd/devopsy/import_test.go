@@ -1094,7 +1094,7 @@ func TestImportExportImagesImageLock(t *testing.T) {
 }
 
 // A pax global header is no member to archive/tar, but GNU tar applies
-// its records to every member after it (checked in devopsy-util:2, GNU
+// its records to every member after it (checked in devopsy-util:3, GNU
 // tar 1.35): a path or linkpath there renames members and retargets
 // links the checks never saw, storage/b -> a extracted as storage/evil
 // -> /etc/shadow. The export's header carries its record alone; a global

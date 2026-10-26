@@ -282,7 +282,7 @@ func runLanes(n int) (int, error) {
 // deploy user's login shell.
 func resetLane(l lane) {
 	_, _ = docker("exec", l.operator, "sh", "-c", "pkill -x devopsy; pkill -x ssh; pkill -x script; iptables -F; tc qdisc del dev eth0 root 2>/dev/null; true")
-	_, _ = docker("exec", l.server, "sh", "-c", "tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; true")
+	_, _ = docker("exec", l.server, "sh", "-c", "tc qdisc del dev eth0 root 2>/dev/null; usermod -s /bin/sh devopsy; for m in $(awk '$2 ~ \"^/home/devopsy/\" {print $2}' /proc/mounts); do umount -l \"$m\"; done; true")
 }
 
 // listTests lists the tests -test.run selects, never -test.skip's.

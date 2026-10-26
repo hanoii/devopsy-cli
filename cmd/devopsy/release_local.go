@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -343,6 +344,20 @@ func destroyData(cwd string, step []string, color bool) int {
 		}
 		if err := images.RemoveHistory(base); err != nil {
 			return fail(err.Error())
+		}
+		// The snapshots' mirror, root's (rsync as root), as root, wherever
+		// the server's snapshot root puts them (basePrelude exports it).
+		// A take's reflink clone, root's too, among its own snapshots.
+		if fileExists(filepath.Join(base, "snapshots", ".clone")) {
+			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), "-v", filepath.Join(base, "snapshots")+":/s", remote.UtilImage, "rm", "-rf", "/s/.clone"); err != nil {
+				return fail("removing the snapshots' clone: " + err.Error())
+			}
+		}
+		snaps := cmp.Or(os.Getenv(images.SnapshotsEnv), filepath.Join(base, "snapshots"))
+		if fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
+			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-mirror", os.Getpid()), "-v", snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror); err != nil {
+				return fail("removing the snapshots' mirror: " + err.Error())
+			}
 		}
 	}
 	return 0

@@ -63,6 +63,13 @@ type Plan struct {
 	// Never in a release on a server, where --mnt-owners gives them away
 	// at each switch, nor for --dry-run, which starts nothing.
 	Starts bool
+	// StartsInRelease is set for such a command, or cp (which mounts bind
+	// sources afresh), in a release on a server:
+	// the caller checks first that no bind source leads out of its entry
+	// through a link in the data as it is now (SyncService.LeavingBinds),
+	// whatever brought the link (a restore, a sync, an import): Docker
+	// resolves bind sources at every start.
+	StartsInRelease bool
 }
 
 // startingCommands are compose's commands that start or create
@@ -173,7 +180,13 @@ func mayOwnMnt(files []string) bool {
 // starting sets plan.Starts for args, compose's command line after
 // docker compose (Plan.Starts).
 func (p *loadedProject) starting(plan *Plan, args []string) {
-	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && !dryRun(args) && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
+	command := composeCommand(args)
+	starts := slices.Contains(startingCommands, command) && !dryRun(args)
+	plan.Starts = starts && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
+	// cp mounts a container's bind sources afresh too, running or
+	// stopped (checked on Docker 29.8: a copy into a bind whose source
+	// became a link landed where the link leads, as root).
+	plan.StartsInRelease = (starts || command == "cp" && !dryRun(args)) && InRelease(p.dir)
 }
 
 // Output is returned when devopsy only prints something to stdout.
@@ -804,6 +817,73 @@ is an id that names none or several: nothing is removed then. Rollbacks
 cannot go back to a removed release; data in shared/ is never touched.
 Asks first at a terminal; --yes for scripts and CI. It waits for the
 release lock, and up to 10 minutes for releases using the server's images.
+`,
+	"--snapshot": `Usage: devopsy @<target> --snapshot
+
+Takes a snapshot of the environment: the data of every service with data
+(devopsy.data=true: its entries of mnt and named volumes, as files,
+whatever its copy label), the current release's code and the images
+that ran on them, and its shared/.env. Every service with data, any
+service writing what it copies, and what depends on them, is stopped
+for the moment of the copy, all together.
+Where the data clones by reflinks (XFS, btrfs), the copy is a clone,
+seconds, and the tars are made from it afterwards. Otherwise the
+compressed tars are written while stopped (the downtime), unless the
+environment's snapshots: {mirror: true} keeps a mirror of the data
+beside the snapshots: the data is first copied into it while everything
+runs, then again stopped, only what changed since (the downtime), and
+the tars are made from it afterwards, nobody waiting.
+
+Before the services start again a Ctrl-C or a session gone cancels it,
+the services started again; past that it finishes on its own, its output
+in the server's log (devopsy @<target> --log). Refused on an environment
+whose data a sync, an import or a restore left incomplete, with nothing
+with data, with a service with data writing a bind from outside the
+project or mounting no entry or named volume, with a bind source a
+link in its entry leads out of it, with snapshots: {manual: false}, or
+without the space for it.
+The server's snapshots: {mirror: false} keeps any environment from
+keeping a mirror. The environment's snapshots: manual keep
+(3) says how many stay, at most the server's snapshots: max_keep; where
+they go is the server's snapshots: root, else beside shared/.
+`,
+	"--snapshots": `Usage: devopsy @<target> --snapshots
+       devopsy @<target> --snapshots restore <id> [--no-code] [--with-env] [--yes]
+       devopsy @<target> --snapshots remove <id>... [--yes]
+       devopsy @<target> --snapshots export <id> > <file>
+       devopsy @<target> --snapshots import < <file>
+
+Lists the environment's snapshots, newest first: id, kind, the release
+it was taken in, when, and its size; IN PROGRESS for one being taken
+now, INCOMPLETE for one cut off (the next snapshot finishes it when its
+data was complete, else removes it). An id can be its start, when only
+one snapshot starts so.
+
+restore brings a snapshot back whole: its data, its code and the images
+that ran on them, as a new release (a --rollback after it goes back to
+the release before), every service with data and what depends on it
+stopped while the data is written. The data services run the exact
+images their data ran, the rest as their names give them now. Its steps
+are the restored release's rollback:, else release:. --no-code restores
+the data and its images under the current release, rerunning its run
+step: refused when its labels no longer fit the snapshot's. --with-env
+brings its shared/.env back too (without it, a difference is said).
+Asks for the environment's full name; --yes for scripts and CI. A
+restore that cannot finish keeps the services down, the environment
+marked, until a restore completes.
+
+remove takes snapshots away, each with the images only it holds, as a
+release's removal does; a word that names none or several refuses them
+all. Asks first at a terminal; --yes for scripts and CI. It waits for
+the snapshot lock, and up to 10 minutes for the server's images.
+
+export writes a snapshot to stdout as one tar (its data's tars, code,
+manifest, and shared/.env: it carries the environment's secrets);
+import stores one from stdin as a snapshot of the environment, under a
+new id, on this server or another, checked whole. It needs a current
+release: on a new server, release first, then import and restore
+(--with-env). Images are not in an export: a restore pulls the pulled
+ones by digest and builds the built ones from the snapshot's code.
 `,
 	"--env": `Usage: devopsy @<target> --env [--show]
 

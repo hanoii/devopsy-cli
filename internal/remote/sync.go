@@ -105,6 +105,24 @@ func WriterLine(service string, pid int, was string) string {
 // sync's id: what --sync-services finish partial and settle remove.
 const SyncContainerPrefix = "devopsy-sync-"
 
+// SyncCheckedEnv, set by a parent's push for the child's devopsy, says the
+// parent checked the child's restore mark (it copies all of every service
+// the restore covers): the child's done line then says so
+// (CheckedDoneLine), and only such a line completes a sync over a
+// restore's mark, so a parent older than restores' marks never clears one
+// with a copy that leaves some of it.
+const SyncCheckedEnv = "DEVOPSY_INTERNAL_SYNC_CHECKED"
+
+// CheckedDoneLine is DoneLine from a parent that checks restores' marks:
+// a line of its own before it (CheckedLine), written together in one
+// append, so the done line stays what an older devopsy's holder looks
+// for (an operator older than the servers took every complete sync for
+// a cut one, review).
+func CheckedDoneLine(id string) string { return CheckedLine(id) + "\n" + DoneLine(id) }
+
+// CheckedLine says the sync's parent checked the child's restore mark.
+func CheckedLine(id string) string { return "checked " + id }
+
 // DoneLine records the copy's last write in SyncStartedFile.
 func DoneLine(id string) string {
 	return "done " + id
@@ -151,6 +169,9 @@ type Incomplete struct{ Since, From, Code, Why string }
 // IsImport reports an import's mark: From is its service.
 func (m *Incomplete) IsImport() bool { return m != nil && m.Code == IncompleteImport }
 
+// IsRestore reports a restore's mark: From is its snapshot's id.
+func (m *Incomplete) IsRestore() bool { return m != nil && m.Code == IncompleteRestore }
+
 // ImportFixes are the ways out of an import of service that did not
 // complete, ref the address as typed, child whether it has a parent: the
 // import again from a complete file (on a child, or a sync), or
@@ -165,6 +186,32 @@ func ImportFixes(ref, service string, child bool) [][2]string {
 	}
 	return append(fixes,
 		[2]string{"or go on with the data as it is (to fix it by hand first: devopsy @" + ref + " up -d --no-deps " + service + ", then --shell " + service + "):", "devopsy @" + ref + " --import " + service + " --resolved"})
+}
+
+// RestoreFixes are the ways out of a restore of snapshot that did not
+// complete, ref the address as typed, child whether it has a parent: the
+// same restore again (it empties and extracts everything again),
+// another snapshot, a reset on a child. Each a text and its command.
+func RestoreFixes(ref, snapshot string, child bool) [][2]string {
+	fixes := [][2]string{
+		{"restore it again:", "devopsy @" + ref + " --snapshots restore " + snapshot},
+		{"or its data alone, under the current release:", "devopsy @" + ref + " --snapshots restore " + snapshot + " --no-code"},
+		{"or another snapshot:", "devopsy @" + ref + " --snapshots"},
+	}
+	if child {
+		fixes = append(fixes, ResetFix(ref))
+	}
+	return fixes
+}
+
+// restoreFixLines are RestoreFixes as --say's details, the snapshot the
+// shell's $snapshot.
+func restoreFixLines(t *Target, snapshot string) string {
+	var lines []string
+	for _, f := range RestoreFixes(hintAddress(t), "$"+snapshot, t.Parent != "") {
+		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
+	}
+	return strings.Join(lines, " ")
 }
 
 // ResetFix is the way out that starts a child over from its parent.
@@ -199,6 +246,9 @@ func markRefusal(t *Target, what, syncFix, refuse string) string {
   if [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
     mr_service=$(cut -f2 ` + mark + ` 2>/dev/null) || true
     devopsy --say error "the import of $mr_service into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + importFixLines(t, "mr_service") + `
+  elif [ "$(cut -f3 ` + mark + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+    mr_snapshot=$(cut -f2 ` + mark + ` 2>/dev/null) || true
+    devopsy --say error "the restore of snapshot $mr_snapshot into @` + t.Address + ` did not complete, and nothing runs on its data until one does: ` + what + `" ` + restoreFixLines(t, "mr_snapshot") + `
   else
     devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: ` + what + `: ` + IncompleteWhy + `" ` + syncFix + `
   fi
@@ -273,8 +323,9 @@ var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "C
 // root on the data and serves rsync across servers, so its base floats
 // on alpine:3 and gets its fixes within a week. Its tag changes with the
 // Dockerfile's packages. It was devopsy-rsync until October 2026, then
-// devopsy-util:1: hosts keep those until removed.
-const UtilImage = "devopsy-util:2"
+// devopsy-util:1 and :2 (:3 added zstd, for snapshots): hosts keep those
+// until removed.
+const UtilImage = "devopsy-util:3"
 
 // UtilImageMaxAge is how old UtilImage may get before it is rebuilt.
 const UtilImageMaxAge = 7 * 24 * time.Hour
@@ -288,8 +339,9 @@ const UtilImageFlag = "--util-image"
 // UtilDockerfile is UtilImage's Dockerfile, one line per element. GNU
 // tar, find and chown, not busybox's: tar's --numeric-owner and
 // --overwrite, find's -user and -group with numbers and -exec ... +,
-// chown -h, as documented.
-var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils"}
+// chown -h, as documented; zstd for snapshots' tars (Go's standard
+// library has none, and devopsy takes no dependency for it).
+var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar findutils coreutils zstd"}
 
 // RsyncCopy is how a sync copies an entry of mnt, in UtilImage, on one
 // server or across two: everything, owners as numbers, and what the
@@ -303,8 +355,12 @@ var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar
 // import extracts none either, errMember in cmd/devopsy). Why: rsync as
 // root makes them on the child's host, where bind mounts are not nodev,
 // and --chown gave them to the entry's owner, a block device of the
-// server's disk the raw disk for that UID.
-var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1"}
+// server's disk the raw disk for that UID. --sparse keeps holes holes
+// (a database's punched pages), as a snapshot's tars do: written as
+// zeros, a copy takes more disk than its source, past what a space
+// check measured (du counts blocks); rsync 3.1.3 and later take it with
+// --inplace (a file entry's).
+var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1", "--sparse"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the
@@ -473,6 +529,30 @@ fi
 // was written; $status says how it went. failed says what a failure
 // means here; release is an activation's, which may be a first release
 // (syncPrepare).
+// syncDecision sets $sync_word from what the copy wrote (taken, the
+// writers' record the holder took), the environment's mark (incomplete)
+// and the answer ($reply): go, partial or abort.
+func syncDecision(taken, incomplete string) string {
+	return `  # A push that went through and wrote nothing (the parent's labels
+  # copy nothing) is go: no data the labels cover is partial any more.
+  sync_word=abort
+  # Over a restore's mark, only a parent that checked it completes it.
+  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null &&
+    { grep -qx "` + CheckedLine("$sync_id") + `" ` + taken + ` 2>/dev/null || [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" != ` + IncompleteRestore + ` ]; }; then
+    sync_word=go
+  elif [ -e ` + taken + ` ]; then
+    # Written in part: the copy was cut.
+    sync_word=partial
+  elif [ -e ` + incomplete + ` ]; then
+    # Nothing written over an earlier sync's partial copy, whatever the
+    # answer: only a sync that writes completes it.
+    sync_word=partial
+  elif [ "$reply" = go ]; then
+    sync_word=go
+  fi
+`
+}
+
 func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
@@ -488,22 +568,7 @@ func syncBlock(projectName, failed string, release bool) string {
   # The writers' record taken in one move: a write appending after it
   # finds no file and stops.
   mv -f ` + started + ` ` + taken + ` 2>/dev/null || true
-  # A push that went through and wrote nothing (the parent's labels
-  # copy nothing) is go: no data the labels cover is partial any more.
-  sync_word=abort
-  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null; then
-    sync_word=go
-  elif [ -e ` + taken + ` ]; then
-    # Written in part: the copy was cut.
-    sync_word=partial
-  elif [ -e ` + incomplete + ` ]; then
-    # Nothing written over an earlier sync's partial copy, whatever the
-    # answer: only a sync that writes completes it.
-    sync_word=partial
-  elif [ "$reply" = go ]; then
-    sync_word=go
-  fi
-  case "$reply.$sync_word" in
+` + syncDecision(taken, incomplete) + `  case "$reply.$sync_word" in
     go.go) ;;
     *.go) devopsy --say info "the copy had completed: going on with it" || true ;;
     *.partial)
@@ -512,11 +577,19 @@ func syncBlock(projectName, failed string, release bool) string {
       sync_since=$(cut -f1 ` + incomplete + ` 2>/dev/null) || true
       [ -n "$sync_since" ] || sync_since=$(date -u '+%Y-%m-%d %H:%M:%S')
       sync_from=$(head -n 1 ` + taken + ` 2>/dev/null | cut -d' ' -f1) || true
-      if [ -e ` + taken + ` ]; then
+      if [ -e ` + taken + ` ] && [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        # Over a restore's mark the mark stays the restore's: a sync's
+        # would let a later sync clear it without copying every service
+        # of the snapshot (an older parent's complete copy, which could
+        # not check that, included).
+        devopsy --say error "the copy did not complete what the restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) left: what it stopped stays down until a sync from a parent that copies every service of it, or a restore, completes, and ` + failed + `" || true
+      elif [ -e ` + taken + ` ]; then
         devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
         printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
       elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         devopsy --say error "nothing was copied, and the data is still from an import of $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes that service, and ` + failed + `" || true
+      elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        devopsy --say error "nothing was copied, and the data is still from a restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) that did not complete: what it stopped stays down until a sync writes every service of it, and ` + failed + `" || true
       else
         devopsy --say error "nothing was copied, and the data is still an earlier sync's that did not complete: the services stay down until a sync writes it, and ` + failed + `" "if the parent no longer has that data, start the child over from it:" "` + report.CmdMark + `devopsy @$` + SyncToTargetEnv + ` --reset" || true
       fi
@@ -603,7 +676,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+` + recoverFetch(`"$rel"`) + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
 # child's images, and the parent's image must be here (img sync-check
 # pulls it, maybe for long): an abort or a session gone meanwhile ends
 # this, nothing stopped.
@@ -737,7 +810,10 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
   im_code=$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
   im_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
-  if [ "$im_code" != ` + IncompleteImport + ` ]; then
+  if [ "$im_code" = ` + IncompleteRestore + ` ]; then
+    devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixLines(t, "im_service") + `
+    exit 1
+  elif [ "$im_code" != ` + IncompleteImport + ` ]; then
     devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
@@ -752,7 +828,7 @@ export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(pro
 // writers end first, and its data becomes a sync's mark (replacing an
 // import's), which the checks after it see. Under the release lock.
 func settleLeftover(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
 `
@@ -889,6 +965,10 @@ const SyncRunning = `{ [ -e "$base/` + SyncHoldingFile + `" ] && ` + LockBusy + 
 // export of it holds its sync lock ($base set).
 const SourceBusy = `{ [ -e "$base/` + SyncLockFile + `" ] && ! flock -n "$base/` + SyncLockFile + `" true; } 2>/dev/null`
 
+// SnapshotRunning succeeds while a snapshot is taken (its holding file,
+// and its lock held), $base set.
+const SnapshotRunning = `{ [ -e "$base/` + SnapshotHoldingFile + `" ] && ! flock -n -s "$base/` + SnapshotLockFile + `" true; } 2>/dev/null`
+
 // LockBusy succeeds while something holds the environment's release
 // lock ($base set): a sync's files are its own then, not leftovers.
 const LockBusy = `{ [ -e "$base/.lock" ] && ! flock -n -s "$base/.lock" true; } 2>/dev/null`
@@ -948,7 +1028,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:`+port+`/$2" "/mnt/$3"` + ` >&2 || {
+  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -984,7 +1064,7 @@ copyvol() {
 		// the copy is not this sync's to complete. (A take between the
 		// check and the append leaves a record of this line alone, which
 		// the next lock-taker settles.)
-		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
+		script += "mine && printf '%s\\n' " + Quote(CheckedDoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
 }

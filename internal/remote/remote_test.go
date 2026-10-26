@@ -265,6 +265,11 @@ func allScripts() map[string]string {
 		"import":          ImportScript(tg, "app-prod", "it's db", "\nend 0a1b\n", "database"),
 		"resolved check":  ResolvedCheckScript(tg),
 		"resolved":        ResolvedScript(tg, "app-prod", "it's db"),
+		"snapshot":        SnapshotScript(tg, "app-prod", 3),
+		"snapshots":       SnapshotsScript(tg, "app-prod"),
+		"snapshots rm":    SnapshotsRemoveScript(tg, "app-prod", []string{"20261025120000"}),
+		"restore":         RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000", WithEnv: true, By: "me"}),
+		"restore data":    RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
 	}
 }
 
@@ -320,7 +325,7 @@ func TestMntOwnerFeature(t *testing.T) {
 // root in UtilImage it makes them on the child's host, where bind mounts
 // are not nodev, and --chown then gives them to the entry's owner, a
 // block device of the server's disk the raw disk for that UID. Checked
-// in devopsy-util:2: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
+// in devopsy-util:3: a parent's `mknod disk b 8 0` and `mkfifo fifo`,
 // copied by RsyncCopy with --chown=10001:10001, land as `brw-r--r--
 // 10001 10001 8, 0 disk` and `prw-r--r-- 10001 10001 fifo` (review of
 // 2026-10-23, round 4). Both paths, the same server's and the receive
@@ -339,7 +344,7 @@ func TestRsyncCopySkipsDevices(t *testing.T) {
 func TestSyncReceiveOwners(t *testing.T) {
 	t.Parallel()
 	s := allScripts()["receive"]
-	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 $4 ") {
+	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse $4 ") {
 		t.Errorf("receive:\n%s", s)
 	}
 	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {
@@ -357,7 +362,7 @@ func TestSyncReceiveOwners(t *testing.T) {
 func TestDataImagesFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove"
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove" || strings.HasPrefix(name, "restore")
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}
@@ -1369,7 +1374,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "3" {
@@ -1381,7 +1386,7 @@ exit 0
 	if out, err := release("32", "FAIL_OWNERS=32"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "giving the entries of mnt to their owners failed (5), current is back to 1") {
 		t.Fatalf("failed owners (%v), current %q:\n%s", err, current(), out)
 	}
-	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --release-steps restart run\n") {
+	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n") {
 		t.Errorf("failed owners calls:\n%s", got)
 	}
 
@@ -1937,7 +1942,7 @@ exit 0
 		t.Fatal(err)
 	}
 	w.Close()
-	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+	for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	r.Close()
@@ -1960,7 +1965,7 @@ exit 0
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+		for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 			time.Sleep(50 * time.Millisecond)
 		}
 		during()
@@ -2053,7 +2058,7 @@ exit 0
 		t.Fatal(err)
 	}
 	r.Close()
-	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+	for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	start := time.Now()

@@ -285,6 +285,8 @@ type Record struct {
 	Commit string `json:"commit,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	Dirty  bool   `json:"dirty,omitempty"`
+	// Restore is the snapshot a restore made the release from.
+	Restore string `json:"restore,omitempty"`
 }
 
 // NewRecord describes a release made now from projectRoot.
@@ -401,11 +403,18 @@ func devopsyCall(projectName string, args []string, exec bool) string {
 // lockWait takes the lock on fd (shared with -s): at once, or saying what
 // it waits for, up to 10 minutes, then giving up with 75.
 func lockWait(fd int, shared bool, what string) string {
+	return lockWaitOr(fd, shared, what, "exit 75")
+}
+
+// lockWaitOr is lockWait running timeout when the wait ends: an
+// activation's not_live, so a release that waited in vain is failed, not
+// left pending.
+func lockWaitOr(fd int, shared bool, what, timeout string) string {
 	opt := ""
 	if shared {
 		opt = "-s "
 	}
-	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; exit 75; }; }`, opt, fd, what, opt, fd, what)
+	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; }`, opt, fd, what, opt, fd, what, timeout)
 }
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
@@ -467,8 +476,9 @@ const ProtocolCheckEnv = "DEVOPSY_PROTOCOL_CHECK"
 const Protocol = 8
 
 // basePrelude sets $root, $keep and $max_keep from the server's devopsy
-// (--release-settings: its user-level config's releases:) and $base to the
-// target's directory: its path under $root. The
+// (--release-settings: its user-level config's releases:), $base to the
+// target's directory (its path under $root), and $snaps to where its
+// snapshots go, with $snap_max_keep (its snapshots:). The
 // server decides where releases live, so a laptop and CI always agree.
 func basePrelude(t *Target) string {
 	// The detached update check would inherit the scripts' locks (fds 8
@@ -488,6 +498,14 @@ root=$(printf '%s\n' "$settings" | sed -n 's/^root=//p')
 keep=$(printf '%s\n' "$settings" | sed -n 's/^keep=//p')
 max_keep=$(printf '%s\n' "$settings" | sed -n 's/^max_keep=//p')
 base="$root"/` + Quote(t.Path) + `
+# Where this environment's snapshots go: the server's snapshot root, by
+# the same path, else its own snapshots/.
+snap_root=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_root=//p')
+snap_max_keep=$(printf '%s\n' "$settings" | sed -n 's/^snapshot_max_keep=//p')
+snaps="$base/snapshots"
+[ -z "$snap_root" ] || snaps="$snap_root"/` + Quote(t.Path) + `
+# The images' rules count a snapshot's bookmarks as the environment's own.
+export ` + images.SnapshotsEnv + `="$snaps" ` + images.BaseEnv + `="$base"
 `
 }
 
@@ -687,6 +705,41 @@ func RemotePhases(steps *Steps) Phases {
 // prints SyncMarker and waits for devopsy's go or abort on stdin. Not for
 // rollbacks.
 func ActivateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions) string {
+	return activateScript(t, id, rollback, projectName, p, sync, nil)
+}
+
+// RestoreOptions are a full restore's (RestoreScript): the snapshot it
+// restores, by id.
+type RestoreOptions struct {
+	Snapshot string
+	// WithEnv brings the snapshot's shared/.env and inherit.env back
+	// (RestoreEnvEnv), By is who restores (the record's).
+	WithEnv bool
+	By      string
+}
+
+// RestoreEnvEnv and RestoreByEnv carry RestoreOptions' WithEnv and By to
+// the server's devopsy.
+const (
+	RestoreEnvEnv = "DEVOPSY_INTERNAL_RESTORE_ENV"
+	RestoreByEnv  = "DEVOPSY_INTERNAL_RESTORE_BY"
+)
+
+// RestoreScript restores t's snapshot r.Snapshot whole: a new release,
+// its id the server's, made from the snapshot's copy of its release, run
+// as a rollback runs the release it restores (no upload, its own steps,
+// --check-mounts restored, its images from its bookmarks), with the
+// snapshot's data written in the stretch a sync's copy would be, between
+// the images and the switch: the snapshot's tars checked whole before
+// anything stops, then the set stopped, each entry and volume emptied and
+// extracted, the data services held on the images that ran on it. Never
+// marks the release it leaves rolled back: a rollback after it goes back
+// there.
+func RestoreScript(t *Target, projectName string, r *RestoreOptions) string {
+	return activateScript(t, "", true, projectName, Phases{}, nil, r)
+}
+
+func activateScript(t *Target, id string, rollback bool, projectName string, p Phases, sync *SyncOptions, restore *RestoreOptions) string {
 	if !rollback && len(p.Run) == 0 {
 		// runRemote refuses a release without one (remote.Steps).
 		panic("remote.ActivateScript: a release without a run step")
@@ -714,19 +767,35 @@ func ActivateScript(t *Target, id string, rollback bool, projectName string, p P
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
-  img recover "$base" ${prev:+"$base/$prev"}
-  image_unlock
-fi
+` + recoverFetch(`${prev:+"$base/$prev"}`)
+	switch {
+	case restore != nil:
+		// A restore goes through a mark (a complete one clears it), as a
+		// release that syncs does. Its release: made from the snapshot's
+		// copy, pending until the switch, failed if it never goes live.
+		snapStep := func(word string, args ...string) string {
+			return "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
+		}
+		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
+[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
+[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
+` + settleSync(projectName) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+` + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
+export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
+export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
+id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
+devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
+` + NotLive + snapStep("make-release", `"$snap"`, `"$base/releases/$id"`) + ` || { rm -rf "$base/releases/$id"; exit 1; }
 `
-	if rollback {
+	case rollback:
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
 		s += `id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
 devopsy --say info "rolling back to $id"
 ` + RollbackNotLive
-	} else {
+	default:
 		s += "id=" + Quote(id) + "\n" + NotLive
 	}
 	// On a pseudo-terminal when the operator has one (with_tty), as
@@ -741,7 +810,7 @@ code="$rel/` + CodeDir + `"
 	if sync == nil && !rollback {
 		s += partialGuard(t, projectName, "not_live 1")
 	}
-	if !rollback {
+	if !rollback || restore != nil {
 		// Held until the switch: --releases tells this release in
 		// progress from one cut off before (ReleasesScript), whatever
 		// else holds the release lock.
@@ -757,8 +826,14 @@ fi
 	// release's do. On a pseudo-terminal like a release's (with_tty,
 	// which may run them in script's own shell: the release's code
 	// exported for that).
+	// A restore's are the restored release's rollback:, else its
+	// release:, as a restart's are.
+	kind := "rollback"
+	if restore != nil {
+		kind = "restart"
+	}
 	steps := func(phase string) string {
-		return devopsyCall(projectName, []string{"--release-steps", "rollback", phase}, false)
+		return devopsyCall(projectName, []string{"--release-steps", kind, phase}, false)
 	}
 	if rollback {
 		s += `rb_code="$rel/` + CodeDir + `"; export rb_code
@@ -817,7 +892,19 @@ done
 		// switch, and only that (its labels refuse nothing): the util
 		// image, which may have been pruned since, and no owned entry a
 		// link.
-		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + ") || not_live 1\n"
+		// A restore's names its snapshot: the entries it carries are
+		// replaced, their links checked in its tars (check-tars).
+		snapArg := ""
+		if restore != nil {
+			snapArg = ` "$snap"`
+		}
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + snapArg + ") || not_live 1\n"
+	}
+	if restore != nil {
+		// The snapshot's tars read and checked whole, before anything
+		// stops (devopsy's own, still checked: they sit on disk), in the
+		// restored code, whose binds the restored data meets.
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "check-tars"}, false) + " \"$snap\") || not_live 1\n"
 	}
 	if !rollback {
 		// The checks reading compose's configuration, which fails while a
@@ -862,10 +949,23 @@ done
 	if rollback {
 		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
 	}
+	// A release with snapshots on, replacing a current one, takes the
+	// snapshot of what it replaces (part 4 of snapshots): its locks and
+	// check before the fetch, its first pass during it, its stopped pass
+	// inside the stretch that cancels, leaving the services stopped for
+	// the run step to start under the new code, and its tars from the
+	// mirror after, detached (release-tar).
+	// A restore takes one too, of the data it replaces (its first write
+	// turns the snapshot's lines into its own: restore-data).
+	releaseSnap := (!rollback || restore != nil) && t.SnapshotsRelease.Enabled
+	if releaseSnap {
+		s += releaseSnapshotSetup(t, projectName, restore != nil)
+	}
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
-  ` + fetchStep + ` || fr=$?
+` + map[bool]string{true: releaseSnapshotFirstPass(projectName), false: ""}[releaseSnap] + `  ` + fetchStep + ` || fr=$?
+` + map[bool]string{true: releaseSnapshotStopped(projectName, restore != nil), false: ""}[releaseSnap] + `
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -921,9 +1021,10 @@ fetch_release "$rel" || fr=$?
 # A write before the marker goes: a session gone during the fetch that
 # watchSession did not see (none on -t, which gets HUP) fails here (PIPE
 # is ignored, so the write fails and set -e ends it), the marker kept for
-# img recover and current as it was. img record ignores SIGPIPE, so
-# nothing died sooner.
-[ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready"
+# img recover and current as it was, through not_live (whose hook starts
+# what a release snapshot's stopped pass left stopped). img record ignores
+# SIGPIPE, so nothing died sooner.
+[ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready" || not_live 1
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 out="$rel/` + ServerLogFile + `"
@@ -938,13 +1039,36 @@ if ! (umask 077; : >>"$out"); then
   not_live 1
 fi
 `
-	if !rollback {
+	if restore != nil {
+		// The data, once the images are ready and past the point a session
+		// gone cancels: before its first write a failure starts the set
+		// again; from it the set stays down under a restore mark. Nothing
+		// interrupts it, so its output goes to the server's log from here
+		// (followOutput's marker tells the operator's devopsy it goes on),
+		// and a failure puts the images' names back as the log check does.
+		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
+if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
+  set +e
+  if image_lock shared undoing; then
+    ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
+    image_unlock
+  fi
+  not_live 1
+fi
+`
+	}
+	if !rollback || restore != nil {
 		s += `rm -f "$rel/` + PendingFile + `"
 exec 7<&-
 `
 	}
 	s += `make_current "releases/$id"
-devopsy --say info "current is now $id" || true
+`
+	if releaseSnap {
+		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
+`
+	}
+	s += `devopsy --say info "current is now $id" || true
 `
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
@@ -958,6 +1082,9 @@ devopsy --say info "current is now $id" || true
       if [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteImport + ` ]; then
         rs_service=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
         devopsy --say warning "not restarting ${prev#releases/}: the import of $rs_service did not complete, and nothing runs on its data until one does" ` + importFixLines(t, "rs_service") + `
+      elif [ "$(cut -f3 "$base/` + SyncIncompleteFile + `" 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        rs_snapshot=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
+        devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixLines(t, "rs_snapshot") + `
       else
         devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
@@ -975,9 +1102,21 @@ devopsy --say info "current is now $id" || true
 	// release's may have given them to others.
 	restart += `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
 `
+	// No bind source of it may lead out of its entry through a link in
+	// the data as the failed release left it (a sync's copy, a restore's):
+	// as a rollback checks before its switch (review).
+	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
+      exit "$status"
+    fi
+`
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `
+	if releaseSnap {
+		restart += `    [ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+`
+	}
 	// The entries of mnt created when missing and given to their owners
 	// (cli.MntOwnerLabel), right after the switch, from the labels of
 	// what is now current (a rollback's restored release's): it changes
@@ -1010,7 +1149,9 @@ fi
 	// (syncWait) and whose copy's lines reach the session's log from the
 	// push, so --log shows them in their place. PIPE is ignored again: a
 	// sync's end restores it.
-	s += "trap '' PIPE\n" + followOutput
+	if restore == nil {
+		s += "trap '' PIPE\n" + followOutput
+	}
 	if sync == nil {
 		s += owners
 	}
@@ -1027,10 +1168,25 @@ fi
 	}
 	// What ran on the data, failed or not, before a restart replaces it:
 	// the history the next activation's checks and holds go by.
+	// A restore whose run step failed keeps its mark, so the previous
+	// release is not restarted (the restart skips a marked environment):
+	// what the failed step started goes down too, never left running on
+	// the restored data (review of 2026-10-25, round 2).
+	restoreDown := ""
+	if restore != nil {
+		restoreDown = firstDown(projectName)
+	}
+	if releaseSnap {
+		// Only once something started them: the run step, else the restart
+		// of the release before (below). A cut sync's copy or a failed
+		// restore keeps them down, its record saying so.
+		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+`
+	}
 	s += `img ran "$base" "$rel" || true
 if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
-` + failureReport(projectName) + `  if [ -n "$prev" ]; then
+` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
@@ -1040,7 +1196,11 @@ if [ "$status" != 0 ]; then
   exit "$status"
 fi
 `
-	if rollback {
+	if restore != nil {
+		// Its mark and record go once the run step started the set.
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || exit 1\n"
+	}
+	if rollback && restore == nil {
 		// The release it left: never counted toward keep, never rolled back
 		// to again, its log kept until pruning takes it.
 		s += `: >"$base/$prev/` + RolledBackFile + `"
@@ -1165,18 +1325,19 @@ func firstDown(projectName string) string {
 // tail's --pid, which, like kill -0, takes a zombie for alive, and
 // nothing may reap one. Both are killed with SIGKILL: they start while
 // the script ignores INT, TERM and HUP (from the fetch to the run step),
-// which they inherit. Neither holds the locks nor the sync's answer.
+// which they inherit. Neither holds the locks (5, 6, 8, 9: a lock the
+// script drops before its run step must go then) nor the sync's answer.
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
-  fo_tag="$(date -u '+%Y%m%d%H%M%S').$$"
+  fo_tag="${fo_tag:-$(date -u '+%Y%m%d%H%M%S').$$}"
   echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out" || true
   if [ -z "${sync_gone:-}" ]; then
     fo_off=$(wc -c <"$out")
-    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
+    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 5>&- 6>&- 8>&- 9>&- >&2 &
     fo_tp=$!
     ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
-      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
+      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 5>&- 6>&- 8>&- 9>&- &
     fo_hp=$!
     echo "` + SwitchMarker + ` $fo_tag" >&2 || true
     trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; [ "$fo_s" != 255 ] || fo_s=254; exit $fo_s' EXIT
@@ -1274,10 +1435,135 @@ exec 4<&-
 // it; or on an import that did not complete, with its own ways out. A
 // holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
-	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; }; then
+	return `if [ -n "$prev" ]; then
+` + settleSync(projectName) + `fi
+` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+}
+
+// recoverFetch finishes what a release's fetch killed outright left (img
+// recover: the release marked failed, current's own names back, cur the
+// current release's directory), under the release lock, before anything
+// runs current's images: every script that runs or restores them.
+// releaseImages defines img and image_lock.
+func recoverFetch(cur string) string {
+	return `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+  img recover "$base" ` + cur + `
+  image_unlock
+fi
+`
+}
+
+// releaseSnapshotSetup is a release's part before its fetch when its
+// environment takes release snapshots and something is current: the
+// effective keep checked (one would remove the snapshot with its own
+// release), the sync and snapshot locks, the check (3: skipped, said),
+// the snapshot's id, the server log made (a full disk fails here), and
+// not_live's hook, which starts what a stopped pass left stopped.
+func releaseSnapshotSetup(t *Target, projectName string, restore bool) string {
+	// A restore holds the sync and snapshot locks already, to its end.
+	locks := `  exec 5>"$base/` + SyncLockFile + `"
+` + lockWaitOr(5, false, "a sync or an export from $base", "not_live 75") + `
+  exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWaitOr(6, false, "a snapshot of $base", "not_live 75") + `
+  rm -f "$base/` + SnapshotHoldingFile + `"
+`
+	unlock := "    exec 6>&- 5>&-\n"
+	if restore {
+		locks, unlock = "", "    :\n"
+	}
+	return `rs_id=
+if [ -n "$prev" ]; then
+  # A release that syncs runs no partialGuard: a killed holder's files are
+  # settled (into a mark) before the check reads it.
+` + settleSync(projectName) + `  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
+  # The server's image lock, record and mode, for the snapshot's bookmarks
+  # and the detached tar's pruning.
+  export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
+  rs_k=` + strconv.Itoa(t.Keep) + `
+  [ "$rs_k" -gt 0 ] || rs_k=$keep
+  [ "$rs_k" -le "$max_keep" ] || rs_k=$max_keep
+  if [ "$rs_k" -le 1 ]; then
+    devopsy --say error "this server keeps 1 release (releases: keep), and a release snapshot goes with the release it belongs to: keep 2 or more, or turn release snapshots off"
+    not_live 1
+  fi
+` + locks + `  (umask 077; mkdir -p "$snaps")
+  rs=0
+  (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-check"}, false) + `) || rs=$?
+  case $rs in
+    0) rs_id=$(devopsy ` + ReleaseIDFlag + ` "$snaps") ;;
+    3) ;;
+    *) not_live 1 ;;
+  esac
+  if [ -n "$rs_id" ]; then
+    # A take from here to its detached tar's end, which keeps fd 6: the
+    # holding file says so to --snapshots and --status.
+    : >"$base/` + SnapshotHoldingFile + `"
+    (umask 077; : >>"$rel/` + ServerLogFile + `") || not_live 1
+    not_live_hook() {
+      if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+        (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
+      fi
+    }
+  else
+` + unlock + `  fi
+fi
+`
+}
+
+// releaseSnapshotFirstPass starts a release snapshot's first pass (the
+// mirror's, when it keeps one) beside the fetch.
+func releaseSnapshotFirstPass(projectName string) string {
+	return `  rs_pid=
+  if [ -n "${rs_id:-}" ]; then
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "mirror"}, true) + `) &
+    rs_pid=$!
+  fi
+`
+}
+
+// releaseSnapshotStopped, after a release's fetch went through and
+// before its disarm (a session gone or a signal still cancels it, the
+// services started again through not_live's hook): the first pass waited
+// for, the stopped pass, which leaves the services stopped, and the tars
+// from the mirror started detached, holding the snapshot lock alone and
+// nothing of the session's (its output to the release's server log),
+// then the locks this script held for it given up.
+func releaseSnapshotStopped(projectName string, restore bool) string {
+	unlock := "    exec 6>&- 5>&-\n"
+	if restore {
+		// A restore keeps them to its data step.
+		unlock = ""
+	}
+	return `  if [ -n "${rs_pid:-}" ]; then
+    rs_fp=0
+    wait "$rs_pid" || rs_fp=$?
+    [ "$fr" -ne 0 ] || fr=$rs_fp
+  fi
+  if [ -n "${rs_id:-}" ]; then
+    if [ "$fr" -eq 0 ] && [ -z "$fetch_sig" ]; then
+      (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-stopped"}, false) + ` "$rs_id" "$base/$prev" "$1") || fr=$?
+      if [ "$fr" -eq 0 ]; then
+        rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+        if command -v setsid >/dev/null 2>&1; then
+          base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+        else
+          base="$base" rs_id="$rs_id" sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+        fi
+      fi
+    fi
+` + unlock + `  fi
+`
+}
+
+// settleSync settles what a sync's holder or a take killed outright left
+// (--sync-services settle: a sync's files become its mark, a take's
+// stopped services start), under the release lock, in the current
+// release, before anything reads the mark.
+func settleSync(projectName string) string {
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
-` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+`
 }
 
 // NoExit255 keeps a script's own exit status off 255, ssh's for a
@@ -1468,6 +1754,7 @@ var ProfilePull = []string{"--profile", "*", "pull", "--ignore-buildable"}
 // leaves its environment's directory too: --destroy, or --releases
 // remove failed, takes it away. $rel and $id are set.
 const NotLive = `not_live() {
+  ! command -v not_live_hook >/dev/null 2>&1 || not_live_hook
   touch "$rel/` + FailedFile + `"
   devopsy --say error "release $id not made current"
   exit "$1"
@@ -1636,6 +1923,9 @@ func (r Release) Line() string {
 		if r.Record.Dirty {
 			src += "+dirty"
 		}
+	}
+	if r.Record.Restore != "" {
+		src += ", restore of snapshot " + r.Record.Restore
 	}
 	status := ""
 	switch {
@@ -2130,7 +2420,9 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, not an environment with releases: remove it by hand"
   exit 1
 fi
-` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -2146,6 +2438,10 @@ else
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
+# Its snapshots' bookmarks too, wherever the snapshot root puts them.
+for d in "$snaps"/*; do
+  [ ! -d "$d" ] || img remove "$d" || d_fail=1
+done
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
@@ -2157,6 +2453,8 @@ cd /
   devopsy --say error "could not remove everything in $base"
   exit 1
 }
+# Snapshots outside $base (the server's snapshot root): their directory.
+case "$snaps" in "$base"/*) ;; *) rm -rf "$snaps" || { devopsy --say error "could not remove $snaps"; exit 1; } ;; esac
 devopsy --say info "removed $base"
 `
 }

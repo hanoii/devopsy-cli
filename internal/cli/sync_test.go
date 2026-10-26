@@ -106,8 +106,8 @@ func TestSyncServices(t *testing.T) {
 	if db, _ := SyncFind(services, "database"); db.Volumes[0].Name != "app_dbdata" || db.Volumes[0].Driver != "local" || db.Volumes[0].Opts["type"] != "tmpfs" || db.Volumes[0].Labels["x"] != "1" {
 		t.Errorf("dbdata: %+v", db.Volumes[0])
 	}
-	if a, _ := SyncFind(services, "app"); !slices.Contains(a.Excluded, "cache") {
-		t.Errorf("app's excluded: %v", a.Excluded)
+	if a, _ := SyncFind(services, "app"); !slices.Contains(a.Excluded, "cache") || strings.Join(a.OutsideBinds, ",") != resolvePath("/etc/hosts") {
+		t.Errorf("app's excluded %v, its writable binds from outside the project %v", a.Excluded, a.OutsideBinds)
 	}
 	if got := strings.Join(SyncVolumes(services), ","); got != "" {
 		t.Errorf("custom and excluded volumes are not rsynced: %s", got)
@@ -346,6 +346,37 @@ func TestCheckMounts(t *testing.T) {
 	if err := check(`"db":{"labels":{"devopsy.data":"true"},"volumes":[{"type":"volume","source":"dbdata","target":"/var/lib/mysql"}]}`); err != nil {
 		t.Errorf("data in a named volume alone: %v", err)
 	}
+	// A bind source below an entry nobody owns, a link in the entry
+	// leading out of it (a restored snapshot's storage/public -> /): Docker
+	// would mount that of the host, whatever release runs, so a rollback's
+	// check refuses it too (CheckLeavingBinds). A link within the entry
+	// (web/current -> v1), and an entry that is itself a link (on another
+	// disk), are the data's own place.
+	far := filepath.Join(t.TempDir(), "disk")
+	for _, d := range []string{filepath.Join(shared, "mnt", "web", "v1"), far} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for l, target := range map[string]string{"web/public": "/", "web/current": "v1", "far": far} {
+		if err := os.Symlink(target, filepath.Join(shared, "mnt", l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := check(`"app":{"volumes":[` + bind(dot+"/mnt/web/current", false) + `,` + bind(dot+"/mnt/far/x", false) + `]}`); err != nil {
+		t.Errorf("a link within its entry, an entry on another disk: %v", err)
+	}
+	leaving := `"app":{"volumes":[` + bind(dot+"/mnt/web/public", true) + `]}`
+	if err := check(leaving); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "app mounts ./mnt/web/public -> / through a symbolic link out of its entry: Docker would mount that of the host") {
+		t.Errorf("a bind source a link leads out of its entry: %v %q", err, report.Details(err))
+	}
+	parsed, err := parseSyncServices([]byte(`{"services":{`+leaving+`}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckLeavingBinds(parsed, nil, "the rollback: it does not go live"); err == nil || err.Error() != "the mounts check refuses the rollback: it does not go live" {
+		t.Errorf("a rollback's check of a bind source a link leads out of its entry: %v", err)
+	}
 	for services, want := range map[string]string{
 		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                              "app mounts ./src writable: it is in the release, and the next one replaces it",
 		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                           "app mounts ./.devopsy/cache/x writable",
@@ -369,6 +400,34 @@ func TestCheckMounts(t *testing.T) {
 		err := check(services)
 		if err == nil || err.Error() != "the mounts check refuses the release: it does not go live" || !strings.Contains(strings.Join(report.Details(err), "\n"), want) {
 			t.Errorf("%s: %v %q", services, err, report.Details(err))
+		}
+	}
+	// The same bind sources once the link in the entry is there: the
+	// owner of storage made storage/files a link to / (the case the
+	// refusal of a bind below an owned entry exists for), and reader
+	// binds ./files, the release's link to .devopsy/mnt/storage/files,
+	// refused above while that path was a directory. Where it leads now
+	// is outside mnt, but what Docker mounts is still a path below the
+	// entry: the refusal must not go away with the link, owned or not.
+	if err := os.MkdirAll(filepath.Join(shared, "mnt", "storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(shared, "mnt", "storage", "files")); err != nil {
+		t.Fatal(err)
+	}
+	for _, services := range []string{
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage", false) + `]},"reader":{"volumes":[` + bind(root+"/files", true) + `]}`,
+		`"reader":{"volumes":[` + bind(root+"/files", true) + `]}`,
+	} {
+		if err := check(services); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "storage/files") {
+			t.Errorf("%s, with mnt/storage/files a link to /: the mounts check lets Docker mount the host's root: %v %q", services, err, report.Details(err))
+		}
+		parsed, err := parseSyncServices([]byte(`{"services":{`+services+`}}`), dot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckLeavingBinds(parsed, nil, "the rollback: it does not go live"); err == nil {
+			t.Errorf("%s, with mnt/storage/files a link to /: a rollback's check lets Docker mount the host's root", services)
 		}
 	}
 }

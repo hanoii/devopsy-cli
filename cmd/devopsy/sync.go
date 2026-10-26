@@ -76,7 +76,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool, extra ...string) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -118,7 +118,11 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	if reset {
 		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
 	}
-	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
+	// extra: what the child's state needs of the parent too (a restore's
+	// mark: a parent whose list reading predates it would sync and clear
+	// the mark over what it does not copy).
+	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), extra...)
+	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, needs), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +138,8 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 		return nil, fmt.Errorf("an import into the parent @%s (%s:%s) is running: sync once it is done (devopsy @%s --status shows it)", p.Address, p.Host, p.Path, targetRef(p))
 	case cur.Mark.IsImport():
 		return nil, fmt.Errorf("the import of %s into the parent @%s (%s:%s) did not complete: import it again, or devopsy @%s --import %s --resolved, then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
+	case cur.Mark.IsRestore():
+		return nil, fmt.Errorf("the restore of snapshot %s into the parent @%s (%s:%s) did not complete: restore it again (devopsy @%s --snapshots restore %s), then sync", cur.Mark.From, p.Address, p.Host, p.Path, targetRef(p), cur.Mark.From)
 	case cur.Mark != nil:
 		return nil, fmt.Errorf("the parent @%s (%s:%s) holds data from a sync that did not complete: sync it first (devopsy @%s --sync)", p.Address, p.Host, p.Path, targetRef(p))
 	}
@@ -618,6 +624,9 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
+	// A restore's mark on the child needs no session of its own here: only
+	// a parent that checks it writes the done line that completes a sync
+	// over it (remote.CheckedDoneLine).
 	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
 		return fail(err.Error())
@@ -898,6 +907,9 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		report.Error(msg)
 		return 1
 	}
+	// This devopsy checks the child's restore mark (copiesService, below):
+	// the child's devopsy says so in the done line it writes.
+	_ = os.Setenv(remote.SyncCheckedEnv, "1")
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
@@ -963,9 +975,25 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
+	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
 	if err != nil {
 		return fail(err.Error())
+	}
+	// A restore that did not complete on the child: a sync clears its
+	// mark only by copying every service of the snapshot, all of each.
+	if len(restoreMark) > 0 && !reset {
+		var missing []string
+		for _, r := range restoreMark {
+			if m, ok := copiesService(ctx, projectDir, services, streams, r.Name, r.Dirs, r.Volumes); !ok {
+				missing = append(missing, r.Name+cmp.Or(" ("+strings.Join(m, ", ")+")", ""))
+			}
+		}
+		if len(missing) > 0 {
+			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
+				Fixes: []report.Remedy{report.Fix("restore it again on the child (its snapshots):", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --snapshots"),
+					report.Fix("or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+			return 1
+		}
 	}
 	// A reset wipes the child whatever its mark: completed, it starts
 	// over from this side's data.
@@ -1066,6 +1094,13 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 		return code
 	}
+	// What a take killed outright left stopped here starts first, as for
+	// an export (PushScript holds the release lock, shared, so no take's
+	// stopped pass runs): the push's restore removes the record whole, its
+	// snapshot lines with it (review of 2026-10-25, round 3).
+	if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+		return finish(fail(err.Error()), false)
+	}
 	if err := runDataHook(ctx, cwd, projectDir, env, nil, nil, nil, "prepare", "parent"); err != nil {
 		return finish(fail("the data capability's prepare parent: "+err.Error()), false)
 	}
@@ -1075,6 +1110,11 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		if base := os.Getenv(remote.SyncToBaseEnv); !fileExists(filepath.Join(base, remote.SyncOpenFile(os.Getenv(remote.SyncIDEnv)))) && !fileExists(filepath.Join(base, remote.SyncStartedFile)) {
 			return finish(fail("the child's side ended already ("+base+"): nothing copied"), false)
 		}
+	}
+	// The parent starts again on its own data what it stops: refused
+	// before anything stops when that start would be (checkStartBinds).
+	if err := checkStartBinds(cwd); err != nil {
+		return finish(fail(err.Error()), false)
 	}
 	if err := stopServices(cwd, set); err != nil {
 		// What it stopped before failing comes back: restoring reads the
@@ -1454,24 +1494,33 @@ func listOwners(s cli.SyncService) string {
 // by a tab and the service: no service is named so.
 const listMark = "!import"
 
+// restoreMarkNeed is what a parent's devopsy needs to sync into a child
+// a restore left marked: the flag that came with restores' marks.
+const restoreMarkNeed = "snapshot-step"
+
+// listRestore starts the child's list's lines for a restore's mark: one
+// per service with data of the snapshot it names, its entries and
+// volumes, which a sync must copy all of to clear the mark.
+const listRestore = "!restore"
+
 // childServices asks the child's release for its services, and the
 // service of its import's mark if any, through --sync-exec, after it
 // prepared them: across servers the sync's first session there, which
 // checks the child's devopsy for needs too.
-func childServices(ctx context.Context, needs []string) ([]childService, string, error) {
+func childServices(ctx context.Context, needs []string) ([]childService, string, []childService, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
 	cmd.Env = append(os.Environ(), remote.SyncNeedsEnv+"="+strings.Join(needs, " "))
 	if err := cmd.Run(); err != nil {
-		return nil, "", fmt.Errorf("listing the child's services: %w", err)
+		return nil, "", nil, fmt.Errorf("listing the child's services: %w", err)
 	}
-	services, mark := parseChildServices(out.String())
-	return services, mark, nil
+	services, mark, restore := parseChildServices(out.String())
+	return services, mark, restore, nil
 }
 
 // childUtilImage gets the child's server's devopsy-util ready
@@ -1492,14 +1541,20 @@ func childUtilImage(ctx context.Context) error {
 // parseChildServices reads --sync-services list: per service its name,
 // label (<copy>+<stop word>), state, entries, owners (listOwners) and
 // volumes,
-// and the import mark's line (listMark), whose service it returns.
-func parseChildServices(out string) (services []childService, mark string) {
+// the import mark's line (listMark), whose service it returns, and a
+// restore mark's (listRestore), its services with their entries and
+// volumes.
+func parseChildServices(out string) (services []childService, mark string, restore []childService) {
 	// Lines one by one: the last service's entries may be empty, its
 	// line ending in a tab.
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) == 2 && f[0] == listMark {
 			mark = f[1]
+			continue
+		}
+		if len(f) == 4 && f[0] == listRestore {
+			restore = append(restore, childService{Name: f[1], Dirs: strings.Fields(f[2]), Volumes: strings.Fields(f[3])})
 			continue
 		}
 		if len(f) < 4 {
@@ -1519,7 +1574,7 @@ func parseChildServices(out string) (services []childService, mark string) {
 		}
 		services = append(services, c)
 	}
-	return services, mark
+	return services, mark, restore
 }
 
 // streamMismatches names the services one side copies as custom and the
@@ -1631,6 +1686,49 @@ func exitCode(err error) int {
 	return 1
 }
 
+// rsyncEntry copies the entry d of the mnt srcMnt into dstMnt's, as
+// root in the util image (remote.RsyncCopy, opts after it), in a
+// container named name: a file entry in place (a container bind-mounts
+// the file's inode, and a replaced file would leave it reading the old
+// one until recreated). Files vanished during the copy (rsync's 24) are
+// a notice; a failure says the entry is half copied.
+func rsyncEntry(ctx context.Context, name, srcMnt, dstMnt, d string, file bool, opts ...string) error {
+	report.Info("rsync mnt/" + d)
+	run := append(append([]string{"-v", srcMnt + ":/src:ro", "-v", dstMnt + ":/dst", remote.UtilImage}, remote.RsyncCopy...), opts...)
+	src, dst := "/src/"+d+"/", "/dst/"+d+"/"
+	if file {
+		src, dst = "/src/"+d, "/dst/"
+		run = append(run, "--inplace")
+	}
+	return rsyncRun(ctx, name, append(run, src, dst), "mnt/"+d)
+}
+
+// rsyncVolume copies the named volume key from its mount src
+// (<name>:/src/<key>:ro) into dst's (<name or dir>:/dst/<key>), as
+// rsyncEntry copies an entry.
+func rsyncVolume(ctx context.Context, name, src, dst, key string) error {
+	report.Info("rsync volume " + key)
+	run := append([]string{"-v", src, "-v", dst, remote.UtilImage}, remote.RsyncCopy...)
+	return rsyncRun(ctx, name, append(run, "/src/"+key+"/", "/dst/"+key+"/"), "the volume "+key)
+}
+
+// rsyncRun runs args as the util container name, what being what it
+// copies, for its notices.
+func rsyncRun(ctx context.Context, name string, args []string, what string) error {
+	if err := dockerRun(ctx, name, args...); err != nil {
+		if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
+			report.Info("rsync " + what + ": " + remote.RsyncVanishedNotice)
+			return nil
+		}
+		report.Info(what + " " + remote.HalfCopiedNotice)
+		if ctx.Err() != nil {
+			return errors.New("interrupted")
+		}
+		return fmt.Errorf("rsync %s: %w", what, err)
+	}
+	return nil
+}
+
 // rsyncdConf serves the entries of mnt and the named volumes being
 // copied, each as a module of its name (the volumes mounted at
 // /vol/<key>), read-only, as root, so every owner's files are read;
@@ -1703,7 +1801,6 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 	if len(present) == 0 && len(volumes) == 0 {
 		return nil
 	}
-	rsync := slices.Clone(remote.RsyncCopy)
 	toProject := os.Getenv(remote.SyncToProjectEnv)
 
 	to := os.Getenv(remote.SyncToEnv)
@@ -1735,50 +1832,23 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 			}
 		}
 		for i, d := range present {
-			report.Info("rsync mnt/" + d)
-			run := append([]string{"-v", parentMnt + ":/src:ro", "-v", childMnt + ":/dst", remote.UtilImage}, rsync...)
 			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
-			src, dst := "/src/"+d+"/", "/dst/"+d+"/"
-			if slices.Contains(files, d) {
-				// In place: a container bind-mounts the file's inode,
-				// and a replaced file would leave it reading the old one
-				// until recreated.
-				src, dst = "/src/"+d, "/dst/"
-				run = append(run, "--inplace")
-			}
+			var opts []string
 			if o := owners[d]; o != "" {
-				run = append(run, "--chown="+o)
+				opts = append(opts, "--chown="+o)
 			}
-			if err := dockerRun(ctx, name, append(run, src, dst)...); err != nil {
-				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
-					report.Info("rsync mnt/" + d + ": " + remote.RsyncVanishedNotice)
-					continue
-				}
-				report.Info("mnt/" + d + " " + remote.HalfCopiedNotice)
-				if ctx.Err() != nil {
-					return errors.New("interrupted")
-				}
-				return fmt.Errorf("rsync mnt/%s: %w", d, err)
+			if err := rsyncEntry(ctx, name, parentMnt, childMnt, d, slices.Contains(files, d), opts...); err != nil {
+				return err
 			}
 		}
 		for i, v := range volumes {
-			report.Info("rsync volume " + v.Key)
 			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
-			run := append([]string{"-v", v.Name + ":/src/" + v.Key + ":ro", "-v", toProject + "_" + v.Key + ":/dst/" + v.Key, remote.UtilImage}, rsync...)
-			if err := dockerRun(ctx, name, append(run, "/src/"+v.Key+"/", "/dst/"+v.Key+"/")...); err != nil {
-				if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
-					report.Info("rsync volume " + v.Key + ": " + remote.RsyncVanishedNotice)
-					continue
-				}
-				report.Info("the volume " + v.Key + " " + remote.HalfCopiedNotice)
-				if ctx.Err() != nil {
-					return errors.New("interrupted")
-				}
-				return fmt.Errorf("rsync volume %s: %w", v.Key, err)
+			if err := rsyncVolume(ctx, name, v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
+				return err
 			}
 		}
 		if last {
-			return recordWrite(toBase, remote.DoneLine(os.Getenv(remote.SyncIDEnv)))
+			return recordWrite(toBase, remote.CheckedDoneLine(os.Getenv(remote.SyncIDEnv)))
 		}
 		return nil
 	}
@@ -1863,13 +1933,13 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `|` + remote.SyncCheckedEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv, remote.SyncCheckedEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -2017,6 +2087,16 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		if m := readMark(base); m.IsImport() {
 			fmt.Printf("%s\t%s\n", listMark, m.From)
+		} else if m.IsRestore() {
+			// The services the snapshot holds data of, each line one: all
+			// of it a sync must copy to clear the mark.
+			mf, err := readManifest(filepath.Join(snapshotPathsOf(cwd).snaps, m.From))
+			if err != nil {
+				return fail("the snapshot a restore's mark names (" + m.From + "): " + err.Error())
+			}
+			for _, ms := range mf.services {
+				fmt.Printf("%s\t%s\t%s\t%s\n", listRestore, ms.name, strings.Join(ms.entries, " "), strings.Join(ms.volumes, " "))
+			}
 		}
 		return 0
 	case "import":
@@ -2035,6 +2115,11 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	// on: its data may be anything from untouched to complete, never
 	// finished by finish child go.
 	settle := func() int {
+		// What a take killed outright left stopped starts again first,
+		// unless the environment is marked.
+		if err := settleSnapshots(cwd, base); err != nil {
+			return fail(err.Error())
+		}
 		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
 		if !fileExists(started) && !fileExists(taken) {
 			return 0
@@ -2087,9 +2172,14 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		// An import a killed devopsy left may still load: ended, and what
-		// it stops recorded, before anything streams into it.
+		// it stops recorded, before anything streams into it; a restore's
+		// extracting containers likewise.
 		if m := readMark(base); m.IsImport() {
 			if err := endLeftoverImport(cwd, base, services, m.From); err != nil {
+				return fail(err.Error())
+			}
+		} else if m.IsRestore() {
+			if err := removeContainers(importContainers(cwd)); err != nil {
 				return fail(err.Error())
 			}
 		}
@@ -2109,6 +2199,17 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			}
 		}
 		dependentNotices(cwd, services, data, set)
+		// A link in the child's data making a bind source lead out of its
+		// entry would have finish go refuse the copy, the parent stopped
+		// for nothing: refused before anything stops (review), but under
+		// --reset, whose wipe removes it. Which entries the copy replaces
+		// is the parent's to say: one there is refused too, said.
+		if os.Getenv(remote.SyncResetEnv) == "" {
+			if err := cli.CheckLeavingBinds(services, nil, "the sync: nothing stopped, nothing copied (or start the child over without it: devopsy @"+cmp.Or(os.Getenv(remote.SyncToTargetEnv), "<child>")+" --reset)"); err != nil {
+				report.Fail(err)
+				return 1
+			}
+		}
 		// The volumes a copy writes into, made when missing (a first
 		// release, a volume added since) as compose would: the parent's
 		// rsync never makes one.
@@ -2128,6 +2229,28 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		word = "partial"
 	}
 	hookEnv := env
+	if word == "go" {
+		// The copy may have brought a symbolic link that makes a bind
+		// source lead out of its entry (the parent's data, a restored
+		// snapshot's there): Docker would mount that of the host at the
+		// services' start, so nothing starts, the copy kept as one whose
+		// finish refused it (review: the data outlives the checks of
+		// the release it was checked in).
+		if _, now, err := cli.SyncServices(cwd, os.Environ()); err == nil {
+			if lerr := cli.CheckLeavingBinds(now, nil, "the copy: nothing started"); lerr != nil {
+				var bad []string
+				for _, s := range now {
+					bad = append(bad, s.LeavingBinds...)
+				}
+				code = fail("the copy brings a symbolic link out of its entry where a service bind-mounts: " + strings.Join(bad, ", ") + ": nothing started")
+				why := "the copy completed, but brought a symbolic link out of its entry where a service bind-mounts (" + strings.Join(bad, ", ") + "), which Docker would mount from the host: nothing runs on the data until a sync without it completes"
+				if err := markIncomplete(base, "", remote.IncompleteFinish, why, false); err != nil {
+					fail(err.Error())
+				}
+				word, hookEnv = "partial", recordEnv()
+			}
+		}
+	}
 	switch word {
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.
@@ -2394,7 +2517,11 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	if err := runDataHook(ctx, cwd, projectDir, env, f, nil, nil, "import", name); err != nil {
 		code = fail("the data capability's import " + name + ": " + err.Error())
 	} else if last {
-		if err := recordWrite(base, remote.DoneLine(os.Getenv(remote.SyncIDEnv))); err != nil {
+		done := remote.DoneLine(os.Getenv(remote.SyncIDEnv))
+		if os.Getenv(remote.SyncCheckedEnv) != "" {
+			done = remote.CheckedDoneLine(os.Getenv(remote.SyncIDEnv))
+		}
+		if err := recordWrite(base, done); err != nil {
 			code = fail(err.Error())
 		}
 	}
@@ -2451,6 +2578,11 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 	plan, err := cli.Build(cwd, append([]string{"--"}, args...), os.Environ())
 	if err != nil {
 		return err
+	}
+	if plan.StartsInRelease {
+		if err := checkStartBinds(cwd); err != nil {
+			return err
+		}
 	}
 	trace(plan.Args)
 	cmd := exec.CommandContext(ctx, "docker", plan.Args[1:]...)
@@ -2566,9 +2698,12 @@ const syncFirst = "first"
 // all: syncFirst), the services it stopped ("stop <name>" lines), those
 // of them a sync stopped itself, by its id ("own <sync id> <name>": what
 // a sync that writes nothing starts again; the rest is an earlier sync's
-// or import's, kept down) and an import's hook while it runs ("writer
+// or import's, kept down), an import's hook while it runs ("writer
 // <process group>", then " down" when its service was not running
-// before the import: writerDown).
+// before the import: writerDown), and what a snapshot's stopped pass
+// stopped ("snapshot <id> <name>": started again by its own end, or, a
+// take killed outright, by the next settle unless the environment is
+// marked: settleSnapshots).
 type syncRecord struct {
 	first      bool
 	stops      []string
@@ -2576,6 +2711,8 @@ type syncRecord struct {
 	ownID      string
 	writers    []int
 	writerDown bool
+	snaps      []string
+	snapID     string
 }
 
 // readSyncRecord reads the record; ok is false without one.
@@ -2595,6 +2732,11 @@ func readSyncRecord(cwd string) (rec syncRecord, ok bool) {
 			if id, svc, ok := strings.Cut(name, " "); ok && svc != "" {
 				rec.ownID = id
 				rec.own = append(rec.own, svc)
+			}
+		case action == "snapshot":
+			if id, svc, ok := strings.Cut(name, " "); ok && svc != "" && !slices.Contains(rec.snaps, svc) {
+				rec.snapID = id
+				rec.snaps = append(rec.snaps, svc)
 			}
 		case action == "writer":
 			pgid, down, _ := strings.Cut(name, " ")
@@ -2618,6 +2760,9 @@ func (rec syncRecord) write(cwd string) error {
 	}
 	for _, name := range rec.own {
 		b.WriteString("own " + rec.ownID + " " + name + "\n")
+	}
+	for _, name := range rec.snaps {
+		b.WriteString("snapshot " + rec.snapID + " " + name + "\n")
 	}
 	for _, pgid := range rec.writers {
 		b.WriteString("writer " + strconv.Itoa(pgid))
@@ -2691,7 +2836,7 @@ func wipeData(cwd, projectDir, base string) error {
 		return err
 	}
 	rec, _ := readSyncRecord(cwd)
-	rec.first, rec.stops, rec.own = true, nil, nil
+	rec.first, rec.stops, rec.own, rec.snaps = true, nil, nil, nil
 	return rec.write(cwd)
 }
 

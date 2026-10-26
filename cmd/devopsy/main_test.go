@@ -1032,6 +1032,14 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "oldssh"), "DEVOPSY_PROTOCOL_CHECK=warn"}, "@b/prod", "--release"); !strings.Contains(out, "devopsy: warning: the server's devopsy speaks protocol 1, older than this one's") || strings.Contains(out, "lacks what this needs") || !strings.Contains(out, "a new instance") {
 		t.Fatalf("an older server, warned (%d):\n%s", code, out)
 	}
+	// --destroy's prompt counts the snapshots that go: on a server
+	// without them, that count's refusal is no error of --destroy's.
+	nosnap := filepath.Join(tmp, "nosnap")
+	write(t, filepath.Join(nosnap, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ snapshot-step / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "nosnapssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+nosnap+":$PATH exec sh -c \"$s\"\n", 0o755)
+	if out, _ := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "nosnapssh")}, "@b/prod", "--destroy"); strings.Contains(out, "snapshot-step") {
+		t.Errorf("--destroy's prompt on a server without snapshots said its count's refusal:\n%s", out)
+	}
 	// A server whose devopsy lacks a feature (here --release-id, which
 	// only the upload calls) refuses only what needs it, naming it, and
 	// runs the rest.

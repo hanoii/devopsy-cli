@@ -195,6 +195,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--destroy":
 		return runDestroy(t, projectName, args[1:], color)
 
+	case "--snapshot":
+		return runSnapshot(t, projectName, args[1:], color)
+
+	case "--snapshots":
+		return runSnapshots(t, projectName, args[1:], color)
+
 	case "--sync", "--reset":
 		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 
@@ -306,96 +312,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			log.Fail(err)
 			return 1
 		}
-		// session runs an activation, with keepalives (a quiet run step
-		// over a dead connection would wait for TCP), never on a
-		// terminal: its stdin is a pipe devopsy keeps open
-		// (remote.WatchEnv), which the server watches, and devopsy takes
-		// Ctrl-C itself (ssh ignores it), the same at a terminal and in
-		// CI. The first closes the pipe, which before the switch cancels
-		// the release there, and devopsy waits for the session; after the
-		// switch nothing listens, the release goes on, which devopsy says
-		// (as soon as it knows, for a switch under way). A second Ctrl-C
-		// ends the session.
 		session := func(script string) int {
-			r, w, err := os.Pipe()
-			if err != nil {
-				return stop(err)
-			}
-			defer r.Close()
-			defer w.Close()
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			sigs := make(chan os.Signal, 1)
-			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-			defer signal.Stop(sigs)
-			type result struct {
-				code int
-				err  error
-			}
-			done := make(chan result, 1)
-			defer heartbeat(w)()
-			var switched atomic.Bool
-			go func() {
-				code, err := remote.SSHContext(remote.WithBeat(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
-				done <- result{code, err}
-			}()
-			var res result
-			var slow <-chan time.Time
-			tick := time.NewTicker(200 * time.Millisecond)
-			defer tick.Stop()
-			interrupted, said := false, false
-			goesOn := func() {
-				if !said {
-					said, slow = true, nil
-					log.Warn("interrupted: the release goes on on @"+t.Address+", past its switch", "devopsy @"+targetRef(t)+" --log shows how it ends; Ctrl-C again ends the session, not the release")
-				}
-			}
-		wait:
-			for {
-				select {
-				case res = <-done:
-					break wait
-				case <-tick.C:
-					if interrupted && switched.Load() {
-						goesOn()
-					}
-				case <-slow:
-					// The server takes the cancel once it holds the
-					// release lock, which another release may hold.
-					log.Warn("the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now")
-				case <-sigs:
-					if interrupted {
-						cancel()
-						<-done
-						return 130
-					}
-					interrupted = true
-					w.Close()
-					if switched.Load() {
-						goesOn()
-					} else {
-						log.Error("interrupted: cancelling the release on @" + t.Address)
-						slow = time.After(5 * time.Second)
-					}
-				}
-			}
-			if interrupted && !switched.Load() {
-				return 130
-			}
-			if res.err == nil && res.code == sshLost {
-				if switched.Load() {
-					log.Error("the connection to @"+t.Address+" was lost after the switch: the release goes on there", "devopsy @"+targetRef(t)+" --log shows how it ends")
-				} else {
-					log.Error("the connection to @"+t.Address+" failed or was lost before the switch: the server cancels the release once it notices, within a minute", "devopsy @"+targetRef(t)+" --releases shows it")
-				}
-			}
-			if interrupted && !said {
-				log.Warn("it had switched already, and went on", "devopsy @"+targetRef(t)+" --log shows how it ends")
-			}
-			if res.err != nil {
-				return stop(res.err)
-			}
-			return res.code
+			return liveSession(t, script, rlog, log, releaseWords(t))
 		}
 		// save ends the log with code and saves it in release id's
 		// directory on the server: a rollback's is appended to the log of
@@ -550,6 +468,12 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					for _, f := range remote.ImportFixes(releaseRef(t), cur.Mark.From, true) {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
+				} else if cur.Mark.IsRestore() {
+					msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
+					fixes = nil
+					for _, f := range remote.RestoreFixes(releaseRef(t), cur.Mark.From, t.Parent != "") {
+						fixes = append(fixes, report.Fix(f[0], f[1]))
+					}
 				} else if !current {
 					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
 				}
@@ -581,7 +505,11 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					} else if t.ParentErr != nil {
 						return failParent(t, color, args[0])
 					}
-					if job, err = syncPreflight(t, p, projectName, false); err != nil {
+					var extra []string
+					if cur.Mark.IsRestore() {
+						extra = append(extra, restoreMarkNeed)
+					}
+					if job, err = syncPreflight(t, p, projectName, false, extra...); err != nil {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
@@ -980,7 +908,26 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)", t.Name, where),
+		// Its snapshots go too: how many, said. Only a count for the
+		// prompt, so what the session says goes nowhere (an older server
+		// refuses the listing, naming its upgrade, and --destroy still
+		// runs there).
+		snaps := ""
+		var out bytes.Buffer
+		if code, err := remote.SSHStreams(context.Background(), t, remote.Bounded, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
+			n := 0
+			for _, line := range strings.Split(out.String(), "\n") {
+				if len(strings.Split(line, "\t")) >= 6 {
+					n++
+				}
+			}
+			if n == 1 {
+				snaps = ", and its snapshot"
+			} else if n > 1 {
+				snaps = fmt.Sprintf(", and its %d snapshots", n)
+			}
+		}
+		if err := typeToGoOn(fmt.Sprintf("this runs the destroy step of %s's current release, if it has one, takes its containers, volumes and images down and removes %s: its releases and shared/ (data, .env)%s", t.Name, where, snaps),
 			confirmWord(t), "nothing removed", false); err != nil {
 			report.Fail(err)
 			return 1
@@ -1044,4 +991,123 @@ func acceptImage(services []string, value string) []string {
 		}
 	}
 	return services
+}
+
+// liveWords are what liveSession says of what it runs: a release, a
+// snapshot's take.
+type liveWords struct {
+	// goesOn is said once interrupted past the point of no return,
+	// cancelling when interrupted before it, slow when the server takes
+	// a while to cancel, lostAfter and lostBefore when the connection is
+	// lost, hadGone when it had passed that point already.
+	goesOn, cancelling, slow, lostAfter, lostBefore, hadGone []string
+}
+
+// releaseWords are a release's.
+func releaseWords(t *remote.Target) liveWords {
+	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
+	return liveWords{
+		goesOn:     []string{"interrupted: the release goes on on @" + t.Address + ", past its switch", logs + "; Ctrl-C again ends the session, not the release"},
+		cancelling: []string{"interrupted: cancelling the release on @" + t.Address},
+		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now"},
+		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the switch: the release goes on there", logs},
+		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the switch: the server cancels the release once it notices, within a minute", "devopsy @" + targetRef(t) + " --releases shows it"},
+		hadGone:    []string{"it had switched already, and went on", logs},
+	}
+}
+
+// liveSession runs script on t's server as an activation runs, with
+// keepalives (a quiet run step over a dead connection would wait for
+// TCP), never on a terminal: its stdin is a pipe devopsy keeps open
+// (remote.WatchEnv), which the server watches, and devopsy takes Ctrl-C
+// itself (ssh ignores it), the same at a terminal and in CI. The first
+// closes the pipe, which before the point of no return (the script's
+// SwitchMarker: a release's switch, a take's stopped pass) cancels it
+// there, and devopsy waits for the session; past it nothing listens, it
+// goes on, which devopsy says (as soon as it knows, for one under way).
+// A second Ctrl-C ends the session.
+func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.Logger, words liveWords) int {
+	stop := func(err error) int {
+		log.Fail(err)
+		return 1
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return stop(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	defer heartbeat(w)()
+	var switched atomic.Bool
+	go func() {
+		code, err := remote.SSHContext(remote.WithBeat(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+		done <- result{code, err}
+	}()
+	var res result
+	var slow <-chan time.Time
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	interrupted, said := false, false
+	goesOn := func() {
+		if !said {
+			said, slow = true, nil
+			log.Warn(words.goesOn[0], words.goesOn[1:]...)
+		}
+	}
+wait:
+	for {
+		select {
+		case res = <-done:
+			break wait
+		case <-tick.C:
+			if interrupted && switched.Load() {
+				goesOn()
+			}
+		case <-slow:
+			// The server takes the cancel once it holds the lock it
+			// waits for, which another may hold.
+			log.Warn(words.slow[0], words.slow[1:]...)
+		case <-sigs:
+			if interrupted {
+				cancel()
+				<-done
+				return 130
+			}
+			interrupted = true
+			w.Close()
+			if switched.Load() {
+				goesOn()
+			} else {
+				log.Error(words.cancelling[0], words.cancelling[1:]...)
+				slow = time.After(5 * time.Second)
+			}
+		}
+	}
+	if interrupted && !switched.Load() {
+		return 130
+	}
+	if res.err == nil && res.code == sshLost {
+		if switched.Load() {
+			log.Error(words.lostAfter[0], words.lostAfter[1:]...)
+		} else {
+			log.Error(words.lostBefore[0], words.lostBefore[1:]...)
+		}
+	}
+	if interrupted && !said {
+		log.Warn(words.hadGone[0], words.hadGone[1:]...)
+	}
+	if res.err != nil {
+		return stop(res.err)
+	}
+	return res.code
 }

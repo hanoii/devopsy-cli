@@ -71,6 +71,14 @@ func dataService(services []cli.SyncService, name string) (cli.SyncService, erro
 // record back as it was: a devopsy killed after the stop leaves the
 // record, which the next complete import, --resolved or sync restores.
 func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, restore func() error, err error) {
+	return stopSetFor(cwd, set, record, "")
+}
+
+// stopSetFor is stopSet, recording each as a snapshot's line (snapshot
+// <id> <name>) with snapshot: what a take killed outright leaves for the
+// next settle to start (settleSnapshots), where a stop line would be kept
+// down.
+func stopSetFor(cwd string, set []cli.Stopped, record bool, snapshot string) (stopped []string, restore func() error, err error) {
 	restore = func() error { return nil }
 	if len(set) == 0 {
 		return nil, restore, nil
@@ -84,12 +92,20 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 		return nil, restore, nil
 	}
 	prior, hadRecord := readSyncRecord(cwd)
+	lines := func(rec *syncRecord) *[]string {
+		if snapshot != "" {
+			rec.snapID = snapshot
+			return &rec.snaps
+		}
+		return &rec.stops
+	}
 	if record {
 		rec := prior
-		rec.stops = slices.Clone(prior.stops)
+		rec.stops, rec.snaps = slices.Clone(prior.stops), slices.Clone(prior.snaps)
+		l := lines(&rec)
 		for _, name := range stopped {
-			if !slices.Contains(rec.stops, name) {
-				rec.stops = append(rec.stops, name)
+			if !slices.Contains(*l, name) {
+				*l = append(*l, name)
 			}
 		}
 		if err := rec.write(cwd); err != nil {
@@ -109,10 +125,15 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 		}
 		if record {
 			rec, _ := readSyncRecord(cwd)
-			rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool {
-				return slices.Contains(stopped, s) && !slices.Contains(prior.stops, s)
+			before := prior.stops
+			if snapshot != "" {
+				before = prior.snaps
+			}
+			l := lines(&rec)
+			*l = slices.DeleteFunc(*l, func(s string) bool {
+				return slices.Contains(stopped, s) && !slices.Contains(before, s)
 			})
-			if !hadRecord && !rec.first && len(rec.stops) == 0 && len(rec.writers) == 0 {
+			if !hadRecord && !rec.first && len(rec.stops) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
 				_ = os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
 				return nil
 			}
@@ -231,9 +252,18 @@ func runExport(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	// On a target, what a snapshot's take killed outright left stopped
+	// starts again first (ExportScript holds the release lock).
+	if cli.InRelease(projectDir) {
+		if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+			return fail(err.Error())
+		}
+	}
 	if data, err := os.ReadFile(filepath.Join(filepath.Dir(cwd), remote.SyncIncompleteFile)); err == nil {
 		if m := remote.ParseMark(string(data)); m.IsImport() {
 			report.Warn("the import of " + m.From + " into this environment did not complete: exporting the data as it is")
+		} else if m.IsRestore() {
+			report.Warn("the restore of snapshot " + m.From + " into this environment did not complete: exporting the data as it is")
 		} else {
 			report.Warn("this environment's data is from a sync that did not complete: exporting it anyway")
 		}
@@ -295,6 +325,14 @@ func runExport(cwd string, args []string, color bool) int {
 	}
 
 	set := cli.DataStops(services, cli.ExportOne, name)
+	// On a target what it stops it starts again on the same data: refused
+	// before anything stops when that start would be (checkStartBinds).
+	if cli.InRelease(projectDir) {
+		if err := checkStartBinds(cwd); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	_, restore, err := stopSet(cwd, set, false)
 	if err != nil {
 		code := fail(err.Error())
@@ -473,6 +511,13 @@ type tarEntry struct {
 	// volume is the named volume the entry is, by the service's labels
 	// (its key is name): extracted into it, never into mnt.
 	volume *cli.Volume
+	// links are its symbolic links' names, clean (storage/public), and
+	// tar the tar's links, for a walk through them (linkAtBind).
+	links []string
+	tar   *tarLinks
+	// size is its files' bytes, sparse ones whole (a restore's space
+	// warning).
+	size int64
 }
 
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
@@ -490,6 +535,14 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return tarEntriesIn(f, false)
+}
+
+// tarEntriesIn is tarEntries of the tar f streams (a snapshot's,
+// decompressed on the way). With anyTarget, a symbolic link may lead
+// anywhere (a snapshot's: its data as it was, an app's absolute links
+// included); everything else is checked as for an import.
+func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 	// archive/tar ends at its end-of-archive blocks and at a plain end
 	// of file alike; only the first leaves a read that returned data
 	// last.
@@ -534,7 +587,7 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		if p == "" || p == "." || p == "./" {
 			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
 		}
-		top, err := tarMember(h, p)
+		top, err := tarMember(h, p, anyTarget)
 		if err != nil {
 			return nil, err
 		}
@@ -550,6 +603,12 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		if form := strings.TrimSuffix(h.Name, "/")[:len(h.Name)-len(p)+len(top)]; !slices.Contains(e.forms, form) {
 			e.forms = append(e.forms, form)
 		}
+		if h.Typeflag == tar.TypeSymlink {
+			e.links = append(e.links, path.Clean(p))
+		}
+		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA || h.Typeflag == tar.TypeGNUSparse {
+			e.size += h.Size
+		}
 		if strings.TrimSuffix(p, "/") == top && h.Typeflag != tar.TypeDir {
 			e.file = true
 		} else {
@@ -559,11 +618,12 @@ func tarEntries(spool string) ([]tarEntry, error) {
 			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
 		}
 	}
-	if err := links.check(); err != nil {
+	if err := links.check(anyTarget); err != nil {
 		return nil, err
 	}
 	var entries []tarEntry
 	for _, e := range seen {
+		e.tar = &links
 		entries = append(entries, *e)
 	}
 	slices.SortFunc(entries, func(a, b tarEntry) int { return strings.Compare(a.name, b.name) })
@@ -630,7 +690,14 @@ const maxLinks = 40
 // a directory to the walk: the entry is emptied before the extraction,
 // so only the tar's links are there (what a running service makes there
 // itself is its own).
-func (l *tarLinks) check() error {
+//
+// With anyTarget (a snapshot's tars) a symbolic link's target is not
+// walked: it is the data, never followed, since the first two rules
+// leave no member written through a link and the hard links' rule still
+// holds. An extraction mounts its entry alone, so nothing of the host is
+// in the way of a link anyway; what the restored app makes of its links
+// is its own, as it was when the snapshot was taken.
+func (l *tarLinks) check(anyTarget bool) error {
 	under := func(name string) string {
 		for i := range len(name) {
 			if name[i] != '/' {
@@ -651,6 +718,9 @@ func (l *tarLinks) check() error {
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(l.symlinks)) {
+		if anyTarget {
+			break
+		}
 		dir := strings.Split(path.Dir(name), "/")
 		hops := 0
 		if _, err := l.walk(dir, l.symlinks[name], &hops); err != nil {
@@ -675,6 +745,19 @@ func (l *tarLinks) check() error {
 // the way leaves the entry (a .. above it, an absolute target) or
 // follows more than maxLinks links, hops counting them.
 func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error) {
+	return l.walkIn(dir, target, hops, "")
+}
+
+// walkMnt is walk as the host resolves it in mnt, where a .. above the
+// entry is mnt itself: the way may pass through mnt, but only back into
+// entry (storage/public -> ../storage/v1), never into another entry or
+// above mnt (linkAtBind; an extraction's container holds the entry alone,
+// so an import's check keeps walk).
+func (l *tarLinks) walkMnt(entry, target string, hops *int) ([]string, error) {
+	return l.walkIn([]string{entry}, target, hops, entry)
+}
+
+func (l *tarLinks) walkIn(dir []string, target string, hops *int, entry string) ([]string, error) {
 	if path.IsAbs(target) {
 		return nil, errors.New("is absolute")
 	}
@@ -684,11 +767,21 @@ func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error
 		case "", ".":
 			continue
 		case "..":
+			if entry != "" && len(at) <= 1 {
+				if len(at) == 0 {
+					return nil, fmt.Errorf("leads out of mnt/%s, above mnt", entry)
+				}
+				at = at[:0]
+				continue
+			}
 			if len(at) <= 1 {
 				return nil, fmt.Errorf("leads out of mnt/%s", at[0])
 			}
 			at = at[:len(at)-1]
 			continue
+		}
+		if entry != "" && len(at) == 0 && c != entry {
+			return nil, fmt.Errorf("leads out of mnt/%s, into mnt/%s", entry, c)
 		}
 		at = append(at, c)
 		link, ok := l.symlinks[strings.Join(at, "/")]
@@ -699,9 +792,12 @@ func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error
 			return nil, fmt.Errorf("follows more than %d links", maxLinks)
 		}
 		var err error
-		if at, err = l.walk(at[:len(at)-1], link, hops); err != nil {
+		if at, err = l.walkIn(at[:len(at)-1], link, hops, entry); err != nil {
 			return nil, err
 		}
+	}
+	if entry != "" && len(at) == 0 {
+		return nil, fmt.Errorf("leads out of mnt/%s, to mnt itself", entry)
 	}
 	return at, nil
 }
@@ -727,8 +823,9 @@ var tarTypes = []byte{tar.TypeReg, tar.TypeRegA, tar.TypeGNUSparse, tar.TypeCont
 // top-level entry of mnt, and returns that entry. A path or a link out
 // of its entry (into another entry too), and a top-level entry that is
 // no directory or file, are errOutside; a member of another type than
-// tarTypes (a device node, a FIFO) is errMember.
-func tarMember(h *tar.Header, p string) (top string, err error) {
+// tarTypes (a device node, a FIFO) is errMember. With anyTarget a
+// symbolic link's target is not judged (tarLinks.check).
+func tarMember(h *tar.Header, p string, anyTarget bool) (top string, err error) {
 	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
 	if !slices.Contains(tarTypes, h.Typeflag) {
 		kind := map[byte]string{tar.TypeBlock: "a block device", tar.TypeChar: "a character device", tar.TypeFifo: "a FIFO"}[h.Typeflag]
@@ -748,6 +845,9 @@ func tarMember(h *tar.Header, p string) (top string, err error) {
 	var target string
 	switch h.Typeflag {
 	case tar.TypeSymlink:
+		if anyTarget {
+			return top, nil
+		}
 		if path.IsAbs(h.Linkname) {
 			return outside()
 		}
@@ -782,19 +882,31 @@ func (e *endReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// emptyAndExtract empties the entry of mnt $1 (a sync's --delete: what
-// the source does not have goes) and extracts the tar's members named
-// by the rest ($1 as the archive names it: storage, ./storage), as root
-// in the util image so owners and modes come as they were. A directory
-// is emptied, never removed, and a file overwritten in place: a running
-// container bind-mounts their inodes. It runs in a container that
-// mounts that entry alone (extractEntries).
+// emptyAndExtract empties the entry of mnt $2 (a sync's --delete: what
+// the source does not have goes) and extracts the members named by the
+// rest ($2 as the archive names it: storage, ./storage) of the tar $1, a
+// file mounted read-only (decompressed when it is a .zst: a snapshot's),
+// as root in the util image so owners and modes come as they were. A
+// directory is emptied, never removed, and a file overwritten in place:
+// a running container bind-mounts their inodes. It runs in a container
+// that mounts that entry alone and the tar (extractEntries). The tar is
+// read there, never sent on the container's stdin: Docker's stream ran
+// at 8 MB/s on a small DigitalOcean Droplet, a restore's downtime for 1
+// GiB 131 s against some 9 for the same tar read in the container
+// (measured 2026-10-26).
 const emptyAndExtract = `set -eu
-e=$1; shift
+set -o pipefail
+src=$1 e=$2; shift 2
 if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
-exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
+case $src in
+  *.zst)
+    # What tar leaves unread past its end blocks (a tar of large records)
+    # is drained: zstd killed by SIGPIPE would fail the pipe.
+    zstd -dcq -- "$src" | { s=0; tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" || s=$?; cat >/dev/null; exit "$s"; } ;;
+  *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+esac
 `
 
 // extractEntries empties and extracts each entry of mnt the tar in spool
@@ -813,37 +925,47 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 // would, and mounted by name.
 func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
 	for i, e := range entries {
-		var mount string
-		var err error
-		if e.volume != nil {
-			// A volume: made when missing, as compose would, and mounted
-			// by name.
-			if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
-				return err
-			}
-			mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
-		} else {
-			if err := readyEntry(mnt, e); err != nil {
-				return err
-			}
-			if mount, err = bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name); err != nil {
-				return err
-			}
-		}
-		in, err := os.Open(spool)
-		if err != nil {
+		if err := extractEntry(ctx, mnt, spool, e, fmt.Sprintf("%s-extract-%d", name, i), project); err != nil {
 			return err
 		}
-		run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
-		err = dockerRunFresh(ctx, fmt.Sprintf("%s-extract-%d", name, i), in, run...)
-		in.Close()
-		if err != nil {
-			what := "mnt/" + e.name
-			if e.volume != nil {
-				what = "the volume " + e.name
-			}
-			return fmt.Errorf("extracting %s: %w", what, err)
+	}
+	return nil
+}
+
+// extractEntry empties and extracts the entry or volume e from the tar
+// file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
+// each, in the util container name, which mounts the file read-only.
+func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, project string) error {
+	var mount string
+	var err error
+	if e.volume != nil {
+		// A volume: made when missing, as compose would, and mounted
+		// by name.
+		if err := ensureVolumes(ctx, project, []cli.Volume{*e.volume}); err != nil {
+			return err
 		}
+		mount = "type=volume,source=" + e.volume.Name + ",target=/mnt/" + e.name
+	} else {
+		if err := readyEntry(mnt, e); err != nil {
+			return err
+		}
+		if mount, err = bindMount(filepath.Join(mnt, e.name), "/mnt/"+e.name); err != nil {
+			return err
+		}
+	}
+	// The tar under its own name: a .zst is decompressed (emptyAndExtract).
+	in := "/in/" + filepath.Base(tarFile)
+	src, err := bindMount(tarFile, in)
+	if err != nil {
+		return err
+	}
+	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
+	if err := dockerRunFresh(ctx, name, nil, run...); err != nil {
+		what := "mnt/" + e.name
+		if e.volume != nil {
+			what = "the volume " + e.name
+		}
+		return fmt.Errorf("extracting %s: %w", what, err)
 	}
 	return nil
 }
@@ -930,6 +1052,9 @@ func runImport(cwd string, args []string, color bool) int {
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
 		if m := readMark(base); m != nil {
+			if m.IsRestore() {
+				return fail("the restore of snapshot " + m.From + " did not complete, and only a restore completes it: nothing imported")
+			}
 			if !m.IsImport() {
 				return fail("this environment's data is from a sync that did not complete, and only a sync completes it: nothing imported")
 			}
@@ -1068,6 +1193,23 @@ func runImport(cwd string, args []string, color bool) int {
 
 	set := cli.DataStops(services, cli.ImportOne, name)
 	dependentNotices(cwd, services, []string{name}, set)
+	// What it stops it starts again: refused before anything stops when a
+	// bind source leads out of its entry through a link in what the
+	// import keeps (the start gate would refuse that start, the set left
+	// down under the mark: review); the entries its tar replaces are no
+	// matter.
+	if onTarget {
+		var carried []string
+		for _, e := range entries {
+			if e.volume == nil {
+				carried = append(carried, e.name)
+			}
+		}
+		if err := cli.CheckLeavingBinds(services, carried, "the import: nothing imported"); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	// Up to the first write, a failure brings back what was stopped (and
 	// a stream's up undone).
@@ -1338,6 +1480,8 @@ func runResolved(cwd, name string) int {
 	switch {
 	case m == nil:
 		return fail("no import of " + name + " to resolve: the environment has no mark")
+	case m.IsRestore():
+		return fail("the restore of snapshot " + m.From + " did not complete: --resolved is for imports; restore it again (--snapshots restore " + m.From + ")")
 	case !m.IsImport():
 		return fail("this environment's data is from a sync that did not complete, and only a sync completes it: nothing resolved")
 	case m.From != name:
@@ -1776,6 +1920,13 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return fail("an import into @" + t.Address + " still runs: nothing resolved (devopsy @" + targetRef(t) + " --status shows it)")
 	case mark == nil:
 		return fail("no import of " + name + " to resolve on @" + t.Address + ": its data has no mark")
+	case mark.IsRestore():
+		var fixes []report.Remedy
+		for _, f := range remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "") {
+			fixes = append(fixes, report.Fix(f[0], f[1]))
+		}
+		report.Fail(&report.Failure{Msg: "the restore of snapshot " + mark.From + " into @" + t.Address + " did not complete: --resolved is for imports: nothing resolved", Fixes: fixes})
+		return 1
 	case !mark.IsImport() || settle:
 		reset := remote.ResetFix(targetRef(t))
 		report.Fail(&report.Failure{Msg: "@" + t.Address + "'s data is from a sync that did not complete, and only a sync completes it: nothing resolved", Fixes: []report.Remedy{report.Fix("sync it:", "devopsy @"+targetRef(t)+" --sync"), report.Fix(reset[0], reset[1])}})

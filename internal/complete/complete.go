@@ -344,6 +344,22 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 			return filter(Result{Candidates: []Candidate{{"failed", "every failed release", GroupDevopsy}, {"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
 		}
 		return Result{Directive: DirectiveNoFileComp}
+	case "--snapshots":
+		// Ids are the server's: never offered.
+		if len(words) == 2 {
+			return filter(Result{Candidates: []Candidate{
+				{"restore", "bring a snapshot back: data, code, images", GroupDevopsy},
+				{"remove", "remove snapshots and the images only they hold", GroupDevopsy},
+				{"export", "a snapshot to stdout, one tar", GroupDevopsy},
+				{"import", "a snapshot from stdin", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		}
+		switch words[1] {
+		case "restore":
+			return filter(Result{Candidates: []Candidate{{"--no-code", "the data alone, under the current release", GroupDevopsy}, {"--with-env", "its shared/.env too", GroupDevopsy}, {"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		case "remove":
+			return filter(Result{Candidates: []Candidate{{"--yes", "do not ask first", GroupDevopsy}, help}, Directive: DirectiveNoFileComp}, cur)
+		}
+		return Result{Directive: DirectiveNoFileComp}
 	case "--sync", "--reset":
 		if len(words) > 2 && words[len(words)-2] == "--from" {
 			return fromAddresses(projectDir, cur, user)

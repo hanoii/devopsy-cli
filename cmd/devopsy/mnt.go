@@ -230,6 +230,39 @@ func runMntOwners(cwd string, args []string) int {
 	return 0
 }
 
+// checkStartBinds refuses to start anything of the release at cwd while a
+// bind source of its services leads out of its entry through a symbolic
+// link in the data as it is now (cli.SyncService.LeavingBinds): Docker
+// resolves bind sources at every start, so a link a restore, a sync or an
+// import brought would mount that of the host (review: every hole the
+// checks per flow left was a start none preceded). One place every start
+// goes through, a project's command and devopsy's own (composeRun); the
+// checks before each flow stay, refusing before anything changes. Labels
+// it cannot read are a warning and the start goes on, as for the owners'
+// step: a label devopsy reads never stops compose.
+func checkStartBinds(cwd string) error {
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if errors.Is(err, cli.ErrComposeConfig) {
+		return nil
+	}
+	if err != nil {
+		report.Warn("the release's labels cannot be read: its bind sources are not checked before the start", err.Error())
+		return nil
+	}
+	var bad []string
+	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	// The message whole in its first line: callers wrap it (docker
+	// compose start: ...), which keeps only that.
+	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": remove the link in shared/mnt (a restored snapshot's, a sync's, or one made by hand), or bind-mount where it leads explicitly"}
+}
+
 // mntOwnersRestored is --mnt-owners' word for a restored release
 // (runMntOwners).
 const mntOwnersRestored = "restored"
@@ -253,12 +286,34 @@ const mntOwnersRestored = "restored"
 // labels this devopsy cannot read are a warning, and the owners' step
 // gives nothing away then.
 func runCheckMounts(cwd string, args []string) int {
-	restored := len(args) == 1 && args[0] == mntOwnersRestored
-	if len(args) > 0 && !restored {
-		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored)
+	restored := len(args) > 0 && args[0] == mntOwnersRestored
+	if len(args) > 0 && !restored || len(args) > 2 {
+		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored + " [<snapshot> | restart]")
 		return 2
 	}
+	// A restore's: the entries its snapshot carries are replaced, so the
+	// links in them now are no matter (the snapshot's own are checked in
+	// its tars); the rest stay as they are.
+	// The restart after a failed run step names itself (restart), a
+	// restore its snapshot, a rollback nothing.
+	var m *manifest
+	what := "the rollback: it does not go live"
+	switch {
+	case len(args) == 2 && args[1] == "restart":
+		what = "the restart of the release before: it stays down until a release whose mounts it accepts"
+	case len(args) == 2:
+		var err error
+		if m, err = readManifest(args[1]); err != nil {
+			report.Fail(err)
+			return 1
+		}
+		what = "the restore: nothing restored"
+	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	var carried []string
+	if m != nil {
+		carried = restoredEntries(m, services)
+	}
 	if restored && err == nil {
 		// Two owners on one entry: --mnt-owners restored reads them as
 		// labels it cannot read.
@@ -274,6 +329,8 @@ func runCheckMounts(cwd string, args []string) int {
 		err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
 	case !restored:
 		err = cli.CheckMounts(services)
+	default:
+		err = cli.CheckLeavingBinds(services, carried, what)
 	}
 	if err == nil {
 		err = checkOwned(projectDir, services)

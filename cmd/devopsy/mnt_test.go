@@ -59,9 +59,9 @@ func TestMntOwnersRelease(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	for _, want := range []string{
-		"run --rm --name devopsy-owners-shop-prod-", " --network none --mount type=bind,source=" + s.mnt("prod") + "/cache,target=/mnt/cache devopsy-util:2 sh -c set -eu\n",
+		"run --rm --name devopsy-owners-shop-prod-", " --network none --mount type=bind,source=" + s.mnt("prod") + "/cache,target=/mnt/cache devopsy-util:3 sh -c set -eu\n",
 		`find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "chown_entry \"$1\" \"$2\"\n sh cache 10001:10001\n",
-		"-1 --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
+		"-1 --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
 	} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
@@ -94,7 +94,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000:20000") {
+	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/db/ /dst/db/\n") || strings.Contains(docker, "20000:20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
 	}
 
@@ -105,7 +105,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// (TestExportImport).
 	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:2 sh -c set -eu`).MatchString(docker) {
+	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu`).MatchString(docker) {
 		t.Errorf("an owned import on a target (%d):\n%s\n%s", code, errs, docker)
 	}
 	// Its owners' step failing keeps the mark, and --resolved, the way
@@ -120,7 +120,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 	_, errs, code = s.runIO(nil, nil, "@dev", "--import", "app", "--resolved", "--yes")
 	docker, _ = s.logs()
-	owners, start := regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:2 `).FindStringIndex(docker), strings.Index(docker, " start ")
+	owners, start := regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 `).FindStringIndex(docker), strings.Index(docker, " start ")
 	if code != 0 || owners == nil || start < owners[0] {
 		t.Errorf("--resolved of an owned import (%d), its owners' step at %v, the start at %d:\n%s\n%s", code, owners, start, errs, docker)
 	}
@@ -145,7 +145,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// the switch, and went back).
 	second := s.current("prod")
 	out, code = s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@prod", "--rollback")
-	if docker, _ := s.logs(); code == 0 || s.current("prod") != second || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "nothing changed: current is still") || strings.Contains(out, "current is now") || strings.Contains(docker, "devopsy-owners-") {
+	if docker, _ := s.logs(); code == 0 || s.current("prod") != second || !strings.Contains(out, "building devopsy-util:3") || !strings.Contains(out, "nothing changed: current is still") || strings.Contains(out, "current is now") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("a rollback without the util image (%d), current %q, want %q:\n%s\n%s", code, s.current("prod"), second, out, docker)
 	}
 	// Two owners on one entry in the restored release: labels its
@@ -244,7 +244,7 @@ func TestCheckMountsRelease(t *testing.T) {
 	write(t, s.log+".shop-slow", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code = s.run([]string{"FAKE_UTIL_MISSING=1", "FAIL_UTIL_BUILD=1"}, "@slow", "--release")
 	docker, _ := s.logs()
-	if code == 0 || s.current("slow") != "" || !strings.Contains(out, "building devopsy-util:2") || !strings.Contains(out, "not made current") || strings.Contains(docker, "devopsy-owners-") {
+	if code == 0 || s.current("slow") != "" || !strings.Contains(out, "building devopsy-util:3") || !strings.Contains(out, "not made current") || strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("no util image (%d), current %q:\n%s\n%s", code, s.current("slow"), out, docker)
 	}
 
@@ -484,7 +484,7 @@ exit ${st:-0}
 	// the label, an import of a tar made elsewhere) is given away in a few
 	// chowns, as find -exec ... + batches them, not one per directory.
 	// Review of 2026-10-23 (round 2): -execdir runs chown once per
-	// directory; measured in devopsy-util:2 on a Docker volume, 20,200
+	// directory; measured in devopsy-util:3 on a Docker volume, 20,200
 	// directories of 40,201 inodes took 22.7 s against 0.43 s for -exec
 	// +, after the switch (a release) or with the services stopped (an
 	// import), so a Drupal files tree took minutes.

@@ -120,7 +120,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial := "", "", ""
-	syncing, source, importing := false, false, false
+	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
 	id := ""
@@ -151,7 +151,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			// files no holder settled yet.
 			partial = "a sync was cut"
 			mark = remote.ParseMark(value)
-			if mark.IsImport() {
+			if mark.IsImport() || mark.IsRestore() {
 				partial = mark.Why + " (since " + mark.Since + " UTC)"
 			} else if mark.Why != "" {
 				partial = mark.Why + " (since " + mark.Since + " UTC, from @" + mark.From + ")"
@@ -162,6 +162,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			importing = true
 		case "source":
 			source = true
+		case "snapshot":
+			snapshotting = true
 		}
 	}
 	if id != "" {
@@ -206,6 +208,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	if source {
 		fmt.Println("data        a sync or an export from it is running")
 	}
+	if snapshotting {
+		fmt.Println("data        a snapshot of it is being taken")
+	}
 	switch {
 	case mark.IsImport() && importing:
 		fmt.Println(st.bad("data        importing " + mark.From + ": what it stopped stays down until it completes"))
@@ -217,6 +222,12 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			fixes = append(fixes, f[1])
 		}
 		fmt.Println(st.bad("data        the import of " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+	case mark.IsRestore():
+		var fixes []string
+		for _, f := range remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "") {
+			fixes = append(fixes, f[1])
+		}
+		fmt.Println(st.bad("data        the restore of snapshot " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
 	case partial != "":
 		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
 		if id == "" {
