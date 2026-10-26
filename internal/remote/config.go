@@ -100,11 +100,13 @@ type Target struct {
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
 	// Snapshots is its snapshots: section, as written (merged over
-	// defaults key by key); SnapshotsManual what it resolves to, and
-	// SnapshotsMirror whether its takes keep a mirror (off unless set).
-	Snapshots       *TargetSnapshots `yaml:"snapshots"`
-	SnapshotsManual SnapshotSetting  `yaml:"-"`
-	SnapshotsMirror bool             `yaml:"-"`
+	// defaults key by key); SnapshotsManual and SnapshotsRelease what its
+	// kinds resolve to, and SnapshotsMirror whether its takes keep a
+	// mirror (off unless set).
+	Snapshots        *TargetSnapshots `yaml:"snapshots"`
+	SnapshotsManual  SnapshotSetting  `yaml:"-"`
+	SnapshotsRelease SnapshotSetting  `yaml:"-"`
+	SnapshotsMirror  bool             `yaml:"-"`
 	// Parent is the environment this one is a copy of (a concrete key of
 	// environments:): its first release syncs the parent's data, and
 	// --sync resyncs it. Empty: not a child.
@@ -184,7 +186,8 @@ type TargetReleases struct {
 // alone (decided 2026-10-25: defaults: can then give a keep without
 // turning a kind on everywhere). Only manual ones so far.
 type TargetSnapshots struct {
-	Manual *SnapshotKind `yaml:"manual"`
+	Manual  *SnapshotKind `yaml:"manual"`
+	Release *SnapshotKind `yaml:"release"`
 	// Mirror is whether takes keep a mirror of the data (nil: no).
 	Mirror *bool `yaml:"mirror"`
 }
@@ -193,10 +196,17 @@ type TargetSnapshots struct {
 // what is below it (defaults, then the built-in DefaultManualSnapshots).
 type SnapshotKind struct {
 	Enabled *bool
-	Keep    int
+	// Keep is how many stay (0: what is below), KeepAll every one whose
+	// release is kept (release snapshots only).
+	Keep int
 }
 
-// UnmarshalYAML reads true, false or {enabled, keep}.
+// KeepAll is a release snapshots' keep: all: every snapshot whose release
+// is kept.
+const KeepAll = -1
+
+// UnmarshalYAML reads true, false or {enabled, keep}, keep a number or
+// all.
 func (k *SnapshotKind) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		var b bool
@@ -207,8 +217,8 @@ func (k *SnapshotKind) UnmarshalYAML(n *yaml.Node) error {
 		return nil
 	}
 	var m struct {
-		Enabled *bool `yaml:"enabled"`
-		Keep    *int  `yaml:"keep"`
+		Enabled *bool     `yaml:"enabled"`
+		Keep    yaml.Node `yaml:"keep"`
 	}
 	if n.Kind != yaml.MappingNode {
 		return errors.New("true, false, or {enabled: true|false, keep: <n>}")
@@ -221,18 +231,27 @@ func (k *SnapshotKind) UnmarshalYAML(n *yaml.Node) error {
 	if err := n.Decode(&m); err != nil {
 		return errors.New("enabled: true or false, keep: a number")
 	}
-	// keep: ~ is a null (nullKeys), back to what is below.
-	if m.Keep != nil && *m.Keep < 1 {
-		return errors.New("keep is at least 1")
-	}
 	k.Enabled = m.Enabled
-	if m.Keep != nil {
-		k.Keep = *m.Keep
+	// keep: ~ is a null (nullKeys), back to what is below.
+	if m.Keep.Kind != 0 && m.Keep.Tag != "!!null" {
+		if m.Keep.Value == "all" {
+			k.Keep = KeepAll
+			return nil
+		}
+		var keep int
+		if err := m.Keep.Decode(&keep); err != nil {
+			return errors.New("keep: a number, or all (release snapshots)")
+		}
+		if keep < 1 {
+			return errors.New("keep is at least 1")
+		}
+		k.Keep = keep
 	}
 	return nil
 }
 
-// SnapshotSetting is one kind resolved for an environment.
+// SnapshotSetting is one kind resolved for an environment: Keep is
+// KeepAll for every release snapshot whose release is kept.
 type SnapshotSetting struct {
 	Enabled bool
 	Keep    int
@@ -241,6 +260,10 @@ type SnapshotSetting struct {
 // DefaultManualSnapshots is what an environment's manual snapshots are
 // when nothing says: on, three kept.
 var DefaultManualSnapshots = SnapshotSetting{Enabled: true, Keep: 3}
+
+// DefaultReleaseSnapshots is what its release snapshots are when nothing
+// says: off, one kept (the release before).
+var DefaultReleaseSnapshots = SnapshotSetting{Enabled: false, Keep: 1}
 
 // Steps are what --release or --rollback runs, in phases, so the upload,
 // the switch of `current` and the release lock are always where devopsy
@@ -641,15 +664,23 @@ func checkSnapshots(n *yaml.Node) error {
 		if n.Tag == "!!null" {
 			return nil
 		}
-		return errors.New("a mapping: manual, mirror")
+		return errors.New("a mapping: manual, release, mirror")
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k := n.Content[i].Value; k {
-		case "manual", "mirror":
+		case "manual":
+			if v := n.Content[i+1]; v.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(v.Content); j += 2 {
+					if v.Content[j].Value == "keep" && v.Content[j+1].Value == "all" {
+						return errors.New("manual: keep: all is for release snapshots only: a number")
+					}
+				}
+			}
+		case "release", "mirror":
 		case "root", "max_keep":
 			return fmt.Errorf("%s belongs to each machine's user-level config (~/.config/devopsy/config.yaml there), never to a project", k)
 		default:
-			return fmt.Errorf("unknown key %q (manual, mirror)", k)
+			return fmt.Errorf("unknown key %q (manual, release, mirror)", k)
 		}
 	}
 	return nil
@@ -799,8 +830,8 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 }
 
 // mergeSnapshots is over's snapshots: on base's, key by key; nulls
-// remove what is below (snapshots, snapshots.manual,
-// snapshots.manual.keep, snapshots.mirror).
+// remove what is below (snapshots, snapshots.<kind>,
+// snapshots.<kind>.keep, snapshots.mirror).
 func mergeSnapshots(base, over *TargetSnapshots, nulls map[string]bool) *TargetSnapshots {
 	if nulls["snapshots"] {
 		base = nil
@@ -809,54 +840,57 @@ func mergeSnapshots(base, over *TargetSnapshots, nulls map[string]bool) *TargetS
 		return nil
 	}
 	out := &TargetSnapshots{}
-	var b, o *SnapshotKind
-	if base != nil && !nulls["snapshots.manual"] {
-		b = base.Manual
-	}
 	if base != nil && !nulls["snapshots.mirror"] {
 		out.Mirror = base.Mirror
 	}
-	if over != nil {
-		o = over.Manual
-		if over.Mirror != nil {
-			out.Mirror = over.Mirror
+	if over != nil && over.Mirror != nil {
+		out.Mirror = over.Mirror
+	}
+	kind := func(name string, of func(*TargetSnapshots) *SnapshotKind) *SnapshotKind {
+		var b, o *SnapshotKind
+		if base != nil && !nulls["snapshots."+name] {
+			b = of(base)
 		}
-	}
-	if b == nil && o == nil {
-		return out
-	}
-	m := SnapshotKind{}
-	if b != nil {
-		m = *b
-	}
-	if nulls["snapshots.manual.enabled"] {
-		m.Enabled = nil
-	}
-	if nulls["snapshots.manual.keep"] {
-		m.Keep = 0
-	}
-	if o != nil {
-		if o.Enabled != nil {
-			m.Enabled = o.Enabled
+		if over != nil {
+			o = of(over)
 		}
-		if o.Keep > 0 {
-			m.Keep = o.Keep
+		if b == nil && o == nil {
+			return nil
 		}
+		m := SnapshotKind{}
+		if b != nil {
+			m = *b
+		}
+		if nulls["snapshots."+name+".enabled"] {
+			m.Enabled = nil
+		}
+		if nulls["snapshots."+name+".keep"] {
+			m.Keep = 0
+		}
+		if o != nil {
+			if o.Enabled != nil {
+				m.Enabled = o.Enabled
+			}
+			if o.Keep != 0 {
+				m.Keep = o.Keep
+			}
+		}
+		return &m
 	}
-	out.Manual = &m
+	out.Manual = kind("manual", func(t *TargetSnapshots) *SnapshotKind { return t.Manual })
+	out.Release = kind("release", func(t *TargetSnapshots) *SnapshotKind { return t.Release })
 	return out
 }
 
-// resolveSnapshots is what t's snapshots: comes to, on the built-in
-// defaults.
-func resolveSnapshots(t *Target) SnapshotSetting {
-	s := DefaultManualSnapshots
-	if t.Snapshots != nil && t.Snapshots.Manual != nil {
-		if m := t.Snapshots.Manual; m.Enabled != nil {
-			s.Enabled = *m.Enabled
+// resolveSnapshots is what one kind of an environment's snapshots:
+// comes to, on s, its built-in default.
+func resolveSnapshots(k *SnapshotKind, s SnapshotSetting) SnapshotSetting {
+	if k != nil {
+		if k.Enabled != nil {
+			s.Enabled = *k.Enabled
 		}
-		if m := t.Snapshots.Manual; m.Keep > 0 {
-			s.Keep = m.Keep
+		if k.Keep != 0 {
+			s.Keep = k.Keep
 		}
 	}
 	return s
@@ -1577,7 +1611,18 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		t.Keep = project.Keep
 		t.From["keep"] = "releases: in " + filepath.Join(project.Dir, ConfigFile)
 	}
-	t.SnapshotsManual = resolveSnapshots(&t)
+	var manual, release *SnapshotKind
+	if t.Snapshots != nil {
+		manual, release = t.Snapshots.Manual, t.Snapshots.Release
+	}
+	t.SnapshotsManual = resolveSnapshots(manual, DefaultManualSnapshots)
+	t.SnapshotsRelease = resolveSnapshots(release, DefaultReleaseSnapshots)
+	// A release's snapshot belongs to the release it replaces, which a
+	// keep of 1 prunes with this very release: it would go at the end of
+	// its own tar.
+	if t.SnapshotsRelease.Enabled && t.Keep == 1 {
+		return nil, fmt.Errorf("environment %q: releases: keep: 1 with release snapshots on would remove each snapshot with the release it belongs to: keep 2 or more", a.env)
+	}
 	t.SnapshotsMirror = t.Snapshots != nil && t.Snapshots.Mirror != nil && *t.Snapshots.Mirror
 	switch t.Mode {
 	case "":

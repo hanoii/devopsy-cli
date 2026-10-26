@@ -411,6 +411,15 @@ environments:
   unmirrored:
     snapshots:
       mirror: ~
+  released:
+    snapshots:
+      release: true
+  allkept:
+    snapshots:
+      release: {enabled: true, keep: all}
+  kept4:
+    snapshots:
+      release: {keep: 4}
 `)
 	for env, want := range map[string]SnapshotSetting{
 		"prod":    {true, 10},
@@ -430,18 +439,32 @@ environments:
 	}
 	// mirror: off unless an environment (or defaults:) says true; ~ back
 	// to off; it merges beside manual's keys.
+	// release: off and keep 1 by default; true turns it on alone, keep
+	// counts alone, all every one whose release is kept.
+	for env, want := range map[string]SnapshotSetting{
+		"prod":     {false, 1},
+		"released": {true, 1},
+		"allkept":  {true, KeepAll},
+		"kept4":    {false, 4},
+	} {
+		if tg, err := LoadTarget(dir, "vm1:"+env, nil); err != nil || tg.SnapshotsRelease != want {
+			t.Errorf("%s: release %+v (%v), want %+v", env, tg.SnapshotsRelease, err, want)
+		}
+	}
 	for env, want := range map[string]bool{"prod": false, "mirrored": true, "unmirrored": false, "none": false} {
 		if tg, err := LoadTarget(dir, "vm1:"+env, nil); err != nil || tg.SnapshotsMirror != want || env == "mirrored" && tg.SnapshotsManual.Keep != 4 {
 			t.Errorf("%s: mirror %v, manual %+v (%v), want mirror %v", env, tg.SnapshotsMirror, tg.SnapshotsManual, err, want)
 		}
 	}
 	for conf, want := range map[string]string{
-		"project: app\nsnapshots: {manual: true}\n":                                "snapshots: goes under defaults: or an environment",
-		"project: app\nenvironments:\n  prod: {snapshots: {root: /x}}\n":           "snapshots: root belongs to each machine's user-level config",
-		"project: app\nenvironments:\n  prod: {snapshots: {release: true}}\n":      `snapshots: unknown key "release" (manual, mirror)`,
-		"project: app\nenvironments:\n  prod: {snapshots: {manual: {keep: 0}}}\n":  "keep is at least 1",
-		"project: app\nenvironments:\n  prod: {snapshots: {manual: {every: 1}}}\n": `unknown key "every" (enabled, keep)`,
-		"project: app\nenvironments:\n  prod: {snapshots: {manual: often}}\n":      "true, false, or {enabled: true|false, keep: <n>}",
+		"project: app\nsnapshots: {manual: true}\n":                                                "snapshots: goes under defaults: or an environment",
+		"project: app\nenvironments:\n  prod: {snapshots: {root: /x}}\n":                           "snapshots: root belongs to each machine's user-level config",
+		"project: app\nenvironments:\n  prod: {snapshots: {weekly: true}}\n":                       `snapshots: unknown key "weekly" (manual, release, mirror)`,
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: {keep: all}}}\n":                "keep: all is for release snapshots only",
+		"project: app\nenvironments:\n  prod: {releases: {keep: 1}, snapshots: {release: true}}\n": "releases: keep: 1 with release snapshots on",
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: {keep: 0}}}\n":                  "keep is at least 1",
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: {every: 1}}}\n":                 `unknown key "every" (enabled, keep)`,
+		"project: app\nenvironments:\n  prod: {snapshots: {manual: often}}\n":                      "true, false, or {enabled: true|false, keep: <n>}",
 	} {
 		write(t, filepath.Join(dir, ConfigFile), conf)
 		if _, err := LoadTarget(dir, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), want) {
