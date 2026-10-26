@@ -466,3 +466,17 @@ func TestSnapshotRestoreCut(t *testing.T) {
 		t.Errorf("the restore again (%d), marked %v:\n%s", code, fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)
 	}
 }
+
+// A take that would not fit refuses before anything stops, naming the
+// sizes.
+func TestSnapshotSpace(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	// 2^40 kB a path: more than any test machine has.
+	out, code := s.run([]string{"FAKE_DU=1099511627776"}, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "not enough space for a snapshot at") || !strings.Contains(out, "nothing stopped") || strings.Contains(docker, " stop ") {
+		t.Errorf("too big (%d):\n%s\n%s", code, out, docker)
+	}
+}
