@@ -830,8 +830,10 @@ func copyFile(from, to string) error {
 
 // manifest is a snapshot's manifest, read.
 type manifest struct {
-	// copy is how the take copied the data: reflink, mirror or none.
+	// copy is how the take copied the data: reflink, mirror or none;
+	// imported, a snapshot taken elsewhere.
 	format, kind, release, taken, copy string
+	imported                           bool
 	entries, files               []string
 	volumes                      map[string]string
 	// services are its services with data, each with its entries and
@@ -859,6 +861,8 @@ func readManifest(dir string) (*manifest, error) {
 			m.format = fs[1]
 		case fs[0] == "copy" && len(fs) > 1:
 			m.copy = fs[1]
+		case fs[0] == "imported":
+			m.imported = true
 		case fs[0] == "kind" && len(fs) > 1:
 			m.kind = fs[1]
 		case fs[0] == "release" && len(fs) > 1:
@@ -1124,7 +1128,11 @@ func snapshotList(p snapshotPaths) {
 				state = "in progress"
 			}
 		}
-		lines = append(lines, strings.Join([]string{id, m.kind, m.release, m.taken, strconv.FormatInt(bytes, 10), state, m.copy}, "\t"))
+		how := m.copy
+		if m.imported {
+			how = ""
+		}
+		lines = append(lines, strings.Join([]string{id, m.kind, m.release, m.taken, strconv.FormatInt(bytes, 10), state, how}, "\t"))
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(lines)))
 	for _, l := range lines {
@@ -1465,8 +1473,17 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			}
 			fmt.Println(line)
 		}
+		// How the last take here copied: an imported snapshot says nothing
+		// of that.
+		last := ""
+		for _, sn := range snaps {
+			if sn.copy != "" {
+				last = sn.copy
+				break
+			}
+		}
 		switch {
-		case snaps[0].copy == "reflink":
+		case last == "reflink":
 			fmt.Println("the last take cloned the data by reflinks: down for seconds")
 		case mirrored:
 			fmt.Println("a mirror of the data is kept beside them: a take is down only for what changed since its first pass")
@@ -1799,11 +1816,10 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	// Imported, it is a snapshot someone chose to bring, as a take is: a
 	// release snapshot's release is not here, and pruning would take it for
 	// one whose release went.
-	if m.kind != "manual" {
-		mf := filepath.Join(dir, remote.SnapshotManifest)
-		if err := os.WriteFile(mf, []byte(strings.Replace(fileText(mf), "\nkind\t"+m.kind+"\n", "\nkind\tmanual\n", 1)), 0o600); err != nil {
-			return err
-		}
+	// Marked imported: how it was copied says nothing of the takes here.
+	mf := filepath.Join(dir, remote.SnapshotManifest)
+	if err := os.WriteFile(mf, []byte(strings.Replace(fileText(mf), "\nkind\t"+m.kind+"\n", "\nkind\tmanual\n", 1)+"imported\t"+time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		return err
 	}
 	if err := os.Rename(dir, filepath.Join(p.snaps, id)); err != nil {
 		return err
