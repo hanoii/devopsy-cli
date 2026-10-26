@@ -561,21 +561,36 @@ func (s *Set) SnapshotPull(snap, data string) error {
 
 // FilterImported keeps of an imported snapshot's listing (snap's, anyone's
 // file) only the entries of a service the current release (cur) lists
-// too, in the same repository: what a later pull (SnapshotPull's own
+// too, in that one's repository: what a later pull (SnapshotPull's own
 // repository), its bookmarks (BookmarkFrom) and its removal take names
 // from (review: a crafted listing had the server pull and tag another
 // repository's image, and its removal strip names of images nothing
 // else held).
+//
+// An entry of a service the current release lists under another
+// repository (a snapshot moved from another environment, whose own
+// images are named after its compose project, a mirror's name) is kept
+// under the current one's repository, its tag, digest and id as they
+// were: never dropped, or a full restore of it would find a listing of
+// nothing, nor kept elsewhere (review).
 func FilterImported(snap, cur string) error {
-	mine := map[string]bool{}
+	repos := map[string]string{}
 	for _, e := range readList(cur) {
-		mine[e.Service+" "+repoKey(e.Ref)] = true
+		if e.Service != "" {
+			repos[e.Service] = repoOf(e.Ref)
+		}
 	}
 	var kept []entry
 	for _, e := range readList(snap) {
-		if e.Service != "" && mine[e.Service+" "+repoKey(e.Ref)] {
-			kept = append(kept, e)
+		repo, ok := repos[e.Service]
+		if e.Service == "" || !ok {
+			continue
 		}
+		e.Ref = repo + e.Ref[len(repoOf(e.Ref)):]
+		if e.Digest != "" {
+			e.Digest = repo + e.Digest[len(repoOf(e.Digest)):]
+		}
+		kept = append(kept, e)
 	}
 	return writeList(snap, kept)
 }

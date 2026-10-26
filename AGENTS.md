@@ -1154,7 +1154,16 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   and full restores, but for the entries their snapshot carries (they
   are replaced, their links checked in its tars: `--check-mounts
   restored <snapshot>`; review round 4: a restore was refused by a link
-  in the data it would replace, and called itself a rollback). With an entry owned it readies `UtilImage`
+  in the data it would replace, and called itself a rollback), a
+  `--no-code` restore's check likewise (`check-tars`: it runs no mounts
+  check), and a sync's `finish go` before it starts anything (a copy
+  that brings one is kept as one its finish refused: `IncompleteFinish`,
+  nothing started; review round 4). A bind source that reaches mnt
+  through links (the release tree's `files -> .devopsy/mnt/storage/files`,
+  an aliased base path) is judged by where it lands in mnt
+  (`throughMnt`, before the links in mnt are followed: resolved whole, a
+  link there leading out of mnt lost it, the owned-entry rule with it;
+  review round 4). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: absolute paths. It reads the labels
@@ -2463,8 +2472,11 @@ settled every rule here after nine reviews (2026-10-25).
   its `code/` (a link among its own files had the import read and write
   another snapshot's manifest: review round 3), checked whole as a
   restore checks (`imported`), its tars only (no pull, no space
-  warning), its image listing cut to the current release's services and
-  their repositories (`images.FilterImported`: a crafted listing had
+  warning), its image listing cut to the current release's services,
+  each kept under that one's repository (a snapshot moved from another
+  environment names its own images after its compose project: dropped,
+  its full restore found a listing of nothing, review round 4)
+  (`images.FilterImported`: a crafted listing had
   the server pull and tag another repository's image, and its removal
   strip names of images nothing else held: review round 3), the
   snapshot's `code/` trusted by design (a full restore runs it; the

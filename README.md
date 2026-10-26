@@ -960,7 +960,8 @@ the secrets its compose file requires), the mounts check refuses
   mount what it points to, and devopsy give that to the owner;
 - a bind mount from below an entry that a symbolic link in the entry
   leads out of it (`storage/public -> /`, made by hand or by a restored
-  snapshot), rollbacks and restores too: Docker would mount that of the host. A link
+  snapshot), rollbacks and restores too, and a sync whose copy brings
+  one starts nothing on it: Docker would mount that of the host. A link
   within the entry, and an entry that is itself a link (on another
   disk), are fine.
 

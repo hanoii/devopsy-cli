@@ -360,7 +360,8 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-tars <snapshot>")
 		}
 		if err := snapshotCheckTars(cwd, p, args[1], true); err != nil {
-			return fail(err.Error())
+			report.Fail(err)
+			return 1
 		}
 		return 0
 	case "restore-data":
@@ -1933,6 +1934,15 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) e
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		return err
+	}
+	// The entries it does not carry stay as they are, their links too:
+	// none may make a bind source lead out of its entry, which the
+	// restore's start would mount from the host (a --no-code restore runs
+	// no mounts check: review).
+	if restore {
+		if err := cli.CheckLeavingBinds(services, m.entries, true); err != nil {
+			return err
+		}
 	}
 	sizes := map[snapshotTarFile]int64{}
 	for _, t := range snapshotTars(m) {

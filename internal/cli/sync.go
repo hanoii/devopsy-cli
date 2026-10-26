@@ -428,6 +428,16 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			// release to below an owned entry, or one in shared/mnt into
 			// the release, is judged by where it leads.
 			src := filepath.Clean(v.Source)
+			// A source that reaches mnt through links (the release tree's
+			// files -> .devopsy/mnt/storage/files, a base path aliased) is
+			// judged by its path in mnt, found before the links in mnt are
+			// followed: resolved whole, a link there leading out of mnt lost
+			// it, and with it every rule below (review).
+			if mntPath(src, mnts) == "" {
+				if in := throughMnt(src, mnts); in != "" {
+					src = in
+				}
+			}
 			r := resolvePath(src)
 			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
 			if rel := mntPath(src, mnts); d != "" && d != "." && rel != d {
@@ -557,6 +567,37 @@ func mntEntry(source string, mnts []string) string {
 	return strings.SplitN(rel, string(filepath.Separator), 2)[0]
 }
 
+// throughMnt is p with its symbolic links followed one at a time,
+// outermost first, up to the first path in one of mnts, "" when none
+// is (or past 40 links): where a bind source lands in mnt before the
+// links in mnt lead it on.
+func throughMnt(p string, mnts []string) string {
+	for range 40 {
+		if mntPath(p, mnts) != "" {
+			return p
+		}
+		parts := strings.Split(strings.TrimPrefix(p, string(filepath.Separator)), string(filepath.Separator))
+		moved := false
+		for i := range parts {
+			q := string(filepath.Separator) + filepath.Join(parts[:i+1]...)
+			t, err := os.Readlink(q)
+			if err != nil {
+				continue
+			}
+			if !filepath.IsAbs(t) {
+				t = filepath.Join(filepath.Dir(q), t)
+			}
+			p = filepath.Join(append([]string{t}, parts[i+1:]...)...)
+			moved = true
+			break
+		}
+		if !moved {
+			return ""
+		}
+	}
+	return ""
+}
+
 // mntRoot is the one of mnts source is in, "" outside them.
 func mntRoot(source string, mnts []string) string {
 	for _, m := range mnts {
@@ -651,11 +692,11 @@ func CheckLeavingBinds(services []SyncService, carried []string, restore bool) e
 	if len(bad) == 0 {
 		return nil
 	}
-	what := "the rollback"
+	what := "the rollback: it does not go live"
 	if restore {
-		what = "the restore"
+		what = "the restore: nothing restored"
 	}
-	return &report.Failure{Msg: "the mounts check refuses " + what + ": it does not go live", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
+	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
 }
 
 // CheckMounts refuses, before a release goes live, the mounts whose data

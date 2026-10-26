@@ -426,7 +426,7 @@ func TestCheckMounts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckLeavingBinds(parsed); err == nil {
+		if err := CheckLeavingBinds(parsed, nil, false); err == nil {
 			t.Errorf("%s, with mnt/storage/files a link to /: a rollback's check lets Docker mount the host's root", services)
 		}
 	}

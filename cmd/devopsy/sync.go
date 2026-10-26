@@ -2213,6 +2213,28 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		word = "partial"
 	}
 	hookEnv := env
+	if word == "go" {
+		// The copy may have brought a symbolic link that makes a bind
+		// source lead out of its entry (the parent's data, a restored
+		// snapshot's there): Docker would mount that of the host at the
+		// services' start, so nothing starts, the copy kept as one whose
+		// finish refused it (review: the data outlives the checks of
+		// the release it was checked in).
+		if _, now, err := cli.SyncServices(cwd, os.Environ()); err == nil {
+			if lerr := cli.CheckLeavingBinds(now, nil, false); lerr != nil {
+				var bad []string
+				for _, s := range now {
+					bad = append(bad, s.LeavingBinds...)
+				}
+				code = fail("the copy brings a symbolic link out of its entry where a service bind-mounts: " + strings.Join(bad, ", ") + ": nothing started")
+				why := "the copy completed, but brought a symbolic link out of its entry where a service bind-mounts (" + strings.Join(bad, ", ") + "), which Docker would mount from the host: nothing runs on the data until a sync without it completes"
+				if err := markIncomplete(base, "", remote.IncompleteFinish, why, false); err != nil {
+					fail(err.Error())
+				}
+				word, hookEnv = "partial", recordEnv()
+			}
+		}
+	}
 	switch word {
 	case "go":
 		// Complete: whatever an earlier sync or import left is replaced.

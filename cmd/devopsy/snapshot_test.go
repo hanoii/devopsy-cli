@@ -2276,6 +2276,32 @@ func TestSnapshotFIFORestores(t *testing.T) {
 	}
 }
 
+// A --no-code restore runs no mounts check, and keeps as they are the
+// entries its snapshot does not carry: a link there making a bind source
+// lead out of its entry (storage/public -> /, app without data binding
+// mnt/storage and mnt/storage/public) is refused before anything stops,
+// as a release would refuse it, rather than started on by the restore.
+func TestRestoreKeptLinkAtBindSource(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP=none\nFAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "app mounts ./mnt/storage/public -> / through a symbolic link out of its entry") || strings.Contains(docker, " stop ") {
+		t.Errorf("a --no-code restore keeping a link out of its entry at a bind source (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
 // A snapshot's symbolic links may lead anywhere, but not where Docker
 // follows them on the host: a bind source below an entry nobody owns
 // (allowed: such an entry is the deploy user's, written from the host,
