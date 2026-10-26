@@ -1049,3 +1049,57 @@ func TestSnapshotRestoreRunFailsLeavesNothingHalf(t *testing.T) {
 		t.Errorf("the previous release not restarted, and the failed run step's services left running on the restored data (stopped: %v), current %s:\n%s", stopped, s.current("prod"), out)
 	}
 }
+
+// --snapshots import reads a plain tar from stdin, and tar takes a stream
+// cut at a member boundary for complete (no end-of-archive blocks): an
+// operator's Ctrl-C, a dropped connection, or the pipe feeding it dying
+// (aws s3 cp ... - |) at a 512-byte boundary between members. Such a
+// stream must not be stored as a snapshot: here the cut drops the
+// snapshot's images record (data/images), which a restore holds the data
+// services on, and the import says it imported the snapshot.
+func TestSnapshotImportCut(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	// The export as the server receives it when the stream ends right
+	// before its last member: every member but that one, no end blocks.
+	last := m[1] + "/data/images"
+	var cut bytes.Buffer
+	tw := tar.NewWriter(&cut)
+	found := false
+	for tr := tar.NewReader(bytes.NewReader(exported)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == last {
+			found = true
+			continue
+		}
+		data, _ := io.ReadAll(tr)
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(data)
+	}
+	_ = tw.Flush()
+	if !found {
+		t.Fatalf("the export has no %s: %v", last, tarNamesOf(t, exported))
+	}
+	_, errs, code = s.runIO(nil, cut.Bytes(), "@prod", "--snapshots", "import")
+	if im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs); code == 0 || im != nil {
+		t.Errorf("a stream cut before its last member stored as a snapshot (%d), without %s:\n%s", code, last, errs)
+	}
+}
