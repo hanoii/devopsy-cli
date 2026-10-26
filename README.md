@@ -1501,7 +1501,9 @@ anything stops, the stopped pass clones the data (seconds, whatever its
 size, a database included), the services start, and the tars are made
 from the clone afterwards, nobody waiting; the clone then goes, and a
 mirror left from before with it. `--snapshots` says how the last take
-copied. Plain
+copied. A snapshot holds files, directories and symbolic links:
+FIFOs, sockets and device nodes are left out (no restore takes them),
+and hard links come back as files of their own. Plain
 `tar.zst` files, one per entry or volume, restorable by hand
 (`zstd -dc mnt.files.tar.zst | tar -x`). Unlabeled services run on (a
 service that holds visitors, like drupal11's `alwaysup`, answers
@@ -1539,8 +1541,10 @@ a failure taking the snapshot (too little space, Docker) fails the
 release before its switch. The snapshot belongs to the release before:
 `--snapshots` lists it as `release`, beside that release's id, and it
 goes once that release is gone, at the next snapshot taken or removed,
-or past `snapshots: {release: {keep}}` (1, or `all`: one for every
-release kept). An imported one is kept as a manual snapshot. Restoring it is a full return to
+or past `snapshots: {release: {keep}}` (1, or `all`: every one whose
+release is kept; a release tried again after a failure takes another,
+and the one before holds the data from before the failed attempt). An
+imported one is kept as a manual snapshot. Restoring it is a full return to
 that release, code and data (a migration gone wrong, say). A restore
 with release snapshots on takes one first too, of the data it replaces,
 so a restore can be undone the same way. None is taken by a first
