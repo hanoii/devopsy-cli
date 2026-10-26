@@ -241,4 +241,36 @@ func TestSyncDecisionRestoreMark(t *testing.T) {
 			t.Errorf("mark %q, %q: %s (%v), want %s", c.mark, c.done, out, err, c.want)
 		}
 	}
+
+	// The partial copy over the restore's mark leaves the mark a
+	// restore's: its data is as partial as the restore left it, and only
+	// a restore or a sync writing every service of the snapshot clears
+	// it. Written over as a sync's copy mark, the next plain done line
+	// (the same older parent) would clear it, the snapshot's services
+	// the parent does not copy started on half-restored data.
+	base := t.TempDir()
+	if err := os.WriteFile(filepath.Join(base, SyncTakenFile), []byte("writer db 1 up\n"+DoneLine("7.1")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mark := filepath.Join(base, SyncIncompleteFile)
+	if err := os.WriteFile(mark, []byte(IncompleteLine("2026-10-26 00:00:00", "20261026000000", IncompleteRestore, "why")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	block := syncBlock("app-dev", "the sync fails", false)
+	i := strings.Index(block, "*.partial)")
+	j := strings.Index(block[i:], ";;")
+	if i < 0 || j < 0 {
+		t.Fatalf("no *.partial) branch in syncBlock:\n%s", block)
+	}
+	script := "base=" + Quote(base) + "\nsync_id=7.1; reply=go\n" + syncDecision(`"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`) + "case \"$reply.$sync_word\" in\n" + block[i:i+j] + ";;\nesac\n"
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{fakeDevopsy(t), SyncFromTargetEnv + "=vm1:prod"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the partial branch: %v\n%s", err, out)
+	}
+	data, _ := os.ReadFile(mark)
+	if m := ParseMark(string(data)); !m.IsRestore() || m.From != "20261026000000" {
+		t.Errorf("an older parent's complete copy over a restore's mark wrote it over: %q\n%s", data, out)
+	}
 }
