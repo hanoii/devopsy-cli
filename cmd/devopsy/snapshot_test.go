@@ -972,6 +972,11 @@ func TestSnapshotRestoreReleaseFiles(t *testing.T) {
 // the server cancels).
 func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 	t.Parallel()
+	// The switch is known from the server's log marker, which needs GNU
+	// tail, as on every server (macOS here has none).
+	if exec.Command("/bin/sh", "-c", "PATH=/usr/bin:/bin tail --version").Run() != nil {
+		t.Skip("no GNU tail: followOutput prints no marker")
+	}
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	out, code := s.run(nil, "@prod", "--snapshot")
