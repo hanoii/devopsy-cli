@@ -1439,7 +1439,12 @@ func releaseSnapshotSetup(t *Target, projectName string, restore bool) string {
 	}
 	return `rs_id=
 if [ -n "$prev" ]; then
-  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
+  # A release that syncs runs no partialGuard: a killed holder's files are
+  # settled (into a mark) before the check reads it.
+` + settleSync(projectName) + `  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
+  # The server's image lock, record and mode, for the snapshot's bookmarks
+  # and the detached tar's pruning.
+  export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
   rs_k=` + strconv.Itoa(t.Keep) + `
   [ "$rs_k" -gt 0 ] || rs_k=$keep
   [ "$rs_k" -le "$max_keep" ] || rs_k=$max_keep
