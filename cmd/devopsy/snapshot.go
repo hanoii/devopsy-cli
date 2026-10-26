@@ -1059,6 +1059,16 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 			report.Warn(err.Error())
 		}
 	}
+	// A FIFO's directory a devopsy killed outright left (unzstd): only
+	// one whose devopsy is gone, a check may be reading beside it.
+	ents, _ := os.ReadDir(p.snaps)
+	for _, e := range ents {
+		if pid, ok := strings.CutPrefix(e.Name(), fifoPrefix); ok {
+			if n, err := strconv.Atoi(pid); err == nil && n != os.Getpid() && syscall.Kill(n, 0) != nil {
+				_ = os.RemoveAll(filepath.Join(p.snaps, e.Name()))
+			}
+		}
+	}
 	// A clone whose take is gone (renamed and its clone not removed, or
 	// removed with its .tmp) is nobody's.
 	clones, _ := os.ReadDir(p.clone())
@@ -1742,21 +1752,72 @@ func snapshotTars(m *manifest) []snapshotTarFile {
 	return ts
 }
 
+// fifoPrefix starts the name of the directory, among an environment's
+// snapshots, of a FIFO unzstd reads (its pid after it): one a devopsy
+// killed outright left goes with the leftovers.
+const fifoPrefix = ".fifo."
+
 // unzstd streams the tar file of snap's data/, decompressed in the util
-// image, to f; wait ends it.
+// image, to r; wait ends it. Through a FIFO in a directory beside snap,
+// which the container writes, never its stdout: Docker's stream ran at 8
+// MB/s on a small DigitalOcean Droplet, where the same bytes through a
+// pipe go at the decompression's speed (a restore's check of 1 GiB took
+// 114 s, measured 2026-10-26). The reader holds a writer of its own
+// (keep), so it never waits for the container to open the FIFO, and
+// gives it up once the container is gone: then r ends (EOF), however
+// the container ended, and wait says how.
 func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait func() error, err error) {
-	args := []string{"run", "--rm", "--name", name, "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData) + ":/s:ro", remote.UtilImage, "zstd", "-dcq", "/s/" + file}
+	dir := filepath.Join(filepath.Dir(snap), fifoPrefix+strconv.Itoa(os.Getpid()))
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, nil, err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, nil, err
+	}
+	fifo := filepath.Join(dir, "tar")
+	fail := func(err error) (io.ReadCloser, func() error, error) {
+		_ = os.RemoveAll(dir)
+		return nil, nil, err
+	}
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		return fail(err)
+	}
+	keep, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		return fail(err)
+	}
+	f, err := os.Open(fifo)
+	if err != nil {
+		keep.Close()
+		return fail(err)
+	}
+	args := []string{"run", "--rm", "--name", name, "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData) + ":/s:ro", "-v", dir + ":/o", remote.UtilImage,
+		"sh", "-c", `zstd -dcq -- "/s/$1" >/o/tar`, "sh", file}
 	trace(append([]string{"docker"}, args...))
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stderr = errOut
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, err
-	}
+	cmd.Stdout, cmd.Stderr = errOut, errOut
 	if err := cmd.Start(); err != nil {
-		return nil, nil, err
+		keep.Close()
+		f.Close()
+		return fail(err)
 	}
-	return out, cmd.Wait, nil
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		keep.Close()
+		if ctx.Err() != nil {
+			// The client killed: the container may write on, and the
+			// reader stops here.
+			f.Close()
+		}
+		done <- err
+	}()
+	return f, func() error {
+		err := <-done
+		f.Close()
+		_ = os.RemoveAll(dir)
+		return err
+	}, nil
 }
 
 // snapshotCheckTars reads and checks each of snap's tars whole, as an
@@ -2120,16 +2181,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
-		r, wait, err := unzstd(ctx, snap, t.file, fmt.Sprintf("%s-unzstd-%d", cname, i))
-		if err == nil {
-			err = extractEntry(ctx, mnt, r, e, fmt.Sprintf("%s-extract-%d", cname, i), composeName(cwd))
-			// What the extraction left unread, so the decompression ends.
-			_, _ = io.Copy(io.Discard, r)
-			if werr := wait(); err == nil && werr != nil {
-				err = werr
-			}
-		}
-		if err != nil {
+		if err := extractEntry(ctx, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, fmt.Sprintf("%s-extract-%d", cname, i), composeName(cwd)); err != nil {
 			report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 			return 1
 		}

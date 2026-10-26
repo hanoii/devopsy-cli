@@ -272,10 +272,11 @@ case "$*" in
   # A snapshot's: its mirror's old entries removed, its tars (plain, not
   # compressed) from the mirror to stdout, the data measured (du -sk:
   # FAKE_DU kilobytes each, 4 by default).
-  # A snapshot's tar, decompressed (the fake's are plain tars).
-  "run --rm --name devopsy-snapshot-"*"-check "*|"run --rm --name devopsy-import-"*"-unzstd-"*)
-    for a; do case $a in *:/s:ro) sd=${a%:/s:ro} ;; esac; done
-    exec cat "$sd/${last#/s/}" ;;
+  # A snapshot's tar, decompressed (the fake's are plain tars) into the
+  # FIFO of -v <dir>:/o.
+  "run --rm --name devopsy-snapshot-"*"-check "*)
+    for a; do case $a in *:/s:ro) sd=${a%:/s:ro} ;; *:/o) o=${a%:/o} ;; esac; done
+    exec cat "$sd/$last" >"$o/tar" ;;
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
@@ -353,17 +354,20 @@ case "$*" in
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
     # One entry per container (--mount, its source the entry): emptied,
-    # then the members named after it extracted, as the util image does.
-    vol=
-    while [ $# -gt 0 ]; do case $1 in --mount) case $2 in type=volume,*) vol=1; src=${2#type=volume,source=}; src="$vols/${src%%,target=*}" ;; *) src=${2#type=bind,source=}; src=${src%%,target=*} ;; esac ;; -c) shift 3; break ;; esac; shift; done
-    e=$1; shift
+    # then the members named after it extracted from the tar mounted at
+    # /in (a snapshot's .tar.zst is a plain tar here), as the util image
+    # does.
+    vol= in=
+    while [ $# -gt 0 ]; do case $1 in --mount) case $2 in *,target=/in/*) in=${2#type=bind,source=}; in=${in%%,target=*} ;; type=volume,*) vol=1; src=${2#type=volume,source=}; src="$vols/${src%%,target=*}" ;; *) src=${2#type=bind,source=}; src=${src%%,target=*} ;; esac ;; -c) shift 3; break ;; esac; shift; done
+    e=$2; shift 2
+    [ -n "$in" ] || { echo "the tar is no file mounted at /in" >&2; exit 1; }
     if [ -d "$src" ] && [ ! -L "$src" ]; then find "$src" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi
     if [ -n "$vol" ]; then
       # A volume (its mount, by name): what the members under its key hold.
       t="$DOCKER_LOG.vtmp"; rm -rf "$t"; mkdir -p "$t" "$src"
-      tar -C "$t" -xf - "$@" && cp -R "$t/$e/." "$src/"; exit $?
+      tar -C "$t" -xf "$in" "$@" && cp -R "$t/$e/." "$src/"; exit $?
     fi
-    exec tar -C "${src%/"$e"}" -xf - "$@" ;;
+    exec tar -C "${src%/"$e"}" -xf "$in" "$@" ;;
 esac
 exit 0
 `
@@ -2226,7 +2230,9 @@ func TestExportImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mnt, "storage", "old.txt")); err == nil {
 		t.Errorf("the entry was not emptied first")
 	}
-	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 -i --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage devopsy-util:3 sh -c `).MatchString(docker) || !strings.Contains(docker, "exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- \"$@\"\n sh storage ./storage storage\n") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
+	// The spool mounted read-only and read there, never on the
+	// container's stdin (Docker's stream is slow).
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy-util:3 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// An entry that is a file: made empty when missing, for its
@@ -2237,7 +2243,7 @@ func TestExportImport(t *testing.T) {
 	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini": "[x]\n"}), "--import", "app"); code != 0 || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {
 		t.Errorf("--import of a file entry (%d):\n%s", code, errs)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, " -i --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini devopsy-util:3 ") || !strings.Contains(docker, " sh app.ini app.ini\n") {
+	if docker, _ := s.logs(); !strings.Contains(docker, " --network none --mount type=bind,source="+mnt+"/app.ini,target=/mnt/app.ini --mount type=bind,source=") || !regexp.MustCompile(` sh /in/[^ ]* app\.ini app\.ini\n`).MatchString(docker) {
 		t.Errorf("--import of a file entry:\n%s", docker)
 	}
 	if _, errs, code := s.runIO(file, tarOf(t, map[string]string{"app.ini/x": "x"}), "--import", "app"); code == 0 || !strings.Contains(errs, "the tar carries mnt/app.ini as a directory, and it is a file here: nothing imported") || readString(filepath.Join(mnt, "app.ini")) != "[x]\n" {

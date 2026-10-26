@@ -2213,8 +2213,13 @@ func TestSnapshotReflink(t *testing.T) {
 	// service writes over them, up to the file's size, for good.
 	probe := filepath.Join(snaps, ".clone", ".reflink.4242")
 	write(t, probe, "half of ibdata\n", 0o600)
-	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || fileExists(left) || fileExists(probe) {
-		t.Errorf("a leftover clone or check file kept (%d, there: %v %v):\n%s", code, fileExists(left), fileExists(probe), out)
+	// And a restore check's FIFO directory a devopsy killed outright left
+	// (unzstd), never one whose devopsy runs (this test's, standing in).
+	deadFifo, liveFifo := filepath.Join(snaps, ".fifo.2147483646"), filepath.Join(snaps, ".fifo."+strconv.Itoa(os.Getpid()))
+	write(t, filepath.Join(deadFifo, "tar"), "", 0o600)
+	write(t, filepath.Join(liveFifo, "tar"), "", 0o600)
+	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || fileExists(left) || fileExists(probe) || fileExists(deadFifo) || !fileExists(liveFifo) {
+		t.Errorf("a leftover clone, check file or FIFO kept, or a live FIFO removed (%d, there: %v %v %v %v):\n%s", code, fileExists(left), fileExists(probe), fileExists(deadFifo), fileExists(liveFifo), out)
 	}
 
 

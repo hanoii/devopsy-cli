@@ -834,19 +834,28 @@ func (e *endReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// emptyAndExtract empties the entry of mnt $1 (a sync's --delete: what
-// the source does not have goes) and extracts the tar's members named
-// by the rest ($1 as the archive names it: storage, ./storage), as root
-// in the util image so owners and modes come as they were. A directory
-// is emptied, never removed, and a file overwritten in place: a running
-// container bind-mounts their inodes. It runs in a container that
-// mounts that entry alone (extractEntries).
+// emptyAndExtract empties the entry of mnt $2 (a sync's --delete: what
+// the source does not have goes) and extracts the members named by the
+// rest ($2 as the archive names it: storage, ./storage) of the tar $1, a
+// file mounted read-only (decompressed when it is a .zst: a snapshot's),
+// as root in the util image so owners and modes come as they were. A
+// directory is emptied, never removed, and a file overwritten in place:
+// a running container bind-mounts their inodes. It runs in a container
+// that mounts that entry alone and the tar (extractEntries). The tar is
+// read there, never sent on the container's stdin: Docker's stream ran
+// at 8 MB/s on a small DigitalOcean Droplet, a restore's downtime for 1
+// GiB 131 s against some 9 for the same tar read in the container
+// (measured 2026-10-26).
 const emptyAndExtract = `set -eu
-e=$1; shift
+set -o pipefail
+src=$1 e=$2; shift 2
 if [ -d "/mnt/$e" ] && [ ! -L "/mnt/$e" ]; then
   find "/mnt/$e" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 fi
-exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
+case $src in
+  *.zst) zstd -dcq -- "$src" | tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+  *) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;
+esac
 `
 
 // extractEntries empties and extracts each entry of mnt the tar in spool
@@ -865,13 +874,7 @@ exec tar -C /mnt -xf - --numeric-owner --overwrite --no-wildcards -- "$@"
 // would, and mounted by name.
 func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
 	for i, e := range entries {
-		in, err := os.Open(spool)
-		if err != nil {
-			return err
-		}
-		err = extractEntry(ctx, mnt, in, e, fmt.Sprintf("%s-extract-%d", name, i), project)
-		in.Close()
-		if err != nil {
+		if err := extractEntry(ctx, mnt, spool, e, fmt.Sprintf("%s-extract-%d", name, i), project); err != nil {
 			return err
 		}
 	}
@@ -879,8 +882,9 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 }
 
 // extractEntry empties and extracts the entry or volume e from the tar
-// in, as extractEntries does each, in the util container name.
-func extractEntry(ctx context.Context, mnt string, in io.Reader, e tarEntry, name, project string) error {
+// file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
+// each, in the util container name, which mounts the file read-only.
+func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, project string) error {
 	var mount string
 	var err error
 	if e.volume != nil {
@@ -898,8 +902,14 @@ func extractEntry(ctx context.Context, mnt string, in io.Reader, e tarEntry, nam
 			return err
 		}
 	}
-	run := append([]string{"-i", "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", e.name}, e.forms...)
-	if err := dockerRunFresh(ctx, name, in, run...); err != nil {
+	// The tar under its own name: a .zst is decompressed (emptyAndExtract).
+	in := "/in/" + filepath.Base(tarFile)
+	src, err := bindMount(tarFile, in)
+	if err != nil {
+		return err
+	}
+	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
+	if err := dockerRunFresh(ctx, name, nil, run...); err != nil {
 		what := "mnt/" + e.name
 		if e.volume != nil {
 			what = "the volume " + e.name

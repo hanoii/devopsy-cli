@@ -2009,7 +2009,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   just made for a link to `../<another entry>`, which GNU tar followed
   as root, planting files in another entry (demonstrated); here a link
   leads only into the entry or the throwaway container. Cost: the spool
-  is read once per entry. An entry that is a
+  is read once per entry. The spool (a snapshot's restore: its
+  `.tar.zst`, decompressed there) is mounted read-only into the
+  container and read there, never sent on its stdin: Docker's stream
+  ran at 8 MB/s on a small DigitalOcean Droplet, a restore of 1 GiB
+  down 131 s against some 9 (measured 2026-10-26). An entry that is a
   symlink is refused both ways: tar carries only the link (an export
   that succeeded empty), and the image's `/mnt` never reaches its
   target.
@@ -2329,7 +2333,11 @@ settled every rule here after nine reviews (2026-10-25).
   when gone), its steps the restored release's `rollback:` else
   `release:` (`--release-steps restart`), `--check-mounts restored`; the
   tars checked whole before anything stops (`check-tars`: `zstd -dc`
-  into `tarEntriesIn`, the import's checks but a symbolic link's
+  in the util image into a FIFO beside the snapshots, never its stdout
+  (`unzstd`: the same 8 MB/s, 114 s for 1 GiB; the reader holds a
+  writer of its own, so it never waits on a container that never
+  opened it, and a leftover directory goes with the leftovers), into
+  `tarEntriesIn`, the import's checks but a symbolic link's
   target, which is the data's own wherever it leads (`anyTarget`:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
