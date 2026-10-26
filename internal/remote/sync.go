@@ -348,8 +348,12 @@ var UtilDockerfile = []string{"FROM alpine:3", "RUN apk add --no-cache rsync tar
 // import extracts none either, errMember in cmd/devopsy). Why: rsync as
 // root makes them on the child's host, where bind mounts are not nodev,
 // and --chown gave them to the entry's owner, a block device of the
-// server's disk the raw disk for that UID.
-var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1"}
+// server's disk the raw disk for that UID. --sparse keeps holes holes
+// (a database's punched pages), as a snapshot's tars do: written as
+// zeros, a copy takes more disk than its source, past what a space
+// check measured (du counts blocks); rsync 3.1.3 and later take it with
+// --inplace (a file entry's).
+var RsyncCopy = []string{"rsync", "-a", "--no-D", "--delete", "--numeric-ids", "--modify-window=-1", "--sparse"}
 
 // StreamSpoolPrefix starts the name of a stream's spool file in an
 // environment's directory ($base): what an export wrote, read by the

@@ -1470,6 +1470,9 @@ if [ -n "$prev" ]; then
     *) not_live 1 ;;
   esac
   if [ -n "$rs_id" ]; then
+    # A take from here to its detached tar's end, which keeps fd 6: the
+    # holding file says so to --snapshots and --status.
+    : >"$base/` + SnapshotHoldingFile + `"
     (umask 077; : >>"$rel/` + ServerLogFile + `") || not_live 1
     not_live_hook() {
       if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then

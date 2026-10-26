@@ -474,20 +474,24 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		sort.Strings(cs.TreeBinds)
 		sort.Strings(cs.Binds)
 		// The owners' list (the child's, for a sync) names entries split
-		// by spaces too.
+		// by spaces too, and find and chown take them as arguments: one
+		// starting with a dash would be an option.
 		if cs.Owner != "" {
 			for _, d := range cs.Writable {
-				if strings.ContainsFunc(d, unicode.IsSpace) {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name: rename it", name, d, MntOwnerLabel)
+				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt %s owns cannot have whitespace in its name or start with a dash: rename it", name, d, MntOwnerLabel)
 				}
 			}
 		}
 		// Copies name entries in space-separated lists (the child's,
 		// exclude) and rsync modules: a name with whitespace would split.
+		// The tools that carry them (find for a snapshot's tar, tar for
+		// --export) take entries as arguments: a name starting with a
+		// dash would be an option (find: unknown predicate).
 		if cs.HasData {
 			for _, d := range append(slices.Clone(cs.Dirs), cs.Excluded...) {
-				if strings.ContainsFunc(d, unicode.IsSpace) {
-					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name: rename it", name, d)
+				if strings.ContainsFunc(d, unicode.IsSpace) || strings.HasPrefix(d, "-") {
+					return nil, fmt.Errorf("service %s: ./mnt/%s: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it", name, d)
 				}
 			}
 		}

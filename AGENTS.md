@@ -1503,7 +1503,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   every consumer (copy, guard, list) agrees. Without data it is ignored,
   not validated, so a variable can flip `devopsy.data` and keep it. A
   data service's entry with whitespace in its name is refused: the child's list, exclude and rsync modules name
-  entries split by spaces (decided over a new list format).
+  entries split by spaces (decided over a new list format); one starting
+  with a dash too (an owned one as well), since find, chown and tar take
+  entries as arguments (decided over `./` prefixes in every tool: a
+  snapshot's take failed on find's predicate, review).
 - **The child guard: each side reads its own labels, and the parent
   checks the child's before changing anything.** `--sync-push` asks the
   child for `--sync-services list` (through `--sync-exec`, one more
@@ -2185,7 +2188,10 @@ settled every rule here after nine reviews (2026-10-25).
   one consistent moment, a restore bringing code back unless told
   otherwise (`--no-code`). Refused before anything stops: nothing with
   data, a data service writing a bind from outside the project
-  (`cli.SyncService.OutsideBinds`), a marked environment, a killed
+  (`cli.SyncService.OutsideBinds`), one with data and no entry or named
+  volume, none excluded (a database in an anonymous volume, copied by
+  its scripts: the snapshot held nothing of it and restored as
+  complete, review), a marked environment, a killed
   sync holder's files settled into a mark first (`settleSync`, as before
   every activation, and before every restore too: review of 2026-10-25)
   (a complete
@@ -2199,7 +2205,10 @@ settled every rule here after nine reviews (2026-10-25).
   directories and links (`find ... | tar --null --no-recursion -T -`: a
   FIFO or a device is nothing a restore takes, review), hard links as
   files of their own (`--hard-dereference`, as the mirror's rsync
-  without `-H` makes them: a restore refuses a hard link to a link);
+  without `-H` makes them: a restore refuses a hard link to a link),
+  holes kept (`--sparse`, and `RsyncCopy`'s `--sparse` for the mirror
+  and syncs: written as zeros, a copy took more disk than its source,
+  past what `du` measured, review);
   one `.tar.zst`
   per entry or volume, `zstd -T0` under `nice` in the util image,
   written into the snapshot's directory mounted and given to the deploy
@@ -2285,10 +2294,15 @@ settled every rule here after nine reviews (2026-10-25).
   restore was reading). `--destroy` takes all four. `--status` says "snapshot" while
   one holds its holding file and lock (`SnapshotRunning`), never the
   file alone, and every other holder of the lock removes a holding file
-  a killed take left (`snapshotLock`).
-- **Stopped as a sync stops** (`stopSetFor`): every service with data and
-  its dependents (a restore also any service of the current release
-  mounting what it writes, a label or not: round 2), in one stop and one start, recorded as `snapshot <id>
+  a killed take left (`snapshotLock`); a release snapshot writes it once
+  it has its id, its detached tar keeping the lock to its end (review:
+  `--snapshots` listed it INCOMPLETE meanwhile). The unit tests' fake
+  `flock` locks nothing unless `FAKE_REAL_FLOCK` names the real one.
+- **Stopped as a sync stops** (`stopSetFor`): every service with data,
+  any service writing what is copied, a label or not (a take: a
+  writable mount of a copied entry or any mount of a copied volume,
+  review; a restore: any service of the current release mounting what
+  it writes, round 2), and their dependents, in one stop and one start, recorded as `snapshot <id>
   <name>` lines (their own kind: `readSyncRecord` keeps them). A take
   killed outright leaves them for the next settle
   (`settleSnapshots`: `--sync-services settle`, `partialGuard` and
@@ -2315,7 +2329,11 @@ settled every rule here after nine reviews (2026-10-25).
   when gone), its steps the restored release's `rollback:` else
   `release:` (`--release-steps restart`), `--check-mounts restored`; the
   tars checked whole before anything stops (`check-tars`: `zstd -dc`
-  into `tarEntriesIn`, the import's checks, one entry per tar, of the
+  into `tarEntriesIn`, the import's checks but a symbolic link's
+  target, which is the data's own wherever it leads (`anyTarget`:
+  nothing is written through a link, the other rules hold, and an
+  extraction mounts its entry alone; review: an app's absolute links
+  made every snapshot unrestorable), one entry per tar, of the
   manifest's kind, its members named plainly as a take names them: the
   extraction matches by that name alone; a data image gone pulled by its
   digest in the service's own repository as the snapshot's listing names
@@ -2380,7 +2398,9 @@ settled every rule here after nine reviews (2026-10-25).
   stops nothing): the import gated (`lockedGate`, `--stdin-guard`),
   extracted beside (`receive`: GNU tar, the same stream read by
   archive/tar to its end-of-archive blocks, since GNU tar takes a stream
-  cut at a member's boundary for complete: round 2), checked whole as a restore checks (`imported`),
+  cut at a member's boundary for complete: round 2; modes as the tar has
+  them, `-p`, never the import's umask 077, which stripped the code's a
+  restore then ran: review), checked whole as a restore checks (`imported`),
   renamed under a new id, its images bookmarked where the server has
   them, a release snapshot made a manual one (its release is not there,
   and pruning would take it for one whose release went: review), its

@@ -466,8 +466,12 @@ func runSnapshotStep(cwd string, args []string) int {
 
 // snapshotCheck refuses, before anything stops: nothing with data, a
 // service with data writing a bind from outside the project (no copy or
-// snapshot carries it), and too little space for the mirror and the
-// tars, the data measured as root in the util image (volumes are root's).
+// snapshot carries it), one with data and no entry of mnt or named
+// volume (a database in an anonymous volume, copied by its scripts: a
+// snapshot would hold nothing of it and restore as complete; one whose
+// exclude label leaves nothing chose so), and too little space for the
+// mirror and the tars, the data measured as root in the util image
+// (volumes are root's).
 func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror bool) error {
 	if len(d.data) == 0 {
 		return errors.New("nothing to snapshot: no service has data (" + cli.DataLabel + "=true)")
@@ -477,9 +481,12 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 		for _, b := range s.OutsideBinds {
 			bad = append(bad, fmt.Sprintf("%s has data and mounts %s writable, from outside the project: a snapshot cannot hold it", s.Name, b))
 		}
+		if len(s.Dirs)+len(s.Volumes)+len(s.Excluded) == 0 {
+			bad = append(bad, fmt.Sprintf("%s has data (%s=true) and mounts no entry of mnt or named volume: a snapshot would hold nothing of it", s.Name, cli.DataLabel))
+		}
 	}
 	if len(bad) > 0 {
-		return &report.Failure{Msg: "no snapshot taken", Details: bad, Fixes: []report.Remedy{report.Fix("mount its data from ./mnt/<name> or a named volume, or that path read-only (:ro)")}}
+		return &report.Failure{Msg: "no snapshot taken", Details: bad, Fixes: []report.Remedy{report.Fix("mount its data from ./mnt/<name> or a named volume, or that path read-only (:ro), or label a service without data " + cli.DataLabel + "=false")}}
 	}
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
@@ -656,9 +663,19 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	// Stopped: the services with data, and any service writing what the
+	// take copies, a label or not (a worker writing the app's entry), as
+	// a restore stops what writes what it restores; a service that only
+	// reads it runs on.
 	var names []string
-	for _, s := range d.data {
-		names = append(names, s.Name)
+	for _, s := range d.services {
+		writes := slices.ContainsFunc(s.Writable, func(e string) bool { return slices.Contains(d.entries, e) }) ||
+			slices.ContainsFunc(s.Volumes, func(v cli.Volume) bool {
+				return slices.ContainsFunc(d.volumes, func(x cli.Volume) bool { return x.Key == v.Key })
+			})
+		if s.HasData || writes {
+			names = append(names, s.Name)
+		}
 	}
 	set := cli.WithDependents(d.services, names, "snapshot")
 	how := takeCopy(ctx, cwd, p, d)
@@ -988,7 +1005,9 @@ func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry
 		// Hard links as files of their own (--hard-dereference), as the
 		// mirror's rsync (no -H) makes them: a restore refuses a hard link
 		// to a symbolic link (tarLinks), and every take's tars are alike.
-		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
+		// Holes stay holes (--sparse): a database's punched pages came back
+		// as zeros, more disk than the data took.
+		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
 		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
 	if err := dockerRun(ctx, name, args...); err != nil {
 		_ = os.Remove(file)
@@ -1741,8 +1760,10 @@ func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait
 }
 
 // snapshotCheckTars reads and checks each of snap's tars whole, as an
-// import checks its tar (tarEntriesIn: complete, nothing reaching out of
-// its entry, only files, directories and links), each carrying its own
+// import checks its tar (tarEntriesIn: complete, no member written
+// through a link or out of its entry, only files, directories and links;
+// a symbolic link's target is the data's own, wherever it leads), each
+// carrying its own
 // entry or volume alone and of the kind the manifest says; and has the
 // images its data services ran there (pulled by digest when gone).
 func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
@@ -1763,7 +1784,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 		if err != nil {
 			return err
 		}
-		es, err := tarEntriesIn(r)
+		es, err := tarEntriesIn(r, true)
 		_, _ = io.Copy(io.Discard, r)
 		if werr := wait(); err == nil && werr != nil {
 			err = werr
@@ -2168,9 +2189,11 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 // with GNU tar, reading the same stream with archive/tar to its end: a
 // stream cut at a member's boundary (a dropped session, a pipe that
 // died, a truncated file) has no end-of-archive blocks, and GNU tar
-// takes it for complete.
+// takes it for complete. Modes come as the tar has them (-p): the
+// import's umask 077 would strip the code's, which a restore runs and
+// bind-mounts into containers running as another user.
 func snapshotReceive(in io.Reader, dir string) error {
-	cmd := exec.Command("tar", "-xmf", "-", "-C", dir)
+	cmd := exec.Command("tar", "-xmpf", "-", "-C", dir)
 	cmd.Stdout, cmd.Stderr = errOut, errOut
 	w, err := cmd.StdinPipe()
 	if err != nil {

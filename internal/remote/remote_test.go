@@ -344,7 +344,7 @@ func TestRsyncCopySkipsDevices(t *testing.T) {
 func TestSyncReceiveOwners(t *testing.T) {
 	t.Parallel()
 	s := allScripts()["receive"]
-	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 $4 ") {
+	if !strings.Contains(s, "copy 'storage' 'storage/' 'storage/' '--chown=10001:10001'\n") || !strings.Contains(s, "copy 'logs' 'logs/' 'logs/' ''\n") || !strings.Contains(s, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse $4 ") {
 		t.Errorf("receive:\n%s", s)
 	}
 	if s := allScripts()["receive bare"]; !strings.Contains(s, "copy 'app.ini' 'app.ini/app.ini' '' '--inplace --chown=1:2'\n") {

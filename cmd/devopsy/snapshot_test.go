@@ -2326,31 +2326,25 @@ func TestRestoreMarkFailsStartsReleaseSnapshotSet(t *testing.T) {
 	}
 }
 
-// An entry of mnt whose name starts with a dash (./mnt/-files: nothing
-// refuses it, only whitespace) is data like any other: a take tars it and
-// a restore brings it back. The tar's find takes the bare name for a
-// predicate: on a server (pipefail) the take fails, and here, where the
-// fake's pipe hides find's failure, the tar is empty.
+// An entry of mnt whose name starts with a dash (./mnt/-files) is
+// refused where labels are read, as one with whitespace is: the tools
+// that carry entries take them as arguments, and the take's find read
+// the bare name as a predicate (on a server, pipefail failed every take;
+// in the fake, whose pipe hid find's failure, the tar came out empty).
+// Refused before anything stops.
 func TestSnapshotEntryLeadingDash(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT=/-files\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "-files", "a.jpg"), "pic\n", 0o644)
+	s.logs()
 	out, code := s.run(nil, "@prod", "--snapshot")
-	m := snapshotID.FindStringSubmatch(out)
-	if code != 0 || m == nil {
-		t.Fatalf("a take of mnt/-files (%d):\n%s", code, out)
+	if code == 0 || !strings.Contains(out, "./mnt/-files: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it") {
+		t.Errorf("a take of mnt/-files (%d):\n%s", code, out)
 	}
-	tarFile := filepath.Join(s.root, "shop", "prod", "snapshots", m[1], "data", "mnt.-files.tar.zst")
-	if got := tarNames(t, tarFile); !slices.Contains(got, "-files/a.jpg") {
-		t.Errorf("the take's tar of mnt/-files holds %v", got)
-	}
-	if err := os.Remove(filepath.Join(s.mnt("prod"), "-files", "a.jpg")); err != nil {
-		t.Fatal(err)
-	}
-	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "-files", "a.jpg")) != "pic\n" {
-		t.Errorf("a restore of mnt/-files (%d):\n%s", code, out)
+	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+		t.Errorf("a refused take stopped something:\n%s", docker)
 	}
 }
 
@@ -2375,14 +2369,19 @@ func TestSnapshotDataServiceWithoutFiles(t *testing.T) {
 
 // A release snapshot whose tars are being made from the mirror, detached
 // after its release went live, is one being taken: --snapshots says IN
-// PROGRESS, never INCOMPLETE, which its help says is one cut off.
+// PROGRESS, never INCOMPLETE, which its help says is one cut off. The
+// detached tar holds the snapshot lock (the real flock: Linux).
 func TestReleaseSnapshotTarListedInProgress(t *testing.T) {
 	t.Parallel()
+	flock, err := exec.LookPath("flock")
+	if err != nil {
+		t.Skip("no flock")
+	}
 	s := newSyncSetup(t)
 	s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}")
 	s.releaseProd(nil)
 	started := filepath.Join(t.TempDir(), "started")
-	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started}, "@prod", "--release"); code != 0 {
+	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started, "FAKE_REAL_FLOCK=" + flock}, "@prod", "--release"); code != 0 {
 		t.Fatalf("the second release (%d):\n%s", code, out)
 	}
 	for start := time.Now(); !fileExists(started) && time.Since(start) < startWait; time.Sleep(50 * time.Millisecond) {

@@ -520,12 +520,14 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return tarEntriesIn(f)
+	return tarEntriesIn(f, false)
 }
 
 // tarEntriesIn is tarEntries of the tar f streams (a snapshot's,
-// decompressed on the way).
-func tarEntriesIn(f io.Reader) ([]tarEntry, error) {
+// decompressed on the way). With anyTarget, a symbolic link may lead
+// anywhere (a snapshot's: its data as it was, an app's absolute links
+// included); everything else is checked as for an import.
+func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 	// archive/tar ends at its end-of-archive blocks and at a plain end
 	// of file alike; only the first leaves a read that returned data
 	// last.
@@ -570,7 +572,7 @@ func tarEntriesIn(f io.Reader) ([]tarEntry, error) {
 		if p == "" || p == "." || p == "./" {
 			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
 		}
-		top, err := tarMember(h, p)
+		top, err := tarMember(h, p, anyTarget)
 		if err != nil {
 			return nil, err
 		}
@@ -595,7 +597,7 @@ func tarEntriesIn(f io.Reader) ([]tarEntry, error) {
 			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
 		}
 	}
-	if err := links.check(); err != nil {
+	if err := links.check(anyTarget); err != nil {
 		return nil, err
 	}
 	var entries []tarEntry
@@ -666,7 +668,14 @@ const maxLinks = 40
 // a directory to the walk: the entry is emptied before the extraction,
 // so only the tar's links are there (what a running service makes there
 // itself is its own).
-func (l *tarLinks) check() error {
+//
+// With anyTarget (a snapshot's tars) a symbolic link's target is not
+// walked: it is the data, never followed, since the first two rules
+// leave no member written through a link and the hard links' rule still
+// holds. An extraction mounts its entry alone, so nothing of the host is
+// in the way of a link anyway; what the restored app makes of its links
+// is its own, as it was when the snapshot was taken.
+func (l *tarLinks) check(anyTarget bool) error {
 	under := func(name string) string {
 		for i := range len(name) {
 			if name[i] != '/' {
@@ -687,6 +696,9 @@ func (l *tarLinks) check() error {
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(l.symlinks)) {
+		if anyTarget {
+			break
+		}
 		dir := strings.Split(path.Dir(name), "/")
 		hops := 0
 		if _, err := l.walk(dir, l.symlinks[name], &hops); err != nil {
@@ -763,8 +775,9 @@ var tarTypes = []byte{tar.TypeReg, tar.TypeRegA, tar.TypeGNUSparse, tar.TypeCont
 // top-level entry of mnt, and returns that entry. A path or a link out
 // of its entry (into another entry too), and a top-level entry that is
 // no directory or file, are errOutside; a member of another type than
-// tarTypes (a device node, a FIFO) is errMember.
-func tarMember(h *tar.Header, p string) (top string, err error) {
+// tarTypes (a device node, a FIFO) is errMember. With anyTarget a
+// symbolic link's target is not judged (tarLinks.check).
+func tarMember(h *tar.Header, p string, anyTarget bool) (top string, err error) {
 	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
 	if !slices.Contains(tarTypes, h.Typeflag) {
 		kind := map[byte]string{tar.TypeBlock: "a block device", tar.TypeChar: "a character device", tar.TypeFifo: "a FIFO"}[h.Typeflag]
@@ -784,6 +797,9 @@ func tarMember(h *tar.Header, p string) (top string, err error) {
 	var target string
 	switch h.Typeflag {
 	case tar.TypeSymlink:
+		if anyTarget {
+			return top, nil
+		}
 		if path.IsAbs(h.Linkname) {
 			return outside()
 		}

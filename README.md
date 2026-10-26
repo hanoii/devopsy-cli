@@ -1033,7 +1033,8 @@ entries of `mnt` or named volumes (by key) it mounts that are not
 copied through it anyway: an access log next to the site's files
 (`./mnt/logs`), a cache in a volume. On a service
 without data it is ignored. The entries a service with data mounts
-cannot have whitespace in their names: copies refuse them.
+cannot have whitespace in their names or start with a dash: copies and
+snapshots refuse them.
 
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:
@@ -1482,8 +1483,9 @@ its entries of `mnt` and named volumes, as files, whatever its copy
 label, excluded ones left out), a copy of the current release (its code,
 and its images bookmarked so they stay), the image history and
 `shared/.env` (so an export carries the environment's secrets). Every
-service with data and what depends on it stops for one moment, all
-together, as Platform.sh's backups do, while the compressed tars
+service with data, any service writing what the snapshot copies (a
+worker writing the app's files, labeled or not), and what depends on
+them stop for one moment, all together, as Platform.sh's backups do, while the compressed tars
 (`zstd`) are written from the stopped data, then they start, waited for
 until healthy: the downtime is the time the tars take. An environment
 with `snapshots: {mirror: true}` keeps a mirror of its data instead
@@ -1501,11 +1503,13 @@ anything stops, the stopped pass clones the data (seconds, whatever its
 size, a database included), the services start, and the tars are made
 from the clone afterwards, nobody waiting; the clone then goes, and a
 mirror left from before with it. `--snapshots` says how the last take
-copied. A snapshot holds files, directories and symbolic links:
+copied. A snapshot holds files, directories and symbolic links
+(wherever they lead, an app's absolute ones included: a restore makes
+them as they were and follows none), sparse files with their holes:
 FIFOs, sockets and device nodes are left out (no restore takes them),
 and hard links come back as files of their own. Plain
 `tar.zst` files, one per entry or volume, restorable by hand
-(`zstd -dc mnt.files.tar.zst | tar -x`). Unlabeled services run on (a
+(`zstd -dc mnt.files.tar.zst | tar -x`). Other services run on (a
 service that holds visitors, like drupal11's `alwaysup`, answers
 meanwhile). Before the services start again, a Ctrl-C or a session gone
 cancels it and starts them; past that it finishes on its own (`--log`
@@ -1514,7 +1518,9 @@ release, rollback, take, restore, import, export or sync of the
 environment, which starts it first. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
-service with data writing a bind from outside the project, too little
+service with data writing a bind from outside the project, one with
+data and no entry or named volume (a database in an anonymous volume:
+a snapshot would hold nothing of it), too little
 space for the tars, and a mirror when it keeps one (measured first, a
 tenth to spare).
 
@@ -1530,7 +1536,7 @@ request environments, say).
 **Release snapshots.** With the environment's `snapshots: {release:
 true}`, every release that replaces a current one first takes a
 snapshot of the data as the release it replaces left it, right before
-its switch: its services with data and their dependents stop (with a
+its switch: what a take stops stops (with a
 mirror only for what changed while its images were fetched), the tars
 are written (or, with a mirror, made from it afterwards, nobody
 waiting), and the services stay stopped until the new release's run
@@ -1543,7 +1549,8 @@ release before its switch. The snapshot belongs to the release before:
 goes once that release is gone, at the next snapshot taken or removed,
 or past `snapshots: {release: {keep}}` (1, or `all`: every one whose
 release is kept; a release tried again after a failure takes another,
-and the one before holds the data from before the failed attempt). An
+and with `keep` 2 or more, or `all`, the one before still holds the
+data from before the failed attempt). An
 imported one is kept as a manual snapshot. Restoring it is a full return to
 that release, code and data (a migration gone wrong, say). A restore
 with release snapshots on takes one first too, of the data it replaces,

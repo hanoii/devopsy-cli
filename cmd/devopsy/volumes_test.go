@@ -29,7 +29,7 @@ func TestSyncVolumes(t *testing.T) {
 		t.Fatalf("first release (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
 	order := []string{"volume create --label com.docker.compose.project=shop-dev --label com.docker.compose.volume=dbdata shop-dev_dbdata", "shop-dev compose", "stop db",
-		"-rsync-v0 -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/dbdata/ /dst/dbdata/"}
+		"-rsync-v0 -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
 	if !strings.Contains(out, "devopsy: rsync volume dbdata\n") {
 		t.Errorf("the volume's copy not said:\n%s", out)
 	}

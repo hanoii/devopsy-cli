@@ -94,7 +94,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code = s.run(nil, "@dev", "--release")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 /src/db/ /dst/db/\n") || strings.Contains(docker, "20000:20000") {
+	if code != 0 || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse --chown=10001:10001 /src/storage/ /dst/storage/\n") || !strings.Contains(docker, "rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/db/ /dst/db/\n") || strings.Contains(docker, "20000:20000") {
 		t.Errorf("a child's first release (%d):\n%s\n%s", code, out, docker)
 	}
 
