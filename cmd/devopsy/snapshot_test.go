@@ -534,3 +534,20 @@ func TestSnapshotSettlesLeftoverSync(t *testing.T) {
 		t.Errorf("the release after a complete restore (%d):\n%s", code, out)
 	}
 }
+
+// A --snapshots import killed outright (SIGKILL, a reboot) leaves its
+// .import directory under the snapshots, gigabytes nothing lists: the
+// next holder of the snapshot lock removes it, as it does a take's .tmp.
+func TestSnapshotImportLeftover(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	left := filepath.Join(s.root, "shop", "prod", "snapshots", ".import.4242")
+	write(t, filepath.Join(left, "20261025000000", remote.SnapshotManifest), "format\t1\nkind\tmanual\n", 0o600)
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if fileExists(left) {
+		t.Errorf("the killed import's directory left behind: %s", left)
+	}
+}
