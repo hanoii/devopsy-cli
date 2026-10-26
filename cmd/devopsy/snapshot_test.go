@@ -1103,3 +1103,30 @@ func TestSnapshotImportCut(t *testing.T) {
 		t.Errorf("a stream cut before its last member stored as a snapshot (%d), without %s:\n%s", code, last, errs)
 	}
 }
+
+// A snapshot's id is a UTC second picked per environment, so two
+// environments on one server (prod and staging, taken by the same cron)
+// get the same id when their stopped passes start in the same second.
+// Every container a take or a restore names must then carry the
+// environment's compose name, as the mirror's do: a tar container named
+// by the id alone collides with the other take's, whose docker run fails
+// on the name in use after its stopped pass.
+func TestSnapshotContainerNames(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes"); code != 0 {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+	docker, _ := s.logs()
+	for _, name := range regexp.MustCompile(`run --rm --name (devopsy-snapshot-\S+)`).FindAllStringSubmatch(docker, -1) {
+		if !strings.Contains(name[1], "shop-prod") {
+			t.Errorf("a container named without the environment's compose name: %s", name[1])
+		}
+	}
+}
