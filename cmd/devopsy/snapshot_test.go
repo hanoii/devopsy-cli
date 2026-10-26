@@ -2520,31 +2520,54 @@ func TestSnapshotDataServiceWithoutFiles(t *testing.T) {
 
 // A release snapshot whose tars are being made from the mirror, detached
 // after its release went live, is one being taken: --snapshots says IN
-// PROGRESS, never INCOMPLETE, which its help says is one cut off. The
-// detached tar holds the snapshot lock (the real flock: Linux).
+// PROGRESS, never INCOMPLETE, which its help says is one cut off, and
+// --status says a snapshot is taken. The detached tar holds the snapshot
+// lock (the real flock: Linux). A --no-code restore with release
+// snapshots on takes one the same way, its tars detached too.
 func TestReleaseSnapshotTarListedInProgress(t *testing.T) {
 	t.Parallel()
 	flock, err := exec.LookPath("flock")
 	if err != nil {
 		t.Skip("no flock")
 	}
-	s := newSyncSetup(t)
-	s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}")
-	s.releaseProd(nil)
-	started := filepath.Join(t.TempDir(), "started")
-	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started, "FAKE_REAL_FLOCK=" + flock}, "@prod", "--release"); code != 0 {
-		t.Fatalf("the second release (%d):\n%s", code, out)
-	}
-	for start := time.Now(); !fileExists(started) && time.Since(start) < startWait; time.Sleep(50 * time.Millisecond) {
-	}
-	if !fileExists(started) {
-		t.Fatal("the release snapshot's detached tar never started")
-	}
-	out, code := s.run(nil, "@prod", "--snapshots")
-	write(t, started+".go", "", 0o644)
-	s.waitReleaseTars()
-	if code != 0 || strings.Contains(out, "INCOMPLETE") || !strings.Contains(out, "IN PROGRESS") {
-		t.Errorf("--snapshots while a release snapshot's tars are made (%d):\n%s", code, out)
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"a release", []string{"--release"}},
+		{"a --no-code restore", []string{"--snapshots", "restore", "", "--no-code", "--yes"}},
+	} {
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}")
+		s.releaseProd(nil)
+		args := append([]string{"@prod"}, c.args...)
+		if i := slices.Index(args, ""); i >= 0 {
+			out, code := s.run(nil, "@prod", "--snapshot")
+			m := snapshotID.FindStringSubmatch(out)
+			if code != 0 || m == nil {
+				t.Fatalf("%s: take (%d):\n%s", c.name, code, out)
+			}
+			args[i] = m[1]
+		}
+		started := filepath.Join(t.TempDir(), "started")
+		if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started, "FAKE_REAL_FLOCK=" + flock}, args...); code != 0 {
+			t.Fatalf("%s (%d):\n%s", c.name, code, out)
+		}
+		for start := time.Now(); !fileExists(started) && time.Since(start) < startWait; time.Sleep(50 * time.Millisecond) {
+		}
+		if !fileExists(started) {
+			t.Fatalf("%s: the release snapshot's detached tar never started", c.name)
+		}
+		out, code := s.run(nil, "@prod", "--snapshots")
+		status, scode := s.run([]string{"FAKE_REAL_FLOCK=" + flock}, "@prod", "--status")
+		write(t, started+".go", "", 0o644)
+		s.waitReleaseTars()
+		if code != 0 || strings.Contains(out, "INCOMPLETE") || !strings.Contains(out, "IN PROGRESS") {
+			t.Errorf("%s: --snapshots while its release snapshot's tars are made (%d):\n%s", c.name, code, out)
+		}
+		if scode != 0 || !strings.Contains(status, "snapshot") {
+			t.Errorf("%s: --status while its release snapshot's tars are made (%d):\n%s", c.name, scode, status)
+		}
 	}
 }
 
