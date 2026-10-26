@@ -955,20 +955,19 @@ func dataTars(ctx context.Context, cwd string, d *snapshotData, tmp, id string) 
 
 // tarInto writes file, the tar of /m/<dir>/<entry> compressed, from a
 // util container (name) with mounts, under nice, as root (the mirror and
-// the volumes are root's), to stdout, which devopsy writes as the deploy
-// user's.
+// the volumes are root's), into file's directory mounted, then gives it to
+// the deploy user (0600). Never through the container's stdout: Docker's
+// stream ran at about 12 MB/s on a small server where the same tar to a
+// file took a tenth of the time (measured on DigitalOcean, 2026-10-26).
 func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry string) error {
-	out, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage,
-		"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0`, "sh", dir, entry)
-	if err := dockerRunIO(ctx, name, nil, out, args...); err != nil {
+	args := append(append([]string{"--network", "none"}, mounts...), "-v", filepath.Dir(file)+":/o", remote.UtilImage,
+		"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
+		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
+	if err := dockerRun(ctx, name, args...); err != nil {
+		_ = os.Remove(file)
 		return fmt.Errorf("the tar of %s/%s: %w", dir, entry, err)
 	}
-	return out.Close()
+	return nil
 }
 
 // snapshotLeftovers is what a snapshot lock's holder does first: a take

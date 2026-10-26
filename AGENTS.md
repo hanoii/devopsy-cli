@@ -2197,7 +2197,10 @@ settled every rule here after nine reviews (2026-10-25).
   the entries and volumes mounted read-only where a mirror has them,
   `/m/mnt`, `/m/volumes/<key>`, so the tars are the same; one `.tar.zst`
   per entry or volume, `zstd -T0` under `nice` in the util image,
-  written to stdout so the files are the deploy user's), the downtime
+  written into the snapshot's directory mounted and given to the deploy
+  user, never through the container's stdout: Docker's stream ran at 12
+  MB/s on a small DigitalOcean Droplet where the same tar to a file took
+  a tenth of the time, 90 s of downtime for 1 GiB, `tarInto`), the downtime
   their time, then the manifest and the rename. Decided 2026-10-26: a
   mirror is a full second copy kept for good, and saves downtime only on
   data that stays put between passes; a busy database's written tables
