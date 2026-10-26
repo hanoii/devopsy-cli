@@ -358,24 +358,6 @@ func destroyData(cwd string, step []string, color bool) int {
 				return fail("removing the snapshots' mirror: " + err.Error())
 			}
 		}
-		// Every snapshot with its bookmarks, then their directory, here,
-		// on the server: an older operator's script never removed them
-		// (review: their bookmarks held the images for good, a snapshot
-		// root outside the environment kept its data). The destroy's
-		// script holds the image lock, exclusive.
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Base: base, Snapshots: snaps}
-		ents, _ := os.ReadDir(snaps)
-		for _, e := range ents {
-			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-				continue
-			}
-			if err := set.Remove(filepath.Join(snaps, e.Name())); err != nil {
-				return fail("removing snapshot " + e.Name() + "'s images: " + err.Error())
-			}
-		}
-		if err := os.RemoveAll(snaps); err != nil {
-			return fail("removing the snapshots: " + err.Error())
-		}
 	}
 	return 0
 }

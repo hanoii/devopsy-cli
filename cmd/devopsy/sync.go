@@ -2229,17 +2229,6 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		word = "partial"
 	}
 	hookEnv := env
-	// Over a restore's mark only a copy whose parent checked it completes
-	// it (remote.CheckedLine in the record): decided here too, never only
-	// by the holder, whose text is the operator's devopsy (review: an
-	// older one's took a plain done line for go, and the mark went).
-	if m := readMark(base); word == "go" && m.IsRestore() {
-		taken := fileText(filepath.Join(base, remote.SyncTakenFile))
-		if !slices.Contains(strings.Split(taken, "\n"), remote.CheckedLine(os.Getenv(remote.SyncIDEnv))) {
-			report.Error("the copy did not check the restore's mark (a devopsy older than restores' marks decided it): it stays, and what the restore stopped stays down until a sync from a parent that copies every service of it, or a restore, completes")
-			word, hookEnv, code = "partial", recordEnv(), 1
-		}
-	}
 	if word == "go" {
 		// The copy may have brought a symbolic link that makes a bind
 		// source lead out of its entry (the parent's data, a restored

@@ -586,38 +586,7 @@ func (s *Set) others(img string, own map[string]bool) []string {
 	if err != nil {
 		return append(who, "Docker could not tell: "+err.Error())
 	}
-	var theirs []string
-	for _, t := range tags {
-		if !s.snapshotBookmark(t) {
-			theirs = append(theirs, t)
-		}
-	}
-	return append(who, holding(theirs, own, s.leftBookmarks()[img])...)
-}
-
-// snapshotBookmark says whether tag is a bookmark of this environment's
-// snapshots (<prefix>s<id>), by its name alone: an older operator's
-// scripts never say where the snapshots are (SnapshotsEnv), and its
-// rollback then took one for another environment's, leaving a built name
-// on the newer image (review).
-func (s *Set) snapshotBookmark(tag string) bool {
-	if strings.Contains(tag, "@") {
-		return false
-	}
-	t, ok := strings.CutPrefix(tag[len(repoOf(tag)):], ":")
-	if !ok {
-		return false
-	}
-	rest, ok := strings.CutPrefix(t, bookmarkPrefix(s.Name)+"s")
-	if !ok || len(rest) < 14 {
-		return false
-	}
-	for _, c := range rest[:14] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return append(who, holding(tags, own, s.leftBookmarks()[img])...)
 }
 
 // Remove takes a going release's images: its bookmarks are untagged, and

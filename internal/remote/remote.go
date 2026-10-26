@@ -2423,9 +2423,6 @@ fi
 ` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
-# The record of what could not go, for --destroy-data's removal of the
-# snapshots' images, as img gets it (review: it recorded nothing).
-export ` + ImagesLeftEnv + `="$left"
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -2441,9 +2438,7 @@ else
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
-# Its snapshots' bookmarks too, wherever the snapshot root puts them:
-# this server's --destroy-data removed them already, a v0.52.0 one's
-# does not (review), and a removal found gone is nothing.
+# Its snapshots' bookmarks too, wherever the snapshot root puts them.
 for d in "$snaps"/*; do
   [ ! -d "$d" ] || img remove "$d" || d_fail=1
 done

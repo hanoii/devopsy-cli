@@ -40,7 +40,15 @@ conflicts with one is a design question for the user, not a detail.
   files and syntax just stop working, with an error that says what to
   do; a breaking change is marked (`feat!`, `fix!`); a protocol bump
   or a new feature means upgrading the servers. A 1.0.0 is when
-  this gets a compatibility promise.
+  this gets a compatibility promise. Until then mixed versions (an
+  operator and a server, or a parent and a child, on different devopsy)
+  are not a concern beyond the gate itself: a new behavior an older
+  server lacks is a named feature or a protocol bump, so it refuses
+  before anything changes, and that is all. No tests of specific older
+  versions, no code that exists only for an older operator's or
+  server's scripts, and reviews do not look for version-skew edge cases
+  (decided 2026-10-26, after review rounds spent on them; the user
+  lifts it, not a session).
 - **devopsy replaces itself with what it runs** (`syscall.Exec`). Why:
   signals, the terminal and exit codes belong to that command, so
   `devopsy up` behaves as `docker compose up` does, Ctrl-C included.
@@ -439,19 +447,6 @@ before changing anything".
   newer side, accepted: an older parent's receive on a newer child runs
   the older util tag after its claim; upgrade parents and children
   together.
-- **What an older operator's scripts leave out, the server does
-  itself:** a child's `finish go` keeps a restore's mark unless the
-  record has this sync's `CheckedLine` (an older holder took a plain
-  done line for go); `--images` counts a bookmark tagged
-  `<prefix>s<id>` as this environment's snapshot's by its name
-  (`snapshotBookmark`: an older script exports no `SnapshotsEnv`, and a
-  rollback left a built name on the newer image); `--destroy-data`
-  removes the snapshots, their bookmarks and directory, wherever the
-  snapshot root puts them (`snapshotsOf`: an older script never did),
-  recording what cannot go in the project's record (`ImagesLeftEnv`,
-  which the destroy script exports); the destroy script still does it
-  too, for a v0.52.0 server's `--destroy-data`, which does not (a
-  removal found gone is nothing).
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
