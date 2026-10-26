@@ -806,3 +806,34 @@ func TestSnapshotRestoreRunFails(t *testing.T) {
 		}
 	}
 }
+
+// On a marked environment a full restore clears the mark only when the
+// snapshot holds all of every service with data of the restored code, as
+// --no-code refuses otherwise: an entry mounted at the take but not yet
+// written (app's mnt/uploads) is not in the snapshot, so a full restore
+// leaves what the cut import half wrote there, and must not run it under
+// a cleared mark: refused, the mark kept, or the entry emptied.
+func TestSnapshotRestoreMarkMissingEntry(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/uploads\n", 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	if manifest := readString(filepath.Join(base, "snapshots", m[1], "manifest")); strings.Contains(manifest, "uploads") {
+		t.Fatalf("the snapshot holds uploads, which did not exist:\n%s", manifest)
+	}
+	half := filepath.Join(s.mnt("prod"), "uploads", "half.jpg")
+	write(t, half, "half\n", 0o644)
+	mark := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, mark, "2026-10-25 00:00:00\tapp\timport\tthe import of app did not complete\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	if code == 0 && !fileExists(mark) && fileExists(half) {
+		t.Errorf("the mark cleared (%d), app's mnt/uploads as the cut import left it:\n%s", code, out)
+	}
+}
