@@ -227,18 +227,19 @@ func (s *Set) say(lv report.Level, format string, args ...any) {
 }
 
 // bookmarkPrefix is the start of a release's bookmarks, the release id
-// following it: devopsy-<compose name>-, then the 14-digit id, then,
-// when the release names a repository more than once, - and the ref's
-// cksum (up to 10 digits). Docker's tags end at 128 characters, so a
-// name over 94 is cut to 85 and followed by the first 8 hex digits of its
-// sha256, which keeps names that differ only past the cut apart.
+// following it: devopsy-<compose name>-, then the id (14 digits, a
+// snapshot's 15: s and its id), then, when the release names a
+// repository more than once, - and the ref's cksum (up to 10 digits).
+// Docker's tags end at 128 characters, so a name over 93 is cut to 84
+// and followed by the first 8 hex digits of its sha256, which keeps
+// names that differ only past the cut apart.
 func bookmarkPrefix(composeName string) string {
 	if composeName == "" {
 		return "devopsy-"
 	}
-	if len(composeName) > 94 {
+	if len(composeName) > 93 {
 		sum := sha256.Sum256([]byte(composeName))
-		composeName = composeName[:85] + "-" + hex.EncodeToString(sum[:4])
+		composeName = composeName[:84] + "-" + hex.EncodeToString(sum[:4])
 	}
 	return "devopsy-" + composeName + "-"
 }

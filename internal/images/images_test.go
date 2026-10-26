@@ -307,18 +307,15 @@ func TestBookmarkPrefix(t *testing.T) {
 	if got := bookmarkPrefix(""); got != "devopsy-" {
 		t.Errorf("empty: %q", got)
 	}
-	long1 := strings.Repeat("a", 94)
+	// The longest tags (a snapshot's id, a cksum): TestSnapshotBookmarkLength.
+	long1 := strings.Repeat("a", 93)
 	if bookmarkPrefix(long1) != "devopsy-"+long1+"-" {
-		t.Errorf("94 characters are kept")
+		t.Errorf("93 characters are kept")
 	}
 	long2, long3 := strings.Repeat("b", 120)+"x", strings.Repeat("b", 120)+"y"
 	p2, p3 := bookmarkPrefix(long2), bookmarkPrefix(long3)
-	if p2 == p3 || len(p2) != len("devopsy-")+85+1+8+1 {
+	if p2 == p3 || len(p2) != len("devopsy-")+84+1+8+1 {
 		t.Errorf("long names: %q %q", p2, p3)
-	}
-	// The longest tag: prefix, a 14-digit id, - and a 10-digit cksum.
-	if n := len(p2) + 14 + 1 + 10; n > 128 {
-		t.Errorf("a tag can reach %d characters", n)
 	}
 	if bookmarkPrefix(long2) != p2 {
 		t.Errorf("not stable")

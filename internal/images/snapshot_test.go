@@ -62,11 +62,12 @@ func TestSnapshotBookmarks(t *testing.T) {
 // twice (its cksum), and the tag still fits.
 func TestSnapshotBookmarkLength(t *testing.T) {
 	t.Parallel()
-	name := strings.Repeat("b", 120)
 	es := []entry{{Ref: "app:1", ID: "sha256:a"}, {Ref: "app:2", ID: "sha256:b"}}
-	for _, b := range bookmarks(es, name, "s20261025000000") {
-		if _, tag, _ := strings.Cut(b, ":"); len(tag) > 128 {
-			t.Errorf("a snapshot's bookmark tag of %d characters: %s", len(tag), tag)
+	for _, name := range []string{strings.Repeat("b", 93), strings.Repeat("b", 120)} {
+		for _, b := range bookmarks(es, name, "s20261025000000") {
+			if _, tag, _ := strings.Cut(b, ":"); len(tag) > 128 {
+				t.Errorf("a snapshot's bookmark tag of %d characters: %s", len(tag), tag)
+			}
 		}
 	}
 }
