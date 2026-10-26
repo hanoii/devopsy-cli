@@ -1540,3 +1540,49 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		t.Errorf("release snapshots %+v, want one, of %s", rs, second)
 	})
 }
+
+// A mirror take's tar step that fails on its last tar (Docker answering
+// an error, a disk full) leaves its .tmp with the manifest, the listing
+// and every tar file, the last one cut, named by the mirror's marker; a
+// take queued behind it (another operator's, a cron's) then rewrites the
+// mirror and the marker in its own stopped pass. The next take finds that
+// .tmp complete but for the marker, and must not take it for a take
+// without a mirror cut before its rename: renamed into place, it is a
+// snapshot that lists as taken, counts towards keep (pruning a good one
+// for it) and restores as nothing. Whatever ends up renamed must restore.
+func TestSnapshotLeftoverCutTar(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.mirrored("prod")
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+	left := remote.NextReleaseID(time.Now(), []string{m[1]})
+	if out, err := exec.Command("cp", "-a", filepath.Join(snaps, m[1]), filepath.Join(snaps, left+".tmp")).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	// Its last tar cut inside its second block (tar pads a whole archive
+	// to its record size, so a cut must land inside a member); the marker
+	// names the later take.
+	cut := filepath.Join(snaps, left+".tmp", remote.SnapshotData, "mnt.storage.tar.zst")
+	if err := os.Truncate(cut, 700); err != nil {
+		t.Fatal(err)
+	}
+	if got := readString(filepath.Join(snaps, remote.SnapshotMirror, remote.SnapshotComplete)); strings.TrimSpace(got) != m[1] {
+		t.Fatalf("the marker names %q, not the take %s", got, m[1])
+	}
+	s.logs()
+	if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 {
+		t.Fatalf("the take after it (%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(snaps, left)) {
+		return
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", left, "--yes"); code != 0 {
+		t.Errorf("the finished snapshot %s is listed but does not restore (%d):\n%s", left, code, out)
+	}
+}
