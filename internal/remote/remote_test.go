@@ -498,6 +498,31 @@ func TestOlderChildUtilImage(t *testing.T) {
 	}
 }
 
+// v0520Features is what a v0.52.0 server's devopsy reports: v0.51.0's,
+// snapshot-step and release-snapshots.
+var v0520Features = append(slices.Clone(v0510Features), "snapshot-step", ReleaseSnapshotsFeature)
+
+// A v0.52.0 server's devopsy already runs everything this one's scripts
+// call of it: --check-mounts restored restart and restored <snapshot>
+// (cmd/devopsy/mnt.go is unchanged since v0.52.0) and devopsy-util:3,
+// its own UtilImage. leaving-binds and util-image-3 only name those, so
+// a v0.52.0 server must not refuse a script for them: every release,
+// rollback, restore and receive there would be refused needlessly.
+func TestV052ServerRunsScripts(t *testing.T) {
+	t.Parallel()
+	for name, s := range allScripts() {
+		var missing []string
+		for _, n := range Needs(s) {
+			if !slices.Contains(v0520Features, n) {
+				missing = append(missing, n)
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%s: a v0.52.0 server, which runs it, refuses it for %v", name, missing)
+		}
+	}
+}
+
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
 	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
