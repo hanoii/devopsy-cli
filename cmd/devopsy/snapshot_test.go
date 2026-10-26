@@ -2320,6 +2320,61 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 			t.Errorf("%v: the restore of a snapshot whose link at a bind source leads within its entry (%d), the link %q:\n%s", args, code, target, out)
 		}
 	}
+
+	// A full restore checks the code it brings back, which here has no
+	// such bind (the fake's config: app binds mnt/storage/public unless
+	// the code holds nobind). The link stays in the data, and the
+	// rollback after it, back to the release before (a rollback target,
+	// as the README says), binds mnt/storage/public again: Docker mounts
+	// the host's root there, nothing refusing it.
+	s = newSyncSetup(t)
+	write(t, s.log+".shop-prod", "[ \"$1\" = compose ] && [ \"$2\" = -f ] && [ -e \"$(dirname \"$3\")/nobind\" ] || FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.envConfig("prod", "{rollback: deploy}")
+	s.releaseProd(nil)
+	before := s.current("prod")
+	out, code = s.run(nil, "@prod", "--snapshot")
+	m = snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snap := filepath.Join(s.root, "shop", "prod", "snapshots", m[1])
+	write(t, filepath.Join(snap, remote.CodeDir, ".devopsy", "nobind"), "", 0o644)
+	tarFile = filepath.Join(snap, "data", "mnt.storage.tar.zst")
+	data, err = os.ReadFile(tarFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Reset()
+	tw = tar.NewWriter(&b)
+	for tr := tar.NewReader(bytes.NewReader(data)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(tw, tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "storage/public", Typeflag: tar.TypeSymlink, Linkname: "/", Mode: 0o777}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	write(t, tarFile, b.String(), 0o600)
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes"); code != 0 {
+		t.Fatalf("the full restore of code without the bind (%d):\n%s", code, out)
+	}
+	out, code = s.run(nil, "@prod", "--rollback")
+	if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); code == 0 && err == nil && s.current("prod") == before {
+		t.Errorf("the rollback to %s, which binds mnt/storage/public, went live on the restored link to %s: Docker mounts that path of the host:\n%s", before, target, out)
+	}
 }
 
 // A restore with release snapshots on whose data step refuses, nothing
