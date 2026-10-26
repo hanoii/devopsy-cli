@@ -1170,8 +1170,10 @@ func snapshotMakeRelease(cwd string, p snapshotPaths, snap, rel string) error {
 	}
 	files, _ := os.ReadDir(snap)
 	for _, f := range files {
+		// Only what the new release needs of the snapshot's: the rest (its
+		// marks, an image history forced, the images file the activation
+		// writes) is the old release's state, and an imported one anyone's.
 		switch name := f.Name(); {
-		case f.IsDir(), name == remote.SnapshotManifest, name == images.ListFile, name == remote.PendingFile:
 		case name == remote.TargetEnvFile:
 			s, _ := os.ReadFile(filepath.Join(snap, name))
 			c, _ := os.ReadFile(filepath.Join(current, name))
@@ -1184,10 +1186,6 @@ func snapshotMakeRelease(cwd string, p snapshotPaths, snap, rel string) error {
 			_ = json.Unmarshal(data, &r)
 			r.Time, r.By, r.Restore = time.Now().UTC().Format(time.RFC3339), cmp.Or(os.Getenv(remote.RestoreByEnv), r.By), filepath.Base(snap)
 			if err := os.WriteFile(filepath.Join(rel, name), []byte(r.JSON()), 0o644); err != nil {
-				return err
-			}
-		default:
-			if err := copyFile(filepath.Join(snap, name), filepath.Join(rel, name)); err != nil {
 				return err
 			}
 		}

@@ -931,3 +931,33 @@ func TestSnapshotImportDotForms(t *testing.T) {
 		t.Errorf("restore (%d), storage/file.txt %q, marked %v:\n%s\n%s", code, readString(file), marked, out, docker)
 	}
 }
+
+// A restore's release takes only its target lines and record from the
+// snapshot: a mark the snapshot's release had, or one an imported
+// snapshot carries, is never the new release's.
+func TestSnapshotRestoreReleaseFiles(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snap := filepath.Join(s.root, "shop", "prod", "snapshots", m[1])
+	for _, f := range []string{remote.FailedFile, images.RolledBackFile, images.ForcedFile} {
+		write(t, filepath.Join(snap, f), "", 0o600)
+	}
+	if out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes"); code != 0 {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+	cur, _ := filepath.EvalSymlinks(filepath.Join(s.root, "shop", "prod", "current"))
+	for _, f := range []string{remote.FailedFile, images.RolledBackFile, images.ForcedFile} {
+		if fileExists(filepath.Join(filepath.Dir(cur), f)) {
+			t.Errorf("the restored release has the snapshot's %s", f)
+		}
+	}
+	if !fileExists(filepath.Join(filepath.Dir(cur), remote.TargetEnvFile)) || !fileExists(filepath.Join(filepath.Dir(cur), remote.RecordFile)) {
+		t.Errorf("the restored release lacks its target lines or record")
+	}
+}

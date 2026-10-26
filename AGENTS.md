@@ -2246,7 +2246,9 @@ settled every rule here after nine reviews (2026-10-25).
   (`followOutput`, tag `snapshot.<id>`).
 - **A full restore is a release** (`RestoreScript`: `activateScript` in
   rollback mode with `RestoreOptions`): a new release, its id the
-  server's, made from the snapshot's copy (`make-release`: pending, its
+  server's, made from the snapshot's copy (`make-release`: its code, and
+  of the release's files only these two, never a mark the snapshot
+  carries (round 2): pending, its
   `devopsy-target.env` keeping the current release's target lines and
   imports, `mergeTargetEnv`, its record naming the snapshot), its images
   restored from its bookmarks as a rollback's (`img restore`, built again
