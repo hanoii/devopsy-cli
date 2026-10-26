@@ -1493,7 +1493,15 @@ since (the downtime), and the tars are made from the mirror afterwards,
 nobody waiting. Worth it for data that stays put between the two
 passes, like uploaded files; not for a busy database, whose written
 tables change within minutes and are copied again whole (data on XFS,
-whose reflinks make the copy instant, is the way there). Plain
+whose reflinks make the copy instant, is the way there). **Where the
+data clones by reflinks** (its entries and volumes on an XFS or btrfs
+together with the environment's directory, as devopsy-server's
+`cloud-init.yaml` sets a server up), a take needs neither: tried before
+anything stops, the stopped pass clones the data (seconds, whatever its
+size, a database included), the services start, and the tars are made
+from the clone afterwards, nobody waiting; the clone then goes, and a
+mirror left from before with it. `--snapshots` says how the last take
+copied. Plain
 `tar.zst` files, one per entry or volume, restorable by hand
 (`zstd -dc mnt.files.tar.zst | tar -x`). Unlabeled services run on (a
 service that holds visitors, like drupal11's `alwaysup`, answers

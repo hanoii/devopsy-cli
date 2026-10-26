@@ -2204,6 +2204,24 @@ settled every rule here after nine reviews (2026-10-25).
   change within minutes, and rsync copies a changed file whole between
   local directories, so its stopped pass is close to a full copy anyway.
   Reflinks are the answer for a large database.
+- **Reflinks first, whatever the setting** (`takeCopy`: reflink, mirror
+  or none, recorded as the manifest's `copy`): before anything stops,
+  `reflinks` clones one file of each entry and volume into
+  `$base/snapshots/.clone` (the release root's filesystem, never the
+  snapshot root's: reflinks never cross filesystems) with `cp
+  --reflink=always`, as root in the util image (readied first: a
+  server's first take has none, and the check then failed into a take
+  without, e2e), and removes it; where all clone, the stopped pass
+  clones the data there (`cloneData`, `cp -a --reflink=always`, marked
+  `.devopsy-complete` with the id), the tars are made from the clone
+  afterwards (`snapshotTar`), and the clone goes once the snapshot is
+  renamed (`removeClone`, as root); a cut take with a marked clone is
+  finished from it, a clone without its `.tmp` removed (`leftovers`),
+  `--destroy` removes `.clone` as root. A take that clones removes a
+  leftover mirror. Decided over keeping reflinked copies: a database
+  writing over them would fragment its files. Tests: the fake's
+  `FAKE_REFLINK`, and end to end an XFS loop device mounted where the
+  project's directory goes (the e2e image has `xfsprogs`).
 - **With `snapshots: {mirror: true}`, two passes into a kept mirror, then
   tars from it** (decided over hard links, which give nothing for a
   database and cost compression, removal time and honest sizes): the
