@@ -440,7 +440,8 @@ func TestSyncRestoreMark(t *testing.T) {
 // A restore cut after its first write keeps what it stopped down, the
 // environment marked (a restore's mark, its snapshot named), the
 // release not live; the same restore again empties and extracts it all,
-// and clears the mark.
+// clears the mark, and leaves no stop lines in the record: the cut one's
+// name services its run step starts.
 func TestSnapshotRestoreCut(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -465,6 +466,9 @@ func TestSnapshotRestoreCut(t *testing.T) {
 	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
 	if code != 0 || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || s.current("prod") == current {
 		t.Errorf("the restore again (%d), marked %v:\n%s", code, fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)
+	}
+	if rec := readString(filepath.Join(base, ".devopsy-sync.services")); strings.Contains(rec, "stop ") {
+		t.Errorf("the cut restore's stop lines left after the complete one:\n%s", rec)
 	}
 }
 
