@@ -758,3 +758,22 @@ func TestSnapshotRestoreEntryKind(t *testing.T) {
 		t.Errorf("mnt/app.ini a directory, a file in the snapshot: not refused before stopping (%d):\n%s\n%s", code, out, docker)
 	}
 }
+
+// A manifest naming an entry or a volume key that is no single name (an
+// imported one is anyone's) is refused, so nothing becomes a path out of
+// mnt.
+func TestSnapshotManifestNames(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{"entry\t../etc\tdir", "entry\t.\tdir", "entry\ta/b\tdir", "volume\t..\tx_y", "volume\tdb x\tx_db"} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, remote.SnapshotManifest), "format\t1\nkind\tmanual\n"+line+"\n", 0o600)
+		if _, err := readManifest(dir); err == nil {
+			t.Errorf("%q passed", line)
+		}
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, remote.SnapshotManifest), "format\t1\nentry\tstorage\tdir\nvolume\tdb\tx_db\n", 0o600)
+	if _, err := readManifest(dir); err != nil {
+		t.Error(err)
+	}
+}

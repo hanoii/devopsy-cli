@@ -603,7 +603,17 @@ func readManifest(dir string) (*manifest, error) {
 			m.services = append(m.services, manifestService{name: fs[1], entries: strings.Fields(fs[3]), volumes: strings.Fields(fs[4])})
 		}
 	}
-	return m, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	// An imported snapshot's manifest is anyone's: what it names becomes
+	// paths and volume mounts as root.
+	for _, n := range append(slices.Clone(m.entries), slices.Collect(maps.Keys(m.volumes))...) {
+		if n == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\\ \t\n\r") {
+			return nil, fmt.Errorf("%s names %q: no entry of mnt or volume key", filepath.Join(dir, remote.SnapshotManifest), n)
+		}
+	}
+	return m, nil
 }
 
 // snapshotTar makes a snapshot's tars from the mirror, one .tar.zst per
@@ -1426,8 +1436,31 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 	if err != nil {
 		return fail("the project's mnt: " + err.Error())
 	}
-	// The restored code's volumes, for what makes one missing.
-	_, restored, _ := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
+	// Every tar goes where the restored code's services with data have it,
+	// a volume by the name compose gives its key there, never by what the
+	// manifest says (an imported one is anyone's), all checked before
+	// anything stops.
+	_, restored, err := cli.SyncServices(filepath.Join(rel, remote.CodeDir), os.Environ())
+	if err != nil {
+		return fail("the restored code's labels: " + err.Error() + ": nothing restored")
+	}
+	entries, volumes := map[string]bool{}, map[string]cli.Volume{}
+	for _, s := range restored {
+		if s.HasData {
+			for _, d := range s.Dirs {
+				entries[d] = true
+			}
+			for _, v := range s.Volumes {
+				volumes[v.Key] = v
+			}
+		}
+	}
+	tars := snapshotTars(m)
+	for _, t := range tars {
+		if _, ok := volumes[t.name]; t.volume != "" && !ok || t.volume == "" && !entries[t.name] {
+			return fail(fmt.Sprintf("snapshot %s holds %s, which no service with data of the restored code has: nothing restored", id, map[bool]string{true: "the volume " + t.name, false: "mnt/" + t.name}[t.volume != ""]))
+		}
+	}
 	var names []string
 	for _, s := range services {
 		if s.HasData {
@@ -1451,15 +1484,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 	// From the mark on, the restore rule: whatever fails keeps the set
 	// down under the mark, its ways out a restore again or another.
 	cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
-	for i, t := range snapshotTars(m) {
+	for i, t := range tars {
 		e := tarEntry{name: t.name, forms: []string{t.name}, file: t.isFile}
 		if t.volume != "" {
-			v := cli.Volume{Key: t.name, Name: t.volume}
-			for _, s := range restored {
-				if j := slices.IndexFunc(s.Volumes, func(x cli.Volume) bool { return x.Key == t.name }); j >= 0 {
-					v = s.Volumes[j]
-				}
-			}
+			v := volumes[t.name]
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
