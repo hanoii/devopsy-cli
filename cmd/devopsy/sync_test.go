@@ -3586,3 +3586,27 @@ func TestRestartAfterFailedRunChecksLeavingBinds(t *testing.T) {
 		t.Errorf("the previous release, whose app binds mnt/storage/public, was restarted on the synced data, where that is the parent's link to %s: Docker mounts that path of the host into app:\n%s", target, out)
 	}
 }
+
+// An import on a target stops its set, then starts it again on the same
+// data: on data where a bind source already leads out of its entry
+// through a link (one the import does not replace), the start gate
+// refuses that start, so the import must refuse before it stops anything,
+// as a take and an export do (check everything before changing
+// anything), never leave the set down under its mark with the data in.
+func TestImportRefusesLeavingBindsBeforeStopping(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	// app, without data, depends on db: an import of db stops it with db.
+	write(t, s.log+".shop-prod", "FAKE_APP=none\nFAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"db/x": "x"}), "@prod", "--import", "db", "--yes")
+	docker, _ := s.logs()
+	stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod"))
+	if code == 0 || stopped != "" || readString(filepath.Join(s.mnt("prod"), "db", "ibdata")) != "rows\n" || fileExists(filepath.Join(s.root, "shop", "prod", remote.SyncIncompleteFile)) {
+		t.Errorf("an import on data with a link out of its entry at a bind source (%d) left %q stopped, db's data %q:\n%s\n%s", code, stopped, readString(filepath.Join(s.mnt("prod"), "db", "ibdata")), errs, docker)
+	}
+}
