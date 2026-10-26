@@ -768,9 +768,12 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 // id, kind, release, taken, size in bytes, state.
 func snapshotList(p snapshotPaths) {
 	ents, _ := os.ReadDir(p.snaps)
+	// A take runs while its holding file is there and the lock is held, as
+	// --status reads it (SnapshotRunning): any other holder removed the
+	// file of a take killed outright.
 	busy := false
 	if f, err := os.OpenFile(filepath.Join(p.base, remote.SnapshotLockFile), os.O_RDONLY, 0); err == nil {
-		busy = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
+		busy = fileExists(filepath.Join(p.base, remote.SnapshotHoldingFile)) && syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
 		f.Close()
 	}
 	var lines []string
