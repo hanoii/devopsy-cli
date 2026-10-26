@@ -2353,3 +2353,22 @@ func TestSnapshotEntryLeadingDash(t *testing.T) {
 		t.Errorf("a restore of mnt/-files (%d):\n%s", code, out)
 	}
 }
+
+// A service with data that mounts no entry of mnt and no named volume
+// (copy=custom or none, which the mounts check names as the way for one:
+// a database whose image declares an anonymous volume, say) has data no
+// snapshot holds: the take refuses, as for one writing a bind from
+// outside the project, rather than taking a snapshot that restores as
+// complete with that data left as it is.
+func TestSnapshotDataServiceWithoutFiles(t *testing.T) {
+	t.Parallel()
+	for _, db := range []string{"stream+own", "keep+own"} {
+		s := newSyncSetup(t)
+		write(t, s.log+".shop-prod", "FAKE_DB="+db+"\nFAKE_DB_NO_BIND=1\n", 0o644)
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		if code == 0 {
+			t.Errorf("FAKE_DB=%s: db has data and nothing a snapshot holds, and the take went through:\n%s", db, out)
+		}
+	}
+}
