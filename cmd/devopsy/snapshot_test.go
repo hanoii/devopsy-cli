@@ -2397,3 +2397,28 @@ func TestReleaseSnapshotTarListedInProgress(t *testing.T) {
 		t.Errorf("--snapshots while a release snapshot's tars are made (%d):\n%s", code, out)
 	}
 }
+
+// A take is one consistent moment of the data it holds: a service with no
+// data label that mounts one of its entries writable (a worker writing
+// app's files, db here, with app's mnt/db) and depends on no service
+// with data writes on through the copy unless it stops too, as a
+// restore stops any service mounting what it writes, a label or not.
+func TestSnapshotStopsUnlabeledWriter(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_DB=none\nFAKE_APP_MOUNT=/db\n", 0o644)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if got := tarNames(t, filepath.Join(s.root, "shop", "prod", "snapshots", m[1], "data", "mnt.db.tar.zst")); !slices.Contains(got, "db/ibdata") {
+		t.Fatalf("the take's tar of mnt/db: %v", got)
+	}
+	stops := regexp.MustCompile(`(?m) stop ([a-z ]+)$`).FindAllStringSubmatch(docker, -1)
+	if len(stops) == 0 || !slices.Contains(strings.Fields(stops[0][1]), "db") {
+		t.Errorf("db writes mnt/db, which the take copies, and ran on through it (stops %v):\n%s", stops, out)
+	}
+}
