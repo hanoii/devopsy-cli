@@ -47,7 +47,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	}
 	// Both written as root, as the services would (Docker made the
 	// entry root's: the app has no owner label).
-	if out, code := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d -v \"$PWD/snaptake/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo rows >/d/table && echo pic >/f/a.jpg'"); code != 0 {
+	if out, code := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d -v \"$PWD/snaptake/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo rows >/d/table && echo pic >/f/a.jpg && truncate -s 256M /d/sparse'"); code != 0 {
 		t.Fatalf("writing the data: %s", out)
 	}
 	out, code := op(t, dir, "devopsy @prod --snapshot")
@@ -85,6 +85,12 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	files, _ := srv(t, "ls snaptake/prod/shared/mnt/files")
 	if strings.TrimSpace(table) != "rows" || strings.TrimSpace(files) != "a.jpg" {
 		t.Errorf("after the restore: table %q, files %q", table, files)
+	}
+	// A sparse file (a database's punched holes, a preallocated log) comes
+	// back as sparse as it was taken: 256 MB of holes take no blocks, and a
+	// restore writing them as zeros needs room the take never measured.
+	if du, _ := srv(t, "docker run --rm -v snaptake-prod_dbdata:/d busybox:1.37 du -k /d/sparse"); len(strings.Fields(du)) == 0 || strings.Fields(du)[0] != "0" {
+		t.Errorf("the sparse file after the restore takes %s kB", du)
 	}
 	for _, svc := range []string{"db", "app"} {
 		if state := syncState(t, "snaptake", "prod", svc); state != "running" {
