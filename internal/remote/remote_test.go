@@ -3177,3 +3177,64 @@ func TestSyncScriptsFitOneArgument(t *testing.T) {
 		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, limit)
 	}
 }
+
+// A v0.52.0 server's --destroy-data removes a take's reflink clone and
+// the snapshots' mirror, never the snapshots themselves
+// (cmd/devopsy/release_local.go at v0.52.0): their bookmarks and
+// directory went with v0.52.0's DestroyScript, its loop of img remove
+// over "$snaps"/* and its rm -rf of a snapshot root outside $base. This
+// DestroyScript has neither now, leaving them to the server's
+// --destroy-data, and needs nothing a v0.52.0 server lacks, so it runs
+// there: the snapshot's bookmarks then hold its images on the server for
+// good, once $base went (and, with the server's snapshot root elsewhere,
+// the snapshots' data stays there too). What --destroy removes must not
+// depend on the server's version, or the script must refuse there.
+func TestV052ServerDestroySnapshots(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	// The server's devopsy, as v0.52.0's for what matters here: its
+	// --destroy-data leaves the snapshots alone.
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "--stdin-guard") exec cat ;;
+  "-- config --format json") printf '%s' '`+cfgJSON("mariadb:11")+`' ;;
+  "-- --profile * pull --ignore-buildable" | "-- pull") echo M1 > "$FAKE_ROOT/images/mariadb:11" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
+	base := filepath.Join(root, tg.Path)
+	run := func(script string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		cmd.Stdin = strings.NewReader(AckInput)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	if out, err := run(ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, nil)); err != nil {
+		t.Fatalf("release (%v):\n%s", err, out)
+	}
+	// A snapshot of release 1, as a take leaves it: its listing, and its
+	// images bookmarked as s<id>.
+	snap := filepath.Join(base, "snapshots", "20261025120000")
+	list, err := os.ReadFile(filepath.Join(base, "releases", "1", ImagesFile))
+	if err != nil || len(list) == 0 {
+		t.Fatalf("release 1's listing (%v): %q", err, list)
+	}
+	write(t, filepath.Join(snap, ImagesFile), string(list))
+	bookmark := "mariadb:devopsy-app-prod-s20261025120000"
+	write(t, filepath.Join(root, "images", bookmark), "M1\n")
+	out, err := run(DestroyScript(tg, "app-prod"))
+	if err != nil {
+		t.Fatalf("destroy (%v):\n%s", err, out)
+	}
+	if fakeImage(root, bookmark) != "" {
+		t.Errorf("a --destroy on a v0.52.0 server (its needs %v all v0.52.0's) left the snapshot's bookmark %s, which holds its image for good:\n%s", Needs(DestroyScript(tg, "app-prod")), bookmark, out)
+	}
+}
