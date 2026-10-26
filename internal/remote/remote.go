@@ -1016,8 +1016,19 @@ fi
 	if restore != nil {
 		// The data, once the images are ready and past the point a session
 		// gone cancels: before its first write a failure starts the set
-		// again; from it the set stays down under a restore mark.
-		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + " \"$snap\" \"$rel\") || not_live 1\n"
+		// again; from it the set stays down under a restore mark. Nothing
+		// interrupts it, so its output goes to the server's log from here
+		// (followOutput's marker tells the operator's devopsy it goes on),
+		// and a failure puts the images' names back as the log check does.
+		s += "trap '' PIPE\n" + followOutput + `if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
+  set +e
+  if image_lock shared undoing; then
+    ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
+    image_unlock
+  fi
+  not_live 1
+fi
+`
 	}
 	if !rollback || restore != nil {
 		s += `rm -f "$rel/` + PendingFile + `"
@@ -1094,7 +1105,9 @@ fi
 	// (syncWait) and whose copy's lines reach the session's log from the
 	// push, so --log shows them in their place. PIPE is ignored again: a
 	// sync's end restores it.
-	s += "trap '' PIPE\n" + followOutput
+	if restore == nil {
+		s += "trap '' PIPE\n" + followOutput
+	}
 	if sync == nil {
 		s += owners
 	}

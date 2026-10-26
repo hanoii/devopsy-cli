@@ -2269,7 +2269,10 @@ settled every rule here after nine reviews (2026-10-25).
   current or restored, that the snapshot lacks (absent at the take: the
   restore clears the mark, so it must write all of each, as a sync does;
   review of 2026-10-25, round 2); the data
-  written between the images and the switch (`restore-data`): the set
+  written between the images and the switch (`restore-data`, past the
+  point of no return, so `followOutput` and its marker come right before
+  it and a failure undoes the images' names as a failure before the
+  switch does: round 2): the set
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers
   named with `ImportContainerPrefix`), the data services held on the
