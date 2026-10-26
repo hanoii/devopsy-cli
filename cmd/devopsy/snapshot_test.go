@@ -2254,3 +2254,37 @@ func TestReleaseSnapshotReadyWriteFails(t *testing.T) {
 		t.Errorf("the release ended before its switch with %v left stopped (record: %q):\n%s\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out, docker)
 	}
 }
+
+// A restore with release snapshots on whose data step cannot write its
+// mark (a disk full right there; here the mark's path is a directory)
+// after it turned the release snapshot's lines into its own stop lines:
+// nothing restored, so what that snapshot stopped must start again, as
+// when the step refuses before that. Left as stop lines without a mark,
+// nothing starts them: not the script's hook, which looks for snapshot
+// lines, nor the next settle, which starts only those.
+func TestRestoreMarkFailsStartsReleaseSnapshotSet(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{}, {"--no-code"}} {
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: {enabled: true, keep: all}}}")
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("%v: take (%d):\n%s", args, code, out)
+		}
+		base := filepath.Join(s.root, "shop", "prod")
+		if err := os.Mkdir(filepath.Join(base, remote.SyncIncompleteFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		s.logs()
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		docker, _ := s.logs()
+		if code == 0 || !strings.Contains(out, "nothing restored") || strings.Contains(docker, "-extract-") {
+			t.Fatalf("%v: a restore whose mark cannot be written (%d):\n%s\n%s", args, code, out, docker)
+		}
+		if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); len(down) > 0 {
+			t.Errorf("%v: nothing restored, and %v left stopped (record: %q):\n%s", args, down, readString(filepath.Join(base, ".devopsy-sync.services")), out)
+		}
+	}
+}
