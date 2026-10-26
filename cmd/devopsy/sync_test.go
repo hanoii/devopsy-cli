@@ -281,6 +281,10 @@ case "$*" in
   # A reflink clone: -v <mnt>:/m/mnt:ro, -v <volume>:/m/volumes/<key>:ro,
   # -v <clone>:/c; copied as cp -a would.
   "run --rm --name devopsy-snapshot-"*"-clone "*)
+    # FAIL_CLONE: part of the data does not clone (another filesystem
+    # mounted inside an entry, a btrfs nodatacow file), whatever the check
+    # found of the one file it tried.
+    [ -z "${FAIL_CLONE:-}" ] || { echo "cp: failed to clone '/c/mnt/db/ibdata': Operation not supported" >&2; exit 1; }
     m= c=
     for a; do case $a in *:/m/mnt:ro) m=${a%:/m/mnt:ro} ;; *:/c) c=${a%:/c} ;; esac; done
     mkdir -p "$c/mnt" "$c/volumes"

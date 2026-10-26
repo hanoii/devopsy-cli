@@ -1945,6 +1945,27 @@ func TestRestoreTakesReleaseSnapshot(t *testing.T) {
 	}
 }
 
+// The reflink check tries one file of each entry and volume; where it
+// passes and the clone then fails on another (a filesystem mounted inside
+// an entry, a btrfs nodatacow file), the take must still be possible: the
+// services are stopped already, and its tars can come from the stopped
+// data, as a take without a mirror's. Otherwise every take fails the same
+// way, with nothing to turn reflinks off, and with release snapshots on
+// every release fails before its switch.
+func TestSnapshotReflinkCloneFails(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.snapshotted("prod", "true", false)
+	s.releaseProd(nil)
+	env := []string{"FAKE_REFLINK=1", "FAIL_CLONE=1"}
+	if out, code := s.run(env, "@prod", "--snapshot"); code != 0 {
+		t.Errorf("a take whose clone fails after the check passed (%d):\n%s", code, out)
+	}
+	if out, code := s.run(env, "@prod", "--release"); code != 0 {
+		t.Errorf("a release whose release snapshot's clone fails after the check passed (%d):\n%s", code, out)
+	}
+}
+
 // A restore with release snapshots on whose data step refuses, nothing
 // restored (here mnt/storage a file now, a directory in the snapshot),
 // leaves the services running: what its snapshot of the data it replaces
