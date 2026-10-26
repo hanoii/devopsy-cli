@@ -306,9 +306,11 @@ case "$*" in
     m= vn= o=
     for a; do case $a in *:/m:ro) m=${a%:/m:ro} ;; *:/m/mnt:ro) m=${a%:/m/mnt:ro}/.. ;; *:/m/volumes/*:ro) vn=${a%%:*} ;; *:/o) o=${a%:/o} ;; esac; done
     n=$#; eval "tdir=\${$((n - 3))} tentry=\${$((n - 2))}"; out="$o/$last2"
-    if [ -n "$vn" ]; then st=$(mktemp -d); cp -R "$vols/$vn" "$st/$tentry"; COPYFILE_DISABLE=1 tar -C "$st" -cf "$out" -- "$tentry"; r=$?; rm -rf "$st"; exit $r; fi
-    case $m in */..) m=${m%/..}; COPYFILE_DISABLE=1 exec tar -C "$m" -cf "$out" -- "$tentry" ;; esac
-    COPYFILE_DISABLE=1 exec tar -C "$m/$tdir" -cf "$out" -- "$tentry" ;;
+    # Only files, directories and links, as the script's find.
+    ftar() { (cd "$1" && find "$2" \( -type f -o -type d -o -type l \) | COPYFILE_DISABLE=1 tar -cf "$out" --no-recursion -T -); }
+    if [ -n "$vn" ]; then st=$(mktemp -d); cp -R "$vols/$vn" "$st/$tentry"; ftar "$st" "$tentry"; r=$?; rm -rf "$st"; exit $r; fi
+    case $m in */..) ftar "${m%/..}" "$tentry"; exit $? ;; esac
+    ftar "$m/$tdir" "$tentry" ;;
   "run --rm --network none "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
   "run --rm --name devopsy-sync-"*|"run --rm --name devopsy-snapshot-"*)

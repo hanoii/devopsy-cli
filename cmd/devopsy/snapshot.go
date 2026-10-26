@@ -973,7 +973,9 @@ func dataTars(ctx context.Context, cwd string, d *snapshotData, tmp, id string) 
 // file took a tenth of the time (measured on DigitalOcean, 2026-10-26).
 func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry string) error {
 	args := append(append([]string{"--network", "none"}, mounts...), "-v", filepath.Dir(file)+":/o", remote.UtilImage,
-		"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
+		// Only files, directories and links, as the mirror's rsync --no-D:
+		// a FIFO or a device node is nothing a restore takes (tarTypes).
+		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
 		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
 	if err := dockerRun(ctx, name, args...); err != nil {
 		_ = os.Remove(file)
