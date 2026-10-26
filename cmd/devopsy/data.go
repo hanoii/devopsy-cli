@@ -370,16 +370,25 @@ func runExport(cwd string, args []string, color bool) int {
 			err = exportHeader(os.Stdout, record)
 		}
 		if err == nil {
-			// Volumes at the tar's top level by their key, beside the
+			// Each entry and volume mounted at /x by its name, so the tar
+			// has volumes at its top level by their key, beside the
 			// entries (cli.SyncServices refuses a key named like one).
-			run := []string{"-v", mnt + ":/mnt:ro"}
+			// Only files, directories and links, as a sync (--no-D) and a
+			// snapshot's tars: an import refuses anything else (tarTypes),
+			// so a FIFO in the data made an export no import took
+			// (review).
+			var run []string
+			for _, e := range entries {
+				m, merr := bindMount(filepath.Join(mnt, e), "/x/"+e)
+				if merr != nil {
+					return fail(merr.Error())
+				}
+				run = append(run, "--mount", m+",readonly")
+			}
 			for _, v := range vols {
-				run = append(run, "-v", v.Name+":/vol/"+v.Key+":ro")
+				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
-			run = append(append(run, remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"), entries...)
-			if len(vols) > 0 {
-				run = append(append(run, "-C", "/vol"), cli.VolumeKeys(vols)...)
-			}
+			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 		}
 	}

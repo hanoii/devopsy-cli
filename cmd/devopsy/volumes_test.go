@@ -95,7 +95,7 @@ func TestExportImportVolumes(t *testing.T) {
 
 	out, errs, code := s.runIO(env, nil, "--export", "db")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "-v shop_dbdata:/vol/dbdata:ro devopsy-util:3 tar -C /mnt -cf - --numeric-owner db -C /vol dbdata\n") {
+	if code != 0 || !strings.Contains(errs, "exporting db: a tar of mnt/db, the volume dbdata") || !strings.Contains(docker, "/db,target=/x/db,readonly -v shop_dbdata:/x/dbdata:ro devopsy-util:3 sh -c ") || !strings.Contains(docker, " sh db dbdata\n") {
 		t.Fatalf("--export (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string

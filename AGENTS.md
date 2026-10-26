@@ -2038,7 +2038,11 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   `export` and `import` (`runDataHook`, the lists in their
   environment). `volumes`: a tar of
   the service's entries of `mnt` (exclude honored, file entries
-  included) made in `UtilImage` as root with `--numeric-owner`. The
+  included) made in `UtilImage` as root with `--numeric-owner`, each
+  entry and volume mounted at `/x/<name>`, only files, directories and
+  links (`find ... | tar --null --no-recursion -T -`, as a sync's
+  `--no-D` and a snapshot's tars: review after v0.52.1, a FIFO in the
+  data made an export its import refused). The
   set (`cli.DataStops`, `ExportOne` or `ImportOne`) is stopped around
   either and restored (`stopSet`), interrupts and a stop that failed
   included (it may have stopped them all the same) up to the first

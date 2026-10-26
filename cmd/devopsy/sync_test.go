@@ -357,12 +357,16 @@ case "$*" in
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
-    # Volumes (-v <name>:/vol/<key>:ro) copied under a directory of their
-    # own, which tar's -C /vol then names.
-    vroot="$DOCKER_LOG.vroot"; rm -rf "$vroot"; mkdir -p "$vroot"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; *:/vol/*:ro) v=${1%:ro}; cp -R "$vols/${1%%:*}" "$vroot/${v##*/}" ;; --numeric-owner) shift; break ;; esac; shift; done
-    set -- $(for a; do [ "$a" = /vol ] && echo "$vroot" || echo "$a"; done)
-    COPYFILE_DISABLE=1 exec tar -C "$src" -cf - "$@" ;;
+    # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
+    # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
+    # where the script that follows the image runs, /x being it.
+    x="$DOCKER_LOG.x"; rm -rf "$x"; mkdir -p "$x"
+    while [ $# -gt 0 ]; do case $1 in
+      --mount) m=${2%,readonly}; src=${m#type=bind,source=}; src=${src%%,target=*}; cp -Rp "$src" "$x/${m##*,target=/x/}"; shift ;;
+      *:/x/*:ro) v=${1%:ro}; cp -Rp "$vols/${1%%:*}" "$x/${v##*/}" ;;
+      -c) script=$2; shift 2; break ;;
+    esac; shift; done
+    COPYFILE_DISABLE=1 exec sh -c "$(printf '%s' "$script" | sed "s|set -o pipefail; ||; s|cd /x|cd '$x'|")" "$@" ;;
   "run --rm --name devopsy-import-"*)
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
@@ -2159,7 +2163,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:3 tar -C /mnt -cf - --numeric-owner storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "--mount type=bind,source="+mnt+"/storage,target=/x/storage,readonly devopsy-util:3 sh -c ") || !strings.Contains(docker, " sh storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
