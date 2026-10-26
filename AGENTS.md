@@ -2219,7 +2219,8 @@ settled every rule here after nine reviews (2026-10-25).
   snapshot root's: reflinks never cross filesystems) with `cp
   --reflink=always`, as root in the util image (readied first: a
   server's first take has none, and the check then failed into a take
-  without, e2e), and removes it; where all clone, the stopped pass
+  without, e2e), and removes it (one a check killed outright left,
+  `.reflink.*`, goes with the leftovers); where all clone, the stopped pass
   clones the data there (`cloneData`, `cp -a --reflink=always`, marked
   `.devopsy-complete` with the id; a clone that fails though the check
   passed falls back to the tars from the stopped data, never failing
@@ -2414,7 +2415,9 @@ settled every rule here after nine reviews (2026-10-25).
   `release-check` (the leftovers first, as a take's: a detached tar
   killed outright left a `.tmp` only a take settled; 3: skipped, said: a
   marked environment, nothing with data; else the space check), the id, the server log made, `not_live`'s
-  hook (settle starts the record's `snapshot` lines). Inside
+  hook (settle starts the record's `snapshot` lines; every failure
+  before the switch goes through `not_live`, the write after the fetch
+  included: review). Inside
   `fetch_release`, before its disarm (so a session gone or a signal
   still cancels): the mirror's first pass beside the fetch (a
   background job, waited for), then `release-stopped`, which leaves the
@@ -2445,7 +2448,8 @@ settled every rule here after nine reviews (2026-10-25).
   the record saying so: review). A `--no-code` restore traps INT, TERM
   and HUP around its release snapshot, so a cancel starts the set again
   (`rd_unsnap`) rather than killing the shell. A restore's data step turns them into its own
-  (kept down under its mark). Without a mirror the stopped pass writes
+  once its mark is written (kept down under it; a mark that cannot be
+  written leaves them the snapshot's, which the hook starts: review). Without a mirror the stopped pass writes
   the tars, so a release is down for them: the reason for `mirror:
   true` or reflinks with large data. Rollbacks take none.
 - **Gates:** the hidden `--snapshot-step` is a feature flag, so an

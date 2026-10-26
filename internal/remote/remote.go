@@ -1007,9 +1007,10 @@ fetch_release "$rel" || fr=$?
 # A write before the marker goes: a session gone during the fetch that
 # watchSession did not see (none on -t, which gets HUP) fails here (PIPE
 # is ignored, so the write fails and set -e ends it), the marker kept for
-# img recover and current as it was. img record ignores SIGPIPE, so
-# nothing died sooner.
-[ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready"
+# img recover and current as it was, through not_live (whose hook starts
+# what a release snapshot's stopped pass left stopped). img record ignores
+# SIGPIPE, so nothing died sooner.
+[ "$fr" -ne 0 ] || devopsy --say info "the images of $id are ready" || not_live 1
 rm -f "$rel/` + FetchingFile + `"
 [ "$fr" -eq 0 ] || not_live "$fr"
 out="$rel/` + ServerLogFile + `"

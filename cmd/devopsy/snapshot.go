@@ -1044,6 +1044,12 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 	// removed with its .tmp) is nobody's.
 	clones, _ := os.ReadDir(p.clone())
 	for _, c := range clones {
+		// The reflink check's own file, left by a check killed outright: a
+		// reflink of a data file, growing as the services write.
+		if strings.HasPrefix(c.Name(), ".reflink.") {
+			_ = os.Remove(filepath.Join(p.clone(), c.Name()))
+			continue
+		}
 		if c.IsDir() && !fileExists(filepath.Join(p.snaps, c.Name()+".tmp")) {
 			if err := removeClone(context.Background(), cwd, p, c.Name()); err != nil {
 				report.Warn("removing a leftover clone: " + err.Error())
@@ -2062,6 +2068,16 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 		return fail(err.Error() + ": nothing restored")
 	}
+	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
+		if rerr := restore(); rerr != nil {
+			report.Error(rerr.Error())
+		}
+		return fail(err.Error() + ": nothing restored")
+	}
+	// Its release snapshot's stopped set is the restore's once its mark is
+	// there: a mark that cannot be written leaves the snapshot's lines, which
+	// the script's hook starts; a conversion that fails after it leaves the
+	// set down under the mark, as it should be.
 	if rec, ok := readSyncRecord(cwd); own != "" && ok && rec.snapID == own {
 		for _, name := range rec.snaps {
 			if !slices.Contains(rec.stops, name) {
@@ -2070,17 +2086,8 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 		rec.snaps, rec.snapID = nil, ""
 		if err := rec.write(cwd); err != nil {
-			if rerr := restore(); rerr != nil {
-				report.Error(rerr.Error())
-			}
-			return fail(err.Error() + ": nothing restored")
+			return fail(err.Error() + ": the services stay down: restore it again")
 		}
-	}
-	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
-		if rerr := restore(); rerr != nil {
-			report.Error(rerr.Error())
-		}
-		return fail(err.Error() + ": nothing restored")
 	}
 	// From the mark on, the restore rule: whatever fails keeps the set
 	// down under the mark, its ways out a restore again or another.

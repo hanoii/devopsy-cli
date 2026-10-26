@@ -1897,6 +1897,10 @@ func TestReleaseSnapshotPruneHoldsImageLock(t *testing.T) {
 		t.Fatalf("release snapshots after the second release: %+v, want one of %s", rs, first)
 	}
 	orphan := filepath.Join(snaps.snaps, rs[0].id)
+	// The second release's own tar must be done: still running, it would
+	// prune the orphan once the third release removed the first, before
+	// this test holds the image lock.
+	s.waitReleaseTars()
 	// The third release prunes the first, whose snapshot is then nobody's:
 	// its detached tar, held in its tars until told to go on, prunes it
 	// once the activation ended.
