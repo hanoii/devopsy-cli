@@ -2049,7 +2049,10 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   entry and volume mounted at `/x/<name>`, only files, directories and
   links (`find ... | tar --null --no-recursion -T -`, as a sync's
   `--no-D` and a snapshot's tars: review after v0.52.1, a FIFO in the
-  data made an export its import refused). The
+  data made an export its import refused), hard links as files of their
+  own and holes kept (`--hard-dereference --sparse`, as a snapshot's
+  tars: a hard link to a link or across entries made an export its
+  import refused, and a database's holes came back as zeros). The
   set (`cli.DataStops`, `ExportOne` or `ImportOne`) is stopped around
   either and restored (`stopSet`), interrupts and a stop that failed
   included (it may have stopped them all the same) up to the first

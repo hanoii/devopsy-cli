@@ -376,7 +376,9 @@ func runExport(cwd string, args []string, color bool) int {
 			// Only files, directories and links, as a sync (--no-D) and a
 			// snapshot's tars: an import refuses anything else (tarTypes),
 			// so a FIFO in the data made an export no import took
-			// (review).
+			// (review). Hard links as files of their own and holes kept,
+			// as a snapshot's tars (an import refuses a hard link to a
+			// link, and a database's holes came back as zeros: review).
 			var run []string
 			for _, e := range entries {
 				m, merr := bindMount(filepath.Join(mnt, e), "/x/"+e)
@@ -388,7 +390,7 @@ func runExport(cwd string, args []string, color bool) int {
 			for _, v := range vols {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
-			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
+			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 		}
 	}

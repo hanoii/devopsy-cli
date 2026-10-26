@@ -369,7 +369,9 @@ case "$*" in
       *:/x/*:ro) v=${1%:ro}; cp -Rp "$vols/${1%%:*}" "$x/${v##*/}" ;;
       -c) script=$2; shift 2; break ;;
     esac; shift; done
-    COPYFILE_DISABLE=1 exec sh -c "$(printf '%s' "$script" | sed "s|set -o pipefail; ||; s|cd /x|cd '$x'|")" "$@" ;;
+    # bsdtar (macOS) has neither --hard-dereference nor --sparse.
+    gnu=; tar --version 2>/dev/null | grep -q GNU || gnu="s| --hard-dereference --sparse||;"
+    COPYFILE_DISABLE=1 exec sh -c "$(printf '%s' "$script" | sed "$gnu s|set -o pipefail; ||; s|cd /x|cd '$x'|")" "$@" ;;
   "run --rm --name devopsy-import-"*)
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
@@ -3885,27 +3887,38 @@ func TestImportExportWithFIFO(t *testing.T) {
 	}
 }
 
-// An app's data may hold a hard link to a symbolic link (GNU ln makes
-// one of a link by default): a sync copies it as a link of its own
-// (rsync without -H) and a snapshot's tar as one too
-// (--hard-dereference: "a restore refuses a hard link to a symbolic
-// link"), while an --import refuses one (tarLinks.check). The tar
-// devopsy's own --export makes of that data must import all the same,
-// as for a FIFO (TestImportExportWithFIFO): GNU tar writes the second
-// name as a hard link to the first, a link, unless told otherwise.
-func TestImportExportHardLinkToSymlink(t *testing.T) {
+// An app's data may hold two names of one inode: a hard link to a
+// symbolic link (storage/b to storage/a, which Linux makes with link(2)
+// on a link), or a file hard-linked across two entries (cache/dup to
+// storage/file.txt). --export ran GNU tar over find's list without
+// --hard-dereference, so the second name came out as a hard link
+// member, which an --import refused: a hard link to a link, and one that
+// links into another entry (tarLinks.check, tarMember). A snapshot's tar
+// takes --hard-dereference for that reason, and a sync's rsync without
+// -H copies them as files: the tar devopsy's own --export makes of that
+// data must import all the same, as TestImportExportWithFIFO says of a
+// FIFO. (macOS's link follows the symbolic link, so only the second
+// case arises there, and the fake's cp keeps no hard links: Linux shows
+// it.)
+func TestImportExportHardLinks(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
+	s.labels("FAKE_APP_MOUNT2=/cache")
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Fatalf("dev's release (%d):\n%s", code, out)
 	}
 	storage := filepath.Join(s.mnt("prod"), "storage")
-	if err := os.Symlink("file.txt", filepath.Join(storage, "latest")); err != nil {
+	if err := os.Symlink("file.txt", filepath.Join(storage, "a")); err != nil {
 		t.Fatal(err)
 	}
-	// linkat without AT_SYMLINK_FOLLOW: the link itself, as GNU ln does.
-	if err := os.Link(filepath.Join(storage, "latest"), filepath.Join(storage, "also")); err != nil {
+	if err := os.Link(filepath.Join(storage, "a"), filepath.Join(storage, "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(storage, "file.txt"), filepath.Join(s.mnt("prod"), "cache", "dup")); err != nil {
 		t.Fatal(err)
 	}
 	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
@@ -3913,8 +3926,9 @@ func TestImportExportHardLinkToSymlink(t *testing.T) {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
 	}
 	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
-	if l, _ := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "also")); code != 0 || l != "file.txt" {
-		t.Errorf("prod's storage, with a hard link to a symbolic link in it, into dev (%d), the link %q:\n%s", code, l, errs)
+	dev := s.mnt("dev")
+	if l, _ := os.Readlink(filepath.Join(dev, "storage", "b")); code != 0 || readString(filepath.Join(dev, "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(dev, "cache", "dup")) != "from prod\n" || l != "file.txt" {
+		t.Errorf("prod's storage and cache, with a hard link to a link and one across the entries, into dev (%d), storage/b %q:\n%s", code, l, errs)
 	}
 }
 
@@ -3943,6 +3957,9 @@ func TestExportImportKeepsHoles(t *testing.T) {
 	var st syscall.Stat_t
 	if err := syscall.Stat(f.Name(), &st); err != nil || st.Blocks*512 >= size/8 {
 		t.Skipf("no holes on this filesystem (%v, %d blocks)", err, st.Blocks)
+	}
+	if v, _ := exec.Command("tar", "--version").Output(); !strings.Contains(string(v), "GNU") {
+		t.Skip("the fake's tar is no GNU tar, which keeps holes (--sparse)")
 	}
 	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
 	if code != 0 {
