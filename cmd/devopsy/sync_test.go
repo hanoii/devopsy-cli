@@ -3826,3 +3826,28 @@ func TestImportAppAbsoluteLink(t *testing.T) {
 		t.Errorf("prod's storage, with a link the app wrote to where it sees its data, into dev (%d), the link %q:\n%s", code, l, errs)
 	}
 }
+
+// An app's data may hold a FIFO (a mail spool's public/pickup): a sync
+// skips it (--no-D) and a snapshot's tar leaves it out (find -type f -o
+// -type d -o -type l), while an --import refuses one (errMember). The
+// tar devopsy's own --export makes of that data must import all the
+// same: the export leaves out what no copy carries, as the others do.
+func TestImportExportWithFIFO(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := syscall.Mkfifo(filepath.Join(s.mnt("prod"), "storage", "pickup"), 0o622); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("prod's storage, with a FIFO in it, into dev (%d):\n%s", code, errs)
+	}
+}
