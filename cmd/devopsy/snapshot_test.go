@@ -605,6 +605,11 @@ func TestSnapshotSpace(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "not enough space for a snapshot at") || !strings.Contains(out, "nothing stopped") || strings.Contains(docker, " stop ") {
 		t.Errorf("too big (%d):\n%s\n%s", code, out, docker)
 	}
+	// By reflinks, the room the clone may need as the services write is
+	// said too.
+	if out, _ := s.run([]string{"FAKE_DU=1099511627776", "FAKE_REFLINK=1"}, "@prod", "--snapshot"); !strings.Contains(out, "the clone takes room as the services write") {
+		t.Errorf("by reflinks, the clone's room not said:\n%s", out)
+	}
 }
 
 // Pruning after a take never removes the snapshot a restore's mark names:
