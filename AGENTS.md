@@ -1249,9 +1249,11 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   into `shared/` lead out of the release tree, so they stay fine. A
   bind source below an entry that the deploy user cannot resolve (a
   directory on the way it cannot search: an import's tar sets the modes
-  and owners it carries) counts as leading out of it, `LeavingBinds`'
-  "somewhere unknown": Docker resolves it as root (review after
-  v0.52.1: a 0700 directory of the app's hid a link to `/`).
+  and owners it carries) is refused as one leading out of it is
+  (`HiddenBinds`), in its own words (`LeavingLines`, one
+  place for the mounts check, the start gate and `CheckLeavingBinds`):
+  Docker resolves it as root (review after v0.52.1: a 0700 directory of
+  the app's hid a link to `/`).
 - **A bind source below an owned entry is refused** (decided, review
   of 2026-10-23, round 2), by any service, read-only too: the entry's
   owner (the app, writing it) can replace `storage/files` with a

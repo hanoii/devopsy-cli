@@ -180,6 +180,11 @@ type SyncService struct {
 	// (CheckMounts refuses them). A link to the entry itself (an entry on
 	// another disk) is the entry's place, never one.
 	LeavingBinds []string
+	// HiddenBinds are its bind sources below an entry of mnt that the
+	// deploy user cannot resolve (a directory on the way it cannot
+	// search), as "<source>: <error>": Docker, as root, follows whatever
+	// link is there, so they are refused as LeavingBinds are.
+	HiddenBinds []string
 	// WholeMnt is whether it mounts ./mnt whole writable, which a service
 	// without data or an owner may as far as parsing goes, and
 	// CheckMounts refuses: it would write every entry, which the child
@@ -443,15 +448,14 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
 			if rel := mntPath(src, mnts); d != "" && d != "." && rel != d {
 				// A directory on the way the deploy user cannot search
-				// hides its links, which Docker, as root, follows: such a
-				// source counts as leading out (review: an import's 0700
-				// directory, the app's, hid a link to /).
-				to := r
+				// hides its links, which Docker, as root, follows (review:
+				// an import's 0700 directory, the app's, hid a link to /).
 				if _, err := os.Lstat(r); errors.Is(err, fs.ErrPermission) {
-					to = "somewhere unknown (" + err.Error() + ")"
-				}
-				if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); to != r || !within(r, er) {
-					if l := rel + " -> " + to; !slices.Contains(cs.LeavingBinds, l) {
+					if h := rel + ": " + err.Error(); !slices.Contains(cs.HiddenBinds, h) {
+						cs.HiddenBinds = append(cs.HiddenBinds, h)
+					}
+				} else if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); !within(r, er) {
+					if l := rel + " -> " + r; !slices.Contains(cs.LeavingBinds, l) {
 						cs.LeavingBinds = append(cs.LeavingBinds, l)
 					}
 				}
@@ -698,19 +702,47 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // replaced, their links checked in its tars. what is the refusal's own
 // words (the rollback: it does not go live).
 func CheckLeavingBinds(services []SyncService, carried []string, what string) error {
-	var bad []string
-	for _, s := range services {
-		for _, l := range s.LeavingBinds {
-			if e, _, _ := strings.Cut(l, string(filepath.Separator)); slices.Contains(carried, e) {
-				continue
-			}
-			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
-		}
-	}
+	bad, fixes := LeavingLines(services, carried)
 	if len(bad) == 0 {
 		return nil
 	}
-	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
+	var remedies []report.Remedy
+	for _, f := range fixes {
+		remedies = append(remedies, report.Fix(f))
+	}
+	return &report.Failure{Msg: "the mounts check refuses " + what, Details: bad, Fixes: remedies}
+}
+
+// LeavingLines are what services' LeavingBinds and HiddenBinds refuse,
+// but in carried's entries, one line each, and the fixes they need.
+func LeavingLines(services []SyncService, carried []string) (bad, fixes []string) {
+	in := func(b string) bool {
+		e, _, _ := strings.Cut(b, string(filepath.Separator))
+		return slices.Contains(carried, e)
+	}
+	leaving, hidden := false, false
+	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			if !in(l) {
+				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+				leaving = true
+			}
+		}
+		for _, h := range s.HiddenBinds {
+			if !in(h) {
+				src, why, _ := strings.Cut(h, ": ")
+				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below a directory the deploy user cannot search (%s): Docker, as root, would follow any link there", s.Name, src, why))
+				hidden = true
+			}
+		}
+	}
+	if leaving {
+		fixes = append(fixes, "remove the link in shared/mnt (a restored snapshot's, a sync's, an import's, or one made by hand), or bind-mount where it leads explicitly")
+	}
+	if hidden {
+		fixes = append(fixes, "let the deploy user search the directories on the way (chmod o+x, as their owner: from the service), or bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container")
+	}
+	return bad, fixes
 }
 
 // CheckMounts refuses, before a release goes live, the mounts whose data
@@ -727,17 +759,14 @@ func CheckLeavingBinds(services []SyncService, carried []string, what string) er
 // service, read-only too: the entry's owner can replace that path with a
 // symbolic link, and Docker resolves a bind source on the host (a link
 // to / would mount the host's root); and a bind source a link in its
-// entry leads out of it (LeavingBinds), whoever made it.
+// entry leads out of it (LeavingBinds), whoever made it, or that the
+// deploy user cannot resolve (HiddenBinds).
 func CheckMounts(services []SyncService) error {
-	var bad []string
 	var fixes []report.Remedy
-	tree, data, owner, whole, below, leaving := false, false, false, false, false, false
+	tree, data, owner, whole, below := false, false, false, false, false
 	owners, ownersErr := MntOwners(services)
+	bad, leavingFixes := LeavingLines(services, nil)
 	for _, s := range services {
-		for _, l := range s.LeavingBinds {
-			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
-			leaving = true
-		}
 		for _, b := range s.Binds {
 			if e, _, under := strings.Cut(b, string(filepath.Separator)); under && owners[e] != "" {
 				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below the owned entry ./mnt/%s (%s=%s): its owner can make that path a symbolic link, and Docker would mount what it points to on the host", s.Name, b, e, MntOwnerLabel, owners[e]))
@@ -783,8 +812,8 @@ func CheckMounts(services []SyncService) error {
 	if below {
 		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
 	}
-	if leaving {
-		fixes = append(fixes, report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly"))
+	for _, f := range leavingFixes {
+		fixes = append(fixes, report.Fix(f))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }
