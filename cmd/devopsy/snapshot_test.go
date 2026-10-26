@@ -705,3 +705,28 @@ func TestSnapshotImportForeignVolume(t *testing.T) {
 		t.Errorf("the restore (%d) emptied shop-other_db, another project's volume:\n%s\n%s", code, out, docker)
 	}
 }
+
+// On a marked environment a --no-code restore clears the mark only by
+// writing all of every service with data: one of its entries the
+// snapshot does not hold (app's mnt/uploads, mounted since) keeps what
+// the cut import half wrote, so the restore is refused, or the mark kept.
+func TestSnapshotRestoreNoCodeMarkEntries(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(s.mnt("prod"), "uploads", "half.jpg"), "half\n", 0o644)
+	mark := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, mark, "2026-10-25 00:00:00\tapp\timport\tthe import of app did not complete\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/uploads\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code == 0 && !fileExists(mark) {
+		t.Errorf("the mark cleared (%d), app's mnt/uploads as the cut import left it:\n%s", code, out)
+	}
+}
