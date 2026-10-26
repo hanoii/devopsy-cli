@@ -1696,6 +1696,64 @@ func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	}
 }
 
+// A --no-code restore with release snapshots on, cancelled during the
+// snapshot's stopped pass (Ctrl-C, the session gone): the services it
+// stopped start again, their snapshot lines go, as a release's do
+// (not_live's hook) and a take's. The watcher signals the script alone
+// here, as OrbStack's SSH would; under sshd the step sees the signal
+// too, but ignores it once its tars are complete, and the shell is what
+// starts the services again either way.
+func TestRestoreNoCodeInterruptDuringReleaseSnapshot(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.snapshotted("prod", "true", false)
+	// One entry, db's: the stopped pass says nothing to the session once
+	// its tar started, so it completes whatever became of the session.
+	write(t, s.log+".shop-prod", "FAKE_APP=none\n", 0o644)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.logs()
+	started := filepath.Join(t.TempDir(), "started")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_SLOW_TAR="+started)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the stopped pass never started:\n%s", readString(outFile.Name()))
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	// The tar goes on: the stopped pass ends with db and app down.
+	write(t, started+".go", "", 0o644)
+	start := time.Now()
+	base := filepath.Join(s.root, "shop", "prod")
+	for !strings.Contains(readString(s.log), "start db app") || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
+		if time.Since(start) > 15*time.Second {
+			t.Fatalf("the services not started again, or their snapshot lines left (down: %q):\n%s\n%s\n%s", readString(s.log+".stopped.shop-prod"), out, readString(filepath.Join(base, ".devopsy-sync.services")), readString(s.log))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if cmd.ProcessState.ExitCode() == 0 || strings.Contains(readString(s.log), "-extract-") {
+		t.Errorf("not cancelled (%d), or the data restored:\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+}
+
 // A release snapshot's detached tar prunes once the activation ended, and
 // removing a snapshot frees images: only under the server's image lock,
 // exclusive, as every removal of images is (another environment's fetch
