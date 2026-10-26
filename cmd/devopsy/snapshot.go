@@ -223,7 +223,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		// Past the stopped pass nothing interrupts it: a signal, a session
 		// gone (its writes go to the server's log).
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-		if err := snapshotTar(p, args[1]); err != nil {
+		if err := snapshotTar(cwd, p, args[1]); err != nil {
 			return fail(err.Error())
 		}
 		pruneSnapshots(cwd, p)
@@ -630,7 +630,7 @@ func readManifest(dir string) (*manifest, error) {
 // entry and volume, under nice, as root in the util image (the mirror is
 // root's) writing to stdout, which devopsy writes as the deploy user's,
 // then renames <id>.tmp into place: only then is it a snapshot.
-func snapshotTar(p snapshotPaths, id string) error {
+func snapshotTar(cwd string, p snapshotPaths, id string) error {
 	tmp := filepath.Join(p.snaps, id+".tmp")
 	m, err := readManifest(tmp)
 	if err != nil {
@@ -646,7 +646,7 @@ func snapshotTar(p snapshotPaths, id string) error {
 			return err
 		}
 		defer out.Close()
-		err = dockerRunIO(ctx, "devopsy-snapshot-"+id+"-tar", nil, out, "--network", "none", "-v", p.mirror+":/m:ro", remote.UtilImage,
+		err = dockerRunIO(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-tar", nil, out, "--network", "none", "-v", p.mirror+":/m:ro", remote.UtilImage,
 			"sh", "-c", `set -o pipefail; cd "/m/$1" && tar -cf - --numeric-owner -- "$2" | nice zstd -q -T0`, "sh", dir, name)
 		if err != nil {
 			return fmt.Errorf("the tar of %s/%s: %w", dir, name, err)
@@ -697,7 +697,7 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 		// images listing a restore needs.
 		if fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && fileExists(filepath.Join(tmp, images.ListFile)) && strings.TrimSpace(string(marker)) == id {
 			report.Info("finishing snapshot " + id + ", cut off after its stopped pass")
-			if err := snapshotTar(p, id); err != nil {
+			if err := snapshotTar(cwd, p, id); err != nil {
 				return err
 			}
 			continue
@@ -1257,7 +1257,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 		return err
 	}
 	for _, t := range snapshotTars(m) {
-		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+filepath.Base(snap)+"-check")
+		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+composeName(cwd)+"-"+filepath.Base(snap)+"-check")
 		if err != nil {
 			return err
 		}
