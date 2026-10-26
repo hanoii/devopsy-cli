@@ -1247,3 +1247,32 @@ echo FAKE_APP_MOUNT=/files > "`+s.log+`.current.shop-prod"
 		t.Errorf("the snapshot holds release 29990101000000's code, and the data of %s's labels:\n%s", old, manifest)
 	}
 }
+
+// A take killed outright on the parent leaves its snapshot lines, its
+// services down, for the next settle to start them. A sync from that
+// parent stops and restores the parent's set by its record, and must not
+// take those lines with it: the parent's services would stay down with
+// nothing left to start them.
+func TestSyncPushKeepsParentSnapshotLines(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	record := filepath.Join(base, ".devopsy-sync.services")
+	write(t, record, "snapshot 20261025000000 db\nsnapshot 20261025000000 app\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s\n%s", code, out, docker)
+	}
+	started := false
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.HasPrefix(line, "shop-prod ") && strings.HasSuffix(line, " start db app") {
+			started = true
+		}
+	}
+	if !started && !strings.Contains(readString(record), "snapshot 20261025000000 db") {
+		t.Errorf("the parent's snapshot lines went with the push's record, db and app left down with nothing to start them:\n%s\n%s", out, docker)
+	}
+}
