@@ -2322,6 +2322,30 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 			t.Errorf("%v: the restore of a snapshot whose link at a bind source leads within its entry (%d), the link %q:\n%s", args, code, target, out)
 		}
 	}
+	// The same link written through the entry's name (storage/public ->
+	// ../storage/v1): the kernel, Docker and the release's mounts check
+	// (LeavingBinds) all take it to mnt/storage/v1, within the entry, and
+	// a release goes live on it; its own snapshot restores too.
+	if err := os.Remove(filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../storage/v1", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("a release on storage/public -> ../storage/v1 (%d):\n%s", code, out)
+	}
+	out, code = s.run(nil, "@prod", "--snapshot")
+	m = snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take with ../storage/v1 (%d):\n%s", code, out)
+	}
+	for _, args := range [][]string{{"--no-code"}, {}} {
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if target, _ := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); code != 0 || target != "../storage/v1" {
+			t.Errorf("%v: the restore of a snapshot whose link at a bind source leads within its entry through its name (%d), the link %q:\n%s", args, code, target, out)
+		}
+	}
 
 	// A full restore checks the code it brings back, which here has no
 	// such bind (the fake's config: app binds mnt/storage/public unless
