@@ -499,3 +499,38 @@ func TestPruneKeepsRestoreMarkedSnapshot(t *testing.T) {
 		t.Errorf("the snapshot the restore's mark names (%s) was pruned; left: %v", ids[0], manualSnapshots(p))
 	}
 }
+
+// A sync's holder killed before it decided leaves its files for the next
+// lock-taker to settle (its writers ended, the environment marked, which
+// every stop under the release lock does first). A take then refuses,
+// nothing stopped: the data may be half a copy, and a snapshot of it
+// would restore as complete. A restore settles them too and clears what
+// it settled once its data is in, so the next release goes through
+// instead of finding the files and marking a complete restore's data as
+// a sync's that did not complete.
+func TestSnapshotSettlesLeftoverSync(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	taken := filepath.Join(base, remote.SyncTakenFile)
+	write(t, taken, "devopsy@one:prod 1.2\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "did not complete") || strings.Contains(docker, " stop ") {
+		t.Errorf("a take over a killed holder's files (%d):\n%s\n%s", code, out, docker)
+	}
+	write(t, taken, "devopsy@one:prod 1.2\n", 0o644)
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes"); code != 0 || fileExists(taken) || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) {
+		t.Errorf("a restore over them (%d), its files left %v, marked %v:\n%s", code, fileExists(taken), fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)
+	}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 || strings.Contains(out, "did not complete") {
+		t.Errorf("the release after a complete restore (%d):\n%s", code, out)
+	}
+}
