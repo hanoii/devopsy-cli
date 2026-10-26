@@ -252,12 +252,8 @@ mkdir -p "$snaps"
 ` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"
 rm -rf "$tmp"
 mkdir -p "$tmp"
-if ! devopsy ` + StdinGuardFlag + ` | tar -xmf - -C "$tmp"; then
-  rm -rf "$tmp"
-  devopsy --say error "stdin is not a complete snapshot: nothing imported"
-  exit 1
-fi
 cd "$base/current"
+devopsy ` + StdinGuardFlag + ` | ` + devopsyCall(projectName, []string{SnapshotStepFlag, "receive"}, false) + ` "$tmp" || { rm -rf "$tmp"; exit 1; }
 ` + devopsyCall(projectName, []string{SnapshotStepFlag, "imported"}, false) + ` "$tmp" || { s=$?; rm -rf "$tmp"; exit "$s"; }
 `
 }

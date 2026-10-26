@@ -2307,7 +2307,9 @@ settled every rule here after nine reviews (2026-10-25).
 - **Export and import:** one outer tar of the snapshot's directory, on
   stdout and from stdin, never `--import`'s marker and byte (storing one
   stops nothing): the import gated (`lockedGate`, `--stdin-guard`),
-  extracted beside, checked whole as a restore checks (`imported`),
+  extracted beside (`receive`: GNU tar, the same stream read by
+  archive/tar to its end-of-archive blocks, since GNU tar takes a stream
+  cut at a member's boundary for complete: round 2), checked whole as a restore checks (`imported`),
   renamed under a new id, its images bookmarked where the server has
   them. Images stay out of exports (a member of the outer tar needs its
   size first, so `docker save` would spool gigabytes on the server): a

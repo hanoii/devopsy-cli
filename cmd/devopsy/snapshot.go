@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"cmp"
@@ -208,6 +209,14 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release>")
 		}
 		return snapshotRestoreData(cwd, p, args[1], args[2])
+	case "receive":
+		if len(args) != 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " receive <directory>")
+		}
+		if err := snapshotReceive(os.Stdin, args[1]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
 	case "restored":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restored <snapshot>")
@@ -1646,6 +1655,65 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 	// (restored): a shell killed before it leaves the set down, marked.
 	report.Info("snapshot " + id + "'s data is in")
 	return 0
+}
+
+// snapshotReceive extracts the tar on in (an exported snapshot) into dir
+// with GNU tar, reading the same stream with archive/tar to its end: a
+// stream cut at a member's boundary (a dropped session, a pipe that
+// died, a truncated file) has no end-of-archive blocks, and GNU tar
+// takes it for complete.
+func snapshotReceive(in io.Reader, dir string) error {
+	cmd := exec.Command("tar", "-xmf", "-", "-C", dir)
+	cmd.Stdout, cmd.Stderr = errOut, errOut
+	w, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// What tar stops reading past its end (the record's padding) is no
+	// failure of the stream: tar's own exit says how it went.
+	tw := &lenientWriter{w: w}
+	r := &endReader{r: io.TeeReader(in, tw)}
+	tr := tar.NewReader(r)
+	var rerr error
+	for {
+		if _, err := tr.Next(); err == io.EOF {
+			if r.atEOF {
+				rerr = errNoTarEnd
+			}
+			break
+		} else if err != nil {
+			rerr = err
+			break
+		}
+	}
+	if rerr == nil {
+		_, rerr = io.Copy(tw, in)
+	}
+	_ = w.Close()
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("stdin is not a complete snapshot: tar: %v: nothing imported", err)
+	}
+	if rerr != nil {
+		return fmt.Errorf("stdin is not a complete snapshot: %v: nothing imported", rerr)
+	}
+	return nil
+}
+
+// lenientWriter passes writes on until one fails, then takes the rest
+// without writing.
+type lenientWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (l *lenientWriter) Write(p []byte) (int, error) {
+	if l.err == nil {
+		_, l.err = l.w.Write(p)
+	}
+	return len(p), nil
 }
 
 // snapshotRestored completes a restore once its run step went through:
