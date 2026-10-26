@@ -196,6 +196,11 @@ func TestImportMarkOnTarget(t *testing.T) {
 	if !strings.Contains(docker, "up -d --wait --no-deps db") || !strings.Contains(docker, " start app worker\n") || strings.Contains(out, "stopping db again") || len(s.stopped()) > 0 {
 		t.Errorf("the retry, stopped %v:\n%s\n%s", s.stopped(), out, docker)
 	}
+	// Its up said first, compose's lines after it never read as the step
+	// before's (a sync's export on the parent).
+	if i, j := strings.Index(out, "devopsy: starting db to import into it\n"), strings.Index(out, "running 'devopsy --capability data import db'"); i < 0 || j < i {
+		t.Errorf("the up for its import not said before the import:\n%s", out)
+	}
 }
 
 // Before its first write an import changes nothing for good: a bad tar

@@ -2553,6 +2553,13 @@ func upFor(ctx context.Context, cwd, name string, keep, noDeps bool) (down func(
 			return nil
 		}
 	}
+	// Said first: compose's lines that follow would read as the step
+	// before's (a sync's export, on the parent).
+	if states[name] == "running" {
+		report.Info("waiting for " + name + ", running, to import into it")
+	} else {
+		report.Info("starting " + name + " to import into it")
+	}
 	// An up that fails may have started it all the same (unhealthy, or
 	// late): down then too.
 	if err := composeContext(ctx, cwd, errOut, up...); err != nil {
