@@ -942,7 +942,11 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			report.Error("--snapshots export writes the snapshot to stdout: redirect it (> snapshot.tar) or pipe it (| aws s3 cp - s3://...)")
 			return 1
 		}
-		code, err := remote.SSHWith(t, remote.Bounded, remote.SnapshotExportScript(t, words[1]), bytes.NewReader(nil), os.Stdout, false, nil)
+		id, code := resolveSnapshot(t, projectName, words[1], "nothing exported")
+		if code != 0 {
+			return code
+		}
+		code, err := remote.SSHWith(t, remote.Bounded, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
 		if err != nil {
 			report.Fail(err)
 			return 1
@@ -1784,6 +1788,43 @@ var restoringAs = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `restorin
 // [--no-code] [--with-env] [--yes]: the snapshot's id resolved (a unique
 // prefix), the environment's full name asked for, then the restore's one
 // session, an activation's (liveSession), its log the new release's.
+// resolveSnapshot is the complete snapshot word names on t: its id, else
+// the one id it starts; else a failure saying nothing, and its code.
+func resolveSnapshot(t *remote.Target, projectName, word, nothing string) (string, int) {
+	var out bytes.Buffer
+	code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false)
+	if err != nil || code != 0 {
+		if err != nil {
+			report.Fail(err)
+		}
+		return "", max(code, 1)
+	}
+	var ids, match []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if f := strings.Split(line, "\t"); len(f) >= 6 && f[5] == "" {
+			ids = append(ids, f[0])
+		}
+	}
+	for _, id := range ids {
+		if id == word {
+			match = []string{id}
+			break
+		}
+		if strings.HasPrefix(id, word) {
+			match = append(match, id)
+		}
+	}
+	switch {
+	case len(match) == 0:
+		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: %s", t.Address, word, nothing), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
+		return "", 1
+	case len(match) > 1:
+		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): %s", word, strings.Join(match, " "), nothing)})
+		return "", 1
+	}
+	return match[0], 0
+}
+
 func runRestore(t *remote.Target, projectName string, args []string) int {
 	usage := "usage: devopsy @" + targetRef(t) + " --snapshots restore <id> [--no-code] [--with-env] [--yes]"
 	var words []string
@@ -1804,38 +1845,10 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		report.Error(usage)
 		return 2
 	}
-	var out bytes.Buffer
-	code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false)
-	if err != nil || code != 0 {
-		if err != nil {
-			report.Fail(err)
-		}
-		return max(code, 1)
+	id, code := resolveSnapshot(t, projectName, words[1], "nothing restored")
+	if code != 0 {
+		return code
 	}
-	var ids, match []string
-	for _, line := range strings.Split(out.String(), "\n") {
-		if f := strings.Split(line, "\t"); len(f) >= 6 && f[5] == "" {
-			ids = append(ids, f[0])
-		}
-	}
-	for _, id := range ids {
-		if id == words[1] {
-			match = []string{id}
-			break
-		}
-		if strings.HasPrefix(id, words[1]) {
-			match = append(match, id)
-		}
-	}
-	switch {
-	case len(match) == 0:
-		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s has no snapshot %s: nothing restored", t.Address, words[1]), Details: []string{"its snapshots: " + cmp.Or(strings.Join(ids, " "), "none")}})
-		return 1
-	case len(match) > 1:
-		report.Fail(&report.Failure{Msg: fmt.Sprintf("%s starts several snapshots (%s): nothing restored", words[1], strings.Join(match, " "))})
-		return 1
-	}
-	id := match[0]
 	what := "snapshot " + id + "'s data, code and the images that ran on them"
 	if noCode {
 		what = "snapshot " + id + "'s data and the images that ran on it, under its current release"

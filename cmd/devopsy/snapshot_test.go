@@ -399,7 +399,8 @@ func TestSnapshotExportImport(t *testing.T) {
 	if code != 0 || m == nil {
 		t.Fatalf("take (%d):\n%s", code, out)
 	}
-	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	// By its start, as restore takes it.
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1][:12])
 	if code != 0 || !strings.Contains(strings.Join(tarNamesOf(t, exported), " "), m[1]+"/data/mnt.db.tar.zst") {
 		t.Fatalf("export (%d):\n%s", code, errs)
 	}
