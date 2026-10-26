@@ -2747,3 +2747,38 @@ func TestSnapshotStopsUnlabeledWriter(t *testing.T) {
 		t.Errorf("db writes mnt/db, which the take copies, and ran on through it (stops %v):\n%s", stops, out)
 	}
 }
+
+// An imported snapshot's files are anyone's: one whose manifest is a
+// symbolic link to another snapshot's (its id known to whoever read an
+// export from this server: the tar names it) must not make the import
+// write that snapshot's manifest, which it rewrites (kind, imported) in
+// place of its own, nor read the other's data as its own.
+func TestSnapshotImportManifestLink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+	before := readString(filepath.Join(snaps, m[1], remote.SnapshotManifest))
+	// The crafted import: a directory of its own whose manifest and data
+	// are links to the taken snapshot's, as they sit beside the import's
+	// directory ($snaps/.import.<pid>/<id>).
+	var crafted bytes.Buffer
+	tw := tar.NewWriter(&crafted)
+	id := "20300101000000"
+	_ = tw.WriteHeader(&tar.Header{Name: id + "/", Typeflag: tar.TypeDir, Mode: 0o700})
+	_ = tw.WriteHeader(&tar.Header{Name: id + "/" + remote.SnapshotManifest, Typeflag: tar.TypeSymlink, Linkname: "../../" + m[1] + "/" + remote.SnapshotManifest, Mode: 0o777})
+	_ = tw.WriteHeader(&tar.Header{Name: id + "/" + remote.SnapshotData, Typeflag: tar.TypeSymlink, Linkname: "../../" + m[1] + "/" + remote.SnapshotData, Mode: 0o777})
+	_ = tw.Close()
+	_, errs, code := s.runIO(nil, crafted.Bytes(), "@prod", "--snapshots", "import")
+	if after := readString(filepath.Join(snaps, m[1], remote.SnapshotManifest)); after != before {
+		t.Errorf("the import (%d) wrote snapshot %s's manifest through the imported one's link:\n%s\nwas:\n%s\nimport:\n%s", code, m[1], after, before, errs)
+	}
+	if code == 0 {
+		t.Errorf("an import whose files are links to another snapshot's was stored:\n%s", errs)
+	}
+}
