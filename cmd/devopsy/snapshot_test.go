@@ -837,3 +837,30 @@ func TestSnapshotRestoreMarkMissingEntry(t *testing.T) {
 		t.Errorf("the mark cleared (%d), app's mnt/uploads as the cut import left it:\n%s", code, out)
 	}
 }
+
+// A full restore stops every service whose data it writes over: the
+// restored code's services with data and the current release's. One that
+// still mounts an entry the snapshot restores but carries no data label
+// in the current release (db's went since the take) must stop too: else
+// it runs on while its entry is emptied and extracted under it.
+func TestSnapshotRestoreStopsCurrentWriter(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	// The current release's db has no data label now, and mounts mnt/db
+	// as before; the snapshot's code has it with data.
+	write(t, s.log+".current.shop-prod", "FAKE_DB=none\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	extract := strings.Index(docker, "-extract-")
+	stopped := regexp.MustCompile(`compose .* stop ([^\n]* )?db(\n| )`)
+	if code == 0 && (extract < 0 || !stopped.MatchString(docker[:extract])) {
+		t.Errorf("mnt/db emptied and extracted (%d) with db running:\n%s\n%s", code, out, docker)
+	}
+}

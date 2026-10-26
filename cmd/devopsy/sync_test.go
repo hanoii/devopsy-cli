@@ -48,6 +48,9 @@ const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
+# $DOCKER_LOG.current.<compose project> sets them for the current
+# release's code alone: a restore reads the restored release's too.
+case ${dir:-} in */current/.devopsy) [ ! -f "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ;; esac
 for a; do last2=${last:-}; last=$a; done
 # FAKE_ABSENT names services without a container (a first release),
 # until an up creates them and a down removes them again.
