@@ -71,7 +71,7 @@ var Flags = []FlagGroup{
 		{Name: "--export", Args: "<service>", Scope: LocalOrTarget, Desc: "a service's data, to stdout"},
 		{Name: "--import", Args: "<service> [--accept-image <svc>] [--yes] [--resolved]", Scope: LocalOrTarget, Desc: "a service's data, from stdin"},
 		{Name: "--snapshot", Scope: Target, Desc: "a snapshot: the data, code and images,\nits services stopped for the copy"},
-		{Name: "--snapshots", Args: "[remove <id>... [--yes]]", Scope: Target, Desc: "the snapshots there; or remove some"},
+		{Name: "--snapshots", Args: "[restore | remove | export | import ...]", Scope: Target, Desc: "the snapshots there; or restore one,\nremove, export or import some"},
 	}},
 	{"Variables", []Flag{
 		{Name: "--env", Scope: LocalOrTarget, Desc: "what devopsy loads and computes (.env)"},

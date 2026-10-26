@@ -351,3 +351,53 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 		t.Errorf("a mismatch (%d):\n%s\n%s", code, out, docker)
 	}
 }
+
+// --snapshots export writes one tar, which --snapshots import stores as
+// a snapshot of the environment under a new id, restorable as any; one
+// that is no snapshot, or into an environment with no current release,
+// is refused.
+func TestSnapshotExportImport(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 || !strings.Contains(strings.Join(tarNamesOf(t, exported), " "), m[1]+"/data/mnt.db.tar.zst") {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
+	_, errs, code = s.runIO(nil, exported, "@prod", "--snapshots", "import")
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if code != 0 || im == nil || im[1] == m[1] {
+		t.Fatalf("import (%d):\n%s", code, errs)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", im[1], "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a restore of the imported snapshot (%d):\n%s", code, out)
+	}
+	if _, errs, code := s.runIO(nil, []byte("not a tar"), "@prod", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "nothing imported") {
+		t.Errorf("no snapshot on stdin (%d):\n%s", code, errs)
+	}
+	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "has no current release: release it first") {
+		t.Errorf("into an environment never released (%d):\n%s", code, errs)
+	}
+}
+
+// tarNamesOf are the member names of the tar data.
+func tarNamesOf(t *testing.T, data []byte) []string {
+	t.Helper()
+	var names []string
+	for tr := tar.NewReader(bytes.NewReader(data)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, strings.TrimSuffix(h.Name, "/"))
+	}
+}

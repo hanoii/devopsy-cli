@@ -216,3 +216,41 @@ exit "$rs"
 `
 	return s
 }
+
+// SnapshotExportScript writes t's snapshot id as one tar on stdout, its
+// only output there (the snapshot's directory: its tars, manifest, code
+// and copies of the environment's variables), under the snapshot lock
+// shared: no removal takes it meanwhile.
+func SnapshotExportScript(t *Target, id string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -f "$snaps"/` + Quote(id) + `/` + SnapshotManifest + ` ] || { devopsy --say error "$base has no snapshot ` + id + `"; exit 1; }
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, true, "a snapshot of $base") + `
+exec tar -C "$snaps" -cf - ` + Quote(id) + `
+`
+}
+
+// SnapshotImportScript stores the snapshot tar on stdin (one
+// SnapshotExportScript wrote, from this environment on this server or
+// another) as one of t's, under a new id: once the server holds the
+// snapshot lock (LockedMarker, then the data through --stdin-guard),
+// extracted into a .import directory, checked whole as a restore checks
+// its tars (--snapshot-step imported), renamed into place. It needs a
+// current release, as a restore does: on a new server, release first.
+func SnapshotImportScript(t *Target, projectName string) string {
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + hintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
+umask 077
+mkdir -p "$snaps"
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "a snapshot of $base") + `
+` + lockedGate(false, "") + `tmp="$snaps/.import.$$"
+rm -rf "$tmp"
+mkdir -p "$tmp"
+if ! devopsy ` + StdinGuardFlag + ` | tar -xmf - -C "$tmp"; then
+  rm -rf "$tmp"
+  devopsy --say error "stdin is not a complete snapshot: nothing imported"
+  exit 1
+fi
+cd "$base/current"
+` + devopsyCall(projectName, []string{SnapshotStepFlag, "imported"}, false) + ` "$tmp" || { s=$?; rm -rf "$tmp"; exit "$s"; }
+`
+}

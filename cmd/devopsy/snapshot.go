@@ -170,6 +170,14 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail(err.Error())
 		}
 		return 0
+	case "imported":
+		if len(args) != 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " imported <directory>")
+		}
+		if err := snapshotImported(cwd, p, args[1]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
 	case "check-fit":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-fit <snapshot>")
@@ -866,6 +874,38 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 	if len(words) > 0 && words[0] == "restore" {
 		return runRestore(t, projectName, args)
 	}
+	if len(words) > 0 && words[0] == "export" {
+		if len(words) != 2 {
+			report.Error("usage: devopsy @" + targetRef(t) + " --snapshots export <id>")
+			return 2
+		}
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			report.Error("--snapshots export writes the snapshot to stdout: redirect it (> snapshot.tar) or pipe it (| aws s3 cp - s3://...)")
+			return 1
+		}
+		code, err := remote.SSHWith(t, remote.Bounded, remote.SnapshotExportScript(t, words[1]), bytes.NewReader(nil), os.Stdout, false, nil)
+		if err != nil {
+			report.Fail(err)
+			return 1
+		}
+		return code
+	}
+	if len(words) > 0 && words[0] == "import" {
+		if len(words) != 1 {
+			report.Error("usage: devopsy @" + targetRef(t) + " --snapshots import < <file>")
+			return 2
+		}
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			report.Error("--snapshots import reads a snapshot from stdin: < snapshot.tar, or a pipe (aws s3 cp s3://... - |)")
+			return 1
+		}
+		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, remote.Bounded, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
+		if err != nil {
+			report.Fail(err)
+			return 1
+		}
+		return code
+	}
 	if len(words) > 0 && (words[0] != "remove" || len(words) == 1) {
 		report.Error(usage)
 		return 2
@@ -1215,6 +1255,55 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 			return fmt.Errorf("the image %s's data ran when snapshot %s was taken (%s) is gone and could not be pulled by its digest: nothing restored", f[1], filepath.Base(snap), f[2])
 		}
 	}
+	return nil
+}
+
+// snapshotImported takes the snapshot an import extracted into tmp: one
+// directory, a snapshot's id, of a format this devopsy knows, its tars
+// whole; renamed into place under a new id (the server's), a manual
+// snapshot of this environment's from then on.
+func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
+	ents, err := os.ReadDir(tmp)
+	if err != nil {
+		return err
+	}
+	if len(ents) != 1 || !ents[0].IsDir() || !remote.ReleaseIDFormat.MatchString(ents[0].Name()) {
+		return errors.New("stdin is no snapshot (one directory named by its id): nothing imported")
+	}
+	old := ents[0].Name()
+	dir := filepath.Join(tmp, old)
+	m, err := readManifest(dir)
+	if err != nil {
+		return fmt.Errorf("the snapshot has no manifest (%v): nothing imported", err)
+	}
+	if m.format != remote.SnapshotFormat {
+		return fmt.Errorf("the snapshot is of a format this devopsy does not know (%s): upgrade the server's devopsy: nothing imported", cmp.Or(m.format, "none"))
+	}
+	if err := snapshotCheckTars(cwd, p, dir); err != nil {
+		return err
+	}
+	var ids []string
+	if es, err := os.ReadDir(p.snaps); err == nil {
+		for _, e := range es {
+			ids = append(ids, e.Name())
+		}
+	}
+	id := remote.NextReleaseID(time.Now(), ids)
+	if err := os.Rename(dir, filepath.Join(p.snaps, id)); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(tmp)
+	// The images it lists that this server has, bookmarked for it; the
+	// rest come back at its restore, pulled by digest or built from its
+	// code.
+	unlock, err := imagesShared(context.Background())
+	if err != nil {
+		return err
+	}
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: io.Discard, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
+	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
+	unlock()
+	report.Info("imported snapshot " + old + " as " + id + " (taken " + m.taken + " in release " + m.release + "): devopsy --snapshots restore " + id)
 	return nil
 }
 

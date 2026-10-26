@@ -825,18 +825,42 @@ or without the space for it. The environment's snapshots: manual keep
 they go is the server's snapshots: root, else beside shared/.
 `,
 	"--snapshots": `Usage: devopsy @<target> --snapshots
+       devopsy @<target> --snapshots restore <id> [--no-code] [--with-env] [--yes]
        devopsy @<target> --snapshots remove <id>... [--yes]
+       devopsy @<target> --snapshots export <id> > <file>
+       devopsy @<target> --snapshots import < <file>
 
 Lists the environment's snapshots, newest first: id, kind, the release
 it was taken in, when, and its size; IN PROGRESS for one being taken
 now, INCOMPLETE for one cut off (the next snapshot finishes it when its
-data was complete, else removes it).
+data was complete, else removes it). An id can be its start, when only
+one snapshot starts so.
+
+restore brings a snapshot back whole: its data, its code and the images
+that ran on them, as a new release (a --rollback after it goes back to
+the release before), every service with data and what depends on it
+stopped while the data is written. The data services run the exact
+images their data ran, the rest as their names give them now. Its steps
+are the restored release's rollback:, else release:. --no-code restores
+the data and its images under the current release, rerunning its run
+step: refused when its labels no longer fit the snapshot's. --with-env
+brings its shared/.env back too (without it, a difference is said).
+Asks for the environment's full name; --yes for scripts and CI. A
+restore that cannot finish keeps the services down, the environment
+marked, until a restore completes.
 
 remove takes snapshots away, each with the images only it holds, as a
-release's removal does. An id can be its start, when only one snapshot
-starts so; a word that names none or several refuses them all. Asks
-first at a terminal; --yes for scripts and CI. It waits for the
-snapshot lock, and up to 10 minutes for the server's images.
+release's removal does; a word that names none or several refuses them
+all. Asks first at a terminal; --yes for scripts and CI. It waits for
+the snapshot lock, and up to 10 minutes for the server's images.
+
+export writes a snapshot to stdout as one tar (its data's tars, code,
+manifest, and shared/.env: it carries the environment's secrets);
+import stores one from stdin as a snapshot of the environment, under a
+new id, on this server or another, checked whole. It needs a current
+release: on a new server, release first, then import and restore
+(--with-env). Images are not in an export: a restore pulls the pulled
+ones by digest and builds the built ones from the snapshot's code.
 `,
 	"--env": `Usage: devopsy @<target> --env [--show]
 
