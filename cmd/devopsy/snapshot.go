@@ -1865,6 +1865,21 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	// What its snapshot of the data it replaces left stopped (release
+	// snapshots on, its pre-restore pass in this same session) is the
+	// restore's: its stop lines, kept down for its data step, never started
+	// by the settle below as a take's cut off.
+	if rec, ok := readSyncRecord(cwd); ok && len(rec.snaps) > 0 && os.Getenv(remote.SnapshotReleaseKeepEnv) != "" {
+		for _, name := range rec.snaps {
+			if !slices.Contains(rec.stops, name) {
+				rec.stops = append(rec.stops, name)
+			}
+		}
+		rec.snaps, rec.snapID = nil, ""
+		if err := rec.write(cwd); err != nil {
+			return fail(err.Error() + ": nothing restored")
+		}
+	}
 	if err := settleSnapshots(cwd, p.base); err != nil {
 		return fail(err.Error())
 	}
@@ -1978,22 +1993,6 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			report.Error(rerr.Error())
 		}
 		return fail(err.Error() + ": nothing restored")
-	}
-	// What a snapshot of the data it replaces left stopped (release
-	// snapshots on) is the restore's from here: kept down under its mark.
-	if rec, ok := readSyncRecord(cwd); ok && len(rec.snaps) > 0 {
-		for _, name := range rec.snaps {
-			if !slices.Contains(rec.stops, name) {
-				rec.stops = append(rec.stops, name)
-			}
-		}
-		rec.snaps, rec.snapID = nil, ""
-		if err := rec.write(cwd); err != nil {
-			if rerr := restore(); rerr != nil {
-				report.Error(rerr.Error())
-			}
-			return fail(err.Error() + ": nothing restored")
-		}
 	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		if rerr := restore(); rerr != nil {
