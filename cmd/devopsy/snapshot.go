@@ -663,7 +663,19 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	case err != nil:
 	case how == "reflink":
 		// A clone by reflinks: seconds whatever the size; the tars after.
-		err = cloneData(ctx, cwd, p, d, id)
+		// One that fails though the check passed (another filesystem
+		// mounted inside an entry, a file that will not reflink) falls back
+		// to the tars from the data, stopped already, never failing every
+		// take there.
+		if err = cloneData(ctx, cwd, p, d, id); err != nil && ctx.Err() == nil {
+			report.Warn(err.Error() + ": writing the tars instead, the services stopped")
+			_ = removeClone(context.Background(), cwd, p, id)
+			how = "none"
+			err = dataTars(ctx, cwd, d, tmp, id)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(tmp, snapshotTarredFile), nil, 0o600)
+			}
+		}
 	case mirror:
 		err = copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-stopped")
 		if err == nil {
