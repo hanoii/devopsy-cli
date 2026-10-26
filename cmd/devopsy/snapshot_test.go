@@ -2331,33 +2331,41 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var b bytes.Buffer
-	tw := tar.NewWriter(&b)
-	for tr := tar.NewReader(bytes.NewReader(data)); ; {
-		h, err := tr.Next()
-		if err == io.EOF {
-			break
+	// The same written relative, climbing out of mnt (../../etc, as an
+	// app's link to its release's tree is): refused alike, said, never a
+	// crash of the check.
+	for _, link := range []string{"/", "../../etc"} {
+		var b bytes.Buffer
+		tw := tar.NewWriter(&b)
+		for tr := tar.NewReader(bytes.NewReader(data)); ; {
+			h, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.WriteHeader(h); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.Copy(tw, tr); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: "storage/public", Typeflag: tar.TypeSymlink, Linkname: link, Mode: 0o777}); err != nil {
 			t.Fatal(err)
 		}
-		if err := tw.WriteHeader(h); err != nil {
+		if err := tw.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := io.Copy(tw, tr); err != nil {
-			t.Fatal(err)
+		write(t, tarFile, b.String(), 0o600)
+		out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+		if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
+			t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
 		}
-	}
-	if err := tw.WriteHeader(&tar.Header{Name: "storage/public", Typeflag: tar.TypeSymlink, Linkname: "/", Mode: 0o777}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	write(t, tarFile, b.String(), 0o600)
-	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
-	if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
-		t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
+		if code == 0 || strings.Contains(out, "panic:") || !strings.Contains(out, "bind-mounts mnt/storage/public, which the snapshot's links make a path that") {
+			t.Errorf("the restore of a snapshot whose storage/public -> %s, a bind source of app (%d): not refused as a link out of its entry:\n%s", link, code, out)
+		}
 	}
 
 	// A link the deploy user made in the entry nobody owns, at that bind
@@ -2431,8 +2439,8 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.Reset()
-	tw = tar.NewWriter(&b)
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
 	for tr := tar.NewReader(bytes.NewReader(data)); ; {
 		h, err := tr.Next()
 		if err == io.EOF {
