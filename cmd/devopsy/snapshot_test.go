@@ -617,3 +617,27 @@ func TestSnapshotRestoreEnvKeysOnly(t *testing.T) {
 		t.Errorf("the keys that differ, as said:\n%s", out)
 	}
 }
+
+// A --no-code restore gives what it extracted into an owned entry to its
+// owner by the current labels, as an import does: the tars carry the
+// owners the files had when the snapshot was taken (another owner since,
+// another server's), and the app runs as the label's.
+func TestSnapshotRestoreNoCodeOwners(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.logs()
+	// db owns its entry now (its UID changed since the snapshot).
+	out, code = s.run([]string{"FAKE_DB_OWNER=10002:10002"}, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	docker, _ := s.logs()
+	owners := regexp.MustCompile(`run --rm --name devopsy-\S*owners\S* .*source=` + regexp.QuoteMeta(filepath.Join(s.mnt("prod"), "db")) + `,`)
+	extract := strings.LastIndex(docker, "-extract-")
+	if code != 0 || extract < 0 || !owners.MatchString(docker[extract:]) {
+		t.Errorf("--no-code (%d): mnt/db not given to 10002:10002 after its extraction:\n%s\n%s", code, out, docker)
+	}
+}
