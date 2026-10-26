@@ -760,11 +760,7 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
-  img recover "$base" ${prev:+"$base/$prev"}
-  image_unlock
-fi
-`
+` + recoverFetch(`${prev:+"$base/$prev"}`)
 	switch {
 	case restore != nil:
 		// A restore goes through a mark (a complete one clears it), as a
@@ -1387,6 +1383,19 @@ func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ]; then
 ` + settleSync(projectName) + `fi
 ` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+}
+
+// recoverFetch finishes what a release's fetch killed outright left (img
+// recover: the release marked failed, current's own names back, cur the
+// current release's directory), under the release lock, before anything
+// runs current's images: every script that runs or restores them.
+// releaseImages defines img and image_lock.
+func recoverFetch(cur string) string {
+	return `if ls "$base"/releases/*/` + FetchingFile + ` >/dev/null 2>&1 && image_lock shared restoring; then
+  img recover "$base" ` + cur + `
+  image_unlock
+fi
+`
 }
 
 // settleSync settles what a sync's holder or a take killed outright left

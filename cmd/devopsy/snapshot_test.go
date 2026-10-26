@@ -1136,3 +1136,44 @@ func TestSnapshotContainerNames(t *testing.T) {
 		}
 	}
 }
+
+// A release whose fetch was killed outright (its marker left) is recovered
+// before a --no-code restore or a sync's holder runs anything of current's,
+// as before every activation: marked failed, current's own names back.
+func TestRecoverFetchBeforeData(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	cut := func(env string) string {
+		cur, _ := filepath.EvalSymlinks(filepath.Join(s.root, "shop", env, "current"))
+		rel := filepath.Join(filepath.Dir(filepath.Dir(cur)), "29991231235959")
+		if out, err := exec.Command("cp", "-a", filepath.Dir(cur), rel).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+		os.Remove(filepath.Join(rel, remote.FailedFile))
+		write(t, filepath.Join(rel, images.FetchingFile), "", 0o644)
+		return rel
+	}
+	rel := cut("prod")
+	if out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 {
+		t.Fatalf("--no-code (%d):\n%s", code, out)
+	}
+	if fileExists(filepath.Join(rel, images.FetchingFile)) || !fileExists(filepath.Join(rel, remote.FailedFile)) {
+		t.Errorf("--no-code ran over a cut fetch, not recovered:\n%s", out)
+	}
+	if out, code = s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	rel = cut("dev")
+	if out, code = s.run(nil, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("sync (%d):\n%s", code, out)
+	}
+	if fileExists(filepath.Join(rel, images.FetchingFile)) || !fileExists(filepath.Join(rel, remote.FailedFile)) {
+		t.Errorf("a sync's holder ran over a cut fetch, not recovered:\n%s", out)
+	}
+}

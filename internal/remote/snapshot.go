@@ -203,7 +203,7 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 ` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
-devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
+` + releaseImages(projectName, t, mode) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 if [ -n "${watch_pid:-}" ]; then
@@ -216,7 +216,6 @@ out="$base/$cur/` + ServerLogFile + `"
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", t.ComposeName(), "--mode", mode, "--address", hintAddress(t)}, false) + ` --left ` + leftPath(t) + ` "$@"; }
 img ran "$base" "$base/$cur" || true
 if [ "$rs" = 0 ]; then
   ` + step("restored", `"$snap"`) + ` || rs=1

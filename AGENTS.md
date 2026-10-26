@@ -944,8 +944,10 @@ interrupts" and "The server never waits on the operator for long".
   "Terminated" to the dead session.
 - **A shell killed outright is recovered by the next lock-taker:**
   `FetchingFile` marks a new release's fetch until a line says its
-  images are ready, and `img recover` (by every activation, `--destroy`
-  and `--releases remove`, after the lock) marks such a release failed,
+  images are ready, and `img recover` (`recoverFetch`: by every activation, a sync's
+  holder, a `--no-code` restore, `--destroy` and `--releases remove`,
+  after the lock: review of 2026-10-25, the holder and `--no-code` ran
+  current's images without it) marks such a release failed,
   bookmarks its images and restores current's own names; until then it
   counts as failed. Rollbacks never write the marker, which would mark
   a good release failed.
