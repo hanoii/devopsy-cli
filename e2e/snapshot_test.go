@@ -179,3 +179,57 @@ func TestReleaseSnapshotE2E(t *testing.T) {
 		}
 	}
 }
+
+// Snapshots by reflinks with real Docker on an XFS: the environment's
+// directory on a loop device (mounted where the project's directory goes,
+// before its first release), its data in mnt: a take clones it while
+// stopped and makes the tars from the clone, which goes; a restore brings
+// it back.
+func TestSnapshotReflinkE2E(t *testing.T) {
+	dir := project(t, "snapref", map[string]string{
+		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml": "project: snapref\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n",
+		".devopsy/compose.yaml": `services:
+  app:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/files:/files]
+    labels: {devopsy.data: "true"}
+`,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+	})
+	if out, code := execIn(t, []string{server}, "set -e; truncate -s 300M /var/tmp/snapref.xfs; mkfs.xfs -q -f /var/tmp/snapref.xfs; mkdir -p /home/devopsy/snapref; mount -o loop /var/tmp/snapref.xfs /home/devopsy/snapref; chown devopsy:devopsy /home/devopsy/snapref"); code != 0 {
+		t.Fatalf("the XFS (%d): %s", code, out)
+	}
+	t.Cleanup(func() { _, _ = execIn(t, []string{server}, "umount -l /home/devopsy/snapref; rm -f /var/tmp/snapref.xfs") })
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	if out, code := srv(t, "docker run --rm -v \"$PWD/snapref/prod/shared/mnt/files:/f\" busybox:1.37 sh -c 'echo pic >/f/a.jpg'"); code != 0 {
+		t.Fatalf("writing the data: %s", out)
+	}
+	out, code := op(t, dir, "devopsy @prod --snapshot")
+	m := takenID.FindStringSubmatch(out)
+	if code != 0 || m == nil || !strings.Contains(out, "the data clones by reflinks") {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	snap := "snapref/prod/snapshots/" + m[1]
+	if manifest, _ := srv(t, "cat "+snap+"/manifest"); !strings.Contains(manifest, "copy\treflink") {
+		t.Errorf("the manifest:\n%s", manifest)
+	}
+	if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:3 sh -c 'zstd -dc /s/mnt.files.tar.zst | tar -tf -'"); code != 0 || !strings.Contains(list, "files/a.jpg") {
+		t.Errorf("the tar (%d): %s", code, list)
+	}
+	if left, _ := srv(t, "ls snapref/prod/snapshots/.clone 2>/dev/null"); strings.TrimSpace(left) != "" {
+		t.Errorf("the clone left: %s", left)
+	}
+	if out, code := srv(t, "docker run --rm -v \"$PWD/snapref/prod/shared/mnt/files:/f\" busybox:1.37 rm /f/a.jpg"); code != 0 {
+		t.Fatalf("changing the data: %s", out)
+	}
+	if out, code := op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --no-code --yes"); code != 0 {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+	if files, _ := srv(t, "ls snapref/prod/shared/mnt/files"); strings.TrimSpace(files) != "a.jpg" {
+		t.Errorf("after the restore: %q", files)
+	}
+}

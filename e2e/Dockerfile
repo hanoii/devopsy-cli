@@ -1,6 +1,7 @@
 # A devopsy server for the end-to-end tests, as devopsy-server sets one
 # up: Debian 13, Docker from docker.com with buildx (BuildKit), sshd,
-# util-linux, the deploy user in the docker group. Run privileged with a
+# util-linux, the deploy user in the docker group; xfsprogs for a test of
+# snapshots by reflinks on an XFS loop device. Run privileged with a
 # volume on /var/lib/docker; its own dockerd starts with it. The operator runs the
 # same image as "operator": an ssh client, no daemons.
 #
@@ -11,7 +12,7 @@
 # changes what the suite tests from one host to the next.
 FROM debian:trixie
 RUN apt-get update -q \
- && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client git util-linux iptables iproute2 procps \
+ && apt-get install -yq --no-install-recommends ca-certificates curl gnupg openssh-server openssh-client git util-linux iptables iproute2 procps xfsprogs \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" >/etc/apt/sources.list.d/docker.list \
