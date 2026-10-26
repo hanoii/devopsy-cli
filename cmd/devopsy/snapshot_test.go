@@ -1609,9 +1609,16 @@ func TestRestoreTakesReleaseSnapshot(t *testing.T) {
 		write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
 		before := s.current("prod")
 		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+		s.logs()
 		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
 		if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 			t.Fatalf("%v: restore (%d):\n%s", args, code, out)
+		}
+		// What the snapshot of the replaced data left stopped stays down
+		// for the restore's data step: never started on the data about to
+		// be replaced, to be stopped again.
+		if docker, _ := s.logs(); strings.Contains(out, "left stopped") || strings.Count(docker, "stop db app") != 1 {
+			t.Errorf("%v: the services started between the snapshot and the restore's data:\n%s\n%s", args, out, docker)
 		}
 		var rs []releaseSnapshot
 		for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
