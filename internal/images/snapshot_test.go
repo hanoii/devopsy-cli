@@ -90,15 +90,46 @@ func TestSnapshotPullOwnRepositoryOnly(t *testing.T) {
 	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tIX\tevil.example/x@IX\n"); err == nil || d.images["IX"] {
 		t.Errorf("another repository's digest: pulled %v (%v)\n%s", d.images["IX"], err, out.String())
 	}
+	// A snapshot among the environment's, its listing the release's.
+	snaps := t.TempDir()
+	snap := filepath.Join(snaps, "20261026000000")
+	listing, err := os.ReadFile(filepath.Join(rel, ListFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snap, ListFile), listing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prod.e.set.Snapshots = snaps
 	d.publish("mariadb:11.8", "I2")
-	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tI2\tmariadb@I2\n"); err != nil || !d.images["I2"] {
+	if err := prod.e.set.SnapshotPull(snap, "image\tdatabase\tmariadb:11.8\tI2\tmariadb@I2\n"); err != nil || !d.images["I2"] {
 		t.Errorf("its own repository's digest: pulled %v (%v)\n%s", d.images["I2"], err, out.String())
 	}
-	// Bookmarked at once, by the listing's name for it: until the
-	// restore's data step holds it, only that keeps another environment's
-	// removal (which takes the names no bookmark holds) off it.
+	// Bookmarked at once as the snapshot's (s<id>): until the restore's
+	// data step holds it, only that keeps another environment's removal
+	// (which takes the names no bookmark holds) off it.
 	tags, err := d.Tags("I2")
-	if err != nil || !slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, ":devopsy-app-prod-") }) {
+	if err != nil || !slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, ":devopsy-app-prod-s20261026000000") }) {
 		t.Errorf("the pulled image's names: %v (%v)", tags, err)
+	}
+	// An import's, checked where it was extracted (outside the
+	// snapshots): pulled, never bookmarked by its directory's id, a
+	// release nothing would remove; the import bookmarks it once in place.
+	imp := filepath.Join(snaps, ".import.1", "20261026000001")
+	if err := os.MkdirAll(imp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imp, ListFile), listing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mariadb:11.8", "I3")
+	if err := prod.e.set.SnapshotPull(imp, "image\tdatabase\tmariadb:11.8\tI3\tmariadb@I3\n"); err != nil || !d.images["I3"] {
+		t.Errorf("an import's: pulled %v (%v)\n%s", d.images["I3"], err, out.String())
+	}
+	if tags, _ := d.Tags("I3"); slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, "20261026000001") }) {
+		t.Errorf("an import's pulled image bookmarked by its directory: %v", tags)
 	}
 }

@@ -545,6 +545,13 @@ func (s *Set) SnapshotPull(snap, data string) error {
 		if pulled == "" {
 			return fmt.Errorf("the image %s's data ran when the snapshot was taken (%s) is gone and could not be pulled by its digest in %s: nothing restored", e.Service, p.Ref, repoKey(e.Ref))
 		}
+		// Only a snapshot among the environment's (s<id>): an import's,
+		// checked where it was extracted, bookmarks its images once it
+		// is in place (BookmarkFrom), and a bookmark of its directory's
+		// id would name a release nothing ever removes.
+		if !strings.HasPrefix(s.idOf(snap), "s") {
+			continue
+		}
 		if err := s.Docker.Tag(pulled, names[i]); err != nil {
 			return fmt.Errorf("bookmarking %s as %s: %w: nothing restored", pulled, names[i], err)
 		}
