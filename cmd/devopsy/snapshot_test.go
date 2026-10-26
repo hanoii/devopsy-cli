@@ -2177,9 +2177,16 @@ func TestSnapshotReflink(t *testing.T) {
 	// the next take, there no .tmp at all.
 	left := filepath.Join(snaps, ".clone", "20200101000000")
 	write(t, filepath.Join(left, "mnt", "db", "ibdata"), "old rows\n", 0o644)
-	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || fileExists(left) {
-		t.Errorf("a leftover clone kept (%d, there: %v):\n%s", code, fileExists(left), out)
+	// And the check's test file (cp --reflink of one data file, removed
+	// by the check itself), left by a check killed outright (a reboot
+	// during it): it shares the file's blocks, which it keeps as the
+	// service writes over them, up to the file's size, for good.
+	probe := filepath.Join(snaps, ".clone", ".reflink.4242")
+	write(t, probe, "half of ibdata\n", 0o600)
+	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || fileExists(left) || fileExists(probe) {
+		t.Errorf("a leftover clone or check file kept (%d, there: %v %v):\n%s", code, fileExists(left), fileExists(probe), out)
 	}
+
 
 	// A release's snapshot, cloned.
 	s2 := newSyncSetup(t)
