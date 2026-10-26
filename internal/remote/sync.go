@@ -105,6 +105,17 @@ func WriterLine(service string, pid int, was string) string {
 // sync's id: what --sync-services finish partial and settle remove.
 const SyncContainerPrefix = "devopsy-sync-"
 
+// SyncCheckedEnv, set by a parent's push for the child's devopsy, says the
+// parent checked the child's restore mark (it copies all of every service
+// the restore covers): the child's done line then says so
+// (CheckedDoneLine), and only such a line completes a sync over a
+// restore's mark, so a parent older than restores' marks never clears one
+// with a copy that leaves some of it.
+const SyncCheckedEnv = "DEVOPSY_INTERNAL_SYNC_CHECKED"
+
+// CheckedDoneLine is DoneLine from a parent that checks restores' marks.
+func CheckedDoneLine(id string) string { return DoneLine(id) + " checked" }
+
 // DoneLine records the copy's last write in SyncStartedFile.
 func DoneLine(id string) string {
 	return "done " + id
@@ -507,6 +518,30 @@ fi
 // was written; $status says how it went. failed says what a failure
 // means here; release is an activation's, which may be a first release
 // (syncPrepare).
+// syncDecision sets $sync_word from what the copy wrote (taken, the
+// writers' record the holder took), the environment's mark (incomplete)
+// and the answer ($reply): go, partial or abort.
+func syncDecision(taken, incomplete string) string {
+	return `  # A push that went through and wrote nothing (the parent's labels
+  # copy nothing) is go: no data the labels cover is partial any more.
+  sync_word=abort
+  # Over a restore's mark, only a parent that checked it completes it.
+  if grep -qx "` + CheckedDoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null ||
+    { grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null && [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" != ` + IncompleteRestore + ` ]; }; then
+    sync_word=go
+  elif [ -e ` + taken + ` ]; then
+    # Written in part: the copy was cut.
+    sync_word=partial
+  elif [ -e ` + incomplete + ` ]; then
+    # Nothing written over an earlier sync's partial copy, whatever the
+    # answer: only a sync that writes completes it.
+    sync_word=partial
+  elif [ "$reply" = go ]; then
+    sync_word=go
+  fi
+`
+}
+
 func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
@@ -522,22 +557,7 @@ func syncBlock(projectName, failed string, release bool) string {
   # The writers' record taken in one move: a write appending after it
   # finds no file and stops.
   mv -f ` + started + ` ` + taken + ` 2>/dev/null || true
-  # A push that went through and wrote nothing (the parent's labels
-  # copy nothing) is go: no data the labels cover is partial any more.
-  sync_word=abort
-  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null; then
-    sync_word=go
-  elif [ -e ` + taken + ` ]; then
-    # Written in part: the copy was cut.
-    sync_word=partial
-  elif [ -e ` + incomplete + ` ]; then
-    # Nothing written over an earlier sync's partial copy, whatever the
-    # answer: only a sync that writes completes it.
-    sync_word=partial
-  elif [ "$reply" = go ]; then
-    sync_word=go
-  fi
-  case "$reply.$sync_word" in
+` + syncDecision(taken, incomplete) + `  case "$reply.$sync_word" in
     go.go) ;;
     *.go) devopsy --say info "the copy had completed: going on with it" || true ;;
     *.partial)
@@ -1027,7 +1047,7 @@ copyvol() {
 		// the copy is not this sync's to complete. (A take between the
 		// check and the append leaves a record of this line alone, which
 		// the next lock-taker settles.)
-		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
+		script += "mine && printf '%s\\n' " + Quote(CheckedDoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
 }

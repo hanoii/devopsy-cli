@@ -2334,9 +2334,13 @@ settled every rule here after nine reviews (2026-10-25).
   snapshot it names stays. A sync clears it only by copying every
   service of the snapshot, all of each: the child's list prints a
   `!restore` line per service (from its manifest), the push checks each
-  with `copiesService`, and a parent older than the restore's mark
-  refuses (`restoreMarkNeed`, the parent check's extra need, on the
-  release path and `--sync`, which reads the child's mark first).
+  with `copiesService`, and only a parent that does writes the done
+  line that completes it (`CheckedDoneLine`, through `SyncCheckedEnv`
+  for the child's devopsy; `syncDecision`): an older parent's sync over
+  it stays partial. A release that syncs refuses such a parent before
+  its upload too (`restoreMarkNeed`, from the child's session it opens
+  anyway). Decided over a session of `--sync`'s own to read the mark
+  (review: every sync paid it, projects without snapshots included).
 - **Export and import:** one outer tar of the snapshot's directory, on
   stdout and from stdin, never `--import`'s marker and byte (storing one
   stops nothing): the import gated (`lockedGate`, `--stdin-guard`),

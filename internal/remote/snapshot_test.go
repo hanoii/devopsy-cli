@@ -184,3 +184,34 @@ func TestReleaseSnapshotScripts(t *testing.T) {
 		}
 	}
 }
+
+// A sync's done line completes it, but over a restore's mark only one a
+// parent that checked the mark wrote (CheckedDoneLine): an older parent,
+// whose done line is plain, leaves the copy partial and the mark there.
+func TestSyncDecisionRestoreMark(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		mark, done, want string
+	}{
+		{"", DoneLine("7.1"), "go"},
+		{"", CheckedDoneLine("7.1"), "go"},
+		{IncompleteImport, DoneLine("7.1"), "go"},
+		{IncompleteRestore, CheckedDoneLine("7.1"), "go"},
+		{IncompleteRestore, DoneLine("7.1"), "partial"},
+	} {
+		dir := t.TempDir()
+		taken, incomplete := filepath.Join(dir, "taken"), filepath.Join(dir, "incomplete")
+		if err := os.WriteFile(taken, []byte("writer db 1 up\n"+c.done+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if c.mark != "" {
+			if err := os.WriteFile(incomplete, []byte(IncompleteLine("2026-10-26 00:00:00", "20261026000000", c.mark, "why")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command("sh", "-c", "sync_id=7.1; reply=go\n"+syncDecision(Quote(taken), Quote(incomplete))+"echo \"$sync_word\"").CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != c.want {
+			t.Errorf("mark %q, %q: %s (%v), want %s", c.mark, c.done, out, err, c.want)
+		}
+	}
+}
