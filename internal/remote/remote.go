@@ -776,9 +776,7 @@ fi
 		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
-` + settleSync(projectName) + `exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, false, "a snapshot of $base") + `
-[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
+` + settleSync(projectName) + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
 export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
@@ -2235,9 +2233,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
 fi
 ` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
-exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, false, "a snapshot of $base") + `
-` + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then

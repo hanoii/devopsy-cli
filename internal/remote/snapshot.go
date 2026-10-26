@@ -53,6 +53,16 @@ const (
 	SnapshotData = "data"
 )
 
+// snapshotLock takes the snapshot lock (fd 6) for anything but a take,
+// and removes a take's holding file a take killed outright left, so
+// --status never says a snapshot is taken while another holds it.
+func snapshotLock(stdin bool) string {
+	return `exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, stdin, "a snapshot of $base") + `
+rm -f "$base/` + SnapshotHoldingFile + `"
+`
+}
+
 // SnapshotScript takes a manual snapshot of t's current release, keeping
 // keep of them (at most the server's snapshot max_keep). One session:
 // watched as an activation is (WatchEnv), so before the end of its
@@ -161,9 +171,7 @@ func SnapshotsRemoveScript(t *Target, projectName string, ids []string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$snaps" ] || { devopsy --say error "$base has no snapshots"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release"; exit 1; }
 export ` + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
-exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, false, "a snapshot of $base") + `
-cd "$base/current"
+` + snapshotLock(false) + `cd "$base/current"
 ` + devopsyCall(projectName, append([]string{SnapshotStepFlag, "remove"}, ids...), true) + "\n"
 }
 
@@ -194,9 +202,7 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 	s += `
 ` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
-` + settleSync(projectName) + `exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, false, "a snapshot of $base") + `
-cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
+` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
@@ -228,9 +234,7 @@ exit "$rs"
 // shared: no removal takes it meanwhile.
 func SnapshotExportScript(t *Target, id string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -f "$snaps"/` + Quote(id) + `/` + SnapshotManifest + ` ] || { devopsy --say error "$base has no snapshot ` + id + `"; exit 1; }
-exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, true, "a snapshot of $base") + `
-exec tar -C "$snaps" -cf - ` + Quote(id) + `
+` + snapshotLock(true) + `exec tar -C "$snaps" -cf - ` + Quote(id) + `
 `
 }
 
@@ -245,9 +249,7 @@ func SnapshotImportScript(t *Target, projectName string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + hintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
 umask 077
 mkdir -p "$snaps"
-exec 6>"$base/` + SnapshotLockFile + `"
-` + lockWait(6, false, "a snapshot of $base") + `
-` + lockedGate(false, "") + `tmp="$snaps/.import.$$"
+` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"
 rm -rf "$tmp"
 mkdir -p "$tmp"
 if ! devopsy ` + StdinGuardFlag + ` | tar -xmf - -C "$tmp"; then

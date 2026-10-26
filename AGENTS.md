@@ -2226,7 +2226,8 @@ settled every rule here after nine reviews (2026-10-25).
   names (review of 2026-10-25: a take's prune removed the snapshot a
   restore was reading). `--destroy` takes all four. `--status` says "snapshot" while
   one holds its holding file and lock (`SnapshotRunning`), never the
-  file alone.
+  file alone, and every other holder of the lock removes a holding file
+  a killed take left (`snapshotLock`).
 - **Stopped as a sync stops** (`stopSetFor`): every service with data and
   its dependents, in one stop and one start, recorded as `snapshot <id>
   <name>` lines (their own kind: `readSyncRecord` keeps them). A take
