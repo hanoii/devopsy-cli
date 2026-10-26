@@ -1543,6 +1543,69 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		}
 		t.Errorf("release snapshots %+v, want one, of %s", rs, second)
 	})
+	t.Run("pruned once off", func(t *testing.T) {
+		t.Parallel()
+		if _, err := os.Stat("/proc/self/cwd"); err != nil {
+			t.Skip("waiting for the detached tar reads /proc")
+		}
+		// A release snapshot goes when its release goes, whatever takes
+		// that release: here releases once release snapshots are off.
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 2}, snapshots: {release: true}}")
+		s.releaseProd(nil)
+		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+		if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+			t.Fatalf("second release (%d):\n%s", code, out)
+		}
+		var rs []releaseSnapshot
+		for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+			if rs = releaseSnapshots(snaps); len(rs) == 1 {
+				break
+			}
+		}
+		if len(rs) != 1 {
+			t.Fatalf("release snapshots %+v, want one", rs)
+		}
+		// Its detached tar's pruning done: it would otherwise prune for
+		// the releases below.
+		s.waitReleaseTars()
+		conf := filepath.Join(s.dot, "config.yaml")
+		write(t, conf, strings.Replace(readString(conf), "snapshots: {release: true}", "snapshots: {release: false}", 1), 0o644)
+		for i := range 2 {
+			if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+				t.Fatalf("release %d (%d):\n%s", i+3, code, out)
+			}
+		}
+		if fileExists(filepath.Join(s.root, "shop", "prod", "releases", rs[0].release)) {
+			t.Fatalf("release %s not pruned", rs[0].release)
+		}
+		if left := releaseSnapshots(snaps); len(left) > 0 {
+			t.Errorf("release snapshots %+v left, their release gone", left)
+		}
+	})
+}
+
+// waitReleaseTars waits until no detached release-tar of the setup's
+// environments runs (Linux: /proc).
+func (s *syncSetup) waitReleaseTars() {
+	s.t.Helper()
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		busy := false
+		procs, _ := filepath.Glob("/proc/[0-9]*")
+		for _, p := range procs {
+			cmd, _ := os.ReadFile(filepath.Join(p, "cmdline"))
+			cwd, _ := os.Readlink(filepath.Join(p, "cwd"))
+			if strings.Contains(string(cmd), "release-tar") && strings.HasPrefix(cwd, s.root) {
+				busy = true
+			}
+		}
+		if !busy {
+			return
+		}
+		if time.Since(start) > startWait {
+			s.t.Fatal("a release's detached tar still runs")
+		}
+	}
 }
 
 // A mirror take's tar step that fails on its last tar (Docker answering
