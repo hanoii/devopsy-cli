@@ -550,6 +550,12 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		// No mirror: the tars, from the stopped data, are the downtime.
 		report.Info("writing snapshot " + id + "'s tars, the services stopped")
 		err = dataTars(ctx, cwd, d, tmp, id)
+		if err == nil {
+			// Its tars are complete: a take cut before its rename is
+			// finished by the next (snapshotLeftovers), a mirror take's
+			// .tmp, whose tars come after its manifest, never.
+			err = os.WriteFile(filepath.Join(tmp, snapshotTarredFile), nil, 0o600)
+		}
 	}
 	undo := func() {
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
@@ -856,11 +862,9 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 			}
 			continue
 		}
-		// A take without a mirror writes its manifest after its tars: one
-		// cut before its rename is complete.
-		if m, err := readManifest(tmp); complete && err == nil && !slices.ContainsFunc(snapshotTars(m), func(t snapshotTarFile) bool {
-			return !fileExists(filepath.Join(tmp, remote.SnapshotData, t.file))
-		}) {
+		// A take without a mirror marks its tars complete before its
+		// manifest: one cut before its rename is complete.
+		if complete && fileExists(filepath.Join(tmp, snapshotTarredFile)) {
 			report.Info("finishing snapshot " + id + ", cut off before its rename")
 			if err := os.Rename(tmp, filepath.Join(p.snaps, id)); err != nil {
 				return err
@@ -1008,6 +1012,10 @@ func manualSnapshots(p snapshotPaths) []string {
 	sort.Strings(ids)
 	return ids
 }
+
+// snapshotTarredFile, in a take's <id>.tmp, says its tars, written
+// while stopped, are complete (a take without a mirror).
+const snapshotTarredFile = "devopsy-tarred"
 
 // releaseStoppedFile, in a release that took a snapshot of the one it
 // replaced, names what its stopped pass left stopped (release-record).

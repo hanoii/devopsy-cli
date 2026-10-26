@@ -2214,8 +2214,10 @@ settled every rule here after nine reviews (2026-10-25).
   `.mirror/.devopsy-complete` (the id), so a holder of the snapshot lock
   finding that id's `.tmp`, its manifest written last and its images
   listing there, finishes it from the mirror (`leftovers`); a `.tmp`
-  with its manifest, listing and every tar but no marker is a take
-  without a mirror cut before its rename, renamed; any other `.tmp`
+  with its manifest, listing and `devopsy-tarred` (written once a take
+  without a mirror has all its tars; a mirror take's tars come after its
+  manifest, so the files alone never tell: review) is one cut before its
+  rename, renamed; any other `.tmp`
   removed with its bookmarks, and a killed import's `.import.*` with
   it. The rsync is the sync's (`rsyncEntry`, `rsyncVolume`:
   `--modify-window=-1`, `--no-D`, exit 24 a notice). One tar per entry,
