@@ -2279,3 +2279,64 @@ func TestRestoredHistoryKeepsWhatDataMovedPast(t *testing.T) {
 		t.Errorf("after the restore of its own snapshot, the mirror's tag back on I1, an image the data moved past (%v): runs %s, history %v\n%s", err, prod.runs("database"), prod.history("database"), out.String())
 	}
 }
+
+// An imported snapshot's listing and record are whoever made them. The
+// import keeps the listing's entries of the current release's services
+// under that release's repository (FilterImported) and bookmarks them by
+// id where the server has them (BookmarkFrom, keep: by id). A crafted
+// entry naming, by its id and digest, an image the server has of another
+// repository (a public image's id is public: traefik's, the proxy's) is
+// then tagged into the service's own repository, and Docker's containerd
+// store resolves mariadb@<that digest> to it from then on (checked on
+// Docker 28: once an image has a name in a repository, repo@digest finds
+// it there and RepoDigests lists it). SnapshotPull finds the id present
+// and pulls nothing, and the --no-code restore's hold in the service's
+// own repository (ownHold), which is meant to keep an untrusted
+// snapshot's images to that repository, runs that image on the
+// database: an image never pulled as mariadb's, whatever its name.
+func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, appSvc, db118)
+	// An image of another repository on the server: the proxy's.
+	d.pull("traefik:v3.7", "IT")
+	snaps := filepath.Join(t.TempDir(), "snapshots")
+	snap := filepath.Join(snaps, "20261026000001")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot's listing, crafted: database on traefik's image, named
+	// as mariadb's; its record the same.
+	if err := writeList(snap, []entry{{Ref: "mariadb:11.8", ID: "IT", Service: "database", Kind: KindData, Digest: "mariadb@IT"}}); err != nil {
+		t.Fatal(err)
+	}
+	data := "image\tdatabase\tmariadb:11.8\tIT\tmariadb@IT\n"
+	rel := prod.e.rel(prod.cur)
+	prod.e.set.Snapshots, prod.e.set.Base = snaps, prod.base()
+	// The import: the listing cut to the current release's services and
+	// repositories, then bookmarked where the server has the images.
+	if err := FilterImported(snap, rel); err != nil {
+		t.Fatal(err)
+	}
+	if err := prod.e.set.BookmarkFrom(snap, snap); err != nil {
+		t.Fatal(err)
+	}
+	// The --no-code restore: its check pulls what is gone, its data step
+	// holds the database on the record's image, then the run step.
+	if err := prod.e.set.SnapshotPull(snap, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := prod.e.set.ImportDone(prod.base(), rel, data); err != nil {
+		return // refused: nothing taken over
+	}
+	prod.activation = true
+	prod.up()
+	tags, _ := d.Tags("IT")
+	if prod.runs("database") == "IT" || holdsIn(rel)["database"] == "mariadb@IT" {
+		t.Errorf("the --no-code restore of an imported snapshot runs traefik's image on the database (hold %s, traefik's names %v): the listing's id named it, and the import tagged it as mariadb's\n%s", holdsIn(rel)["database"], tags, out.String())
+	}
+}

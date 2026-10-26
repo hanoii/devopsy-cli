@@ -129,6 +129,13 @@ func (d *fakeDocker) Tag(src, dst string) error {
 		return err
 	}
 	d.names[familiar(dst)] = id
+	// As Docker's containerd store: a pulled image tagged into another
+	// repository gets that repository's digest name too (RepoDigests
+	// lists it), and repo@digest then finds it there (checked on Docker
+	// 28 with the containerd store, 2026-10-26).
+	if len(d.digests[id]) > 0 {
+		d.digests[id] = appendNew(d.digests[id], repoKey(dst)+"@"+id)
+	}
 	return nil
 }
 
