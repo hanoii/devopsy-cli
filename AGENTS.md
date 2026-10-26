@@ -2306,7 +2306,10 @@ settled every rule here after nine reviews (2026-10-25).
   `snapshots: max_keep` (5); pruned after each tar, under the snapshot
   lock, the image lock taken only when free (else the next take prunes).
   `--snapshots remove` waits for it, and refuses the snapshot a restore's
-  mark names. `--destroy` removes them all, bookmarks first, the mirror
+  mark names. A changed `snapshots: root` leaves the old ones unseen
+  (accepted, review of 2026-10-25: finding them would need a sweep of
+  Docker's bookmarks, which removals never do; the README says to move
+  them first). `--destroy` removes them all, bookmarks first, the mirror
   as root, the snapshot root's directory too, and says how many.
 - **Gates:** the hidden `--snapshot-step` is a feature flag, so an
   older server refuses every snapshot script before anything changes.

@@ -1579,6 +1579,11 @@ snapshots:
   max_keep: 5          # no environment keeps more manual snapshots (5)
 ```
 
+Changing a server's `snapshots: root` leaves the snapshots taken before
+where they are, unseen by `--snapshots`, pruning and `--destroy`: move
+each environment's directory under the new root first (their images'
+bookmarks go with them).
+
 **On a server:** `--shell` opens a container shell as locally;
 `--shell-host` your login shell on the server, in the current release
 (in the release root with `@<server>` alone), independent of the project
