@@ -1841,7 +1841,11 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		what += ", and its shared/.env"
 	}
 	if !yes {
-		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s, as a new release (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
+		how := ", as a new release"
+		if noCode {
+			how = ""
+		}
+		if err := typeToGoOn(fmt.Sprintf("this replaces @%s's data with %s%s (%s:%s): what it holds now goes; devopsy @%s --snapshot first keeps it", t.Address, what, how, t.Host, t.Path, targetRef(t)), confirmWord(t), "nothing restored", false); err != nil {
 			report.Fail(err)
 			return 1
 		}
