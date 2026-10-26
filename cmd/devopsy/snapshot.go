@@ -692,7 +692,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	if next != "" {
 		gated = filepath.Join(next, remote.CodeDir)
 	}
-	if err := checkStartBinds(gated); err != nil {
+	if err := gateBeforeStop(cwd, gated, set); err != nil {
 		report.Fail(err)
 		return 1
 	}

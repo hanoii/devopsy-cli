@@ -1178,9 +1178,15 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   in the new release's code, whose run step starts them; an `--import`
   but for the entries its tar replaces; a sync's child side but under
   `--reset` (its wipe removes the link; which entries the copy replaces
-  is the parent's to say, so one there is refused too); a restore in
-  the entries it keeps (`check-tars`). Its message carries the links in
-  its first line, which callers wrap.
+  is the parent's to say, so one there is refused too; the holder knows
+  the reset from `SyncOptions.Reset`, exported as `SyncResetEnv` as the
+  push's is: review, the child refused the `--reset` it named as the way
+  out; accepted: a reset whose push aborts before its wipe, the data as
+  it was, leaves the child's set down, the gate saying which link); a
+  restore in the entries it keeps (`check-tars`). A take and an export
+  check only when something of their set runs (`gateBeforeStop`: none
+  running, they stop and start nothing). Its message carries the links
+  in its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
   an aliased base path) is judged by where it lands in mnt

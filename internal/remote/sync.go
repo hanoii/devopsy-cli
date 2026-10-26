@@ -457,6 +457,9 @@ type SyncOptions struct {
 	// the preflight: checked before anything stops, taken over once the
 	// copy is complete.
 	Images string
+	// Reset is a --reset's: the child's side knows it from its prepare
+	// on (SyncResetEnv), as the push's devopsy does.
+	Reset bool
 }
 
 // imagesExport exports the parent's data images for the child's img
@@ -470,6 +473,9 @@ func (o *SyncOptions) imagesExport() string {
 func (o *SyncOptions) exports(t *Target) string {
 	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncIDEnv, Quote(o.ID))
 	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
+	if o.Reset {
+		s += "export " + SyncResetEnv + "=1\n"
+	}
 	return s
 }
 
