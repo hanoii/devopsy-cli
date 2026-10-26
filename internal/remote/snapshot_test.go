@@ -14,17 +14,35 @@ import (
 // writes its mark naming it, while a take's pruning and --snapshots remove
 // remove snapshots under that lock alone, with the release lock gone, so
 // without it the snapshot being restored can go halfway through.
+//
+// Held to the data step, with release snapshots on too: their setup
+// reopening fd 6, or giving it up when it takes none (a marked
+// environment, nothing with data), would let a removal or a take's
+// pruning in before the restore's mark names the snapshot.
 func TestRestoreScriptsTakeSnapshotLock(t *testing.T) {
 	t.Parallel()
 	tg := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage}
+	on := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage, SnapshotsRelease: SnapshotSetting{Enabled: true, Keep: 1}}
 	for name, s := range map[string]string{
-		"restore":      RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
-		"restore data": RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+		"restore":                         RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+		"restore data":                    RestoreDataScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+		"restore, release snapshots":      RestoreScript(on, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
+		"restore data, release snapshots": RestoreDataScript(on, "app-prod", &RestoreOptions{Snapshot: "20261025120000"}),
 	} {
 		lock := strings.Index(s, `exec 6>"$base/`+SnapshotLockFile+`"`)
 		check := strings.Index(s, quoteAll([]string{SnapshotStepFlag, "check-tars"}))
 		if lock < 0 || check < 0 || lock > check {
 			t.Errorf("%s: the snapshot lock (at %d) is not held before the snapshot's tars are read (at %d)", name, lock, check)
+		}
+		data := strings.Index(s, quoteAll([]string{SnapshotStepFlag, "restore-data"}))
+		if data < 0 || lock < 0 {
+			continue
+		}
+		for _, give := range []string{"exec 6>", "exec 6>&-"} {
+			if i := strings.Index(s[lock+1:data], give); i >= 0 {
+				t.Errorf("%s: the snapshot lock given up or reopened (%q at %d) before the data step (at %d)", name, give, lock+1+i, data)
+				break
+			}
 		}
 	}
 }
