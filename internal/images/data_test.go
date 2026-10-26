@@ -2181,3 +2181,55 @@ func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
 		t.Errorf("--resolved after an import that held nothing (%v): history %v, want ran:I1 import:I1", err, dev.history("database"))
 	}
 }
+
+// A snapshot's record of its data images (data/images) and an export's
+// header are whoever made them: an import or a restore holds the service
+// in its own repository only (ownHold), but the history it takes over
+// from the record decides what a later rollback or restart holds the
+// service on (Restore, HoldData: the history's last). A record whose
+// image line names another repository (a restore checks none: no
+// ImportCheck), or whose history ends on one (an --import's check reads
+// the image line only), must not leave the data's newest image in that
+// repository: a rollback then pulls evil.example/x by its digest and
+// runs it on the database.
+func TestImportedHistoryOwnRepositoryOnly(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		data  string
+		check bool
+	}{
+		"restore, its image line elsewhere": {data: "image\tdatabase\tevil.example/x:1\tIX\tevil.example/x@IX\n"},
+		"import, its history ending elsewhere": {check: true, data: "image\tdatabase\tmariadb:11.8\tI1\tmariadb@I1\n" +
+			"ran\t1\tdatabase\tran\tmariadb:11.8\tI1\tmariadb@I1\n" +
+			"ran\t2\tdatabase\tran\tevil.example/x:1\tIX\tevil.example/x@IX\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := newFake()
+			d.strictRepo = true
+			var out bytes.Buffer
+			prod := newSim(t, d, "app-prod", &out)
+			d.publish("mariadb:11.8", "I1")
+			r1, _ := prod.release(false, appSvc, db118)
+			prod.release(false, appSvc, db118)
+			d.publish("evil.example/x:1", "IX")
+			rel := prod.e.rel(prod.cur)
+			var err error
+			if c.check {
+				err = prod.e.set.ImportCheck(rel, c.data, "database")
+			}
+			if err == nil {
+				err = prod.e.set.ImportDone(prod.base(), rel, c.data)
+			}
+			if err != nil {
+				return // refused: nothing taken over
+			}
+			if last, ok := readHistory(prod.base()).last("database"); ok && repoKey(last.hold()) != "mariadb" {
+				t.Errorf("the data's newest image is %s, from the record, outside the service's own repository", last.hold())
+			}
+			if err := prod.rollback(r1); err == nil && (d.images["IX"] || prod.runs("database") == "IX") {
+				t.Errorf("a rollback after it pulled and ran evil.example/x on the database (runs %s)\n%s", prod.runs("database"), out.String())
+			}
+		})
+	}
+}
