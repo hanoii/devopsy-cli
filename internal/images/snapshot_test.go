@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,19 @@ func TestSnapshotBookmarks(t *testing.T) {
 	}
 	if img, err := d.Inspect("app-prod-app:devopsy-app-prod-" + r2); err != nil || img.ID != newer {
 		t.Errorf("r2's bookmark gone with the snapshot: %+v %v", img, err)
+	}
+}
+
+// A snapshot's bookmark fits Docker's 128 characters as a release's does,
+// its id one longer (s<id>): a long compose name, a repository named
+// twice (its cksum), and the tag still fits.
+func TestSnapshotBookmarkLength(t *testing.T) {
+	t.Parallel()
+	name := strings.Repeat("b", 120)
+	es := []entry{{Ref: "app:1", ID: "sha256:a"}, {Ref: "app:2", ID: "sha256:b"}}
+	for _, b := range bookmarks(es, name, "s20261025000000") {
+		if _, tag, _ := strings.Cut(b, ":"); len(tag) > 128 {
+			t.Errorf("a snapshot's bookmark tag of %d characters: %s", len(tag), tag)
+		}
 	}
 }
