@@ -640,3 +640,48 @@ func TestSyncStreamOrder(t *testing.T) {
 		t.Errorf("stops with a cycle: %+v", got)
 	}
 }
+
+// A bind source below a directory the deploy user cannot search is
+// refused (TestLeavingBindsUnreadableDirectory), link or no link: devopsy
+// cannot see what is there. The refusal must say so, never that a
+// symbolic link leads out of the entry, nor have the operator remove a
+// link in shared/mnt: here there is none, and the deploy user cannot
+// even list the directory to look for one. storage/priv is 0700, the
+// app's (an import or a sync writes the owners and modes the parent
+// had), and storage/priv/public a plain directory.
+func TestLeavingBindsUnsearchableSaysSo(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root searches every directory: run as another user")
+	}
+	root := filepath.Join(t.TempDir(), "code")
+	dot := filepath.Join(root, ProjectDirName)
+	shared := filepath.Join(filepath.Dir(root), "shared")
+	priv := filepath.Join(shared, "mnt", "storage", "priv")
+	for _, d := range []string{filepath.Join(priv, "public"), dot} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(shared, "mnt"), filepath.Join(dot, "mnt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(priv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(priv, 0o755) })
+	parsed, err := parseSyncServices([]byte(`{"services":{"app":{"volumes":[{"type":"bind","source":"`+dot+`/mnt/storage/priv/public","target":"/x","read_only":false}]}}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, err := range map[string]error{"the mounts check": CheckMounts(parsed), "the start gate": CheckLeavingBinds(parsed, nil, "the start")} {
+		var said []string
+		for _, f := range report.Fixes(err) {
+			said = append(said, f.Text)
+		}
+		said = append(said, report.Details(err)...)
+		if err == nil || strings.Contains(strings.Join(said, "\n"), "symbolic link out of its entry") || strings.Contains(strings.Join(said, "\n"), "remove the link") {
+			t.Errorf("%s, of a bind source below a directory the deploy user cannot search, with no link at all: %v\n%s", what, err, strings.Join(said, "\n"))
+		}
+	}
+}
