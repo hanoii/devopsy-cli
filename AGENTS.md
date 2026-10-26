@@ -2195,7 +2195,12 @@ settled every rule here after nine reviews (2026-10-25).
   root's filesystem, where both live).
 - **No mirror by default: the tars written while stopped** (`dataTars`:
   the entries and volumes mounted read-only where a mirror has them,
-  `/m/mnt`, `/m/volumes/<key>`, so the tars are the same; one `.tar.zst`
+  `/m/mnt`, `/m/volumes/<key>`, so the tars are the same: only files,
+  directories and links (`find ... | tar --null --no-recursion -T -`: a
+  FIFO or a device is nothing a restore takes, review), hard links as
+  files of their own (`--hard-dereference`, as the mirror's rsync
+  without `-H` makes them: a restore refuses a hard link to a link);
+  one `.tar.zst`
   per entry or volume, `zstd -T0` under `nice` in the util image,
   written into the snapshot's directory mounted and given to the deploy
   user, never through the container's stdout: Docker's stream ran at 12
@@ -2216,7 +2221,9 @@ settled every rule here after nine reviews (2026-10-25).
   server's first take has none, and the check then failed into a take
   without, e2e), and removes it; where all clone, the stopped pass
   clones the data there (`cloneData`, `cp -a --reflink=always`, marked
-  `.devopsy-complete` with the id), the tars are made from the clone
+  `.devopsy-complete` with the id; a clone that fails though the check
+  passed falls back to the tars from the stopped data, never failing
+  every take there), the tars are made from the clone
   afterwards (`snapshotTar`), and the clone goes once the snapshot is
   renamed (`removeClone`, as root); a cut take with a marked clone is
   finished from it, a clone without its `.tmp` removed (`leftovers`),
@@ -2375,7 +2382,9 @@ settled every rule here after nine reviews (2026-10-25).
   cut at a member's boundary for complete: round 2), checked whole as a restore checks (`imported`),
   renamed under a new id, its images bookmarked where the server has
   them, a release snapshot made a manual one (its release is not there,
-  and pruning would take it for one whose release went: review). Images stay out of exports (a member of the outer tar needs its
+  and pruning would take it for one whose release went: review), its
+  manifest marked `imported` (`--snapshots`' line says how the last take
+  here copied, never an imported one). Images stay out of exports (a member of the outer tar needs its
   size first, so `docker save` would spool gigabytes on the server): a
   restore pulls the pulled ones by digest and builds the
   built ones from the snapshot's code.
@@ -2417,7 +2426,11 @@ settled every rule here after nine reviews (2026-10-25).
   meanwhile waits) makes
   the mirror's tars and, once the activation's pid is gone, prunes
   (both kinds, every release snapshot whose release is gone, `pruneGone`,
-  which `--snapshots remove` runs too; a wait of 10 minutes for the
+  which `--snapshots remove` runs too; every release snapshot counts
+  towards `keep`, a release tried again keeping its own: the one before
+  a failed run step holds the only copy of the data from before it
+  (decided over one per release, which a review found removing it); a
+  wait of 10 minutes for the
   image lock the activation held). Only a holder of the snapshot lock
   prunes: a release removed by anything else (pruning, `--releases
   remove`, with release snapshots since turned off) leaves its snapshot
@@ -2546,7 +2559,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`,
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`,
   `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
