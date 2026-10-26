@@ -2229,7 +2229,8 @@ settled every rule here after nine reviews (2026-10-25).
   file alone, and every other holder of the lock removes a holding file
   a killed take left (`snapshotLock`).
 - **Stopped as a sync stops** (`stopSetFor`): every service with data and
-  its dependents, in one stop and one start, recorded as `snapshot <id>
+  its dependents (a restore also any service of the current release
+  mounting what it writes, a label or not: round 2), in one stop and one start, recorded as `snapshot <id>
   <name>` lines (their own kind: `readSyncRecord` keeps them). A take
   killed outright leaves them for the next settle
   (`settleSnapshots`: `--sync-services settle`, `partialGuard` and
@@ -2261,7 +2262,11 @@ settled every rule here after nine reviews (2026-10-25).
   must be single names (`readManifest`; review of 2026-10-25: an
   imported manifest is anyone's, and a crafted one emptied another
   project's volume as root), and an entry of another kind than its tar
-  or a symlink refused as an import refuses them; the data
+  or a symlink refused as an import refuses them, and on a marked
+  environment any entry or volume there now of a service with data,
+  current or restored, that the snapshot lacks (absent at the take: the
+  restore clears the mark, so it must write all of each, as a sync does;
+  review of 2026-10-25, round 2); the data
   written between the images and the switch (`restore-data`): the set
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers

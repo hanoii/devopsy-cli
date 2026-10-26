@@ -1522,9 +1522,44 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			return fail(fmt.Sprintf("snapshot %s holds mnt/%s as %s, and it is %s here: make it %s first: nothing restored", id, t.name, as, is, as))
 		}
 	}
+	// On a marked environment the restore clears the mark, so it must write
+	// all of the data a service with data has now, the current release's
+	// and the restored one's, as a sync clears one (copiesService): an
+	// entry or a volume there now that the snapshot lacks (absent at the
+	// take) would keep what the cut copy left.
+	if readMark(p.base) != nil {
+		var bad []string
+		for _, s := range append(slices.Clone(services), restored...) {
+			if !s.HasData {
+				continue
+			}
+			for _, d := range s.Dirs {
+				if _, err := os.Lstat(filepath.Join(mnt, d)); err == nil && !slices.Contains(m.entries, d) && !slices.Contains(bad, "mnt/"+d) {
+					bad = append(bad, "mnt/"+d)
+				}
+			}
+			for _, v := range s.Volumes {
+				if _, ok := m.volumes[v.Key]; ok || slices.Contains(bad, "the volume "+v.Key) {
+					continue
+				}
+				if there, err := volumeExists(ctx, v.Name); err != nil {
+					return fail(err.Error() + ": nothing restored")
+				} else if there {
+					bad = append(bad, "the volume "+v.Key)
+				}
+			}
+		}
+		if len(bad) > 0 {
+			return fail("the environment is marked, and snapshot " + id + " has no " + strings.Join(bad, ", ") + ", which would stay as the cut copy left it: nothing restored")
+		}
+	}
+	// Stopped: the current release's services with data, and any of its
+	// services that mounts what the restore writes, a label or not.
 	var names []string
 	for _, s := range services {
-		if s.HasData {
+		writes := slices.ContainsFunc(s.Dirs, func(d string) bool { return slices.Contains(m.entries, d) }) ||
+			slices.ContainsFunc(s.Volumes, func(v cli.Volume) bool { _, ok := m.volumes[v.Key]; return ok })
+		if s.HasData || writes {
 			names = append(names, s.Name)
 		}
 	}
