@@ -864,3 +864,70 @@ func TestSnapshotRestoreStopsCurrentWriter(t *testing.T) {
 		t.Errorf("mnt/db emptied and extracted (%d) with db running:\n%s\n%s", code, out, docker)
 	}
 }
+
+// A snapshot's tar whose members the archive names ./storage/x (one made
+// by hand, imported): the check reads them as storage's, and the restore
+// extracts storage by that name alone, which GNU tar does not match
+// against ./storage/x. The entry is emptied first, so the restore fails
+// after its first write, the data gone from the entry, and every restore
+// again fails the same way. Refused before anything stops, or extracted
+// by the names the archive gives: never emptied for nothing.
+func TestSnapshotImportDotForms(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	// storage's tar, its members named ./storage/...: the same files.
+	var inner bytes.Buffer
+	iw := tar.NewWriter(&inner)
+	_ = iw.WriteHeader(&tar.Header{Name: "./storage/", Typeflag: tar.TypeDir, Mode: 0o755})
+	_ = iw.WriteHeader(&tar.Header{Name: "./storage/file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 10})
+	_, _ = iw.Write([]byte("from prod\n"))
+	_ = iw.Close()
+	var crafted bytes.Buffer
+	tw := tar.NewWriter(&crafted)
+	for tr := tar.NewReader(bytes.NewReader(exported)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(tr)
+		if h.Name == m[1]+"/data/mnt.storage.tar.zst" {
+			data = inner.Bytes()
+			h.Size = int64(len(data))
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(data)
+	}
+	_ = tw.Close()
+	_, errs, code = s.runIO(nil, crafted.Bytes(), "@prod", "--snapshots", "import")
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if code != 0 || im == nil {
+		return // refused at the import
+	}
+	file := filepath.Join(s.mnt("prod"), "storage", "file.txt")
+	write(t, file, "changed\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", im[1], "--yes")
+	docker, _ := s.logs()
+	marked := fileExists(filepath.Join(s.root, "shop", "prod", remote.SyncIncompleteFile))
+	switch {
+	case code == 0 && readString(file) == "from prod\n":
+	case code != 0 && !strings.Contains(docker, " stop ") && !marked:
+	default:
+		t.Errorf("restore (%d), storage/file.txt %q, marked %v:\n%s\n%s", code, readString(file), marked, out, docker)
+	}
+}
