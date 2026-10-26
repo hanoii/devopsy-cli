@@ -302,7 +302,7 @@ func TestRestoreMark(t *testing.T) {
 		t.Fatalf("take (%d):\n%s", code, out)
 	}
 	base := filepath.Join(s.root, "shop", "prod")
-	write(t, filepath.Join(base, remote.SyncIncompleteFile), "2026-10-25 00:00:00\t"+m[1]+"\trestore\tthe restore of snapshot "+m[1]+" did not complete\n", 0o644)
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), "2026-10-25 00:00:00\t"+m[1]+"\trestore\tit failed or was cut after its first write: its data may be partial\n", 0o644)
 	s.logs()
 	for args, want := range map[string]string{
 		"--release":                             "the restore of snapshot " + m[1] + " into @devopsy@one:prod did not complete",

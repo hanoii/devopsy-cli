@@ -1559,7 +1559,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 		return fail(err.Error() + ": nothing restored")
 	}
-	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "the restore of snapshot "+id+" did not complete", false); err != nil {
+	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		if rerr := restore(); rerr != nil {
 			report.Error(rerr.Error())
 		}
