@@ -404,3 +404,34 @@ func tarNamesOf(t *testing.T, data []byte) []string {
 		names = append(names, strings.TrimSuffix(h.Name, "/"))
 	}
 }
+
+// A child a restore left marked: a sync clears it only by copying every
+// service of the snapshot, all of each (the child's list names them); a
+// parent whose copy leaves one out is refused before anything stops.
+func TestSyncRestoreMark(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	out, code := s.run(nil, "@dev", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	mark := filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)
+	write(t, mark, "2026-10-25 00:00:00\t"+m[1]+"\trestore\tthe restore of snapshot "+m[1]+" did not complete\n", 0o644)
+	s.logs()
+	// prod copies app as nothing: app's storage stays half restored.
+	write(t, s.log+".shop-prod", "FAKE_APP=keep\n", 0o644)
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "a restore into the child did not complete, and the parent does not copy all of app") || parentChanged(docker) {
+		t.Errorf("a sync leaving app out (%d):\n%s\n%s", code, out, docker)
+	}
+	os.Remove(s.log + ".shop-prod")
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(mark) {
+		t.Errorf("a sync copying it all (%d), marked %v:\n%s", code, fileExists(mark), out)
+	}
+}

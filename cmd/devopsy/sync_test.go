@@ -1758,7 +1758,10 @@ func TestSyncMismatch(t *testing.T) {
 func TestChildServicesParse(t *testing.T) {
 	t.Parallel()
 	// The last service mounts nothing: its line ends in a tab.
-	got, mark := parseChildServices("app\tvolumes+import\texited\tstorage\ndb\tcustom+never\trunning\tdb\nworker\tnone+never\trunning\tdb\n!import\tdb\nbad\ncache\tnone+never\tnone\t\n")
+	got, mark, restore := parseChildServices("app\tvolumes+import\texited\tstorage\ndb\tcustom+never\trunning\tdb\nworker\tnone+never\trunning\tdb\n!import\tdb\nbad\ncache\tnone+never\tnone\t\n!restore\tdb\tdb\tdbdata\n")
+	if len(restore) != 1 || restore[0].Name != "db" || strings.Join(restore[0].Dirs, " ") != "db" || strings.Join(restore[0].Volumes, " ") != "dbdata" {
+		t.Errorf("a restore's mark: %+v", restore)
+	}
 	want := []childService{
 		{Name: "app", Copy: "volumes", Stop: "import", State: "exited", Dirs: []string{"storage"}},
 		{Name: "db", Copy: "custom", Stop: "never", State: "running", Dirs: []string{"db"}},

@@ -40,11 +40,18 @@ type snapshotPaths struct{ base, snaps, mirror string }
 
 func snapshotPathsOf(cwd string) snapshotPaths {
 	base := cmp.Or(os.Getenv(images.BaseEnv), filepath.Dir(cwd))
-	return snapshotPaths{
-		base:   base,
-		snaps:  cmp.Or(os.Getenv(images.SnapshotsEnv), filepath.Join(base, "snapshots")),
-		mirror: filepath.Join(base, "snapshots", remote.SnapshotMirror),
+	snaps := os.Getenv(images.SnapshotsEnv)
+	if snaps == "" {
+		// Outside a script's prelude (--sync-exec): from the server's own
+		// settings, as basePrelude finds it.
+		snaps = filepath.Join(base, "snapshots")
+		if r, err := remote.ReleaseSettings(); err == nil && r.Snapshots.Root != "" {
+			if rel, err := filepath.Rel(r.Root, base); err == nil && !strings.HasPrefix(rel, "..") {
+				snaps = filepath.Join(r.Snapshots.Root, rel)
+			}
+		}
 	}
+	return snapshotPaths{base: base, snaps: snaps, mirror: filepath.Join(base, "snapshots", remote.SnapshotMirror)}
 }
 
 // snapshotData is what a snapshot takes: every service with data, its

@@ -76,7 +76,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool, extra ...string) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -118,7 +118,11 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJo
 	if reset {
 		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
 	}
-	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, remote.Needs(remote.PushScript(p, job.parentName, pushEnv))), bytes.NewReader(nil), &out, false)
+	// extra: what the child's state needs of the parent too (a restore's
+	// mark: a parent whose list reading predates it would sync and clear
+	// the mark over what it does not copy).
+	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), extra...)
+	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, needs), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
 	}
@@ -620,7 +624,18 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
-	job, err := syncPreflight(t, p, projectName, reset)
+	// The child's mark first (one short session): a restore's needs the
+	// parent to read it. A reset wipes everything, whatever the mark.
+	var extra []string
+	if !reset {
+		var out bytes.Buffer
+		if code, err := remote.SSH(t, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
+			if remote.ParseCurrent(out.String()).Mark.IsRestore() {
+				extra = append(extra, restoreMarkNeed)
+			}
+		}
+	}
+	job, err := syncPreflight(t, p, projectName, reset, extra...)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -965,9 +980,24 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// So is an import's mark on the child for a service this side does
 	// not copy: only a sync that writes it may clear it. Asked even with
 	// nothing to copy here, for that mark.
-	child, mark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
+	child, mark, restoreMark, err := childServices(ctx, childNeeds(append(slices.Clone(dirs), cli.VolumeKeys(vols)...), streams))
 	if err != nil {
 		return fail(err.Error())
+	}
+	// A restore that did not complete on the child: a sync clears its
+	// mark only by copying every service of the snapshot, all of each.
+	if len(restoreMark) > 0 && !reset {
+		var missing []string
+		for _, r := range restoreMark {
+			if m, ok := copiesService(ctx, projectDir, services, streams, r.Name, r.Dirs, r.Volumes); !ok {
+				missing = append(missing, r.Name+cmp.Or(" ("+strings.Join(m, ", ")+")", ""))
+			}
+		}
+		if len(missing) > 0 {
+			report.Fail(&report.Failure{Msg: "a restore into the child did not complete, and the parent does not copy all of " + strings.Join(missing, ", ") + ": a sync completes it only by copying every service of the snapshot: nothing changed",
+				Fixes: []report.Remedy{report.Fix("restore it again on the child, or start it over from the parent:", "devopsy @"+os.Getenv(remote.SyncToTargetEnv)+" --reset")}})
+			return 1
+		}
 	}
 	// A reset wipes the child whatever its mark: completed, it starts
 	// over from this side's data.
@@ -1456,24 +1486,33 @@ func listOwners(s cli.SyncService) string {
 // by a tab and the service: no service is named so.
 const listMark = "!import"
 
+// restoreMarkNeed is what a parent's devopsy needs to sync into a child
+// a restore left marked: the flag that came with restores' marks.
+const restoreMarkNeed = "snapshot-step"
+
+// listRestore starts the child's list's lines for a restore's mark: one
+// per service with data of the snapshot it names, its entries and
+// volumes, which a sync must copy all of to clear the mark.
+const listRestore = "!restore"
+
 // childServices asks the child's release for its services, and the
 // service of its import's mark if any, through --sync-exec, after it
 // prepared them: across servers the sync's first session there, which
 // checks the child's devopsy for needs too.
-func childServices(ctx context.Context, needs []string) ([]childService, string, error) {
+func childServices(ctx context.Context, needs []string) ([]childService, string, []childService, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, self, cli.SyncExecFlag, cli.SyncServicesFlag, "list")
 	cmd.Stdout, cmd.Stderr = &out, errOut
 	cmd.Env = append(os.Environ(), remote.SyncNeedsEnv+"="+strings.Join(needs, " "))
 	if err := cmd.Run(); err != nil {
-		return nil, "", fmt.Errorf("listing the child's services: %w", err)
+		return nil, "", nil, fmt.Errorf("listing the child's services: %w", err)
 	}
-	services, mark := parseChildServices(out.String())
-	return services, mark, nil
+	services, mark, restore := parseChildServices(out.String())
+	return services, mark, restore, nil
 }
 
 // childUtilImage gets the child's server's devopsy-util ready
@@ -1494,14 +1533,20 @@ func childUtilImage(ctx context.Context) error {
 // parseChildServices reads --sync-services list: per service its name,
 // label (<copy>+<stop word>), state, entries, owners (listOwners) and
 // volumes,
-// and the import mark's line (listMark), whose service it returns.
-func parseChildServices(out string) (services []childService, mark string) {
+// the import mark's line (listMark), whose service it returns, and a
+// restore mark's (listRestore), its services with their entries and
+// volumes.
+func parseChildServices(out string) (services []childService, mark string, restore []childService) {
 	// Lines one by one: the last service's entries may be empty, its
 	// line ending in a tab.
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) == 2 && f[0] == listMark {
 			mark = f[1]
+			continue
+		}
+		if len(f) == 4 && f[0] == listRestore {
+			restore = append(restore, childService{Name: f[1], Dirs: strings.Fields(f[2]), Volumes: strings.Fields(f[3])})
 			continue
 		}
 		if len(f) < 4 {
@@ -1521,7 +1566,7 @@ func parseChildServices(out string) (services []childService, mark string) {
 		}
 		services = append(services, c)
 	}
-	return services, mark
+	return services, mark, restore
 }
 
 // streamMismatches names the services one side copies as custom and the
@@ -2034,6 +2079,16 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		if m := readMark(base); m.IsImport() {
 			fmt.Printf("%s\t%s\n", listMark, m.From)
+		} else if m.IsRestore() {
+			// The services the snapshot holds data of, each line one: all
+			// of it a sync must copy to clear the mark.
+			mf, err := readManifest(filepath.Join(snapshotPathsOf(cwd).snaps, m.From))
+			if err != nil {
+				return fail("the snapshot a restore's mark names (" + m.From + "): " + err.Error())
+			}
+			for _, ms := range mf.services {
+				fmt.Printf("%s\t%s\t%s\t%s\n", listRestore, ms.name, strings.Join(ms.entries, " "), strings.Join(ms.volumes, " "))
+			}
 		}
 		return 0
 	case "import":
