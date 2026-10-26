@@ -2241,7 +2241,9 @@ settled every rule here after nine reviews (2026-10-25).
   <name>` lines (their own kind: `readSyncRecord` keeps them). A take
   killed outright leaves them for the next settle
   (`settleSnapshots`: `--sync-services settle`, `partialGuard` and
-  `settleLeftover` when the record has them, an export on a target),
+  `settleLeftover` when the record has them, an export on a target, a
+  sync's push on the parent: round 3, its restore removed the record
+  whole),
   which starts them unless the environment is marked. Every stopped pass
   holds the release lock exclusively, so a line settle sees is a
   leftover by construction. A take's session is an activation's

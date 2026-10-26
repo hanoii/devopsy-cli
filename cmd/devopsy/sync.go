@@ -1099,6 +1099,13 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 		return code
 	}
+	// What a take killed outright left stopped here starts first, as for
+	// an export (PushScript holds the release lock, shared, so no take's
+	// stopped pass runs): the push's restore removes the record whole, its
+	// snapshot lines with it (review of 2026-10-25, round 3).
+	if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+		return finish(fail(err.Error()), false)
+	}
 	if err := runDataHook(ctx, cwd, projectDir, env, nil, nil, nil, "prepare", "parent"); err != nil {
 		return finish(fail("the data capability's prepare parent: "+err.Error()), false)
 	}

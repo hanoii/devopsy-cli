@@ -1495,7 +1495,8 @@ service that holds visitors, like drupal11's `alwaysup`, answers
 meanwhile). Before the services start again, a Ctrl-C or a session gone
 cancels it and starts them; past that it finishes on its own (`--log`
 shows how). A take killed outright leaves what it stopped for the next
-command that takes the release lock, which starts it. Refused, nothing
+release, rollback, take, restore, import, export or sync of the
+environment, which starts it first. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, too little
