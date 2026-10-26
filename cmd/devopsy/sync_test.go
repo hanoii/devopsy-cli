@@ -3550,3 +3550,39 @@ func TestSyncAbortRecreatesNothing(t *testing.T) {
 		t.Errorf("finish abort (%v): db must start as it was, never be recreated on the release's image:\n%s\n%s", err, out, docker)
 	}
 }
+
+// The restart after a failed run step brings the previous release back
+// on the data as it is then, which a release that syncs changed between
+// the two. A release and a rollback refuse a bind source a symbolic link
+// in its entry leads out of (the mounts check, --check-mounts restored),
+// and a sync's finish refuses to start the new release's code on one;
+// the previous release's code, whose binds may differ from the new one's
+// (here app binding mnt/storage/public below an entry nobody owns, a
+// bind the new release dropped, as the mounts check's fix says), is
+// restarted without any of them, and Docker mounts the host's root into
+// its app at that start.
+func TestRestartAfterFailedRunChecksLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	first := s.current("dev")
+	// Only the first release's code binds below the entry (the fake reads
+	// the compose file's release through current).
+	write(t, s.log+".shop-dev", `case $(readlink -f "$(dirname "${3:-/}")") in *"/dev/`+first+`/"*) FAKE_APP_MOUNT2=/storage/public ;; esac`+"\n", 0o644)
+	// Meanwhile the parent's app wrote a link in its entry.
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := s.run([]string{"FAKE_FAIL_DEPLOY=1"}, "@dev", "--release-sync", "--yes")
+	target, err := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "public"))
+	if code == 0 || err != nil || target != "/" || s.current("dev") != first {
+		t.Fatalf("the release that syncs with a failing run step (%d), current %s (was %s), mnt/storage/public -> %q (%v):\n%s", code, s.current("dev"), first, target, err, out)
+	}
+	if strings.Contains(out, "restarting "+strings.TrimPrefix(first, "releases/")+" with its own run step") {
+		t.Errorf("the previous release, whose app binds mnt/storage/public, was restarted on the synced data, where that is the parent's link to %s: Docker mounts that path of the host into app:\n%s", target, out)
+	}
+}
