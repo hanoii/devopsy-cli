@@ -402,6 +402,34 @@ func TestCheckMounts(t *testing.T) {
 			t.Errorf("%s: %v %q", services, err, report.Details(err))
 		}
 	}
+	// The same bind sources once the link in the entry is there: the
+	// owner of storage made storage/files a link to / (the case the
+	// refusal of a bind below an owned entry exists for), and reader
+	// binds ./files, the release's link to .devopsy/mnt/storage/files,
+	// refused above while that path was a directory. Where it leads now
+	// is outside mnt, but what Docker mounts is still a path below the
+	// entry: the refusal must not go away with the link, owned or not.
+	if err := os.MkdirAll(filepath.Join(shared, "mnt", "storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(shared, "mnt", "storage", "files")); err != nil {
+		t.Fatal(err)
+	}
+	for _, services := range []string{
+		`"app":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind(dot+"/mnt/storage", false) + `]},"reader":{"volumes":[` + bind(root+"/files", true) + `]}`,
+		`"reader":{"volumes":[` + bind(root+"/files", true) + `]}`,
+	} {
+		if err := check(services); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "storage/files") {
+			t.Errorf("%s, with mnt/storage/files a link to /: the mounts check lets Docker mount the host's root: %v %q", services, err, report.Details(err))
+		}
+		parsed, err := parseSyncServices([]byte(`{"services":{`+services+`}}`), dot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckLeavingBinds(parsed); err == nil {
+			t.Errorf("%s, with mnt/storage/files a link to /: a rollback's check lets Docker mount the host's root", services)
+		}
+	}
 }
 
 // Compose lists the implicit dependencies under depends_on too (as
