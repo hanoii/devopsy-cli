@@ -505,6 +505,9 @@ type tarEntry struct {
 	volume *cli.Volume
 	// links are its symbolic links' names, clean (storage/public).
 	links []string
+	// size is its files' bytes, sparse ones whole (a restore's space
+	// warning).
+	size int64
 }
 
 // tarEntries lists the top-level entries of mnt the tar in spool carries,
@@ -592,6 +595,9 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 		}
 		if h.Typeflag == tar.TypeSymlink {
 			e.links = append(e.links, path.Clean(p))
+		}
+		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA || h.Typeflag == tar.TypeGNUSparse {
+			e.size += h.Size
 		}
 		if strings.TrimSuffix(p, "/") == top && h.Typeflag != tar.TypeDir {
 			e.file = true

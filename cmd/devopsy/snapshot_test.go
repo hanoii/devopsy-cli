@@ -201,6 +201,34 @@ func TestSnapshotInterrupt(t *testing.T) {
 	}
 }
 
+// A restore whose data may not fit where it goes (more to write than the
+// free space plus what it replaces, per filesystem) warns before
+// anything stops, and goes on: a warning only, sparse files counting
+// whole. One with room says nothing.
+func TestSnapshotRestoreSpaceWarns(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || strings.Contains(out, "may not fit") {
+		t.Errorf("a restore with room (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code = s.run([]string{"FAKE_FREE_KB=0", "FAKE_DU=0"}, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	docker, _ := s.logs()
+	warned := strings.Index(out, "'s data may not fit on fakefs: ")
+	if code != 0 || warned < 0 || !strings.Contains(out, " free with what it replaces (sparse files counted whole)") || !strings.Contains(out, "snapshot "+m[1]+"'s data is in") {
+		t.Errorf("a restore without room (%d):\n%s", code, out)
+	}
+	if first := strings.Index(out, "restoring mnt/"); !strings.Contains(docker, "-space ") || first < 0 || warned > first {
+		t.Errorf("the space not measured before the first write:\n%s\n%s", out, docker)
+	}
+}
+
 // A full restore: a new release made from the snapshot's copy of its
 // release, its tars checked, the data written back between the images
 // and the switch (the services stopped, then started by its run step),
@@ -1593,6 +1621,12 @@ func TestReleaseSnapshot(t *testing.T) {
 		}
 		if rec := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")); rec != "" {
 			t.Errorf("mirror %v: the record after the run step:\n%s", mirror, rec)
+		}
+		// The fake's deploy starts nothing: what the snapshot stopped,
+		// running before the release, is started once the run step ended,
+		// said, never left down unrecorded.
+		if stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod")); stopped != "" || !strings.Contains(out, "stopped, which the release snapshot stopped: starting them") {
+			t.Errorf("mirror %v: left stopped after the run step: %q\n%s", mirror, stopped, out)
 		}
 	}
 }

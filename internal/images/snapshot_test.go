@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,12 @@ func TestSnapshotPullOwnRepositoryOnly(t *testing.T) {
 	d.publish("mariadb:11.8", "I2")
 	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tI2\tmariadb@I2\n"); err != nil || !d.images["I2"] {
 		t.Errorf("its own repository's digest: pulled %v (%v)\n%s", d.images["I2"], err, out.String())
+	}
+	// Bookmarked at once, by the listing's name for it: until the
+	// restore's data step holds it, only that keeps another environment's
+	// removal (which takes the names no bookmark holds) off it.
+	tags, err := d.Tags("I2")
+	if err != nil || !slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, ":devopsy-app-prod-") }) {
+		t.Errorf("the pulled image's names: %v (%v)", tags, err)
 	}
 }

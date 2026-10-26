@@ -1262,12 +1262,50 @@ func releaseRecord(cwd, how, next string) error {
 	case "done":
 		data, _ := os.ReadFile(filepath.Join(next, releaseStoppedFile))
 		names := strings.Fields(string(data))
+		startLeftDown(cwd, intersect(names, rec.stops))
 		rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(names, s) })
 	}
 	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
 		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
 	}
 	return rec.write(cwd)
+}
+
+// startLeftDown starts what of names (services a release snapshot
+// stopped, so running before the release) the run step left down, as
+// far as the current release has them: a project's run step need not
+// up every service, and nothing else would start them (review). Said,
+// and a start that fails only warns: the release is live.
+func startLeftDown(cwd string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
+		report.Warn("reading the release's services: " + err.Error())
+		return
+	}
+	var have []string
+	for _, s := range services {
+		have = append(have, s.Name)
+	}
+	exited, err := servicesIn(cwd, "exited")
+	if err != nil {
+		report.Warn(err.Error())
+		return
+	}
+	left := intersect(intersect(names, have), exited)
+	if len(left) == 0 {
+		return
+	}
+	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which the release snapshot stopped: starting them")
+	if err := compose(cwd, errOut, append([]string{"start"}, left...)...); err != nil {
+		report.Warn("docker compose start: "+err.Error()+": they stay stopped", "to start them:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" up -d")
+		return
+	}
+	if err := waitHealthy(cwd, left); err != nil {
+		report.Warn(err.Error())
+	}
 }
 
 // removeIfThere removes path, nothing when it is gone.
@@ -1871,10 +1909,11 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 	// current release for --no-code, the restored one for a full
 	// restore): a link the snapshot puts at one, or above one, is one
 	// Docker would follow on the host at the service's next start.
-	_, services, err := cli.SyncServices(cwd, os.Environ())
+	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
 		return err
 	}
+	sizes := map[snapshotTarFile]int64{}
 	for _, t := range snapshotTars(m) {
 		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+composeName(cwd)+"-"+filepath.Base(snap)+"-check")
 		if err != nil {
@@ -1903,13 +1942,96 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 		if err != nil {
 			return fmt.Errorf("snapshot %s's %s: %v: nothing restored", filepath.Base(snap), t.file, err)
 		}
+		sizes[t] = es[0].size
 	}
+	restoreSpace(ctx, cwd, filepath.Base(snap), projectDir, services, sizes)
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	// Under the server's image lock, shared, as a fetch: a removal
+	// elsewhere waits until the pull is bookmarked.
+	unlock, err := imagesShared(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Snapshots: p.snaps}
 	if err := set.SnapshotPull(snap, string(data)); err != nil {
 		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
 	}
 	return nil
+}
+
+// restoreSpace warns, before anything stops, when what a restore of the
+// snapshot id writes (sizes: each tar's files, sparse ones whole) may
+// not fit where it goes: per filesystem, more than its free space plus
+// what it replaces there (each entry's and volume's current use). A
+// warning only (decided 2026-10-26: sparse files make the estimate
+// high): a disk filled midway fails the restore after its first write,
+// the services down and the environment marked. Measured as root in the
+// util image (volumes are root's), only volumes that exist mounted
+// (docker run would make a missing one); one it cannot measure says
+// nothing.
+func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cli.SyncService, sizes map[snapshotTarFile]int64) {
+	mnt, err := dataMnt(projectDir)
+	if err != nil {
+		return
+	}
+	names := map[string]string{}
+	for _, s := range services {
+		for _, v := range s.Volumes {
+			names[v.Key] = v.Name
+		}
+	}
+	run := []string{"-v", mnt + ":/m:ro"}
+	var paths []string
+	need := map[string]int64{}
+	for t, n := range sizes {
+		p := "/m/" + t.name
+		if t.volume != "" {
+			name := names[t.name]
+			if ok, err := volumeExists(ctx, name); name == "" || err != nil || !ok {
+				continue
+			}
+			run = append(run, "-v", name+":/v/"+t.name+":ro")
+			p = "/v/" + t.name
+		}
+		paths = append(paths, p)
+		need[p] = n
+	}
+	if len(paths) == 0 {
+		return
+	}
+	sort.Strings(paths)
+	// Per path: its filesystem (its parent's while missing), that one's
+	// free kilobytes, and the path's own use.
+	script := `for p; do d=$p; [ -e "$d" ] || d=${d%/*}; set -- $(df -Pk "$d" | tail -n 1); u=0; [ ! -e "$p" ] || u=$(du -sk "$p" | cut -f1); printf '%s\t%s\t%s\t%s\n' "$p" "$1" "$4" "$u"; done`
+	args := append(append([]string{"run", "--rm", "--name", "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-space", "--network", "none"}, run...), append([]string{remote.UtilImage, "sh", "-c", script, "sh"}, paths...)...)
+	trace(append([]string{"docker"}, args...))
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	if err != nil {
+		return
+	}
+	free := map[string]int64{}
+	have := map[string]int64{}
+	want := map[string]int64{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 {
+			return
+		}
+		avail, err1 := strconv.ParseInt(f[2], 10, 64)
+		used, err2 := strconv.ParseInt(f[3], 10, 64)
+		if err1 != nil || err2 != nil {
+			return
+		}
+		free[f[1]] = avail * 1024
+		have[f[1]] += used * 1024
+		want[f[1]] += need[f[0]]
+	}
+	for _, fs := range slices.Sorted(maps.Keys(want)) {
+		if room := free[fs] + have[fs]; want[fs] > room {
+			report.Warn("snapshot "+id+"'s data may not fit on "+fs+": "+size(want[fs])+" to write, "+size(room)+" free with what it replaces (sparse files counted whole)", "a disk filled midway fails the restore after its first write: the services stay down and the environment marked until a restore completes")
+		}
+	}
 }
 
 // linkAtBind refuses a snapshot's symbolic link (links, clean names

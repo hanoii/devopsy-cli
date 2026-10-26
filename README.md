@@ -1566,7 +1566,9 @@ error: the snapshot would go with its own release.
 restores do: a new release made from the snapshot's copy (a
 `--rollback` after it goes back to the release before), its steps the
 restored release's `rollback:`, else `release:`; its tars checked whole
-before anything stops, then every service with data and its dependents
+before anything stops (with a warning when their data may not fit
+where it goes, sparse files counted whole: a disk filled midway leaves
+the services down and the environment marked), then every service with data and its dependents
 stopped, each entry and volume emptied and extracted, the data services
 held on the exact images their data ran (no check, no
 `--accept-image`: data and image come back as the pair that ran

@@ -2345,7 +2345,12 @@ settled every rule here after nine reviews (2026-10-25).
   container of the check's name, which a check killed outright leaves
   blocked opening the FIFO, is removed first: every check holds the
   snapshot lock; Docker's failure is the one said), into
-  `tarEntriesIn`, the import's checks but a symbolic link's
+  `tarEntriesIn`, the files' sizes summed for a warning when they may
+  not fit (`restoreSpace`: per filesystem, more than its free space plus
+  what the restore replaces there, from `df` and `du` in the util image,
+  existing volumes only; decided 2026-10-26: a warning, sparse files
+  counting whole make the estimate high; disk space as a whole is a plan
+  of its own), the import's checks but a symbolic link's
   target, which is the data's own wherever it leads (`anyTarget`:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
@@ -2359,7 +2364,9 @@ settled every rule here after nine reviews (2026-10-25).
   extraction matches by that name alone; a data image gone pulled by its
   digest in the service's own repository as the snapshot's listing names
   it, what the hold then takes: `SnapshotPull`, `ownHolds`, never a
-  repository an imported record names), each only
+  repository an imported record names; under the image lock, shared,
+  and bookmarked as the snapshot's at once, so another environment's
+  removal never strips it before the data step holds it: review), each only
   where the restored code's services with data have it, a volume by the
   name compose gives its key there, never the manifest's, whose names
   must be single names (`readManifest`; review of 2026-10-25: an
@@ -2498,7 +2505,10 @@ settled every rule here after nine reviews (2026-10-25).
   which would start them), and once something started them, the run
   step or the restart of the release before, `release-record done`
   removes them (a cut sync's copy or a failed restore keeps them down,
-  the record saying so: review). A `--no-code` restore traps INT, TERM
+  the record saying so: review), first starting what of them the run
+  step left exited, said (`startLeftDown`: a run step need not `up`
+  every service, and they ran before the release; a start that fails
+  only warns, the release live: review). A `--no-code` restore traps INT, TERM
   and HUP around its release snapshot, so a cancel starts the set again
   (`rd_unsnap`) rather than killing the shell. A restore's data step turns them into its own
   once its mark is written (kept down under it; a mark that cannot be

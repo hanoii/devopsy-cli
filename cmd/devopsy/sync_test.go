@@ -281,6 +281,12 @@ case "$*" in
     [ -z "${FAKE_STALE_CHECK:-}" ] || grep -q " rm -f .*-check$" "$DOCKER_LOG" || { echo "docker: Error response from daemon: Conflict. The container name \"/$4\" is already in use by container \"stale\"." >&2; exit 125; }
     for a; do case $a in *:/s:ro) sd=${a%:/s:ro} ;; *:/o) o=${a%:/o} ;; esac; done
     exec cat "$sd/$last" >"$o/tar" ;;
+  # A restore's space: per path its filesystem (fakefs), the free
+  # kilobytes there (FAKE_FREE_KB, plenty by default) and its own use
+  # (FAKE_DU, 4 by default).
+  "run --rm --name devopsy-snapshot-"*"-space "*)
+    # The paths: what follows sh -c <script> sh.
+    w=0; for a; do case $w in 3) printf '%s\tfakefs\t%s\t%s\n' "$a" "${FAKE_FREE_KB:-1000000000}" "${FAKE_DU:-4}" ;; 0) [ "$a" != -c ] || w=1 ;; *) w=$((w + 1)) ;; esac; done ;;
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;

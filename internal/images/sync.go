@@ -518,10 +518,16 @@ func ownHolds(e entry, p *parentImage) []string {
 // repository, as snap's listing names it, exactly what the restore's
 // hold then takes (ownHold), never a repository the record names (an
 // imported snapshot's record is anyone's). A service the listing does
-// not have, or whose image no digest brings, is refused.
+// not have, or whose image no digest brings, is refused. Each image it
+// pulls is bookmarked as the snapshot's at once (its listing's name), so
+// another environment's removal meanwhile, which takes an image's names
+// no bookmark holds, never strips it before the restore's data step
+// holds it (review); the caller holds the server's image lock, shared.
 func (s *Set) SnapshotPull(snap, data string) error {
 	ps := parseParentData(data)
-	for _, e := range readList(snap) {
+	es := readList(snap)
+	names := bookmarks(es, s.Name, s.idOf(snap))
+	for i, e := range es {
 		p := ps[e.Service]
 		if e.Kind != KindData || p == nil || p.Image.ID == "" {
 			continue
@@ -529,15 +535,18 @@ func (s *Set) SnapshotPull(snap, data string) error {
 		if _, err := s.Docker.Inspect(p.Image.ID); err == nil {
 			continue
 		}
-		pulled := false
+		pulled := ""
 		for _, h := range ownHolds(e, p) {
 			if _, err := s.Docker.Inspect(h); err == nil || s.Docker.Pull(h) == nil {
-				pulled = true
+				pulled = h
 				break
 			}
 		}
-		if !pulled {
+		if pulled == "" {
 			return fmt.Errorf("the image %s's data ran when the snapshot was taken (%s) is gone and could not be pulled by its digest in %s: nothing restored", e.Service, p.Ref, repoKey(e.Ref))
+		}
+		if err := s.Docker.Tag(pulled, names[i]); err != nil {
+			return fmt.Errorf("bookmarking %s as %s: %w: nothing restored", pulled, names[i], err)
 		}
 	}
 	return nil
