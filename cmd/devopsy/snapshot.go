@@ -190,7 +190,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		if len(args) != 3 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " stopped <id> <release>")
 		}
-		return snapshotStopped(cwd, p, args[1], args[2])
+		return snapshotStopped(cwd, p, args[1], args[2], "")
 	case "list":
 		snapshotList(p)
 		return 0
@@ -252,6 +252,69 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail(err.Error())
 		}
 		return 0
+	case "release-check":
+		// Before a release's fetch: whether it takes the snapshot of what
+		// it replaces (3: skipped, said), and whether it would fit.
+		ctx, stop := interruptible()
+		defer stop()
+		if readMark(p.base) != nil {
+			report.Info("no release snapshot: the environment is marked, and a snapshot of its data would restore as complete")
+			return 3
+		}
+		d, err := readSnapshotData(ctx, cwd)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if len(d.data) == 0 {
+			report.Info("no release snapshot: no service has data (" + cli.DataLabel + "=true)")
+			return 3
+		}
+		mirror, refused := takeMirror()
+		if refused {
+			report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
+		}
+		if err := snapshotCheck(ctx, p, d, mirror); err != nil {
+			report.Fail(err)
+			return 1
+		}
+		return 0
+	case "release-stopped":
+		if len(args) != 4 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " release-stopped <id> <release> <next release>")
+		}
+		return snapshotStopped(cwd, p, args[1], args[2], args[3])
+	case "release-tar":
+		// Detached, after a release's stopped pass: the tars from the
+		// mirror (a take without one wrote them already), then, once the
+		// activation (pid) ended, the pruning, which needs the image lock
+		// it held.
+		if len(args) != 3 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " release-tar <id> <pid>")
+		}
+		signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+		if err := snapshotTar(cwd, p, args[1]); err != nil {
+			return fail(err.Error())
+		}
+		if pid, err := strconv.Atoi(args[2]); err == nil {
+			for start := time.Now(); syscall.Kill(pid, 0) == nil && time.Since(start) < time.Hour; time.Sleep(time.Second) {
+			}
+		}
+		// The release current is now (the activation's or the one it went
+		// back to): what its run step left of the record is no take's.
+		pruneSnapshots(filepath.Join(p.base, "current"), p, 10*time.Minute)
+		return 0
+	case "release-record":
+		// After a release's switch (live): its snapshot's lines become
+		// the release's own stop lines, which a settle never starts; once
+		// its run step ended (done), they go: the run step, or the restart
+		// of the release before, started them.
+		if len(args) != 3 || (args[1] != "live" && args[1] != "done") {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " release-record live|done <next release>")
+		}
+		if err := releaseRecord(cwd, args[1], args[2]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
 	case "restored":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restored <snapshot>")
@@ -270,7 +333,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		if err := snapshotTar(cwd, p, args[1]); err != nil {
 			return fail(err.Error())
 		}
-		pruneSnapshots(cwd, p)
+		pruneSnapshots(cwd, p, 0)
 		return 0
 	}
 	return fail("unknown " + remote.SnapshotStepFlag + " word: " + args[0])
@@ -454,7 +517,7 @@ func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, name stri
 // the manifest, the environment's variables and image history, and the
 // release's images bookmarked for it. A signal or a session gone before
 // the services are back cancels it, the services started again.
-func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
+func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
@@ -475,7 +538,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
 	set := cli.WithDependents(d.services, names, "snapshot")
 	mirror, _ := takeMirror()
 	tmp := filepath.Join(p.snaps, id+".tmp")
-	_, restore, err := stopSetFor(cwd, set, true, id)
+	stopped, restore, err := stopSetFor(cwd, set, true, id)
 	switch {
 	case err != nil:
 	case mirror:
@@ -494,12 +557,16 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
 			_ = os.RemoveAll(tmp)
 		}
 	}
-	if rerr := restore(); rerr != nil {
-		undo()
-		if err != nil {
-			report.Error(err.Error())
+	// A release's snapshot (next, the release that replaces rel) leaves
+	// them stopped: the release's run step starts them under its code.
+	if next == "" || err != nil {
+		if rerr := restore(); rerr != nil {
+			undo()
+			if err != nil {
+				report.Error(err.Error())
+			}
+			return fail(rerr.Error() + ": no snapshot taken")
 		}
-		return fail(rerr.Error() + ": no snapshot taken")
 	}
 	if err != nil {
 		undo()
@@ -512,7 +579,16 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
 	// interrupts.
 	stopSig()
 	signal.Ignore(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-	if err := writeSnapshotDir(cwd, p, d, tmp, id, rel); err != nil {
+	kind := "manual"
+	if next != "" {
+		kind = "release"
+		// What it left stopped, for the release to clear once its run step
+		// ended (release-record done).
+		if err := os.WriteFile(filepath.Join(next, releaseStoppedFile), []byte(strings.Join(stopped, "\n")+"\n"), 0o644); err != nil {
+			return fail(err.Error())
+		}
+	}
+	if err := writeSnapshotDir(cwd, p, d, tmp, id, rel, kind); err != nil {
 		return fail(err.Error())
 	}
 	if !mirror {
@@ -526,7 +602,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel string) int {
 }
 
 // writeSnapshotDir makes the snapshot's directory tmp but its tars.
-func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel string) error {
+func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel, kind string) error {
 	if err := os.MkdirAll(filepath.Join(tmp, remote.SnapshotData), 0o700); err != nil {
 		return err
 	}
@@ -555,7 +631,7 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 		}
 	}
 	var m strings.Builder
-	fmt.Fprintf(&m, "format\t%s\nkind\tmanual\nrelease\t%s\ntaken\t%s\n", remote.SnapshotFormat, filepath.Base(rel), time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&m, "format\t%s\nkind\t%s\nrelease\t%s\ntaken\t%s\n", remote.SnapshotFormat, kind, filepath.Base(rel), time.Now().UTC().Format(time.RFC3339))
 	for _, s := range d.data {
 		var es []string
 		for _, e := range s.Dirs {
@@ -933,10 +1009,54 @@ func manualSnapshots(p snapshotPaths) []string {
 	return ids
 }
 
-// pruneSnapshots removes the oldest manual snapshots past the take's
-// keep (remote.SnapshotKeepEnv), at most the server's snapshots:
-// max_keep.
-func pruneSnapshots(cwd string, p snapshotPaths) {
+// releaseStoppedFile, in a release that took a snapshot of the one it
+// replaced, names what its stopped pass left stopped (release-record).
+const releaseStoppedFile = "devopsy-snapshot-stopped"
+
+// releaseRecord turns a release snapshot's lines in the record into the
+// release's own stop lines once it is current (live), so a settle past
+// the switch (a release that syncs runs one) never starts them; once the
+// run step ended (done) those stop lines go.
+func releaseRecord(cwd, how, next string) error {
+	rec, ok := readSyncRecord(cwd)
+	if !ok {
+		return nil
+	}
+	switch how {
+	case "live":
+		for _, name := range rec.snaps {
+			if !slices.Contains(rec.stops, name) {
+				rec.stops = append(rec.stops, name)
+			}
+		}
+		rec.snaps, rec.snapID = nil, ""
+	case "done":
+		data, _ := os.ReadFile(filepath.Join(next, releaseStoppedFile))
+		names := strings.Fields(string(data))
+		rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(names, s) })
+	}
+	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
+		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
+	}
+	return rec.write(cwd)
+}
+
+// removeIfThere removes path, nothing when it is gone.
+func removeIfThere(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// pruneSnapshots removes, under the snapshot lock, the oldest manual
+// snapshots past their keep (remote.SnapshotKeepEnv, at most the
+// server's snapshots: max_keep), every release snapshot whose release is
+// gone and the oldest past theirs (remote.SnapshotReleaseKeepEnv,
+// remote.KeepAll for every one whose release is kept), never the one a
+// restore's mark names (running that restore again is the way out of
+// it; it still counts). wait bounds a wait for the image lock.
+func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	keep, _ := strconv.Atoi(os.Getenv(remote.SnapshotKeepEnv))
 	if keep < 1 {
 		keep = remote.DefaultManualSnapshots.Keep
@@ -945,25 +1065,73 @@ func pruneSnapshots(cwd string, p snapshotPaths) {
 		report.Warn(fmt.Sprintf("keeping %d snapshots, this server's snapshots: max_keep, not %d", r.Snapshots.MaxKeep, keep))
 		keep = r.Snapshots.MaxKeep
 	}
-	// The snapshot a restore's mark names stays: running that restore
-	// again is the way out of it. It still counts towards keep.
-	ids := manualSnapshots(p)
 	marked := ""
 	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore {
 		marked = m.From
 	}
+	remove := func(id, why string) bool {
+		report.Info("removing snapshot " + id + " (" + why + ")")
+		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, id), wait); err != nil {
+			report.Warn(err.Error())
+			return false
+		}
+		return true
+	}
+	ids := manualSnapshots(p)
 	for n := len(ids); n > keep; n-- {
 		i := slices.IndexFunc(ids, func(id string) bool { return id != marked })
 		if i < 0 {
-			return
+			break
 		}
-		report.Info("removing snapshot " + ids[i] + " (keep " + strconv.Itoa(keep) + ")")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, ids[i]), 0); err != nil {
-			report.Warn(err.Error())
+		if !remove(ids[i], "keep "+strconv.Itoa(keep)) {
 			return
 		}
 		ids = slices.Delete(ids, i, i+1)
 	}
+	rkeep, err := strconv.Atoi(os.Getenv(remote.SnapshotReleaseKeepEnv))
+	if err != nil || rkeep == 0 {
+		rkeep = remote.DefaultReleaseSnapshots.Keep
+	}
+	var kept []string
+	for _, rs := range releaseSnapshots(p) {
+		if rs.id != marked && !fileExists(filepath.Join(p.base, "releases", rs.release)) {
+			if !remove(rs.id, "its release "+rs.release+" is gone") {
+				return
+			}
+			continue
+		}
+		kept = append(kept, rs.id)
+	}
+	for n := len(kept); rkeep != remote.KeepAll && n > rkeep; n-- {
+		i := slices.IndexFunc(kept, func(id string) bool { return id != marked })
+		if i < 0 {
+			break
+		}
+		if !remove(kept[i], "keep "+strconv.Itoa(rkeep)+" release snapshots") {
+			return
+		}
+		kept = slices.Delete(kept, i, i+1)
+	}
+}
+
+// releaseSnapshot is a release snapshot's id and the release it belongs
+// to (the one its release replaced).
+type releaseSnapshot struct{ id, release string }
+
+// releaseSnapshots are the environment's release snapshots, oldest first.
+func releaseSnapshots(p snapshotPaths) []releaseSnapshot {
+	ents, _ := os.ReadDir(p.snaps)
+	var rs []releaseSnapshot
+	for _, e := range ents {
+		if !e.IsDir() || !remote.ReleaseIDFormat.MatchString(e.Name()) {
+			continue
+		}
+		if m, err := readManifest(filepath.Join(p.snaps, e.Name())); err == nil && m.kind == "release" {
+			rs = append(rs, releaseSnapshot{e.Name(), m.release})
+		}
+	}
+	sort.Slice(rs, func(i, j int) bool { return rs[i].id < rs[j].id })
+	return rs
 }
 
 // settleSnapshots starts what a take killed outright left stopped (the

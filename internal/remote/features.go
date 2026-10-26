@@ -64,7 +64,14 @@ var namedFeatures = []struct {
 	// on. An older server would export without them and import as if
 	// none were there, unchecked.
 	{ExportImagesFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(export|import)\b`)},
+	// Release snapshots: an activation taking the snapshot of the release
+	// it replaces calls --snapshot-step's release words, which a devopsy
+	// with manual snapshots only refuses as usage once the locks are held.
+	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--snapshot-step[ '\\]{1,8}release-`)},
 }
+
+// ReleaseSnapshotsFeature is release snapshots' named feature.
+const ReleaseSnapshotsFeature = "release-snapshots"
 
 // ExportImagesFeature is the export's images' named feature.
 const ExportImagesFeature = "export-images"

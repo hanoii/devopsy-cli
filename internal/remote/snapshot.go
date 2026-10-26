@@ -121,7 +121,7 @@ trap - INT TERM HUP
 `
 	s += watchSession(false, true)
 	s += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
-export ` + SnapshotKeepEnv + `=` + strconv.Itoa(keep) + ` ` + SnapshotMirrorEnv + `=` + map[bool]string{true: "1", false: "0"}[t.SnapshotsMirror] + `
+export ` + snapshotEnv(t, keep) + `
 umask 077
 mkdir -p "$snaps"
 cd "$base/current"
@@ -149,6 +149,17 @@ fo_tag="snapshot.$id"
 // environment's snapshots: manual keep, which the server's devopsy caps
 // by its own max_keep.
 const SnapshotKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_KEEP"
+
+// snapshotEnv is the variables a take or a release with snapshots
+// exports: how many of each kind stay and whether it keeps a mirror.
+func snapshotEnv(t *Target, keep int) string {
+	return SnapshotKeepEnv + "=" + strconv.Itoa(keep) + " " + SnapshotReleaseKeepEnv + "=" + strconv.Itoa(t.SnapshotsRelease.Keep) + " " + SnapshotMirrorEnv + "=" + map[bool]string{true: "1", false: "0"}[t.SnapshotsMirror]
+}
+
+// SnapshotReleaseKeepEnv is how many release snapshots a pruning keeps
+// (KeepAll: every one whose release is kept), sent by the operator from
+// the environment's snapshots: {release: {keep}}.
+const SnapshotReleaseKeepEnv = "DEVOPSY_INTERNAL_SNAPSHOT_RELEASE_KEEP"
 
 // SnapshotMirrorEnv is 1 when a take's environment asks for a mirror
 // (snapshots: {mirror: true}), sent by the operator as its keep is; the

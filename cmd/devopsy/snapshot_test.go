@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -542,7 +543,7 @@ func TestPruneKeepsRestoreMarkedSnapshot(t *testing.T) {
 		write(t, filepath.Join(p.snaps, id, remote.SnapshotManifest), "format\t1\nkind\tmanual\n", 0o600)
 	}
 	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-25 00:00:00", ids[0], remote.IncompleteRestore, "the restore of snapshot "+ids[0]+" did not complete"), 0o644)
-	pruneSnapshots(filepath.Join(base, "current"), p)
+	pruneSnapshots(filepath.Join(base, "current"), p, 0)
 	if !fileExists(filepath.Join(p.snaps, ids[0])) {
 		t.Errorf("the snapshot the restore's mark names (%s) was pruned; left: %v", ids[0], manualSnapshots(p))
 	}
@@ -1358,5 +1359,68 @@ func TestSnapshotNoMirror(t *testing.T) {
 	out, code = s.run(nil, "@prod", "--snapshot")
 	if code != 0 || !strings.Contains(out, "this server keeps no snapshot mirrors") || !strings.Contains(out, "removing the snapshots' mirror") || fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
 		t.Errorf("the server's mirror: false (%d):\n%s", code, out)
+	}
+}
+
+// snapshotted gives env snapshots: {release: <how>} in the setup's config
+// (how a YAML value: true, or {enabled: true, keep: 2}), and a mirror
+// when mirror says so.
+func (s *syncSetup) snapshotted(env, how string, mirror bool) {
+	s.t.Helper()
+	conf := filepath.Join(s.dot, "config.yaml")
+	data := readString(conf)
+	if !strings.Contains(data, "\n  "+env+": {}\n") {
+		s.t.Fatalf("no %s: {} in the setup's config:\n%s", env, data)
+	}
+	write(s.t, conf, strings.Replace(data, "\n  "+env+": {}\n", "\n  "+env+": {snapshots: {release: "+how+", mirror: "+strconv.FormatBool(mirror)+"}}\n", 1), 0o644)
+}
+
+// A release with release snapshots on takes one of the release it
+// replaces before its switch, with and without a mirror: every service
+// with data and its dependents stopped (left stopped for the run step to
+// start under the new code), the snapshot belonging to the release
+// before, the record clean once the run step ended. A first release
+// takes none (a rollback neither: TestReleaseSnapshotScripts).
+func TestReleaseSnapshot(t *testing.T) {
+	t.Parallel()
+	for _, mirror := range []bool{false, true} {
+		s := newSyncSetup(t)
+		s.snapshotted("prod", "true", mirror)
+		s.releaseProd(nil)
+		snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+		if left, _ := filepath.Glob(filepath.Join(snaps, "2*")); len(left) > 0 {
+			t.Fatalf("mirror %v: a first release took a snapshot: %v", mirror, left)
+		}
+		a := s.current("prod")
+		out, code := s.run(nil, "@prod", "--release")
+		docker, _ := s.logs()
+		if code != 0 {
+			t.Fatalf("mirror %v: the second release (%d):\n%s", mirror, code, out)
+		}
+		rest := docker
+		for _, want := range []string{"stop db app", "-tar"} {
+			i := strings.Index(rest, want)
+			if i < 0 && !(mirror && want == "-tar") {
+				t.Fatalf("mirror %v: missing %q in order:\n%s", mirror, want, docker)
+			}
+			if i >= 0 {
+				rest = rest[i+len(want):]
+			}
+		}
+		if i, j := strings.Index(out, "stopped pass"), strings.Index(out, "current is now"); strings.Contains(out, "starting db app") || j < 0 {
+			t.Errorf("mirror %v: the services started again before the switch, or no switch (%d, %d):\n%s", mirror, i, j, out)
+		}
+		var rs []releaseSnapshot
+		for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+			if rs = releaseSnapshots(snapshotPaths{snaps: snaps}); len(rs) == 1 {
+				break
+			}
+		}
+		if len(rs) != 1 || "releases/"+rs[0].release != a {
+			t.Fatalf("mirror %v: the release snapshots %+v, want one of %s:\n%s", mirror, rs, a, out)
+		}
+		if rec := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")); rec != "" {
+			t.Errorf("mirror %v: the record after the run step:\n%s", mirror, rec)
+		}
 	}
 }

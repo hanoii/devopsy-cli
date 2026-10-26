@@ -933,10 +933,21 @@ done
 	if rollback {
 		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
 	}
+	// A release with snapshots on, replacing a current one, takes the
+	// snapshot of what it replaces (part 4 of snapshots): its locks and
+	// check before the fetch, its first pass during it, its stopped pass
+	// inside the stretch that cancels, leaving the services stopped for
+	// the run step to start under the new code, and its tars from the
+	// mirror after, detached (release-tar).
+	releaseSnap := !rollback && restore == nil && t.SnapshotsRelease.Enabled
+	if releaseSnap {
+		s += releaseSnapshotSetup(t, projectName)
+	}
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
-  ` + fetchStep + ` || fr=$?
+` + map[bool]string{true: releaseSnapshotFirstPass(projectName), false: ""}[releaseSnap] + `  ` + fetchStep + ` || fr=$?
+` + map[bool]string{true: releaseSnapshotStopped(projectName), false: ""}[releaseSnap] + `
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -1032,7 +1043,12 @@ exec 7<&-
 `
 	}
 	s += `make_current "releases/$id"
-devopsy --say info "current is now $id" || true
+`
+	if releaseSnap {
+		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
+`
+	}
+	s += `devopsy --say info "current is now $id" || true
 `
 	// The previous release, back after a failed run, restarts with its own
 	// images and its own run step: its config's rollback:, else its
@@ -1127,6 +1143,10 @@ fi
 	restoreDown := ""
 	if restore != nil {
 		restoreDown = firstDown(projectName)
+	}
+	if releaseSnap {
+		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
+`
 	}
 	s += `img ran "$base" "$rel" || true
 if [ "$status" != 0 ]; then
@@ -1398,6 +1418,88 @@ fi
 `
 }
 
+// releaseSnapshotSetup is a release's part before its fetch when its
+// environment takes release snapshots and something is current: the
+// effective keep checked (one would remove the snapshot with its own
+// release), the sync and snapshot locks, the check (3: skipped, said),
+// the snapshot's id, the server log made (a full disk fails here), and
+// not_live's hook, which starts what a stopped pass left stopped.
+func releaseSnapshotSetup(t *Target, projectName string) string {
+	return `rs_id=
+if [ -n "$prev" ]; then
+  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
+  rs_k=` + strconv.Itoa(t.Keep) + `
+  [ "$rs_k" -gt 0 ] || rs_k=$keep
+  [ "$rs_k" -le "$max_keep" ] || rs_k=$max_keep
+  if [ "$rs_k" -le 1 ]; then
+    devopsy --say error "this server keeps 1 release (releases: keep), and a release snapshot goes with the release it belongs to: keep 2 or more, or turn release snapshots off"
+    not_live 1
+  fi
+  exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+` + snapshotLock(false) + `  (umask 077; mkdir -p "$snaps")
+  rs=0
+  (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-check"}, false) + `) || rs=$?
+  case $rs in
+    0) rs_id=$(devopsy ` + ReleaseIDFlag + ` "$snaps") ;;
+    3) ;;
+    *) not_live 1 ;;
+  esac
+  if [ -n "$rs_id" ]; then
+    (umask 077; : >>"$rel/` + ServerLogFile + `") || not_live 1
+    not_live_hook() {
+      if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+        (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
+      fi
+    }
+  else
+    exec 6>&- 5>&-
+  fi
+fi
+`
+}
+
+// releaseSnapshotFirstPass starts a release snapshot's first pass (the
+// mirror's, when it keeps one) beside the fetch.
+func releaseSnapshotFirstPass(projectName string) string {
+	return `  rs_pid=
+  if [ -n "${rs_id:-}" ]; then
+    (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "mirror"}, true) + `) &
+    rs_pid=$!
+  fi
+`
+}
+
+// releaseSnapshotStopped, after a release's fetch went through and
+// before its disarm (a session gone or a signal still cancels it, the
+// services started again through not_live's hook): the first pass waited
+// for, the stopped pass, which leaves the services stopped, and the tars
+// from the mirror started detached, holding the snapshot lock alone and
+// nothing of the session's (its output to the release's server log),
+// then the locks this script held for it given up.
+func releaseSnapshotStopped(projectName string) string {
+	return `  if [ -n "${rs_pid:-}" ]; then
+    rs_fp=0
+    wait "$rs_pid" || rs_fp=$?
+    [ "$fr" -ne 0 ] || fr=$rs_fp
+  fi
+  if [ -n "${rs_id:-}" ]; then
+    if [ "$fr" -eq 0 ] && [ -z "$fetch_sig" ]; then
+      (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-stopped"}, false) + ` "$rs_id" "$base/$prev" "$1") || fr=$?
+      if [ "$fr" -eq 0 ]; then
+        rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+        if command -v setsid >/dev/null 2>&1; then
+          base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+        else
+          base="$base" rs_id="$rs_id" sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
+        fi
+      fi
+    fi
+    exec 6>&- 5>&-
+  fi
+`
+}
+
 // settleSync settles what a sync's holder or a take killed outright left
 // (--sync-services settle: a sync's files become its mark, a take's
 // stopped services start), under the release lock, in the current
@@ -1597,6 +1699,7 @@ var ProfilePull = []string{"--profile", "*", "pull", "--ignore-buildable"}
 // leaves its environment's directory too: --destroy, or --releases
 // remove failed, takes it away. $rel and $id are set.
 const NotLive = `not_live() {
+  ! command -v not_live_hook >/dev/null 2>&1 || not_live_hook
   touch "$rel/` + FailedFile + `"
   devopsy --say error "release $id not made current"
   exit "$1"
