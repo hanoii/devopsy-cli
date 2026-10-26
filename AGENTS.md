@@ -272,7 +272,8 @@ The section that covers each part is in parentheses.
   the operator's side of remote commands (`remote.go`, Releases; a
   local release in `release_local.go`), syncs and the servers'
   `--sync-*` flags (`sync.go`, Syncs), `--export` and `--import`
-  (`data.go`), the owners of `mnt`'s entries and the mounts check
+  (`data.go`), snapshots (`snapshot.go`, named volumes' helpers in
+  `volumes.go`), the owners of `mnt`'s entries and the mounts check
   (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
   (`releaselog.go`), `--releases` and `--images`; tests run the built
@@ -2158,6 +2159,142 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   asks on `/dev/tty` (`confirmImport`: stdin is the data; no terminal
   and no `--yes` fails).
 
+## Snapshots
+
+A copy of an environment's data, its code and the images that ran on
+them, taken with its services with data stopped for one moment, and
+brought back whole or as data alone. Code: `cmd/devopsy/snapshot.go`
+(the steps, run on the server as the hidden `--snapshot-step <word>`,
+and the operator's commands), `internal/remote/snapshot.go` (the
+scripts), the restore inside `activateScript` (`RestoreScript`). Its plan
+settled every rule here after nine reviews (2026-10-25).
+
+- **Binary, always, and everything with data:** every service with
+  `devopsy.data=true`, whatever its copy label (`copy=none` included:
+  kept, never copied), its entries and named volumes as files, minus
+  `exclude`; no `custom` script runs. Modelled on Platform.sh's backups:
+  one consistent moment, a restore bringing code back unless told
+  otherwise (`--no-code`). Refused before anything stops: nothing with
+  data, a data service writing a bind from outside the project
+  (`cli.SyncService.OutsideBinds`), a marked environment (a complete
+  restore clears marks, so a snapshot of half-written data would
+  restore as clean), too little space (`du` in the util image, a
+  tenth to spare, against the mirror's and the tars' filesystems).
+- **Two passes into a kept mirror, then tars from it** (decided over
+  hard links, which give nothing for a database and cost compression,
+  removal time and honest sizes, and over a tar while stopped, which
+  costs the whole size in downtime): `$base/snapshots/.mirror` (`mnt/`,
+  `volumes/`, on the data's filesystem, root's: rsync as root), pass 1
+  while everything runs, pass 2 stopped (only what changed: the
+  downtime), the services started, then one `.tar.zst` per entry or
+  volume (`zstd -T0` under `nice`, in the util image, written to stdout
+  so the files are the deploy user's) into `<id>.tmp/`, renamed when
+  complete: only a renamed directory is a snapshot. The stopped pass
+  ends by writing `.mirror/.devopsy-complete` (the id), so a holder of
+  the snapshot lock finding that id's `.tmp` finishes it from the mirror
+  (`leftovers`), any other `.tmp` removed with its bookmarks. The rsync
+  is the sync's (`rsyncEntry`, `rsyncVolume`: `--modify-window=-1`,
+  `--no-D`, exit 24 a notice). One tar per entry, not one for all: an
+  extracting container reads only its own.
+- **A snapshot's directory holds a release's copy:** `code/` and its
+  files (not the logs), its images listing, bookmarked as `s<id>`
+  (`images.Set.idOf`, `BookmarkFrom`), the manifest (`format` first: a
+  restore refuses one it does not know), `data/` (the tars,
+  `shared.env`, `inherit.env`, `data-images`, `images`: every pulled
+  data service's image as `ParentData` lines, `SnapshotData`, whatever
+  its copy). Written under `umask 077`: it holds the secrets.
+  `images.Set.own` counts snapshots' bookmarks as the environment's own
+  (else a rollback of a built image after a snapshot left its name on
+  the newer image: `TestSnapshotBookmarks`); scripts export
+  `DEVOPSY_INTERNAL_SNAPSHOTS` and `DEVOPSY_INTERNAL_BASE`
+  (`basePrelude`), which a `Set` reads when its own fields are empty.
+- **Locks, one order everywhere:** release (fd 9), sync (fd 5 in
+  snapshot scripts: `image_lock` and `syncSourceLock` use 8), snapshot
+  (`.devopsy-snapshot.lock`, fd 6), image; none waited for while a later
+  one is held. A take: pass 1 under the snapshot lock alone, then the
+  release, sync and snapshot locks for the stopped pass, then the
+  snapshot lock alone for the tars, so a release never waits minutes for
+  a tar. `--destroy` takes all four. `--status` says "snapshot" while
+  one holds its holding file and lock (`SnapshotRunning`), never the
+  file alone.
+- **Stopped as a sync stops** (`stopSetFor`): every service with data and
+  its dependents, in one stop and one start, recorded as `snapshot <id>
+  <name>` lines (their own kind: `readSyncRecord` keeps them). A take
+  killed outright leaves them for the next settle
+  (`settleSnapshots`: `--sync-services settle`, `partialGuard` and
+  `settleLeftover` when the record has them, an export on a target),
+  which starts them unless the environment is marked. Every stopped pass
+  holds the release lock exclusively, so a line settle sees is a
+  leftover by construction. A take's session is an activation's
+  (`liveSession` with its words): before the end of the stopped pass a
+  signal or a session gone cancels, the services started again (each
+  step runs in the background, the shell forwarding the signal: the
+  watcher signals the script alone where it leads no group); past it, it
+  goes on, its output in the current release's server log
+  (`followOutput`, tag `snapshot.<id>`).
+- **A full restore is a release** (`RestoreScript`: `activateScript` in
+  rollback mode with `RestoreOptions`): a new release, its id the
+  server's, made from the snapshot's copy (`make-release`: pending, its
+  `devopsy-target.env` keeping the current release's target lines and
+  imports, `mergeTargetEnv`, its record naming the snapshot), its images
+  restored from its bookmarks as a rollback's (`img restore`, built again
+  when gone), its steps the restored release's `rollback:` else
+  `release:` (`--release-steps restart`), `--check-mounts restored`; the
+  tars checked whole before anything stops (`check-tars`: `zstd -dc`
+  into `tarEntriesIn`, the import's checks, one entry per tar, of the
+  manifest's kind; a data image gone pulled by its digest); the data
+  written between the images and the switch (`restore-data`): the set
+  stopped, a restore mark right before the first write, each entry and
+  volume extracted by the import's own code (`extractEntry`, containers
+  named with `ImportContainerPrefix`), the data services held on the
+  snapshot's images (`ImportDone`), the mark cleared. Never marks the
+  release it leaves rolled back: a rollback after it goes back there.
+  `--with-env` brings `shared/.env` and `inherit.env` back; without it the
+  keys that differ are said.
+- **`--no-code`** (`RestoreDataScript`): the data under the current
+  release, never an activation: the watcher, the locks, `check-fit`
+  (refused, naming each mismatch, when the current labels do not fit
+  the manifest: a service gone or without data, an entry or volume no
+  longer its own or another's now; on a marked environment, a current
+  data service the snapshot lacks), the tars checked, `waitBeat`, then
+  the data step and the deployed run step again, the output followed
+  from the disarm on.
+- **A restore's mark** (`remote.IncompleteRestore`, its `From` the
+  snapshot): every reader branches on it (`markRefusal`, the restart
+  skip, `syncBlock`, `ImportScript`, the operator's release check, the
+  parent check, `--status`, `--export`'s warning, `--import`,
+  `--resolved`, which is for imports only), with `RestoreFixes`. The
+  snapshot it names stays. A sync clears it only by copying every
+  service of the snapshot, all of each: the child's list prints a
+  `!restore` line per service (from its manifest), the push checks each
+  with `copiesService`, and a parent older than the restore's mark
+  refuses (`restoreMarkNeed`, the parent check's extra need, on the
+  release path and `--sync`, which reads the child's mark first).
+- **Export and import:** one outer tar of the snapshot's directory, on
+  stdout and from stdin, never `--import`'s marker and byte (storing one
+  stops nothing): the import gated (`lockedGate`, `--stdin-guard`),
+  extracted beside, checked whole as a restore checks (`imported`),
+  renamed under a new id, its images bookmarked where the server has
+  them. Images stay out of exports (the roadmap's "images in an
+  export"): a restore pulls the pulled ones by digest and builds the
+  built ones from the snapshot's code.
+- **Keep:** the environment's `snapshots: manual: {keep}` (3), sent by
+  the operator (`DEVOPSY_INTERNAL_SNAPSHOT_KEEP`), at most the server's
+  `snapshots: max_keep` (5); pruned after each tar, under the snapshot
+  lock, the image lock taken only when free (else the next take prunes).
+  `--snapshots remove` waits for it, and refuses the snapshot a restore's
+  mark names. `--destroy` removes them all, bookmarks first, the mirror
+  as root, the snapshot root's directory too, and says how many.
+- **Gates:** the hidden `--snapshot-step` is a feature flag, so an
+  older server refuses every snapshot script before anything changes.
+- **Tests:** the scripts against the fake docker (`snapshot_test.go`:
+  take, interrupt, keep, list, remove, restore, cut restore, `--no-code`,
+  leftover lines, the mark's readers, a sync over a restore mark,
+  export and import, `--destroy`), the images' bookmarks
+  (`images/snapshot_test.go`), and end to end a take and a full restore
+  with real Docker and a snapshot moved to another server
+  (`e2e/snapshot_test.go`).
+
 ## Roles, exports and imports
 
 Facts shared between projects on a host, through labels on running
@@ -2253,7 +2390,8 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`):
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`,
+  `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
   names.

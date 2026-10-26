@@ -430,6 +430,7 @@ defaults:                       # what every environment takes unless it sets it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
+  snapshots: {manual: {keep: 3}}  # optional: snapshots kept (manual: on, 3 by default)
 environments:
   prod:
     env:
@@ -440,13 +441,16 @@ environments:
     parent: prod                # a child: its first release syncs prod's data
   "pr-*":                       # a pattern: @pr-12, @pr-feature
     releases: {keep: 1}
+    snapshots: {manual: false}  # no --snapshot here
     parent: prod
 ```
 
 Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
 sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
-remove theirs. Patterns match one or
+remove theirs. `snapshots:` merges key by key too: `true` and `false` only
+turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the
+default. Patterns match one or
 more name characters; an exact name wins, then the most literal characters;
 `"*"` allows any. Unknown keys are errors.
 
@@ -511,6 +515,10 @@ devopsy @vm1:develop --release-sync       # a release and the parent's data in o
 devopsy @vm1:prod --export database > db.sql   # a service's data, as its devopsy.data.copy label says
 devopsy @vm1:prod --export database | devopsy --import database   # prod's database locally
 devopsy @vm1:prod --import database --resolved   # accept the data an import that failed left, start what it kept down
+devopsy @vm1:prod --snapshot     # a snapshot: every service with data stopped for the moment of its copy, code and images kept
+devopsy @vm1:prod --snapshots    # list them; restore, remove, export or import one
+devopsy @vm1:prod --snapshots restore <id>   # its data, code and images back, as a new release (--no-code: the data alone)
+devopsy @vm1:prod --snapshots export <id> | aws s3 cp - s3://backups/prod.tar   # a snapshot off the server
 devopsy @vm1:prod --status       # the release there, a sync running into or from it, its containers, images held or moved, the project's own lines
 devopsy @vm1:prod --env          # its variables there, env capability included, secrets masked
 devopsy @vm1:prod --debug imports  # what devopsy sees there (capabilities, labels, imports)
@@ -1468,6 +1476,74 @@ child's side stopped is kept off partial data: a service left running
 during the copy (a `volumes` one labeled `never`, a `custom` one imported
 into while running) sees it change, as it chose.
 
+**Snapshots.** `devopsy @<target> --snapshot` takes one of the
+environment: the data of every service with data (`devopsy.data=true`:
+its entries of `mnt` and named volumes, as files, whatever its copy
+label, excluded ones left out), a copy of the current release (its code,
+and its images bookmarked so they stay), the image history and
+`shared/.env` (so an export carries the environment's secrets). Every
+service with data and what depends on it stops for one moment, all
+together, as Platform.sh's backups do: the data is first copied into a
+mirror while everything runs (`snapshots/.mirror`, kept, so the next
+take copies only what changed), then again with them stopped, only what
+changed since (the downtime: seconds for a few GB of database on a local
+disk), then they start, waited for until healthy; the compressed tars
+(`zstd`) are made from the mirror afterwards, nobody waiting. Plain
+`tar.zst` files, one per entry or volume, restorable by hand
+(`zstd -dc mnt.files.tar.zst | tar -x`). Unlabeled services run on (a
+service that holds visitors, like drupal11's `alwaysup`, answers
+meanwhile). Before the services start again, a Ctrl-C or a session gone
+cancels it and starts them; past that it finishes on its own (`--log`
+shows how). A take killed outright leaves what it stopped for the next
+command that takes the release lock, which starts it. Refused, nothing
+stopped: an environment a sync, an import or a restore left incomplete
+(a snapshot of it would restore as complete), nothing with data, a
+service with data writing a bind from outside the project, too little
+space for the mirror and the tars (measured first, a tenth to spare).
+
+Where they go: each environment's `snapshots/`, beside `shared/` (never
+inside it: everything there is linked into each release), or the
+server's `snapshots: root` (`<root>/<project>/[<instance>/]<environment>`),
+a network volume say: the data at full speed on the local disk, the
+backups off it. How many stay: the environment's `snapshots: manual:
+{keep}` (3), at most the server's `snapshots: max_keep` (5); an
+environment's `snapshots: manual: false` refuses `--snapshot` (pull
+request environments, say).
+
+`--snapshots restore <id>` brings one back whole, as Platform.sh's
+restores do: a new release made from the snapshot's copy (a
+`--rollback` after it goes back to the release before), its steps the
+restored release's `rollback:`, else `release:`; its tars checked whole
+before anything stops, then every service with data and its dependents
+stopped, each entry and volume emptied and extracted, the data services
+held on the exact images their data ran (no check, no
+`--accept-image`: data and image come back as the pair that ran
+together), the rest as their names give them now, its own builds from
+the snapshot's bookmarks; then the switch and the run step. Its
+`devopsy-target.env` keeps this server's lines (the target, the imports:
+an imported snapshot's would name another server). `--no-code` restores
+the data and its images under the current release and reruns its run
+step, refused when its labels no longer fit the snapshot's (a service
+gone, or an entry another service mounts now): restore it whole then.
+`shared/.env` comes back only with `--with-env`; without it, the keys
+that differ are named. The prompt asks for the environment's full name
+(`--yes` for CI). A restore cut after its first write keeps what it
+stopped down, the environment marked as an import's would be, until the
+same restore again (it writes everything again), another snapshot,
+`--destroy`, or on a child `--reset` (a `--sync` too, when the parent
+copies every service of the snapshot).
+
+`--snapshots export <id>` writes a snapshot as one tar to stdout (`|
+aws s3 cp - s3://...`: devopsy owns no storage of its own), and
+`--snapshots import` stores one from stdin into the same environment,
+on this server or another, checked whole, under a new id: on a new
+server, release the project first, then import and restore it
+(`--with-env` brings its secrets). Images stay out of it: a restore
+pulls the pulled ones by their digest and builds the built ones from
+the snapshot's code. `--snapshots remove <id>` removes one with the
+images only it holds; `--destroy` removes them all, and its prompt says
+how many.
+
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
 the instance's `.env` (`<project>/<instance>/.env`), the project's
@@ -1498,6 +1574,9 @@ releases:
   root: /srv     # where releases live; default: the deploy user's home
   keep: 2        # default for its projects (5)
   max_keep: 5    # no project keeps more (5)
+snapshots:
+  root: /mnt/backups   # where snapshots go; default: each environment's snapshots/
+  max_keep: 5          # no environment keeps more manual snapshots (5)
 ```
 
 **On a server:** `--shell` opens a container shell as locally;
