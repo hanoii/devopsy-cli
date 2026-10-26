@@ -822,7 +822,10 @@ Before the services start again a Ctrl-C or a session gone cancels it,
 the services started again; past that it finishes on its own, its output
 in the server's log (devopsy @<target> --log). Refused on an environment
 whose data a sync, an import or a restore left incomplete, with nothing
-with data, or without the space for it. The environment's snapshots: manual keep
+with data, with a service with data writing a bind from outside the
+project, with snapshots: {manual: false}, or without the space for it.
+The server's snapshots: {mirror: false} keeps any environment from
+keeping a mirror. The environment's snapshots: manual keep
 (3) says how many stay, at most the server's snapshots: max_keep; where
 they go is the server's snapshots: root, else beside shared/.
 `,

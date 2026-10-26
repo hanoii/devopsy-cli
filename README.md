@@ -1505,7 +1505,8 @@ environment, which starts it first. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, too little
-space for the tars and a mirror (measured first, a tenth to spare).
+space for the tars, and a mirror when it keeps one (measured first, a
+tenth to spare).
 
 Where they go: each environment's `snapshots/`, beside `shared/` (never
 inside it: everything there is linked into each release), or the

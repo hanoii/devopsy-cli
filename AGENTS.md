@@ -305,13 +305,16 @@ Where a target's names, server and settings come from. Governed by
   `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`,
   `public:`, `releases: {keep}`, `defaults:`, `environments:`), its
   `config.local.yaml` over it, and the user's
-  `~/.config/devopsy/config.yaml` (`aliases:`; on servers `releases:`).
+  `~/.config/devopsy/config.yaml` (`aliases:`; on servers `releases:`
+  and `snapshots: {root, max_keep, mirror}`).
   Never `~/.devopsy`: discovery would take the home directory for a
   project. Where: `config.go`.
 - **`defaults:` merges, `~` removes:** it gives environments `mode`,
-  steps, `releases`, `parent`, `inherit` and `env`; `env` merges key by
-  key, `KEY: ~` removes, `""` stays empty, and `parent: ~` and
-  `inherit: ~` remove theirs. Why YAML nodes are parsed: a plain decode
+  steps, `releases`, `snapshots`, `parent`, `inherit` and `env`; `env`
+  merges key by key, `KEY: ~` removes, `""` stays empty, `snapshots`
+  merges by kind and key (`mergeSnapshots`: `snapshots.manual.keep: ~`,
+  `snapshots.mirror: ~`), and `parent: ~` and `inherit: ~` remove
+  theirs. Why YAML nodes are parsed: a plain decode
   cannot tell `~` from absent (`nullKeys`).
 - **A target is an address,** `@[<server>:][<instance>/]<environment>`
   (`parseAddress`): the server ends at the first `:`, the instance
@@ -335,9 +338,11 @@ Where a target's names, server and settings come from. Governed by
   only from there (`ReleasesHere`, symlinks resolved). Why: anywhere
   else a release would upload whatever project devopsy runs in.
 - **Release settings belong to the server:** its deploy user's
-  `releases:` (`root`, default home; `keep`, `max_keep`, default 5),
-  read by the hidden `--release-settings` that every script asks first
-  (`basePrelude`). Why: a laptop and CI resolve the same paths. A
+  `releases:` (`root`, default home; `keep`, `max_keep`, default 5) and
+  `snapshots:` (`root`, `max_keep`, `mirror`), read by the hidden
+  `--release-settings` that every script asks first (`basePrelude`;
+  `snapshot_root=`, `snapshot_max_keep=`, `snapshot_mirror=`, which Go
+  reads itself, `ReleaseSettings`). Why: a laptop and CI resolve the same paths. A
   project's `keep` is capped by `max_keep`; `root` and `max_keep` in a
   project are errors.
 - **The schemas are documentation that parses:** `--debug schema
