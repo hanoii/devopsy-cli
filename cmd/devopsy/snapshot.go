@@ -675,6 +675,16 @@ func snapshotTar(p snapshotPaths, id string) error {
 // cut after its stopped pass (the mirror's marker names it) is finished
 // from the mirror, any other .tmp removed with its bookmarks.
 func snapshotLeftovers(cwd string, p snapshotPaths) error {
+	// An import holds the snapshot lock from before its extraction to its
+	// end, so one found while holding it was killed outright: nothing of
+	// it is bookmarked before it is renamed into place.
+	imports, _ := filepath.Glob(filepath.Join(p.snaps, ".import.*"))
+	for _, d := range imports {
+		report.Info("removing " + filepath.Base(d) + ", a snapshot import cut off before it was complete")
+		if err := os.RemoveAll(d); err != nil {
+			report.Warn(err.Error())
+		}
+	}
 	tmps, _ := filepath.Glob(filepath.Join(p.snaps, "*.tmp"))
 	if len(tmps) == 0 {
 		return nil

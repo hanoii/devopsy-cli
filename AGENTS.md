@@ -2197,7 +2197,8 @@ settled every rule here after nine reviews (2026-10-25).
   complete: only a renamed directory is a snapshot. The stopped pass
   ends by writing `.mirror/.devopsy-complete` (the id), so a holder of
   the snapshot lock finding that id's `.tmp` finishes it from the mirror
-  (`leftovers`), any other `.tmp` removed with its bookmarks. The rsync
+  (`leftovers`), any other `.tmp` removed with its bookmarks, and a
+  killed import's `.import.*` with it. The rsync
   is the sync's (`rsyncEntry`, `rsyncVolume`: `--modify-window=-1`,
   `--no-D`, exit 24 a notice). One tar per entry, not one for all: an
   extracting container reads only its own.
