@@ -254,6 +254,9 @@ rd_unsnap() {
   fi
 }
 if [ -n "$rs_id" ]; then
+  # A take from here to its detached tar's end (fd 6): the holding file
+  # says so to --snapshots and --status, as a release's does.
+  : >"$base/` + SnapshotHoldingFile + `"
   # A signal or the watcher's (the session gone) ends a step, never the
   # shell: what the stopped pass left stopped starts again.
   rd_sig=

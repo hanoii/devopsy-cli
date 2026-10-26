@@ -1788,6 +1788,12 @@ const fifoPrefix = ".fifo."
 // gives it up once the container is gone: then r ends (EOF), however
 // the container ended, and wait says how.
 func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait func() error, err error) {
+	// A container of that name is one a check killed outright left
+	// (blocked opening the FIFO nobody reads): every check holds the
+	// snapshot lock, so none runs beside this one.
+	if err := removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$"); err != nil {
+		return nil, nil, err
+	}
 	dir := filepath.Join(filepath.Dir(snap), fifoPrefix+strconv.Itoa(os.Getpid()))
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, nil, err
@@ -1876,7 +1882,9 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 		}
 		es, err := tarEntriesIn(r, true)
 		_, _ = io.Copy(io.Discard, r)
-		if werr := wait(); err == nil && werr != nil {
+		// Docker's failure first: what the tar's check says then follows
+		// from it (a container that never wrote reads as a cut tar).
+		if werr := wait(); werr != nil {
 			err = werr
 		}
 		switch {

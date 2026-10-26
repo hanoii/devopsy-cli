@@ -2301,8 +2301,8 @@ settled every rule here after nine reviews (2026-10-25).
   restore was reading). `--destroy` takes all four. `--status` says "snapshot" while
   one holds its holding file and lock (`SnapshotRunning`), never the
   file alone, and every other holder of the lock removes a holding file
-  a killed take left (`snapshotLock`); a release snapshot writes it once
-  it has its id, its detached tar keeping the lock to its end (review:
+  a killed take left (`snapshotLock`); a release snapshot (a release's,
+  a full restore's, a `--no-code` restore's) writes it once it has its id, its detached tar keeping the lock to its end (review:
   `--snapshots` listed it INCOMPLETE meanwhile). The unit tests' fake
   `flock` locks nothing unless `FAKE_REAL_FLOCK` names the real one.
 - **Stopped as a sync stops** (`stopSetFor`): every service with data,
@@ -2341,7 +2341,10 @@ settled every rule here after nine reviews (2026-10-25).
   in the util image into a FIFO beside the snapshots, never its stdout
   (`unzstd`: the same 8 MB/s, 114 s for 1 GiB; the reader holds a
   writer of its own, so it never waits on a container that never
-  opened it, and a leftover directory goes with the leftovers), into
+  opened it, and a leftover directory goes with the leftovers; a
+  container of the check's name, which a check killed outright leaves
+  blocked opening the FIFO, is removed first: every check holds the
+  snapshot lock; Docker's failure is the one said), into
   `tarEntriesIn`, the import's checks but a symbolic link's
   target, which is the data's own wherever it leads (`anyTarget`:
   nothing is written through a link, the other rules hold, and an
