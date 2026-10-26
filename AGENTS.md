@@ -1150,7 +1150,11 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   resolved first, so an entry on another disk is its own place; review
   of snapshots, round 3: a restored snapshot's link outlived the code
   its restore was checked in, and a rollback went live on it), which
-  rollbacks refuse too (`--check-mounts restored`, `CheckLeavingBinds`). With an entry owned it readies `UtilImage`
+  rollbacks refuse too (`--check-mounts restored`, `CheckLeavingBinds`),
+  and full restores, but for the entries their snapshot carries (they
+  are replaced, their links checked in its tars: `--check-mounts
+  restored <snapshot>`; review round 4: a restore was refused by a link
+  in the data it would replace, and called itself a rollback). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: absolute paths. It reads the labels
@@ -1676,7 +1680,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   digest in that repository first (`ownHold`,
   never `localHold`'s fallback to the record's repository: review of
   2026-10-24, a reference of the service's repository with another's
-  digest pulled and ran that one). The check and the take-over run
+  digest pulled and ran that one); the history taken over keeps only
+  lines and digests in that repository, and the line it adds names the
+  hold (`history.inRepo`; review of snapshots, round 4: a record whose
+  image line or last history line named another repository made it the
+  data's newest image, which a rollback then pulled and ran). The check and the take-over run
   under the server's image lock, shared, taken from Go in two short
   windows (`imagesShared`), never across the load: a removal elsewhere
   waits only for them. `ImportScript` passes the project's record, the
@@ -2361,7 +2369,9 @@ settled every rule here after nine reviews (2026-10-25).
   extraction mounts its entry alone; review: an app's absolute links
   made every snapshot unrestorable), but none that makes a bind source
   of the code that will run lead out of its entry, walked through the
-  tar's own links (`linkAtBind`, `tarLinks.walk`: Docker resolves a bind
+  tar's own links as the host resolves them in mnt (`linkAtBind`,
+  `tarLinks.walkMnt`: through mnt only back into the entry,
+  `../storage/v1` from storage; Docker resolves a bind
   source on the host, and the mounts check allows one below an entry
   nobody owns; review round 2: an imported snapshot's `storage/public ->
   /` mounted the host's root; round 3: refusing every link there made
@@ -2524,7 +2534,10 @@ settled every rule here after nine reviews (2026-10-25).
   step or the restart of the release before, `release-record done`
   removes them (a cut sync's copy or a failed restore keeps them down,
   the record saying so: review), first starting what of them the run
-  step left exited, said (`startLeftDown`: a run step need not `up`
+  step left exited, said, a restore's end likewise (`startLeftDown`;
+  one whose container another image than the release now holds it on
+  is made again, `images.Recreate`, as `restoreServices` does: review
+  round 4; a run step need not `up`
   every service, and they ran before the release; a start that fails
   only warns, the release live: review). A `--no-code` restore traps INT, TERM
   and HUP around its release snapshot, so a cancel starts the set again

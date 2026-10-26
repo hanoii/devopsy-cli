@@ -2830,6 +2830,7 @@ func TestSnapshotImportManifestLink(t *testing.T) {
 		t.Errorf("an import whose files are links to another snapshot's was stored:\n%s", errs)
 	}
 }
+
 // An imported snapshot's images listing is anyone's, like its record: an
 // import, and a --no-code restore, pull a data service's missing image
 // only in the repository the current release lists for that service,

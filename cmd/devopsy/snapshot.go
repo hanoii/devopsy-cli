@@ -1299,10 +1299,31 @@ func startLeftDown(cwd string, names []string) {
 		return
 	}
 	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which devopsy stopped before it: starting them")
-	if err := compose(cwd, errOut, append([]string{"start"}, left...)...); err != nil {
-		report.Warn("docker compose start: "+err.Error()+": they stay stopped", "to start them:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" up -d")
+	// One whose container another image than the release now holds it on
+	// made (a restore's data held on the image it ran, a release's
+	// accepted one) is made again, as restoreServices does: compose start
+	// would run the old image on that data (review).
+	again := intersect(left, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+	var start []string
+	for _, s := range left {
+		if !slices.Contains(again, s) {
+			start = append(start, s)
+		}
+	}
+	fix := []string{"to start them:", report.CmdMark + "devopsy @" + targetAddress(cwd) + " up -d"}
+	if len(again) > 0 {
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
+			report.Warn("docker compose up: "+err.Error()+": "+strings.Join(again, ", ")+" stay stopped", fix...)
+		}
+	}
+	if len(start) == 0 {
 		return
 	}
+	if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+		report.Warn("docker compose start: "+err.Error()+": they stay stopped", fix...)
+		return
+	}
+	left = start
 	if err := waitHealthy(cwd, left); err != nil {
 		report.Warn(err.Error())
 	}
@@ -1945,7 +1966,8 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) e
 		sizes[t] = es[0].size
 	}
 	// An import checks the tars alone: its images come at its restore,
-	// pulled where the restored code's listing says, and its space too.
+	// pulled as its own listing names them (cut to the current release's
+	// services and repositories at the import), and its space too.
 	if !restore {
 		return nil
 	}
@@ -2071,7 +2093,7 @@ func linkAtBind(e tarEntry, services []cli.SyncService) error {
 				continue
 			}
 			hops := 0
-			if _, err := e.tar.walk([]string{e.name}, rest, &hops); err != nil {
+			if _, err := e.tar.walkMnt(e.name, rest, &hops); err != nil {
 				return fmt.Errorf("%w: %s bind-mounts mnt/%s, which the snapshot's links make a path that %v, which Docker would follow on the host", errOutside, s.Name, b, err)
 			}
 		}

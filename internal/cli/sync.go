@@ -636,17 +636,26 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // nothing, since Docker would mount that of the host whatever release
 // runs (a restored snapshot's link outlives the code it was checked in:
 // review).
-func CheckLeavingBinds(services []SyncService) error {
+// A restore's (restore) skips the entries its snapshot carries (carried):
+// they are replaced, their links checked in its tars.
+func CheckLeavingBinds(services []SyncService, carried []string, restore bool) error {
 	var bad []string
 	for _, s := range services {
 		for _, l := range s.LeavingBinds {
+			if e, _, _ := strings.Cut(l, string(filepath.Separator)); slices.Contains(carried, e) {
+				continue
+			}
 			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
 		}
 	}
 	if len(bad) == 0 {
 		return nil
 	}
-	return &report.Failure{Msg: "the mounts check refuses the rollback: it does not go live", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
+	what := "the rollback"
+	if restore {
+		what = "the restore"
+	}
+	return &report.Failure{Msg: "the mounts check refuses " + what + ": it does not go live", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
 }
 
 // CheckMounts refuses, before a release goes live, the mounts whose data
@@ -720,7 +729,7 @@ func CheckMounts(services []SyncService) error {
 		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
 	}
 	if leaving {
-		fixes = append(fixes, report.Fix("remove the link (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly"))
+		fixes = append(fixes, report.Fix("remove the link in shared/mnt (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly"))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }

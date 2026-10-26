@@ -253,10 +253,22 @@ const mntOwnersRestored = "restored"
 // labels this devopsy cannot read are a warning, and the owners' step
 // gives nothing away then.
 func runCheckMounts(cwd string, args []string) int {
-	restored := len(args) == 1 && args[0] == mntOwnersRestored
-	if len(args) > 0 && !restored {
-		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored)
+	restored := len(args) > 0 && args[0] == mntOwnersRestored
+	if len(args) > 0 && !restored || len(args) > 2 {
+		report.Error(cli.CheckMountsFlag + " takes nothing, or " + mntOwnersRestored + " [<snapshot>]")
 		return 2
+	}
+	// A restore's: the entries its snapshot carries are replaced, so the
+	// links in them now are no matter (the snapshot's own are checked in
+	// its tars); the rest stay as they are.
+	var carried []string
+	if len(args) == 2 {
+		m, err := readManifest(args[1])
+		if err != nil {
+			report.Fail(err)
+			return 1
+		}
+		carried = m.entries
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if restored && err == nil {
@@ -275,7 +287,7 @@ func runCheckMounts(cwd string, args []string) int {
 	case !restored:
 		err = cli.CheckMounts(services)
 	default:
-		err = cli.CheckLeavingBinds(services)
+		err = cli.CheckLeavingBinds(services, carried, len(args) == 2)
 	}
 	if err == nil {
 		err = checkOwned(projectDir, services)

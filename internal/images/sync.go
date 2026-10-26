@@ -685,12 +685,29 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		// the child does (its mirror, its pin), so the child's own name
 		// moving forward needs nothing.
 		w := append(history{}, p.History.window(e.Service)...)
+		img, ref := p.Image, p.Ref
+		if importing {
+			// An export's record is whoever made the tar's (an imported
+			// snapshot's too): only its lines and digests in the service's
+			// own repository, and the line it adds names the hold when the
+			// record's name is another repository's, so the data's newest
+			// image a rollback later holds is never another repository's
+			// (review).
+			w = w.inRepo(repoKey(e.Ref))
+			img.Digests = inRepo(img.Digests, repoKey(e.Ref))
+			if len(img.Digests) == 0 && hold != "" {
+				img.Digests = []string{hold}
+			}
+			if repoKey(ref) != repoKey(e.Ref) {
+				ref = hold
+			}
+		}
 		known := false
 		for _, r := range w {
-			known = known || r.is(p.Image)
+			known = known || r.is(img)
 		}
 		if !known {
-			w = append(w, ranOn(e.Service, Ran, p.Ref, p.Image, s.now()))
+			w = append(w, ranOn(e.Service, Ran, ref, img, s.now()))
 		}
 		// Only when the child's own name holds the very image (a mirror):
 		// another series --yes let through stays one its data never ran.
@@ -719,6 +736,31 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		return err
 	}
 	return writeCompose(rel, out, holds)
+}
+
+// inRepo are of h the lines whose reference is in repo, each with only
+// its digests in repo.
+func (h history) inRepo(repo string) history {
+	var out history
+	for _, r := range h {
+		if repoKey(r.Ref) != repo {
+			continue
+		}
+		r.Digests = inRepo(r.Digests, repo)
+		out = append(out, r)
+	}
+	return out
+}
+
+// inRepo are of digests (<repository>@sha256:...) those in repo.
+func inRepo(digests []string, repo string) []string {
+	var out []string
+	for _, d := range digests {
+		if repoKey(d) == repo {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // Recreate are the services of rel whose container its activation gave

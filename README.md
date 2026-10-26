@@ -960,7 +960,7 @@ the secrets its compose file requires), the mounts check refuses
   mount what it points to, and devopsy give that to the owner;
 - a bind mount from below an entry that a symbolic link in the entry
   leads out of it (`storage/public -> /`, made by hand or by a restored
-  snapshot), rollbacks too: Docker would mount that of the host. A link
+  snapshot), rollbacks and restores too: Docker would mount that of the host. A link
   within the entry, and an entry that is itself a link (on another
   disk), are fine.
 
@@ -1612,7 +1612,8 @@ server, release the project first, then import and restore it
 full restore runs the snapshot's code as the deploy user (its steps,
 its compose file, its Dockerfiles), and `--with-env` applies its
 variables to whatever code runs; a `--no-code` restore runs nothing of
-it, its data checked as for any restore. Images stay out of it: a restore
+it, its data checked as for any restore and its record of the images
+kept to each service's own repository. Images stay out of it: a restore
 pulls the pulled ones by their digest and builds the built ones from
 the snapshot's code. `--snapshots remove <id>` removes one with the
 images only it holds; `--destroy` removes them all, and its prompt says

@@ -374,7 +374,7 @@ func TestCheckMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckLeavingBinds(parsed); err == nil || err.Error() != "the mounts check refuses the rollback: it does not go live" {
+	if err := CheckLeavingBinds(parsed, nil, false); err == nil || err.Error() != "the mounts check refuses the rollback: it does not go live" {
 		t.Errorf("a rollback's check of a bind source a link leads out of its entry: %v", err)
 	}
 	for services, want := range map[string]string{

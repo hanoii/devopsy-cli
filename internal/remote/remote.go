@@ -892,7 +892,13 @@ done
 		// switch, and only that (its labels refuse nothing): the util
 		// image, which may have been pruned since, and no owned entry a
 		// link.
-		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + ") || not_live 1\n"
+		// A restore's names its snapshot: the entries it carries are
+		// replaced, their links checked in its tars (check-tars).
+		snapArg := ""
+		if restore != nil {
+			snapArg = ` "$snap"`
+		}
+		s += "(cd \"$code\" && " + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + snapArg + ") || not_live 1\n"
 	}
 	if restore != nil {
 		// The snapshot's tars read and checked whole, before anything

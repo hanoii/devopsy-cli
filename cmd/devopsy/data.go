@@ -737,6 +737,19 @@ func (l *tarLinks) check(anyTarget bool) error {
 // the way leaves the entry (a .. above it, an absolute target) or
 // follows more than maxLinks links, hops counting them.
 func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error) {
+	return l.walkIn(dir, target, hops, "")
+}
+
+// walkMnt is walk as the host resolves it in mnt, where a .. above the
+// entry is mnt itself: the way may pass through mnt, but only back into
+// entry (storage/public -> ../storage/v1), never into another entry or
+// above mnt (linkAtBind; an extraction's container holds the entry alone,
+// so an import's check keeps walk).
+func (l *tarLinks) walkMnt(entry, target string, hops *int) ([]string, error) {
+	return l.walkIn([]string{entry}, target, hops, entry)
+}
+
+func (l *tarLinks) walkIn(dir []string, target string, hops *int, entry string) ([]string, error) {
 	if path.IsAbs(target) {
 		return nil, errors.New("is absolute")
 	}
@@ -746,11 +759,18 @@ func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error
 		case "", ".":
 			continue
 		case "..":
+			if entry != "" && len(at) == 1 {
+				at = at[:0]
+				continue
+			}
 			if len(at) <= 1 {
-				return nil, fmt.Errorf("leads out of mnt/%s", at[0])
+				return nil, fmt.Errorf("leads out of mnt/%s", cmp.Or(entry, at[0]))
 			}
 			at = at[:len(at)-1]
 			continue
+		}
+		if entry != "" && len(at) == 0 && c != entry {
+			return nil, fmt.Errorf("leads out of mnt/%s, into mnt/%s", entry, c)
 		}
 		at = append(at, c)
 		link, ok := l.symlinks[strings.Join(at, "/")]
@@ -761,9 +781,12 @@ func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error
 			return nil, fmt.Errorf("follows more than %d links", maxLinks)
 		}
 		var err error
-		if at, err = l.walk(at[:len(at)-1], link, hops); err != nil {
+		if at, err = l.walkIn(at[:len(at)-1], link, hops, entry); err != nil {
 			return nil, err
 		}
+	}
+	if entry != "" && len(at) == 0 {
+		return nil, fmt.Errorf("leads out of mnt/%s, to mnt itself", entry)
 	}
 	return at, nil
 }
