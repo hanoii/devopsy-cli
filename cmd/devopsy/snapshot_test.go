@@ -227,6 +227,11 @@ func TestSnapshotRestore(t *testing.T) {
 	if readString(filepath.Join(base, "shared", ".env")) != "DB_PASSWORD=new\n" || !strings.Contains(out, "differs from the environment's in DB_PASSWORD") {
 		t.Errorf("shared/.env without --with-env: %q\n%s", readString(filepath.Join(base, "shared", ".env")), out)
 	}
+	// The way to bring it back, a command that works as copied: devopsy
+	// alone, without the address, runs locally.
+	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + id + ` --with-env`).MatchString(out) {
+		t.Errorf("the --with-env hint names no address:\n%s", out)
+	}
 	if fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "stop ") {
 		t.Errorf("a mark or stop lines left:\n%s", readString(filepath.Join(base, ".devopsy-sync.services")))
 	}
@@ -379,6 +384,9 @@ func TestSnapshotExportImport(t *testing.T) {
 	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
 	if code != 0 || im == nil || im[1] == m[1] {
 		t.Fatalf("import (%d):\n%s", code, errs)
+	}
+	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + im[1]).MatchString(errs) {
+		t.Errorf("the import's restore line names no address:\n%s", errs)
 	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", im[1], "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 		t.Errorf("a restore of the imported snapshot (%d):\n%s", code, out)
