@@ -125,6 +125,10 @@ func reflinks(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData)
 	if err := os.MkdirAll(p.clone(), 0o700); err != nil {
 		return false
 	}
+	// Its image first: a server's first take has none yet.
+	if err := ensureUtilImage(ctx); err != nil {
+		return false
+	}
 	mounts, srcs := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", p.clone() + ":/c"}, []string{}
 	for _, e := range d.entries {
 		srcs = append(srcs, "/m/mnt/"+e)
