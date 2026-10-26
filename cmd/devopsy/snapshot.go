@@ -319,6 +319,10 @@ func runSnapshotStep(cwd string, args []string) int {
 				code = 1
 			}
 		}
+		// And the release snapshots whose release is gone, as a take's
+		// pruning removes them (counts need the environment's keeps,
+		// which only a take is sent).
+		pruneGone(cwd, p, 10*time.Minute)
 		return code
 	case "make-release":
 		if len(args) != 3 {
@@ -1242,14 +1246,11 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	if err != nil || rkeep == 0 {
 		rkeep = remote.DefaultReleaseSnapshots.Keep
 	}
+	if !pruneGone(cwd, p, wait) {
+		return
+	}
 	var kept []string
 	for _, rs := range releaseSnapshots(p) {
-		if rs.id != marked && !fileExists(filepath.Join(p.base, "releases", rs.release)) {
-			if !remove(rs.id, "its release "+rs.release+" is gone") {
-				return
-			}
-			continue
-		}
 		kept = append(kept, rs.id)
 	}
 	for n := len(kept); rkeep != remote.KeepAll && n > rkeep; n-- {
@@ -1262,6 +1263,27 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 		}
 		kept = slices.Delete(kept, i, i+1)
 	}
+}
+
+// pruneGone removes, under the snapshot lock, every release snapshot
+// whose release is gone, never the one a restore's mark names; false
+// when a removal failed (said).
+func pruneGone(cwd string, p snapshotPaths, wait time.Duration) bool {
+	marked := ""
+	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore {
+		marked = m.From
+	}
+	for _, rs := range releaseSnapshots(p) {
+		if rs.id == marked || fileExists(filepath.Join(p.base, "releases", rs.release)) {
+			continue
+		}
+		report.Info("removing snapshot " + rs.id + " (its release " + rs.release + " is gone)")
+		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, rs.id), wait); err != nil {
+			report.Warn(err.Error())
+			return false
+		}
+	}
+	return true
 }
 
 // releaseSnapshot is a release snapshot's id and the release it belongs

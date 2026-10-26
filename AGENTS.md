@@ -2387,10 +2387,18 @@ settled every rule here after nine reviews (2026-10-25).
   set stopped (the run step's `up` starts it under the new code) and
   names it in the new release's `devopsy-snapshot-stopped`; then
   `release-tar` detached (`setsid`, `nice`, its output to the release's
-  server log, fd 6 alone kept: the snapshot lock to its rename) makes
+  server log, fd 6 alone kept: the snapshot lock to its end, its wait
+  for the activation and its pruning included, so a take or a removal
+  meanwhile waits) makes
   the mirror's tars and, once the activation's pid is gone, prunes
-  (both kinds, every release snapshot whose release is gone; a wait of
-  10 minutes for the image lock the activation held). At the switch
+  (both kinds, every release snapshot whose release is gone, `pruneGone`,
+  which `--snapshots remove` runs too; a wait of 10 minutes for the
+  image lock the activation held). Only a holder of the snapshot lock
+  prunes: a release removed by anything else (pruning, `--releases
+  remove`, with release snapshots since turned off) leaves its snapshot
+  for the next take or removal (decided: an activation calling a
+  snapshot step would make every release need a server with
+  snapshots). At the switch
   `release-record live` turns the `snapshot` lines into the release's
   `stop` lines (a release that syncs runs a settle past the switch,
   which would start them), and once the run step ended `release-record

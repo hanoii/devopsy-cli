@@ -1530,8 +1530,9 @@ a Ctrl-C before the switch cancels the release and starts them again;
 a failure taking the snapshot (too little space, Docker) fails the
 release before its switch. The snapshot belongs to the release before:
 `--snapshots` lists it as `release`, beside that release's id, and it
-goes when that release goes, or past `snapshots: {release: {keep}}` (1,
-or `all`: one for every release kept). Restoring it is a full return to
+goes once that release is gone, at the next snapshot taken or removed,
+or past `snapshots: {release: {keep}}` (1, or `all`: one for every
+release kept). An imported one is kept as a manual snapshot. Restoring it is a full return to
 that release, code and data (a migration gone wrong, say). A restore
 with release snapshots on takes one first too, of the data it replaces,
 so a restore can be undone the same way. None is taken by a first

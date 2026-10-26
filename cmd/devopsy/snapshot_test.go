@@ -1591,8 +1591,10 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		if _, err := os.Stat("/proc/self/cwd"); err != nil {
 			t.Skip("waiting for the detached tar reads /proc")
 		}
-		// A release snapshot goes when its release goes, whatever takes
-		// that release: here releases once release snapshots are off.
+		// A release snapshot whose release is gone goes at the next
+		// pruning, by a holder of the snapshot lock (a take, a removal),
+		// whatever removed the release: here releases once release
+		// snapshots are off, then a manual take.
 		s := newSyncSetup(t)
 		s.envConfig("prod", "{releases: {keep: 2}, snapshots: {release: true}}")
 		s.releaseProd(nil)
@@ -1621,6 +1623,9 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		}
 		if fileExists(filepath.Join(s.root, "shop", "prod", "releases", rs[0].release)) {
 			t.Fatalf("release %s not pruned", rs[0].release)
+		}
+		if out, code := s.run(nil, "@prod", "--snapshot"); code != 0 || !strings.Contains(out, "its release "+rs[0].release+" is gone") {
+			t.Fatalf("a take (%d):\n%s", code, out)
 		}
 		if left := releaseSnapshots(snaps); len(left) > 0 {
 			t.Errorf("release snapshots %+v left, their release gone", left)
