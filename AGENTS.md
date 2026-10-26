@@ -2186,25 +2186,40 @@ settled every rule here after nine reviews (2026-10-25).
   (a complete
   restore clears marks, so a snapshot of half-written data would
   restore as clean), too little space (`du` in the util image, a
-  tenth to spare, against the mirror's and the tars' filesystems).
-- **Two passes into a kept mirror, then tars from it** (decided over
-  hard links, which give nothing for a database and cost compression,
-  removal time and honest sizes, and over a tar while stopped, which
-  costs the whole size in downtime): `$base/snapshots/.mirror` (`mnt/`,
-  `volumes/`, on the data's filesystem, root's: rsync as root), pass 1
-  while everything runs, pass 2 stopped (only what changed: the
-  downtime), the services started, then one `.tar.zst` per entry or
-  volume (`zstd -T0` under `nice`, in the util image, written to stdout
-  so the files are the deploy user's) into `<id>.tmp/`, renamed when
-  complete: only a renamed directory is a snapshot. The stopped pass
-  ends by writing `.mirror/.devopsy-complete` (the id), so a holder of
-  the snapshot lock finding that id's `.tmp`, its manifest written last
-  and its images listing there, finishes it from the mirror
-  (`leftovers`), any other `.tmp` removed with its bookmarks, and a
-  killed import's `.import.*` with it. The rsync
-  is the sync's (`rsyncEntry`, `rsyncVolume`: `--modify-window=-1`,
-  `--no-D`, exit 24 a notice). One tar per entry, not one for all: an
-  extracting container reads only its own.
+  tenth to spare, the tars and a mirror's missing part on the snapshot
+  root's filesystem, where both live).
+- **No mirror by default: the tars written while stopped** (`dataTars`:
+  the entries and volumes mounted read-only where a mirror has them,
+  `/m/mnt`, `/m/volumes/<key>`, so the tars are the same; one `.tar.zst`
+  per entry or volume, `zstd -T0` under `nice` in the util image,
+  written to stdout so the files are the deploy user's), the downtime
+  their time, then the manifest and the rename. Decided 2026-10-26: a
+  mirror is a full second copy kept for good, and saves downtime only on
+  data that stays put between passes; a busy database's written tables
+  change within minutes, and rsync copies a changed file whole between
+  local directories, so its stopped pass is close to a full copy anyway.
+  Reflinks are the answer for a large database.
+- **With `snapshots: {mirror: true}`, two passes into a kept mirror, then
+  tars from it** (decided over hard links, which give nothing for a
+  database and cost compression, removal time and honest sizes): the
+  server's `snapshots: {mirror: false}` wins (`takeMirror`; a take asking
+  goes on without, warned). `.mirror` among the environment's
+  snapshots, under the snapshot root (`mnt/`, `volumes/`, root's: rsync
+  as root): a backup volume keeps it, never the data disk; pass 1 while
+  everything runs, pass 2 stopped (only what changed: the downtime), the
+  services started, then the tars (`snapshotTar`, `tarInto`) into
+  `<id>.tmp/`, renamed when complete: only a renamed directory is a
+  snapshot. A take without a mirror removes one left from before
+  (`removeMirror`, as root), said. The stopped pass ends by writing
+  `.mirror/.devopsy-complete` (the id), so a holder of the snapshot lock
+  finding that id's `.tmp`, its manifest written last and its images
+  listing there, finishes it from the mirror (`leftovers`); a `.tmp`
+  with its manifest, listing and every tar but no marker is a take
+  without a mirror cut before its rename, renamed; any other `.tmp`
+  removed with its bookmarks, and a killed import's `.import.*` with
+  it. The rsync is the sync's (`rsyncEntry`, `rsyncVolume`:
+  `--modify-window=-1`, `--no-D`, exit 24 a notice). One tar per entry,
+  not one for all: an extracting container reads only its own.
 - **A snapshot's directory holds a release's copy:** `code/` and its
   files (not the logs), its images listing, bookmarked as `s<id>`
   (`images.Set.idOf`, `BookmarkFrom`), the manifest (`format` first: a
@@ -2332,7 +2347,8 @@ settled every rule here after nine reviews (2026-10-25).
   restore pulls the pulled ones by digest and builds the
   built ones from the snapshot's code.
 - **Keep:** the environment's `snapshots: manual: {keep}` (3), sent by
-  the operator (`DEVOPSY_INTERNAL_SNAPSHOT_KEEP`), at most the server's
+  the operator (`DEVOPSY_INTERNAL_SNAPSHOT_KEEP`, and its `mirror:` as
+  `DEVOPSY_INTERNAL_SNAPSHOT_MIRROR`), at most the server's
   `snapshots: max_keep` (5); pruned after each tar, under the snapshot
   lock, the image lock taken only when free (else the next take prunes).
   `--snapshots remove` waits for it, and refuses the snapshot a restore's
@@ -2446,7 +2462,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`,
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_MIRROR`,
   `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`

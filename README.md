@@ -430,7 +430,7 @@ defaults:                       # what every environment takes unless it sets it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
-  snapshots: {manual: {keep: 3}}  # optional: snapshots kept (manual: on, 3 by default)
+  snapshots: {manual: {keep: 3}, mirror: false}  # optional: snapshots kept (manual: on, 3 by default), a mirror (off)
 environments:
   prod:
     env:
@@ -1483,12 +1483,17 @@ label, excluded ones left out), a copy of the current release (its code,
 and its images bookmarked so they stay), the image history and
 `shared/.env` (so an export carries the environment's secrets). Every
 service with data and what depends on it stops for one moment, all
-together, as Platform.sh's backups do: the data is first copied into a
-mirror while everything runs (`snapshots/.mirror`, kept, so the next
-take copies only what changed), then again with them stopped, only what
-changed since (the downtime: seconds for a few GB of database on a local
-disk), then they start, waited for until healthy; the compressed tars
-(`zstd`) are made from the mirror afterwards, nobody waiting. Plain
+together, as Platform.sh's backups do, while the compressed tars
+(`zstd`) are written from the stopped data, then they start, waited for
+until healthy: the downtime is the time the tars take. An environment
+with `snapshots: {mirror: true}` keeps a mirror of its data instead
+(`.mirror` among its snapshots, kept): the data is first copied into it
+while everything runs, then again with them stopped, only what changed
+since (the downtime), and the tars are made from the mirror afterwards,
+nobody waiting. Worth it for data that stays put between the two
+passes, like uploaded files; not for a busy database, whose written
+tables change within minutes and are copied again whole (data on XFS,
+whose reflinks make the copy instant, is the way there). Plain
 `tar.zst` files, one per entry or volume, restorable by hand
 (`zstd -dc mnt.files.tar.zst | tar -x`). Unlabeled services run on (a
 service that holds visitors, like drupal11's `alwaysup`, answers
@@ -1500,7 +1505,7 @@ environment, which starts it first. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, too little
-space for the mirror and the tars (measured first, a tenth to spare).
+space for the tars and a mirror (measured first, a tenth to spare).
 
 Where they go: each environment's `snapshots/`, beside `shared/` (never
 inside it: everything there is linked into each release), or the
@@ -1580,8 +1585,9 @@ releases:
   keep: 2        # default for its projects (5)
   max_keep: 5    # no project keeps more (5)
 snapshots:
-  root: /mnt/backups   # where snapshots go; default: each environment's snapshots/
+  root: /mnt/backups   # where snapshots (and mirrors) go; default: each environment's snapshots/
   max_keep: 5          # no environment keeps more manual snapshots (5)
+  mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
 ```
 
 Changing a server's `snapshots: root` leaves the snapshots taken before
