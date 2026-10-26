@@ -430,7 +430,7 @@ defaults:                       # what every environment takes unless it sets it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
   env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
-  snapshots: {manual: {keep: 3}, mirror: false}  # optional: snapshots kept (manual: on, 3 by default), a mirror (off)
+  snapshots: {manual: {keep: 3}, release: false, mirror: false}  # optional: manual ones kept (on, 3), release snapshots (off), a mirror (off)
 environments:
   prod:
     env:
@@ -1516,6 +1516,29 @@ backups off it. How many stay: the environment's `snapshots: manual:
 {keep}` (3), at most the server's `snapshots: max_keep` (5); an
 environment's `snapshots: manual: false` refuses `--snapshot` (pull
 request environments, say).
+
+**Release snapshots.** With the environment's `snapshots: {release:
+true}`, every release that replaces a current one first takes a
+snapshot of the data as the release it replaces left it, right before
+its switch: its services with data and their dependents stop (with a
+mirror only for what changed while its images were fetched), the tars
+are written (or, with a mirror, made from it afterwards, nobody
+waiting), and the services stay stopped until the new release's run
+step starts them under its code. The downtime is that stop, the switch
+and the `up`; without a mirror it includes the tars. A session gone or
+a Ctrl-C before the switch cancels the release and starts them again;
+a failure taking the snapshot (too little space, Docker) fails the
+release before its switch. The snapshot belongs to the release before:
+`--snapshots` lists it as `release`, beside that release's id, and it
+goes when that release goes, or past `snapshots: {release: {keep}}` (1,
+or `all`: one for every release kept). Restoring it is a full return to
+that release, code and data (a migration gone wrong, say). A restore
+with release snapshots on takes one first too, of the data it replaces,
+so a restore can be undone the same way. None is taken by a first
+release, a rollback (it changes code, not data), on an environment a
+sync, an import or a restore left incomplete (said), or with nothing
+with data (said). `releases: {keep: 1}` with release snapshots on is an
+error: the snapshot would go with its own release.
 
 `--snapshots restore <id>` brings one back whole, as Platform.sh's
 restores do: a new release made from the snapshot's copy (a

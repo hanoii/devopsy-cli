@@ -2368,15 +2368,50 @@ settled every rule here after nine reviews (2026-10-25).
   Docker's bookmarks, which removals never do; the README says to move
   them first). `--destroy` removes them all, bookmarks first, the mirror
   as root, the snapshot root's directory too, and says how many.
+- **Release snapshots** (`snapshots: {release: true|{enabled, keep}}`,
+  off, keep 1 or `all`, `KeepAll`; the checkout's config decides, as
+  for a release's `keep`; what it holds from the release replaced, in
+  `$base/current`): an activation replacing a current release, and a
+  restore, full or `--no-code`, takes one of the data it replaces.
+  `releaseSnapshotSetup` before the fetch: the effective releases
+  `keep` checked (1 would prune the snapshot with its own release;
+  `releases: keep: 1` with them on is a config error too), the sync and
+  snapshot locks (release, sync, snapshot, then the fetch's image lock),
+  `release-check` (3: skipped, said: a marked environment, nothing with
+  data; else the space check), the id, the server log made, `not_live`'s
+  hook (settle starts the record's `snapshot` lines). Inside
+  `fetch_release`, before its disarm (so a session gone or a signal
+  still cancels): the mirror's first pass beside the fetch (a
+  background job, waited for), then `release-stopped`, which leaves the
+  set stopped (the run step's `up` starts it under the new code) and
+  names it in the new release's `devopsy-snapshot-stopped`; then
+  `release-tar` detached (`setsid`, `nice`, its output to the release's
+  server log, fd 6 alone kept: the snapshot lock to its rename) makes
+  the mirror's tars and, once the activation's pid is gone, prunes
+  (both kinds, every release snapshot whose release is gone; a wait of
+  10 minutes for the image lock the activation held). At the switch
+  `release-record live` turns the `snapshot` lines into the release's
+  `stop` lines (a release that syncs runs a settle past the switch,
+  which would start them), and once the run step ended `release-record
+  done` removes them. A restore's data step turns them into its own
+  (kept down under its mark). Without a mirror the stopped pass writes
+  the tars, so a release is down for them: the reason for `mirror:
+  true` or reflinks with large data. Rollbacks take none.
 - **Gates:** the hidden `--snapshot-step` is a feature flag, so an
-  older server refuses every snapshot script before anything changes.
+  older server refuses every snapshot script before anything changes;
+  release snapshots are a named feature, `release-snapshots`, found by
+  the scripts' `release-` words (`ReleaseSnapshotsFeature`): a server
+  with manual snapshots only refuses a release with them on once its
+  activation starts, after the upload (accepted: an activation's needs
+  are checked by its own session, the upload's by the upload's).
 - **Tests:** the scripts against the fake docker (`snapshot_test.go`:
   take, interrupt, keep, list, remove, restore, cut restore, `--no-code`,
   leftover lines, the mark's readers, a sync over a restore mark,
-  export and import, `--destroy`), the images' bookmarks
+  export and import, `--destroy`, without a mirror, release snapshots
+  and their cases, a restore's), the images' bookmarks
   (`images/snapshot_test.go`), and end to end a take and a full restore
-  with real Docker and a snapshot moved to another server
-  (`e2e/snapshot_test.go`).
+  with real Docker, a snapshot moved to another server (with a mirror)
+  and release snapshots both ways (`e2e/snapshot_test.go`).
 
 ## Roles, exports and imports
 
@@ -2473,7 +2508,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_MIRROR`,
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`,
   `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
