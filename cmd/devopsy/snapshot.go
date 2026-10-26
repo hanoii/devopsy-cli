@@ -545,18 +545,19 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 	if err := os.WriteFile(filepath.Join(tmp, remote.SnapshotData, "images"), []byte(set.SnapshotData(p.base, rel)), 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, remote.SnapshotManifest), []byte(m.String()), 0o600); err != nil {
-		return err
-	}
 	unlock, err := imagesShared(context.Background())
 	if err != nil {
 		return err
 	}
-	defer unlock()
-	if err := set.BookmarkFrom(tmp, rel); err != nil {
+	err = set.BookmarkFrom(tmp, rel)
+	unlock()
+	if err != nil {
 		return fmt.Errorf("bookmarking the release's images: %w", err)
 	}
-	return nil
+	// The manifest last: a .tmp with one is complete but for its tars,
+	// which a take cut off after its stopped pass leaves to the next
+	// (snapshotLeftovers); without one it is removed, its bookmarks too.
+	return os.WriteFile(filepath.Join(tmp, remote.SnapshotManifest), []byte(m.String()), 0o600)
 }
 
 func copyFile(from, to string) error {
@@ -692,7 +693,9 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 	marker, _ := os.ReadFile(filepath.Join(p.mirror, remote.SnapshotComplete))
 	for _, tmp := range tmps {
 		id := strings.TrimSuffix(filepath.Base(tmp), ".tmp")
-		if fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && strings.TrimSpace(string(marker)) == id {
+		// Complete but for its tars: its manifest, written last, and the
+		// images listing a restore needs.
+		if fileExists(filepath.Join(tmp, remote.SnapshotManifest)) && fileExists(filepath.Join(tmp, images.ListFile)) && strings.TrimSpace(string(marker)) == id {
 			report.Info("finishing snapshot " + id + ", cut off after its stopped pass")
 			if err := snapshotTar(p, id); err != nil {
 				return err

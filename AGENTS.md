@@ -2196,7 +2196,8 @@ settled every rule here after nine reviews (2026-10-25).
   so the files are the deploy user's) into `<id>.tmp/`, renamed when
   complete: only a renamed directory is a snapshot. The stopped pass
   ends by writing `.mirror/.devopsy-complete` (the id), so a holder of
-  the snapshot lock finding that id's `.tmp` finishes it from the mirror
+  the snapshot lock finding that id's `.tmp`, its manifest written last
+  and its images listing there, finishes it from the mirror
   (`leftovers`), any other `.tmp` removed with its bookmarks, and a
   killed import's `.import.*` with it. The rsync
   is the sync's (`rsyncEntry`, `rsyncVolume`: `--modify-window=-1`,
