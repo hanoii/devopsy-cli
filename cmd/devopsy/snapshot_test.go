@@ -1945,6 +1945,36 @@ func TestRestoreTakesReleaseSnapshot(t *testing.T) {
 	}
 }
 
+// A restore with release snapshots on whose data step refuses, nothing
+// restored (here mnt/storage a file now, a directory in the snapshot),
+// leaves the services running: what its snapshot of the data it replaces
+// stopped starts again, as before any stop a refusal does.
+func TestRestoreRefusedStartsReleaseSnapshotSet(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{}, {"--no-code"}} {
+		s := newSyncSetup(t)
+		s.envConfig("prod", "{releases: {keep: 3}, snapshots: {release: {enabled: true, keep: all}}}")
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("%v: take (%d):\n%s", args, code, out)
+		}
+		if err := os.RemoveAll(filepath.Join(s.mnt("prod"), "storage")); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(s.mnt("prod"), "storage"), "a file now\n", 0o644)
+		s.logs()
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if code == 0 || !strings.Contains(out, "nothing restored") {
+			t.Fatalf("%v: a restore over an entry of another kind (%d):\n%s", args, code, out)
+		}
+		if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); len(down) > 0 {
+			t.Errorf("%v: nothing restored, and %v left stopped (record: %q):\n%s", args, down, readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")), out)
+		}
+	}
+}
+
 // Where the data clones by reflinks, a take clones it while stopped (no
 // first pass, whatever its mirror setting), makes the tars from the clone
 // once the services are back, and removes the clone; a mirror left from
