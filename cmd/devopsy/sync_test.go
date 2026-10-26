@@ -3917,3 +3917,43 @@ func TestImportExportHardLinkToSymlink(t *testing.T) {
 		t.Errorf("prod's storage, with a hard link to a symbolic link in it, into dev (%d), the link %q:\n%s", code, l, errs)
 	}
 }
+
+// A database's files may have holes (pages it punched out): a sync
+// keeps them (rsync --sparse) and so does a snapshot's tar (--sparse:
+// "a database's punched pages came back as zeros, more disk than the
+// data took"). An --export of the same data writes each hole as zeros,
+// so the stream, the import's spool and the file it extracts take the
+// file's whole size: --export then --import must keep holes holes too.
+func TestExportImportKeepsHoles(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	const size = 64 << 20
+	f, err := os.Create(filepath.Join(s.mnt("prod"), "storage", "ibdata"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("page\n"), size-5); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Stat(f.Name(), &st); err != nil || st.Blocks*512 >= size/8 {
+		t.Skipf("no holes on this filesystem (%v, %d blocks)", err, st.Blocks)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	if len(out) >= size/8 {
+		t.Errorf("--export of a %d-byte file with %d bytes of data wrote %d bytes: its hole as zeros", size, st.Blocks*512, len(out))
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	var dst syscall.Stat_t
+	if err := syscall.Stat(filepath.Join(s.mnt("dev"), "storage", "ibdata"), &dst); code != 0 || err != nil || dst.Size != size || dst.Blocks*512 >= size/8 {
+		t.Errorf("the import of it (%d, %v): %d bytes on disk for %d:\n%s", code, err, dst.Blocks*512, dst.Size, errs)
+	}
+}
