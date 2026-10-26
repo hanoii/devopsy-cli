@@ -2325,3 +2325,31 @@ func TestRestoreMarkFailsStartsReleaseSnapshotSet(t *testing.T) {
 		}
 	}
 }
+
+// An entry of mnt whose name starts with a dash (./mnt/-files: nothing
+// refuses it, only whitespace) is data like any other: a take tars it and
+// a restore brings it back. The tar's find takes the bare name for a
+// predicate: on a server (pipefail) the take fails, and here, where the
+// fake's pipe hides find's failure, the tar is empty.
+func TestSnapshotEntryLeadingDash(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT=/-files\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "-files", "a.jpg"), "pic\n", 0o644)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("a take of mnt/-files (%d):\n%s", code, out)
+	}
+	tarFile := filepath.Join(s.root, "shop", "prod", "snapshots", m[1], "data", "mnt.-files.tar.zst")
+	if got := tarNames(t, tarFile); !slices.Contains(got, "-files/a.jpg") {
+		t.Errorf("the take's tar of mnt/-files holds %v", got)
+	}
+	if err := os.Remove(filepath.Join(s.mnt("prod"), "-files", "a.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "-files", "a.jpg")) != "pic\n" {
+		t.Errorf("a restore of mnt/-files (%d):\n%s", code, out)
+	}
+}
