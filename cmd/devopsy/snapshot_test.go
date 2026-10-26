@@ -2225,3 +2225,32 @@ func TestReleaseSyncSettlesBeforeReleaseSnapshot(t *testing.T) {
 	}
 }
 
+// A release with release snapshots on whose session dies right after its
+// fetch: the stopped pass left the services down, waitBeat saw the session
+// alive, and the write that then probes for it ("the images of <id> are
+// ready", PIPE ignored) fails, which set -e ends the script on. Every exit
+// before the switch must start what the stopped pass left stopped, as
+// not_live's hook does; here the server's devopsy fails that one write.
+func TestReleaseSnapshotReadyWriteFails(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.snapshotted("prod", "true", false)
+	s.releaseProd(nil)
+	// The server's devopsy: the real one, but for that write.
+	bin := filepath.Join(filepath.Dir(s.root), "bin", "devopsy")
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	write(t, bin, "#!/bin/sh\ncase \"$*\" in \"--say info the images of \"*\" are ready\") exit 1 ;; esac\nexec '"+binary+"' \"$@\"\n", 0o755)
+	before := s.current("prod")
+	s.logs()
+	out, code := s.run(nil, "@prod", "--release")
+	docker, _ := s.logs()
+	if code == 0 || s.current("prod") != before {
+		t.Fatalf("the release went live (%d), current %s (was %s):\n%s", code, s.current("prod"), before, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	if down := strings.Fields(readString(s.log + ".stopped.shop-prod")); len(down) > 0 || strings.Contains(readString(filepath.Join(base, ".devopsy-sync.services")), "snapshot ") {
+		t.Errorf("the release ended before its switch with %v left stopped (record: %q):\n%s\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out, docker)
+	}
+}
