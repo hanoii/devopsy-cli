@@ -438,6 +438,49 @@ func TestSnapshotExportImport(t *testing.T) {
 	}
 }
 
+// A release snapshot imported elsewhere (another environment, another
+// server: a move) belongs to a release that is not there: it stays a
+// snapshot to restore, never pruned at the next take as one whose release
+// went.
+func TestSnapshotImportReleaseKind(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.snapshotted("prod", "true", false)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("second release (%d):\n%s", code, out)
+	}
+	snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+	var rs []releaseSnapshot
+	for start := time.Now(); time.Since(start) < startWait; time.Sleep(100 * time.Millisecond) {
+		if rs = releaseSnapshots(snaps); len(rs) == 1 {
+			break
+		}
+	}
+	if len(rs) != 1 {
+		t.Fatalf("release snapshots %+v, want one", rs)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", rs[0].id)
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	_, errs, code = s.runIO(nil, exported, "@solo", "--snapshots", "import")
+	im := regexp.MustCompile(`imported snapshot ` + rs[0].id + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if code != 0 || im == nil {
+		t.Fatalf("import (%d):\n%s", code, errs)
+	}
+	out, code := s.run(nil, "@solo", "--snapshot")
+	if code != 0 {
+		t.Fatalf("solo's take (%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(s.root, "shop", "solo", "snapshots", im[1], remote.SnapshotManifest)) {
+		t.Errorf("the imported snapshot %s went at the next take:\n%s", im[1], out)
+	}
+}
+
 // tarNamesOf are the member names of the tar data.
 func tarNamesOf(t *testing.T, data []byte) []string {
 	t.Helper()
