@@ -2427,6 +2427,30 @@ func TestSnapshotEntryLeadingDash(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
 		t.Errorf("a refused take stopped something:\n%s", docker)
 	}
+	// A named volume whose key starts with a dash (compose takes -data
+	// as a key, its name shop-prod_-data) reaches the same tools as a
+	// bare argument: the take's find "$2" (a volume's tar, -C /m/volumes)
+	// and --export's tar -C /vol <key>. Refused as an entry is, or held.
+	s = newSyncSetup(t)
+	s.labels("FAKE_DB_VOLUME=-data")
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.log+".vol", "shop-prod_-data", "ibd"), "pages\n", 0o644)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	switch {
+	case code != 0:
+		if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+			t.Errorf("a refused take of the volume -data stopped something:\n%s", docker)
+		}
+	case m == nil:
+		t.Fatalf("a take of the volume -data said no id:\n%s", out)
+	default:
+		tarFile := filepath.Join(s.root, "shop", "prod", "snapshots", m[1], "data", "volume.-data.tar.zst")
+		if got := tarNames(t, tarFile); !slices.Contains(got, "-data/ibd") {
+			t.Errorf("the take of the volume -data went through, its tar holding %v: the bare key read as find's predicate (on a server, pipefail fails every take):\n%s", got, out)
+		}
+	}
 }
 
 // A service with data that mounts no entry of mnt and no named volume
