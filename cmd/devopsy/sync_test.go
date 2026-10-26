@@ -219,6 +219,10 @@ case "$*" in
   # (images.CLI's ID); any other name answers nothing.
   "image inspect --format {{.Id}} "*)
     for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
+  # FAKE_USERS: the compose projects whose containers use any image
+  # (images.CLI's Users: a container's id, then its project), none by
+  # default.
+  "ps -a --filter ancestor="*) for u in ${FAKE_USERS:-}; do echo "c1 $u"; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
   # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
   # exited, its id ctr:<project>:<service>.
