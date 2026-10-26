@@ -570,6 +570,41 @@ func TestSnapshotExportImport(t *testing.T) {
 	}
 }
 
+// A snapshot imported into another environment (prod's into solo, a copy
+// of prod to test on; a move to another server imports into one too)
+// restores whole there: its own images, gone, are built again from its
+// code, as a rollback whose image went does. Here the project's images
+// are all its own (compose names them after the project: shop-prod-app),
+// so the import's cut of the listing to the current release's services
+// and repositories keeps nothing of shop-solo's, and the restore's
+// release must not be refused for listing no images.
+func TestSnapshotImportIntoAnotherEnvironmentRestores(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo release (%d):\n%s", code, out)
+	}
+	_, errs, code = s.runIO(nil, exported, "@solo", "--snapshots", "import")
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if code != 0 || im == nil {
+		t.Fatalf("import into solo (%d):\n%s", code, errs)
+	}
+	out, code = s.run(nil, "@solo", "--snapshots", "restore", im[1], "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("solo"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a full restore in solo of the snapshot imported from prod (%d):\n%s", code, out)
+	}
+}
+
 // A release snapshot imported elsewhere (another environment, another
 // server: a move) belongs to a release that is not there: it stays a
 // snapshot to restore, never pruned at the next take as one whose release
