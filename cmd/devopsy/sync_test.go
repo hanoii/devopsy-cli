@@ -3610,3 +3610,34 @@ func TestImportRefusesLeavingBindsBeforeStopping(t *testing.T) {
 		t.Errorf("an import on data with a link out of its entry at a bind source (%d) left %q stopped, db's data %q:\n%s\n%s", code, stopped, readString(filepath.Join(s.mnt("prod"), "db", "ibdata")), errs, docker)
 	}
 }
+
+// A child's prepare stops its set before the copy, and its finish starts
+// it again: on data where a bind source already leads out of its entry
+// through a link in an entry the copy does not replace, finish go refuses
+// that start, so the prepare must refuse before anything stops on either
+// side (its holder runs before the parent's push), never leave the child
+// down and marked, the parent stopped for a copy that could not be used.
+func TestSyncChildRefusesLeavingBindsBeforeStopping(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	// The child's app binds below an entry of its own that the parent has
+	// not (cache): nothing of the copy replaces it.
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT2=/cache/public\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("dev"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("dev"), "cache", "public")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	stoppedDev, stoppedProd := strings.TrimSpace(readString(s.log+".stopped.shop-dev")), strings.TrimSpace(readString(s.log+".stopped.shop-prod"))
+	if code == 0 || stoppedDev != "" || stoppedProd != "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Errorf("a sync into a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), out, docker)
+	}
+}
