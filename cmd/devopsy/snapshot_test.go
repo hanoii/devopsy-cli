@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -1014,5 +1015,37 @@ func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 	}
 	if strings.Contains(said, "cancelling the release") {
 		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+}
+
+// A full restore whose data went in and whose run step then fails (it
+// started the services, then a migration failed) switches back to the
+// release it left, and skips that release's restart for the restore's
+// mark, which says nothing runs on the data until a restore completes.
+// What the failed run step started must not be left running on it then,
+// under the restored release's config while current is the previous
+// release: either the previous release comes back, as after any failed
+// run step, or nothing runs, as the mark says.
+func TestSnapshotRestoreRunFailsLeavesNothingHalf(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME\"\n[ -z \"${FAKE_UP_THEN_FAIL:-}\" ] || { devopsy up -d --wait app db; exit 3; }\n", 0o755)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	before := s.current("prod")
+	s.logs()
+	out, code = s.run([]string{"FAKE_UP_THEN_FAIL=1"}, "@prod", "--snapshots", "restore", m[1], "--yes")
+	docker, _ := s.logs()
+	if code == 0 || s.current("prod") != before {
+		t.Fatalf("a restore whose run step fails (%d), current %s (was %s):\n%s", code, s.current("prod"), before, out)
+	}
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	restarted := strings.Contains(docker, "--release-steps restart run") || strings.Contains(out, "restarting "+strings.TrimPrefix(before, "releases/")+" with its own run step")
+	if !restarted && (!slices.Contains(stopped, "db") || !slices.Contains(stopped, "app")) {
+		t.Errorf("the previous release not restarted, and the failed run step's services left running on the restored data (stopped: %v), current %s:\n%s", stopped, s.current("prod"), out)
 	}
 }
