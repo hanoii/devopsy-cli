@@ -772,7 +772,9 @@ prev=${prev%/` + CodeDir + `}
 		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
-` + settleSync(projectName) + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
+` + settleSync(projectName) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+` + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
 export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
@@ -943,13 +945,13 @@ done
 	// turns the snapshot's lines into its own: restore-data).
 	releaseSnap := (!rollback || restore != nil) && t.SnapshotsRelease.Enabled
 	if releaseSnap {
-		s += releaseSnapshotSetup(t, projectName)
+		s += releaseSnapshotSetup(t, projectName, restore != nil)
 	}
 	s += `fetch_release() {
   image_lock shared fetching || return $?
   fr=0
 ` + map[bool]string{true: releaseSnapshotFirstPass(projectName), false: ""}[releaseSnap] + `  ` + fetchStep + ` || fr=$?
-` + map[bool]string{true: releaseSnapshotStopped(projectName), false: ""}[releaseSnap] + `
+` + map[bool]string{true: releaseSnapshotStopped(projectName, restore != nil), false: ""}[releaseSnap] + `
   # Disarmed here, under the lock, by taking the watcher's file away,
   # atomically against the watcher, which takes it before it signals:
   # when it got there first, its SIGTERM is on its way, or here, and the
@@ -1426,7 +1428,15 @@ fi
 // release), the sync and snapshot locks, the check (3: skipped, said),
 // the snapshot's id, the server log made (a full disk fails here), and
 // not_live's hook, which starts what a stopped pass left stopped.
-func releaseSnapshotSetup(t *Target, projectName string) string {
+func releaseSnapshotSetup(t *Target, projectName string, restore bool) string {
+	// A restore holds the sync and snapshot locks already, to its end.
+	locks := `  exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "a sync or an export from $base") + `
+` + snapshotLock(false)
+	unlock := "    exec 6>&- 5>&-\n"
+	if restore {
+		locks, unlock = "", "    :\n"
+	}
 	return `rs_id=
 if [ -n "$prev" ]; then
   export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
@@ -1437,9 +1447,7 @@ if [ -n "$prev" ]; then
     devopsy --say error "this server keeps 1 release (releases: keep), and a release snapshot goes with the release it belongs to: keep 2 or more, or turn release snapshots off"
     not_live 1
   fi
-  exec 5>"$base/` + SyncLockFile + `"
-` + lockWait(5, false, "a sync or an export from $base") + `
-` + snapshotLock(false) + `  (umask 077; mkdir -p "$snaps")
+` + locks + `  (umask 077; mkdir -p "$snaps")
   rs=0
   (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-check"}, false) + `) || rs=$?
   case $rs in
@@ -1455,8 +1463,7 @@ if [ -n "$prev" ]; then
       fi
     }
   else
-    exec 6>&- 5>&-
-  fi
+` + unlock + `  fi
 fi
 `
 }
@@ -1479,7 +1486,12 @@ func releaseSnapshotFirstPass(projectName string) string {
 // from the mirror started detached, holding the snapshot lock alone and
 // nothing of the session's (its output to the release's server log),
 // then the locks this script held for it given up.
-func releaseSnapshotStopped(projectName string) string {
+func releaseSnapshotStopped(projectName string, restore bool) string {
+	unlock := "    exec 6>&- 5>&-\n"
+	if restore {
+		// A restore keeps them to its data step.
+		unlock = ""
+	}
 	return `  if [ -n "${rs_pid:-}" ]; then
     rs_fp=0
     wait "$rs_pid" || rs_fp=$?
@@ -1497,8 +1509,7 @@ func releaseSnapshotStopped(projectName string) string {
         fi
       fi
     fi
-    exec 6>&- 5>&-
-  fi
+` + unlock + `  fi
 `
 }
 
