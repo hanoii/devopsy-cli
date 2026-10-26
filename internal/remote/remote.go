@@ -1253,7 +1253,8 @@ func firstDown(projectName string) string {
 // tail's --pid, which, like kill -0, takes a zombie for alive, and
 // nothing may reap one. Both are killed with SIGKILL: they start while
 // the script ignores INT, TERM and HUP (from the fetch to the run step),
-// which they inherit. Neither holds the locks nor the sync's answer.
+// which they inherit. Neither holds the locks (5, 6, 8, 9: a lock the
+// script drops before its run step must go then) nor the sync's answer.
 // Without GNU's tail (macOS, in tests), as before.
 const followOutput = `if tail --version >/dev/null 2>&1; then
   (umask 077; : >>"$out")
@@ -1261,10 +1262,10 @@ const followOutput = `if tail --version >/dev/null 2>&1; then
   echo "` + LogSection + `$(date -u '+%Y-%m-%d %H:%M:%S') $fo_tag" >>"$out" || true
   if [ -z "${sync_gone:-}" ]; then
     fo_off=$(wc -c <"$out")
-    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 8>&- 9>&- >&2 &
+    tail -c +$((fo_off + 1)) -s 0.2 -f "$out" </dev/null 3<&- 5>&- 6>&- 8>&- 9>&- >&2 &
     fo_tp=$!
     ( while fo_st=$(sed -n 's/^State:[[:space:]]*//p' /proc/$$/status 2>/dev/null) && [ -n "$fo_st" ] && [ "${fo_st%% *}" != Z ]; do sleep 1; done
-      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 8>&- 9>&- &
+      sleep 1; kill -9 $fo_tp ) </dev/null >/dev/null 2>&1 3<&- 5>&- 6>&- 8>&- 9>&- &
     fo_hp=$!
     echo "` + SwitchMarker + ` $fo_tag" >&2 || true
     trap 'fo_s=$?; kill -9 $fo_hp 2>/dev/null || true; sleep 0.5; kill -9 $fo_tp 2>/dev/null || true; wait $fo_tp 2>/dev/null || true; [ "$fo_s" != 255 ] || fo_s=254; exit $fo_s' EXIT
