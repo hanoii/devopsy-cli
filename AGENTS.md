@@ -2214,7 +2214,10 @@ settled every rule here after nine reviews (2026-10-25).
   one is held. A take: pass 1 under the snapshot lock alone, then the
   release, sync and snapshot locks for the stopped pass, then the
   snapshot lock alone for the tars, so a release never waits minutes for
-  a tar. `--destroy` takes all four. `--status` says "snapshot" while
+  a tar. A restore holds the snapshot lock from before it reads the
+  snapshot to its end, and pruning keeps the snapshot a restore's mark
+  names (review of 2026-10-25: a take's prune removed the snapshot a
+  restore was reading). `--destroy` takes all four. `--status` says "snapshot" while
   one holds its holding file and lock (`SnapshotRunning`), never the
   file alone.
 - **Stopped as a sync stops** (`stopSetFor`): every service with data and

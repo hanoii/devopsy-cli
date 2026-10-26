@@ -776,6 +776,9 @@ fi
 		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
+exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWait(6, false, "a snapshot of $base") + `
+[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
 export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")

@@ -818,14 +818,24 @@ func pruneSnapshots(cwd string, p snapshotPaths) {
 		report.Warn(fmt.Sprintf("keeping %d snapshots, this server's snapshots: max_keep, not %d", r.Snapshots.MaxKeep, keep))
 		keep = r.Snapshots.MaxKeep
 	}
+	// The snapshot a restore's mark names stays: running that restore
+	// again is the way out of it. It still counts towards keep.
 	ids := manualSnapshots(p)
-	for len(ids) > keep {
-		report.Info("removing snapshot " + ids[0] + " (keep " + strconv.Itoa(keep) + ")")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, ids[0])); err != nil {
+	marked := ""
+	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore {
+		marked = m.From
+	}
+	for n := len(ids); n > keep; n-- {
+		i := slices.IndexFunc(ids, func(id string) bool { return id != marked })
+		if i < 0 {
+			return
+		}
+		report.Info("removing snapshot " + ids[i] + " (keep " + strconv.Itoa(keep) + ")")
+		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, ids[i])); err != nil {
 			report.Warn(err.Error())
 			return
 		}
-		ids = ids[1:]
+		ids = slices.Delete(ids, i, i+1)
 	}
 }
 
