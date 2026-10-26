@@ -1940,7 +1940,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) e
 	// restore's start would mount from the host (a --no-code restore runs
 	// no mounts check: review).
 	if restore {
-		if err := cli.CheckLeavingBinds(services, m.entries, true); err != nil {
+		if err := cli.CheckLeavingBinds(services, restoredEntries(m, services), true); err != nil {
 			return err
 		}
 	}
@@ -2080,6 +2080,20 @@ func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cl
 			report.Warn("snapshot "+id+"'s data may not fit on "+fs+": "+size(want[fs])+" to write, "+size(room)+" free with what it replaces (sparse files counted whole)", "a disk filled midway fails the restore after its first write: the services stay down and the environment marked until a restore completes")
 		}
 	}
+}
+
+// restoredEntries are the entries of mnt a restore of m writes under
+// services' labels: the manifest's that a service with data mounts there
+// (snapshotRestoreData), never one the manifest names alone (a label
+// changed since the take, an imported manifest), which stays as it is.
+func restoredEntries(m *manifest, services []cli.SyncService) []string {
+	var out []string
+	for _, e := range m.entries {
+		if slices.ContainsFunc(services, func(s cli.SyncService) bool { return s.HasData && slices.Contains(s.Dirs, e) }) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // linkAtBind refuses a snapshot's entry e whose tar makes a bind source

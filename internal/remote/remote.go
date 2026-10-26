@@ -1102,6 +1102,14 @@ exec 7<&-
 	// release's may have given them to others.
 	restart += `    (cd "$base/current" && ` + devopsyCall(projectName, []string{"--mnt-owners", "restored"}, false) + `) || devopsy --say error "giving the entries of mnt to their owners failed ($?): restarting ${prev#releases/} anyway"
 `
+	// No bind source of it may lead out of its entry through a link in
+	// the data as the failed release left it (a sync's copy, a restore's):
+	// as a rollback checks before its switch (review).
+	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored"}, false) + `); then
+      devopsy --say error "not restarting ${prev#releases/}: its mounts check refuses the data as it is"
+      exit "$status"
+    fi
+`
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
     (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "restart", "run"}, false)) + `) || devopsy --say error "restarting ${prev#releases/} failed too ($?): check the site"
 `

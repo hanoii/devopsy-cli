@@ -2328,7 +2328,7 @@ func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
 	// The --no-code restore: its check pulls what is gone, its data step
 	// holds the database on the record's image, then the run step.
 	if err := prod.e.set.SnapshotPull(snap, data); err != nil {
-		t.Fatal(err)
+		return // refused before anything stops: no such image in mariadb
 	}
 	if err := prod.e.set.ImportDone(prod.base(), rel, data); err != nil {
 		return // refused: nothing taken over

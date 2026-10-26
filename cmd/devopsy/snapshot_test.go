@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 )
@@ -2284,6 +2285,49 @@ func TestSnapshotFIFORestores(t *testing.T) {
 				t.Errorf("%s, %v: snapshot %s taken, its restore refused (%d):\n%s", c.name, env, m[1], code, out)
 			}
 		}
+	}
+}
+
+// Docker resolves bind sources at every start, so in a release on a
+// server nothing starts while one leads out of its entry through a link
+// in the data as it is (one place every start goes through: a project's
+// command, here a plain up, and devopsy's own compose calls), whatever
+// brought the link. A start with the link gone goes on.
+func TestStartRefusesLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	link := filepath.Join(s.mnt("prod"), "storage", "public")
+	if err := os.Symlink("/", link); err != nil {
+		t.Fatal(err)
+	}
+	s.logs()
+	out, code := s.run(nil, "@prod", "up", "-d")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "nothing started") || !strings.Contains(out, "app mounts ./mnt/storage/public -> / through a symbolic link out of its entry") || strings.Contains(docker, " up -d") {
+		t.Errorf("an up with mnt/storage/public a link to / (%d):\n%s\n%s", code, out, docker)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@prod", "up", "-d"); code != 0 {
+		t.Errorf("an up with the link gone (%d):\n%s", code, out)
+	}
+}
+
+// A restore writes the manifest's entries a service with data of the
+// code mounts, never one the manifest names alone.
+func TestRestoredEntries(t *testing.T) {
+	t.Parallel()
+	m := &manifest{entries: []string{"db", "files", "old"}}
+	services := []cli.SyncService{
+		{Name: "db", HasData: true, Dirs: []string{"db"}},
+		{Name: "web", Dirs: []string{"files"}},
+		{Name: "app", HasData: true, Dirs: []string{"files", "logs"}},
+	}
+	if got := restoredEntries(m, services); !slices.Equal(got, []string{"db", "files"}) {
+		t.Errorf("restoredEntries: %v, want [db files]", got)
 	}
 }
 

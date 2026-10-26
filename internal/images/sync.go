@@ -532,14 +532,18 @@ func (s *Set) SnapshotPull(snap, data string) error {
 		if e.Kind != KindData || p == nil || p.Image.ID == "" {
 			continue
 		}
-		if _, err := s.Docker.Inspect(p.Image.ID); err == nil {
-			continue
-		}
+		// There already only when its own repository has it by digest,
+		// never by the record's id (an imported record's is anyone's).
 		pulled := ""
 		for _, h := range ownHolds(e, p) {
-			if _, err := s.Docker.Inspect(h); err == nil || s.Docker.Pull(h) == nil {
+			if _, err := s.Docker.Inspect(h); err == nil {
 				pulled = h
 				break
+			}
+		}
+		for _, h := range ownHolds(e, p) {
+			if pulled == "" && s.Docker.Pull(h) == nil {
+				pulled = h
 			}
 		}
 		if pulled == "" {
@@ -590,6 +594,12 @@ func FilterImported(snap, cur string) error {
 		if e.Digest != "" {
 			e.Digest = repo + e.Digest[len(repoOf(e.Digest)):]
 		}
+		// Its id is the other server's word: bookmarked by it, any local
+		// image of another repository it names would be tagged into the
+		// service's, which Docker's containerd store then resolves by
+		// digest there (review round 5). Without, nothing is tagged until
+		// a restore pulls it by digest in that repository, or builds it.
+		e.ID = ""
 		kept = append(kept, e)
 	}
 	return writeList(snap, kept)

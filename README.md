@@ -961,7 +961,9 @@ the secrets its compose file requires), the mounts check refuses
 - a bind mount from below an entry that a symbolic link in the entry
   leads out of it (`storage/public -> /`, made by hand or by a restored
   snapshot), rollbacks and restores too, and a sync whose copy brings
-  one starts nothing on it: Docker would mount that of the host. A link
+  one starts nothing on it: Docker would mount that of the host. On a
+  server nothing in a release starts while one is there (an `up`, a
+  `start`, a `run`, devopsy's own starts), whatever brought it. A link
   within the entry, and an entry that is itself a link (on another
   disk), are fine.
 

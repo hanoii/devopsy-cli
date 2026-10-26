@@ -1158,7 +1158,17 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   `--no-code` restore's check likewise (`check-tars`: it runs no mounts
   check), and a sync's `finish go` before it starts anything (a copy
   that brings one is kept as one its finish refused: `IncompleteFinish`,
-  nothing started; review round 4). A bind source that reaches mnt
+  nothing started; review round 4); the restart after a failed run step
+  runs `--check-mounts restored` first, and keeps the previous release
+  down when it refuses. And the net under all of them (decided after
+  review round 5, whose every hole was a start no check per flow
+  preceded): on a server nothing in a release starts while a bind source
+  leads out of its entry, whatever brought the link
+  (`cli.Plan.StartsInRelease`, `checkStartBinds`, in main before a
+  project's command execs and in `composeRun` for devopsy's own starts:
+  compose's starting commands, `--dry-run` aside). Cost: one compose
+  config read per start in a release; labels it cannot read only warn.
+  A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
   an aliased base path) is judged by where it lands in mnt
   (`throughMnt`, before the links in mnt are followed: resolved whole, a
@@ -2479,7 +2489,12 @@ settled every rule here after nine reviews (2026-10-25).
   warning), its image listing cut to the current release's services,
   each kept under that one's repository (a snapshot moved from another
   environment names its own images after its compose project: dropped,
-  its full restore found a listing of nothing, review round 4)
+  its full restore found a listing of nothing, review round 4), its
+  image ids cleared (the other server's word: bookmarked by them, a
+  local image of another repository was tagged into the service's,
+  which the containerd store then resolves by digest there; a restore's
+  pull counts an image there only when its own repository has it by
+  digest: review round 5)
   (`images.FilterImported`: a crafted listing had
   the server pull and tag another repository's image, and its removal
   strip names of images nothing else held: review round 3), the

@@ -292,16 +292,19 @@ func runCheckMounts(cwd string, args []string) int {
 	// A restore's: the entries its snapshot carries are replaced, so the
 	// links in them now are no matter (the snapshot's own are checked in
 	// its tars); the rest stay as they are.
-	var carried []string
+	var m *manifest
 	if len(args) == 2 {
-		m, err := readManifest(args[1])
-		if err != nil {
+		var err error
+		if m, err = readManifest(args[1]); err != nil {
 			report.Fail(err)
 			return 1
 		}
-		carried = m.entries
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
+	var carried []string
+	if m != nil {
+		carried = restoredEntries(m, services)
+	}
 	if restored && err == nil {
 		// Two owners on one entry: --mnt-owners restored reads them as
 		// labels it cannot read.
