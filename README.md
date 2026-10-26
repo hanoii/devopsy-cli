@@ -1606,8 +1606,8 @@ the snapshot being exported, said), and
 `--snapshots import` stores one from stdin into the same environment,
 on this server or another, checked whole (its tars as a restore checks
 them, nothing but files and directories outside its code, its image
-listing cut to the current release's services and their
-repositories), under a new id: on a new
+listing cut to the current release's services, each under that one's
+repository), under a new id: on a new
 server, release the project first, then import and restore it
 (`--with-env` brings its secrets). Import only snapshots you trust: a
 full restore runs the snapshot's code as the deploy user (its steps,

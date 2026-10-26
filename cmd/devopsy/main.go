@@ -241,6 +241,12 @@ func run() int {
 			return 1
 		}
 	}
+	if plan.StartsInRelease {
+		if err := checkStartBinds(cwd); err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	if notice := plan.Notice; notice != "" {
 		if verboseLevel > 1 && plan.NoticeFull != "" {
 			notice = plan.NoticeFull

@@ -227,7 +227,9 @@ func TestSnapshotReflinkE2E(t *testing.T) {
 	if out, code := execIn(t, []string{server}, "set -e; truncate -s 300M /var/tmp/snapref.xfs; mkfs.xfs -q -f /var/tmp/snapref.xfs; mkdir -p /home/devopsy/snapref; mount -o loop /var/tmp/snapref.xfs /home/devopsy/snapref; chown devopsy:devopsy /home/devopsy/snapref"); code != 0 {
 		t.Fatalf("the XFS (%d): %s", code, out)
 	}
-	t.Cleanup(func() { _, _ = execIn(t, []string{server}, "umount -l /home/devopsy/snapref; rm -f /var/tmp/snapref.xfs") })
+	t.Cleanup(func() {
+		_, _ = execIn(t, []string{server}, "umount -l /home/devopsy/snapref; rm -f /var/tmp/snapref.xfs")
+	})
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}

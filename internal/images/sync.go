@@ -703,12 +703,15 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		img, ref := p.Image, p.Ref
 		if importing {
 			// An export's record is whoever made the tar's (an imported
-			// snapshot's too): only its lines and digests in the service's
-			// own repository, and the line it adds names the hold when the
-			// record's name is another repository's, so the data's newest
+			// snapshot's too): the line it adds keeps only digests in the
+			// service's own repository and names the hold when the
+			// record's name is another repository's, and the window ends
+			// on a line in that repository (below), so the data's newest
 			// image a rollback later holds is never another repository's
-			// (review).
-			w = w.inRepo(repoKey(e.Ref))
+			// (review). Every line stays: they are also what the data
+			// moved past, by identity (a mirror's name of an image the
+			// upstream's lines recorded: review round 5, dropped, a tag
+			// gone back ran an older image on the data).
 			img.Digests = inRepo(img.Digests, repoKey(e.Ref))
 			if len(img.Digests) == 0 && hold != "" {
 				img.Digests = []string{hold}
@@ -736,6 +739,11 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 			}
 			w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: e.Ref, ID: last.ID, Digests: ds})
 		}
+		if importing && hold != "" {
+			if last := w[len(w)-1]; repoKey(last.hold()) != repoKey(e.Ref) {
+				w = append(w, ran{Time: s.now().Unix(), Service: e.Service, How: Ran, Ref: hold, ID: img.ID, Digests: []string{hold}})
+			}
+		}
 		w[0].How = first
 		h = append(kept, w...)
 		changed = true
@@ -751,20 +759,6 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		return err
 	}
 	return writeCompose(rel, out, holds)
-}
-
-// inRepo are of h the lines whose reference is in repo, each with only
-// its digests in repo.
-func (h history) inRepo(repo string) history {
-	var out history
-	for _, r := range h {
-		if repoKey(r.Ref) != repo {
-			continue
-		}
-		r.Digests = inRepo(r.Digests, repo)
-		out = append(out, r)
-	}
-	return out
 }
 
 // inRepo are of digests (<repository>@sha256:...) those in repo.

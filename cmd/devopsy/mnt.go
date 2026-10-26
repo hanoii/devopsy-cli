@@ -230,6 +230,37 @@ func runMntOwners(cwd string, args []string) int {
 	return 0
 }
 
+// checkStartBinds refuses to start anything of the release at cwd while a
+// bind source of its services leads out of its entry through a symbolic
+// link in the data as it is now (cli.SyncService.LeavingBinds): Docker
+// resolves bind sources at every start, so a link a restore, a sync or an
+// import brought would mount that of the host (review: every hole the
+// checks per flow left was a start none preceded). One place every start
+// goes through, a project's command and devopsy's own (composeRun); the
+// checks before each flow stay, refusing before anything changes. Labels
+// it cannot read are a warning and the start goes on, as for the owners'
+// step: a label devopsy reads never stops compose.
+func checkStartBinds(cwd string) error {
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if errors.Is(err, cli.ErrComposeConfig) {
+		return nil
+	}
+	if err != nil {
+		report.Warn("the release's labels cannot be read: its bind sources are not checked before the start", err.Error())
+		return nil
+	}
+	var bad []string
+	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &report.Failure{Msg: "nothing started", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link in shared/mnt (a restored snapshot's, a sync's, or one made by hand), or bind-mount where it leads explicitly")}}
+}
+
 // mntOwnersRestored is --mnt-owners' word for a restored release
 // (runMntOwners).
 const mntOwnersRestored = "restored"

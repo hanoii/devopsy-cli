@@ -1885,7 +1885,8 @@ func TestReleaseSnapshotCases(t *testing.T) {
 }
 
 // waitReleaseTars waits until no detached release-tar of the setup's
-// environments runs (Linux: /proc).
+// environments runs: on Linux by /proc (their directory), elsewhere by
+// ps -E (their environment, the setup's DOCKER_LOG).
 func (s *syncSetup) waitReleaseTars() {
 	s.t.Helper()
 	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
@@ -1896,6 +1897,14 @@ func (s *syncSetup) waitReleaseTars() {
 			cwd, _ := os.Readlink(filepath.Join(p, "cwd"))
 			if strings.Contains(string(cmd), "release-tar") && strings.HasPrefix(cwd, s.root) {
 				busy = true
+			}
+		}
+		if len(procs) == 0 {
+			out, _ := exec.Command("ps", "-E", "-A", "-o", "command=").Output()
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "release-tar") && strings.Contains(line, "DOCKER_LOG="+s.log) {
+					busy = true
+				}
 			}
 		}
 		if !busy {
@@ -2045,6 +2054,8 @@ func TestReleaseSnapshotSettlesLeftoverTmp(t *testing.T) {
 			t.Fatalf("the cut take's %s.tmp left by the release after it:\n%s", left, out)
 		}
 	}
+	// Its tars end before the test does: they write into its directory.
+	s.waitReleaseTars()
 }
 
 // A release snapshot's detached tar prunes once the activation ended, and

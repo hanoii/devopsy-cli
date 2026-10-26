@@ -1689,11 +1689,15 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   digest in that repository first (`ownHold`,
   never `localHold`'s fallback to the record's repository: review of
   2026-10-24, a reference of the service's repository with another's
-  digest pulled and ran that one); the history taken over keeps only
-  lines and digests in that repository, and the line it adds names the
-  hold (`history.inRepo`; review of snapshots, round 4: a record whose
-  image line or last history line named another repository made it the
-  data's newest image, which a rollback then pulled and ran). The check and the take-over run
+  digest pulled and ran that one); the history taken over ends on a
+  line in that repository (the line it adds keeps only digests there and
+  names the hold when the record's name is another repository's, and
+  one naming the hold follows a last line elsewhere; review of
+  snapshots, round 4: a record whose image line or last history line
+  named another repository made it the data's newest image, which a
+  rollback then pulled and ran), every line kept: they are also what
+  the data moved past, by identity (round 5: dropped, a mirror's tag
+  gone back ran an older image on the data). The check and the take-over run
   under the server's image lock, shared, taken from Go in two short
   windows (`imagesShared`), never across the load: a removal elsewhere
   waits only for them. `ImportScript` passes the project's record, the

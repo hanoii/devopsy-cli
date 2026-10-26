@@ -2563,6 +2563,11 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 	if err != nil {
 		return err
 	}
+	if plan.StartsInRelease {
+		if err := checkStartBinds(cwd); err != nil {
+			return err
+		}
+	}
 	trace(plan.Args)
 	cmd := exec.CommandContext(ctx, "docker", plan.Args[1:]...)
 	cmd.Env = plan.Env

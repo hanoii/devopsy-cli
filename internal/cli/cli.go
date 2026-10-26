@@ -63,6 +63,12 @@ type Plan struct {
 	// Never in a release on a server, where --mnt-owners gives them away
 	// at each switch, nor for --dry-run, which starts nothing.
 	Starts bool
+	// StartsInRelease is set for such a command in a release on a server:
+	// the caller checks first that no bind source leads out of its entry
+	// through a link in the data as it is now (SyncService.LeavingBinds),
+	// whatever brought the link (a restore, a sync, an import): Docker
+	// resolves bind sources at every start.
+	StartsInRelease bool
 }
 
 // startingCommands are compose's commands that start or create
@@ -173,7 +179,9 @@ func mayOwnMnt(files []string) bool {
 // starting sets plan.Starts for args, compose's command line after
 // docker compose (Plan.Starts).
 func (p *loadedProject) starting(plan *Plan, args []string) {
-	plan.Starts = slices.Contains(startingCommands, composeCommand(args)) && !dryRun(args) && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
+	starts := slices.Contains(startingCommands, composeCommand(args)) && !dryRun(args)
+	plan.Starts = starts && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
+	plan.StartsInRelease = starts && InRelease(p.dir)
 }
 
 // Output is returned when devopsy only prints something to stdout.

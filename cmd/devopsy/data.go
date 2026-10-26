@@ -759,12 +759,15 @@ func (l *tarLinks) walkIn(dir []string, target string, hops *int, entry string) 
 		case "", ".":
 			continue
 		case "..":
-			if entry != "" && len(at) == 1 {
+			if entry != "" && len(at) <= 1 {
+				if len(at) == 0 {
+					return nil, fmt.Errorf("leads out of mnt/%s, above mnt", entry)
+				}
 				at = at[:0]
 				continue
 			}
 			if len(at) <= 1 {
-				return nil, fmt.Errorf("leads out of mnt/%s", cmp.Or(entry, at[0]))
+				return nil, fmt.Errorf("leads out of mnt/%s", at[0])
 			}
 			at = at[:len(at)-1]
 			continue
