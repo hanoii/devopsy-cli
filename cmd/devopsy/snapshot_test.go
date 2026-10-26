@@ -2782,3 +2782,68 @@ func TestSnapshotImportManifestLink(t *testing.T) {
 		t.Errorf("an import whose files are links to another snapshot's was stored:\n%s", errs)
 	}
 }
+// An imported snapshot's images listing is anyone's, like its record: an
+// import, and a --no-code restore, pull a data service's missing image
+// only in the repository the current release lists for that service,
+// never one the snapshot names (a registry of the tar's author, the
+// pull then bookmarked as this environment's).
+// pulledEvil is a pull or a bookmark of the crafted snapshot's repository
+// in the fake docker's log.
+var pulledEvil = regexp.MustCompile(`(?m)^\S* (pull|tag) .*evil\.example/`)
+
+func TestSnapshotImportPullsOwnRepository(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	// The export, its listing and record naming another repository's
+	// image for db, pulled, with a digest this server does not have.
+	digest := "sha256:" + strings.Repeat("e", 64)
+	var crafted bytes.Buffer
+	tw := tar.NewWriter(&crafted)
+	for tr := tar.NewReader(bytes.NewReader(exported)); ; {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(tr)
+		switch h.Name {
+		case m[1] + "/" + images.ListFile:
+			data = []byte("evil.example/x\tsha256:evilid\tdb\tdata\t" + digest + "\n")
+		case m[1] + "/" + remote.SnapshotData + "/images":
+			data = []byte("image\tdb\tevil.example/x@" + digest + "\tsha256:evilid\tevil.example/x@" + digest + "\n")
+		}
+		h.Size = int64(len(data))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write(data)
+	}
+	_ = tw.Close()
+	s.logs()
+	_, errs, code = s.runIO(nil, crafted.Bytes(), "@prod", "--snapshots", "import")
+	docker, _ := s.logs()
+	if pulledEvil.MatchString(docker) {
+		t.Errorf("the import (%d) pulled or bookmarked an image of the repository the snapshot names:\n%s\n%s", code, docker, errs)
+	}
+	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
+	if im == nil {
+		return
+	}
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", im[1], "--no-code", "--yes")
+	docker, _ = s.logs()
+	if pulledEvil.MatchString(docker) {
+		t.Errorf("the --no-code restore (%d) pulled or bookmarked an image of the repository the snapshot names:\n%s\n%s", code, docker, out)
+	}
+}
