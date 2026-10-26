@@ -712,7 +712,7 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 			continue
 		}
 		report.Info("removing snapshot " + id + ", cut off before it was complete")
-		if err := removeSnapshotDir(cwd, p, tmp); err != nil {
+		if err := removeSnapshotDir(cwd, p, tmp, 0); err != nil {
 			report.Warn(err.Error())
 		}
 	}
@@ -722,13 +722,24 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 // removeSnapshotDir removes a snapshot's directory, its bookmarks first,
 // under the exclusive image lock when it is free (else it stays, for the
 // next holder of the snapshot lock).
-func removeSnapshotDir(cwd string, p snapshotPaths, dir string) error {
-	unlock, ok, err := imagesExclusiveNow()
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errors.New("the server's images are in use: " + filepath.Base(dir) + " stays until the next snapshot")
+func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Duration) error {
+	// The image lock, exclusive, waited for up to wait and kept to the end.
+	var unlock func()
+	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
+		u, ok, err := imagesExclusiveNow()
+		if err != nil {
+			return err
+		}
+		if ok {
+			unlock = u
+			break
+		}
+		if wait == 0 {
+			return errors.New("the server's images are in use: " + filepath.Base(dir) + " stays until the next snapshot")
+		}
+		if time.Since(start) > wait {
+			return errors.New("the server's images are still in use after " + wait.String() + ": " + filepath.Base(dir) + " stays")
+		}
 	}
 	defer unlock()
 	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
@@ -749,21 +760,8 @@ func removeSnapshot(cwd string, p snapshotPaths, id string) error {
 	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
 		return errors.New("the restore of snapshot " + id + " did not complete: it stays until a restore completes (devopsy --snapshots restore " + id + " again)")
 	}
-	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
-		unlock, ok, err := imagesExclusiveNow()
-		if err != nil {
-			return err
-		}
-		if ok {
-			unlock()
-			break
-		}
-		if time.Since(start) > 10*time.Minute {
-			return errors.New("the server's images are still in use after 10 minutes: snapshot " + id + " stays")
-		}
-	}
 	report.Info("removing snapshot " + id)
-	return removeSnapshotDir(cwd, p, dir)
+	return removeSnapshotDir(cwd, p, dir, 10*time.Minute)
 }
 
 // snapshotList prints p's snapshots for SnapshotsScript, newest first:
@@ -872,7 +870,7 @@ func pruneSnapshots(cwd string, p snapshotPaths) {
 			return
 		}
 		report.Info("removing snapshot " + ids[i] + " (keep " + strconv.Itoa(keep) + ")")
-		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, ids[i])); err != nil {
+		if err := removeSnapshotDir(cwd, p, filepath.Join(p.snaps, ids[i]), 0); err != nil {
 			report.Warn(err.Error())
 			return
 		}
