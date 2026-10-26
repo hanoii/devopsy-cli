@@ -1465,6 +1465,21 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		if _, ok := volumes[t.name]; t.volume != "" && !ok || t.volume == "" && !entries[t.name] {
 			return fail(fmt.Sprintf("snapshot %s holds %s, which no service with data of the restored code has: nothing restored", id, map[bool]string{true: "the volume " + t.name, false: "mnt/" + t.name}[t.volume != ""]))
 		}
+		// As an import refuses: a mount point of another kind would fail
+		// the extraction once the entry was emptied.
+		if t.volume != "" {
+			continue
+		}
+		if e := symlinkEntry(mnt, []string{t.name}); e != "" {
+			return fail("mnt/" + e + " is a symlink: the restore would not reach what it points to: make it a directory, mounting that there: nothing restored")
+		}
+		if fi, err := os.Stat(filepath.Join(mnt, t.name)); err == nil && fi.IsDir() == t.isFile {
+			as, is := "a directory", "a file"
+			if t.isFile {
+				as, is = is, as
+			}
+			return fail(fmt.Sprintf("snapshot %s holds mnt/%s as %s, and it is %s here: make it %s first: nothing restored", id, t.name, as, is, as))
+		}
 	}
 	var names []string
 	for _, s := range services {

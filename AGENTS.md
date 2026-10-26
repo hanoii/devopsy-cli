@@ -2252,7 +2252,8 @@ settled every rule here after nine reviews (2026-10-25).
   name compose gives its key there, never the manifest's, whose names
   must be single names (`readManifest`; review of 2026-10-25: an
   imported manifest is anyone's, and a crafted one emptied another
-  project's volume as root); the data
+  project's volume as root), and an entry of another kind than its tar
+  or a symlink refused as an import refuses them; the data
   written between the images and the switch (`restore-data`): the set
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers
