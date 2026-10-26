@@ -81,9 +81,13 @@ defaults:
   # them (devopsy @prod --snapshot, --snapshots). manual: on by default,
   # 3 kept, never more than the server's snapshots: max_keep. true and
   # false only turn a kind on or off; {keep: <n>} only counts; ~ goes back
-  # to the default.
+  # to the default. mirror: true keeps a copy of the data beside the
+  # snapshots, so a take is down only for what changed since its first
+  # pass (files that rarely change); off by default, each take down
+  # while its tars are written, and nothing kept but them.
   snapshots:
     manual: {keep: 3}
+    mirror: false
 
 # The environments: prod, staging... A name with * is a pattern (one or
 # more name characters): "pr-*" matches pr-12; an exact name wins, then the
@@ -163,4 +167,7 @@ snapshots:
   root: /mnt/backups
   # No environment keeps more manual snapshots than this. Default: 5.
   max_keep: 5
+  # false: no environment keeps a mirror here, whatever it asks (a take
+  # goes on without one, said). Unset or true: each environment decides.
+  mirror: true
 `

@@ -100,9 +100,11 @@ type Target struct {
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
 	// Snapshots is its snapshots: section, as written (merged over
-	// defaults key by key); SnapshotsManual what it resolves to.
+	// defaults key by key); SnapshotsManual what it resolves to, and
+	// SnapshotsMirror whether its takes keep a mirror (off unless set).
 	Snapshots       *TargetSnapshots `yaml:"snapshots"`
 	SnapshotsManual SnapshotSetting  `yaml:"-"`
+	SnapshotsMirror bool             `yaml:"-"`
 	// Parent is the environment this one is a copy of (a concrete key of
 	// environments:): its first release syncs the parent's data, and
 	// --sync resyncs it. Empty: not a child.
@@ -183,6 +185,8 @@ type TargetReleases struct {
 // turning a kind on everywhere). Only manual ones so far.
 type TargetSnapshots struct {
 	Manual *SnapshotKind `yaml:"manual"`
+	// Mirror is whether takes keep a mirror of the data (nil: no).
+	Mirror *bool `yaml:"mirror"`
 }
 
 // SnapshotKind is one kind's settings as written: unset fields come from
@@ -398,11 +402,17 @@ type Releases struct {
 
 // ServerSnapshots is the user-level config's snapshots: section, on a
 // server: where snapshots go, Root ("" for each environment's
-// snapshots/), and MaxKeep, the cap on any environment's manual keep.
+// snapshots/), MaxKeep, the cap on any environment's manual keep, and
+// Mirror, false when no environment there may keep a mirror (nil: each
+// environment decides).
 type ServerSnapshots struct {
 	Root    string `yaml:"root"`
 	MaxKeep int    `yaml:"max_keep"`
+	Mirror  *bool  `yaml:"mirror"`
 }
+
+// MirrorsOff says the server keeps no environment's mirror.
+func (s ServerSnapshots) MirrorsOff() bool { return s.Mirror != nil && !*s.Mirror }
 
 // configFile is one config file as read.
 type configFile struct {
@@ -479,8 +489,8 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 		case key == "snapshots":
 			var sn ServerSnapshots
 			for i := 0; i+1 < len(node.Content); i += 2 {
-				if k := node.Content[i].Value; k != "root" && k != "max_keep" {
-					return nil, fmt.Errorf("%s: snapshots: unknown key %q (root, max_keep)", file, k)
+				if k := node.Content[i].Value; k != "root" && k != "max_keep" && k != "mirror" {
+					return nil, fmt.Errorf("%s: snapshots: unknown key %q (root, max_keep, mirror)", file, k)
 				}
 			}
 			if err := node.Decode(&sn); err != nil {
@@ -631,15 +641,15 @@ func checkSnapshots(n *yaml.Node) error {
 		if n.Tag == "!!null" {
 			return nil
 		}
-		return errors.New("a mapping of kinds: manual")
+		return errors.New("a mapping: manual, mirror")
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k := n.Content[i].Value; k {
-		case "manual":
+		case "manual", "mirror":
 		case "root", "max_keep":
 			return fmt.Errorf("%s belongs to each machine's user-level config (~/.config/devopsy/config.yaml there), never to a project", k)
 		default:
-			return fmt.Errorf("unknown key %q (manual)", k)
+			return fmt.Errorf("unknown key %q (manual, mirror)", k)
 		}
 	}
 	return nil
@@ -789,23 +799,31 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 }
 
 // mergeSnapshots is over's snapshots: on base's, key by key; nulls
-// remove what is below (snapshots, snapshots.manual, snapshots.manual.keep).
+// remove what is below (snapshots, snapshots.manual,
+// snapshots.manual.keep, snapshots.mirror).
 func mergeSnapshots(base, over *TargetSnapshots, nulls map[string]bool) *TargetSnapshots {
 	if nulls["snapshots"] {
 		base = nil
 	}
+	if base == nil && over == nil {
+		return nil
+	}
+	out := &TargetSnapshots{}
 	var b, o *SnapshotKind
 	if base != nil && !nulls["snapshots.manual"] {
 		b = base.Manual
 	}
+	if base != nil && !nulls["snapshots.mirror"] {
+		out.Mirror = base.Mirror
+	}
 	if over != nil {
 		o = over.Manual
+		if over.Mirror != nil {
+			out.Mirror = over.Mirror
+		}
 	}
 	if b == nil && o == nil {
-		if over == nil && base == nil {
-			return nil
-		}
-		return &TargetSnapshots{}
+		return out
 	}
 	m := SnapshotKind{}
 	if b != nil {
@@ -825,7 +843,8 @@ func mergeSnapshots(base, over *TargetSnapshots, nulls map[string]bool) *TargetS
 			m.Keep = o.Keep
 		}
 	}
-	return &TargetSnapshots{Manual: &m}
+	out.Manual = &m
+	return out
 }
 
 // resolveSnapshots is what t's snapshots: comes to, on the built-in
@@ -1559,6 +1578,7 @@ func resolveTarget(project *Project, envs map[string]*Target, a address, addr st
 		t.From["keep"] = "releases: in " + filepath.Join(project.Dir, ConfigFile)
 	}
 	t.SnapshotsManual = resolveSnapshots(&t)
+	t.SnapshotsMirror = t.Snapshots != nil && t.Snapshots.Mirror != nil && *t.Snapshots.Mirror
 	switch t.Mode {
 	case "":
 		// Build works for every project, image only for those that never

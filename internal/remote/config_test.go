@@ -356,10 +356,18 @@ func TestReleaseSettings(t *testing.T) {
 	// snapshots: where they go (each environment's own by default) and
 	// the cap on any environment's manual keep.
 	write(t, filepath.Join(home, ConfigFile), "snapshots:\n  root: ~/backups\n  max_keep: 8\n")
-	if r, err := ReleaseSettings(); err != nil || r.Snapshots.Root != filepath.Join(home, "backups") || r.Snapshots.MaxKeep != 8 {
+	if r, err := ReleaseSettings(); err != nil || r.Snapshots.Root != filepath.Join(home, "backups") || r.Snapshots.MaxKeep != 8 || r.Snapshots.MirrorsOff() {
 		t.Fatalf("snapshots: %+v %v", r, err)
 	}
-	for conf, want := range map[string]string{"snapshots:\n  root: rel\n": "snapshots: root must be an absolute directory", "snapshots:\n  keep: 2\n": `snapshots: unknown key "keep" (root, max_keep)`} {
+	// mirror: false turns every environment's mirror off; true or unset
+	// leaves it to each.
+	for conf, off := range map[string]bool{"snapshots:\n  mirror: false\n": true, "snapshots:\n  mirror: true\n": false} {
+		write(t, filepath.Join(home, ConfigFile), conf)
+		if r, err := ReleaseSettings(); err != nil || r.Snapshots.MirrorsOff() != off {
+			t.Errorf("%q: %+v %v", conf, r.Snapshots, err)
+		}
+	}
+	for conf, want := range map[string]string{"snapshots:\n  root: rel\n": "snapshots: root must be an absolute directory", "snapshots:\n  keep: 2\n": `snapshots: unknown key "keep" (root, max_keep, mirror)`} {
 		write(t, filepath.Join(home, ConfigFile), conf)
 		if _, err := ReleaseSettings(); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v", conf, err)
@@ -397,6 +405,12 @@ environments:
       manual: {keep: ~}
   none:
     snapshots: ~
+  mirrored:
+    snapshots:
+      mirror: true
+  unmirrored:
+    snapshots:
+      mirror: ~
 `)
 	for env, want := range map[string]SnapshotSetting{
 		"prod":    {true, 10},
@@ -414,10 +428,17 @@ environments:
 			t.Errorf("%s: %+v, want %+v", env, tg.SnapshotsManual, want)
 		}
 	}
+	// mirror: off unless an environment (or defaults:) says true; ~ back
+	// to off; it merges beside manual's keys.
+	for env, want := range map[string]bool{"prod": false, "mirrored": true, "unmirrored": false, "none": false} {
+		if tg, err := LoadTarget(dir, "vm1:"+env, nil); err != nil || tg.SnapshotsMirror != want || env == "mirrored" && tg.SnapshotsManual.Keep != 4 {
+			t.Errorf("%s: mirror %v, manual %+v (%v), want mirror %v", env, tg.SnapshotsMirror, tg.SnapshotsManual, err, want)
+		}
+	}
 	for conf, want := range map[string]string{
 		"project: app\nsnapshots: {manual: true}\n":                                "snapshots: goes under defaults: or an environment",
 		"project: app\nenvironments:\n  prod: {snapshots: {root: /x}}\n":           "snapshots: root belongs to each machine's user-level config",
-		"project: app\nenvironments:\n  prod: {snapshots: {release: true}}\n":      `snapshots: unknown key "release" (manual)`,
+		"project: app\nenvironments:\n  prod: {snapshots: {release: true}}\n":      `snapshots: unknown key "release" (manual, mirror)`,
 		"project: app\nenvironments:\n  prod: {snapshots: {manual: {keep: 0}}}\n":  "keep is at least 1",
 		"project: app\nenvironments:\n  prod: {snapshots: {manual: {every: 1}}}\n": `unknown key "every" (enabled, keep)`,
 		"project: app\nenvironments:\n  prod: {snapshots: {manual: often}}\n":      "true, false, or {enabled: true|false, keep: <n>}",
