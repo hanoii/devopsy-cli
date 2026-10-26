@@ -2267,7 +2267,8 @@ settled every rule here after nine reviews (2026-10-25).
   (refused, naming each mismatch, when the current labels do not fit
   the manifest: a service gone or without data, an entry or volume no
   longer its own or another's now; on a marked environment, a current
-  data service the snapshot lacks), the tars checked, `waitBeat`, then
+  data service the snapshot lacks, or any of its entries and volumes, as
+  a sync clears a mark: review of 2026-10-25), the tars checked, `waitBeat`, then
   the data step and the deployed run step again, the output followed
   from the disarm on.
 - **A restore's mark** (`remote.IncompleteRestore`, its `From` the

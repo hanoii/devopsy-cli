@@ -1341,8 +1341,9 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 // the files to): a data service of the snapshot gone or without data
 // now, an entry or a volume it held that no service of that name mounts
 // now, or one another service with data mounts now; and on a marked
-// environment one that leaves a service with data of the current labels
-// out (the run step would start it on its half-written data).
+// environment one that leaves a service with data of the current labels,
+// or any of its entries and volumes, out (the run step would start it on
+// its half-written data).
 func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 	m, err := readManifest(snap)
 	if err != nil {
@@ -1353,14 +1354,12 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 		return err
 	}
 	var bad []string
-	covered := map[string]bool{}
 	for _, ms := range m.services {
 		cur, ok := cli.SyncFind(services, ms.name)
 		if !ok || !cur.HasData {
 			bad = append(bad, "the snapshot has data for "+ms.name+", which the current release has no service with data of")
 			continue
 		}
-		covered[ms.name] = true
 		for _, e := range ms.entries {
 			if !slices.Contains(cur.Dirs, e) {
 				bad = append(bad, ms.name+" held mnt/"+e+", which it no longer mounts")
@@ -1383,9 +1382,26 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 		}
 	}
 	if readMark(p.base) != nil {
+		// All of each, as a sync clears a mark (copiesService): an entry
+		// or a volume the snapshot lacks would keep the half-written data.
 		for _, s := range services {
-			if s.HasData && !covered[s.Name] {
+			if !s.HasData {
+				continue
+			}
+			i := slices.IndexFunc(m.services, func(ms manifestService) bool { return ms.name == s.Name })
+			if i < 0 {
 				bad = append(bad, "the environment is marked, and the snapshot has no data for "+s.Name+", which would run on what is there")
+				continue
+			}
+			for _, e := range s.Dirs {
+				if !slices.Contains(m.services[i].entries, e) {
+					bad = append(bad, "the environment is marked, and the snapshot has no mnt/"+e+" of "+s.Name+", which would stay as it is")
+				}
+			}
+			for _, k := range cli.VolumeKeys(s.Volumes) {
+				if !slices.Contains(m.services[i].volumes, k) {
+					bad = append(bad, "the environment is marked, and the snapshot has no volume "+k+" of "+s.Name+", which would stay as it is")
+				}
 			}
 		}
 	}
