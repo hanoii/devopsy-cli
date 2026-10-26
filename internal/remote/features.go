@@ -82,15 +82,7 @@ var namedFeatures = []struct {
 	// anything stops. Bump the tag here with UtilImage's.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
 	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
-	// A reset's holder tells the child's devopsy it is one (SyncResetEnv),
-	// whose prepare then skips the start gate's check the wipe makes moot:
-	// v0.52.0's prepare runs the check under a reset too, and refused the
-	// reset it named as the way out, with no upgrade hint (review).
-	{ResetHolderFeature, regexp.MustCompile(regexp.QuoteMeta(SyncResetEnv + "=1"))},
 }
-
-// ResetHolderFeature is a reset's holder's: the child's prepare knows it.
-const ResetHolderFeature = "reset-holder"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

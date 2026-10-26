@@ -3791,7 +3791,7 @@ func TestV052ChildRunsReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := filepath.Join(filepath.Dir(s.root), "old")
-	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ResetHolderFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ reset-holder / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
 	var env []string
 	for _, kv := range s.env {
 		if v, ok := strings.CutPrefix(kv, "PATH="); ok {

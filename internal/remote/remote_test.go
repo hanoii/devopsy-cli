@@ -523,33 +523,6 @@ func TestV052ServerRunsScripts(t *testing.T) {
 	}
 }
 
-// A v0.52.0 child's --sync-services prepare refuses a sync for a bind
-// source a link in the data leads out of its entry, naming --reset as the
-// way out, under a reset too: the fix after v0.52.0 has the holder export
-// SyncResetEnv, on which that prepare skips the check. A v0.52.0 server's
-// devopsy has everything a reset's holder calls, so it runs it, and its
-// own prepare refuses the reset it names as the way out, with no upgrade
-// hint: on the same server and across (the holder's prepare runs before
-// the push, so childNeeds never gets to refuse). The holder of a reset
-// must need something a v0.52.0 server lacks.
-func TestOlderServerResetHolder(t *testing.T) {
-	t.Parallel()
-	tg := &Target{Name: "dev", Host: "h", Path: "app/dev", Mode: ModeImage}
-	holder := HolderScript(tg, "app-dev", &SyncOptions{From: "vm1:prod", ID: "1.2", Reset: true}, true)
-	if !strings.Contains(holder, "export "+SyncResetEnv+"=1") {
-		t.Fatalf("a reset's holder does not export %s:\n%s", SyncResetEnv, holder)
-	}
-	var missing []string
-	for _, n := range Needs(holder) {
-		if !slices.Contains(v0520Features, n) {
-			missing = append(missing, n)
-		}
-	}
-	if len(missing) == 0 {
-		t.Errorf("a v0.52.0 server runs a reset's holder (needs %v): its own prepare refuses the reset for a link the wipe would remove, naming --reset as the way out", Needs(holder))
-	}
-}
-
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
 	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +

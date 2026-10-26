@@ -2423,6 +2423,9 @@ fi
 ` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+# The record of what could not go, for --destroy-data's removal of the
+# snapshots' images, as img gets it (review: it recorded nothing).
+export ` + ImagesLeftEnv + `="$left"
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -2438,8 +2441,12 @@ else
 fi
 d_fail=
 img remove "$base"/releases/* || d_fail=1
-# Its snapshots, their bookmarks and directory, wherever the snapshot
-# root puts them, went with --destroy-data, on the server's devopsy.
+# Its snapshots' bookmarks too, wherever the snapshot root puts them:
+# this server's --destroy-data removed them already, a v0.52.0 one's
+# does not (review), and a removal found gone is nothing.
+for d in "$snaps"/*; do
+  [ ! -d "$d" ] || img remove "$d" || d_fail=1
+done
 img prune
 image_unlock
 if [ -n "$d_fail" ]; then
@@ -2451,6 +2458,8 @@ cd /
   devopsy --say error "could not remove everything in $base"
   exit 1
 }
+# Snapshots outside $base (the server's snapshot root): their directory.
+case "$snaps" in "$base"/*) ;; *) rm -rf "$snaps" || { devopsy --say error "could not remove $snaps"; exit 1; } ;; esac
 devopsy --say info "removed $base"
 `
 }

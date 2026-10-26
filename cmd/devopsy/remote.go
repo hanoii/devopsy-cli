@@ -390,6 +390,17 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return 1
 		}
 
+		// What the release's activation needs is checked in the first
+		// session to the server too, so a server lacking it refuses before
+		// a new instance is asked about or a child's inherited variables
+		// are written (review); a release opening none before its upload
+		// is checked there, its local before steps run first (accepted:
+		// no session of its own for it).
+		// The activation's own: a sync's are checked where it is decided
+		// (the child's current), and a release that does not sync runs on a
+		// server lacking them.
+		early := remote.WithAlsoNeeds(context.Background(), remote.ActivateScript(t, "0", false, projectName, phases, nil))
+
 		// A role taken by another compose project on the server fails before
 		// anything is uploaded (--prepare-release checks it again, under the
 		// release lock).
@@ -397,7 +408,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return fail(err.Error())
 		} else if role != "" {
 			var out bytes.Buffer
-			if code, err := remote.SSH(t, remote.RoleHoldersScript(t, role), bytes.NewReader(nil), &out, false); err != nil {
+			if code, err := remote.SSHContext(early, t, nil, remote.RoleHoldersScript(t, role), bytes.NewReader(nil), &out, false, nil); err != nil {
 				return fail(err.Error())
 			} else if code != 0 {
 				return code
@@ -412,7 +423,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// A new instance is a new site: confirm it, unless --yes.
 		if t.Instance != "" && !yes {
 			var out bytes.Buffer
-			code, err := remote.SSH(t, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false)
+			code, err := remote.SSHContext(early, t, nil, remote.InstanceExistsScript(t), bytes.NewReader(nil), &out, false, nil)
 			if err != nil {
 				return fail(err.Error())
 			}
@@ -441,7 +452,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		var job *syncJob
 		if t.Parent != "" {
 			var out bytes.Buffer
-			code, err := remote.SSH(t, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false)
+			code, err := remote.SSHContext(early, t, nil, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false, nil)
 			if err != nil {
 				return fail(err.Error())
 			}
