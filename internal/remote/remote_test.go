@@ -1942,7 +1942,7 @@ exit 0
 		t.Fatal(err)
 	}
 	w.Close()
-	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+	for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	r.Close()
@@ -1965,7 +1965,7 @@ exit 0
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+		for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 			time.Sleep(50 * time.Millisecond)
 		}
 		during()
@@ -2058,7 +2058,7 @@ exit 0
 		t.Fatal(err)
 	}
 	r.Close()
-	for i := 0; i < 100 && !fileExists(filepath.Join(root, "building")); i++ {
+	for start := time.Now(); time.Since(start) < startWait && !fileExists(filepath.Join(root, "building")); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	start := time.Now()
