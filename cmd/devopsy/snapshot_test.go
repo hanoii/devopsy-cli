@@ -427,8 +427,22 @@ func TestSnapshotExportImport(t *testing.T) {
 	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + im[1]).MatchString(errs) {
 		t.Errorf("the import's restore line names no address:\n%s", errs)
 	}
+	taken := filepath.Join(s.root, "shop", "prod", "releases", m[2], remote.CodeDir)
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", im[1], "--yes"); code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 		t.Errorf("a restore of the imported snapshot (%d):\n%s", code, out)
+	}
+	// The restored release's code has the modes of the release taken
+	// (git's, Pack's), as a restore of the snapshot never exported does:
+	// the deploy user extracts the import (tar's umask, 077 there), and a
+	// container running as 10001 reads its bind-mounted files and a build
+	// copies them as they are.
+	restored := filepath.Join(s.root, "shop", "prod", "current")
+	for _, f := range []string{".devopsy", ".devopsy/compose.yaml", ".devopsy/commands/deploy"} {
+		want, err1 := os.Stat(filepath.Join(taken, f))
+		got, err2 := os.Stat(filepath.Join(restored, f))
+		if err1 != nil || err2 != nil || got.Mode() != want.Mode() {
+			t.Errorf("%s after a restore of the imported snapshot: %v, taken as %v (%v %v)", f, got.Mode(), want.Mode(), err2, err1)
+		}
 	}
 	if _, errs, code := s.runIO(nil, []byte("not a tar"), "@prod", "--snapshots", "import"); code == 0 || !strings.Contains(errs, "nothing imported") {
 		t.Errorf("no snapshot on stdin (%d):\n%s", code, errs)
