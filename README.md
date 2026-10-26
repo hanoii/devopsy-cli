@@ -963,7 +963,9 @@ the secrets its compose file requires), the mounts check refuses
   snapshot), rollbacks and restores too, and a sync whose copy brings
   one starts nothing on it: Docker would mount that of the host. On a
   server nothing in a release starts while one is there (an `up`, a
-  `start`, a `run`, devopsy's own starts), whatever brought it. A link
+  `start`, a `run`, a `cp`, devopsy's own starts), whatever brought
+  it, and what stops services to start them again (a snapshot, an
+  export, a sync from the environment) refuses before stopping them. A link
   within the entry, and an entry that is itself a link (on another
   disk), are fine.
 
