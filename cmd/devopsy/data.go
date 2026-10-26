@@ -503,8 +503,10 @@ type tarEntry struct {
 	// volume is the named volume the entry is, by the service's labels
 	// (its key is name): extracted into it, never into mnt.
 	volume *cli.Volume
-	// links are its symbolic links' names, clean (storage/public).
+	// links are its symbolic links' names, clean (storage/public), and
+	// tar the tar's links, for a walk through them (linkAtBind).
 	links []string
+	tar   *tarLinks
 	// size is its files' bytes, sparse ones whole (a restore's space
 	// warning).
 	size int64
@@ -613,6 +615,7 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 	}
 	var entries []tarEntry
 	for _, e := range seen {
+		e.tar = &links
 		entries = append(entries, *e)
 	}
 	slices.SortFunc(entries, func(a, b tarEntry) int { return strings.Compare(a.name, b.name) })

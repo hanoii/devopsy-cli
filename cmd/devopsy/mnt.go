@@ -274,6 +274,8 @@ func runCheckMounts(cwd string, args []string) int {
 		err = &report.Failure{Msg: "the mounts check refuses the release, whose labels cannot be read: it does not go live", Details: []string{err.Error()}}
 	case !restored:
 		err = cli.CheckMounts(services)
+	default:
+		err = cli.CheckLeavingBinds(services)
 	}
 	if err == nil {
 		err = checkOwned(projectDir, services)

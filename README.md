@@ -957,7 +957,12 @@ the secrets its compose file requires), the mounts check refuses
   host's root. Bind the entry itself (`./mnt/storage:/app/storage`) and
   use the path below it inside the container;
 - an owned entry that is a symbolic link in `shared/mnt`: Docker would
-  mount what it points to, and devopsy give that to the owner.
+  mount what it points to, and devopsy give that to the owner;
+- a bind mount from below an entry that a symbolic link in the entry
+  leads out of it (`storage/public -> /`, made by hand or by a restored
+  snapshot), rollbacks too: Docker would mount that of the host. A link
+  within the entry, and an entry that is itself a link (on another
+  disk), are fine.
 
 A bind mount's source counts as written and as where its symbolic links
 lead, since Docker mounts that: a link in the release to below an owned
@@ -1506,8 +1511,9 @@ from the clone afterwards, nobody waiting; the clone then goes, and a
 mirror left from before with it. `--snapshots` says how the last take
 copied. A snapshot holds files, directories and symbolic links
 (wherever they lead, an app's absolute ones included: a restore makes
-them as they were and follows none, and refuses one where a service
-bind-mounts a path, which Docker would follow), sparse files with their holes:
+them as they were and follows none, and refuses one that makes a path
+a service bind-mounts lead out of its entry, which Docker would follow),
+sparse files with their holes:
 FIFOs, sockets and device nodes are left out (no restore takes them),
 and hard links come back as files of their own. Plain
 `tar.zst` files, one per entry or volume, restorable by hand
@@ -1542,7 +1548,8 @@ its switch: what a take stops stops (with a
 mirror only for what changed while its images were fetched), the tars
 are written (or, with a mirror, made from it afterwards, nobody
 waiting), and the services stay stopped until the new release's run
-step starts them under its code. The downtime is that stop, the switch
+step starts them under its code (what it leaves stopped, devopsy starts
+after it, said; a restore's likewise). The downtime is that stop, the switch
 and the `up`; without a mirror it includes the tars. A session gone or
 a Ctrl-C before the switch cancels the release and starts them again;
 a failure taking the snapshot (too little space, Docker) fails the
@@ -1596,9 +1603,16 @@ aws s3 cp - s3://...`: devopsy owns no storage of its own; takes,
 releases and restores go on meanwhile, and a removal or pruning leaves
 the snapshot being exported, said), and
 `--snapshots import` stores one from stdin into the same environment,
-on this server or another, checked whole, under a new id: on a new
+on this server or another, checked whole (its tars as a restore checks
+them, nothing but files and directories outside its code, its image
+listing cut to the current release's services and their
+repositories), under a new id: on a new
 server, release the project first, then import and restore it
-(`--with-env` brings its secrets). Images stay out of it: a restore
+(`--with-env` brings its secrets). Import only snapshots you trust: a
+full restore runs the snapshot's code as the deploy user (its steps,
+its compose file, its Dockerfiles), and `--with-env` applies its
+variables to whatever code runs; a `--no-code` restore runs nothing of
+it, its data checked as for any restore. Images stay out of it: a restore
 pulls the pulled ones by their digest and builds the built ones from
 the snapshot's code. `--snapshots remove <id>` removes one with the
 images only it holds; `--destroy` removes them all, and its prompt says

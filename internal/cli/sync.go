@@ -173,6 +173,12 @@ type SyncService struct {
 	// (storage, storage/files), read-only ones too: one below an owned
 	// entry is refused (CheckMounts).
 	Binds []string
+	// LeavingBinds are its bind sources below an entry of mnt that a
+	// symbolic link in the entry leads out of it (storage/public -> /),
+	// as "<source> -> <where it leads>": Docker mounts that of the host
+	// (CheckMounts refuses them). A link to the entry itself (an entry on
+	// another disk) is the entry's place, never one.
+	LeavingBinds []string
 	// WholeMnt is whether it mounts ./mnt whole writable, which a service
 	// without data or an owner may as far as parsing goes, and
 	// CheckMounts refuses: it would write every entry, which the child
@@ -424,6 +430,13 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			src := filepath.Clean(v.Source)
 			r := resolvePath(src)
 			d, rd := mntEntry(src, mnts), mntEntry(r, mnts)
+			if rel := mntPath(src, mnts); d != "" && d != "." && rel != d {
+				if er := resolvePath(filepath.Join(mntRoot(src, mnts), d)); !within(r, er) {
+					if l := rel + " -> " + r; !slices.Contains(cs.LeavingBinds, l) {
+						cs.LeavingBinds = append(cs.LeavingBinds, l)
+					}
+				}
+			}
 			for _, rel := range []string{mntPath(src, mnts), mntPath(r, mnts)} {
 				if rel != "" && rel != "." && !slices.Contains(cs.Binds, rel) {
 					cs.Binds = append(cs.Binds, rel)
@@ -544,6 +557,16 @@ func mntEntry(source string, mnts []string) string {
 	return strings.SplitN(rel, string(filepath.Separator), 2)[0]
 }
 
+// mntRoot is the one of mnts source is in, "" outside them.
+func mntRoot(source string, mnts []string) string {
+	for _, m := range mnts {
+		if within(source, m) {
+			return m
+		}
+	}
+	return ""
+}
+
 // mntPath is source relative to mnt, "." for mnt itself, "" outside it.
 func mntPath(source string, mnts []string) string {
 	for _, m := range mnts {
@@ -607,6 +630,25 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 	return owners, nil
 }
 
+// CheckLeavingBinds refuses the bind sources a symbolic link in their
+// entry leads out of it (SyncService.LeavingBinds), alone: a rollback's
+// check (--check-mounts restored), whose labels otherwise refuse
+// nothing, since Docker would mount that of the host whatever release
+// runs (a restored snapshot's link outlives the code it was checked in:
+// review).
+func CheckLeavingBinds(services []SyncService) error {
+	var bad []string
+	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return &report.Failure{Msg: "the mounts check refuses the rollback: it does not go live", Details: bad, Fixes: []report.Remedy{report.Fix("remove the link (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly")}}
+}
+
 // CheckMounts refuses, before a release goes live, the mounts whose data
 // would not be what the labels say (services as SyncServices read them,
 // so ./mnt whole as data or an owner's is refused already): ./mnt whole
@@ -620,13 +662,18 @@ func MntOwners(services []SyncService) (map[string]string, error) {
 // and a bind source below an owned entry (./mnt/storage/files), by any
 // service, read-only too: the entry's owner can replace that path with a
 // symbolic link, and Docker resolves a bind source on the host (a link
-// to / would mount the host's root).
+// to / would mount the host's root); and a bind source a link in its
+// entry leads out of it (LeavingBinds), whoever made it.
 func CheckMounts(services []SyncService) error {
 	var bad []string
 	var fixes []report.Remedy
-	tree, data, owner, whole, below := false, false, false, false, false
+	tree, data, owner, whole, below, leaving := false, false, false, false, false, false
 	owners, ownersErr := MntOwners(services)
 	for _, s := range services {
+		for _, l := range s.LeavingBinds {
+			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
+			leaving = true
+		}
 		for _, b := range s.Binds {
 			if e, _, under := strings.Cut(b, string(filepath.Separator)); under && owners[e] != "" {
 				bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s, below the owned entry ./mnt/%s (%s=%s): its owner can make that path a symbolic link, and Docker would mount what it points to on the host", s.Name, b, e, MntOwnerLabel, owners[e]))
@@ -671,6 +718,9 @@ func CheckMounts(services []SyncService) error {
 	}
 	if below {
 		fixes = append(fixes, report.Fix("bind-mount the entry itself (./mnt/<name>) and use the path below it inside the container"))
+	}
+	if leaving {
+		fixes = append(fixes, report.Fix("remove the link (a restored snapshot's, or one made by hand), or bind-mount where it leads explicitly"))
 	}
 	return &report.Failure{Msg: "the mounts check refuses the release: it does not go live", Details: bad, Fixes: fixes}
 }

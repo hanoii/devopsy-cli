@@ -535,9 +535,11 @@ func TestSnapshotExportImport(t *testing.T) {
 		t.Fatalf("export (%d):\n%s", code, errs)
 	}
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "changed\n", 0o644)
-	_, errs, code = s.runIO(nil, exported, "@prod", "--snapshots", "import")
+	// No room: an import checks the tars alone, never the space a restore
+	// of them needs (that restore warns).
+	_, errs, code = s.runIO([]string{"FAKE_FREE_KB=0", "FAKE_DU=0"}, exported, "@prod", "--snapshots", "import")
 	im := regexp.MustCompile(`imported snapshot ` + m[1] + ` as ([0-9]{14})`).FindStringSubmatch(errs)
-	if code != 0 || im == nil || im[1] == m[1] {
+	if code != 0 || im == nil || im[1] == m[1] || strings.Contains(errs, "may not fit") {
 		t.Fatalf("import (%d):\n%s", code, errs)
 	}
 	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + im[1]).MatchString(errs) {

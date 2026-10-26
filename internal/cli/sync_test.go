@@ -346,6 +346,37 @@ func TestCheckMounts(t *testing.T) {
 	if err := check(`"db":{"labels":{"devopsy.data":"true"},"volumes":[{"type":"volume","source":"dbdata","target":"/var/lib/mysql"}]}`); err != nil {
 		t.Errorf("data in a named volume alone: %v", err)
 	}
+	// A bind source below an entry nobody owns, a link in the entry
+	// leading out of it (a restored snapshot's storage/public -> /): Docker
+	// would mount that of the host, whatever release runs, so a rollback's
+	// check refuses it too (CheckLeavingBinds). A link within the entry
+	// (web/current -> v1), and an entry that is itself a link (on another
+	// disk), are the data's own place.
+	far := filepath.Join(t.TempDir(), "disk")
+	for _, d := range []string{filepath.Join(shared, "mnt", "web", "v1"), far} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for l, target := range map[string]string{"web/public": "/", "web/current": "v1", "far": far} {
+		if err := os.Symlink(target, filepath.Join(shared, "mnt", l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := check(`"app":{"volumes":[` + bind(dot+"/mnt/web/current", false) + `,` + bind(dot+"/mnt/far/x", false) + `]}`); err != nil {
+		t.Errorf("a link within its entry, an entry on another disk: %v", err)
+	}
+	leaving := `"app":{"volumes":[` + bind(dot+"/mnt/web/public", true) + `]}`
+	if err := check(leaving); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "app mounts ./mnt/web/public -> / through a symbolic link out of its entry: Docker would mount that of the host") {
+		t.Errorf("a bind source a link leads out of its entry: %v %q", err, report.Details(err))
+	}
+	parsed, err := parseSyncServices([]byte(`{"services":{`+leaving+`}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckLeavingBinds(parsed); err == nil || err.Error() != "the mounts check refuses the rollback: it does not go live" {
+		t.Errorf("a rollback's check of a bind source a link leads out of its entry: %v", err)
+	}
 	for services, want := range map[string]string{
 		`"app":{"volumes":[` + bind(root+"/src", false) + `]}`:                                                              "app mounts ./src writable: it is in the release, and the next one replaces it",
 		`"app":{"volumes":[` + bind(dot+"/cache/x", false) + `]}`:                                                           "app mounts ./.devopsy/cache/x writable",

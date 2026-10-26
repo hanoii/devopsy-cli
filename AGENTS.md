@@ -1142,10 +1142,15 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   sync" and a child's first release went live on empty data), two
   owners on one entry, `./mnt` whole mounted writable by any service
   (`WholeMnt`, below), a bind source below an owned entry
-  (`Binds`), and an owned entry that is a symbolic link in `shared/mnt`
+  (`Binds`), an owned entry that is a symbolic link in `shared/mnt`
   (`ownedLinks`: Docker would mount what
   it points to, for the owners' step to give away; `makeEntry` refuses
-  one too, wherever owners are given). With an entry owned it readies `UtilImage`
+  one too, wherever owners are given), and a bind source below an entry
+  that a link in the entry leads out of it (`LeavingBinds`: the entry
+  resolved first, so an entry on another disk is its own place; review
+  of snapshots, round 3: a restored snapshot's link outlived the code
+  its restore was checked in, and a rollback went live on it), which
+  rollbacks refuse too (`--check-mounts restored`, `CheckLeavingBinds`). With an entry owned it readies `UtilImage`
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: absolute paths. It reads the labels
@@ -2354,12 +2359,16 @@ settled every rule here after nine reviews (2026-10-25).
   target, which is the data's own wherever it leads (`anyTarget`:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
-  made every snapshot unrestorable), but none at or above a bind
-  source of the code that will run (`linkAtBind`: Docker resolves a
-  bind source on the host, and the mounts check allows one below an
-  entry nobody owns; review round 2: an imported snapshot's
-  `storage/public -> /` mounted the host's root), checked in that code
-  (`$code` for a full restore, current for `--no-code`), one entry per
+  made every snapshot unrestorable), but none that makes a bind source
+  of the code that will run lead out of its entry, walked through the
+  tar's own links (`linkAtBind`, `tarLinks.walk`: Docker resolves a bind
+  source on the host, and the mounts check allows one below an entry
+  nobody owns; review round 2: an imported snapshot's `storage/public ->
+  /` mounted the host's root; round 3: refusing every link there made
+  `storage/public -> v1` backups unrestorable), checked in that code
+  (`$code` for a full restore, current for `--no-code`); the data
+  outlives that code, so every release and rollback refuses such a bind
+  too (`LeavingBinds`, Data, destroying and removing), one entry per
   tar, of the manifest's kind, its members named plainly as a take names them: the
   extraction matches by that name alone; a data image gone pulled by its
   digest in the service's own repository as the snapshot's listing names
@@ -2440,7 +2449,16 @@ settled every rule here after nine reviews (2026-10-25).
   archive/tar to its end-of-archive blocks, since GNU tar takes a stream
   cut at a member's boundary for complete: round 2; modes as the tar has
   them, `-p`, never the import's umask 077, which stripped the code's a
-  restore then ran: review), checked whole as a restore checks (`imported`),
+  restore then ran: review), nothing but files and directories outside
+  its `code/` (a link among its own files had the import read and write
+  another snapshot's manifest: review round 3), checked whole as a
+  restore checks (`imported`), its tars only (no pull, no space
+  warning), its image listing cut to the current release's services and
+  their repositories (`images.FilterImported`: a crafted listing had
+  the server pull and tag another repository's image, and its removal
+  strip names of images nothing else held: review round 3), the
+  snapshot's `code/` trusted by design (a full restore runs it; the
+  README says to import only snapshots one trusts),
   renamed under a new id, its images bookmarked where the server has
   them, a release snapshot made a manual one (its release is not there,
   and pruning would take it for one whose release went: review), its

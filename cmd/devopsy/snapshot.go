@@ -359,7 +359,7 @@ func runSnapshotStep(cwd string, args []string) int {
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " check-tars <snapshot>")
 		}
-		if err := snapshotCheckTars(cwd, p, args[1]); err != nil {
+		if err := snapshotCheckTars(cwd, p, args[1], true); err != nil {
 			return fail(err.Error())
 		}
 		return 0
@@ -1892,7 +1892,7 @@ func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait
 // carrying its own
 // entry or volume alone and of the kind the manifest says; and has the
 // images its data services ran there (pulled by digest when gone).
-func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
+func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) error {
 	ctx, stop := interruptible()
 	defer stop()
 	m, err := readManifest(snap)
@@ -1937,12 +1937,17 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string) error {
 			// name alone (GNU tar takes ./storage/x only by ./storage).
 			err = errors.New("it names " + t.name + "'s members otherwise than " + t.name + "/...")
 		case t.volume == "":
-			err = linkAtBind(es[0].links, services)
+			err = linkAtBind(es[0], services)
 		}
 		if err != nil {
 			return fmt.Errorf("snapshot %s's %s: %v: nothing restored", filepath.Base(snap), t.file, err)
 		}
 		sizes[t] = es[0].size
+	}
+	// An import checks the tars alone: its images come at its restore,
+	// pulled where the restored code's listing says, and its space too.
+	if !restore {
+		return nil
 	}
 	restoreSpace(ctx, cwd, filepath.Base(snap), projectDir, services, sizes)
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
@@ -1975,16 +1980,27 @@ func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cl
 	if err != nil {
 		return
 	}
-	names := map[string]string{}
+	// Only what the restore writes: the entries and volumes the code's
+	// services with data have.
+	names, entries := map[string]string{}, map[string]bool{}
 	for _, s := range services {
+		if !s.HasData {
+			continue
+		}
 		for _, v := range s.Volumes {
 			names[v.Key] = v.Name
+		}
+		for _, d := range s.Dirs {
+			entries[d] = true
 		}
 	}
 	run := []string{"-v", mnt + ":/m:ro"}
 	var paths []string
 	need := map[string]int64{}
 	for t, n := range sizes {
+		if t.volume == "" && !entries[t.name] {
+			continue
+		}
 		p := "/m/" + t.name
 		if t.volume != "" {
 			name := names[t.name]
@@ -2034,19 +2050,29 @@ func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cl
 	}
 }
 
-// linkAtBind refuses a snapshot's symbolic link (links, clean names
-// under mnt) at a bind source of services or above one: a snapshot's
-// links may lead anywhere (tarEntriesIn's anyTarget), and Docker
-// resolves a bind source on the host, so storage/public -> / mounts the
-// host's root into the service binding ./mnt/storage/public (review:
-// the mounts check allows a bind below an entry nobody owns).
-func linkAtBind(links []string, services []cli.SyncService) error {
+// linkAtBind refuses a snapshot's entry e whose tar makes a bind source
+// of services (or a directory above one) a symbolic link that leads out
+// of the entry, walked through the tar's own links as the kernel would
+// (tarLinks.walk): a snapshot's links may lead anywhere (tarEntriesIn's
+// anyTarget), and Docker resolves a bind source on the host, so
+// storage/public -> / mounts the host's root into the service binding
+// ./mnt/storage/public (review: the mounts check allows a bind below an
+// entry nobody owns). A link that stays in its entry (storage/public ->
+// v1) is fine (review: refusing every link there made such backups
+// unrestorable).
+func linkAtBind(e tarEntry, services []cli.SyncService) error {
+	if e.tar == nil {
+		return nil
+	}
 	for _, s := range services {
 		for _, b := range s.Binds {
-			for _, l := range links {
-				if b == l || strings.HasPrefix(b, l+"/") {
-					return fmt.Errorf("%w: %s is a symbolic link where %s bind-mounts mnt/%s, which Docker would follow on the host", errOutside, l, s.Name, b)
-				}
+			rest, ok := strings.CutPrefix(b, e.name+"/")
+			if !ok || !slices.ContainsFunc(e.links, func(l string) bool { return b == l || strings.HasPrefix(b, l+"/") }) {
+				continue
+			}
+			hops := 0
+			if _, err := e.tar.walk([]string{e.name}, rest, &hops); err != nil {
+				return fmt.Errorf("%w: %s bind-mounts mnt/%s, which the snapshot's links make a path that %v, which Docker would follow on the host", errOutside, s.Name, b, err)
 			}
 		}
 	}
@@ -2067,6 +2093,28 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	}
 	old := ents[0].Name()
 	dir := filepath.Join(tmp, old)
+	// Files and directories only, but in its code (a release's tree may
+	// hold links, and a restore runs that code anyway): a link among its
+	// own files had the import read and write another snapshot's
+	// (manifest -> ../../<id>/manifest), and a FIFO would hang a read.
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, path)
+		if rel == remote.CodeDir && !d.IsDir() {
+			return fmt.Errorf("its %s is no directory", remote.CodeDir)
+		}
+		if strings.HasPrefix(rel, remote.CodeDir+string(filepath.Separator)) {
+			return nil
+		}
+		if !d.IsDir() && !d.Type().IsRegular() {
+			return fmt.Errorf("%s is no file or directory", rel)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("the snapshot holds what a snapshot never does (%v): nothing imported", err)
+	}
 	m, err := readManifest(dir)
 	if err != nil {
 		return fmt.Errorf("the snapshot has no manifest (%v): nothing imported", err)
@@ -2074,7 +2122,14 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	if m.format != remote.SnapshotFormat {
 		return fmt.Errorf("the snapshot is of a format this devopsy does not know (%s): upgrade the server's devopsy: nothing imported", cmp.Or(m.format, "none"))
 	}
-	if err := snapshotCheckTars(cwd, p, dir); err != nil {
+	if err := snapshotCheckTars(cwd, p, dir, false); err != nil {
+		return err
+	}
+	// Its listing cut to the current release's services and their
+	// repositories (FilterImported): the images it names are anyone's.
+	if cur := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), images.ListFile); cur == "" {
+		return errors.New("the current release cannot be found: nothing imported")
+	} else if err := images.FilterImported(dir, filepath.Dir(cur)); err != nil {
 		return err
 	}
 	var ids []string

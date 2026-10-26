@@ -559,6 +559,27 @@ func (s *Set) SnapshotPull(snap, data string) error {
 	return nil
 }
 
+// FilterImported keeps of an imported snapshot's listing (snap's, anyone's
+// file) only the entries of a service the current release (cur) lists
+// too, in the same repository: what a later pull (SnapshotPull's own
+// repository), its bookmarks (BookmarkFrom) and its removal take names
+// from (review: a crafted listing had the server pull and tag another
+// repository's image, and its removal strip names of images nothing
+// else held).
+func FilterImported(snap, cur string) error {
+	mine := map[string]bool{}
+	for _, e := range readList(cur) {
+		mine[e.Service+" "+repoKey(e.Ref)] = true
+	}
+	var kept []entry
+	for _, e := range readList(snap) {
+		if e.Service != "" && mine[e.Service+" "+repoKey(e.Ref)] {
+			kept = append(kept, e)
+		}
+	}
+	return writeList(snap, kept)
+}
+
 // syncPrefix names a listing's entry for a parent's image a sync got for
 // a service (SyncCheck): listed, so bookmarked and removed with the
 // release, never a service of its own.
