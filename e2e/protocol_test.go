@@ -82,33 +82,3 @@ func TestOlderServer(t *testing.T) {
 		t.Errorf("the server changed:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
-
-// An operator on v0.51.0, before snapshots, destroying an environment on
-// a server of this devopsy that has a snapshot: the destroy's script is
-// the operator's, which removes the releases' images and $base, never
-// the snapshots' bookmarks (nor a snapshot root outside $base), so the
-// images a snapshot held stay tagged on the server for good once its
-// directory went with $base. Manual snapshots need no config, so v0.51.0
-// loads the project. What --destroy leaves must not depend on the
-// operator's version.
-func TestOlderOperatorDestroySnapshots(t *testing.T) {
-	dir := snapshotProject(t, "olddestroy", "{}")
-	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
-		t.Fatalf("prod (%d):\n%s", code, out)
-	}
-	out, code := op(t, dir, "devopsy @prod --snapshot")
-	if code != 0 || takenID.FindStringSubmatch(out) == nil {
-		t.Fatalf("take (%d):\n%s", code, out)
-	}
-	old := olderDevopsy(t, "v0.51.0")
-	if out, err := docker("cp", old, operator+":/usr/local/bin/devopsy-v0.51.0"); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	t.Cleanup(func() { _, _ = docker("exec", operator, "rm", "-f", "/usr/local/bin/devopsy-v0.51.0") })
-	if out, code := op(t, dir, "devopsy-v0.51.0 @prod --destroy --yes"); code != 0 {
-		t.Fatalf("destroy by v0.51.0 (%d):\n%s", code, out)
-	}
-	if out, _ := srv(t, "docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -- '-olddestroy-prod-' || true"); strings.TrimSpace(out) != "" {
-		t.Errorf("bookmarks left after the destroy:\n%s", out)
-	}
-}

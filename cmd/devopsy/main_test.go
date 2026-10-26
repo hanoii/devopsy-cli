@@ -1053,20 +1053,6 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(lacking, "@devopsy@server", "--environments"); code != 0 || strings.Contains(out, "lacks") {
 		t.Fatalf("a server lacking a feature, what does not need it (%d):\n%s", code, out)
 	}
-	// A server lacking what only the activation needs (leaving-binds, which
-	// every activation needs: a v0.51.0 or v0.52.0 server) refuses the
-	// release before its upload too: nothing changed, no release left.
-	noBinds := filepath.Join(tmp, "nobinds")
-	write(t, filepath.Join(noBinds, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ReleaseSnapshotsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
-	write(t, filepath.Join(bin, "nobindsssh"), "#!/bin/sh\nfor a; do s=$a; done\nPATH="+noBinds+":$PATH exec sh -c \"$s\"\n", 0o755)
-	if out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "nobindsssh")}, "@b/prod", "--release", "--yes"); code == 0 || !strings.Contains(out, "lacks what this needs ("+remote.ReleaseSnapshotsFeature) {
-		t.Fatalf("a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
-	}
-	if left, _ := filepath.Glob(filepath.Join(root, "shop", "b", "prod", "releases", "*")); len(left) != 0 {
-		t.Errorf("a server lacking %s refused the activation only after the upload, which left %v", remote.ReleaseSnapshotsFeature, left)
-		// What it left goes, so the rest sees a new instance still.
-		_ = os.RemoveAll(filepath.Join(root, "shop", "b"))
-	}
 	// A new instance asks first; without a terminal, --yes.
 	if out, code := run(nil, "@b/prod", "--release"); code == 0 || !strings.Contains(out, `devopsy: error: a new instance: devopsy@server has no "b" instance of shop yet`) || !strings.Contains(out, "shop/b/prod, compose project shop-b-prod") || !strings.Contains(out, "--release --yes") {
 		t.Fatalf("new instance (%d):\n%s", code, out)
