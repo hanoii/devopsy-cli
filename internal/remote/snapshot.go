@@ -156,6 +156,11 @@ func snapshotEnv(t *Target, keep int) string {
 	return SnapshotKeepEnv + "=" + strconv.Itoa(keep) + " " + SnapshotReleaseKeepEnv + "=" + strconv.Itoa(t.SnapshotsRelease.Keep) + " " + SnapshotMirrorEnv + "=" + map[bool]string{true: "1", false: "0"}[t.SnapshotsMirror]
 }
 
+// RestoreSnapshotEnv names a restore's own release snapshot (taken right
+// before, in the same session), whose stopped services its data step keeps
+// down and owns from its mark.
+const RestoreSnapshotEnv = "DEVOPSY_INTERNAL_RESTORE_SNAPSHOT"
+
 // SnapshotReleaseKeepEnv is how many release snapshots a pruning keeps
 // (KeepAll: every one whose release is kept), sent by the operator from
 // the environment's snapshots: {release: {keep}}.
@@ -274,7 +279,8 @@ trap '' INT TERM HUP PIPE
 # From here it goes on whatever happens to the session: the output to the
 # current release's server log, which the session follows.
 out="$base/$cur/` + ServerLogFile + `"
-` + followOutput + step("restore-data", `"$snap"`, `"$base/$cur"`) + ` || exit 1
+` + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
+` + step("restore-data", `"$snap"`, `"$base/$cur"`) + ` || { ` + unsnap + `exit 1; }
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?

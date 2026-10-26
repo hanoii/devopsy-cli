@@ -1031,7 +1031,8 @@ fi
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
-		s += "trap '' PIPE\n" + followOutput + `if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
+		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
+if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
   set +e
   if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `

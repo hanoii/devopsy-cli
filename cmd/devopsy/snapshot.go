@@ -1937,22 +1937,16 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		return fail(err.Error())
 	}
 	// What its snapshot of the data it replaces left stopped (release
-	// snapshots on, its pre-restore pass in this same session) is the
-	// restore's: its stop lines, kept down for its data step, never started
-	// by the settle below as a take's cut off.
-	if rec, ok := readSyncRecord(cwd); ok && len(rec.snaps) > 0 && os.Getenv(remote.SnapshotReleaseKeepEnv) != "" {
-		for _, name := range rec.snaps {
-			if !slices.Contains(rec.stops, name) {
-				rec.stops = append(rec.stops, name)
-			}
+	// snapshots on, its pre-restore pass in this same session, named by
+	// remote.RestoreSnapshotEnv) stays down for its data step, never
+	// started by the settle as a take's cut off; it becomes the restore's
+	// at its mark, below, and a refusal before that leaves it to the
+	// script's hook, which starts it again.
+	own := os.Getenv(remote.RestoreSnapshotEnv)
+	if rec, ok := readSyncRecord(cwd); own == "" || !ok || rec.snapID != own {
+		if err := settleSnapshots(cwd, p.base); err != nil {
+			return fail(err.Error())
 		}
-		rec.snaps, rec.snapID = nil, ""
-		if err := rec.write(cwd); err != nil {
-			return fail(err.Error() + ": nothing restored")
-		}
-	}
-	if err := settleSnapshots(cwd, p.base); err != nil {
-		return fail(err.Error())
 	}
 	projectDir, services, err := cli.SyncServices(cwd, os.Environ())
 	if err != nil {
@@ -2064,6 +2058,20 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			report.Error(rerr.Error())
 		}
 		return fail(err.Error() + ": nothing restored")
+	}
+	if rec, ok := readSyncRecord(cwd); own != "" && ok && rec.snapID == own {
+		for _, name := range rec.snaps {
+			if !slices.Contains(rec.stops, name) {
+				rec.stops = append(rec.stops, name)
+			}
+		}
+		rec.snaps, rec.snapID = nil, ""
+		if err := rec.write(cwd); err != nil {
+			if rerr := restore(); rerr != nil {
+				report.Error(rerr.Error())
+			}
+			return fail(err.Error() + ": nothing restored")
+		}
 	}
 	if err := markIncomplete(p.base, id, remote.IncompleteRestore, "it failed or was cut after its first write: its data may be partial", false); err != nil {
 		if rerr := restore(); rerr != nil {
