@@ -777,3 +777,32 @@ func TestSnapshotManifestNames(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A restore completes only once its run step started what it stopped:
+// one whose run step fails, full or --no-code, stays marked (a shell
+// killed between its data and its run step leaves the same), and the
+// same restore again completes it, its mark and record gone.
+func TestSnapshotRestoreRunFails(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	for _, args := range [][]string{{"--no-code"}, {}} {
+		out, code = s.run([]string{"FAKE_FAIL_DEPLOY=1"}, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		mark := readString(filepath.Join(base, remote.SyncIncompleteFile))
+		// The fake's deploy starts nothing, so only the first restore finds
+		// services running to stop and record.
+		if code == 0 || !strings.Contains(mark, "\t"+remote.IncompleteRestore+"\t") || len(args) > 0 && !fileExists(filepath.Join(base, syncState)) {
+			t.Errorf("%v: a failed run step (%d) left mark %q, record %v:\n%s", args, code, mark, fileExists(filepath.Join(base, syncState)), out)
+		}
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if code != 0 || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || fileExists(filepath.Join(base, syncState)) {
+			t.Errorf("%v: the restore again (%d) left the mark or the record:\n%s", args, code, out)
+		}
+	}
+}

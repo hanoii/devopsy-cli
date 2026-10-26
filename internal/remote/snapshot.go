@@ -212,6 +212,11 @@ rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
 img() { ` + devopsyCall(projectName, []string{"--images", "--name", t.ComposeName(), "--mode", mode, "--address", hintAddress(t)}, false) + ` --left ` + leftPath(t) + ` "$@"; }
 img ran "$base" "$base/$cur" || true
+if [ "$rs" = 0 ]; then
+  ` + step("restored", `"$snap"`) + ` || rs=1
+else
+  devopsy --say error "the run step failed ($rs): the restore stays marked: restore it again" || true
+fi
 exit "$rs"
 `
 	return s

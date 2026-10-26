@@ -208,6 +208,14 @@ func runSnapshotStep(cwd string, args []string) int {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release>")
 		}
 		return snapshotRestoreData(cwd, p, args[1], args[2])
+	case "restored":
+		if len(args) != 2 {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restored <snapshot>")
+		}
+		if err := snapshotRestored(cwd, p, args[1]); err != nil {
+			return fail(err.Error())
+		}
+		return 0
 	case "tar":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " tar <id>")
@@ -1504,7 +1512,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 	}
 	set := cli.WithDependents(services, names, "restore")
-	stopped, restore, err := stopSet(cwd, set, true)
+	_, restore, err := stopSet(cwd, set, true)
 	if err != nil {
 		if rerr := restore(); rerr != nil {
 			report.Error(rerr.Error())
@@ -1584,16 +1592,28 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		}
 		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "devopsy --snapshots restore "+id+" --with-env brings it back too")
 	}
-	_ = os.Remove(filepath.Join(p.base, remote.SyncIncompleteFile))
-	rec, _ := readSyncRecord(cwd)
-	rec.stops = slices.DeleteFunc(rec.stops, func(s string) bool { return slices.Contains(stopped, s) })
-	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.snaps) == 0 && len(rec.writers) == 0 {
-		_ = os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
-	} else if err := rec.write(cwd); err != nil {
-		return fail(err.Error())
-	}
+	// The mark and the record stay until the run step has started the set
+	// (restored): a shell killed before it leaves the set down, marked.
 	report.Info("snapshot " + id + "'s data is in")
 	return 0
+}
+
+// snapshotRestored completes a restore once its run step went through:
+// its mark (still its own) and the record of what it stopped, whole (a
+// restore run again after a cut one stopped nothing itself: the lines
+// are the first one's, and the run step started them all).
+func snapshotRestored(cwd string, p snapshotPaths, snap string) error {
+	id := filepath.Base(snap)
+	if m := readMark(p.base); m != nil && m.Code == remote.IncompleteRestore && m.From == id {
+		if err := os.Remove(filepath.Join(p.base, remote.SyncIncompleteFile)); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(p.base, syncState)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	report.Info("the restore of snapshot " + id + " is complete")
+	return nil
 }
 
 // envKeysDiffer are the keys whose values differ between two .env files,

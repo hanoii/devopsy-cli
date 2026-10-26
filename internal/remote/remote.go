@@ -1126,6 +1126,10 @@ if [ "$status" != 0 ]; then
   exit "$status"
 fi
 `
+	if restore != nil {
+		// Its mark and record go once the run step started the set.
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || exit 1\n"
+	}
 	if rollback && restore == nil {
 		// The release it left: never counted toward keep, never rolled back
 		// to again, its log kept until pruning takes it.

@@ -2258,7 +2258,11 @@ settled every rule here after nine reviews (2026-10-25).
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers
   named with `ImportContainerPrefix`), the data services held on the
-  snapshot's images (`ImportDone`), the mark cleared. Never marks the
+  snapshot's images (`ImportDone`); the mark and the record of what it
+  stopped go, the record whole, only once the run step went through
+  (`restored`; review of 2026-10-25: cleared by the data step, a shell
+  killed before the run step left the set down unmarked, and a restore
+  run again left the cut one's stop lines). Never marks the
   release it leaves rolled back: a rollback after it goes back there.
   `--with-env` brings `shared/.env` and `inherit.env` back; without it the
   keys that differ are said.
@@ -2269,8 +2273,8 @@ settled every rule here after nine reviews (2026-10-25).
   longer its own or another's now; on a marked environment, a current
   data service the snapshot lacks, or any of its entries and volumes, as
   a sync clears a mark: review of 2026-10-25), the tars checked, `waitBeat`, then
-  the data step and the deployed run step again, the output followed
-  from the disarm on.
+  the data step and the deployed run step again, then `restored`, the
+  output followed from the disarm on.
 - **A restore's mark** (`remote.IncompleteRestore`, its `From` the
   snapshot): every reader branches on it (`markRefusal`, the restart
   skip, `syncBlock`, `ImportScript`, the operator's release check, the
