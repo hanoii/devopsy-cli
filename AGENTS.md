@@ -1216,9 +1216,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   push's is: review, the child refused the `--reset` it named as the way
   out; accepted: a reset whose push aborts before its wipe, the data as
   it was, leaves the child's set down, the gate saying which link); a
-  restore in the entries it keeps (`check-tars`). A take and an export
-  check only when something of their set runs (`gateBeforeStop`: none
-  running, they stop and start nothing). Its message carries the links
+  restore in the entries it keeps (`check-tars`). A take, an export and
+  a sync's push check only when something of their set runs
+  (`gateBeforeStop`: none running, they stop and start nothing; review
+  after v0.52.1, the push was refused for a start that never came). Its message carries the links
   in its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
