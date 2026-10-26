@@ -481,6 +481,36 @@ func TestSnapshotImportReleaseKind(t *testing.T) {
 	}
 }
 
+// --snapshots says how the last take copied, never how a snapshot
+// imported from elsewhere was taken there: one taken by reflinks on prod,
+// imported into solo, whose takes write their tars stopped.
+func TestSnapshotsLineImported(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run([]string{"FAKE_REFLINK=1"}, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("prod's take (%d):\n%s", code, out)
+	}
+	exported, errs, code := s.runIO(nil, nil, "@prod", "--snapshots", "export", m[1])
+	if code != 0 {
+		t.Fatalf("export (%d):\n%s", code, errs)
+	}
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@solo", "--snapshot"); code != 0 {
+		t.Fatalf("solo's take (%d):\n%s", code, out)
+	}
+	if _, errs, code := s.runIO(nil, exported, "@solo", "--snapshots", "import"); code != 0 {
+		t.Fatalf("import (%d):\n%s", code, errs)
+	}
+	if out, code := s.run(nil, "@solo", "--snapshots"); code != 0 || strings.Contains(out, "cloned the data by reflinks") {
+		t.Errorf("solo's last take wrote its tars stopped (%d):\n%s", code, out)
+	}
+}
+
 // tarNamesOf are the member names of the tar data.
 func tarNamesOf(t *testing.T, data []byte) []string {
 	t.Helper()
