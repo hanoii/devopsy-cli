@@ -6,16 +6,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // snapshotProject is a database in a named volume and an app's files in
-// an entry of mnt, both with data; prod keeps a snapshot mirror when
-// mirror says so.
-func snapshotProject(t *testing.T, name string, mirror bool) string {
-	prod := "{}"
-	if mirror {
-		prod = "{snapshots: {mirror: true}}"
-	}
+// an entry of mnt, both with data; prod's config is prod (YAML).
+func snapshotProject(t *testing.T, name, prod string) string {
 	return project(t, name, map[string]string{
 		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
 		".devopsy/config.yaml": "project: " + name + "\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: " + prod + "\n",
@@ -45,7 +41,7 @@ var takenID = regexp.MustCompile(`snapshot ([0-9]{14}) taken`)
 // zstd-compressed tars any tar reads, the services running again after.
 func TestSnapshotTakeRestore(t *testing.T) {
 	// No mirror (the default): the tars written from the stopped data.
-	dir := snapshotProject(t, "snaptake", false)
+	dir := snapshotProject(t, "snaptake", "{}")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
@@ -106,7 +102,7 @@ func TestSnapshotTakeRestore(t *testing.T) {
 func TestSnapshotMoveServers(t *testing.T) {
 	secondServer(t)
 	// With a mirror: two passes, the tars made from it after.
-	dir := snapshotProject(t, "snapmove", true)
+	dir := snapshotProject(t, "snapmove", "{snapshots: {mirror: true}}")
 	if out, code := op(t, dir, "devopsy @server:prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
@@ -141,5 +137,45 @@ func TestSnapshotMoveServers(t *testing.T) {
 	}
 	if state := srv2State(t, "snapmove", "prod", "db"); state != "running" {
 		t.Errorf("db on server2: %s", state)
+	}
+}
+
+// Release snapshots with real Docker, without a mirror and with one: the
+// second release takes one of the first's data before its switch, the
+// services running on the new release after, the tars (the mirror's made
+// detached, after the activation) any tar reads.
+func TestReleaseSnapshotE2E(t *testing.T) {
+	for _, c := range []struct{ name, prod string }{
+		{"relsnap", "{releases: {keep: 3}, snapshots: {release: true}}"},
+		{"relsnapm", "{releases: {keep: 3}, snapshots: {release: true, mirror: true}}"},
+	} {
+		dir := snapshotProject(t, c.name, c.prod)
+		if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+			t.Fatalf("%s: first release (%d):\n%s", c.name, code, out)
+		}
+		first, _ := srv(t, "readlink "+c.name+"/prod/current")
+		if out, code := srv(t, "docker run --rm -v "+c.name+"-prod_dbdata:/d busybox:1.37 sh -c 'echo rows >/d/table'"); code != 0 {
+			t.Fatalf("%s: writing the data: %s", c.name, out)
+		}
+		if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+			t.Fatalf("%s: second release (%d):\n%s", c.name, code, out)
+		}
+		for _, svc := range []string{"db", "app"} {
+			if state := syncState(t, c.name, "prod", svc); state != "running" {
+				t.Errorf("%s: %s after the release: %s", c.name, svc, state)
+			}
+		}
+		var list string
+		eventually(t, 2*time.Minute, "the release snapshot", func() bool {
+			list, _ = srv(t, "grep -l '^kind\trelease' "+c.name+"/prod/snapshots/2*/manifest 2>/dev/null")
+			return strings.TrimSpace(list) != ""
+		})
+		snap := strings.TrimSuffix(strings.TrimSpace(list), "/manifest")
+		if manifest, _ := srv(t, "cat "+snap+"/manifest"); !strings.Contains(manifest, "release\t"+strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(first), "releases/"), "/code")) {
+			t.Errorf("%s: the snapshot is not the first release's:\n%s", c.name, manifest)
+		}
+		if list, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:3 sh -c 'zstd -dc /s/volume.dbdata.tar.zst | tar -xOf - dbdata/table'"); code != 0 || strings.TrimSpace(list) != "rows" {
+			t.Errorf("%s: the database's tar (%d): %s", c.name, code, list)
+		}
 	}
 }
