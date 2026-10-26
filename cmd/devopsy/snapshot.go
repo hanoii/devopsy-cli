@@ -985,7 +985,10 @@ func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry
 	args := append(append([]string{"--network", "none"}, mounts...), "-v", filepath.Dir(file)+":/o", remote.UtilImage,
 		// Only files, directories and links, as the mirror's rsync --no-D:
 		// a FIFO or a device node is nothing a restore takes (tarTypes).
-		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
+		// Hard links as files of their own (--hard-dereference), as the
+		// mirror's rsync (no -H) makes them: a restore refuses a hard link
+		// to a symbolic link (tarLinks), and every take's tars are alike.
+		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
 		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
 	if err := dockerRun(ctx, name, args...); err != nil {
 		_ = os.Remove(file)
@@ -1278,17 +1281,11 @@ func pruneSnapshots(cwd string, p snapshotPaths, wait time.Duration) {
 	if !pruneGone(cwd, p, wait) {
 		return
 	}
-	// One per release, its newest: a failed or retried release takes
-	// another of the same one, and keep counts releases, never copies.
+	// Every one counts, a release tried again keeping its own: the one
+	// before a failed run step holds the only copy of the data that step
+	// then wrote over (decided over one per release, review).
 	var kept []string
-	all := releaseSnapshots(p)
-	for i, rs := range all {
-		if rs.id != marked && slices.ContainsFunc(all[i+1:], func(o releaseSnapshot) bool { return o.release == rs.release }) {
-			if !remove(rs.id, "a newer one of release "+rs.release+" is kept") {
-				return
-			}
-			continue
-		}
+	for _, rs := range releaseSnapshots(p) {
 		kept = append(kept, rs.id)
 	}
 	for n := len(kept); rkeep != remote.KeepAll && n > rkeep; n-- {

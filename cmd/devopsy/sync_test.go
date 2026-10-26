@@ -307,7 +307,10 @@ case "$*" in
     for a; do case $a in *:/m:ro) m=${a%:/m:ro} ;; *:/m/mnt:ro) m=${a%:/m/mnt:ro}/.. ;; *:/m/volumes/*:ro) vn=${a%%:*} ;; *:/o) o=${a%:/o} ;; esac; done
     n=$#; eval "tdir=\${$((n - 3))} tentry=\${$((n - 2))}"; out="$o/$last2"
     # Only files, directories and links, as the script's find.
-    ftar() { (cd "$1" && find "$2" \( -type f -o -type d -o -type l \) | COPYFILE_DISABLE=1 tar -cf "$out" --no-recursion -T -); }
+    ftar() { (cd "$1" && find "$2" \( -type f -o -type d -o -type l \) | COPYFILE_DISABLE=1 tar -cf "$out" --no-recursion $hd -T -); }
+    # GNU tar's --hard-dereference; bsdtar (macOS) has none, and its own
+    # hard links the test fakes never hold.
+    hd=; tar --version 2>/dev/null | grep -q GNU && hd=--hard-dereference
     if [ -n "$vn" ]; then st=$(mktemp -d); cp -R "$vols/$vn" "$st/$tentry"; ftar "$st" "$tentry"; r=$?; rm -rf "$st"; exit $r; fi
     case $m in */..) ftar "${m%/..}" "$tentry"; exit $? ;; esac
     ftar "$m/$tdir" "$tentry" ;;

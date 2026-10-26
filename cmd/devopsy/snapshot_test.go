@@ -1621,35 +1621,6 @@ func TestReleaseSnapshotCases(t *testing.T) {
 		}
 		t.Errorf("release snapshots %+v, want one, of %s", rs, second)
 	})
-	t.Run("keep all, one per release", func(t *testing.T) {
-		t.Parallel()
-		if _, err := os.Stat("/proc/self/cwd"); err != nil {
-			t.Skip("waiting for the detached tar reads /proc")
-		}
-		// keep: all is one snapshot for every release kept (README): a
-		// release that fails, tried again (CI retrying a deploy), takes
-		// another snapshot of the same release each time, a full copy of
-		// the data, and none goes until that release does.
-		s := newSyncSetup(t)
-		s.envConfig("prod", "{releases: {keep: 5}, snapshots: {release: {enabled: true, keep: all}}}")
-		s.releaseProd(nil)
-		snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
-		for i := range 3 {
-			if out, code := s.run([]string{"FAKE_FAIL_DEPLOY=1"}, "@prod", "--release"); code == 0 {
-				t.Fatalf("a release whose run step fails, %d (%d):\n%s", i+1, code, out)
-			}
-			s.waitReleaseTars()
-		}
-		per := map[string]int{}
-		for _, rs := range releaseSnapshots(snaps) {
-			per[rs.release]++
-		}
-		for rel, n := range per {
-			if n > 1 {
-				t.Errorf("%d release snapshots of release %s kept, keep: all being one for every release kept", n, rel)
-			}
-		}
-	})
 	t.Run("keep all, the data before a failed run step kept", func(t *testing.T) {
 		t.Parallel()
 		if _, err := os.Stat("/proc/self/cwd"); err != nil {
