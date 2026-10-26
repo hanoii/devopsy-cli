@@ -68,7 +68,25 @@ var namedFeatures = []struct {
 	// it replaces calls --snapshot-step's release words, which a devopsy
 	// with manual snapshots only refuses as usage once the locks are held.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--snapshot-step[ '\\]{1,8}release-`)},
+	// The mounts check's words after restored: restart (the restart after
+	// a failed run step) and a restore's snapshot, which an older devopsy
+	// refuses as usage, after the switch (review: the previous release was
+	// never restarted). Every activation calls it, so every release needs
+	// a server that has it.
+	{LeavingBindsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
+	// The util image a script runs (UtilImage, by its tag): an older
+	// devopsy's --util-image readies its own tag, and a script of this one
+	// runs this tag after it, a sync's receive after its claim (review:
+	// the copy then counted as cut). childNeeds carries it to the child's
+	// first session, so an older child refuses before anything stops.
+	{UtilImageFeature, regexp.MustCompile(regexp.QuoteMeta(UtilImage))},
 }
+
+// LeavingBindsFeature is the mounts check's restart and restore words'.
+const LeavingBindsFeature = "leaving-binds"
+
+// UtilImageFeature names the util image's tag a script runs.
+var UtilImageFeature = strings.Replace(UtilImage, "devopsy-util:", "util-image-", 1)
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

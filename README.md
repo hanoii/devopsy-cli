@@ -640,7 +640,9 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   container's state and health, then, for every one neither running and
   healthy nor exited 0, its last health checks and its last 100 log
   lines. Then `current` goes back to the previous release, which
-  is restarted with its own run step, from its own config (its `rollback:`
+  is restarted (unless one of its bind sources now leads out of its
+  entry through a link: then it stays down, what the failed run step
+  started running on, said, until a release goes live) with its own run step, from its own config (its `rollback:`
   run step, else its `release:` one), with its images as a rollback gets
   them (below: what it built back, a database staying on the newest image
   its data ran). Data changes, like database updates, are the project's
@@ -965,7 +967,9 @@ the secrets its compose file requires), the mounts check refuses
   server nothing in a release starts while one is there (an `up`, a
   `start`, a `run`, a `cp`, devopsy's own starts), whatever brought
   it, and what stops services to start them again (a snapshot, an
-  export, a sync from the environment) refuses before stopping them. A link
+  export, a sync from the environment or into it but a `--reset`, an
+  `--import` for the entries its tar does not replace) refuses before
+  stopping them. A link
   within the entry, and an entry that is itself a link (on another
   disk), are fine.
 
@@ -1210,8 +1214,8 @@ release lock.
 
 The rsync runs as root in `devopsy-util`, devopsy's own image (alpine 3
 with rsync and GNU tar, find and chown; it replaced `devopsy-rsync` and
-`devopsy-util:1`, which `docker image rm devopsy-rsync:2 devopsy-util:1`
-removes), built on each server the first time, so ownership and the
+`devopsy-util:1` and `:2`, which `docker image rm devopsy-rsync:2
+devopsy-util:1 devopsy-util:2` removes), built on each server the first time, so ownership and the
 deploy user's permissions do not matter. Wherever it is used, an image a
 week old is built again, its base pulled, so what runs as root on your
 data gets alpine's fixes; a rebuild that fails (the registry out of

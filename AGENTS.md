@@ -414,6 +414,18 @@ before changing anything".
   `data-copy`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
+- **The mounts check's words after `restored` are a named feature,
+  `leaving-binds`** (`restart` for the restart after a failed run step,
+  a restore's snapshot), and **the util image's tag is one,
+  `util-image-<n>`** (found by `UtilImage` in a script's text): an older
+  devopsy refused the words as usage after the switch, so the previous
+  release was never restarted, and readied its own tag where a sync's
+  receive ran this one's after its claim, the copy counted as cut
+  (review after v0.52.0). Every activation needs the first; `childNeeds`
+  carries the second to the child's first session, so an older child
+  refuses before anything stops. An older parent's receive on a newer
+  child cannot be caught by the newer side: upgrade parents and children
+  together.
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
@@ -1224,7 +1236,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   replaced; only top-level owned entries are made and scanned now. A
   path below an entry nobody owns stays allowed (decided scope): such
   an entry is the deploy user's, written from the host, while an owned
-  one is written by a container by design. Locally nothing refuses it.
+  one is written by a container by design; but for one a link in the
+  entry leads out of it (`LeavingBinds`, below). Locally nothing
+  refuses it.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a data service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
