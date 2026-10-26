@@ -3107,3 +3107,29 @@ func TestExportRefusesLeavingBindsBeforeStopping(t *testing.T) {
 		t.Errorf("an export on data with a link out of its entry at a bind source (%d) left %q stopped:\n%s\n%s", code, stopped, errs, docker)
 	}
 }
+
+// A release snapshot's stopped pass leaves what it stopped for the new
+// release's run step to start under the new code: nothing starts on the
+// release it replaces, so the start gate before its stop must judge the
+// release that starts them. Here the release before mounted
+// mnt/storage/public, now a link to /, and the new one mounts only
+// mnt/storage (its --check-mounts passes): the release goes live, its
+// snapshot taken, rather than being refused for a mount it drops.
+func TestReleaseSnapshotGateJudgesTheNewRelease(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP=none\n", 0o644)
+	s.envConfig("prod", "{snapshots: {release: true}, env: {FAKE_APP_MOUNT2: /storage/public}}")
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(s.dot, "config.yaml")
+	write(t, conf, strings.Replace(readString(conf), ", env: {FAKE_APP_MOUNT2: /storage/public}", "", 1), 0o644)
+	a := s.current("prod")
+	out, code := s.run(nil, "@prod", "--release")
+	docker, _ := s.logs()
+	if code != 0 || s.current("prod") == a {
+		t.Errorf("a release dropping the mount through the link, with release snapshots (%d), current %q (was %q):\n%s\n%s", code, s.current("prod"), a, out, docker)
+	}
+}
