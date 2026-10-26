@@ -588,3 +588,32 @@ func TestSnapshotLeftoverWithoutListing(t *testing.T) {
 		t.Errorf("the finished snapshot %s is listed but does not restore (%d):\n%s", left, code, out)
 	}
 }
+
+// Without --with-env a restore names the keys of shared/.env that
+// differ, never a value: a value over several lines (a key in PEM, its
+// last base64 line padded with =) is one key, read as compose reads the
+// file, and no line of it is printed.
+func TestSnapshotRestoreEnvKeysOnly(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	env := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	pem := func(secret string) string {
+		return "TLS_KEY=\"-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEA" + secret + "==\n-----END PRIVATE KEY-----\"\n"
+	}
+	write(t, env, pem("oldSecretPart"), 0o600)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, env, pem("newSecretPart"), 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
+	if code != 0 {
+		t.Fatalf("restore (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "SecretPart") || !strings.Contains(out, "differs from the environment's in TLS_KEY:") {
+		t.Errorf("the keys that differ, as said:\n%s", out)
+	}
+}
