@@ -360,9 +360,12 @@ case "$*" in
     # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
     # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
     # where the script that follows the image runs, /x being it.
+    # Hard links kept, as the container's bind mount shows them (GNU
+    # cp -a; macOS's cp keeps none).
     x="$DOCKER_LOG.x"; rm -rf "$x"; mkdir -p "$x"
+    cpx="cp -Rp"; cp --version 2>/dev/null | grep -q GNU && cpx="cp -a"
     while [ $# -gt 0 ]; do case $1 in
-      --mount) m=${2%,readonly}; src=${m#type=bind,source=}; src=${src%%,target=*}; cp -Rp "$src" "$x/${m##*,target=/x/}"; shift ;;
+      --mount) m=${2%,readonly}; src=${m#type=bind,source=}; src=${src%%,target=*}; $cpx "$src" "$x/${m##*,target=/x/}"; shift ;;
       *:/x/*:ro) v=${1%:ro}; cp -Rp "$vols/${1%%:*}" "$x/${v##*/}" ;;
       -c) script=$2; shift 2; break ;;
     esac; shift; done
@@ -3879,5 +3882,38 @@ func TestImportExportWithFIFO(t *testing.T) {
 	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
 	if code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
 		t.Errorf("prod's storage, with a FIFO in it, into dev (%d):\n%s", code, errs)
+	}
+}
+
+// An app's data may hold a hard link to a symbolic link (GNU ln makes
+// one of a link by default): a sync copies it as a link of its own
+// (rsync without -H) and a snapshot's tar as one too
+// (--hard-dereference: "a restore refuses a hard link to a symbolic
+// link"), while an --import refuses one (tarLinks.check). The tar
+// devopsy's own --export makes of that data must import all the same,
+// as for a FIFO (TestImportExportWithFIFO): GNU tar writes the second
+// name as a hard link to the first, a link, unless told otherwise.
+func TestImportExportHardLinkToSymlink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	storage := filepath.Join(s.mnt("prod"), "storage")
+	if err := os.Symlink("file.txt", filepath.Join(storage, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	// linkat without AT_SYMLINK_FOLLOW: the link itself, as GNU ln does.
+	if err := os.Link(filepath.Join(storage, "latest"), filepath.Join(storage, "also")); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	if l, _ := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "also")); code != 0 || l != "file.txt" {
+		t.Errorf("prod's storage, with a hard link to a symbolic link in it, into dev (%d), the link %q:\n%s", code, l, errs)
 	}
 }
