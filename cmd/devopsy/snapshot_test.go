@@ -1966,6 +1966,29 @@ func TestSnapshotReflinkCloneFails(t *testing.T) {
 	}
 }
 
+// A snapshot devopsy says it took restores. Data holding a FIFO (a mail
+// queue's public/pickup, say): a take with a mirror leaves it out (the
+// mirror's rsync --no-D), one without a mirror or by reflinks tars it, and
+// a restore's check refuses any member but files, directories and links.
+func TestSnapshotFIFORestores(t *testing.T) {
+	t.Parallel()
+	for _, env := range [][]string{nil, {"FAKE_REFLINK=1"}} {
+		s := newSyncSetup(t)
+		s.releaseProd(nil)
+		if out, err := exec.Command("mkfifo", filepath.Join(s.mnt("prod"), "storage", "pickup")).CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+		out, code := s.run(env, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			continue
+		}
+		if out, code := s.run(env, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 {
+			t.Errorf("%v: snapshot %s taken, its restore refused (%d):\n%s", env, m[1], code, out)
+		}
+	}
+}
+
 // A restore with release snapshots on whose data step refuses, nothing
 // restored (here mnt/storage a file now, a directory in the snapshot),
 // leaves the services running: what its snapshot of the data it replaces
