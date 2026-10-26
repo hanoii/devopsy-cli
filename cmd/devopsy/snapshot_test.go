@@ -1876,3 +1876,31 @@ func TestSnapshotReflink(t *testing.T) {
 		t.Errorf("a release's snapshot, cloned: %+v\n%s", rs, docker)
 	}
 }
+// A release that syncs runs no partialGuard: the sync's prepare settles a
+// killed holder's files, after the switch. With release snapshots on, the
+// snapshot of what the release replaces is taken before that, and must
+// not be one of the half-synced data a settle is about to mark (a
+// restore of it clears marks: it would restore as complete), as a take
+// and a plain release settle first; the mark then skips it, said.
+func TestReleaseSyncSettlesBeforeReleaseSnapshot(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.childSnapshotted()
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	s.logs()
+	dev := filepath.Join(s.root, "shop", "dev")
+	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n", 0o644)
+	out, code := s.run(nil, "@dev", "--release-sync", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "left its files") || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Fatalf("a release that syncs over a killed holder's files (%d):\n%s\n%s", code, out, docker)
+	}
+	rs := releaseSnapshots(snapshotPaths{snaps: filepath.Join(dev, "snapshots")})
+	if len(rs) > 0 || !strings.Contains(out, "no release snapshot: the environment is marked") {
+		t.Errorf("a release snapshot %+v of the data a killed sync holder left, taken before the settle marked it:\n%s", rs, out)
+	}
+}
+
