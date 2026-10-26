@@ -407,10 +407,32 @@ func TestSnapshotDestroy(t *testing.T) {
 	if _, ssh := s.logs(); !strings.Contains(ssh, "ConnectTimeout=") {
 		t.Errorf("--destroy's count, unbounded:\n%s", ssh)
 	}
-	out, code = s.run(nil, "@prod", "--destroy", "--yes")
+	// One snapshot's listing names an image of its own, which a container
+	// of another project uses: its removal cannot take the name, so it
+	// goes to the project's record (images.LeftFile), as the releases'
+	// removals record theirs, for the next pruning to retry; else the
+	// name outlives the environment for good.
+	snaps := filepath.Join(s.root, "shop", "prod", "snapshots")
+	ents, _ := os.ReadDir(snaps)
+	var id string
+	for _, e := range ents {
+		if remote.ReleaseIDFormat.MatchString(e.Name()) {
+			id = e.Name()
+			break
+		}
+	}
+	if id == "" {
+		t.Fatalf("no snapshot in %s", snaps)
+	}
+	write(t, filepath.Join(snaps, id, images.ListFile), "mariadb@sha256:snap\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+	env := []string{"FAKE_IMAGES=sha256:snap=mariadb@sha256:snap", "FAKE_NAMES=mariadb@sha256:snap=sha256:snap", "FAKE_USERS=shop-other"}
+	out, code = s.run(env, "@prod", "--destroy", "--yes")
 	docker, _ := s.logs()
 	if code != 0 || fileExists(filepath.Join(s.root, "shop", "prod")) || !strings.Contains(docker, "-mirror ") {
 		t.Errorf("--destroy (%d):\n%s\n%s", code, out, docker)
+	}
+	if left := readString(filepath.Join(s.root, "shop", images.LeftFile)); strings.Contains(out, "could not record") || !strings.Contains(left, "mariadb@sha256:snap\tsha256:snap") {
+		t.Errorf("snapshot %s's mariadb@sha256:snap, which a container of shop-other uses, is not recorded for the next pruning:\n%s\nrecord:\n%s", id, out, left)
 	}
 }
 

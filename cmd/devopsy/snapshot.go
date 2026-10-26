@@ -42,18 +42,25 @@ type snapshotPaths struct{ base, snaps, mirror string }
 
 func snapshotPathsOf(cwd string) snapshotPaths {
 	base := cmp.Or(os.Getenv(images.BaseEnv), filepath.Dir(cwd))
-	snaps := os.Getenv(images.SnapshotsEnv)
-	if snaps == "" {
-		// Outside a script's prelude (--sync-exec): from the server's own
-		// settings, as basePrelude finds it.
-		snaps = filepath.Join(base, "snapshots")
-		if r, err := remote.ReleaseSettings(); err == nil && r.Snapshots.Root != "" {
-			if rel, err := filepath.Rel(r.Root, base); err == nil && !strings.HasPrefix(rel, "..") {
-				snaps = filepath.Join(r.Snapshots.Root, rel)
-			}
+	snaps := snapshotsOf(base)
+	return snapshotPaths{base: base, snaps: snaps, mirror: filepath.Join(snaps, remote.SnapshotMirror)}
+}
+
+// snapshotsOf is where the environment at base keeps its snapshots: what
+// a script's prelude exports (images.SnapshotsEnv), else, outside one
+// (--sync-exec, an older operator's script), from the server's own
+// settings as basePrelude finds it.
+func snapshotsOf(base string) string {
+	if snaps := os.Getenv(images.SnapshotsEnv); snaps != "" {
+		return snaps
+	}
+	snaps := filepath.Join(base, "snapshots")
+	if r, err := remote.ReleaseSettings(); err == nil && r.Snapshots.Root != "" {
+		if rel, err := filepath.Rel(r.Root, base); err == nil && !strings.HasPrefix(rel, "..") {
+			snaps = filepath.Join(r.Snapshots.Root, rel)
 		}
 	}
-	return snapshotPaths{base: base, snaps: snaps, mirror: filepath.Join(snaps, remote.SnapshotMirror)}
+	return snaps
 }
 
 // takeMirror says whether a take keeps a mirror: its environment asks
@@ -692,7 +699,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	if next != "" {
 		gated = filepath.Join(next, remote.CodeDir)
 	}
-	if err := checkStartBinds(gated); err != nil {
+	if err := gateBeforeStop(cwd, gated, set); err != nil {
 		report.Fail(err)
 		return 1
 	}

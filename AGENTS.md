@@ -40,7 +40,15 @@ conflicts with one is a design question for the user, not a detail.
   files and syntax just stop working, with an error that says what to
   do; a breaking change is marked (`feat!`, `fix!`); a protocol bump
   or a new feature means upgrading the servers. A 1.0.0 is when
-  this gets a compatibility promise.
+  this gets a compatibility promise. Until then mixed versions (an
+  operator and a server, or a parent and a child, on different devopsy)
+  are not a concern beyond the gate itself: a new behavior an older
+  server lacks is a named feature or a protocol bump, so it refuses
+  before anything changes, and that is all. No tests of specific older
+  versions, no code that exists only for an older operator's or
+  server's scripts, and reviews do not look for version-skew edge cases
+  (decided 2026-10-26, after review rounds spent on them; the user
+  lifts it, not a session).
 - **devopsy replaces itself with what it runs** (`syscall.Exec`). Why:
   signals, the terminal and exit codes belong to that command, so
   `devopsy up` behaves as `docker compose up` does, Ctrl-C included.
@@ -414,6 +422,31 @@ before changing anything".
   `data-copy`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
+- **What came with v0.52.0 is under `release-snapshots`, which v0.52.0
+  reports:** the mounts check's words after `restored` (`restart`, a
+  restore's snapshot) and `devopsy-util:3` in a script's text (bump it
+  in `namedFeatures` with `UtilImage`). A v0.51.0 devopsy refused the
+  words as usage after the switch (the previous release never
+  restarted) and readied its own util tag where a sync's receive ran
+  this one's after its claim (the copy counted as cut); names of their
+  own refused every v0.52.0 server, which runs both (review after
+  v0.52.0). Every activation needs it, and `childNeeds` carries the tag
+  to the child's first session. A reset needs nothing new: v0.52.0's
+  child already skips the check under `SyncResetEnv`, which v0.52.0's
+  holder never exported (a feature for it refused v0.52.0 children that
+  run the reset right: review). The activation's needs are checked in
+  the first session to the server too (`remote.WithAlsoNeeds`: the role
+  check, a new instance's, a child's current, and the upload): refused
+  only at the activation, a pending release and an instance's directory
+  were left, and before the instance's prompt or a child's inherited
+  variables are written now; a release opening no session before its
+  upload runs its local before steps first (accepted: no session of
+  its own for it). Only the plain activation's: a sync's are checked
+  where it is decided, and a release that does not sync runs on a
+  server lacking them. Not caught by the
+  newer side, accepted: an older parent's receive on a newer child runs
+  the older util tag after its claim; upgrade parents and children
+  together.
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
@@ -1178,9 +1211,15 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   in the new release's code, whose run step starts them; an `--import`
   but for the entries its tar replaces; a sync's child side but under
   `--reset` (its wipe removes the link; which entries the copy replaces
-  is the parent's to say, so one there is refused too); a restore in
-  the entries it keeps (`check-tars`). Its message carries the links in
-  its first line, which callers wrap.
+  is the parent's to say, so one there is refused too; the holder knows
+  the reset from `SyncOptions.Reset`, exported as `SyncResetEnv` as the
+  push's is: review, the child refused the `--reset` it named as the way
+  out; accepted: a reset whose push aborts before its wipe, the data as
+  it was, leaves the child's set down, the gate saying which link); a
+  restore in the entries it keeps (`check-tars`). A take and an export
+  check only when something of their set runs (`gateBeforeStop`: none
+  running, they stop and start nothing). Its message carries the links
+  in its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
   an aliased base path) is judged by where it lands in mnt
@@ -1218,7 +1257,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   replaced; only top-level owned entries are made and scanned now. A
   path below an entry nobody owns stays allowed (decided scope): such
   an entry is the deploy user's, written from the host, while an owned
-  one is written by a container by design. Locally nothing refuses it.
+  one is written by a container by design; but for one a link in the
+  entry leads out of it (`LeavingBinds`, below). Locally nothing
+  refuses it.
 - **`./mnt` whole is no entry** (decided): refused where labels are read
   as a data service's or an owned writable mount, writable on any other
   by the mounts check, and ignored read-only (a tool), so nothing
@@ -2973,4 +3014,8 @@ out ./devopsy ps`).
 Tag `vX.Y.Z` on `main` and push the tag: the release workflow tests,
 and GoReleaser publishes the binaries and `checksums.txt`.
 Conventional commits (`feat:`, `fix:`, `docs:`, `build:`...), with no
-attribution trailers: no `Co-Authored-By`, no session links.
+attribution trailers: no `Co-Authored-By`, no session links. Any word
+with an `@` in a commit message goes in backticks (`devopsy @prod
+--release`, `@<target>`, `deploy@host`), in the docs too: the release
+notes are the commits' subjects, and GitHub links a bare `@name` to that
+user.

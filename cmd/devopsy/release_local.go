@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -353,7 +352,7 @@ func destroyData(cwd string, step []string, color bool) int {
 				return fail("removing the snapshots' clone: " + err.Error())
 			}
 		}
-		snaps := cmp.Or(os.Getenv(images.SnapshotsEnv), filepath.Join(base, "snapshots"))
+		snaps := snapshotsOf(base)
 		if fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
 			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-mirror", os.Getpid()), "-v", snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror); err != nil {
 				return fail("removing the snapshots' mirror: " + err.Error())

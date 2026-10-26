@@ -63,6 +63,18 @@ func dataService(services []cli.SyncService, name string) (cli.SyncService, erro
 	return s, nil
 }
 
+// gateBeforeStop is the start gate (checkStartBinds) of the code at judged
+// for what of set runs at cwd, before a flow stops it to start it again:
+// nothing when none of it runs, which it neither stops nor starts
+// (review: a read of the data was refused for a start that never came).
+func gateBeforeStop(cwd, judged string, set []cli.Stopped) error {
+	up, err := upServices(cwd)
+	if err != nil || len(intersect(cli.StoppedNames(set), up)) == 0 {
+		return nil
+	}
+	return checkStartBinds(judged)
+}
+
 // stopSet stops what of set runs, in one docker compose stop, so Compose
 // orders it (dependents first), saying what and why, and returns what it
 // stopped and what brings those back (started, then waited for until
@@ -328,7 +340,7 @@ func runExport(cwd string, args []string, color bool) int {
 	// On a target what it stops it starts again on the same data: refused
 	// before anything stops when that start would be (checkStartBinds).
 	if cli.InRelease(projectDir) {
-		if err := checkStartBinds(cwd); err != nil {
+		if err := gateBeforeStop(cwd, cwd, set); err != nil {
 			report.Fail(err)
 			return 1
 		}

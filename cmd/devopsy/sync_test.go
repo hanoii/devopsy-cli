@@ -219,6 +219,10 @@ case "$*" in
   # (images.CLI's ID); any other name answers nothing.
   "image inspect --format {{.Id}} "*)
     for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$5" ] || { echo "${n#*=}"; exit 0; }; done ;;
+  # FAKE_USERS: the compose projects whose containers use any image
+  # (images.CLI's Users: a container's id, then its project), none by
+  # default.
+  "ps -a --filter ancestor="*) for u in ${FAKE_USERS:-}; do echo "c1 $u"; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
   # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
   # exited, its id ctr:<project>:<service>.
@@ -3639,5 +3643,137 @@ func TestSyncChildRefusesLeavingBindsBeforeStopping(t *testing.T) {
 	stoppedDev, stoppedProd := strings.TrimSpace(readString(s.log+".stopped.shop-dev")), strings.TrimSpace(readString(s.log+".stopped.shop-prod"))
 	if code == 0 || stoppedDev != "" || stoppedProd != "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
 		t.Errorf("a sync into a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), out, docker)
+	}
+}
+
+// The child's check before stopping names --reset as the way to start
+// the child over without the link, and a reset skips it, since its wipe
+// removes the link: here dev's app binds mnt/cache/public, a link to /
+// in an entry the parent has not, so a sync is refused, and the reset
+// wipes it and copies prod's data, nothing left stopped or marked.
+func TestSyncResetWipesLeavingBind(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-dev", "FAKE_APP_MOUNT2=/cache/public\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("dev"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(s.mnt("dev"), "cache", "public")); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 || !strings.Contains(out, "devopsy @devopsy@one:dev --reset") {
+		t.Fatalf("a sync into a child with a link out of its entry at a bind source (%d):\n%s", code, out)
+	}
+	s.logs()
+	out, code := s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ := s.logs()
+	stoppedDev, stoppedProd := strings.TrimSpace(readString(s.log+".stopped.shop-dev")), strings.TrimSpace(readString(s.log+".stopped.shop-prod"))
+	if code != 0 || !strings.Contains(docker, " down ") || !strings.Contains(docker, "-wipe ") || stoppedDev != "" || stoppedProd != "" || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) || fileExists(filepath.Join(s.mnt("dev"), "cache")) || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a reset of a child with a link out of its entry at a bind source (%d) left %q stopped on the child, %q on the parent, marked %v, cache there %v:\n%s\n%s", code, stoppedDev, stoppedProd, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), fileExists(filepath.Join(s.mnt("dev"), "cache")), out, docker)
+	}
+}
+
+// An export on a target checks the start gate before it stops its set,
+// for the start that follows: with the set down already (app and db
+// exited) it stops nothing and starts nothing, so a link out of its
+// entry at a bind source is no reason to refuse the read of the data.
+func TestExportNothingRunningIgnoresLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".stopped.shop-prod", "app\ndb\n", 0o644)
+	s.logs()
+	stdout, errs, code := s.runIO(nil, nil, "@prod", "--export", "db")
+	docker, _ := s.logs()
+	if code != 0 || len(stdout) == 0 || strings.Contains(docker, " stop ") || strings.Contains(docker, " start ") {
+		t.Errorf("an export with its set down on data with a link out of its entry at a bind source (%d), %d bytes:\n%s\n%s", code, len(stdout), errs, docker)
+	}
+}
+
+// A feature only the activation needs (leaving-binds: the mounts check's
+// words every activation calls, which a v0.52.0 server lacks) refuses a
+// release before anything changes on the server: the upload's own needs
+// are the server's, so the project must not be uploaded first and the
+// activation's prelude refuse it then, leaving a pending release
+// directory, INCOMPLETE and newer than current, which remove failed never
+// takes and pruning only once it is older than the keep-th live release.
+func TestOlderServerActivationRefusesBeforeUpload(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	old := filepath.Join(filepath.Dir(s.root), "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ReleaseSnapshotsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	var env []string
+	for _, kv := range s.env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			kv = "PATH=" + old + ":" + v
+		}
+		env = append(env, kv)
+	}
+	releases := filepath.Join(s.root, "shop", "prod", "releases")
+	before, _ := os.ReadDir(releases)
+	cmd := exec.Command(binary, "@prod", "--release")
+	cmd.Dir = s.project
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("")
+	outb, _ := cmd.CombinedOutput()
+	out, code := string(outb), cmd.ProcessState.ExitCode()
+	after, _ := os.ReadDir(releases)
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
+		t.Fatalf("a release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
+	}
+	if len(after) != len(before) {
+		t.Errorf("a release refused for %s left a release directory behind (%d releases, %d before):\n%s", remote.ReleaseSnapshotsFeature, len(after), len(before), out)
+	}
+}
+
+// An upload checks its activation's needs (remote.WithAlsoNeeds), so a
+// server lacking one refuses before anything changes: before the upload,
+// but only then, after everything else a release does first. A child's
+// first release to a server lacking release-snapshots (a v0.51.0 one,
+// where every activation is refused) runs its local before steps (the
+// project's: a build and push, a notice) and writes the parent's
+// inherited variables into the child's shared/inherit.env, creating its
+// directory, and only then is refused: the needs are known before any
+// session, and the server's devopsy says what it has in the first one
+// (the child's current check), so nothing of the release should run on
+// a server that refuses it.
+func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {inherit: [SHARED_KEY]}\n  dev: {parent: prod, release: {before: [local: deploy], run: deploy}}\n", 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "SHARED_KEY=from-prod\n", 0o644)
+	old := filepath.Join(filepath.Dir(s.root), "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ReleaseSnapshotsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	var env []string
+	for _, kv := range s.env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			kv = "PATH=" + old + ":" + v
+		}
+		env = append(env, kv)
+	}
+	cmd := exec.Command(binary, "@dev", "--release")
+	cmd.Dir = s.project
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("")
+	outb, _ := cmd.CombinedOutput()
+	out, code := string(outb), cmd.ProcessState.ExitCode()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
+		t.Fatalf("a child's first release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
+	}
+	if strings.Contains(out, "running 'devopsy deploy' locally (before)") {
+		t.Errorf("the release ran its local before step before the server refused it:\n%s", out)
+	}
+	if dev := filepath.Join(s.root, "shop", "dev"); fileExists(dev) {
+		t.Errorf("the release wrote %s before the server refused it (inherit.env: %v):\n%s", dev, fileExists(filepath.Join(dev, "shared", remote.InheritFile)), out)
 	}
 }
