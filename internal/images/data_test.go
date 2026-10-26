@@ -2042,11 +2042,15 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	prod, stage := newSim(t, d, "app-prod", &out), newSim(t, d, "app-stage", &out)
 	d.publish("mariadb:11.8", "I1")
 	stage.release(false, db118)
+	// prod's history written a week before the export, as on a server:
+	// the import's mark (--resolved's since) is the import's own time.
+	prod.e.set.Now = func() time.Time { return time.Now().Add(-7 * 24 * time.Hour) }
 	d.publish("mariadb:11.8", "I2")
 	prod.release(false, db118)
 	// prod's history two lines, so the import's window ends with a run's.
 	d.publish("mariadb:11.8", "I3")
 	prod.release(false, db118)
+	since := time.Now().UTC().Truncate(time.Second)
 	if err := importInto(t, prod, stage, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2054,7 +2058,7 @@ func TestResolvedKeepsHeldHistory(t *testing.T) {
 	if !strings.HasSuffix(before, "ran:I3") {
 		t.Fatalf("the import's history: %s", before)
 	}
-	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database", time.Unix(0, 0)); err != nil || strings.Join(stage.history("database"), " ") != before {
+	if err := stage.e.set.Resolved(stage.base(), stage.e.rel(stage.cur), "database", since); err != nil || strings.Join(stage.history("database"), " ") != before {
 		t.Errorf("--resolved after a held import (%v): history %v, was %s", err, stage.history("database"), before)
 	}
 	// Held as every release holds it, its newest line a run's: over.
