@@ -113,7 +113,7 @@ cd "$base/current"
 	refuse := markRefusal(t, "no snapshot taken", `"`+"a snapshot of it would restore as complete"+`"`, "exit 1")
 	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
 	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
-` + lockWait(5, false, "a sync or an export from $base") + "\n" + snapLock + refuse
+` + lockWait(5, false, "a sync or an export from $base") + "\n" + settleSync(projectName) + snapLock + refuse
 	s += `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 id=$(devopsy ` + ReleaseIDFlag + ` "$snaps")
 devopsy --say info "taking snapshot $id of ${cur#releases/}"
@@ -194,7 +194,7 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 	s += `
 ` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
-exec 6>"$base/` + SnapshotLockFile + `"
+` + settleSync(projectName) + `exec 6>"$base/` + SnapshotLockFile + `"
 ` + lockWait(6, false, "a snapshot of $base") + `
 cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"

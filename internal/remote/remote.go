@@ -776,7 +776,7 @@ fi
 		s += `snap="$snaps"/` + Quote(restore.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
-exec 6>"$base/` + SnapshotLockFile + `"
+` + settleSync(projectName) + `exec 6>"$base/` + SnapshotLockFile + `"
 ` + lockWait(6, false, "a snapshot of $base") + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
 export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
@@ -1364,10 +1364,20 @@ exec 4<&-
 // it; or on an import that did not complete, with its own ways out. A
 // holder that never decided (killed) left its files, settled first.
 func partialGuard(t *Target, projectName, refuse string) string {
-	return `if [ -n "$prev" ] && { [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; }; then
+	return `if [ -n "$prev" ]; then
+` + settleSync(projectName) + `fi
+` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+}
+
+// settleSync settles what a sync's holder or a take killed outright left
+// (--sync-services settle: a sync's files become its mark, a take's
+// stopped services start), under the release lock, in the current
+// release, before anything reads the mark.
+func settleSync(projectName string) string {
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
-` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+`
 }
 
 // NoExit255 keeps a script's own exit status off 255, ssh's for a

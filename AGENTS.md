@@ -2178,7 +2178,10 @@ settled every rule here after nine reviews (2026-10-25).
   one consistent moment, a restore bringing code back unless told
   otherwise (`--no-code`). Refused before anything stops: nothing with
   data, a data service writing a bind from outside the project
-  (`cli.SyncService.OutsideBinds`), a marked environment (a complete
+  (`cli.SyncService.OutsideBinds`), a marked environment, a killed
+  sync holder's files settled into a mark first (`settleSync`, as before
+  every activation, and before every restore too: review of 2026-10-25)
+  (a complete
   restore clears marks, so a snapshot of half-written data would
   restore as clean), too little space (`du` in the util image, a
   tenth to spare, against the mirror's and the tars' filesystems).
