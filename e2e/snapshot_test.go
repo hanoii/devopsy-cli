@@ -100,6 +100,25 @@ func TestSnapshotTakeRestore(t *testing.T) {
 	if compose, _ := srv(t, "cat snaptake/prod/current/../devopsy-compose.yaml"); !strings.Contains(compose, "busybox@sha256:") {
 		t.Errorf("db not held on its data's image:\n%s", compose)
 	}
+
+	// A tar whose stream goes on past its end-of-archive blocks (made
+	// with larger records, tar -b 2048: 1 MiB, zeros after the end, as an
+	// imported or hand-made snapshot may be) passes the restore's check,
+	// which reads to the end blocks and drains the rest. The extraction
+	// must take it too: GNU tar stops reading at the end blocks, and
+	// zstd's write of the rest then dies of SIGPIPE, which pipefail made
+	// the extraction's failure, past the restore's point of no return,
+	// the services left down and the environment marked.
+	if out, code := srv(t, "docker run --rm -v \"$PWD/"+snap+"/data:/s:ro\" devopsy-util:3 sh -c 'cd /tmp && zstd -dc /s/mnt.files.tar.zst | tar -xpf - --numeric-owner && tar -b 2048 --numeric-owner -cf - files | zstd -q' >"+snap+"/data/mnt.files.new && mv "+snap+"/data/mnt.files.new "+snap+"/data/mnt.files.tar.zst"); code != 0 {
+		t.Fatalf("remaking the files' tar with 1 MiB records: %s", out)
+	}
+	if out, code := srv(t, "rm -f snaptake/prod/shared/mnt/files/a.jpg"); code != 0 {
+		t.Fatalf("removing a.jpg: %s", out)
+	}
+	out, code = op(t, dir, "devopsy @prod --snapshots restore "+m[1]+" --no-code --yes")
+	if files, _ := srv(t, "ls snaptake/prod/shared/mnt/files"); code != 0 || strings.TrimSpace(files) != "a.jpg" {
+		t.Errorf("a restore of a tar with 1 MiB records (%d), files %q:\n%s", code, files, out)
+	}
 }
 
 // A snapshot exported from one server and imported on another, where
