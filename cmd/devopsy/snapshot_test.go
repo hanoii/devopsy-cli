@@ -1656,6 +1656,46 @@ func (s *syncSetup) waitReleaseTars() {
 	}
 }
 
+// childSnapshotted gives dev (prod's child) release snapshots in the
+// setup's config.
+func (s *syncSetup) childSnapshotted() {
+	s.t.Helper()
+	conf := filepath.Join(s.dot, "config.yaml")
+	data := readString(conf)
+	if !strings.Contains(data, "\n  dev: {parent: prod}\n") {
+		s.t.Fatalf("no dev: {parent: prod} in the setup's config:\n%s", data)
+	}
+	write(s.t, conf, strings.Replace(data, "\n  dev: {parent: prod}\n", "\n  dev: {parent: prod, snapshots: {release: true}}\n", 1), 0o644)
+}
+
+// A release that syncs with release snapshots on: what the snapshot's
+// stopped pass left stopped becomes the release's stop lines at the
+// switch, which the sync's finish restores or keeps down. A copy cut
+// leaves the child partial, its services down until a sync completes,
+// and the record must keep saying so: the next sync's finish go starts
+// what the record names before its hook, and nothing started them here
+// (the restart of the release before skips a marked environment).
+func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.childSnapshotted()
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	s.logs()
+	dev := filepath.Join(s.root, "shop", "dev")
+	out, code := s.run([]string{"FAIL_RSYNC=23"}, "@dev", "--release-sync", "--yes")
+	docker, _ := s.logs()
+	down := readString(s.log + ".stopped.shop-dev")
+	if code == 0 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" stop db app") || !strings.Contains(out, "db app stay down: the data is partial until a sync completes") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
+		t.Fatalf("a release that syncs, its copy cut after the release snapshot (%d), down: %q:\n%s\n%s", code, down, out, docker)
+	}
+	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") {
+		t.Errorf("db and app stay down on the partial copy, and the record no longer says so (nothing would start them before the next sync's finish hook):\n%q", rec)
+	}
+}
+
 // A release snapshot's detached tar prunes once the activation ended, and
 // removing a snapshot frees images: only under the server's image lock,
 // exclusive, as every removal of images is (another environment's fetch
