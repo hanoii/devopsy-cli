@@ -2284,6 +2284,30 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
 		t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
 	}
+
+	// A link the deploy user made in the entry nobody owns, at that bind
+	// source and leading within the entry (storage/public -> v1, as
+	// certs/current -> 2026-10): Docker follows it to mnt/storage/v1,
+	// nothing of the host's, and the release ran on it. Its own
+	// snapshot restores, the link as it was.
+	s = newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.mnt("prod"), "storage", "v1", "index.html"), "v1\n", 0o644)
+	if err := os.Symlink("v1", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(nil, "@prod", "--snapshot")
+	m = snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take with a link inside its entry (%d):\n%s", code, out)
+	}
+	for _, args := range [][]string{{"--no-code"}, {}} {
+		out, code = s.run(nil, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		if target, _ := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); code != 0 || target != "v1" {
+			t.Errorf("%v: the restore of a snapshot whose link at a bind source leads within its entry (%d), the link %q:\n%s", args, code, target, out)
+		}
+	}
 }
 
 // A restore with release snapshots on whose data step refuses, nothing
