@@ -1656,6 +1656,59 @@ func (s *syncSetup) waitReleaseTars() {
 	}
 }
 
+// A release snapshot's detached tar prunes once the activation ended, and
+// removing a snapshot frees images: only under the server's image lock,
+// exclusive, as every removal of images is (another environment's fetch
+// may be bookmarking the same image meanwhile). Held by someone else, the
+// pruning waits for it and the snapshot stays; freed, it goes.
+func TestReleaseSnapshotPruneHoldsImageLock(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.envConfig("prod", "{releases: {keep: 2}, snapshots: {release: true, mirror: true}}")
+	s.releaseProd(nil)
+	first := strings.TrimPrefix(s.current("prod"), "releases/")
+	snaps := snapshotPaths{snaps: filepath.Join(s.root, "shop", "prod", "snapshots")}
+	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
+		t.Fatalf("the second release (%d):\n%s", code, out)
+	}
+	var rs []releaseSnapshot
+	for start := time.Now(); time.Since(start) < startWait && len(rs) != 1; time.Sleep(100 * time.Millisecond) {
+		rs = releaseSnapshots(snaps)
+	}
+	if len(rs) != 1 || rs[0].release != first {
+		t.Fatalf("release snapshots after the second release: %+v, want one of %s", rs, first)
+	}
+	orphan := filepath.Join(snaps.snaps, rs[0].id)
+	// The third release prunes the first, whose snapshot is then nobody's:
+	// its detached tar, held in its tars until told to go on, prunes it
+	// once the activation ended.
+	started := filepath.Join(t.TempDir(), "started")
+	if out, code := s.run([]string{"FAKE_SLOW_TAR=" + started}, "@prod", "--release"); code != 0 {
+		t.Fatalf("the third release (%d):\n%s", code, out)
+	}
+	if !fileExists(started) || fileExists(filepath.Join(s.root, "shop", "prod", "releases", first)) {
+		t.Fatalf("the detached tar not started (%v), or the first release kept (%v)", fileExists(started), fileExists(filepath.Join(s.root, "shop", "prod", "releases", first)))
+	}
+	lock, err := os.OpenFile(filepath.Join(s.root, remote.ImagesLock), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	write(t, started+".go", "", 0o644)
+	time.Sleep(3 * time.Second)
+	if !fileExists(orphan) {
+		t.Errorf("the first release's snapshot %s was removed, its images freed, while the server's image lock was held by someone else", rs[0].id)
+	}
+	lock.Close()
+	for start := time.Now(); fileExists(orphan); time.Sleep(100 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			t.Fatalf("the first release's snapshot %s not pruned once the image lock was free", rs[0].id)
+		}
+	}
+}
+
 // A mirror take's tar step that fails on its last tar (Docker answering
 // an error, a disk full) leaves its .tmp with the manifest, the listing
 // and every tar file, the last one cut, named by the mirror's marker; a
