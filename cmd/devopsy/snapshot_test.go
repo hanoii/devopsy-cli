@@ -2030,6 +2030,15 @@ func TestSnapshotReflink(t *testing.T) {
 		t.Errorf("the cut take not finished from its clone (%d):\n%s", code, out)
 	}
 
+	// A clone without its .tmp (a take killed outright during its clone,
+	// or after its rename, before its clone went): nobody's, removed by
+	// the next take, there no .tmp at all.
+	left := filepath.Join(snaps, ".clone", "20200101000000")
+	write(t, filepath.Join(left, "mnt", "db", "ibdata"), "old rows\n", 0o644)
+	if out, code := s.run(reflink, "@prod", "--snapshot"); code != 0 || fileExists(left) {
+		t.Errorf("a leftover clone kept (%d, there: %v):\n%s", code, fileExists(left), out)
+	}
+
 	// A release's snapshot, cloned.
 	s2 := newSyncSetup(t)
 	s2.snapshotted("prod", "true", false)
