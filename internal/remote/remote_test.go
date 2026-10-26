@@ -481,6 +481,23 @@ func TestOlderServerCheckMountsWords(t *testing.T) {
 	}
 }
 
+// The receive script runs on the child's server: devopsy --util-image
+// there readies that devopsy's UtilImage, then the script runs this
+// one's, after its claim. A v0.51.0 child readies devopsy-util:2 only,
+// so docker run devopsy-util:3 tries Docker Hub and fails, the copy
+// counts as cut, and the child is marked partial with its services down,
+// though nothing refused the sync before anything stopped (childNeeds
+// adds data-copy and mnt-owner, which v0.51.0 has).
+func TestOlderChildUtilImage(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"receive", "receive bare"} {
+		s := allScripts()[name]
+		if olderRuns(s, DataCopyFeature, MntOwnerFeature) && strings.Contains(s, Quote(UtilImage)) && UtilImage != "devopsy-util:2" {
+			t.Errorf("%s: a v0.51.0 child runs it (needs %v), and its --util-image readies devopsy-util:2, not the %s the script runs after its claim", name, Needs(s), UtilImage)
+		}
+	}
+}
+
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
 	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
