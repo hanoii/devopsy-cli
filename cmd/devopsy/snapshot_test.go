@@ -1637,7 +1637,7 @@ func TestReleaseSnapshot(t *testing.T) {
 		// The fake's deploy starts nothing: what the snapshot stopped,
 		// running before the release, is started once the run step ended,
 		// said, never left down unrecorded.
-		if stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod")); stopped != "" || !strings.Contains(out, "stopped, which the release snapshot stopped: starting them") {
+		if stopped := strings.TrimSpace(readString(s.log + ".stopped.shop-prod")); stopped != "" || !strings.Contains(out, "stopped, which devopsy stopped before it: starting them") {
 			t.Errorf("mirror %v: left stopped after the run step: %q\n%s", mirror, stopped, out)
 		}
 	}

@@ -1271,8 +1271,8 @@ func releaseRecord(cwd, how, next string) error {
 	return rec.write(cwd)
 }
 
-// startLeftDown starts what of names (services a release snapshot
-// stopped, so running before the release) the run step left down, as
+// startLeftDown starts what of names (services a release snapshot or a
+// restore stopped, so running before) the run step left down, as
 // far as the current release has them: a project's run step need not
 // up every service, and nothing else would start them (review). Said,
 // and a start that fails only warns: the release is live.
@@ -1298,7 +1298,7 @@ func startLeftDown(cwd string, names []string) {
 	if len(left) == 0 {
 		return
 	}
-	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which the release snapshot stopped: starting them")
+	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which devopsy stopped before it: starting them")
 	if err := compose(cwd, errOut, append([]string{"start"}, left...)...); err != nil {
 		report.Warn("docker compose start: "+err.Error()+": they stay stopped", "to start them:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" up -d")
 		return
@@ -2498,6 +2498,12 @@ func snapshotRestored(cwd string, p snapshotPaths, snap string) error {
 		if err := os.Remove(filepath.Join(p.base, remote.SyncIncompleteFile)); err != nil {
 			return err
 		}
+	}
+	// What the restore stopped and its run step left down (a run step
+	// need not up every service) is started, said, as a release
+	// snapshot's set is: the record goes next, and nothing else would.
+	if rec, ok := readSyncRecord(cwd); ok {
+		startLeftDown(cwd, rec.stops)
 	}
 	if err := os.Remove(filepath.Join(p.base, syncState)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
