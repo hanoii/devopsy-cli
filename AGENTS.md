@@ -2062,25 +2062,31 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   `tarEntry.volume`, extracted into the volume by name, one carried as
   a file refused) are refused, an excluded one by its label, and
   so is a member that reaches out of its entry (`tarMember`): a `..` or
-  absolute path, a link out of `mnt`, a top-level entry that is no
-  directory or file, a link into another entry, and `./`, `mnt` itself.
-  Why: GNU tar extracted those through to another entry, refused them
-  only once the entries were emptied, or (`../x` into `.`, before `.`
-  went) emptied the container's root. Where a link leads is judged
-  through the tar's own links, never lexically alone (`tarLinks.check`,
-  after the whole tar is read): a symbolic link's target is walked
-  component by component from its directory as the kernel resolves it,
-  following every link of the tar on the way (40 at most, Linux's own
-  limit), and refused when the way leaves its entry at any point (a `..`
-  above it, `../storage/b` going through `mnt` included), as are a
-  member below a link of the tar or sharing a link's name (a tar never
-  writes them, and then every name is where it lands) and a hard link
-  to a link or below one (GNU tar links the symbolic link itself, whose
-  relative target then leads elsewhere: checked in `devopsy-util:2`).
-  Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
-  `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
-  `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
-  carry is a directory to the walk: the entry is emptied first. A pax
+  absolute path, a hard link out of its entry, a top-level entry that
+  is no directory or file, and `./`, `mnt` itself. Why: GNU tar
+  extracted those through to another entry, refused them only once the
+  entries were emptied, or (`../x` into `.`, before `.` went) emptied
+  the container's root. Nothing is written through a link
+  (`tarLinks.check`, after the whole tar is read): a member below a
+  link of the tar or sharing a link's name is refused (a tar never
+  writes them, and then every name is where it lands), and so is a hard
+  link to a link or below one (GNU tar links the symbolic link itself,
+  whose relative target then leads elsewhere: checked in
+  `devopsy-util:2`). A symbolic link's target is the data's own,
+  wherever it leads, as a sync copies it and a restore takes it: the
+  extraction mounts its entry alone, so nothing of the host is in its
+  way (decided after v0.52.1: an app's absolute link, `storage/latest
+  -> /app/storage/f`, made devopsy's own export refuse its import).
+  What Docker follows on the host is refused: a bind source of the
+  current code that the tar's links make lead out of its entry
+  (`linkAtBind`, as a restore's, locally too), walked through the
+  tar's own links as the host resolves them in mnt (`tarLinks.walkMnt`,
+  40 links at most, Linux's own limit; through mnt only back into the
+  entry), never lexically alone: `path.Clean` read `storage/w ->
+  x/x/../../etc/shadow`, with `storage/x -> .`, as `storage/etc/shadow`,
+  and on the server it was `/etc/shadow` (review of 2026-10-23, round
+  4). What the tar does not carry is a directory to the walk: the entry
+  is emptied first. A pax
   global header is no member to `archive/tar`, but GNU tar applies its
   records to every member after it (a `path` or `linkpath` renames
   members and retargets links these checks never saw: review of
@@ -2448,7 +2454,7 @@ settled every rule here after nine reviews (2026-10-25).
   existing volumes only; decided 2026-10-26: a warning, sparse files
   counting whole make the estimate high; disk space as a whole is a plan
   of its own), the import's checks but a symbolic link's
-  target, which is the data's own wherever it leads (`anyTarget`:
+  target, which is the data's own wherever it leads (as an import's:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
   made every snapshot unrestorable), but none that makes a bind source

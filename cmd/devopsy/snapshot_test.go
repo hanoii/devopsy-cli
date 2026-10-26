@@ -2449,7 +2449,7 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 		if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
 			t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
 		}
-		if code == 0 || strings.Contains(out, "panic:") || !strings.Contains(out, "bind-mounts mnt/storage/public, which the snapshot's links make a path that") {
+		if code == 0 || strings.Contains(out, "panic:") || !strings.Contains(out, "bind-mounts mnt/storage/public, which the tar's links make a path that") {
 			t.Errorf("the restore of a snapshot whose storage/public -> %s, a bind source of app (%d): not refused as a link out of its entry:\n%s", link, code, out)
 		}
 	}

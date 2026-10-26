@@ -1371,10 +1371,13 @@ environment on a server) and changes nothing until it is all there; a
 truncated tar (cut anywhere, or missing its end-of-archive blocks),
 or one carrying entries the service does not mount or excludes, is
 refused, and so is one carrying `mnt` itself (`./`: make it with `tar -C
-mnt -cf - <entry>...`), a member reaching out of its entry (a link
-included, judged by where it leads through the tar's other links, never
-leaving its entry on the way, as the server would resolve it), or a device
-node or a FIFO anywhere (as root, tar would make them on the server). On a target, `--export`
+mnt -cf - <entry>...`), a member reaching out of its entry (a path, a
+hard link, a member below a link), a link that makes a bind source of a
+service lead out of its entry (judged by where it leads through the
+tar's other links, as the host would resolve it: Docker follows it
+there; any other link is the data's own, wherever it points, as a sync
+copies it), or a device node or a FIFO anywhere (as root, tar would make
+them on the server; `--export` leaves them out). On a target, `--export`
 holds the release lock shared and the environment's sync lock (a sync from
 it waits), `--import` the release lock, and asks for the environment's
 full name on the terminal unless `--yes` (stdin is the data); one silent

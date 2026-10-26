@@ -2356,32 +2356,18 @@ func TestExportImport(t *testing.T) {
 		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
 		})},
-		// A link out of mnt through another link of the tar (review of
-		// 2026-10-23, round 4): storage/x -> . never descends, so each
-		// x/.. pair path.Clean cancels climbs one directory for real.
-		// Judged lexically, storage/w's target was storage/etc/shadow,
-		// inside its entry; GNU tar extracts both links (checked in
-		// devopsy-util:3, one container mounting storage alone), and on
-		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
-		// root's, in the entry for whatever follows it on the host
-		// (Docker resolves a bind's source there). The ways a tar's links
-		// can lead are tarEntries' (TestTarLinks).
-		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
-			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
-			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
-			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
-		})},
-		// A link out of mnt through another link of the tar (review of
-		// 2026-10-23, round 4): storage/x -> . never descends, so each
-		// x/.. pair path.Clean cancels climbs one directory for real.
-		// Judged lexically, storage/w's target was storage/etc/shadow,
-		// inside its entry; GNU tar extracts both links (checked in
-		// devopsy-util:3, one container mounting storage alone), and on
-		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
-		// root's, in the entry for whatever follows it on the host
-		// (Docker resolves a bind's source there). The ways a tar's links
-		// can lead are tarEntries' (TestTarLinks).
-		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+		// A bind source made a link out of mnt through another link of
+		// the tar (review of 2026-10-23, round 4): storage/x -> . never
+		// descends, so each x/.. pair path.Clean cancels climbs one
+		// directory for real. Judged lexically, storage/w's target was
+		// storage/etc/shadow, inside its entry; GNU tar extracts both
+		// links (checked in devopsy-util:3, one container mounting
+		// storage alone), and on the server `realpath
+		// shared/mnt/storage/w` was /etc/shadow, which Docker follows for
+		// a bind of mnt/storage/w. A link alone is the data's
+		// (TestImportAppAbsoluteLink); the ways a tar's links can lead a
+		// bind source are linkAtBind's (TestTarLinks).
+		{"storage/w, a bind source, a link out of mnt through storage/x", "/storage/w", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
 			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
 			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
@@ -2615,11 +2601,12 @@ func TestExportImport(t *testing.T) {
 	os.Remove(s.log + ".shop-prod")
 }
 
-// tarEntries follows the tar's own links to judge where a link leads,
-// as the kernel resolves it (tarLinks.check): relative links within
-// their entry pass, a way that leaves the entry at any point is refused,
-// however path.Clean reads it, and so are the members whose names would
-// not be where they land (review of 2026-10-23, round 4). A pax global
+// tarEntries refuses the members whose names would not be where they
+// land (review of 2026-10-23, round 4), and takes a symbolic link's
+// target as the data, wherever it leads; a bind source through the
+// tar's links is judged by where it leads as the host resolves it
+// (linkAtBind, tarLinks.walkMnt): through mnt only back into its entry,
+// however path.Clean reads the way, a loop refused. A pax global
 // header is no member, but GNU tar applies its records (linkpath, path,
 // size...) to every member after it, where archive/tar, which the check
 // reads the tar with, applies none (checked in devopsy-util:3, GNU tar
@@ -2644,6 +2631,9 @@ func TestTarLinks(t *testing.T) {
 		name    string
 		members []*tar.Header
 		refused string
+		// bind, a bind source under mnt, is refused by linkAtBind with
+		// atBind (passes when empty).
+		bind, atBind string
 	}{
 		{"links within their entry", []*tar.Header{
 			dir("storage/"), dir("storage/sub/"), file("storage/sub/f"),
@@ -2651,45 +2641,48 @@ func TestTarLinks(t *testing.T) {
 			sym("storage/c", "self/sub/./f"), sym("storage/d", "sub/"), sym("storage/sub/up", ".."),
 			sym("storage/e", "sub/up/sub/f"), sym("storage/dangling", "gone/away"),
 			hard("storage/h", "storage/sub/f"), hard("./storage/i", "./storage/sub/f"),
-		}, ""},
+		}, "", "", ""},
+		{"links leading anywhere, the data's own", []*tar.Header{
+			dir("storage/"), sym("storage/abs", "/app/storage/f"), sym("storage/root", "/"), sym("storage/db", "../db/x"),
+		}, "", "", ""},
 		{"through a link to the entry, path.Clean inside", []*tar.Header{
 			dir("storage/"), sym("storage/x", "."), sym("storage/w", strings.Repeat("x/", 3)+strings.Repeat("../", 3)+"etc/shadow"),
-		}, "storage/w, whose target leads out of mnt/storage"},
+		}, "", "storage/w", "leads out of mnt/storage, above mnt"},
 		{"through a link to a parent, path.Clean inside", []*tar.Header{
 			dir("storage/sub/"), sym("storage/sub/up", ".."), sym("storage/w", "sub/up/../x"),
-		}, "storage/w, whose target leads out of mnt/storage"},
+		}, "", "storage/w", "leads out of mnt/storage, into mnt/x"},
 		{"a link in a subdirectory through another", []*tar.Header{
 			dir("storage/sub/"), sym("storage/x", "."), sym("storage/sub/up", "../x/.."),
-		}, "storage/sub/up, whose target leads out of mnt/storage"},
+		}, "", "storage/sub/up", "leads out of mnt/storage, to mnt itself"},
 		{"out and back through mnt", []*tar.Header{
 			file("storage/b"), sym("storage/a", "../storage/b"),
-		}, "storage/a, whose target leads out of mnt/storage"},
+		}, "", "storage/a", ""},
 		{"a loop", []*tar.Header{
 			sym("storage/a", "b"), sym("storage/b", "a"),
-		}, "follows more than 40 links"},
+		}, "", "storage/a", "follows more than 40 links"},
 		{"a member below a link", []*tar.Header{
 			sym("storage/x", "sub"), dir("storage/sub/"), file("storage/x/f"),
-		}, "storage/x/f is below the link storage/x"},
+		}, "storage/x/f is below the link storage/x", "", ""},
 		{"a link and a directory of one name", []*tar.Header{
 			sym("storage/x", "sub"), dir("storage/x/"),
-		}, "storage/x is a link and another member of the same name"},
+		}, "storage/x is a link and another member of the same name", "", ""},
 		{"a hard link to a link", []*tar.Header{
 			dir("storage/sub/"), file("storage/f"), sym("storage/sub/s", "../f"), hard("storage/h", "storage/sub/s"),
-		}, "storage/h is a hard link to the link storage/sub/s"},
+		}, "storage/h is a hard link to the link storage/sub/s", "", ""},
 		{"a hard link below a link", []*tar.Header{
 			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
-		}, "storage/h is a hard link below the link storage/x"},
+		}, "storage/h is a hard link below the link storage/x", "", ""},
 		{"the export's record alone in a global header", []*tar.Header{
 			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n"}),
 			dir("storage/"), sym("storage/x", "sub"),
-		}, ""},
+		}, "", "", ""},
 		{"a global linkpath beside the export's record", []*tar.Header{
 			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n", "linkpath": "../../../../etc"}),
 			dir("storage/"), sym("storage/x", "sub"),
-		}, "*"},
+		}, "*", "", ""},
 		{"a global linkpath after a member", []*tar.Header{
 			dir("storage/"), global(map[string]string{"linkpath": "../../../../etc"}), sym("storage/x", "sub"),
-		}, "*"},
+		}, "*", "", ""},
 	} {
 		var b bytes.Buffer
 		tw := tar.NewWriter(&b)
@@ -2703,7 +2696,16 @@ func TestTarLinks(t *testing.T) {
 		}
 		spool := filepath.Join(t.TempDir(), "spool")
 		write(t, spool, b.String(), 0o644)
-		_, err := tarEntries(spool)
+		es, err := tarEntries(spool)
+		if c.bind != "" && err == nil {
+			err = linkAtBind(es[0], []cli.SyncService{{Name: "app", Binds: []string{c.bind}}})
+			if c.atBind == "" && err != nil {
+				t.Errorf("%s: a bind of %s refused: %v", c.name, c.bind, err)
+			} else if c.atBind != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.atBind)) {
+				t.Errorf("%s: a bind of %s: %v, want %q", c.name, c.bind, err, c.atBind)
+			}
+			continue
+		}
 		switch {
 		case c.refused == "" && err != nil:
 			t.Errorf("%s: refused: %v", c.name, err)
