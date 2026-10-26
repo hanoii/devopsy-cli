@@ -985,9 +985,6 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 		}
 	}
 	tmps, _ := filepath.Glob(filepath.Join(p.snaps, "*.tmp"))
-	if len(tmps) == 0 {
-		return nil
-	}
 	marker, _ := os.ReadFile(filepath.Join(p.mirror, remote.SnapshotComplete))
 	for _, tmp := range tmps {
 		id := strings.TrimSuffix(filepath.Base(tmp), ".tmp")
