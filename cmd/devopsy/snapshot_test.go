@@ -961,3 +961,58 @@ func TestSnapshotRestoreReleaseFiles(t *testing.T) {
 		t.Errorf("the restored release lacks its target lines or record")
 	}
 }
+
+// A full restore passes its point of no return at the end of its fetch
+// (the watcher disarmed), and writes the data after it, before its
+// switch: a Ctrl-C while it stops the services and extracts (minutes for
+// a large snapshot) cannot cancel it, and the operator must hear that,
+// not that it is being cancelled (a second Ctrl-C then exits 130 while
+// the restore goes live, and a connection lost there is said to be one
+// the server cancels).
+func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	before := s.current("prod")
+	s.logs()
+	stopping := filepath.Join(t.TempDir(), "stopping")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STOP_WAIT="+stopping)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); !fileExists(stopping); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the restore's data step never stopped the services:\n%s", readString(outFile.Name()))
+		}
+	}
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	for start := time.Now(); !strings.Contains(readString(outFile.Name()), "interrupted"); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			break
+		}
+	}
+	said := readString(outFile.Name())
+	write(t, stopping+".go", "", 0o644)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	if s.current("prod") == before {
+		t.Fatalf("the restore did not go live (%d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+	if strings.Contains(said, "cancelling the release") {
+		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+}
