@@ -3726,3 +3726,40 @@ func TestSyncFinishGoKeepsUncheckedRestoreMark(t *testing.T) {
 		t.Errorf("finish go over a restore's mark, from a copy no parent checked, cleared it (%q):\n%s", data, out)
 	}
 }
+
+// A feature only the activation needs (leaving-binds: the mounts check's
+// words every activation calls, which a v0.52.0 server lacks) refuses a
+// release before anything changes on the server: the upload's own needs
+// are the server's, so the project must not be uploaded first and the
+// activation's prelude refuse it then, leaving a pending release
+// directory, INCOMPLETE and newer than current, which remove failed never
+// takes and pruning only once it is older than the keep-th live release.
+func TestOlderServerActivationRefusesBeforeUpload(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	old := filepath.Join(filepath.Dir(s.root), "old")
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+remote.ReleaseSnapshotsFeature+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	var env []string
+	for _, kv := range s.env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			kv = "PATH=" + old + ":" + v
+		}
+		env = append(env, kv)
+	}
+	releases := filepath.Join(s.root, "shop", "prod", "releases")
+	before, _ := os.ReadDir(releases)
+	cmd := exec.Command(binary, "@prod", "--release")
+	cmd.Dir = s.project
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader("")
+	outb, _ := cmd.CombinedOutput()
+	out, code := string(outb), cmd.ProcessState.ExitCode()
+	after, _ := os.ReadDir(releases)
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs ("+remote.ReleaseSnapshotsFeature+")") {
+		t.Fatalf("a release on a server lacking %s (%d):\n%s", remote.ReleaseSnapshotsFeature, code, out)
+	}
+	if len(after) != len(before) {
+		t.Errorf("a release refused for %s left a release directory behind (%d releases, %d before):\n%s", remote.ReleaseSnapshotsFeature, len(after), len(before), out)
+	}
+}
