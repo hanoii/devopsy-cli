@@ -908,10 +908,13 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	where := t.Host + ":" + t.Path
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
-		// Its snapshots go too: how many, said.
+		// Its snapshots go too: how many, said. Only a count for the
+		// prompt, so what the session says goes nowhere (an older server
+		// refuses the listing, naming its upgrade, and --destroy still
+		// runs there).
 		snaps := ""
 		var out bytes.Buffer
-		if code, err := remote.SSH(t, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
+		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
 			if n := strings.Count(out.String(), "\n"); n == 1 {
 				snaps = ", and its snapshot"
 			} else if n > 1 {
