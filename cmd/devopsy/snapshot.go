@@ -1456,6 +1456,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 			}
 		}
 	}
+	owners, err := cli.MntOwners(restored)
+	if err != nil {
+		return fail("the restored code's labels: " + err.Error() + ": nothing restored")
+	}
 	tars := snapshotTars(m)
 	for _, t := range tars {
 		if _, ok := volumes[t.name]; t.volume != "" && !ok || t.volume == "" && !entries[t.name] {
@@ -1504,6 +1508,17 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		if err != nil {
 			return fail(err.Error() + ": the services stay down: restore it again (devopsy --snapshots restore " + id + ")")
 		}
+	}
+	// What it extracted goes to its owner, as an import's does: the tar
+	// carries the owners of when it was taken, or of another server.
+	owned := map[string]string{}
+	for _, e := range m.entries {
+		if o := owners[e]; o != "" {
+			owned[e] = o
+		}
+	}
+	if err := ownMnt(ctx, mnt, owned, cname+"-owners"); err != nil {
+		return fail(err.Error() + ": the services stay down: restore it again (devopsy --snapshots restore " + id + ")")
 	}
 	// The images that ran on the data, held, with their history.
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))

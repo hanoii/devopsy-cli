@@ -1097,7 +1097,9 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   containers (`extractEntries`, below) in the entries' own, never
   locally on macOS (review of 2026-10-23, round 2:
   as before `up`, and Docker Desktop's file sharing may refuse a
-  chown); a reset, after `emptyMnt`;
+  chown); a snapshot's restore, after its extractions, from the
+  restored code's labels (review of 2026-10-25: `--no-code` left the
+  tar's owners); a reset, after `emptyMnt`;
   locally before compose's `up`, `start`, `restart`, `run`,
   `create`, `watch` and `scale` (review of 2026-10-23, round 3:
   `restart` starts containers, and Docker makes a missing entry root's)
