@@ -2233,3 +2233,49 @@ func TestImportedHistoryOwnRepositoryOnly(t *testing.T) {
 		})
 	}
 }
+
+// A data service's history remembers every image its data ran by the
+// image, whatever the name it ran as: an environment that moved to a
+// mirror of its series (mirror.example/mariadb:11.8, the image it ran
+// already, so no --accept-image) still knows its data moved past I1,
+// which ran as mariadb:11.8. A restore of its own snapshot (data/images,
+// ImportDone) keeps that knowledge: its record's lines in the upstream
+// repository are no newest image to hold, but they are what the data
+// moved past. The mirror's tag going back to I1 must then be refused as
+// it was before the restore, never run on the data I2 wrote.
+func TestRestoredHistoryKeepsWhatDataMovedPast(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	mirror := dbSvc("mirror.example/mariadb:11.8")
+	d.publish("mariadb:11.8", "I1")
+	prod.release(false, db118)
+	d.publish("mariadb:11.8", "I2")
+	prod.release(false, db118)
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	if _, err := prod.release(false, mirror); err != nil || prod.runs("database") != "I2" {
+		t.Fatalf("the move to the mirror, the same image (%v): runs %s\n%s", err, prod.runs("database"), out.String())
+	}
+	rel := prod.e.rel(prod.cur)
+	data := prod.e.set.SnapshotData(prod.base(), rel)
+	// The tag moving back before the restore: refused.
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	if _, err := prod.release(false, mirror); !errors.Is(err, ErrRefused) {
+		t.Fatalf("before the restore, the mirror's tag back on I1 (%v): runs %s\n%s", err, prod.runs("database"), out.String())
+	}
+	d.publish("mirror.example/mariadb:11.8", "I2")
+	if err := prod.e.set.ImportDone(prod.base(), rel, data); err != nil {
+		t.Fatalf("the restore's data step: %v\n%s", err, out.String())
+	}
+	prod.activation = true
+	prod.up()
+	if err := prod.e.set.Ran(prod.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	out.Reset()
+	if _, err := prod.release(false, mirror); !errors.Is(err, ErrRefused) || prod.runs("database") != "I2" {
+		t.Errorf("after the restore of its own snapshot, the mirror's tag back on I1, an image the data moved past (%v): runs %s, history %v\n%s", err, prod.runs("database"), prod.history("database"), out.String())
+	}
+}
