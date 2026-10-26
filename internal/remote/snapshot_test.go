@@ -181,6 +181,35 @@ exit 0
 	}
 }
 
+// A release with release snapshots that waits for the sync or the
+// snapshot lock in vain (an export or a take of another operator's past
+// 10 minutes) fails through not_live, the release marked failed with
+// what its hook starts, never left pending by a bare exit.
+func TestReleaseSnapshotLockWaitFails(t *testing.T) {
+	t.Parallel()
+	on := &Target{Name: "prod", Host: "h", Path: "app/prod", Mode: ModeImage, SnapshotsRelease: SnapshotSetting{Enabled: true, Keep: 1}}
+	path := fakeDevopsy(t)
+	bin := strings.SplitN(strings.TrimPrefix(path, "PATH="), ":", 2)[0]
+	for _, busy := range []string{"5", "6"} {
+		// flock: only the lock on fd busy never comes.
+		if err := os.WriteFile(filepath.Join(bin, "flock"), []byte("#!/bin/sh\nfor a; do last=$a; done\n[ \"$last\" != "+busy+" ]\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		rel := filepath.Join(dir, "releases", "2")
+		if err := os.MkdirAll(rel, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		script := "set -eu\nroot=" + Quote(dir) + " base=" + Quote(dir) + " rel=" + Quote(rel) + " id=2 prev=releases/1 keep=5 max_keep=5\n" + NotLive + releaseSnapshotSetup(on, "app-prod", false) + "echo went on\n"
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{path}
+		out, err := cmd.CombinedOutput()
+		if code := cmd.ProcessState.ExitCode(); err == nil || code != 75 || !fileExists(filepath.Join(rel, FailedFile)) || strings.Contains(string(out), "went on") {
+			t.Errorf("fd %s never free: exit %d, failed %v:\n%s", busy, code, fileExists(filepath.Join(rel, FailedFile)), out)
+		}
+	}
+}
+
 // With release snapshots on, a release and a restore (full or
 // --no-code) take one of the data they replace, never a rollback, and
 // need a server with release snapshots (release-snapshots), which
@@ -239,6 +268,12 @@ func TestSyncDecisionRestoreMark(t *testing.T) {
 		out, err := exec.Command("sh", "-c", "sync_id=7.1; reply=go\n"+syncDecision(Quote(taken), Quote(incomplete))+"echo \"$sync_word\"").CombinedOutput()
 		if err != nil || strings.TrimSpace(string(out)) != c.want {
 			t.Errorf("mark %q, %q: %s (%v), want %s", c.mark, c.done, out, err, c.want)
+		}
+		// An operator's devopsy older than the servers decides by the done
+		// line alone, which a checking parent's record still has as it is:
+		// a complete sync is never taken for a cut one there.
+		if err := exec.Command("grep", "-qx", DoneLine("7.1"), taken).Run(); err != nil {
+			t.Errorf("%q: no plain done line for an older holder (%v)", c.done, err)
 		}
 	}
 

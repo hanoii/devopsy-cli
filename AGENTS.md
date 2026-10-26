@@ -2313,7 +2313,9 @@ settled every rule here after nine reviews (2026-10-25).
   `settleLeftover` when the record has them, an export on a target, a
   sync's push on the parent: round 3, its restore removed the record
   whole),
-  which starts them unless the environment is marked. Every stopped pass
+  which starts them unless the environment is marked, only those the
+  current release has (review: a release dropping one, killed before
+  its `release-record live`, failed every settle after it). Every stopped pass
   holds the release lock exclusively, so a line settle sees is a
   leftover by construction. A take's session is an activation's
   (`liveSession` with its words): before the end of the stopped pass a
@@ -2397,12 +2399,24 @@ settled every rule here after nine reviews (2026-10-25).
   with `copiesService`, and only a parent that does writes the done
   line that completes it (`CheckedDoneLine`, through `SyncCheckedEnv`
   for the child's devopsy; `syncDecision`): an older parent's sync over
-  it stays partial. A release that syncs refuses such a parent before
+  it stays partial, and the mark stays the restore's (a sync's copy mark
+  over it let the next plain sync clear it, review). The check is a
+  line of its own (`CheckedLine`) before the done line, in the same
+  append: the done line stays what an older operator's holder looks for
+  (review: `done <id> checked` made it take every complete sync for a
+  cut one). A release that syncs refuses such a parent before
   its upload too (`restoreMarkNeed`, from the child's session it opens
   anyway). Decided over a session of `--sync`'s own to read the mark
   (review: every sync paid it, projects without snapshots included).
 - **Export and import:** one outer tar of the snapshot's directory, on
-  stdout and from stdin, never `--import`'s marker and byte (storing one
+  stdout and from stdin; an export holds its snapshot's directory locked
+  (fd 4, shared, taken under the snapshot lock, which goes before the
+  tar), and a removal or pruning skips a snapshot it finds locked
+  (`removeSnapshotDir`), so nothing waits for an export, which lasts as
+  long as its pipe (review: takes and releases with release snapshots
+  waited 10 minutes for one, then failed). A release that waits for the
+  sync or snapshot lock in vain fails through `not_live` (`lockWaitOr`),
+  never a bare `exit 75` leaving it pending; never `--import`'s marker and byte (storing one
   stops nothing): the import gated (`lockedGate`, `--stdin-guard`),
   extracted beside (`receive`: GNU tar, the same stream read by
   archive/tar to its end-of-archive blocks, since GNU tar takes a stream

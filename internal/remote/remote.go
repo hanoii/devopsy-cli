@@ -403,11 +403,18 @@ func devopsyCall(projectName string, args []string, exec bool) string {
 // lockWait takes the lock on fd (shared with -s): at once, or saying what
 // it waits for, up to 10 minutes, then giving up with 75.
 func lockWait(fd int, shared bool, what string) string {
+	return lockWaitOr(fd, shared, what, "exit 75")
+}
+
+// lockWaitOr is lockWait running timeout when the wait ends: an
+// activation's not_live, so a release that waited in vain is failed, not
+// left pending.
+func lockWaitOr(fd int, shared bool, what, timeout string) string {
 	opt := ""
 	if shared {
 		opt = "-s "
 	}
-	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; exit 75; }; }`, opt, fd, what, opt, fd, what)
+	return fmt.Sprintf(`flock -n %s%d || { devopsy --say info "waiting for %s, up to 10 minutes"; flock %s-w 600 %d || { devopsy --say error "%s did not end in 10 minutes"; %s; }; }`, opt, fd, what, opt, fd, what, timeout)
 }
 
 // releaseLock takes the environment's release lock on fd 9 (lockWait,
@@ -1440,8 +1447,11 @@ fi
 func releaseSnapshotSetup(t *Target, projectName string, restore bool) string {
 	// A restore holds the sync and snapshot locks already, to its end.
 	locks := `  exec 5>"$base/` + SyncLockFile + `"
-` + lockWait(5, false, "a sync or an export from $base") + `
-` + snapshotLock(false)
+` + lockWaitOr(5, false, "a sync or an export from $base", "not_live 75") + `
+  exec 6>"$base/` + SnapshotLockFile + `"
+` + lockWaitOr(6, false, "a snapshot of $base", "not_live 75") + `
+  rm -f "$base/` + SnapshotHoldingFile + `"
+`
 	unlock := "    exec 6>&- 5>&-\n"
 	if restore {
 		locks, unlock = "", "    :\n"

@@ -857,8 +857,8 @@ type manifest struct {
 	// imported, a snapshot taken elsewhere.
 	format, kind, release, taken, copy string
 	imported                           bool
-	entries, files               []string
-	volumes                      map[string]string
+	entries, files                     []string
+	volumes                            map[string]string
 	// services are its services with data, each with its entries and
 	// volumes' keys.
 	services []manifestService
@@ -1090,8 +1090,16 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 
 // removeSnapshotDir removes a snapshot's directory, its bookmarks first,
 // under the exclusive image lock when it is free (else it stays, for the
-// next holder of the snapshot lock).
+// next holder of the snapshot lock); one an export holds locked stays.
 func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Duration) error {
+	// An export reading it holds its directory locked (SnapshotExportScript):
+	// it stays, never waited for.
+	if d, err := os.Open(dir); err == nil {
+		defer d.Close()
+		if err := syscall.Flock(int(d.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			return errors.New("snapshot " + filepath.Base(dir) + " is being exported: it stays")
+		}
+	}
 	// The image lock, exclusive, waited for up to wait and kept to the end.
 	var unlock func()
 	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
@@ -1388,12 +1396,25 @@ func settleSnapshots(cwd, base string) error {
 	if readMark(base) != nil {
 		return nil
 	}
-	report.Info("starting what snapshot " + rec.snapID + ", cut off, left stopped: " + strings.Join(rec.snaps, " "))
-	if err := compose(cwd, errOut, append([]string{"start"}, rec.snaps...)...); err != nil {
-		return fmt.Errorf("docker compose start: %w", err)
-	}
-	if err := waitHealthy(cwd, rec.snaps); err != nil {
+	// Only what the current release has: compose start refuses a service
+	// it lacks (a release that dropped one, killed outright before its
+	// release-record live, left it in the lines), as restoreServices does.
+	_, services, err := cli.SyncServices(cwd, os.Environ())
+	if err != nil {
 		return err
+	}
+	var names []string
+	for _, s := range services {
+		names = append(names, s.Name)
+	}
+	if start := intersect(rec.snaps, names); len(start) > 0 {
+		report.Info("starting what snapshot " + rec.snapID + ", cut off, left stopped: " + strings.Join(start, " "))
+		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+			return fmt.Errorf("docker compose start: %w", err)
+		}
+		if err := waitHealthy(cwd, start); err != nil {
+			return err
+		}
 	}
 	rec, _ = readSyncRecord(cwd)
 	rec.snaps, rec.snapID = nil, ""

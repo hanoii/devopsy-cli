@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/rand"
 	"io"
 	"os"
 	"os/exec"
@@ -420,6 +421,65 @@ func TestSnapshotRestoreNoCode(t *testing.T) {
 // a snapshot of the environment under a new id, restorable as any; one
 // that is no snapshot, or into an environment with no current release,
 // is refused.
+// An export holds its snapshot's directory locked, never the
+// environment's snapshot lock to its end: a take meanwhile goes on
+// without waiting (an export lasts as long as its pipe, an upload to a
+// bucket say), and a removal leaves the snapshot being exported, said;
+// once the export ended, it goes. The real flock (Linux).
+func TestSnapshotExportLocksItsSnapshot(t *testing.T) {
+	t.Parallel()
+	flock, err := exec.LookPath("flock")
+	if err != nil {
+		t.Skip("no flock")
+	}
+	real := []string{"FAKE_REAL_FLOCK=" + flock}
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	// More than a pipe holds, so the export blocks on its reader.
+	big := make([]byte, 1<<20)
+	if _, err := rand.Read(big); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(s.mnt("prod"), "storage", "big.bin"), string(big), 0o644)
+	out, code := s.run(real, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "export", m[1])
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), real...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	cmd.Stderr = &errs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// The export holds the snapshot once its tar has started writing.
+	first := make([]byte, 1)
+	if _, err := io.ReadFull(pipe, first); err != nil {
+		t.Fatalf("the export wrote nothing (%v):\n%s", err, errs.String())
+	}
+	start := time.Now()
+	if out, code := s.run(real, "@prod", "--snapshot"); code != 0 || strings.Contains(out, "waiting for") || time.Since(start) > 30*time.Second {
+		t.Errorf("a take while an export runs (%d, %v):\n%s", code, time.Since(start), out)
+	}
+	if out, code := s.run(real, "@prod", "--snapshots", "remove", m[1], "--yes"); !strings.Contains(out, "snapshot "+m[1]+" is being exported: it stays") || !fileExists(filepath.Join(s.root, "shop", "prod", "snapshots", m[1])) {
+		t.Errorf("a removal while the export runs (%d):\n%s", code, out)
+	}
+	rest, _ := io.ReadAll(pipe)
+	if err := cmd.Wait(); err != nil || len(rest) < len(big) {
+		t.Fatalf("the export (%v, %d bytes):\n%s", err, len(rest)+1, errs.String())
+	}
+	if out, code := s.run(real, "@prod", "--snapshots", "remove", m[1], "--yes"); code != 0 || fileExists(filepath.Join(s.root, "shop", "prod", "snapshots", m[1])) {
+		t.Errorf("a removal once the export ended (%d):\n%s", code, out)
+	}
+}
+
 func TestSnapshotExportImport(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -2238,7 +2298,6 @@ func TestSnapshotReflink(t *testing.T) {
 		t.Errorf("a leftover clone, check file or FIFO kept, or a live FIFO removed (%d, there: %v %v %v %v):\n%s", code, fileExists(left), fileExists(probe), fileExists(deadFifo), fileExists(liveFifo), out)
 	}
 
-
 	// A release's snapshot, cloned.
 	s2 := newSyncSetup(t)
 	s2.snapshotted("prod", "true", false)
@@ -2255,6 +2314,7 @@ func TestSnapshotReflink(t *testing.T) {
 		t.Errorf("a release's snapshot, cloned: %+v\n%s", rs, docker)
 	}
 }
+
 // A release that syncs runs no partialGuard: the sync's prepare settles a
 // killed holder's files, after the switch. With release snapshots on, the
 // snapshot of what the release replaces is taken before that, and must

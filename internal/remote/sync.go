@@ -113,8 +113,15 @@ const SyncContainerPrefix = "devopsy-sync-"
 // with a copy that leaves some of it.
 const SyncCheckedEnv = "DEVOPSY_INTERNAL_SYNC_CHECKED"
 
-// CheckedDoneLine is DoneLine from a parent that checks restores' marks.
-func CheckedDoneLine(id string) string { return DoneLine(id) + " checked" }
+// CheckedDoneLine is DoneLine from a parent that checks restores' marks:
+// a line of its own before it (CheckedLine), written together in one
+// append, so the done line stays what an older devopsy's holder looks
+// for (an operator older than the servers took every complete sync for
+// a cut one, review).
+func CheckedDoneLine(id string) string { return CheckedLine(id) + "\n" + DoneLine(id) }
+
+// CheckedLine says the sync's parent checked the child's restore mark.
+func CheckedLine(id string) string { return "checked " + id }
 
 // DoneLine records the copy's last write in SyncStartedFile.
 func DoneLine(id string) string {
@@ -530,8 +537,8 @@ func syncDecision(taken, incomplete string) string {
   # copy nothing) is go: no data the labels cover is partial any more.
   sync_word=abort
   # Over a restore's mark, only a parent that checked it completes it.
-  if grep -qx "` + CheckedDoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null ||
-    { grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null && [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" != ` + IncompleteRestore + ` ]; }; then
+  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null &&
+    { grep -qx "` + CheckedLine("$sync_id") + `" ` + taken + ` 2>/dev/null || [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" != ` + IncompleteRestore + ` ]; }; then
     sync_word=go
   elif [ -e ` + taken + ` ]; then
     # Written in part: the copy was cut.
@@ -570,7 +577,13 @@ func syncBlock(projectName, failed string, release bool) string {
       sync_since=$(cut -f1 ` + incomplete + ` 2>/dev/null) || true
       [ -n "$sync_since" ] || sync_since=$(date -u '+%Y-%m-%d %H:%M:%S')
       sync_from=$(head -n 1 ` + taken + ` 2>/dev/null | cut -d' ' -f1) || true
-      if [ -e ` + taken + ` ]; then
+      if [ -e ` + taken + ` ] && [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
+        # Over a restore's mark the mark stays the restore's: a sync's
+        # would let a later sync clear it without copying every service
+        # of the snapshot (an older parent's complete copy, which could
+        # not check that, included).
+        devopsy --say error "the copy did not complete what the restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) left: what it stopped stays down until a sync from a parent that copies every service of it, or a restore, completes, and ` + failed + `" || true
+      elif [ -e ` + taken + ` ]; then
         devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
         printf '%s\t%s\t` + IncompleteCopy + `\t%s\n' "$sync_since" "${sync_from:-$` + SyncFromTargetEnv + `}" "the copy from ${sync_from:-$` + SyncFromTargetEnv + `} was cut: the data is partly the parent's, partly what it was" >` + incomplete + ` || true
       elif [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteImport + ` ]; then

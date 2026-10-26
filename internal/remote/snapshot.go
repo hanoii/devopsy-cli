@@ -298,11 +298,20 @@ exit "$rs"
 
 // SnapshotExportScript writes t's snapshot id as one tar on stdout, its
 // only output there (the snapshot's directory: its tars, manifest, code
-// and copies of the environment's variables), under the snapshot lock
-// shared: no removal takes it meanwhile.
+// and copies of the environment's variables). It holds the snapshot's
+// own directory locked, shared (fd 4), taken under the environment's
+// snapshot lock and kept to its end, that lock given up before the tar:
+// a removal or a pruning, holding the environment's lock, skips a
+// snapshot it finds locked (removeSnapshotDir), and nothing else waits
+// for an export, which may take as long as its pipe (an upload to a
+// bucket; review: takes and releases with release snapshots waited 10
+// minutes for one, then failed).
 func SnapshotExportScript(t *Target, id string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -f "$snaps"/` + Quote(id) + `/` + SnapshotManifest + ` ] || { devopsy --say error "$base has no snapshot ` + id + `"; exit 1; }
-` + snapshotLock(true) + `exec tar -C "$snaps" -cf - ` + Quote(id) + `
+	return "set -eu\n" + basePrelude(t) + snapshotLock(true) + `[ -f "$snaps"/` + Quote(id) + `/` + SnapshotManifest + ` ] || { devopsy --say error "$base has no snapshot ` + id + `"; exit 1; }
+exec 4<"$snaps"/` + Quote(id) + `
+flock -s 4
+exec 6>&-
+exec tar -C "$snaps" -cf - ` + Quote(id) + `
 `
 }
 

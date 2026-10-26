@@ -1588,7 +1588,9 @@ release (`--no-code`), another snapshot, `--destroy`, or on a child
 snapshot).
 
 `--snapshots export <id>` writes a snapshot as one tar to stdout (`|
-aws s3 cp - s3://...`: devopsy owns no storage of its own), and
+aws s3 cp - s3://...`: devopsy owns no storage of its own; takes,
+releases and restores go on meanwhile, and a removal or pruning leaves
+the snapshot being exported, said), and
 `--snapshots import` stores one from stdin into the same environment,
 on this server or another, checked whole, under a new id: on a new
 server, release the project first, then import and restore it
