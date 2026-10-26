@@ -442,6 +442,45 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	}
 }
 
+// v0510Features is what a v0.51.0 server's devopsy reports in
+// --release-settings' features=: a script whose needs are all in it
+// passes the prelude's check there and runs.
+var v0510Features = strings.Fields("check-mounts check-names data-copy data-images destroy-data export export-images images import missing-vars mnt-owner mnt-owners prepare-release release-id release-settings release-steps reset say status stdin-guard sync-push sync-services upgrade util-image watch-session")
+
+// olderRuns says a v0.51.0 server's devopsy has every need of script.
+func olderRuns(script string, extra ...string) bool {
+	for _, n := range append(Needs(script), extra...) {
+		if !slices.Contains(v0510Features, n) {
+			return false
+		}
+	}
+	return true
+}
+
+// A v0.51.0 server's --check-mounts takes nothing or restored alone:
+// any other word is a usage error (exit 2). An activation whose needs
+// such a server has must not call it with one, or the restart after a
+// failed run step (--check-mounts restored restart) refuses there and
+// the release before is never restarted: what the failed run step
+// started runs on, from the failed release's code, while current points
+// back at the previous one. An older server must refuse the activation
+// first, naming the upgrade, or the restart must not depend on the word.
+func TestOlderServerCheckMountsWords(t *testing.T) {
+	t.Parallel()
+	words := regexp.MustCompile(`devopsy '--check-mounts'((?: '[^']*')*)`)
+	for _, name := range []string{"activate", "activate+cmd", "activate+sync", "sync only", "rollback+cmd"} {
+		s := allScripts()[name]
+		if !olderRuns(s) {
+			continue
+		}
+		for _, m := range words.FindAllStringSubmatch(s, -1) {
+			if args := strings.TrimSpace(m[1]); args != "" && args != "'restored'" {
+				t.Errorf("%s: a v0.51.0 server runs it (needs %v), and refuses its --check-mounts %s as usage", name, Needs(s), args)
+			}
+		}
+	}
+}
+
 func TestFormatReleases(t *testing.T) {
 	t.Parallel()
 	out := "20261005120000\tcurrent\t-\tregistry/app:abc mariadb:11=11.8.9 \t" + `{"id":"20261005120000","mode":"image","by":"ariel@mac","commit":"0123456789abcdef","branch":"main","dirty":true}` + "\n" +
