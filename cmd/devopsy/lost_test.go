@@ -373,3 +373,44 @@ func TestReleaseOverCutRollback(t *testing.T) {
 		t.Errorf("a rollback after that (%d) went to %q, not to %s, the cut rollback's target:\n%s", code, s.current("solo"), ids[1], out)
 	}
 }
+
+// --status's line for a cut release names "--release releases it again"
+// whatever else the environment holds: on a child whose release that
+// syncs was cut during its copy (the sync's files left, or its mark once
+// settled), --release is refused there (UploadScript: nothing released),
+// and --sync is what completes the data and runs the run step, which
+// clears the mark (HolderScript). The line names a fix that does not run.
+func TestCutReleaseFixOnChildWithSyncFiles(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@dev", "--release-no-sync")
+	if !strings.Contains(readString(filepath.Join(dev, remote.ActivatingFile)), "\trelease\t") {
+		t.Fatalf("dev's release killed past its switch left no mark")
+	}
+	// Killed during its copy: the sync's files are there too.
+	write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
+	status, _ := s.run(nil, "@dev", "--status")
+	fix := ""
+	for _, line := range strings.Split(status, "\n") {
+		if _, f, ok := strings.Cut(line, "its run step may not have run: "); ok {
+			fix = f
+		}
+	}
+	if fix == "" {
+		t.Fatalf("--status names no cut release:\n%s", status)
+	}
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Fatalf("a release of a child holding a cut sync's files (%d) was not refused:\n%s", code, out)
+	}
+	if strings.Contains(fix, "--release ") {
+		t.Errorf("--status names --release to finish the cut release, which is refused there (%q); --sync finishes it:\n%s", fix, status)
+	}
+}
