@@ -266,7 +266,7 @@ if [ -n "$rs_id" ]; then
   [ -z "$rd_sig" ] || { devopsy --say error "interrupted: nothing restored" || true; exit 130; }
   ` + step("release-stopped", `"$rs_id"`, `"$base/$cur"`, `"$base/$cur"`) + ` || { rd_unsnap; exit 1; }
   [ -z "$rd_sig" ] || { rd_unsnap; devopsy --say error "interrupted: nothing restored, the services started again" || true; exit 130; }
-  rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+  rs_tar="cd \"\$base/current\" && echo \"` + LogSection + `\$(date -u '+%Y-%m-%d %H:%M:%S') snapshot.\$rs_id\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
   if command -v setsid >/dev/null 2>&1; then
     base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$base/$cur/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
   else

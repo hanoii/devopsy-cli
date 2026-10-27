@@ -1543,7 +1543,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
     if [ "$fr" -eq 0 ] && [ -z "$fetch_sig" ]; then
       (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-stopped"}, false) + ` "$rs_id" "$base/$prev" "$1") || fr=$?
       if [ "$fr" -eq 0 ]; then
-        rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+        rs_tar="cd \"\$base/current\" && echo \"` + LogSection + `\$(date -u '+%Y-%m-%d %H:%M:%S') snapshot.\$rs_id\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
         if command -v setsid >/dev/null 2>&1; then
           base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
         else
