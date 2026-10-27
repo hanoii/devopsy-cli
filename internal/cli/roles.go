@@ -295,13 +295,17 @@ func sortedKeys(m map[string]bool) []string {
 	return keys
 }
 
-// PrepareRelease implements the hidden `devopsy --prepare-release`, run by
-// the release script in a new release (with shared/ linked) before it
-// becomes current: it checks the project's role is free on this host, and
-// writes its imports into the release's target.env, unless the release's
-// environment already sets them (even empty). It returns what to tell the
-// person releasing.
-func PrepareRelease(cwd string, environ []string) ([]string, error) {
+// PrepareRelease implements the hidden `devopsy --prepare-release
+// [reload]`, run by the release script in a new release (with shared/
+// linked) before it becomes current: it checks the project's role is free
+// on this host, and writes its imports into the release's target.env,
+// unless the release's environment already sets them (even empty). With
+// reload, in the current release before a reload: its imports read again,
+// a value it imported counting as unset, written with its own lines into
+// TargetReloadFile, which the reload's checks read in its place and which
+// replaces it once they pass. It returns what to tell the person
+// releasing.
+func PrepareRelease(cwd string, environ []string, reload bool) ([]string, error) {
 	p, err := loadProject(cwd, environ)
 	if err != nil {
 		return nil, err
@@ -335,7 +339,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 	for waited := false; ; {
 		missing := ""
 		for _, imp := range imports {
-			if _, ok := p.env.Lookup(imp.Var); ok || imp.Optional {
+			if p.setByTarget(imp.Var) || imp.Optional {
 				continue
 			}
 			if e, err := host.Resolve(imp); err == nil && e.Project == "" {
@@ -357,7 +361,7 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 
 	var lines []string
 	for _, imp := range imports {
-		if _, ok := p.env.Lookup(imp.Var); ok {
+		if p.setByTarget(imp.Var) {
 			said = append(said, fmt.Sprintf("%s: set by the target, not imported from %s", imp.Var, imp.Source))
 			continue
 		}
@@ -382,6 +386,9 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		}
 		said = append(said, fmt.Sprintf("%s=%s, from %s", imp.Var, e.Value, from))
 	}
+	if reload {
+		return said, writeReloadTarget(targetEnv, lines)
+	}
 	if len(lines) > 0 {
 		f, err := os.OpenFile(targetEnv, os.O_APPEND|os.O_WRONLY, 0)
 		if err != nil {
@@ -396,6 +403,36 @@ func PrepareRelease(cwd string, environ []string) ([]string, error) {
 		}
 	}
 	return said, nil
+}
+
+// setByTarget says whether the environment sets v itself: a value it
+// imported at its release (below ImportedMarker) does not count, so a
+// reload reads it again.
+func (p *loadedProject) setByTarget(v string) bool {
+	defs := p.env.trace(v)
+	return len(defs) > 0 && defs[0].Kind != EnvImported
+}
+
+// writeReloadTarget writes targetEnv's own lines, then lines under
+// ImportedMarker, into TargetReloadFile beside it, with its mode.
+func writeReloadTarget(targetEnv string, lines []string) error {
+	data, err := os.ReadFile(targetEnv)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(targetEnv)
+	if err != nil {
+		return err
+	}
+	own, _, _ := strings.Cut(string(data), ImportedMarker)
+	if own != "" && !strings.HasSuffix(own, "\n") {
+		own += "\n"
+	}
+	if len(lines) > 0 {
+		own += ImportedMarker + "\n" + strings.Join(lines, "\n") + "\n"
+	}
+	pending := filepath.Join(filepath.Dir(targetEnv), remote.TargetReloadFile)
+	return os.WriteFile(pending, []byte(own), fi.Mode().Perm())
 }
 
 // ImportedMarker starts the imported lines in a release's target.env.

@@ -97,6 +97,12 @@ type Target struct {
 	// project takes its containers, volumes and data down; devopsy knows
 	// none of them.
 	Destroy string `yaml:"destroy"`
+	// Reload is what --reload runs in the current release, once its
+	// variables and imports are read again: a devopsy command line,
+	// optional. Without one, devopsy's own up of what the release fetched
+	// (ReloadDefault): never the run step, which a sync reruns because its
+	// data moved, and which may do far more than apply variables.
+	Reload string `yaml:"reload"`
 	// Releases holds the environment's keep.
 	Releases *TargetReleases `yaml:"releases"`
 	// Snapshots is its snapshots: section, as written (merged over
@@ -154,10 +160,17 @@ type Target struct {
 	// "parent", "inherit".
 	nulls map[string]bool
 	// From says where each value came from, for --debug: "server", "path",
-	// "mode", "release", "rollback", "destroy", "keep", "env.KEY". A file,
+	// "mode", "release", "rollback", "destroy", "reload", "keep",
+	// "env.KEY". A file,
 	// "defaults in" a file, a variable or the address.
 	From map[string]string `yaml:"-"`
 }
+
+// ReloadDefault is what --reload runs without a reload: step, as devopsy
+// arguments: compose's up past project commands, recreating what changed
+// with the release's images, never building or pulling one (a missing
+// image fails it).
+var ReloadDefault = []string{"--", "up", "-d", "--wait", "--no-build", "--pull", "never"}
 
 // Alias is a shortcut for a target, in the user-level config: to: is an
 // address, in the project at source: (which it releases from) or, without
@@ -619,7 +632,7 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			switch k := n.Content[i].Value; k {
-			case "mode", "env", "release", "rollback", "destroy", "releases":
+			case "mode", "env", "release", "rollback", "destroy", "reload", "releases":
 			case "snapshots":
 				if err := checkSnapshots(n.Content[i+1]); err != nil {
 					return nil, nil, fmt.Errorf("%s: %s: snapshots: %w", file, name, err)
@@ -635,7 +648,7 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 			case "server":
 				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, releases, snapshots, parent, inherit)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, reload, releases, snapshots, parent, inherit)", file, name, k)
 			}
 		}
 	}
@@ -698,6 +711,7 @@ func origins(t *Target, from string) map[string]string {
 	set("release", t.Release != nil)
 	set("rollback", t.Rollback != nil)
 	set("destroy", t.Destroy != "")
+	set("reload", t.Reload != "")
 	set("keep", t.Releases != nil && t.Releases.Keep > 0)
 	set("snapshots.manual.enabled", t.Snapshots != nil && t.Snapshots.Manual != nil && t.Snapshots.Manual.Enabled != nil)
 	set("snapshots.manual.keep", t.Snapshots != nil && t.Snapshots.Manual != nil && t.Snapshots.Manual.Keep > 0)
@@ -800,6 +814,9 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	}
 	if t.Destroy == "" {
 		t.Destroy = base.Destroy
+	}
+	if t.Reload == "" {
+		t.Reload = base.Reload
 	}
 	if t.Releases == nil {
 		t.Releases = base.Releases

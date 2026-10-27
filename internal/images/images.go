@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -196,6 +197,11 @@ type Service struct {
 	// NeverPull: pull_policy: never.
 	Build, Data, NeverPull bool
 	Method                 string
+	// BuildSpec is its build: section as compose resolves it, BuildKey
+	// what it comes to (BuildKey, from ListCompose, which knows the
+	// release's code).
+	BuildSpec json.RawMessage
+	BuildKey  string
 	// Entries are the entries of mnt it bind-mounts, less its excluded
 	// ones (. for mnt whole), Volumes its named volumes by key, less its
 	// excluded ones; EntriesKnown: read from compose's config.
@@ -219,6 +225,9 @@ type entry struct {
 	ID string
 	// Service, Kind, Digest and Version: "" in a listing from before them.
 	Service, Kind, Digest, Version string
+	// Build is the BuildKey it was built with, for a service the release
+	// built: what a reload checks (ReloadCheck); "" for any other.
+	Build string
 }
 
 func (s *Set) say(lv report.Level, format string, args ...any) {
@@ -345,7 +354,7 @@ func readList(rel string) []entry {
 			return ""
 		}
 		if col(0) != "" {
-			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5)})
+			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6)})
 		}
 	}
 	return es
@@ -354,7 +363,7 @@ func readList(rel string) []entry {
 func writeList(rel string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
-		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version}
+		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build}
 		for len(cols) > 1 && cols[len(cols)-1] == "" {
 			cols = cols[:len(cols)-1]
 		}
@@ -416,6 +425,9 @@ func (s *Set) entryOf(svc Service, ref string) entry {
 	e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
 	if svc.own(s.Mode) {
 		e.Kind = KindOwn
+		if svc.Build {
+			e.Build = svc.BuildKey
+		}
 	}
 	img, err := s.Docker.Inspect(ref)
 	if err != nil {
@@ -471,6 +483,16 @@ func (s *Set) keep(rel string, es []entry) error {
 	// digest in another repository (a sync's hold through the parent's
 	// mirror) no removal of es takes: it is recorded (review: it outlived
 	// every release).
+	// An image listed again as it was (a rollback's, restored from its
+	// bookmark) was built with what the listing said then, whatever the
+	// variables say now.
+	for i, e := range es {
+		for _, o := range old {
+			if o.Service == e.Service && o.ID == e.ID && o.Build != "" && e.Build != "" {
+				es[i].Build = o.Build
+			}
+		}
+	}
 	named := map[string]bool{}
 	for _, e := range es {
 		listed[familiar(e.Ref)+" "+e.ID] = true

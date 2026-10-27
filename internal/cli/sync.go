@@ -131,6 +131,11 @@ const (
 // MntOwnersFlag in current right after it (MntOwnerLabel).
 const (
 	CheckMountsFlag = "--check-mounts"
+	// CheckImagesFlag, in a release: nothing a variable changed since
+	// asks for another image than it fetched (images.ReloadCheck), before
+	// a reload, a sync's or a restore's run step, which only start what
+	// is there; --hint for --vars, which only says what applies a value.
+	CheckImagesFlag = "--check-images"
 	MntOwnersFlag   = "--mnt-owners"
 )
 

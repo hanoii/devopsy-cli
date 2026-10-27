@@ -47,6 +47,11 @@ const (
 	CodeDir = "code"
 	// TargetEnvFile is the release's environment, from the target's env.
 	TargetEnvFile = "devopsy-target.env"
+	// TargetReloadFile, beside it, is what a reload's imports resolve to
+	// (its own lines, then the imports read again) until its checks pass
+	// and it takes TargetEnvFile's place: TargetPendingEnv names it
+	// meanwhile.
+	TargetReloadFile = TargetEnvFile + ".reload"
 	// RecordFile describes the release: id, commit, branch, who, mode.
 	RecordFile = "devopsy-release.json"
 	// LogFile is the session's log of its release, then of each rollback

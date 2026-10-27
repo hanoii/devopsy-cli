@@ -37,7 +37,7 @@ releases:
   keep: 5
 
 # What every environment takes unless it sets its own: mode, release,
-# rollback, destroy, releases, snapshots, parent, inherit and env (env and
+# rollback, destroy, reload, releases, snapshots, parent, inherit and env (env and
 # snapshots merge key by key).
 defaults:
   # build (default): uploads the project as git sees it and builds on the
@@ -73,6 +73,14 @@ defaults:
   # down, empties shared/mnt and removes the directory. A failure removes
   # nothing.
   destroy: backup
+  # What --reload runs (optional): one devopsy command in the current
+  # release, under the lock, once its variables and imports are read again
+  # and devopsy has checked they need no other image (a build argument or
+  # an image: name changed needs a release). Without one, devopsy's own
+  # up -d --wait --no-build --pull never: what changed is recreated, with
+  # the release's images. Never the run step on its own: it may do more
+  # than apply variables (a schema update).
+  reload: deploy
   # Per-environment settings, written into each release's devopsy-target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:

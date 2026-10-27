@@ -191,6 +191,7 @@ defaults:
     DEVOPSY_WILDCARD_DOMAIN: vm1.example.com
   release: {before: [local: image], prepare: secrets, run: deploy}
   rollback: deploy
+  reload: deploy
 environments:
   prod:
     env:
@@ -198,6 +199,7 @@ environments:
   demo:
     releases: {keep: 1}
     release: deploy --fast
+    reload: reload --quick
     env:
       DEVOPSY_WILDCARD_DOMAIN: ""
       CERTRESOLVER: ~
@@ -216,7 +218,7 @@ environments:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prod.Mode != ModeImage || prod.Release.Run != "deploy" || len(prod.Release.Before) != 1 || prod.Release.Before[0].Remote || len(prod.Release.Prepare) != 1 || prod.Rollback == nil || prod.Rollback.Run != "deploy" || prod.Keep != 3 {
+	if prod.Mode != ModeImage || prod.Release.Run != "deploy" || len(prod.Release.Before) != 1 || prod.Release.Before[0].Remote || len(prod.Release.Prepare) != 1 || prod.Rollback == nil || prod.Rollback.Run != "deploy" || prod.Reload != "deploy" || prod.Keep != 3 {
 		t.Errorf("prod: %+v", prod)
 	}
 	if prod.Env["SITE"] != "prod" || prod.Env["CERTRESOLVER"] != "acmedns" || prod.Env["DEVOPSY_WILDCARD_DOMAIN"] != "vm1.example.com" {
@@ -232,7 +234,7 @@ environments:
 	if _, ok := demo.Env["CERTRESOLVER"]; ok {
 		t.Errorf("null removes a default: %v", demo.Env)
 	}
-	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Run != "deploy --fast" || len(demo.Release.Before) != 0 {
+	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Run != "deploy --fast" || demo.Reload != "reload --quick" || len(demo.Release.Before) != 0 {
 		t.Errorf("demo: %+v", demo)
 	}
 	if staging, err := LoadTarget(dir, "vm1:staging", nil); err != nil || staging.Mode != ModeBuild {

@@ -345,7 +345,7 @@ func LoadDotenv(env *Env, file string) error {
 	}
 	// A release's devopsy-target.env ends with what it imported.
 	imported := map[string]string{}
-	if filepath.Base(file) == remote.TargetEnvFile {
+	if b := filepath.Base(file); b == remote.TargetEnvFile || b == remote.TargetReloadFile {
 		if data, err := os.ReadFile(file); err == nil {
 			if _, after, ok := strings.Cut(string(data), ImportedMarker); ok {
 				imported, _ = dotenv.UnmarshalWithLookup(after, nil)
@@ -1261,6 +1261,13 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	// Per-target settings, written into each release by `devopsy @target
 	// --release` from config.yaml. Below .env, so a server can override them.
 	targetEnv := remote.ReleaseFile(projectDir, remote.TargetEnvFile)
+	// During a reload's checks, its imports read again stand in for the
+	// release's (PrepareRelease's reload).
+	if p, _ := env.Lookup(remote.TargetPendingEnv); p != "" && targetEnv != "" {
+		if _, err := os.Stat(p); err == nil {
+			targetEnv = p
+		}
+	}
 	if err := load(targetEnv); err != nil {
 		return nil, err
 	}

@@ -231,9 +231,19 @@ func runReleaseInherit(cwd string, args []string) int {
 	return 0
 }
 
+// reloadArgs is what a reload runs: the step given, else devopsy's own
+// up of what the release fetched (remote.ReloadDefault).
+func reloadArgs(step string) []string {
+	if a := remote.StepArgs(step); len(a) > 0 {
+		return a
+	}
+	return remote.ReloadDefault
+}
+
 // runReleaseSteps is the hidden ReleaseStepsFlag:
-// <rollback|restart|release> <phase> [<release>], run by ActivateScript
-// where the phase runs, and by a sync's holder (release run). It runs
+// <rollback|restart|release|reload> <phase> [<release>], run by
+// ActivateScript where the phase runs, by a sync's holder (release run)
+// and by a reload (reload run: its reload:, else remote.ReloadDefault). It runs
 // the phase's steps from the config of the release given (default the
 // one here), for the environment it was made for: a rollback's are the
 // restored release's rollback:, a restart's the previous release's
@@ -245,7 +255,7 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 		return 1
 	}
 	if len(args) < 2 || len(args) > 3 {
-		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release before|prepare|run|after [<release>]")
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release|reload before|prepare|run|after [<release>]")
 	}
 	kind, phase := args[0], args[1]
 	projectDir, err := cli.FindProjectDir(cwd)
@@ -260,6 +270,13 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 	if err != nil {
 		return fail("the release's steps: " + err.Error())
 	}
+	if kind == "reload" {
+		// One step, no phases: the release's reload:, else devopsy's own.
+		if phase != "run" {
+			return fail("usage: " + cli.ReleaseStepsFlag + " reload run")
+		}
+		return runInPlace(filepath.Dir(projectDir), "reload", reloadArgs(t.Reload))
+	}
 	var steps *remote.Steps
 	switch kind {
 	case "rollback":
@@ -272,7 +289,7 @@ func runReleaseSteps(cwd string, args []string, color bool) int {
 	case "release":
 		steps = t.Release
 	default:
-		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release ...")
+		return fail("usage: " + cli.ReleaseStepsFlag + " rollback|restart|release|reload ...")
 	}
 	if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 		return fail(fmt.Sprintf("the release's config gives environment %s no %s run step", t.Name, kind))

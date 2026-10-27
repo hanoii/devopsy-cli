@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -202,7 +203,7 @@ func TestParseComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Service{
-		{Name: "app", Ref: "x-prod-app", Build: true, Data: true, Method: "volumes", Entries: []string{"storage"}, Volumes: []string{"cache"}, EntriesKnown: true},
+		{Name: "app", Ref: "x-prod-app", Build: true, BuildSpec: json.RawMessage(`{"context":"."}`), Data: true, Method: "volumes", Entries: []string{"storage"}, Volumes: []string{"cache"}, EntriesKnown: true},
 		{Name: "db", Ref: "mariadb:11.8", Data: true, Method: "none", EntriesKnown: true},
 		{Name: "plain", Ref: "busybox", EntriesKnown: true},
 		{Name: "tool", Ref: "local/tool", NeverPull: true, EntriesKnown: true},

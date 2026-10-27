@@ -462,6 +462,11 @@ func SyncInheritPath(base, id string) string {
 // when it exists: devopsy talking to devopsy.
 const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
+// TargetPendingEnv names the file devopsy reads in place of the
+// release's devopsy-target.env during a reload's checks
+// (TargetReloadFile), when it exists: devopsy talking to devopsy.
+const TargetPendingEnv = "DEVOPSY_INTERNAL_TARGET_FILE"
+
 // Variables of a sync. DEVOPSY_SYNC_TO* and DEVOPSY_SYNC_SSH_PORT are
 // --sync-push's own, set for it by the push session; the data capability
 // gets SyncFromTargetEnv, SyncToTargetEnv and its side's
