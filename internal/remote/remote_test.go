@@ -239,6 +239,7 @@ func allScripts() map[string]string {
 		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
 		"keys read":       KeysReadScript(),
 		"status":          StatusScript(tg),
+		"server info":     ServerInfoScript(&Target{Host: "h"}),
 		"keys add":        KeysAddScript(),
 		"keys remove":     KeysRemoveScript(),
 		"destroy":         DestroyScript(tg, "app"),

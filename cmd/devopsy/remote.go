@@ -216,6 +216,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--ssh-keys":
 		return runSSHKeys(t, args[1:], color)
 
+	case "--server-info":
+		return runServerInfo(t, args[1:])
+
 	case "--status":
 		return runRemoteStatus(t, args[1:], color)
 

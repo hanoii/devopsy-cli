@@ -78,6 +78,8 @@ func run() int {
 			}
 		case "--release-settings":
 			return runReleaseSettings(color)
+		case remote.ServerFactsFlag:
+			return runServerFacts()
 		case imagesFlag:
 			return runImages(args[1:], color)
 		case remote.WatchSessionFlag:
