@@ -247,6 +247,11 @@ the rule, why, and where it lives.
 - **`@<target> <subcommand> --help` only prints help**
   (`cli.RemoteCommandHelp`), resolving the target leniently
   (`DescribeTarget`). Why: help never needs a server.
+- **Names in examples, tests and docs are generic** (`app`, `shop`,
+  `whoami`, `vm1`, `eu`, `example.com`, `203.0.113.10`): never a real
+  project, client, server, domain or person, nor anything from an
+  agent's memory or another project. Why: the repository is public, and
+  its history keeps whatever a commit once said.
 - **Few dependencies, standard library first. Linux and macOS only.**
 - **Color only on a terminal** without `NO_COLOR` (`styleFor`), or
   forced (`cli.ColorForced`: `FORCE_COLOR` not `0` or `false`, or the
