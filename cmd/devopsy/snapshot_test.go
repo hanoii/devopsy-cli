@@ -3338,3 +3338,53 @@ func TestKilledDataStepSaysMark(t *testing.T) {
 		})
 	}
 }
+
+// A full restore's data step killed outright on the server (SIGKILL, the
+// OOM killer) before its first write, here during its stop: nothing
+// restored, no mark, and its script, still holding the locks, starts
+// what the record names it stopped and says so, as a --no-code restore's
+// and an import's do (TestImportBeforeFirstWrite, killedSays). Otherwise
+// the set stays down, unmarked, until the next release, sync, import or
+// snapshot of the environment, the operator told only that the release
+// was not made current.
+func TestKilledRestoreBeforeFirstWriteStartsSet(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.logs()
+	stopping := filepath.Join(t.TempDir(), "stopping")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STOP_WAIT="+stopping)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, stopping, "the restore's stop", startWait, func() string { return readString(outFile.Name()) })
+	pid, err := strconv.Atoi(strings.TrimSpace(readString(stopping)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	write(t, stopping+".go", "", 0o644)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	base := filepath.Join(s.root, "shop", "prod")
+	down := strings.TrimSpace(readString(s.log + ".stopped.shop-prod"))
+	if cmd.ProcessState.ExitCode() == 0 || readMark(base) != nil {
+		t.Fatalf("restored (%d), or marked %+v, though killed before its first write:\n%s", cmd.ProcessState.ExitCode(), readMark(base), out)
+	}
+	if down != "" || fileExists(filepath.Join(base, ".devopsy-sync.services")) || !strings.Contains(out, "before its first write") {
+		t.Errorf("killed before its first write: %q left down, record %q, said:\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out)
+	}
+}

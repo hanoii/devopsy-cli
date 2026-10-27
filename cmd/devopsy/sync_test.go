@@ -138,8 +138,9 @@ case "$*" in
     rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; for s in $svcs; do echo "$s"; done > "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}"
     case "$* " in *" --volumes "*) rm -rf "$vols/${COMPOSE_PROJECT_NAME:-}"_* ;; esac ;;
   *" stop "*)
-    # FAKE_STOP_WAIT: a stop that takes until $FAKE_STOP_WAIT.go exists.
-    if [ -n "${FAKE_STOP_WAIT:-}" ]; then : >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # FAKE_STOP_WAIT: a stop that writes its caller's pid there and takes
+    # until $FAKE_STOP_WAIT.go exists.
+    if [ -n "${FAKE_STOP_WAIT:-}" ]; then echo $PPID >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     after stop "$@" >> "$stopped"
     # FAIL_STOP: a stop that fails partway, its services stopped.
     [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
