@@ -203,8 +203,10 @@ func removeContainers(filter string) error {
 	// Docker refuses a removal already under way (a cancelled push
 	// removing its own rsync container): gone within seconds all the
 	// same, it is no failure.
-	for i := 0; err != nil && i < 40; i++ {
-		out, lerr := exec.Command("docker", "ps", "-aq", "--filter", filter).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for err != nil && ctx.Err() == nil {
+		out, lerr := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", filter).Output()
 		if lerr == nil && !slices.ContainsFunc(strings.Fields(string(out)), func(id string) bool { return slices.Contains(ids, id) }) {
 			return nil
 		}
