@@ -465,6 +465,16 @@ if [ -e "$base/` + SyncImportingFile + `" ] || [ -e "$base/` + SyncHoldingFile +
 // new one exists already, so running it again finds it.
 const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e "$base" ] || mv "$base.rm.$$" "$base"; false; }; }`
 
+// removeMoved removes what a removeBase cut off during its rm -rf (killed
+// outright, a reboot) left moved aside, once its devopsy is gone: its
+// data and images went before the move.
+const removeMoved = `for m in "$base".rm.*; do
+  [ -d "$m" ] || continue
+  ! kill -0 "${m##*.rm.}" 2>/dev/null || continue
+  rm -rf "$m" && devopsy --say info "removed $m, left by a --destroy cut off while it removed it"
+done
+`
+
 // ProtocolCheckEnv set to warn turns the refusal of an older server's
 // devopsy into a warning, the command going on at the operator's risk
 // (a local build ahead of the servers): passed to every session
@@ -2482,7 +2492,7 @@ cat "$d/` + ServerLogFile + `" 2>/dev/null || true
 // before anything goes: compose's down removes images too); then the
 // directory. A failure before the removal removes nothing.
 func DestroyScript(t *Target, projectName string) string {
-	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base" ]; then
+	return "set -eu\n" + basePrelude(t) + removeMoved + `if [ ! -d "$base" ]; then
   devopsy --say info "nothing at $base"
   exit 0
 fi
@@ -2553,6 +2563,8 @@ func EnvironmentsScript(t *Target) string {
 for r in ` + glob + `; do
   [ -d "$r" ] || continue
   d=${r%/releases}
+  # A --destroy cut off while it removed one (removeBase).
+  case "${d##*/}" in *.rm.*) continue ;; esac
   printf '%s\n' "${d#"$dir"/}"
 done
 `
