@@ -1511,8 +1511,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `partialGuard`, takes its record as the holder would, ends what it
   names (`endWriters`), and counts its data as not completed (marked,
   keeping a mark the holder wrote before dying, `finish child
-  partial`); a sync's files while nothing holds the lock (`LockBusy`)
-  are a leftover, a running sync is not.
+  partial`), and removes what syncs left as a finish does
+  (`syncLeftovers`: streams' spools, stale pending inherited variables;
+  review round 9, a dump-sized spool stayed until the next finish); a
+  sync's files while nothing holds the lock (`LockBusy`) are a leftover,
+  a running sync is not.
 - **The answer comes on fd 3, never stdin:** the holder reads it from a
   fifo the watcher writes (`--answer-fd`; both ends opened before the
   watcher starts, so no open ever waits) and gives every command
