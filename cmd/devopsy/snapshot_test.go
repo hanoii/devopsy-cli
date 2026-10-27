@@ -3236,3 +3236,35 @@ func TestReleaseSnapshotGateJudgesTheNewRelease(t *testing.T) {
 		t.Errorf("a release dropping the mount through the link, with release snapshots (%d), current %q (was %q):\n%s\n%s", code, s.current("prod"), a, out, docker)
 	}
 }
+
+// A sync's push killed outright on the parent (SIGKILL, the OOM killer)
+// leaves the parent's services it stopped down, the record's stop and
+// own lines naming them; a release killed between its switch and its
+// run step leaves its release snapshot's stop lines the same way (or a
+// reboot there: the containers stopped stay stopped). Nothing holds the
+// locks then, so a take, holding the release, sync and snapshot locks,
+// finds them a leftover, as it does a cut take's snapshot lines: it
+// starts them. Found by hand (2026-10-27): prod's site stayed down
+// through a take until a child happened to sync, and --status said
+// nothing.
+func TestTakeStartsLeftoverStops(t *testing.T) {
+	t.Parallel()
+	for name, rec := range map[string]string{
+		"a push killed outright":       "stop db\nstop app\nown 1793075295.e34744 db\nown 1793075295.e34744 app\n",
+		"a release killed past switch": "stop db\nstop app\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			record := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")
+			write(t, record, rec, 0o644)
+			write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+			out, code := s.run(nil, "@prod", "--snapshot")
+			stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+			if code != 0 || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(readString(record), "stop ") {
+				t.Errorf("a take over %s (%d) left %v stopped, record %q:\n%s", name, code, stopped, readString(record), out)
+			}
+		})
+	}
+}
