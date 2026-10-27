@@ -414,3 +414,24 @@ func TestCutReleaseFixOnChildWithSyncFiles(t *testing.T) {
 		t.Errorf("--status names --release to finish the cut release, which is refused there (%q); --sync finishes it:\n%s", fix, status)
 	}
 }
+
+// --status reads the activation's mark alone: an activation killed
+// between writing it and make_current (ActivatingFile is written right
+// before the switch) leaves a mark naming a release that never went
+// live, and --status says that release was cut off past its switch while
+// its release line names another as current; --releases checks the mark
+// against current and says nothing. The mark is written by hand here:
+// the window is two shell commands wide.
+func TestStatusCutNotCurrent(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	cur := strings.TrimPrefix(s.current("solo"), "releases/")
+	write(t, filepath.Join(s.root, "shop", "solo", remote.ActivatingFile), "20991231235959\trelease\t"+cur+"\t\n", 0o644)
+	out, _ := s.run(nil, "@solo", "--status")
+	if strings.Contains(out, "20991231235959 was cut off past its switch") {
+		t.Errorf("--status says a release that is not current was cut off past its switch (current is %s):\n%s", cur, out)
+	}
+}
