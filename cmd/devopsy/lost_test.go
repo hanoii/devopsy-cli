@@ -153,3 +153,26 @@ func TestLostResolvedSays(t *testing.T) {
 		t.Errorf("a --resolved whose session was lost (%d) said nothing of devopsy's:\n%s", code, errs)
 	}
 }
+
+// A --destroy whose devopsy --destroy-data is killed outright on the
+// server after its down (SIGKILL, the OOM killer, as the util container
+// empties mnt) said only "<base> is not removed": the containers,
+// volumes and built images gone, mnt maybe emptied, the release still
+// current, and no word that it stopped halfway nor how to finish it, as
+// a lost session's and a failed data step's say. Found by hand
+// (OrbStack, 2026-10-27: devopsy --destroy-data SIGKILLed right after
+// compose removed the network).
+func TestDestroyDataKilledSays(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	s.logs()
+	_, errs, code := s.runIO([]string{"FAKE_KILL_DESTROY=1"}, nil, "@prod", "--destroy", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(docker, " down --volumes") {
+		t.Fatalf("the fake killed no destroy after its down (%d):\n%s\n%s", code, errs, docker)
+	}
+	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+report.CmdMark+"devopsy @prod --destroy") {
+		t.Errorf("a destroy whose data step was killed past its down says neither that it stopped halfway nor how to finish it (%d):\n%s", code, errs)
+	}
+}

@@ -387,6 +387,9 @@ case "$*" in
   "run --rm --name devopsy-destroy-"*)
     # FAIL_DESTROY: emptying mnt fails (or its devopsy is killed).
     [ -z "${FAIL_DESTROY:-}" ] || exit "$FAIL_DESTROY"
+    # FAKE_KILL_DESTROY: its devopsy (--destroy-data, which runs this)
+    # killed outright meanwhile, as SIGKILL or the OOM killer would.
+    [ -z "${FAKE_KILL_DESTROY:-}" ] || kill -9 "$PPID"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
