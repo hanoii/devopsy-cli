@@ -970,7 +970,7 @@ func TestImportExportImages(t *testing.T) {
 		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
 	}
 	docker, _ := s.logs()
-	if !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+	if !strings.Contains(errs, "recreating app on the image its release gives it now") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
 		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
 	}
 	os.Remove(s.log + ".containers.shop-prod")

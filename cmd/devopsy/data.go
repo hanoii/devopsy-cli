@@ -1362,7 +1362,7 @@ func recreateRunning(cwd, rel, name string) error {
 	if err != nil || !slices.Contains(running, name) {
 		return err
 	}
-	report.Info("recreating " + name + " on the image its data now needs")
+	report.Info("recreating " + name + " on the image its release gives it now")
 	if err := compose(cwd, errOut, "up", "-d", "--no-deps", "--wait", name); err != nil {
 		return fmt.Errorf("docker compose up: %w", err)
 	}

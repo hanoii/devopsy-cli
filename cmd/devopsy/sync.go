@@ -2957,7 +2957,7 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 			again = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
 		}
 		if len(again) > 0 {
-			report.Info("recreating " + strings.Join(again, " ") + " on the image its data now needs")
+			report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
 			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
 			}
