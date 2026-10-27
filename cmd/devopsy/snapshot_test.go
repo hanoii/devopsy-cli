@@ -2111,6 +2111,47 @@ func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	}
 }
 
+// A release that syncs with release snapshots on, its sync complete or
+// aborted before its copy (here the parent's prepare refuses): the
+// release snapshot's stopped set, which the switch made the release's
+// stop lines, starts again, by the sync's finish or by the restart of
+// the release before, and the record names none of it after; no mark.
+// TestReleaseSnapshotSyncPartialKeepsStops is the third end, a cut copy.
+func TestReleaseSnapshotSyncEnds(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env  []string
+		live bool
+	}{
+		"complete": {nil, true},
+		"aborted":  {[]string{"FAIL_PREPARE=parent"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.childSnapshotted()
+			write(t, filepath.Join(s.dot, "capabilities", "data", "prepare"), "#!/bin/sh\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ] || { echo 'prepare refuses'; exit 3; }\n", 0o755)
+			s.releaseProd(nil)
+			if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+				t.Fatalf("dev's first release (%d):\n%s", code, out)
+			}
+			before := s.current("dev")
+			dev := filepath.Join(s.root, "shop", "dev")
+			s.logs()
+			out, code := s.run(c.env, "@dev", "--release-sync", "--yes")
+			s.waitReleaseTars()
+			if docker, _ := s.logs(); !strings.Contains(docker, " stop db app\n") || len(releaseSnapshots(snapshotPaths{snaps: filepath.Join(dev, "snapshots")})) != 1 || !c.live && !strings.Contains(out, "prepare refuses") {
+				t.Fatalf("no release snapshot's stopped pass, or no refusal (%d):\n%s\n%s", code, out, docker)
+			}
+			down := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+			rec := readString(filepath.Join(dev, ".devopsy-sync.services"))
+			if (code == 0) != c.live || (s.current("dev") != before) != c.live || len(down) > 0 || strings.Contains(rec, "stop ") || strings.Contains(rec, "snapshot ") || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+				t.Errorf("a release that syncs, %s (%d), current %q (was %q), down %v, record %q:\n%s", name, code, s.current("dev"), before, down, rec, out)
+			}
+		})
+	}
+}
+
 // A --no-code restore with release snapshots on, cancelled during the
 // snapshot's stopped pass (Ctrl-C, the session gone): the services it
 // stopped start again, their snapshot lines go, as a release's do
