@@ -241,3 +241,46 @@ func TestReloadStepScope(t *testing.T) {
 		t.Errorf("a release with a local-only reload: step (%d):\n%s", code, out)
 	}
 }
+
+// A release cut off past its switch (its run step may not have run) is
+// no release to reload: an up alone would start its code without it. The
+// reload refuses, naming what finishes it, by the kind of activation cut.
+func TestReloadCut(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	id := strings.TrimPrefix(s.current("prod"), "releases/")
+	for kind, fix := range map[string]string{
+		"release":  "$ devopsy @devopsy@one:prod --release",
+		"rollback": "$ devopsy @devopsy@one:prod --rollback",
+	} {
+		write(t, filepath.Join(base, remote.ActivatingFile), id+"\t"+kind+"\t\t\n", 0o644)
+		out, code := s.run(nil, "@prod", "--reload")
+		docker, _ := s.logs()
+		if code == 0 || !strings.Contains(out, "cut off past its switch") || !strings.Contains(out, fix) || strings.Contains(docker, " up ") {
+			t.Errorf("a cut %s (%d):\n%s\ndocker:\n%s", kind, code, out, docker)
+		}
+	}
+}
+
+// devopsy --reload typed in a release on a server runs that release's
+// environment's reload: step, as --destroy there runs its destroy:, never
+// defaults:' alone.
+func TestLocalReloadInRelease(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(tmp, "releases", "20261027000000")
+	dir := filepath.Join(rel, remote.CodeDir, ".devopsy")
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {release: deploy, reload: general}\nenvironments:\n  prod: {reload: apply}\n", 0o644)
+	write(t, filepath.Join(dir, "commands", "apply"), "#!/bin/sh\n## Description: a\necho APPLIED\n", 0o755)
+	write(t, filepath.Join(dir, "commands", "general"), "#!/bin/sh\n## Description: g\necho GENERAL\n", 0o755)
+	write(t, filepath.Join(rel, remote.TargetEnvFile), "COMPOSE_PROJECT_NAME='app-prod'\nDEVOPSY_ENVIRONMENT='prod'\n", 0o644)
+	if out, code := runDevopsy(t, filepath.Join(rel, remote.CodeDir), nil, "--reload"); code != 0 || !strings.Contains(out, "APPLIED") || strings.Contains(out, "GENERAL") {
+		t.Errorf("--reload in a release (%d):\n%s", code, out)
+	}
+}

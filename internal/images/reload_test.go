@@ -107,3 +107,40 @@ func TestReloadCheck(t *testing.T) {
 		t.Errorf("a release with no listing: %q", got)
 	}
 }
+
+// A restore (a rollback, the restart after a failed run, a full restore)
+// builds an own image again when its build: section resolves otherwise
+// than when it was built (a build argument changed since): its bookmark
+// would run code built for the old value under the new one (an image
+// built for APP_UID 10001 run as 10002). Unchanged, its bookmark goes back.
+func TestRestoreRebuildsChangedBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
+	built := appSvc
+	built.Data = false
+	built.BuildKey = "k1;APP_UID=aaaaaaaa"
+	d.pull("app-prod-app", "sha256:a1")
+	first := e.release(built)
+	if err := e.set.Record(e.rel(first), ""); err != nil {
+		t.Fatal(err)
+	}
+	changed := built
+	changed.BuildKey = "k2;APP_UID=bbbbbbbb"
+	d.pull("app-prod-app", "sha256:a2")
+	second := e.release(changed)
+	if err := e.set.Record(e.rel(second), e.rel(first)); err != nil {
+		t.Fatal(err)
+	}
+	// Back to first, the variables still as second's.
+	e.svcs[first] = []Service{changed}
+	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != ErrGone || !strings.Contains(out.String(), "APP_UID") {
+		t.Errorf("a restore whose build changed: %v, want ErrGone naming APP_UID\n%s", err, out.String())
+	}
+	out.Reset()
+	e.svcs[first] = []Service{built}
+	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != nil || d.names["app-prod-app"] != "sha256:a1" {
+		t.Errorf("a restore whose build did not change: %v, app-prod-app is %s, want sha256:a1\n%s", err, d.names["app-prod-app"], out.String())
+	}
+}
