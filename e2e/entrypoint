@@ -2,6 +2,14 @@
 # server: dockerd and sshd; operator: nothing, the tests exec into it.
 set -eu
 if [ "${1:-server}" = server ]; then
+  # The deploy user's home, where the releases go, on a tmpfs: no
+  # reflinks there whatever the host's storage (OrbStack's btrfs has
+  # them, CI's ext4 not), so every host runs the same copies; a test of
+  # reflinks mounts an XFS of its own below it.
+  mount -t tmpfs -o size=4g,mode=755 tmpfs /home/devopsy
+  cp -rT /etc/skel /home/devopsy
+  install -d -m 700 /home/devopsy/.ssh
+  chown -R devopsy:devopsy /home/devopsy
   dockerd >/var/log/dockerd.log 2>&1 &
   /usr/sbin/sshd
 fi

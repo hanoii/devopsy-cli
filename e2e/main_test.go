@@ -438,7 +438,7 @@ func (l lane) startServer(name, alias string) error {
 	if err != nil {
 		return err
 	}
-	add := exec.Command("docker", "exec", "-i", "-u", "devopsy", name, "sh", "-c", "cat >>~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys")
+	add := exec.Command("docker", "exec", "-i", "-u", "devopsy", name, "sh", "-c", "until mountpoint -q ~; do sleep 0.1; done; cat >>~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys")
 	add.Stdin = strings.NewReader(pub)
 	if out, err := add.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, out)

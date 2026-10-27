@@ -3092,7 +3092,12 @@ as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the operator's
 runs everything with the real timeouts, and one test always does. The
 test server's deploy user has `/bin/sh` (dash) as login shell, stricter
 than devopsy-server's bash (it found the watcher signalling only the
-script there). A scenario a review finds goes there, unless a unit
+script there). Its home, where the releases go, is a tmpfs (`entrypoint`),
+so nothing clones by reflinks there on any host (decided 2026-10-27: on
+OrbStack's btrfs the container's overlay clones, on CI's ext4 not, so a
+sync ran another order locally than in CI and six tests failed only
+locally); a test of reflinks mounts an XFS loop device of its own below
+it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
 Lanes run the tests at once (`E2E_LANES`, default 4; `runLanes`): each
