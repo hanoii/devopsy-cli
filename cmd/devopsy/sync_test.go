@@ -385,6 +385,8 @@ case "$*" in
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
     rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-destroy-"*)
+    # FAIL_DESTROY: emptying mnt fails (or its devopsy is killed).
+    [ -z "${FAIL_DESTROY:-}" ] || exit "$FAIL_DESTROY"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)

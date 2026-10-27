@@ -64,3 +64,26 @@ func TestLostSessionSays(t *testing.T) {
 		}
 	}
 }
+
+// A --destroy whose data step fails after it took the containers and
+// volumes down (emptying mnt failed, or its devopsy was killed outright
+// as the util container emptied it) said "<base> stays as it was": the
+// containers and volumes are gone, mnt may be empty, and nothing on the
+// server says so (--status shows the release current with no
+// containers, a release goes live on what is left). Found by hand
+// (2026-10-27): killed on the server while mnt was emptied, the
+// container finished emptying it, and devopsy said it stayed as it was.
+func TestDestroyDataFailedSays(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	s.logs()
+	out, code := s.run([]string{"FAIL_DESTROY=1"}, "@prod", "--destroy", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(docker, " down --volumes") {
+		t.Fatalf("the fake failed no destroy after its down (%d):\n%s\n%s", code, out, docker)
+	}
+	if strings.Contains(out, "stays as it was") {
+		t.Errorf("a destroy that took the containers and volumes down, then failed, says its environment stays as it was:\n%s", out)
+	}
+}
