@@ -1241,7 +1241,7 @@ func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
 
 // A release let through with --accept-image and killed past its switch,
 // its database stopped for a release snapshot on the image before: the
-// next lock-taker's Ran (an activation's, before anything reads the
+// next lock-taker's RanCut (an activation's, before anything reads the
 // history) sees the old image and must keep the forced line, so the
 // settle that then makes the database again on the forced image starts
 // its history over from it. Removed at the first Ran, the image ran as a
@@ -1271,7 +1271,7 @@ func TestDataForcedKeptUntilItRuns(t *testing.T) {
 	for i := range d.containers {
 		d.containers[i].state = "exited"
 	}
-	if err := m.e.set.Ran(m.base(), rel); err != nil {
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); err != nil {
@@ -1279,7 +1279,7 @@ func TestDataForcedKeptUntilItRuns(t *testing.T) {
 	}
 	m.activation = true
 	m.up()
-	if err := m.e.set.Ran(m.base(), rel); err != nil {
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(m.history("database"), " "); got != "ran:I1 forced:I2" {

@@ -200,16 +200,22 @@ func (s *Set) containers() map[string]Container {
 // service's container runs, once started, when it is not the last one
 // there: after a run step (failed or not), a sync, an import. A service
 // running the very image a --yes let through (ForcedFile) starts its
-// history over from it; the file is the activation's and each line goes
-// once its service was seen on that image, so a later rollback to the
-// release forces nothing, while one not there yet (a release killed past
-// its switch, its set stopped for a release snapshot) keeps it for the
-// settle that makes it again. One that runs an
+// history over from it; the file is the activation's and goes once read,
+// so a later rollback to the release forces nothing. One that runs an
 // image its data moved past went
 // back outside devopsy: said, never written, so the history keeps the
 // newest. rel is the release whose listing names the data services;
 // those with a history count too.
-func (s *Set) Ran(base, rel string) error {
+func (s *Set) Ran(base, rel string) error { return s.ran(base, rel, false) }
+
+// RanCut is Ran on a release whose activation was cut off past its
+// switch (an activation's start, a settle that made services again): a
+// ForcedFile line goes only once its service runs that image, so one
+// still on the image before (stopped for a release snapshot) keeps it
+// for the settle that makes it again.
+func (s *Set) RanCut(base, rel string) error { return s.ran(base, rel, true) }
+
+func (s *Set) ran(base, rel string, cut bool) error {
 	svcs := map[string]bool{}
 	for _, e := range readList(rel) {
 		if e.Kind == KindData {
@@ -267,7 +273,11 @@ func (s *Set) Ran(base, rel string) error {
 			return err
 		}
 	}
-	if forced != nil {
+	if forced != nil && !cut {
+		if err := os.Remove(filepath.Join(rel, ForcedFile)); err != nil && !os.IsNotExist(err) {
+			s.say(report.WarnLevel, "could not remove %s: %v", ForcedFile, err)
+		}
+	} else if forced != nil {
 		s.keepForced(rel, forced, ranForced)
 	}
 	return nil

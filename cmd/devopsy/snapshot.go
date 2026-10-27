@@ -1540,7 +1540,7 @@ func ranOnData(cwd, base string) {
 		return
 	}
 	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
-	_ = set.Ran(base, rel)
+	_ = set.RanCut(base, rel)
 }
 
 // startStops starts names and waits until they are healthy. One whose

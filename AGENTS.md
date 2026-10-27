@@ -798,10 +798,11 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   rollback ran 11.8 on it). "Newer" means "ran later on this data". `img record` refuses an image the history moved past, or
   one it never ran under a changed name (`check`), unless the operator
   names the service (`--accept-image`, `ImagesAcceptEnv`), whose
-  `ForcedFile` starts its history over once that image runs (each line
-  goes once its service runs that image, so a `Ran` that finds the
-  database still on the image before, stopped for a release snapshot,
-  keeps it for the settle that makes it again). `--yes`
+  `ForcedFile` starts its history over once that image runs (the
+  activation's `img ran` removes it; a cut activation's record, `img ran
+  ... cut`, `RanCut`, keeps each line until its service runs that image,
+  so one finding the database still on the image before, stopped for a
+  release snapshot, leaves it to the settle that makes it again). `--yes`
   never does (decided 2026-10-23): it skips prompts, so CI passed it
   everywhere and skipped every check. A built service whose data has a
   history (it ran a pulled image) is checked by its name too: a switch

@@ -767,7 +767,7 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" || true
+` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
 `
 	// That last line: what runs on the data now goes into its history
 	// before anything reads it. A release killed past its switch ran its
