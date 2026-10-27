@@ -1082,6 +1082,23 @@ start with a dash or be `!` or `(`, nor an entry a `devopsy.mnt.owner`
 owns: releases,
 copies and snapshots refuse them.
 
+`devopsy.data.copy.reflink=true` on a child's service copied as
+`volumes` has its entries and volumes cloned from the parent's by
+reflinks, where a sync runs on one server and its filesystem has them
+(XFS, btrfs): its blocks are the parent's until either side writes, so
+the copy is instant and the child takes next to no room. The child's
+labels decide; the parent's own are ignored, as is the label on a
+service without data or with another copy, and an empty value is an
+error. For mostly static files, added to and rarely rewritten, like
+uploads: never a database, which writes its pages in place, each page
+it writes while a child shares it then landing elsewhere, so the
+parent's files fragment for good (measured on XFS: some 5,600 extents
+for 4,000 pages of 16 KiB written, where a file written in place keeps
+one; `xfs_fsr` puts them back together). The child's entry is emptied,
+never removed, then cloned, and an owned one given to its owner
+(`devopsy.mnt.owner`); where nothing clones (another filesystem), the
+entry is rsynced, said. Across servers it is rsynced as any.
+
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:
 
@@ -1245,6 +1262,24 @@ through them; one in a profile that is not up (`COMPOSE_PROFILES`) stays
 uncreated, as the run step's `up` would leave it. A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
+
+**Where the parent's data clones by reflinks** (its entries and volumes
+on an XFS or btrfs together with the environment's directory, as for
+snapshots), what its side stops for the copy is down for a clone only,
+seconds whatever the size: the parent's set stopped, its data cloned
+into `.devopsy-sync.clone.<id>` beside it, its services started, and
+the rsync made from the clone, which then goes (the same across
+servers: the daemon serves the clone). A `custom` service the parent's
+labels stop is exported before they start, as its label promises; one
+running is exported after. With nothing of what the rsync copies
+stopped (a database dumped, files under a running app) there is no
+clone: the rsync reads the live data as before. An `--export` of a
+`volumes` service on a target does the same, its tar from a clone. The
+cost is the parent's: a database's pages written while the clone
+exists go to new places, so its files fragment (measured on XFS: some
+400 extents for 200 pages of 16 KiB written meanwhile, where a file
+written in place keeps one), which stays once the clone is gone;
+`xfs_fsr` on the database's files puts them back together.
 
 The rsync runs as root in `devopsy-util`, devopsy's own image (alpine 3
 with rsync and GNU tar, find and chown; it replaced `devopsy-rsync` and

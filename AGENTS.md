@@ -286,7 +286,7 @@ The section that covers each part is in parentheses.
   local release in `release_local.go`), syncs and the servers'
   `--sync-*` flags (`sync.go`, Syncs), `--export` and `--import`
   (`data.go`), snapshots (`snapshot.go`, named volumes' helpers in
-  `volumes.go`), the owners of `mnt`'s entries and the mounts check
+  `volumes.go`, reflink clones shared with syncs in `clone.go`), the owners of `mnt`'s entries and the mounts check
   (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
   (`releaselog.go`), `--releases`, `--images` and `--server-info`
@@ -1955,6 +1955,35 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Transport, SSH and environment
 
+- **Where the parent's data clones by reflinks, the stop lasts the
+  clone** (`syncClone`, the helpers in `clone.go` shared with
+  snapshots): once `stopServices` stopped a `volumes` service with
+  data (only a stop the labels ask for: nothing stopped, nothing
+  cloned), its data is cloned into `$base/.devopsy-sync.clone.<sync
+  id>`, the set started, and the rsync copies from the clone
+  (`dataSet.in`: its volumes bound by path), which goes after, on a
+  cancel too. A `custom` service in the set is exported before the
+  start (its label promises it stopped), one running after; the rsync
+  is then the last write. Never under `snapshots/.clone`: a take's
+  leftovers step, which holds only the snapshot lock, removes a clone
+  without its `.tmp`. One a devopsy killed outright left goes with the
+  next holder of the sync lock (`removeLeftoverClones`, its containers
+  by `sourceLabel`, as the daemon's) and with `--destroy-data`. An
+  `--export` of a `volumes` service on a target does the same
+  (`export.<pid>`). Accepted cost, measured on XFS (2026-10-27): the
+  parent's pages written while the clone exists fragment its files
+  (about two extents per 16 KiB page written, which stay after the
+  clone goes; `xfs_fsr` undoes it), as snapshots' clones already did.
+- **`devopsy.data.copy.reflink=true` on the child's service** clones
+  its entries and volumes from the parent's (or the clone) into the
+  child's on one server (`shareInto`, `childShares` from the list's
+  seventh field): the entry emptied, never removed, `cp -a
+  --reflink=always`, then `ownMnt` for owned ones (no `--chown` in a
+  clone). A clone that fails falls back to the rsync, which replaces
+  what it left. File entries and syncs across servers always rsync. No
+  named feature: one devopsy does both sides on one server. Why opt in
+  and for files only: every page a database writes while a child
+  shares it lands elsewhere (4,000 writes made 5,600 extents of one).
 - **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:3`, with `zstd` for snapshots;
   built on each host from `UtilDockerfile` when missing; GNU tar for
   `--export` and `--import` too, GNU find and chown for owners), as
@@ -2456,7 +2485,8 @@ settled every rule here after nine reviews (2026-10-25).
   change within minutes, and rsync copies a changed file whole between
   local directories, so its stopped pass is close to a full copy anyway.
   Reflinks are the answer for a large database.
-- **Reflinks first, whatever the setting** (`takeCopy`: reflink, mirror
+- **Reflinks first, whatever the setting** (`takeCopy`, over `clone.go`'s
+  `reflinks`, `cloneData` and `removeClone`, which syncs share: reflink, mirror
   or none, recorded as the manifest's `copy`): before anything stops,
   `reflinks` clones one file of each entry and volume into
   `$base/snapshots/.clone` (the release root's filesystem, never the
