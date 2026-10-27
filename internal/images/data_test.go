@@ -2463,3 +2463,31 @@ func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
 		t.Errorf("the --no-code restore of an imported snapshot runs traefik's image on the database (hold %s, traefik's names %v): the listing's id named it, and the import tagged it as mariadb's\n%s", holdsIn(rel)["database"], tags, out.String())
 	}
 }
+
+// An import of an environment's own export (an --export database, then
+// --import database of it, as on a server) records nothing as left: the
+// release still lists mariadb:11.8 and runs that very image. ImportCheck
+// lists the export's image as a sync:database entry, ImportDone drops
+// it, and keep took the dropped entry for a name no release lists,
+// recording mariadb:11.8 and its digest in the project's record, which
+// --releases then shows as "the project's removals left (Docker
+// refused)" (found by hand on an OrbStack server, 2026-10-27).
+func TestImportRecordsNothingLeft(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := prod.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	if err := importInto(t, prod, prod, false); err != nil {
+		t.Fatalf("import (%v)\n%s", err, out.String())
+	}
+	if prod.runs("database") != "I1" {
+		t.Fatalf("after the import: runs %s", prod.runs("database"))
+	}
+	for _, l := range readLeft(prod.e.set.Left) {
+		t.Errorf("recorded as left after an import of the same image: %s (%s), %s", l.ref, l.id, l.why)
+	}
+}
