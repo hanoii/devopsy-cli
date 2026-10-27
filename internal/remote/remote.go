@@ -2497,10 +2497,13 @@ func RoleHoldersScript(t *Target, role string) string {
 // instance's, then its project's) that hold nothing but their .env (and
 // the lock --vars-project and --vars-instance take) once no environment
 // is left in them: what --destroy leaves, since the .env is shared by
-// every environment of that level. With remove, it removes them instead,
+// every environment of that level; one with neither is removed. With remove, it removes them instead,
 // checking again under the same rules: --destroy --purge.
 func LeftoverScript(t *Target, remove bool) string {
-	act := `echo "$d"`
+	// Listing, a level holding nothing to ask about (no .env, no record:
+	// a lock alone) goes without a word (review: --destroy warned that
+	// its .env stays, about none).
+	act := `if [ -e "$d/.env" ] || [ -s "$d/` + ImagesLeftFile + `" ]; then echo "$d"; else rm -f "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" 2>/dev/null || exit 0; fi`
 	if remove {
 		act = `if [ -s "$d/` + ImagesLeftFile + `" ]; then
   devopsy --say warning "forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')"
