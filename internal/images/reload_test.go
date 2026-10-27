@@ -140,7 +140,8 @@ func TestRestoreRebuildsChangedBuild(t *testing.T) {
 	}
 	out.Reset()
 	e.svcs[first] = []Service{built}
-	if err := e.set.Restore(e.rel(first), e.rel(second), false); err != nil || d.names["app-prod-app"] != "sha256:a1" {
-		t.Errorf("a restore whose build did not change: %v, app-prod-app is %s, want sha256:a1\n%s", err, d.names["app-prod-app"], out.String())
+	err := e.set.Restore(e.rel(first), e.rel(second), false)
+	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
+		t.Errorf("a restore whose build did not change: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
 	}
 }

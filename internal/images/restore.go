@@ -92,6 +92,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if !haveOld || o.ID == "" || i < 0 {
 				return s.gone(tid, svc)
 			}
+			if changed(o, svc) {
+				return s.rebuilt(tid, o, svc)
+			}
 			if _, err := s.Docker.ID(names[i]); err != nil {
 				return s.gone(tid, svc)
 			}
@@ -127,6 +130,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				i := indexOf(old, o)
 				if !haveOld || o.ID == "" || i < 0 {
 					return s.gone(tid, svc)
+				}
+				if changed(o, svc) {
+					return s.rebuilt(tid, o, svc)
 				}
 				if _, err := s.Docker.ID(names[i]); err != nil {
 					return s.gone(tid, svc)
@@ -221,6 +227,21 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 
 func (s *Set) gone(tid string, svc Service) error {
 	s.say(report.InfoLevel, "%s's image of %s is gone: building it again", tid, svc.Name)
+	return ErrGone
+}
+
+// changed says whether svc's build: section resolves otherwise now than
+// when o's image was built (a build argument changed since): its bookmark
+// holds code built for the old values, which would run under the new
+// ones (an image built for APP_UID 10001 run as 10002).
+func changed(o entry, svc Service) bool {
+	return o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
+}
+
+// rebuilt says that o's image is built again for what its build: section
+// gives now, and asks for the build (ErrGone, as for an image gone).
+func (s *Set) rebuilt(tid string, o entry, svc Service) error {
+	s.say(report.InfoLevel, "%s's image of %s was built with other values of %s: building it again", tid, svc.Name, changedArgs(o.Build, svc.BuildKey))
 	return ErrGone
 }
 
