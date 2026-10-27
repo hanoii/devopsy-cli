@@ -1021,14 +1021,21 @@ interrupts" and "The server never waits on the operator for long".
   `script`'s compose ran on, two `up`s on one project).
 - **What kills the shell past the switch leaves a mark**
   (`ActivatingFile`, `$base/.devopsy-activating`: id, kind, the release
-  replaced, a restore's snapshot), written right before `make_current`
-  and removed wherever the activation ends, its failure paths included:
-  one there while nothing holds the release lock is an activation cut
-  off past its switch (the OOM killer, a reboot), whose run step may
-  not have run. `--status` and `--releases` (`CUT`) say so with what
-  finishes it; a `--rollback` finishes a cut rollback (its target
-  current, the release it left to mark), never going one further back;
-  a sync's run step clears a cut release's; any activation replaces it.
+  replaced, a restore's snapshot), written right before the pending
+  file goes and `make_current`, and removed wherever the activation
+  ends, its failure paths included: one there naming current while
+  nothing holds the release lock is an activation cut off past its
+  switch (the OOM killer, a reboot), whose run step may not have run
+  (one naming another release was cut before its switch: still
+  pending). `--releases` marks it `CUT`, `--status` says so with what
+  finishes it (`--sync` on a sync's partial copy, which refuses a
+  release); a `--rollback` finishes a cut rollback (its target current,
+  the release it left, `rb_from`, to mark and to go back to; `$prev`
+  stays current until the switch), never going one further back; a
+  release or a restore over it marks that release rolled back, as the
+  rollback would have (review round 9: it stayed live, the next
+  rollback's target); a sync's run step clears a cut release's; any
+  activation replaces it.
   Decided 2026-10-27: nothing finishes it by itself (a run step started
   by whatever takes the lock next would surprise more than help).
 - **`script` gets its own session past a fetch** (`setsid -w`,

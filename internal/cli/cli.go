@@ -795,7 +795,9 @@ keeps what it had. Usually the same run step as release:
 The steps and their commands are the restored release's, so they must
 exist there.
 Rolling back restores that release's files and target env, not data. It
-never asks: --yes is accepted, and changes nothing.
+never asks: --yes is accepted, and changes nothing. A rollback cut off
+past its switch (--status says so) is finished by --rollback again, never
+followed by one further back.
 `,
 	"--releases": `Usage: devopsy @<target> --releases
        devopsy @<target> --releases remove <id|failed>... [--yes]
@@ -804,8 +806,9 @@ Lists the releases on the target, newest first: id, who made it, mode,
 branch and commit (+dirty when made with uncommitted changes), FAILED for
 releases that never went live or whose run step failed, ROLLED BACK for
 one a rollback left (never kept nor rolled back to again), IN PROGRESS
-for one being released now, and INCOMPLETE for one cut off before it
-went live. * marks the
+for one being released now, INCOMPLETE for one cut off before it went
+live, and CUT for the current one cut off past its switch, its run step
+perhaps never run (--status says what finishes it). * marks the
 current one. Under each, the images it runs: what a rollback to it
 restores, and what removing it may free. Then the images the project's
 removals left, because a container (even a stopped one) uses them: each

@@ -79,10 +79,12 @@ const (
 // restore's snapshot, tab separated. One there while nothing holds the
 // release lock is an activation cut off past its switch (killed outright,
 // a reboot), which nothing interrupts otherwise: its run step may not
-// have run. --status and --releases say so (CUT); a --rollback finishes
-// a cut rollback, never going one release further back; the next
-// activation replaces it, and a sync's run step (the release's own, run
-// again) removes a cut release's. Decided 2026-10-27 over finishing it
+// have run (one naming a release that is not current was cut before its
+// switch). --status and --releases say so (CUT); a --rollback finishes
+// a cut rollback, never going one release further back, and any other
+// activation marks the release it left rolled back; the next activation
+// replaces it, and a sync's run step (the release's own, run again)
+// removes a cut release's. Decided 2026-10-27 over finishing it
 // by itself: a run step started by whatever takes the lock next would
 // surprise more than help.
 const ActivatingFile = ".devopsy-activating"
