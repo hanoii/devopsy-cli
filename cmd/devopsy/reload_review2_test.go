@@ -29,13 +29,13 @@ func TestSyncChecksImagesFix(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "db's image is mariadb:12 now") {
 		t.Fatalf("the sync (%d):\n%s", code, out)
 	}
-	fix := "$ devopsy @devopsy@one:dev --release"
+	fix := "$ devopsy @devopsy@one:dev --release-sync"
 	if !strings.Contains(out, fix) {
 		t.Fatalf("the sync's fix is not %q:\n%s", fix, out)
 	}
 	s.logs()
-	// The fix as named: a plain release of the child.
-	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+	// The fix as named: a release that syncs, which inherits first.
+	if out, code := s.run(nil, "@dev", "--release-sync", "--yes"); code != 0 {
 		t.Fatalf("dev's release again (%d):\n%s", code, out)
 	}
 	s.logs()

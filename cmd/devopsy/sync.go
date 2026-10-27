@@ -612,6 +612,7 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
+	report.Info("running containers keep their old values until they are recreated: to apply them now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
 	return 0
 }
 

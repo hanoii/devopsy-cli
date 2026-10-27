@@ -70,10 +70,10 @@ exit "$rs"
 // another image than it fetched (--check-images): a sync's holder, a
 // --no-code restore. env is variables for the check alone (the pending
 // files standing in for what the step will read); nothing without run.
-func checkImages(t *Target, projectName string, run bool, env, nothing string) string {
+func checkImages(t *Target, projectName string, run bool, env, nothing string, flags ...string) string {
 	if !run {
 		return ""
 	}
-	return `(cd "$base/current" && ` + env + devopsyCall(projectName, []string{"--check-images", hintAddress(t)}, false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
+	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append(append([]string{"--check-images"}, flags...), hintAddress(t)), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
 `
 }

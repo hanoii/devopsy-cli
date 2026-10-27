@@ -1169,7 +1169,10 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   name outside a release, held by no bookmark. The same check runs
   wherever a run step starts the current release's images on variables
   that may have changed: a `--sync`'s holder before anything stops
-  (with the pending inherited variables) and a `--no-code` restore
+  (with the pending inherited variables; its fix is `--release-sync`,
+  `--check-images --sync`: a plain release keeps the child's
+  `inherit.env`, and the next sync was refused again, review 2) and a
+  `--no-code` restore
   before its data step (with the snapshot's `shared.env` and
   `inherit.env` under `--with-env`, through `DotenvPendingEnv` and
   `InheritPendingEnv`). Not a release that syncs: it fetches anew.
@@ -1183,7 +1186,8 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   plain directory and an environment not released yet say so, never
   `--reload`, which refuses there (review 1). Any value is a release away
   from applying, so nothing is refused there. The instance's and the
-  project's files, several environments', get the plain line.
+  project's files, several environments', get the plain line, and
+  `--inherit` the `--reload` line.
 - **A release checks its `reload:` and `destroy:` steps' scope**
   (`checkStepScopes`) with its own: they go with it and run on the
   server, a command that only runs locally failing a reload past its

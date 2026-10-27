@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -29,21 +30,24 @@ const (
 // so a variable that would give a service another image (an image:
 // name, a build argument, a profile turned on) is refused, naming it,
 // exit 3, the release to run as the fix (address, as the operator typed
-// it). With --hint (after --vars set or unset, which refuse nothing), it
+// it; --sync, a sync's holder: a release that syncs, which inherits
+// first). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
 // follow-up: "missing <name>" lines, exit 4, when compose requires a
 // variable that is not set; else "image <what>" lines, exit 3, when a
 // release applies the change; else nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
-	hint, address := false, ""
+	hint, sync, address := false, false, ""
 	for _, a := range args {
 		switch {
 		case a == "--hint":
 			hint = true
+		case a == "--sync":
+			sync = true
 		case address == "" && !strings.HasPrefix(a, "-"):
 			address = a
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [<address>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync] [<address>]")
 			return 2
 		}
 	}
@@ -85,14 +89,18 @@ func runCheckImages(cwd string, args []string) int {
 		}
 		return checkImagesExit
 	}
-	release := "devopsy @" + strings.TrimPrefix(address, "@") + " --release"
-	if address == "" {
-		release = "devopsy @<target> --release"
+	addr := cmp.Or(strings.TrimPrefix(address, "@"), "<target>")
+	fix := report.Fix("release, which builds or pulls it:", "devopsy @"+addr+" --release")
+	if sync {
+		// A sync's variables are the parent's inherited ones too, which
+		// only a release that syncs takes before it fetches (a plain one
+		// keeps the child's inherit.env: the next sync refused again).
+		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" --release-sync")
 	}
 	report.Fail(&report.Failure{
 		Msg:     "the variables now need another image than the release fetched, and only a release fetches one",
 		Details: needs,
-		Fixes:   []report.Remedy{report.Fix("release, which builds or pulls it:", release)},
+		Fixes:   []report.Remedy{fix},
 	})
 	return checkImagesExit
 }

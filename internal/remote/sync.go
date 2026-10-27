@@ -753,7 +753,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+` + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
 # child's images, and the parent's image must be here (img sync-check
 # pulls it, maybe for long): an abort or a session gone meanwhile ends
 # this, nothing stopped.
