@@ -172,10 +172,12 @@ func varsApply(t *Target, level *Level) string {
 	call := func(args ...string) string { return devopsyCall(t.ComposeName(), args, false) }
 	return `if [ -n "$plain" ]; then
   printf '` + VarsApplied + `plain\n'
-elif [ ! -d "$base/current/.devopsy" ]; then
+elif [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
   printf '` + VarsApplied + `first\n'
 else
-  va_rel=$(readlink "$base/current"); va_rel="$base/${va_rel%/` + CodeDir + `}"
+  # Never a reason for the edit to fail: what it says is a hint.
+  va_rel=$(readlink "$base/current") || va_rel=
+  va_rel="$base/${va_rel%/` + CodeDir + `}"
   va_pending="$va_rel/` + TargetReloadFile + `"
   rm -f "$va_pending"
   (cd "$base/current" && ` + call("--prepare-release", "reload") + ` >/dev/null 2>&1) || rm -f "$va_pending"

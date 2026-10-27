@@ -63,7 +63,8 @@ func TestVarsScripts(t *testing.T) {
 	base := filepath.Join(root, "app's prod")
 	tg := &Target{Name: "prod", Host: "h", Path: "app's prod"}
 	file := filepath.Join(base, "shared", ".env")
-	if out := runVarsScript(t, root, VarsSetScript(tg, nil), "A='1'\n"); strings.TrimSpace(out) != file {
+	// Its path, then what applies it: nothing is released there yet.
+	if out := runVarsScript(t, root, VarsSetScript(tg, nil), "A='1'\n"); out != file+"\n"+VarsApplied+"first\n" {
 		t.Fatalf("set printed %q", out)
 	}
 	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
@@ -163,7 +164,7 @@ func TestVarsScripts(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(root, "app", ".env")); string(got) != "SHARED='1'\n" {
 		t.Fatalf("level .env %q", got)
 	}
-	if out := runVarsScript(t, root, VarsSetScript(tl, nil), "OWN='1'\n"); strings.TrimSpace(out) != filepath.Join(root, "app", "prod", "shared", ".env") {
+	if out := runVarsScript(t, root, VarsSetScript(tl, nil), "OWN='1'\n"); out != filepath.Join(root, "app", "prod", "shared", ".env")+"\n"+VarsApplied+"first\n" {
 		t.Fatalf("own .env printed %q", out)
 	}
 
