@@ -1277,6 +1277,26 @@ func TestDataForcedKeptUntilItRuns(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); err != nil {
 		t.Fatalf("a Ran with the database still on its old image removed the forced line: %v", err)
 	}
+	// It lingers at most until its release's next activation ends (a
+	// rollback to it): that Ran removes it whatever ran, and marks
+	// nothing forced that its image did not run.
+	keep := filepath.Join(t.TempDir(), "forced")
+	if data, err := os.ReadFile(filepath.Join(rel, ForcedFile)); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(keep, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.e.set.Ran(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); !os.IsNotExist(err) || strings.Contains(strings.Join(m.history("database"), " "), "forced:") {
+		t.Errorf("an activation's own Ran, the database on its old image, kept the forced line (%v) or marked it forced: %v", err, m.history("database"))
+	}
+	if data, err := os.ReadFile(keep); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(filepath.Join(rel, ForcedFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	m.activation = true
 	m.up()
 	if err := m.e.set.RanCut(m.base(), rel); err != nil {
