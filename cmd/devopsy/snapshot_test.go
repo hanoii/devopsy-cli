@@ -1383,8 +1383,82 @@ func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 	if s.current("prod") == before {
 		t.Fatalf("the restore did not go live (%d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
-	if strings.Contains(said, "cancelling the release") {
-		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	if strings.Contains(said, "cancelling the") || !strings.Contains(said, "interrupted: the restore goes on on @devopsy@one:prod, past its switch") {
+		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it, or not that the restore goes on (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+}
+
+// A full restore cancelled while it checks the snapshot's tars (minutes
+// for a large one) says it cancels a restore, not a release, and that
+// nothing was restored, not the check's tool killed with it ("signal:
+// killed", which reads as a broken snapshot). Found by hand (2026-10-27,
+// a hands-on run): "cancelling the release", then "snapshot ...'s
+// mnt.database.tar.zst: signal: killed: nothing restored".
+func TestSnapshotRestoreInterruptDuringCheck(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	before := s.current("prod")
+	checking := filepath.Join(t.TempDir(), "checking")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_RUN_WAIT="+checking, "FAKE_RUN_WAIT_ON=-check ")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, checking, "the restore's tar check", startWait, func() string { return readString(outFile.Name()) })
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	if cmd.ProcessState.ExitCode() != 130 || s.current("prod") != before || !strings.Contains(out, "interrupted: cancelling the restore on @devopsy@one:prod") || strings.Contains(out, "the release") {
+		t.Errorf("a restore cancelled during its tar check (%d), current %q, was %q:\n%s", cmd.ProcessState.ExitCode(), s.current("prod"), before, out)
+	}
+
+	// Each step that can be interrupted before its point of no return,
+	// signalled as the cancel signals it (the watcher's SIGTERM) while
+	// what it runs in Docker works: the session above is gone by then,
+	// so its words show in the step's own output. The take's checks and
+	// mirror pass, a release snapshot's check and the restore's tar check.
+	base := filepath.Join(s.root, "shop", "prod")
+	for _, c := range []struct {
+		on, want string
+		args     []string
+		env      []string
+	}{
+		{"du -sk", "interrupted", []string{"check"}, nil},
+		{"-mirror-", "interrupted", []string{"mirror"}, []string{remote.SnapshotMirrorEnv + "=1"}},
+		{"du -sk", "interrupted", []string{"release-check"}, nil},
+		{"-check ", "interrupted: nothing restored", []string{"check-tars", filepath.Join(base, "snapshots", m[1])}, nil},
+	} {
+		waiting := filepath.Join(t.TempDir(), "waiting")
+		step := exec.Command(binary, append([]string{remote.SnapshotStepFlag}, c.args...)...)
+		step.Dir = filepath.Join(base, "current")
+		step.Env = append(append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-prod", "PWD="+step.Dir, "FAKE_RUN_WAIT="+waiting, "FAKE_RUN_WAIT_ON="+c.on), c.env...)
+		saidFile, err := os.CreateTemp(t.TempDir(), "said")
+		if err != nil {
+			t.Fatal(err)
+		}
+		step.Stdout, step.Stderr = saidFile, saidFile
+		if err := step.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waitFile(t, waiting, c.args[0]+"'s docker run", startWait, func() string { return readString(saidFile.Name()) })
+		_ = step.Process.Signal(syscall.SIGTERM)
+		_ = step.Wait()
+		if said := readString(saidFile.Name()); step.ProcessState.ExitCode() == 0 || !strings.Contains(said, c.want) || strings.Contains(said, "signal:") {
+			t.Errorf("%s interrupted (%d):\n%s", c.args[0], step.ProcessState.ExitCode(), said)
+		}
 	}
 }
 

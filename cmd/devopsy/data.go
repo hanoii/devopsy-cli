@@ -398,9 +398,7 @@ func runExport(cwd string, args []string, color bool) int {
 		}
 	}
 	if err != nil {
-		if ctx.Err() != nil {
-			err = errors.New("interrupted")
-		}
+		err = interrupted(ctx, err)
 		code = fail("export " + name + ": " + err.Error() + ": what was written is incomplete")
 	}
 	if err := restore(); err != nil {
@@ -1289,9 +1287,7 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 	}
 	if err != nil {
-		if ctx.Err() != nil {
-			err = errors.New("interrupted")
-		}
+		err = interrupted(ctx, err)
 		return importFailed(cwd, base, name, services, stopped, onTarget, wasUp, err)
 	}
 	code := 0

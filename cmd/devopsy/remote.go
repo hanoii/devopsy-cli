@@ -313,7 +313,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return 1
 		}
 		session := func(script string) int {
-			return liveSession(t, script, rlog, log, releaseWords(t))
+			return liveSession(t, script, rlog, log, releaseWords(t, kind))
 		}
 		// save ends the log with code and saves it in release id's
 		// directory on the server: a rollback's is appended to the log of
@@ -1042,14 +1042,15 @@ func goesOnSays(t *remote.Target, what, past, shows string) []string {
 // Ctrl-C leaves without waiting for it.
 const leavesNow = "Ctrl-C again leaves now"
 
-// releaseWords are a release's.
-func releaseWords(t *remote.Target) liveWords {
+// releaseWords are an activation's, named by its kind: a release, a
+// rollback, a full restore (a release of the snapshot's copy).
+func releaseWords(t *remote.Target, kind string) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     goesOnSays(t, "release", "past its switch", logs),
-		cancelling: []string{"interrupted: cancelling the release on @" + t.Address},
+		goesOn:     goesOnSays(t, kind, "past its switch", logs),
+		cancelling: []string{"interrupted: cancelling the " + kind + " on @" + t.Address},
 		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
-		lostAfter:  []string{lostSays(t, "after the switch", "the release was past its switch there"), logs},
+		lostAfter:  []string{lostSays(t, "after the switch", "the "+kind+" was past its switch there"), logs},
 		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
 	}

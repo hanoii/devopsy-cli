@@ -797,6 +797,22 @@ func interruptible() (context.Context, func()) {
 	return ctx, func() { signal.Stop(sigs); cancel() }
 }
 
+// errInterrupted is the error of a step its signal ended (a cancel, the
+// watcher's SIGTERM, the session gone).
+var errInterrupted = errors.New("interrupted")
+
+// interrupted is err, or errInterrupted once ctx ended, whatever err
+// says then: what the step ran under ctx (docker, zstd, rsync) was
+// killed with it and says only "signal: killed", which reads as a fault
+// of the data. Every interruptible step's failure goes through it, so a
+// cancel always says "interrupted" and what did not happen.
+func interrupted(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return errInterrupted
+	}
+	return err
+}
+
 // watchSession cancels ctx when stdin reaches EOF: devopsy keeps the push
 // session's stdin open (SyncWatchEnv), so EOF means the session is gone.
 // Without it, a silent copy would only notice at its next write. With
@@ -862,7 +878,7 @@ func ensureUtilImage(ctx context.Context) error {
 	report.Info("updating " + remote.UtilImage + ", built over a week ago")
 	if err := buildUtilImage(ctx, true); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return interrupted(ctx, err)
 		}
 		report.Warn("updating "+remote.UtilImage+" failed: going on with the one there", err.Error())
 		return nil
@@ -1303,10 +1319,7 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 			err = nil
 		}
 	}
-	if ctx.Err() != nil {
-		return errors.New("interrupted")
-	}
-	return err
+	return interrupted(ctx, err)
 }
 
 // hookStartEnv tells the devopsy runDataHook starts that its hook runs
@@ -1355,7 +1368,7 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 		return fmt.Errorf("export %s: %w: nothing imported", name, err)
 	}
 	if ctx.Err() != nil {
-		return errors.New("interrupted")
+		return interrupted(ctx, nil)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -1395,7 +1408,7 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		return fmt.Errorf("import %s: %w", name, err)
 	}
@@ -1748,7 +1761,7 @@ func rsyncRun(ctx context.Context, name string, args []string, what string) erro
 		}
 		report.Info(what + " " + remote.HalfCopiedNotice)
 		if ctx.Err() != nil {
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		return fmt.Errorf("rsync %s: %w", what, err)
 	}
@@ -1940,7 +1953,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 			// The child's script says which entry when rsync fails; cut
 			// by the session's end, it says nothing.
 			report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		if strings.Contains(stderr.String(), "remote port forwarding failed") {
 			if attempt < 2 {

@@ -124,6 +124,10 @@ dbmounts=$(printf '{"type":"bind","source":"%s/mnt/db"}%s' "${dir:-}" "$dbvol")
 [ -z "${FAKE_DB_NO_BIND:-}" ] || dbmounts=${dbvol#,}
 [ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_APP_VOLUME"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
 vols="$DOCKER_LOG.vol"
+# FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
+# long check, copy or tar) takes until $FAKE_RUN_WAIT.go exists, or its
+# client is killed.
+if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
     printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;

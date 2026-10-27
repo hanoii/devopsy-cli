@@ -1033,7 +1033,13 @@ interrupts" and "The server never waits on the operator for long".
   next lock-taker settles), with what shows it; a script that runs
   devopsy as its child sees the kill and says it itself, in the same
   words (`killedLine`, `killedSays`). Decided 2026-10-27 over
-  scripts that never exec, for one rule rather than one per script. An ssh killed by a
+  scripts that never exec, for one rule rather than one per script.
+  A step a cancel interrupts on the server says so (`interrupted`:
+  what it ran under its context, docker, zstd or rsync, was killed with
+  it and says only "signal: killed", which read as a broken snapshot),
+  and the operator's words name what runs (`releaseWords` by kind:
+  release, rollback, restore; `goesOnSays` past the point of no return).
+  An ssh killed by a
   signal devopsy did not send reads as 255 too (`SSHStreams`), and
   `DEVOPSY_SSH_COMMAND` runs through `exec`, so signals reach the
   command, never only a shell around it.

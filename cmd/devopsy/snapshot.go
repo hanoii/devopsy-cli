@@ -286,10 +286,10 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(err)
+			report.Fail(interrupted(ctx, err))
 			return 1
 		}
 		return 0
@@ -298,19 +298,19 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if takeCopy(ctx, cwd, p, d) != "mirror" {
 			// No first pass: the stopped one clones the data or writes the
 			// tars.
 			if err := removeMirror(ctx, cwd, p); err != nil {
-				return fail("removing the snapshots' mirror: " + err.Error())
+				return fail("removing the snapshots' mirror: " + interrupted(ctx, err).Error())
 			}
 			return 0
 		}
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
 		if err := copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-mirror"); err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		return 0
 	case "stopped":
@@ -400,14 +400,14 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if len(d.data) == 0 {
 			report.Info("no release snapshot: no service has data (" + cli.DataLabel + "=true)")
 			return 3
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(err)
+			report.Fail(interrupted(ctx, err))
 			return 1
 		}
 		return 0
@@ -2010,9 +2010,14 @@ func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait
 // carrying its own
 // entry or volume alone and of the kind the manifest says; and has the
 // images its data services ran there (pulled by digest when gone).
-func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) error {
+func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (err error) {
 	ctx, stop := interruptible()
 	defer stop()
+	defer func() {
+		if err != nil && interrupted(ctx, err) == errInterrupted {
+			err = fmt.Errorf("%w: %s", errInterrupted, map[bool]string{true: "nothing restored", false: "nothing imported"}[restore])
+		}
+	}()
 	m, err := readManifest(snap)
 	if err != nil {
 		return err
@@ -2755,7 +2760,7 @@ var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `resto
 // restoreDataWords are what liveSession says of a --no-code restore: past
 // the disarm it writes the data, on its own.
 func restoreDataWords(t *remote.Target) liveWords {
-	w := releaseWords(t)
+	w := releaseWords(t, "restore")
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
 	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
@@ -2866,7 +2871,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		}
 		return code
 	}
-	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t))
+	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t, "restore"))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {
