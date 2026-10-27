@@ -3342,6 +3342,64 @@ func TestSettleStopsStartsCurrentImages(t *testing.T) {
 	}
 }
 
+// The settle that makes a data service again on what the current release
+// holds it on (startStops, a release killed between its switch and its
+// run step) runs that image on the data, so the data's history must say
+// so, as img ran after a run step does. Found by hand (OrbStack,
+// 2026-10-27): a --release --accept-image database (mariadb:11.8 to
+// 12.1) whose activation shell was killed right after its switch; the
+// next take's settle made the database again on 12.1, which upgraded its
+// data, while the history still ended on 11.8 and the release's
+// devopsy-forced stayed; a --rollback then held the database on 11.8,
+// the history's last, and ran it on the data 12.1 had upgraded: data
+// went back, which images only going forward forbids. A floating tag
+// that moved (11.8.9 to 11.8.10) does the same without --accept-image.
+// The same when the activation's shell is killed during its run step,
+// after its up made the database on 12.1: img ran never came, the
+// settle after starts nothing, and the next release without
+// --accept-image was refused, the database said never to have run the
+// image it was running.
+func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// container is db's container: the release before's, stopped by
+		// the release snapshot, its run step never run; or already the
+		// run step's, on the new image, its shell killed before img ran
+		// and release-record done.
+		container, stopped string
+	}{
+		{"the run step never ran", "db y@sha256:old sha256:old\n", "db\n"},
+		{"the run step killed after its up", "db y@sha256:new sha256:new\n", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			base := filepath.Join(s.root, "shop", "prod")
+			rel := filepath.Join(base, s.current("prod"))
+			// The new release, current: db held on y@sha256:new, a data
+			// service in its listing; the history's last is y@sha256:old.
+			write(t, filepath.Join(rel, "devopsy-compose.yaml"),
+				"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
+			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tdata\ty@sha256:new\n", 0o644)
+			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\n", 0o644)
+			write(t, s.log+".containers.shop-prod", c.container, 0o644)
+			write(t, filepath.Join(base, ".devopsy-sync.services"), "stop db\n", 0o644)
+			write(t, s.log+".stopped.shop-prod", c.stopped, 0o644)
+			out, code := s.run([]string{"FAKE_IMAGES=sha256:new=y@sha256:new sha256:old=y@sha256:old"}, "@prod", "--snapshot")
+			if cs := readString(s.log + ".containers.shop-prod"); code != 0 || !strings.Contains(cs, "db y@sha256:new") {
+				t.Fatalf("setup: after the settle (take %d) db does not run y@sha256:new (containers %q):\n%s", code, cs, out)
+			}
+			h := readString(filepath.Join(base, ".devopsy-data-images"))
+			lines := strings.Split(strings.TrimSpace(h), "\n")
+			if last := lines[len(lines)-1]; !strings.Contains(last, "sha256:new") {
+				t.Errorf("db runs y@sha256:new on its data, but after the settle its history still ends on %q: the next release refuses that image as one the data never ran, and a rollback holds db on the older one again\n%s", last, out)
+			}
+		})
+	}
+}
+
 // A take's stopped pass killed outright on the server (SIGKILL, the OOM
 // killer) starts what it stopped at once, under the locks the take still
 // holds, and says so: found by hand (2026-10-27), the site stayed down
