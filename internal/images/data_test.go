@@ -2557,3 +2557,76 @@ func TestSyncParentRepositoryHoldRemoved(t *testing.T) {
 		t.Errorf("after every release of the child went, %s is left under %v: no release lists that repository, and nothing recorded the name\n%s", id, ns, out.String())
 	}
 }
+
+// A release whose run step leaves the database as it is (a deploy that
+// ups the app alone) gives it a hold its container does not run yet; a
+// plain up later recreates it on that hold, which nothing records. After
+// another such release, img ran finds that container and appends its
+// image, the newest the data ran; it now skips it, since its label is
+// the earlier release's and not this one's, so the image is in no
+// history and a rollback holds the database on the one before it: data
+// goes back.
+func TestDataRanCountsPlainUpOnEarlierHold(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, appSvc, db118)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A release whose run step ups the app alone: the database's
+	// container stays as it was, its image and label the release before's.
+	leaveDatabase := func() string {
+		t.Helper()
+		id := m.e.release(appSvc, db118)
+		m.e.set.SaveNames(m.e.rel(id))
+		m.fetch(m.e.svcs[id])
+		if err := m.e.set.Record(m.e.rel(id), m.prev()); err != nil {
+			m.fail("%s: %v", id, err)
+		}
+		m.cur = id
+		var db container
+		for _, c := range d.containers {
+			if c.project == m.e.set.Name && c.service == "database" {
+				db = c
+			}
+		}
+		m.activation = true
+		m.up()
+		for i, c := range d.containers {
+			if c.project == m.e.set.Name && c.service == "database" {
+				d.containers[i] = db
+			}
+		}
+		if err := m.e.set.Ran(m.base(), m.e.rel(id)); err != nil {
+			m.fail("%s: %v", id, err)
+		}
+		return id
+	}
+	d.publish("mariadb:11.8", "I2")
+	leaveDatabase()
+	if m.runs("database") != "I1" {
+		m.fail("the run step moved the database: %s", m.runs("database"))
+	}
+	// A plain up: compose recreates the database on the release's hold.
+	m.up()
+	if m.runs("database") != "I2" {
+		m.fail("the plain up: %s", m.runs("database"))
+	}
+	d.publish("mariadb:11.8", "I3")
+	r3 := leaveDatabase()
+	if m.runs("database") != "I2" {
+		m.fail("%s's run step moved the database: %s", r3, m.runs("database"))
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 ran:I2" {
+		t.Errorf("after %s's img ran, the history is %s: I2, which the database runs, is missing", r3, got)
+	}
+	if err := m.rollback(r1); err != nil {
+		m.fail("rollback: %v", err)
+	}
+	if got := m.runs("database"); got != "I2" {
+		t.Errorf("the rollback to %s runs the database on %s: its data ran I2 (the plain up after the release that held it), which must stay the newest", r1, got)
+	}
+}
