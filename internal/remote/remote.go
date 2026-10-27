@@ -767,7 +767,14 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-` + recoverFetch(`${prev:+"$base/$prev"}`)
+` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" || true
+`
+	// That last line: what runs on the data now goes into its history
+	// before anything reads it. A release killed past its switch ran its
+	// run step's up on the image it holds the data on, and its img ran
+	// never came (OrbStack cuts, round 8: a rollback then held the data
+	// on the older image); a settle below that makes a service again
+	// records it itself (ranOnData).
 	switch {
 	case restore != nil:
 		// A restore goes through a mark (a complete one clears it), as a

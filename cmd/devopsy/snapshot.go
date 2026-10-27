@@ -1522,10 +1522,25 @@ func settleStops(cwd, base string) error {
 			rec.stops, rec.own, rec.ownID = nil, nil, ""
 		}
 	}
+	ranOnData(cwd, base)
 	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.writers) == 0 {
 		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
 	}
 	return rec.write(cwd)
+}
+
+// ranOnData records in the data's history what the current release's
+// data services run now, as img ran after a run step does: a settle that
+// made one again on the image the release holds it on ran that image on
+// the data (a release killed past its switch: OrbStack cuts, round 8),
+// and a rollback would hold the data on the older one.
+func ranOnData(cwd, base string) {
+	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+	if rel == "" {
+		return
+	}
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	_ = set.Ran(base, rel)
 }
 
 // startStops starts names and waits until they are healthy. One whose

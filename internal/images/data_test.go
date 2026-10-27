@@ -1239,6 +1239,57 @@ func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
 	}
 }
 
+// A release let through with --accept-image and killed past its switch,
+// its database stopped for a release snapshot on the image before: the
+// next lock-taker's Ran (an activation's, before anything reads the
+// history) sees the old image and must keep the forced line, so the
+// settle that then makes the database again on the forced image starts
+// its history over from it. Removed at the first Ran, the image ran as a
+// plain one (OrbStack cuts, round 8).
+func TestDataForcedKeptUntilItRuns(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	if _, err := m.release(false, dbSvc("mariadb:11.8.3")); err != nil {
+		m.fail("r1: %v", err)
+	}
+	d.publish("mariadb:11.8", "I2")
+	id := m.e.release(db118)
+	rel := m.e.rel(id)
+	if err := m.e.set.SaveNames(rel); err != nil {
+		t.Fatal(err)
+	}
+	m.fetch([]Service{db118})
+	m.e.set.Accept = acceptAll([]Service{db118})
+	if err := m.e.set.Record(rel, m.prev()); err != nil {
+		m.fail("--accept-image: %v", err)
+	}
+	m.e.set.Accept = nil
+	m.cur = id
+	for i := range d.containers {
+		d.containers[i].state = "exited"
+	}
+	if err := m.e.set.Ran(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); err != nil {
+		t.Fatalf("a Ran with the database still on its old image removed the forced line: %v", err)
+	}
+	m.activation = true
+	m.up()
+	if err := m.e.set.Ran(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 forced:I2" {
+		t.Errorf("history once the forced image ran: %s, want ran:I1 forced:I2", got)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); !os.IsNotExist(err) {
+		t.Errorf("the forced line stays once its image ran (%v)", err)
+	}
+}
+
 // Bug: Ran marks forced whatever a forced release's data service runs,
 // not the image --yes let through: a forced release whose run step fails
 // before the database is recreated appends a forced line for the old

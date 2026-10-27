@@ -3391,9 +3391,16 @@ func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
 		// run step's, on the new image, its shell killed before img ran
 		// and release-record done.
 		container, stopped string
+		// record is the record's lines (none without release
+		// snapshots); then runs the next lock-taker: a take, else a
+		// rollback's activation, which records before anything reads the
+		// history (a failed --rollback: no release before it).
+		record string
+		next   []string
 	}{
-		{"the run step never ran", "db y@sha256:old sha256:old\n", "db\n"},
-		{"the run step killed after its up", "db y@sha256:new sha256:new\n", ""},
+		{"the run step never ran", "db y@sha256:old sha256:old\n", "db\n", "stop db\n", []string{"--snapshot"}},
+		{"the run step killed after its up", "db y@sha256:new sha256:new\n", "", "stop db\n", []string{"--snapshot"}},
+		{"no release snapshots, the next activation", "db y@sha256:new sha256:new\n", "", "", []string{"--rollback"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -3408,10 +3415,12 @@ func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
 			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tdata\ty@sha256:new\n", 0o644)
 			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\n", 0o644)
 			write(t, s.log+".containers.shop-prod", c.container, 0o644)
-			write(t, filepath.Join(base, ".devopsy-sync.services"), "stop db\n", 0o644)
+			if c.record != "" {
+				write(t, filepath.Join(base, ".devopsy-sync.services"), c.record, 0o644)
+			}
 			write(t, s.log+".stopped.shop-prod", c.stopped, 0o644)
-			out, code := s.run([]string{"FAKE_IMAGES=sha256:new=y@sha256:new sha256:old=y@sha256:old"}, "@prod", "--snapshot")
-			if cs := readString(s.log + ".containers.shop-prod"); code != 0 || !strings.Contains(cs, "db y@sha256:new") {
+			out, code := s.run([]string{"FAKE_IMAGES=sha256:new=y@sha256:new sha256:old=y@sha256:old"}, append([]string{"@prod"}, c.next...)...)
+			if cs := readString(s.log + ".containers.shop-prod"); (code != 0) != (c.next[0] == "--rollback") || !strings.Contains(cs, "db y@sha256:new") {
 				t.Fatalf("setup: after the settle (take %d) db does not run y@sha256:new (containers %q):\n%s", code, cs, out)
 			}
 			h := readString(filepath.Join(base, ".devopsy-data-images"))
