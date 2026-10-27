@@ -119,3 +119,77 @@ func TestReloadSessionGone(t *testing.T) {
 		t.Errorf("a silent session's reload (%d) in %s:\n%s\ndocker:\n%s", code, time.Since(start), out, docker)
 	}
 }
+
+// --reload without a target runs defaults:' reload step in place, else
+// devopsy's own up, once compose's required variables are set.
+func TestLocalReload(t *testing.T) {
+	t.Parallel()
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(tmp, ".devopsy")
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: x}}\n", 0o644)
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {release: deploy}\nenvironments: {prod: {}}\n", 0o644)
+	write(t, filepath.Join(dir, "commands", "deploy"), "#!/bin/sh\n## Description: d\necho DEPLOYED\n", 0o755)
+	write(t, filepath.Join(dir, "commands", "apply"), "#!/bin/sh\n## Description: a\necho APPLIED in $PWD\n", 0o755)
+	out, code := runDevopsy(t, tmp, nil, "--reload")
+	if code != 0 || strings.Contains(out, "DEPLOYED") || !strings.Contains(out, "[up][-d][--wait][--no-build][--pull][never]") {
+		t.Errorf("--reload without a step (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(dir, "config.yaml"), "project: app\ndefaults: {release: deploy, reload: apply}\nenvironments: {prod: {}}\n", 0o644)
+	if out, code := runDevopsy(t, tmp, nil, "--reload"); code != 0 || !strings.Contains(out, "APPLIED in "+tmp) {
+		t.Errorf("--reload with a step (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(dir, "compose.yaml"), "services: {app: {image: \"x:${TAG:?}\"}}\n", 0o644)
+	if out, code := runDevopsy(t, tmp, nil, "--reload"); code == 0 || strings.Contains(out, "APPLIED") || !strings.Contains(out, "TAG") {
+		t.Errorf("--reload with a required variable unset (%d):\n%s", code, out)
+	}
+}
+
+// A sync reruns the child's run step on its images: a variable that now
+// needs another image refuses it before anything stops, the parent's
+// inherited ones included (the pending file the sync reads).
+func TestSyncChecksImages(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "config.yaml"), strings.Replace(readString(filepath.Join(s.dot, "config.yaml")), "  prod: {}\n", "  prod: {inherit: [FAKE_DB_IMAGE]}\n", 1), 0o644)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "FAKE_DB_IMAGE=mariadb:12\n", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "nothing changed") || strings.Contains(docker, " stop ") || strings.Contains(out, "deploy in") {
+		t.Errorf("a sync whose inherited variable needs another image (%d):\n%s\ndocker:\n%s", code, out, docker)
+	}
+}
+
+// A --no-code restore reruns the run step on the current release's
+// images: with --with-env, under the snapshot's variables, refused before
+// anything stops when they need another image; without, the current
+// ones, which do not.
+func TestRestoreNoCodeChecksImages(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	shared := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, shared, "FAKE_DB_IMAGE=mariadb:12\n", 0o600)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, shared, "", 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--with-env", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "nothing restored") || strings.Contains(docker, " stop ") || readString(shared) != "" {
+		t.Errorf("--with-env needing another image (%d):\n%s\ndocker:\n%s", code, out, docker)
+	}
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || !strings.Contains(out, "deploy in shop-prod") {
+		t.Errorf("without --with-env (%d):\n%s", code, out)
+	}
+}

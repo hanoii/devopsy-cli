@@ -1266,7 +1266,14 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		return nil
 	}
 	dotenvFile := filepath.Join(projectDir, ".env")
-	if err := load(dotenvFile); err != nil {
+	loaded := dotenvFile
+	// A --no-code restore --with-env checks against the snapshot's.
+	if p, _ := env.Lookup(remote.DotenvPendingEnv); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			loaded = p
+		}
+	}
+	if err := load(loaded); err != nil {
 		return nil, err
 	}
 	// On servers, a child's inherited variables (shared/inherit.env, below

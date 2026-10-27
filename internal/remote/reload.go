@@ -61,3 +61,16 @@ img ran "$base" "$rel" || true
 exit "$rs"
 `
 }
+
+// checkImages refuses (exit 1, saying what) a script whose run step
+// would start the current release's services on variables that now need
+// another image than it fetched (--check-images): a sync's holder, a
+// --no-code restore. env is variables for the check alone (the pending
+// files standing in for what the step will read); nothing without run.
+func checkImages(t *Target, projectName string, run bool, env, nothing string) string {
+	if !run {
+		return ""
+	}
+	return `(cd "$base/current" && ` + env + devopsyCall(projectName, []string{"--check-images", hintAddress(t)}, false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
+`
+}

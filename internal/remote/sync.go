@@ -462,6 +462,12 @@ func SyncInheritPath(base, id string) string {
 // when it exists: devopsy talking to devopsy.
 const InheritPendingEnv = "DEVOPSY_INTERNAL_INHERIT_FILE"
 
+// DotenvPendingEnv names the file devopsy reads in place of the
+// project's .env (a release's shared/.env), when it exists: a --no-code
+// restore --with-env checks its run step against the snapshot's
+// variables before it puts them in place. devopsy talking to devopsy.
+const DotenvPendingEnv = "DEVOPSY_INTERNAL_DOTENV_FILE"
+
 // TargetPendingEnv names the file devopsy reads in place of the
 // release's devopsy-target.env during a reload's checks
 // (TargetReloadFile), when it exists: devopsy talking to devopsy.
@@ -747,7 +753,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + recoverFetch(`"$rel"`) + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+` + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
 # child's images, and the parent's image must be here (img sync-check
 # pulls it, maybe for long): an abort or a session gone meanwhile ends
 # this, nothing stopped.
