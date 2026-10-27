@@ -33,6 +33,9 @@ type ServerInfo struct {
 	RebootPackages []string `json:"reboot_packages,omitempty"`
 	// NTP is timedatectl's NTPSynchronized, yes or no; empty unknown.
 	NTP string `json:"ntp,omitempty"`
+	// AppArmor: the kernel has it on (/sys/module/apparmor), whether
+	// Docker uses it or not.
+	AppArmor bool `json:"apparmor,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
 	Disks  []Disk      `json:"disks"`
@@ -65,8 +68,9 @@ type DockerFacts struct {
 
 // Disk is one filesystem and the paths that matter on it.
 type Disk struct {
-	// Paths are what lives there: releases, docker, snapshots, /, each
-	// as <what>=<path>.
+	// Paths are what lives there: releases, docker, containerd (the
+	// containerd image store's images), snapshots, /, each as
+	// <what>=<path>.
 	Paths []string `json:"paths"`
 	Error string   `json:"error,omitempty"`
 	Type  string   `json:"type,omitempty"`

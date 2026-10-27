@@ -216,6 +216,7 @@ type envState struct {
 	kept, synced, partial, left              string
 	cut                                      *remote.Activating
 	syncing, source, importing, snapshotting bool
+	busy                                     bool // its release lock held
 	mark                                     *remote.Incomplete
 }
 
@@ -261,6 +262,8 @@ func parseStatus(header string) envState {
 			h.source = true
 		case "snapshot":
 			h.snapshotting = true
+		case "busy":
+			h.busy = true
 		}
 	}
 	return h

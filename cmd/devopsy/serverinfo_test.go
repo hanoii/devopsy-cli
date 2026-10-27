@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // The facts read on a server: os-release, /proc/meminfo, docker info,
@@ -64,10 +65,17 @@ func TestServerInfoReport(t *testing.T) {
 				{Project: "traefik-prod", Service: "traefik", State: "running", Labels: map[string]string{"devopsy.role": "proxy", "devopsy.export.BASE_DOMAIN": "vm1.example.com"}},
 				{Project: "shop-prod", Service: "app", State: "running", Health: "healthy"},
 				{Project: "shop-prod", Service: "migrate", State: "exited"},
+				// Stopped with a healthcheck: Docker says unhealthy once its
+				// monitor stopped (Docker 29.8), which is no warning (review).
+				{Project: "shop-prod", Service: "db", State: "exited", Health: "unhealthy"},
+				// An environment's name keeps its case in its directory, its
+				// compose name is lowercased (review).
+				{Project: "shop-staging", Service: "app", State: "running"},
 			},
 			Environments: []remote.Environment{
 				{Path: "traefik/prod", Status: "release\t20261026120000\t{\"mode\":\"image\",\"time\":\"2026-10-26T12:00:00Z\",\"by\":\"ci\"}\nkept\t1\nsynced\t\n"},
 				{Path: "shop/prod", Status: "release\t20261027115000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:50:00Z\",\"by\":\"ana\"}\nkept\t2\nsynced\t\n"},
+				{Path: "shop/Staging", Status: "release\t20261027110000\t{\"mode\":\"build\",\"time\":\"2026-10-27T11:00:00Z\",\"by\":\"ana\"}\nkept\t1\nsynced\t\n"},
 			},
 		}
 	}
@@ -85,7 +93,8 @@ func TestServerInfoReport(t *testing.T) {
 		"disks        releases /home/devopsy, docker /var/lib/docker, /: xfs, 40.0 GB free of 80.0 GB (50% used), reflinks",
 		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
 		"environments traefik/prod  20261026120000  24 h ago  by ci",
-		"shop/prod  20261027115000  10 min ago  by ana  1 of 2 running",
+		"shop/prod  20261027115000  10 min ago  by ana  1 of 3 running",
+		"shop/Staging  20261027110000  1 h ago  by ana  1 of 1 running",
 	} {
 		if !strings.Contains(out+"\n", want) {
 			t.Errorf("healthy: no %q in:\n%s", want, out)
@@ -106,23 +115,27 @@ func TestServerInfoReport(t *testing.T) {
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized|timedatectl set-ntp true"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
 		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
-		{"no apparmor", func(i *remote.ServerInfo) { i.Docker.Security = []string{"seccomp"} }, "", "no AppArmor|install apparmor"},
+		{"no apparmor", func(i *remote.ServerInfo) { i.Docker.Security, i.AppArmor = []string{"seccomp"}, true }, "", "no AppArmor profile to containers, though the kernel has AppArmor|install the apparmor package"},
 		{"unbounded logs", func(i *remote.ServerInfo) { i.Docker.LogOpts = nil }, "", "grow without a limit|max-size"},
 		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --shell-host"},
 		{"little free", func(i *remote.ServerInfo) { i.Disks[0].Size, i.Disks[0].Free, i.Disks[0].Used = 9e9, 4.5e9, 4.5e9 }, "", "is 50% full, 4.5 GB free|"},
-		{"no reflinks", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks = "ext4", "no" }, "", "(ext4) makes no reflinks|mirror: true"},
+		{"no reflinks", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks = "ext4", "no" }, "", "(ext4) makes no reflinks|mirror: true} for the environments with large data, in their project's .devopsy/config.yaml"},
 		{"snapshot root on the data", func(i *remote.ServerInfo) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
 		}, "", "the snapshot root /backups is on the release root's filesystem|mount the backup volume on /backups"},
 		{"missing tool", func(i *remote.ServerInfo) { i.Missing = []string{"script"} }, "", "has no script: builds and pulls show no live progress|"},
+		// Held by a restarting container too, as releases and imports see
+		// it: docker ps lists it (review).
 		{"role twice", func(i *remote.ServerInfo) {
-			i.Containers = append(i.Containers, remote.HostContainer{Project: "other-prod", State: "running", Labels: map[string]string{"devopsy.role": "proxy"}})
+			i.Containers = append(i.Containers, remote.HostContainer{Project: "other-prod", State: "restarting", Labels: map[string]string{"devopsy.role": "proxy"}})
 		}, "", "role proxy is held by traefik-prod and other-prod|"},
 		{"first release failed", func(i *remote.ServerInfo) {
 			i.Environments = append(i.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
-		}, "", "shop/dev: its first release, 20261027110000, failed|in shop's checkout: devopsy @vm1:dev --status"},
-		{"cut", func(i *remote.ServerInfo) { i.Environments[1].Status += "cut\t20261027115000\trelease\t20261026000000\n" }, "", "shop/prod: an activation was cut off past its switch|devopsy @vm1:prod --status"},
+		}, "", "shop/dev: its first release, 20261027110000, failed|$ devopsy @vm1:dev --status"},
+		{"cut", func(i *remote.ServerInfo) {
+			i.Environments[1].Status += "cut\t20261027115000\trelease\t20261026000000\n"
+		}, "", "shop/prod: an activation was cut off past its switch|devopsy @vm1:prod --status"},
 		{"sync", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")
 		}, "", "shop/prod: a sync did not complete|"},
@@ -138,18 +151,52 @@ func TestServerInfoReport(t *testing.T) {
 		c.change(&info)
 		_, warnings := serverInfoReport(info, "vm1", "vm1:", cmp.Or(c.local, "0.53.0"), now)
 		msg, fix, _ := strings.Cut(c.want, "|")
-		if len(warnings) != 1 || !strings.Contains(warnings[0].msg, msg) || (fix != "" && !strings.Contains(strings.Join(warnings[0].fixes, "\n"), fix)) {
+		if len(warnings) != 1 || !strings.Contains(warnings[0].msg, msg) || (fix != "" && !strings.Contains(fixText(warnings[0].fixes), fix)) {
 			t.Errorf("%s: want one warning %q (fix %q), got %+v", c.name, msg, fix, warnings)
 		}
 	}
 
-	// What is running is said, never warned: an import under way included.
-	info := healthy()
-	info.Environments[1].Status += "importing\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
-	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
-	if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "1 of 2 running  importing") {
-		t.Errorf("an import running: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	// What is running is said, never warned: an import under way, and a
+	// restore, whose mark is there while it runs (review).
+	for status, said := range map[string]string{
+		"importing\nbusy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut"): "1 of 3 running  importing",
+		"busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"):        "1 of 3 running  an operation running",
+	} {
+		info := healthy()
+		info.Environments[1].Status += status
+		lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
+		if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), said) {
+			t.Errorf("running (%q): %+v\n%s", said, warnings, strings.Join(lines, "\n"))
+		}
 	}
+
+	// A kernel without AppArmor is said, not warned: nothing to install.
+	info := healthy()
+	info.Docker.Security = []string{"seccomp"}
+	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "security seccomp (no AppArmor in this kernel)") {
+		t.Errorf("no AppArmor in the kernel: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	}
+
+	// Every problem of an environment is warned, as --status says each
+	// (review: the first alone was).
+	info = healthy()
+	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")})
+	if _, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now); len(warnings) != 2 {
+		t.Errorf("two problems of shop/dev: %+v", warnings)
+	}
+}
+
+// fixText is fixes as one text, the commands after their words.
+func fixText(fixes []report.Remedy) string {
+	var b strings.Builder
+	for _, f := range fixes {
+		b.WriteString(f.Text + "\n")
+		for _, c := range f.Cmds {
+			b.WriteString("$ " + c + "\n")
+		}
+	}
+	return b.String()
 }
 
 // --server-info end to end against the fake ssh: the server's facts
@@ -168,21 +215,32 @@ func TestServerInfo(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(s.root, "shop", "notes"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// What a --destroy cut off while removing an environment left (review).
+	if err := os.MkdirAll(filepath.Join(s.root, "shop", "old.rm.4242", "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(t.TempDir(), "bin")
+	// Ubuntu 26.04's tail is uutils', which the scripts use as GNU's: no
+	// tool missing (review).
+	write(t, filepath.Join(bin, "tail"), "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'tail (uutils coreutils) 0.2.2'; exit 0; fi\nexec /usr/bin/tail \"$@\"\n", 0o755)
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 case "$1 $2" in
   "info --format") echo '{"ServerVersion":"29.9.1","Driver":"overlayfs","DriverStatus":[["driver-type","io.containerd.snapshotter.v1"]],"DockerRootDir":"/var/lib/docker","SecurityOptions":["name=apparmor"],"CgroupVersion":"2","LoggingDriver":"local"}'; exit 0 ;;
   "compose version") echo 5.5.0; exit 0 ;;
-  "ps -aq") echo c1; echo c2; exit 0 ;;
+  "ps -aq") echo c1; echo c2; echo gone; exit 0 ;;
+  # A container gone since ps: inspect prints the others, then fails
+  # (review: every container was dropped then).
   "inspect --format") echo 'running - {"com.docker.compose.project":"traefik-prod","com.docker.compose.service":"traefik","devopsy.role":"proxy","devopsy.export.BASE_DOMAIN":"vm1.example.com"}'
-    echo 'restarting - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'; exit 0 ;;
+    echo 'restarting - {"com.docker.compose.project":"shop-prod","com.docker.compose.service":"db"}'
+    echo 'Error response from daemon: No such container: gone' >&2; exit 1 ;;
 esac
 exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 `, 0o755)
 	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@devopsy@one:", "--server-info")
 	for _, want := range []string{
-		"@devopsy@one: (devopsy@one)",
+		"@devopsy@one:\n",
 		"releases     " + s.root + ", keep 5",
+		"containerd /var/lib/containerd",
 		"docker       29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
 		"disks        releases " + s.root,
 		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
@@ -190,14 +248,14 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"shop/eu/prod  none: not released yet",
 		"shop/prod  " + strings.TrimPrefix(s.current("prod"), "releases/") + "  just now",
 		"shop/dev: its first release, 19990101000000, failed",
-		"in shop's checkout: devopsy @devopsy@one:dev --status",
+		"devopsy: | in shop's checkout:\ndevopsy: | $ devopsy @devopsy@one:dev --status",
 		"shop/prod: db restarting",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)
 		}
 	}
-	if code != serverInfoWarned || strings.Contains(out, "shop/notes") {
+	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
 	// It left nothing of its own in the release root.

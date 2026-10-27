@@ -2844,11 +2844,21 @@ Smaller features, each with the rule an agent must keep.
   against its own, fixes naming the server as typed, `ServerRef`), so
   a judgment changes with the operator's devopsy alone. Exit 3 when it
   warned (`serverInfoWarned`), for CI. Environments are the directories
-  with `releases/` two or three levels under the release root; their
-  containers come from one `docker inspect` of all, matched by compose
-  name (the path with `-`). Said, never warned: the classic image store
-  (devopsy's image rules never rely on `rmi -f`) and what is running (a
-  sync, an import, a snapshot). Rejected: `--status` with a server
+  with `releases/` two or three levels under the release root (not a
+  cut `--destroy`'s `<base>.rm.<pid>`); their containers come from one
+  `docker inspect` of all, read even when it fails (a container gone
+  since `docker ps`: review), matched by compose name
+  (`composeNameOf`: the environment's name lowercased, as
+  `Target.ComposeName`). Facts agree with what the scripts read
+  (review): roles from what `docker ps` lists, restarting and paused
+  included (`RoleHoldersScript`, `cli.Running`); a `tail` that answers
+  `--version` (`followOutput`); health only of a running container
+  (Docker says unhealthy of a stopped one). Said, never warned: the
+  classic image store (devopsy's image rules never rely on `rmi -f`),
+  a kernel without AppArmor (nothing to install; warned only when the
+  kernel has it and Docker does not use it), and what is running (a
+  sync, an import, a snapshot, and a mark while the release lock is
+  held, `EnvStatus`'s `busy`: a restore's or a sync's in progress). Rejected: `--status` with a server
   scope (`@vm1 --status` would mean two things by whether `vm1` is an
   environment).
 - **`--ssh-keys` edits only the deploy user's own

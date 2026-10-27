@@ -2115,6 +2115,16 @@ func TestStatus(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.Contains(out, "@devopsy@one:prod (devopsy@one:shop/prod)") || !strings.Contains(out, "release     none: not released yet") {
 		t.Fatalf("unreleased status (%d):\n%s", code, out)
 	}
+	// A current that is a directory (a failed release's containers
+	// restarting, Docker making their bind mounts under it as root) is
+	// none, as before EnvStatus: --status ends there (review).
+	if err := os.MkdirAll(filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "mnt", "storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@prod", "--status"); code != 0 || !strings.HasSuffix(out, "release     none: not released yet\n") {
+		t.Fatalf("a current that is a directory (%d):\n%s", code, out)
+	}
+	os.RemoveAll(filepath.Join(s.root, "shop", "prod", "current"))
 	s.releaseProd(nil)
 	write(t, filepath.Join(s.root, "shop", "prod", "releases", "19990101000000", remote.FailedFile), "", 0o644)
 	out, code = s.run(nil, "@prod", "--status")

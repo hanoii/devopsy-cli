@@ -30,7 +30,11 @@ func statDisk(path string) (typ string, size, free, used int64, err error) {
 	if typ == "" {
 		typ = fmt.Sprintf("0x%x", s.Type)
 	}
-	bs := int64(s.Bsize)
+	// Block counts are in fragment-size units, as df counts them.
+	bs := int64(s.Frsize)
+	if bs == 0 {
+		bs = int64(s.Bsize)
+	}
 	return typ, int64(s.Blocks) * bs, int64(s.Bavail) * bs, int64(s.Blocks-s.Bfree) * bs, nil
 }
 

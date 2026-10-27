@@ -994,19 +994,20 @@ deploy user, who owns it. devopsy --upgrade does the same locally.
 What the server is, read in one session that changes nothing and waits
 for no lock: its devopsy and release settings, the system (memory, load,
 uptime), Docker (image store, security options, logs), the filesystems
-of the release root, Docker's data, the snapshot root and / (free space,
-reflinks on the release root), the roles running projects hold and what
-they export, and every environment under the release root with its
-current release, its containers and its state.
+of the release root, Docker's and containerd's data, the snapshot root
+and / (free space, reflinks on the release root), the roles projects
+hold and what they export, and every environment under the release
+root with its current release, its containers and its state.
 
 What needs attention is a warning with its fix: an older devopsy, a
-reboot the system asks for, a clock out of sync, no AppArmor, logs
-without a size limit, a disk 90% full or with less than 5 GB free, no
+reboot the system asks for, a clock out of sync, Docker not using the
+kernel's AppArmor, logs without a size limit, a disk 90% full or with less than 5 GB free, no
 reflinks, a snapshot root on the release root's filesystem, a tool the
 server needs missing, a role held twice, and an environment whose first
 release failed, cut off past its switch, with a sync, an import or a
 restore that did not complete, services an operation left stopped, or
-containers restarting or unhealthy. It then exits 3, for CI: 0 says
+containers restarting or unhealthy (what is running, a sync, an import
+or a restore, is said, not warned). It then exits 3, for CI: 0 says
 nothing needs attention.
 `,
 	"--ssh-config": `Usage: devopsy @<server> --ssh-config

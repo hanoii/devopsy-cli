@@ -29,7 +29,8 @@ cd "$base/current" && exec devopsy --status
 // EnvStatus prints an environment's state lines ($base set), which
 // --status and --server-info read: "none" (with the newest release's id
 // when it failed), else release, kept, synced and cut; then
-// partialStatus's.
+// partialStatus's, and "busy" while something holds its release lock (a
+// mark is then what is running: a restore's, an import's, a sync's).
 var EnvStatus = fmt.Sprintf(`cur=$(readlink "$base/current" 2>/dev/null || true)
 if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
   # The newest release when it failed: a first one that did not go live.
@@ -54,7 +55,9 @@ else
   # still pending).
   if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+` && [ "$(cut -f1 "$base/`+ActivatingFile+`")" = "${cur#releases/}" ]; then printf 'cut\t%%s\n' "$(cat "$base/`+ActivatingFile+`")"; fi
 fi
-`+partialStatus, RecordFile)
+`+partialStatus+`
+if `+LockBusy+`; then echo busy; fi
+`, RecordFile)
 
 // partialStatus prints StatusScript's sync lines: "syncing" while a
 // sync's holder holds the lock, "importing" while an import does,

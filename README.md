@@ -551,20 +551,21 @@ devopsy @vm1 --server-info       # what the server is, and what needs attention
 `--server-info` reads the server in one session that changes nothing
 and waits for no lock: its devopsy and release settings, the system,
 Docker (image store, security options, logs), the filesystems of the
-release root, Docker's data, the snapshot root and `/` (free space,
-whether the release root makes reflinks), the roles running projects
-hold and what they export, and every environment under the release root
+release root, Docker's and containerd's data, the snapshot root and `/`
+(free space, whether the release root makes reflinks), the roles
+projects hold and what they export, and every environment under the release root
 with its current release, its containers and its state. What needs
 attention is a warning with its fix: an older devopsy, a reboot the
-system asks for, a clock out of sync, Docker without AppArmor or with
-logs that grow without a limit, a disk 90% full or with less than 5 GB
+system asks for, a clock out of sync, Docker not using the kernel's
+AppArmor or with logs that grow without a limit, a disk 90% full or with less than 5 GB
 free, no reflinks, a snapshot root on the release root's filesystem (a
 backup volume not mounted), a tool the server needs missing, a role
 held twice, and an environment with a failed first release, an
 activation cut off past its switch, a sync, an import or a restore that
 did not complete, services an operation left stopped, or containers
-restarting or unhealthy. It exits 3 when it warned, so CI can run it as
-a check.
+restarting or unhealthy; what is running (a sync, an import, a
+restore) is said, not warned. It exits 3 when it warned, so CI can run
+it as a check.
 
 Commands on a server run part of their work in the server's devopsy
 (releases' images, for one), so it must be recent enough for yours: an
