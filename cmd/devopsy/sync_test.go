@@ -443,6 +443,9 @@ exec 3<&0
 # devopsy there first.
 case "$opts" in *BatchMode=yes*) [ -z "${FAKE_CHILD_PATH:-}" ] || PATH="$FAKE_CHILD_PATH:$PATH" ;; esac
 case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
+# FAKE_SSH_LOST_PUSH: the push's connection lost once it ran (ssh's 255),
+# its copy complete.
+case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_LOST_PUSH:-}" ]; then sh -c "$s" <&3; exit 255; fi ;; esac
 # FAKE_SSH_LOST_IMPORT: an --import's session lost on the way (a network
 # gone during the upload), as ssh says it.
 case "$s" in *"--import "*) [ -z "${FAKE_SSH_LOST_IMPORT:-}" ] || { echo "Read from remote host one: Operation timed out" >&2; exit 255; } ;; esac
@@ -2013,6 +2016,24 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 	out, code := s.run(nil, "@prod", "--release")
 	if code == 0 || !strings.Contains(out, "current is a directory, not a link to a release") || !strings.Contains(out, "rm -rf /env/current") || strings.Contains(out, "current is now") {
 		t.Errorf("release over a current directory (%d):\n%s", code, out)
+	}
+}
+
+// A sync whose push's connection is lost (ssh's 255) after a copy that
+// completed: what the copy wrote decides, so the child goes on, and the
+// operator is told that, never that the sync aborts. Found by hand
+// (2026-10-27): "the copy ... failed (255): aborting the sync", then the
+// child's finish and deploy ran.
+func TestSyncPushLostSaysCopyDecides(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	out, _ := s.run([]string{"FAKE_SSH_LOST_PUSH=1"}, "@dev", "--sync", "--yes")
+	if strings.Contains(out, "aborting the sync") || !strings.Contains(out, "what the copy wrote decides how the sync ends") || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Errorf("a push lost after its copy completed:\n%s", out)
 	}
 }
 

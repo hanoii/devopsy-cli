@@ -1865,6 +1865,12 @@ wait:
 		return sshLost
 	case interrupted && !wasStarted:
 		return 130
+	case res.code == sshLost:
+		// Before the byte the server waits for (ImportMarker), it never
+		// writes: no byte within its quiet time, it restores what it
+		// stopped.
+		report.Error("the connection to @"+t.Address+" failed or was lost before the import started: nothing imported there, and what it stopped comes back once the server notices", "devopsy @"+targetRef(t)+" --status shows it")
+		return sshLost
 	}
 	return res.code
 }

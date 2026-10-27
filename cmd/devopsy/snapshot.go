@@ -1759,7 +1759,7 @@ func snapshotWords(t *remote.Target) liveWords {
 		cancelling: []string{"interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"},
 		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", "Ctrl-C again leaves now"},
 		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the stopped pass: the snapshot goes on there", logs},
-		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the stopped pass ended: the server cancels the snapshot once it notices, within a minute, its services started again"},
+		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the stopped pass ended: the server cancels the snapshot if it notices before then (within a minute), its services started again either way", "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
 		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
 	}
 }

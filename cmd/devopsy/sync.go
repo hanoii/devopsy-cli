@@ -310,6 +310,11 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		}
 		if interrupted {
 			answer = "abort\n"
+		} else if code == sshLost {
+			// The push's session is gone, not necessarily the push: what
+			// the copy wrote decides, never the answer.
+			answer = "abort\n"
+			log.Error("the connection to @"+job.parent.Address+" was lost during the copy: what the copy wrote decides how the sync ends on @"+job.child.Address, "devopsy @"+targetRef(job.child)+" --status shows it")
 		} else if code != 0 {
 			answer = "abort\n"
 			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
