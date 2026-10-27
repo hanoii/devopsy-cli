@@ -2491,3 +2491,69 @@ func TestImportRecordsNothingLeft(t *testing.T) {
 		t.Errorf("recorded as left after an import of the same image: %s (%s), %s", l.ref, l.id, l.why)
 	}
 }
+
+// A sync across servers whose parent moved to a mirror serving the very
+// image it ran from docker.io (its history names mariadb:11.8, its
+// release mirror.example/mariadb:11.8), into a child a release behind on
+// docker.io: the child's server has the parent's image under no name of
+// its own, so localHold holds it by the digest in the parent's
+// repository, pulled by digest for the sync:database entry, which
+// syncDone drops. The child's release never lists that repository, so
+// its removal takes no name there (Remove: the listed refs'
+// repositories), and only the record keep writes when the entry is
+// dropped brings the name to the retry once nothing holds the image. The
+// database entry's Digest now exempts it (named): once every release of
+// the child goes, mirror.example/mariadb@I1 keeps the image, a name
+// pulled by digest that docker image prune never removes.
+func TestSyncParentRepositoryHoldRemoved(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := prod.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	if _, err := prod.release(false, dbSvc("mirror.example/mariadb:11.8")); err != nil {
+		t.Fatalf("the parent moving to a mirror of the image it runs: %v\n%s", err, out.String())
+	}
+	// The child's server: mariadb:11.8 is I0 there, and the mirror serves
+	// the parent's image by digest.
+	cd := newFake()
+	cd.strictRepo = true
+	cd.publish("mariadb:11.8", "I0")
+	cd.registry["I1"] = []string{"mirror.example/mariadb@I1"}
+	dev := newSim(t, cd, "app-dev", &out)
+	if _, err := dev.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncInto(t, prod, dev, false); err != nil {
+		t.Fatalf("sync (%v)\n%s", err, out.String())
+	}
+	rel := dev.e.rel(dev.cur)
+	if hold := holdsIn(rel)["database"]; hold != "mirror.example/mariadb@I1" || dev.runs("database") != "I1" {
+		t.Fatalf("held on %q, runs %s: not the case this covers (the parent's repository)\n%s", hold, dev.runs("database"), out.String())
+	}
+	// Every release of the child goes, with its images.
+	cd.containers = nil
+	for _, id := range dev.e.releases() {
+		if err := dev.e.set.Remove(dev.e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		os.RemoveAll(dev.e.rel(id))
+	}
+	dev.e.set.Prune()
+	cd.Prune()
+	for id := range cd.images {
+		var ns []string
+		for n, i := range cd.names {
+			if i == id {
+				ns = append(ns, n)
+			}
+		}
+		sort.Strings(ns)
+		t.Errorf("after every release of the child went, %s is left under %v: no release lists that repository, and nothing recorded the name\n%s", id, ns, out.String())
+	}
+}
