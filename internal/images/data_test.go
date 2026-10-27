@@ -944,6 +944,50 @@ func TestStatusLines(t *testing.T) {
 	}
 }
 
+// A rollback whose activation is killed outright past its switch (by
+// hand on OrbStack: the shell holding the release lock, SIGKILLed right
+// after "current is now") leaves current on the older release while the
+// newer release's containers run on, their own labels matching what they
+// run. --status names the service that runs another image than the
+// current release gives it, else the operator sees nothing amiss.
+func TestStatusLinesRollbackCutPastSwitch(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, err := m.release(false, appSvc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.release(false, appSvc); err != nil {
+		t.Fatal(err)
+	}
+	newer := m.runs("app")
+	// The rollback restores r1's images and switches, then dies before
+	// its run step: nothing recreates the containers.
+	if err := m.e.set.Restore(m.e.rel(r1), m.prev(), false); err != nil {
+		t.Fatal(err)
+	}
+	m.cur = r1
+	if m.runs("app") != newer {
+		t.Fatalf("setup: app runs %s, want the newer release's %s", m.runs("app"), newer)
+	}
+	rel := m.e.rel(r1)
+	if got := Recreate(d, "app-prod", rel); strings.Join(got, " ") != "app" {
+		t.Fatalf("setup: Recreate says %v, want app (current gives it another image)", got)
+	}
+	got := StatusLines(d, "app-prod", rel)
+	named := false
+	for _, l := range got {
+		if strings.HasPrefix(l, "app ") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("status lines %q name no app, which runs %s while the current release gives it another image", got, newer)
+	}
+}
+
 // syncInto is a sync of parent's data into child, as the child's side
 // runs it: the parent's data images read (ParentData), checked before
 // anything stops (SyncCheck), and, the copy complete, taken over
