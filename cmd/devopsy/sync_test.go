@@ -49,6 +49,15 @@ const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
+# FAKE_DOTENV: compose reads the .env beside the first compose file (its
+# project directory) for what the environment leaves unset, as compose
+# does: plain KEY=value lines.
+if [ -n "${FAKE_DOTENV:-}" ] && [ -f "${dir:-}/.env" ]; then
+  while IFS='=' read -r fk fv; do
+    case $fk in ''|*[!A-Za-z0-9_]*) continue ;; esac
+    eval "[ -n \"\${$fk+x}\" ] || export $fk=\"\$fv\""
+  done <"$dir/.env"
+fi
 # The compose calls made holding the release lock (fd 9, which the
 # scripts open): what a devopsy killed outright leaves running holds it,
 # so the next lock-taker waits for it.
