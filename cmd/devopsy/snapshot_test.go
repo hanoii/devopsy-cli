@@ -3083,6 +3083,60 @@ func TestRestoredStartsOnHeldImage(t *testing.T) {
 	}
 }
 
+// A restore's data step holds the database on the image the snapshot's
+// data ran and replaces its history with the snapshot's (ImportDone); a
+// run step that leaves the database stopped leaves its container the one
+// from before, on the image the replaced data ran, for restored to make
+// again on the hold (startLeftDown, images.Recreate). img ran, between
+// the run step and restored, must not take that exited container's image
+// for one that ran on the restored data: recorded as the data's newest,
+// a release of that image (here another series, accepted on the data
+// the restore replaced, never run by the snapshot's) passes the next
+// check without --accept-image, and a rollback holds the database on it.
+func TestRestoreRanKeepsHeldImage(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--no-code"}, {}} {
+		s := newSyncSetup(t)
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("%v: take (%d):\n%s", args, code, out)
+		}
+		base := filepath.Join(s.root, "shop", "prod")
+		snap := filepath.Join(base, "snapshots", m[1])
+		// The snapshot: db ran mariadb:11.8 (sha256:snap) when it was taken.
+		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+		write(t, filepath.Join(snap, remote.SnapshotData, "images"), "image\tdb\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n", 0o600)
+		// Since: a release of mariadb:12 (sha256:twelve), accepted, ran on
+		// the data; its container, stopped by the restore, is still on it,
+		// as the fake's deploy starts nothing.
+		current := filepath.Join(base, "current")
+		write(t, releaseFile(t, current, images.ListFile), "mariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+		history := filepath.Join(base, images.HistoryFile)
+		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n2\tdb\tforced\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\n", 0o644)
+		write(t, s.log+".containers.shop-prod", "db mariadb@sha256:twelve\n", 0o644)
+		// The code's image (the snapshot's, which a full restore runs, says
+		// mariadb:11.8): a full restore lists it again from the compose
+		// config before the data step holds it.
+		env := []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_IMAGES=sha256:db=mariadb@sha256:twelve sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap mariadb:12=mariadb@sha256:twelve"}
+		s.logs()
+		out, code = s.run(env, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		docker, _ := s.logs()
+		if code != 0 || !strings.Contains(docker, " up -d --no-deps --wait db\n") {
+			t.Fatalf("%v: the restore (%d), db not made again on the snapshot's image:\n%s\n%s", args, code, out, docker)
+		}
+		if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:snap"`) {
+			t.Fatalf("%v: not held on the snapshot's image:\n%s", args, c)
+		}
+		h := readString(history)
+		lines := strings.Split(strings.TrimSpace(h), "\n")
+		if last := lines[len(lines)-1]; strings.Contains(h, "\tsha256:db\t") || !strings.Contains(last, "\tdb\t"+images.Imported+"\tmariadb:11.8\tsha256:snap\t") {
+			t.Errorf("%v: the history after the restore names the image the replaced data ran, from db's exited container, as the newest that ran on the restored data:\n%s", args, h)
+		}
+	}
+}
+
 // A take stops every service with data and its dependents, then starts
 // them again: on data where a bind source already leads out of its entry
 // through a link (left by hand, or by a release before the mounts check
