@@ -147,12 +147,50 @@ printf '%%s\n' "$file"
 
 // VarsSetScript sets the KEY=value lines given on stdin.
 func VarsSetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set")
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set") + varsApply(level)
 }
 
 // VarsUnsetScript removes the keys given on stdin, one per line.
 func VarsUnsetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset")
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset") + varsApply(level)
+}
+
+// VarsApplied starts the line an environment's --vars set or unset
+// prints after the file's path, once it has a current release: its
+// --check-images --hint exit (0: a reload applies the change, 3: only a
+// release, 4: compose requires a variable not set), its output on the
+// lines after (ParseVarsApplied). Still under the release lock, nothing
+// changed by it.
+const VarsApplied = "apply "
+
+func varsApply(level *Level) string {
+	if level != nil {
+		return ""
+	}
+	return `if [ -z "$plain" ] && [ -d "$base/current/.devopsy" ]; then
+  va=0
+  va_out=$(cd "$base/current" && devopsy --check-images --hint 2>/dev/null) || va=$?
+  printf '` + VarsApplied + `%s\n%s\n' "$va" "$va_out"
+fi
+`
+}
+
+// ParseVarsApplied reads what a --vars set or unset printed: the file's
+// path, then, for an environment with a current release, its
+// --check-images --hint exit and lines; code -1 without them.
+func ParseVarsApplied(out string) (file string, code int, lines []string) {
+	file, rest, _ := strings.Cut(strings.TrimRight(out, "\n"), "\n")
+	head, more, _ := strings.Cut(rest, "\n")
+	n, err := strconv.Atoi(strings.TrimPrefix(head, VarsApplied))
+	if !strings.HasPrefix(head, VarsApplied) || err != nil {
+		return file, -1, nil
+	}
+	for _, l := range strings.Split(more, "\n") {
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return file, n, lines
 }
 
 // InheritFile is a child's inherited variables, shared/inherit.env on its

@@ -93,6 +93,16 @@ func MissingVars(p *loadedProject) ([][2]string, error) {
 	return missing, nil
 }
 
+// MissingVarsIn is MissingVars for the project at cwd, its variables
+// loaded from environ and its files: each name and where it is required.
+func MissingVarsIn(cwd string, environ []string) ([][2]string, error) {
+	p, err := loadProject(cwd, environ)
+	if err != nil {
+		return nil, err
+	}
+	return MissingVars(p)
+}
+
 // missingVars is the hidden `devopsy --missing-vars`: nothing when every
 // required variable is set, else the list and how to set them, failing.
 func missingVars(p *loadedProject) error {

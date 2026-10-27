@@ -36,7 +36,10 @@ cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 rel="$base/$cur"
 rl_pending="$rel/` + TargetReloadFile + `"
 rm -f "$rl_pending"
-` + watchSession(false, true) + releaseImages(projectName, t, mode) + recoverFetch(`"$rel"`) + settleSync(projectName) +
+` + watchSession(false, true) + `# Until the point of no return a signal (the watcher's: the session
+# gone) ends it, nothing changed.
+trap 'rm -f "$rl_pending"; devopsy --say error "interrupted: nothing reloaded" || true; exit 130' INT TERM HUP
+` + releaseImages(projectName, t, mode) + recoverFetch(`"$rel"`) + settleSync(projectName) +
 		markRefusal(t, "nothing reloaded", syncFixLines(t), "exit 1") + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
 cd "$base/current"
 ` + call("--prepare-release", "reload") + ` || ` + refuse + `

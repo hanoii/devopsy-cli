@@ -14,7 +14,12 @@ import (
 
 // checkImagesExit is --check-images' exit when something needs another
 // image than the release fetched: a release applies it.
-const checkImagesExit = 3
+// checkImagesMissing is --hint's when compose requires a variable that
+// is not set: neither a reload nor a release goes until it is.
+const (
+	checkImagesExit    = 3
+	checkImagesMissing = 4
+)
 
 // runCheckImages is the hidden CheckImagesFlag [--hint] [<address>], run
 // in a release on a server, with the variables as they are now: a
@@ -24,8 +29,11 @@ const checkImagesExit = 3
 // so a variable that would give a service another image (an image:
 // name, a build argument, a profile turned on) is refused, naming it,
 // exit 3, the release to run as the fix (address, as the operator typed
-// it). With --hint (after --vars set), the same said as what applies the
-// value, and the same exit: nothing is refused there.
+// it). With --hint (after --vars set or unset, which refuse nothing), it
+// says nothing and prints on stdout, for the operator to word the
+// follow-up: "missing <name>" lines, exit 4, when compose requires a
+// variable that is not set; else "image <what>" lines, exit 3, when a
+// release applies the change; else nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
 	hint, address := false, ""
 	for _, a := range args {
@@ -49,6 +57,19 @@ func runCheckImages(cwd string, args []string) int {
 		report.Fail(errors.New(cli.CheckImagesFlag + " only runs in a release"))
 		return 1
 	}
+	if hint {
+		missing, err := cli.MissingVarsIn(cwd, os.Environ())
+		if err != nil {
+			report.Fail(err)
+			return 1
+		}
+		for _, m := range missing {
+			fmt.Println("missing " + m[0])
+		}
+		if len(missing) > 0 {
+			return checkImagesMissing
+		}
+	}
 	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
 	needs, err := s.ReloadCheck(rel)
 	if err != nil {
@@ -58,13 +79,15 @@ func runCheckImages(cwd string, args []string) int {
 	if len(needs) == 0 {
 		return 0
 	}
+	if hint {
+		for _, n := range needs {
+			fmt.Println("image " + n)
+		}
+		return checkImagesExit
+	}
 	release := "devopsy @" + strings.TrimPrefix(address, "@") + " --release"
 	if address == "" {
 		release = "devopsy @<target> --release"
-	}
-	if hint {
-		report.Info(fmt.Sprintf("this needs another image than the release runs, which only a release fetches: %s applies it", release), needs...)
-		return checkImagesExit
 	}
 	report.Fail(&report.Failure{
 		Msg:     "the variables now need another image than the release fetched, and only a release fetches one",

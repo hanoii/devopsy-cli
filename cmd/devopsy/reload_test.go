@@ -108,14 +108,16 @@ func TestReloadBuildArgument(t *testing.T) {
 	}
 }
 
-// A session gone silent during a reload's checks ends it, nothing done.
+// A session gone silent during a reload's checks ends it, nothing done:
+// the watcher's signal (Linux, where the script leads a group) or the
+// operator's quiet time.
 func TestReloadSessionGone(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	start := time.Now()
 	out, code := s.run([]string{remote.HeartbeatEveryEnv + "=1", "FAKE_SILENT=1"}, "@prod", "--reload")
-	if docker, _ := s.logs(); code == 0 || strings.Contains(docker, " up ") || !strings.Contains(out, "lost before the reload's checks passed, or its devopsy on the server was killed: nothing changed there") {
+	if docker, _ := s.logs(); code == 0 || strings.Contains(docker, " up ") || !strings.Contains(out, "interrupted: nothing reloaded") && !strings.Contains(out, "lost before the reload's checks passed, or its devopsy on the server was killed: nothing changed there") {
 		t.Errorf("a silent session's reload (%d) in %s:\n%s\ndocker:\n%s", code, time.Since(start), out, docker)
 	}
 }
@@ -191,5 +193,38 @@ func TestRestoreNoCodeChecksImages(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes"); code != 0 || !strings.Contains(out, "deploy in shop-prod") {
 		t.Errorf("without --with-env (%d):\n%s", code, out)
+	}
+}
+
+// --vars set and unset on an environment say what applies the change: a
+// reload, a release when the variables now need another image, or
+// nothing until compose's required variables are set; refusing none.
+// The project's file, several environments', gets the plain line.
+func TestVarsApply(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	vars := func(extra []string, args ...string) string {
+		t.Helper()
+		out, code := s.run(extra, append([]string{"@prod", "--vars"}, args...)...)
+		if code != 0 {
+			t.Fatalf("--vars %v (%d):\n%s", args, code, out)
+		}
+		return out
+	}
+	if out := vars([]string{"SITE_NAME=shop"}, "set", "SITE_NAME"); !strings.Contains(out, "to apply it now,\ndevopsy: | $ devopsy @devopsy@one:prod --reload") {
+		t.Errorf("a plain value:\n%s", out)
+	}
+	if out := vars([]string{"FAKE_DB_IMAGE=mariadb:12"}, "set", "FAKE_DB_IMAGE"); !strings.Contains(out, "db's image is mariadb:12 now") || !strings.Contains(out, "$ devopsy @devopsy@one:prod --release") || strings.Contains(out, "--reload") {
+		t.Errorf("an image's name:\n%s", out)
+	}
+	vars(nil, "unset", "FAKE_DB_IMAGE")
+	write(t, filepath.Join(s.root, "shop", "prod", s.current("prod"), remote.CodeDir, ".devopsy", "compose.yaml"), "services:\n  app:\n    image: x\n    environment: [\"KEY=${REQUIRED:?}\"]\n  db:\n    image: y\n", 0o644)
+	vars([]string{"REQUIRED=1"}, "set", "REQUIRED")
+	if out := vars(nil, "unset", "REQUIRED"); !strings.Contains(out, "warning: unset REQUIRED in") || !strings.Contains(out, "refuses until they are: REQUIRED") {
+		t.Errorf("a required variable unset:\n%s", out)
+	}
+	if out, code := s.run([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); code != 0 || !strings.Contains(out, "devopsy @<environment> --reload applies it") {
+		t.Errorf("the project's file (%d):\n%s", code, out)
 	}
 }

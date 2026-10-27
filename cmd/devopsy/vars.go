@@ -192,8 +192,27 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 	if code != 0 {
 		return code
 	}
-	report.Info(fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, strings.TrimSpace(out.String())),
-		"running containers keep their old values until they are recreated, as by the next release")
+	file, applied, lines := remote.ParseVarsApplied(out.String())
+	said := fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, file)
+	var what []string
+	for _, l := range lines {
+		if k, v, ok := strings.Cut(l, " "); ok && (k == "missing" || k == "image") {
+			what = append(what, v)
+		}
+	}
+	switch applied {
+	case 0:
+		report.Info(said, "running containers keep their old values until they are recreated: to apply it now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
+	case 3:
+		report.Info(said, append(append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), "to apply it:", report.CmdMark+"devopsy @"+targetRef(t)+" --release")...)
+	case 4:
+		report.Warn(said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "),
+			"to set them:", report.CmdMark+"devopsy @"+targetRef(t)+" --vars set <KEY>...")
+	default:
+		// The instance's or the project's file, several environments', or
+		// an environment with nothing released yet.
+		report.Info(said, "running containers keep their old values until they are recreated: devopsy @<environment> --reload applies it")
+	}
 	return 0
 }
 
