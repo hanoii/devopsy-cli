@@ -138,8 +138,7 @@ devopsy --say info "taking snapshot $id of ${cur#releases/}"
   # again now, under the locks it held, rather than at the next settle.
   set +e
   `+strings.TrimSpace(strings.ReplaceAll(settleSync(projectName), "\n", "\n  "))+`
-  devopsy --say error "the stopped pass of snapshot $id was killed on the server ($sb): its services started again, and the next snapshot here finishes or removes it" || true
-fi
+  `+killedLine("sb", "during the stopped pass of snapshot $id", "its services started again, and the next snapshot here finishes or removes it", "")+`fi
 [ "$sb" = 0 ] || exit "$sb"`, 1) + `
 # Past the stopped pass the snapshot is consistent in the mirror: it
 # finishes on its own, whatever happens to the session.

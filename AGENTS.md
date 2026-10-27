@@ -1025,8 +1025,15 @@ interrupts" and "The server never waits on the operator for long".
 - **255 is ssh's:** ssh exits 255 for a connection that failed or was
   lost, and passes a script's own status on, so activations and holders
   never exit 255 (`NoExit255`, `followOutput`'s trap: 254 instead;
-  drush on a PHP error exits 255). The operator's lost-connection
-  messages (`sshLost`) then mean what they say. An ssh killed by a
+  drush on a PHP error exits 255). ssh also exits 255 when what it ran
+  on the server was killed outright (SIGKILL, the OOM killer), so every
+  message on `sshLost` says both, in one wording (`lostSays`: "failed
+  or was lost, or its devopsy on the server was killed"), and only what
+  holds for both (never "once the server notices": after a kill the
+  next lock-taker settles), with what shows it; a script that runs
+  devopsy as its child sees the kill and says it itself, in the same
+  words (`killedLine`, `killedSays`). Decided 2026-10-27 over
+  scripts that never exec, for one rule rather than one per script. An ssh killed by a
   signal devopsy did not send reads as 255 too (`SSHStreams`), and
   `DEVOPSY_SSH_COMMAND` runs through `exec`, so signals reach the
   command, never only a shell around it.

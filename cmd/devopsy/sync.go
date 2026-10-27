@@ -314,7 +314,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 			// The push's session is gone, not necessarily the push: what
 			// the copy wrote decides, never the answer.
 			answer = "abort\n"
-			log.Error("the connection to @"+job.parent.Address+" was lost during the copy: what the copy wrote decides how the sync ends on @"+job.child.Address, "devopsy @"+targetRef(job.child)+" --status shows it")
+			log.Error(lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), "devopsy @"+targetRef(job.child)+" --status shows it")
 		} else if code != 0 {
 			answer = "abort\n"
 			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
@@ -368,16 +368,15 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		return 1
 	}
 	if res.code == sshLost {
-		lost := "the connection to @" + job.child.Address + " was lost"
 		switch {
 		case !marked && release:
-			log.Error(lost+" before the copy: the server cancels the release once it notices, within two minutes, and past its switch the previous release, if any, comes back", "devopsy @"+targetRef(job.child)+" --releases shows it")
+			log.Error(lostSays(job.child, "before the copy", "its data there is as it was"), "devopsy @"+targetRef(job.child)+" --releases shows whether the release went live")
 		case !marked:
-			log.Error(lost+" before the copy: the server leaves it as it was once it notices", "devopsy @"+targetRef(job.child)+" --status shows it")
+			log.Error(lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), "devopsy @"+targetRef(job.child)+" --status shows it")
 		case answered:
-			log.Error(lost+" after the copy: the server goes on as far as the copy went, the run step too if it went through", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Error(lostSays(job.child, "after the copy", "the sync was past its copy there"), "devopsy @"+targetRef(job.child)+" --log shows how it ends")
 		default:
-			log.Error(lost+": the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
+			log.Error(lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), "devopsy @"+targetRef(job.child)+" --status shows how it ended")
 		}
 	}
 	return res.code
@@ -385,6 +384,24 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 
 // sshLost is ssh's exit code when the connection failed or was lost.
 const sshLost = 255
+
+// lostSays is what devopsy says of a session that ended with sshLost:
+// the connection failed or was lost, or what ssh ran on the server was
+// killed outright, which ssh reports the same way (a script that runs
+// devopsy as its child says the kill itself: remote's killedLine). when
+// places it ("before the switch", or empty); left is what that may have
+// left there, true of both, and the caller's details name what shows it.
+func lostSays(t *remote.Target, when, left string) string {
+	s := "the connection to @" + t.Address + " failed or was lost"
+	if when != "" {
+		s += " " + when
+	}
+	return s + ", or its devopsy on the server was killed: " + left
+}
+
+// staysDown is what an operation cut off may leave stopped there, until
+// the next lock-taker of the environment starts it (settleStops).
+const staysDown = "what it stopped may stay down until the next release, sync, import or snapshot there"
 
 // runPush is the push session: devopsy --sync-push on the parent's
 // server, into the child's directory base. Across servers it forwards the

@@ -3504,7 +3504,7 @@ func TestTakeKilledStartsItsSet(t *testing.T) {
 	out, code := s.run([]string{"FAKE_KILL_SNAPSHOT_TAR=1"}, "@prod", "--snapshot")
 	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
 	record := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services"))
-	if code == 0 || !strings.Contains(out, "was killed on the server") || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(record, "snapshot ") {
+	if code == 0 || !strings.Contains(out, "its devopsy on the server was killed") || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(record, "snapshot ") {
 		t.Errorf("a take killed in its stopped pass (%d) left %v stopped, record %q:\n%s", code, stopped, record, out)
 	}
 }

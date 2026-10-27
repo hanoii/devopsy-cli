@@ -2457,8 +2457,7 @@ if [ -n "$dir" ]; then
     s=$?; image_unlock
     # Killed (SIGKILL, the OOM killer), it said nothing of where it was.
     if [ "$s" -gt 128 ]; then
-      devopsy --say error "$base is not removed: its devopsy on the server was killed ($s), and the destroy may have stopped halfway, its containers and volumes perhaps gone" "to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --destroy" || true
-    else
+      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+hintAddress(t)+" --destroy") + `    else
       devopsy --say error "$base is not removed" || true
     fi
     exit "$s"

@@ -37,11 +37,18 @@ func TestRunStepExit255(t *testing.T) {
 // says neither that devopsy's command did not complete nor what may be
 // left on the server (an export's services stopped until the server
 // notices, a destroy half done, a truncated file on stdout). Found by
-// hand (2026-10-27, iptables drops on an OrbStack machine).
+// hand (2026-10-27, iptables drops on an OrbStack machine). ssh exits
+// 255 too when what it ran on the server was killed outright (SIGKILL,
+// the OOM killer), so every one says both, in the same words
+// (lostSays), and nothing that holds only for a lost connection (the
+// server noticing: after a kill nothing does).
 func TestLostSessionSays(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
 	out, code := s.run(nil, "@prod", "--snapshot")
 	m := snapshotID.FindStringSubmatch(out)
 	if code != 0 || m == nil {
@@ -53,16 +60,21 @@ func TestLostSessionSays(t *testing.T) {
 		args  []string
 	}{
 		{"'--export'", nil, []string{"@prod", "--export", "db"}},
+		{"'--import'", tarOf(t, map[string]string{"db/ibdata": "rows\n"}), []string{"@prod", "--import", "db", "--yes"}},
 		{"exec tar -C", nil, []string{"@prod", "--snapshots", "export", m[1]}},
 		{"'receive'", []byte("not a tar"), []string{"@prod", "--snapshots", "import"}},
+		{"taking snapshot", nil, []string{"@prod", "--snapshot"}},
 		{"'--destroy-data'", nil, []string{"@prod", "--destroy", "--yes"}},
+		{"--release-id", nil, []string{"@prod", "--release"}},
+		{"--missing-vars", nil, []string{"@prod", "--release"}},
+		{"ready for sync in", nil, []string{"@dev", "--sync", "--yes"}},
 	} {
 		_, errs, code := s.runIO([]string{"FAKE_SSH_LOST=" + c.lost}, c.stdin, c.args...)
 		if code != 255 {
 			t.Fatalf("%v: the fake lost no session (%d):\n%s", c.args, code, errs)
 		}
-		if !strings.Contains(errs, "devopsy: error:") {
-			t.Errorf("%v: a session lost on the way (%d) said nothing of devopsy's:\n%s", c.args, code, errs)
+		if !strings.Contains(errs, "devopsy: error: the connection to @devopsy@one:") || !strings.Contains(errs, ", or its devopsy on the server was killed: ") || strings.Contains(errs, "notices") {
+			t.Errorf("%v: a session lost on the way (%d) does not say both a lost connection and a kill:\n%s", c.args, code, errs)
 		}
 	}
 }

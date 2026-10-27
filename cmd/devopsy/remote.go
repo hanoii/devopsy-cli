@@ -632,7 +632,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return stop(err)
 			}
 			if code == sshLost {
-				log.Error("the connection to @" + t.Address + " failed or was lost during the upload: nothing changed there")
+				log.Error(lostSays(t, "during the upload", "nothing changed there"))
 			}
 			return code
 		}
@@ -958,7 +958,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		return 1
 	}
 	if code == sshLost {
-		report.Error("the connection to @"+t.Address+" failed or was lost: the destroy may have stopped halfway there", "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
+		report.Error(lostSays(t, "", "the destroy may have stopped halfway there"), "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
 	}
 	if code != 0 {
 		return code
@@ -1032,8 +1032,8 @@ func releaseWords(t *remote.Target) liveWords {
 		goesOn:     []string{"interrupted: the release goes on on @" + t.Address + ", past its switch", logs + "; Ctrl-C again ends the session, not the release"},
 		cancelling: []string{"interrupted: cancelling the release on @" + t.Address},
 		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now"},
-		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the switch: the release goes on there", logs},
-		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the switch: the server cancels the release once it notices, within a minute", "devopsy @" + targetRef(t) + " --releases shows it"},
+		lostAfter:  []string{lostSays(t, "after the switch", "the release was past its switch there"), logs},
+		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
 	}
 }

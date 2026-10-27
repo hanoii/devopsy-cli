@@ -1617,7 +1617,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			return 1
 		}
 		if code == sshLost {
-			report.Error("the connection to @" + t.Address + " failed or was lost: the export of snapshot " + id + " is incomplete")
+			report.Error(lostSays(t, "", "the export of snapshot "+id+" is incomplete"))
 		}
 		return code
 	}
@@ -1637,7 +1637,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		}
 		if code == sshLost {
 			// The server keeps a snapshot only once it read the whole tar.
-			report.Error("the connection to @"+t.Address+" failed or was lost: the snapshot is imported only if the server got all of it", "devopsy @"+targetRef(t)+" --snapshots shows whether it did")
+			report.Error(lostSays(t, "", "the snapshot is imported only if the server got all of it"), "devopsy @"+targetRef(t)+" --snapshots shows whether it did")
 		}
 		return code
 	}
@@ -1805,8 +1805,8 @@ func snapshotWords(t *remote.Target) liveWords {
 		goesOn:     []string{"interrupted: the snapshot goes on on @" + t.Address + ", past its stopped pass", logs + "; Ctrl-C again ends the session, not the snapshot"},
 		cancelling: []string{"interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"},
 		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", "Ctrl-C again leaves now"},
-		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the stopped pass: the snapshot goes on there", logs},
-		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the stopped pass ended: the server cancels the snapshot if it notices before then (within a minute), its services started again either way", "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
+		lostAfter:  []string{lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs},
+		lostBefore: []string{lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
 		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
 	}
 }
@@ -2759,8 +2759,8 @@ func restoreDataWords(t *remote.Target) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	w.goesOn = []string{"interrupted: the restore goes on on @" + t.Address + ", writing the data", logs + "; Ctrl-C again ends the session, not the restore"}
 	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
-	w.lostAfter = []string{"the connection to @" + t.Address + " was lost while it wrote the data: the restore goes on there", logs}
-	w.lostBefore = []string{"the connection to @" + t.Address + " failed or was lost before the restore wrote anything: the server cancels it once it notices"}
+	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), logs}
+	w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}
 	w.hadGone = []string{"it was writing the data already, and went on", logs}
 	return w
 }

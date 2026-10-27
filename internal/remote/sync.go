@@ -272,16 +272,36 @@ fi
 // release, whatever the script's directory (settleSync), and nothing
 // written. A failure of its own said so itself.
 func killedSays(t *Target, projectName, status, nothing string) string {
-	killed := "its devopsy on the server was killed ($" + status + ")"
 	s := `if [ "$` + status + `" -gt 128 ]; then
-` + markRefusal(t, killed, syncFixLines(t), ":")
+` + markRefusal(t, killed(status), syncFixLines(t), ":")
 	if nothing != "" {
 		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
-` + settleSync(projectName) + `  devopsy --say error "` + killed + ` before its first write: ` + nothing + `" || true
-fi
+` + settleSync(projectName) + "  " + killedLine(status, "before its first write", nothing, "") + `fi
 `
 	}
 	return s + "fi\n"
+}
+
+// killed opens what every script says once the devopsy it ran was
+// killed (its status in $<status>, above 128: SIGKILL, the OOM killer),
+// which said nothing itself. killedLine is the line: when it was killed
+// ("before its first write", or empty), what that left, and the command
+// that finishes it, if any. The operator's side says the same when only
+// ssh's 255 is left (cmd/devopsy's lostSays).
+func killed(status string) string {
+	return "its devopsy on the server was killed ($" + status + ")"
+}
+
+func killedLine(status, when, left, finish string) string {
+	s := killed(status)
+	if when != "" {
+		s += " " + when
+	}
+	s = `devopsy --say error "` + s + `: ` + left + `"`
+	if finish != "" {
+		s += ` "to finish it:" "` + report.CmdMark + finish + `"`
+	}
+	return s + " || true\n"
 }
 
 // IncompleteWhy is shell printing the mark's why and since ($base set),
@@ -904,8 +924,7 @@ func ResolvedScript(t *Target, projectName, service string) string {
 # Killed (SIGKILL, the OOM killer), it said nothing: the mark stays, what
 # it started perhaps running under it.
 if [ "$rv_status" -gt 128 ]; then
-  devopsy --say error "its devopsy on the server was killed ($rv_status): the import of ` + service + ` is not resolved, its mark still there and what it started perhaps running" "to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --import ` + service + ` --resolved" || true
-fi
+  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+hintAddress(t)+" --import "+service+" --resolved") + `fi
 exit "$rv_status"
 `
 }

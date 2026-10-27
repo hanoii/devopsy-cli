@@ -1723,7 +1723,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Error("the connection to @"+t.Address+" failed or was lost: the export is incomplete, and what it stopped there comes back once the server notices, or with the next release, sync, import or snapshot there", "devopsy @"+targetRef(t)+" --status shows it")
+		report.Error(lostSays(t, "", "the export is incomplete, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
 	}
 	return code
 }
@@ -1867,15 +1867,15 @@ wait:
 		report.Warn("the session is ended: the import of "+name+" goes on on @"+t.Address, "devopsy @"+targetRef(t)+" --status shows it")
 		return 130
 	case wasStarted && res.code == sshLost:
-		report.Error("the connection to @"+t.Address+" was lost during the import: it goes on on the server", "devopsy @"+targetRef(t)+" --status shows it")
+		report.Error(lostSays(t, "during the import", "the import was under way there"), "devopsy @"+targetRef(t)+" --status shows how it ends")
 		return sshLost
 	case interrupted && !wasStarted:
 		return 130
 	case res.code == sshLost:
 		// Before the byte the server waits for (ImportMarker), it never
 		// writes: no byte within its quiet time, it restores what it
-		// stopped.
-		report.Error("the connection to @"+t.Address+" failed or was lost before the import started: nothing imported there, and what it stopped comes back once the server notices", "devopsy @"+targetRef(t)+" --status shows it")
+		// stopped (killed, the next lock-taker does).
+		report.Error(lostSays(t, "before the import started", "nothing imported there, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
 		return sshLost
 	}
 	return res.code
@@ -1963,7 +1963,7 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Error("the connection to @"+t.Address+" failed or was lost: the import of "+name+" may not be resolved there", "devopsy @"+targetRef(t)+" --status shows whether its mark is still there; to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --import "+name+" --resolved")
+		report.Error(lostSays(t, "", "the import of "+name+" may not be resolved there"), "devopsy @"+targetRef(t)+" --status shows whether its mark is still there; to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --import "+name+" --resolved")
 	}
 	return code
 }
