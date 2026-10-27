@@ -119,91 +119,48 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
-	kept, synced, partial, left := "", "", "", ""
-	var cut *remote.Activating
-	syncing, source, importing, snapshotting := false, false, false, false
-	var mark *remote.Incomplete
-	var record *remote.Record
-	id := ""
-	for _, line := range strings.Split(header, "\n") {
-		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
-		switch key {
-		case "none":
-			if value != "" {
-				fmt.Printf("release     none: %s failed, devopsy @%s --log shows why\n", value, targetRef(t))
-			} else {
-				fmt.Println("release     none: not released yet")
-			}
-			id = ""
-		case "plain":
-			fmt.Println("release     none: a plain devopsy directory")
-		case "release":
-			var r remote.Record
-			id, value, _ = strings.Cut(value, "\t")
-			if json.Unmarshal([]byte(value), &r) == nil && r.Mode != "" {
-				record = &r
-			}
-		case "kept":
-			kept = value
-		case "synced":
-			synced = value
-		case "partial":
-			// The mark (remote.IncompleteLine), or nothing for a sync's
-			// files no holder settled yet.
-			partial = "a sync was cut"
-			mark = remote.ParseMark(value)
-			if mark.IsImport() || mark.IsRestore() {
-				partial = mark.Why + " (since " + mark.Since + " UTC)"
-			} else if mark.Why != "" {
-				partial = mark.Why + " (since " + mark.Since + " UTC, from @" + mark.From + ")"
-			}
-		case "left":
-			left = strings.TrimSpace(value)
-		case "cut":
-			cut = remote.ParseActivating(value)
-		case "syncing":
-			syncing = true
-		case "importing":
-			importing = true
-		case "source":
-			source = true
-		case "snapshot":
-			snapshotting = true
-		}
+	h := parseStatus(header)
+	switch {
+	case h.plain:
+		fmt.Println("release     none: a plain devopsy directory")
+	case h.none && h.failed != "":
+		fmt.Printf("release     none: %s failed, devopsy @%s --log shows why\n", h.failed, targetRef(t))
+	case h.none:
+		fmt.Println("release     none: not released yet")
 	}
-	if id != "" {
-		line := "release     " + id
-		if record != nil {
-			if record.Commit != "" {
-				short := record.Commit
+	if h.id != "" {
+		line := "release     " + h.id
+		if h.record != nil {
+			if h.record.Commit != "" {
+				short := h.record.Commit
 				if len(short) > 10 {
 					short = short[:10]
 				}
-				line += "  " + record.Branch + "@" + short
-				if record.Dirty {
+				line += "  " + h.record.Branch + "@" + short
+				if h.record.Dirty {
 					line += "+dirty"
 				}
 			}
-			if when, err := time.Parse(time.RFC3339, record.Time); err == nil {
+			if when, err := time.Parse(time.RFC3339, h.record.Time); err == nil {
 				line += "  " + ago(when)
 			}
-			if record.By != "" {
-				line += "  by " + record.By
+			if h.record.By != "" {
+				line += "  by " + h.record.By
 			}
 		}
-		if kept != "" {
-			line += "  (" + kept + " kept)"
+		if h.kept != "" {
+			line += "  (" + h.kept + " kept)"
 		}
 		fmt.Println(line)
 	}
-	if cut != nil {
-		what, fix := cut.Cut(targetRef(t), releaseRef(t), partial != "" && !mark.IsImport() && !mark.IsRestore())
+	if h.cut != nil {
+		what, fix := h.cut.Cut(targetRef(t), releaseRef(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
 		fmt.Println(st.bad("release     " + what + ": " + fix))
 	}
 	if t.Parent != "" {
 		line := "parent      " + t.Parent
-		if synced != "" {
-			if when, err := time.Parse("2006-01-02 15:04:05", synced); err == nil {
+		if h.synced != "" {
+			if when, err := time.Parse("2006-01-02 15:04:05", h.synced); err == nil {
 				line += "  last synced " + ago(when.UTC())
 			}
 		} else {
@@ -211,48 +168,110 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		}
 		fmt.Println(line)
 	}
-	if syncing {
+	if h.syncing {
 		fmt.Println("data        a sync into it is running")
 	}
-	if source {
+	if h.source {
 		fmt.Println("data        a sync or an export from it is running")
 	}
-	if snapshotting {
+	if h.snapshotting {
 		fmt.Println("data        a snapshot of it is being taken")
 	}
 	switch {
-	case mark.IsImport() && importing:
-		fmt.Println(st.bad("data        importing " + mark.From + ": what it stopped stays down until it completes"))
-	case importing:
+	case h.mark.IsImport() && h.importing:
+		fmt.Println(st.bad("data        importing " + h.mark.From + ": what it stopped stays down until it completes"))
+	case h.importing:
 		fmt.Println("data        an import into it is running")
-	case mark.IsImport():
+	case h.mark.IsImport():
 		var fixes []string
-		for _, f := range remote.ImportFixes(targetRef(t), mark.From, t.Parent != "") {
+		for _, f := range remote.ImportFixes(targetRef(t), h.mark.From, t.Parent != "") {
 			fixes = append(fixes, f[1])
 		}
-		fmt.Println(st.bad("data        the import of " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
-	case mark.IsRestore():
+		fmt.Println(st.bad("data        the import of " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+	case h.mark.IsRestore():
 		var fixes []string
-		for _, f := range remote.RestoreFixes(targetRef(t), mark.From, t.Parent != "") {
+		for _, f := range remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "") {
 			fixes = append(fixes, f[1])
 		}
-		fmt.Println(st.bad("data        the restore of snapshot " + mark.From + " did not complete: " + partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
-	case partial != "":
+		fmt.Println(st.bad("data        the restore of snapshot " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+	case h.partial != "":
 		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
-		if id == "" {
+		if h.id == "" {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
-		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
-	case left != "":
-		fmt.Println(st.bad("data        an operation cut off recorded " + left + " as stopped: the next release, sync, import or snapshot here starts what of them is down"))
+		fmt.Println(st.bad("data        from a sync that did not complete: " + h.partial + ": nothing runs on it until one does: " + fix))
+	case h.left != "":
+		fmt.Println(st.bad("data        an operation cut off recorded " + h.left + " as stopped: the next release, sync, import or snapshot here starts what of them is down"))
 	}
 	fmt.Print(rest)
 	return 0
 }
 
+// envState is an environment's state lines (remote.EnvStatus), read.
+type envState struct {
+	plain, none                              bool
+	failed                                   string // none: the first release that failed
+	id                                       string // the current release
+	record                                   *remote.Record
+	kept, synced, partial, left              string
+	cut                                      *remote.Activating
+	syncing, source, importing, snapshotting bool
+	mark                                     *remote.Incomplete
+}
+
+// parseStatus reads remote.EnvStatus's lines.
+func parseStatus(header string) envState {
+	var h envState
+	for _, line := range strings.Split(header, "\n") {
+		key, value, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+		switch key {
+		case "none":
+			h.none, h.failed, h.id = true, value, ""
+		case "plain":
+			h.plain = true
+		case "release":
+			var r remote.Record
+			h.id, value, _ = strings.Cut(value, "\t")
+			if json.Unmarshal([]byte(value), &r) == nil && r.Mode != "" {
+				h.record = &r
+			}
+		case "kept":
+			h.kept = value
+		case "synced":
+			h.synced = value
+		case "partial":
+			// The mark (remote.IncompleteLine), or nothing for a sync's
+			// files no holder settled yet.
+			h.partial = "a sync was cut"
+			h.mark = remote.ParseMark(value)
+			if h.mark.IsImport() || h.mark.IsRestore() {
+				h.partial = h.mark.Why + " (since " + h.mark.Since + " UTC)"
+			} else if h.mark.Why != "" {
+				h.partial = h.mark.Why + " (since " + h.mark.Since + " UTC, from @" + h.mark.From + ")"
+			}
+		case "left":
+			h.left = strings.TrimSpace(value)
+		case "cut":
+			h.cut = remote.ParseActivating(value)
+		case "syncing":
+			h.syncing = true
+		case "importing":
+			h.importing = true
+		case "source":
+			h.source = true
+		case "snapshot":
+			h.snapshotting = true
+		}
+	}
+	return h
+}
+
 // ago says how long ago t was, roughly.
-func ago(t time.Time) string {
-	d := time.Since(t)
+func ago(t time.Time) string { return agoAt(t, time.Now()) }
+
+// agoAt says how long before now t was, roughly.
+func agoAt(t, now time.Time) string {
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return "just now"

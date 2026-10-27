@@ -11,12 +11,23 @@ import "fmt"
 // stopped), then "---" and, from the current release,
 // devopsy --status there: the containers and the project's own lines.
 func StatusScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   echo plain
   echo ---
   cd "$base" && exec devopsy --status
 fi
-cur=$(readlink "$base/current" 2>/dev/null || true)
+` + EnvStatus + `
+[ -d "$base/current/.devopsy" ] || exit 0
+echo ---
+cd "$base/current" && exec devopsy --status
+`
+}
+
+// EnvStatus prints an environment's state lines ($base set), which
+// --status and --server-info read: "none" (with the newest release's id
+// when it failed), else release, kept, synced and cut; then
+// partialStatus's.
+var EnvStatus = fmt.Sprintf(`cur=$(readlink "$base/current" 2>/dev/null || true)
 if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
   # The newest release when it failed: a first one that did not go live.
   r=$(ls -1 "$base/releases" 2>/dev/null | grep -v '\.tmp$' | sort | tail -n 1) || true
@@ -25,27 +36,22 @@ if [ -z "$cur" ] || [ ! -d "$base/$cur/.devopsy" ]; then
   else
     echo none
   fi
-  `+partialStatus+`
-  exit 0
+else
+  cur=${cur%%/`+CodeDir+`}
+  printf 'release\t%%s\t' "${cur#releases/}"
+  tr -d '\n' < "$base/$cur/%s" 2>/dev/null || true
+  echo
+  kept=0; for r in "$base"/releases/*; do [ ! -d "$r" ] || { case "$r" in *.tmp) continue ;; esac; [ -e "$r/`+FailedFile+`" ] || [ -e "$r/`+FetchingFile+`" ] || [ -e "$r/`+PendingFile+`" ] || [ -e "$r/`+RolledBackFile+`" ] || kept=$((kept + 1)); }; done
+  printf 'kept\t%%s\n' "$kept"
+  # The last sync that completed, whatever its run step did after it.
+  printf 'synced\t%%s\n' "$(cut -f1 "$base/`+SyncedFile+`" 2>/dev/null)"
+  # An activation cut off past its switch (ActivatingFile), its run step
+  # perhaps never run: its line, while nothing holds the lock and its
+  # release is current (as --releases' CUT: one cut before its switch is
+  # still pending).
+  if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+` && [ "$(cut -f1 "$base/`+ActivatingFile+`")" = "${cur#releases/}" ]; then printf 'cut\t%%s\n' "$(cat "$base/`+ActivatingFile+`")"; fi
 fi
-cur=${cur%%/`+CodeDir+`}
-printf 'release\t%%s\t' "${cur#releases/}"
-tr -d '\n' < "$base/$cur/%s" 2>/dev/null || true
-echo
-kept=0; for r in "$base"/releases/*; do [ ! -d "$r" ] || { case "$r" in *.tmp) continue ;; esac; [ -e "$r/`+FailedFile+`" ] || [ -e "$r/`+FetchingFile+`" ] || [ -e "$r/`+PendingFile+`" ] || [ -e "$r/`+RolledBackFile+`" ] || kept=$((kept + 1)); }; done
-printf 'kept\t%%s\n' "$kept"
-# The last sync that completed, whatever its run step did after it.
-printf 'synced\t%%s\n' "$(cut -f1 "$base/`+SyncedFile+`" 2>/dev/null)"
-# An activation cut off past its switch (ActivatingFile), its run step
-# perhaps never run: its line, while nothing holds the lock and its
-# release is current (as --releases' CUT: one cut before its switch is
-# still pending).
-if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+` && [ "$(cut -f1 "$base/`+ActivatingFile+`")" = "${cur#releases/}" ]; then printf 'cut\t%%s\n' "$(cat "$base/`+ActivatingFile+`")"; fi
-`+partialStatus+`
-echo ---
-cd "$base/current" && exec devopsy --status
-`, RecordFile)
-}
+`+partialStatus, RecordFile)
 
 // partialStatus prints StatusScript's sync lines: "syncing" while a
 // sync's holder holds the lock, "importing" while an import does,
