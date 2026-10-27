@@ -117,7 +117,7 @@ func (p snapshotPaths) clone() string { return filepath.Join(p.base, "snapshots"
 // it keeps one (takeMirror), else none. Reflinks need no mirror: a take
 // that clones removes one left over.
 func takeCopy(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) string {
-	if reflinks(ctx, cwd, p, d) {
+	if snapshotReflinks(ctx, cwd, p, d) {
 		return "reflink"
 	}
 	if mirror, _ := takeMirror(); mirror {
@@ -126,78 +126,24 @@ func takeCopy(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData)
 	return "none"
 }
 
-// reflinks says whether d's entries and volumes clone into the clone's
-// place by reflinks (the same XFS or btrfs, say): one regular file of
-// each tried with cp --reflink=always, as root in the util image, the
-// copy removed at once (an entry or volume without a file has nothing to
-// try). Read-only on the data; nothing stops.
-func reflinks(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) bool {
-	if len(d.entries)+len(d.volumes) == 0 {
-		return false
-	}
-	if err := os.MkdirAll(p.clone(), 0o700); err != nil {
-		return false
-	}
-	// Its image first: a server's first take has none yet.
-	if err := ensureUtilImage(ctx); err != nil {
-		return false
-	}
-	mounts, srcs := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", p.clone() + ":/c"}, []string{}
-	for _, e := range d.entries {
-		srcs = append(srcs, "/m/mnt/"+e)
-	}
-	for _, v := range d.volumes {
-		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
-		srcs = append(srcs, "/m/volumes/"+v.Key)
-	}
-	args := append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", `t=/c/.reflink.$$
-for src; do
-  f=$(find "$src" -type f -print -quit 2>/dev/null) || f=
-  [ -n "$f" ] || continue
-  cp --reflink=always "$f" "$t" 2>/dev/null || { rm -f "$t"; exit 1; }
-  rm -f "$t"
-done`, "sh")
-	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-reflink", append(args, srcs...)...) == nil
+// snapshotReflinks is reflinks into the take's clones' place.
+func snapshotReflinks(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) bool {
+	return reflinks(ctx, "devopsy-snapshot-"+composeName(cwd)+"-reflink", p.clone(), d.dataSet)
 }
 
-// cloneData clones d into the clone's <id>, by reflinks, as root in the
-// util image (owners and modes kept: cp -a), then marks it complete.
-func cloneData(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData, id string) error {
+// snapshotCloneData clones d into the clone's <id> (cloneData), then
+// marks it complete.
+func snapshotCloneData(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData, id string) error {
 	dir := filepath.Join(p.clone(), id)
-	mounts := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", dir + ":/c"}
-	script := `set -e
-mkdir -p /c/mnt /c/volumes
-`
-	for _, e := range d.entries {
-		script += `cp -a --reflink=always "/m/mnt/` + e + `" /c/mnt/
-`
-	}
-	for _, v := range d.volumes {
-		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
-		script += `mkdir -p "/c/volumes/` + v.Key + `"
-cp -a --reflink=always "/m/volumes/` + v.Key + `/." "/c/volumes/` + v.Key + `/"
-`
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := cloneData(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-clone", dir, d.dataSet); err != nil {
 		return err
-	}
-	if err := dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-clone", append(append([]string{"--network", "none"}, mounts...), remote.UtilImage, "sh", "-c", script)...); err != nil {
-		return fmt.Errorf("the reflink clone: %w", err)
 	}
 	return os.WriteFile(filepath.Join(dir, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
 }
 
-// removeClone removes the clone of id (every clone, id ""), root's, as
-// root.
-func removeClone(ctx context.Context, cwd string, p snapshotPaths, id string) error {
-	target := "/s/" + snapshotClone
-	if id != "" {
-		target += "/" + id
-	}
-	if _, err := os.Lstat(filepath.Join(p.base, "snapshots", strings.TrimPrefix(target, "/s/"))); err != nil {
-		return nil
-	}
-	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unclone", "--network", "none", "-v", filepath.Join(p.base, "snapshots")+":/s", remote.UtilImage, "rm", "-rf", target)
+// snapshotRemoveClone removes the clone of id (every clone, id "").
+func snapshotRemoveClone(ctx context.Context, cwd string, p snapshotPaths, id string) error {
+	return removeClone(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unclone", filepath.Join(p.base, "snapshots"), filepath.Join(snapshotClone, id))
 }
 
 // removeMirror removes the environment's mirror, root's, as root: a take
@@ -214,12 +160,9 @@ func removeMirror(ctx context.Context, cwd string, p snapshotPaths) error {
 // entries of mnt (with whether each is a file) and its named volumes,
 // whatever its copy label, excluded ones left out; only those there.
 type snapshotData struct {
+	dataSet
 	services []cli.SyncService
 	data     []cli.SyncService
-	entries  []string
-	files    []string
-	volumes  []cli.Volume
-	mnt      string
 }
 
 func readSnapshotData(ctx context.Context, cwd string) (*snapshotData, error) {
@@ -712,9 +655,9 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		// mounted inside an entry, a file that will not reflink) falls back
 		// to the tars from the data, stopped already, never failing every
 		// take there.
-		if err = cloneData(ctx, cwd, p, d, id); err != nil && ctx.Err() == nil {
+		if err = snapshotCloneData(ctx, cwd, p, d, id); err != nil && ctx.Err() == nil {
 			report.Warn(err.Error() + ": writing the tars instead, the services stopped")
-			_ = removeClone(context.Background(), cwd, p, id)
+			_ = snapshotRemoveClone(context.Background(), cwd, p, id)
 			how = "none"
 			err = dataTars(ctx, cwd, d, tmp, id)
 			if err == nil {
@@ -741,7 +684,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
 		switch how {
 		case "reflink":
-			_ = removeClone(context.Background(), cwd, p, id)
+			_ = snapshotRemoveClone(context.Background(), cwd, p, id)
 		case "none":
 			_ = os.RemoveAll(tmp)
 		}
@@ -979,7 +922,7 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 		return err
 	}
 	if cloned {
-		if err := removeClone(ctx, cwd, p, id); err != nil {
+		if err := snapshotRemoveClone(ctx, cwd, p, id); err != nil {
 			report.Warn("removing snapshot " + id + "'s clone: " + err.Error())
 		}
 	}
@@ -1102,7 +1045,7 @@ func snapshotLeftovers(cwd string, p snapshotPaths) error {
 			continue
 		}
 		if c.IsDir() && !fileExists(filepath.Join(p.snaps, c.Name()+".tmp")) {
-			if err := removeClone(context.Background(), cwd, p, c.Name()); err != nil {
+			if err := snapshotRemoveClone(context.Background(), cwd, p, c.Name()); err != nil {
 				report.Warn("removing a leftover clone: " + err.Error())
 			}
 		}
