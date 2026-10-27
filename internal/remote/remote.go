@@ -2255,7 +2255,12 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	// live session goes on in a round trip. Taken out of both the
 	// terminal's and the log's lines.
 	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
-		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) { _, _ = w.Write([]byte{0}) }}
+		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) {
+			_, _ = w.Write([]byte{0})
+			if f, ok := ctx.Value(beatenKey{}).(*atomic.Bool); ok {
+				f.Store(true)
+			}
+		}}
 		mw := lm.Writer(cmd.Stderr)
 		flush = append([]*MarkerWriter{mw}, flush...)
 		cmd.Stderr = mw
@@ -2382,6 +2387,16 @@ const gatedRead = `gated_read() {
 type switchedKey struct{}
 
 type beatKey struct{}
+
+type beatenKey struct{}
+
+// WithBeaten is ctx for a session that sets beaten once devopsy answered
+// its BeatMarker: an activation's or a --no-code restore's disarm, past
+// which the script goes on on its own (its point of no return), before
+// it prints SwitchMarker.
+func WithBeaten(ctx context.Context, beaten *atomic.Bool) context.Context {
+	return context.WithValue(ctx, beatenKey{}, beaten)
+}
 
 // WithBeat is ctx for a session whose stdin devopsy writes through w, the
 // pipe it keeps open with a heartbeat: a BeatMarker line the script

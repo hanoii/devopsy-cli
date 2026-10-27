@@ -2765,7 +2765,7 @@ func restoreWords(t *remote.Target, noCode bool) liveWords {
 	w := releaseWords(t, "restore")
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
-	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), w.lostAfter[1]}
+	w.lostAfter = []string{lostSays(t, "past its point of no return", "the restore was writing the data there, or about to"), w.lostAfter[1]}
 	w.hadGone = []string{"it was writing the data already, and went on", logs}
 	if noCode {
 		w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}

@@ -994,8 +994,11 @@ interrupts" and "The server never waits on the operator for long".
   says the release goes on, and a second ends the session; the log is
   saved either way. "After the switch" is `SSHStreams`' flag on
   `SwitchMarker` (`WithSwitched`), never the release log, which stops
-  at its cap; a switch already under way when the pipe closed goes on,
-  said. During the upload (`signal.NotifyContext`) the progress line
+  at its cap, or the disarm's byte answered (`WithBeaten`): from it the
+  script goes on to its switch on its own, so a Ctrl-C or a session
+  lost between the two says the release goes on, at or past its switch,
+  never that nothing went live (review round 9); a switch already under
+  way when the pipe closed goes on, said. During the upload (`signal.NotifyContext`) the progress line
   goes and nothing changed.
 - **An interrupted fetch is undone under the lock, once:** a signal
   only sets `fetch_sig` (INT, TERM, HUP); the fetch's child gets it too

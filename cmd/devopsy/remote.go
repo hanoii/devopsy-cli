@@ -1047,11 +1047,11 @@ const leavesNow = "Ctrl-C again leaves now"
 func releaseWords(t *remote.Target, kind string) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     goesOnSays(t, kind, "past its switch", logs),
+		goesOn:     goesOnSays(t, kind, "at or past its switch", logs),
 		cancelling: []string{"interrupted: cancelling the " + kind + " on @" + t.Address},
 		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
 		// Killed there, it never ends: --status names it (cut).
-		lostAfter:  []string{lostSays(t, "after the switch", "the "+kind+" was past its switch there"), "devopsy @" + targetRef(t) + " --log shows how it ends, --status whether it was cut off"},
+		lostAfter:  []string{lostSays(t, "at or after the switch", "the "+kind+" was at or past its switch there"), "devopsy @" + targetRef(t) + " --log shows how it ends, --status whether it was cut off"},
 		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
 	}
@@ -1089,9 +1089,14 @@ func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.
 	}
 	done := make(chan result, 1)
 	defer heartbeat(w)()
-	var switched atomic.Bool
+	// Past the point of no return: the disarm's byte answered (beaten),
+	// or the switch's marker seen; between the two the script goes on on
+	// its own, its switch under way (review round 9: a session lost
+	// there said nothing went live).
+	var switched, beaten atomic.Bool
+	live := func() bool { return switched.Load() || beaten.Load() }
 	go func() {
-		code, err := remote.SSHContext(remote.WithBeat(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+		code, err := remote.SSHContext(remote.WithBeat(remote.WithBeaten(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), &beaten), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 		done <- result{code, err}
 	}()
 	var res result
@@ -1111,7 +1116,7 @@ wait:
 		case res = <-done:
 			break wait
 		case <-tick.C:
-			if interrupted && switched.Load() {
+			if interrupted && live() {
 				goesOn()
 			}
 		case <-slow:
@@ -1126,7 +1131,7 @@ wait:
 			}
 			interrupted = true
 			w.Close()
-			if switched.Load() {
+			if live() {
 				goesOn()
 			} else {
 				log.Error(words.cancelling[0], words.cancelling[1:]...)
@@ -1134,11 +1139,11 @@ wait:
 			}
 		}
 	}
-	if interrupted && !switched.Load() {
+	if interrupted && !live() {
 		return 130
 	}
 	if res.err == nil && res.code == sshLost {
-		if switched.Load() {
+		if live() {
 			log.Error(words.lostAfter[0], words.lostAfter[1:]...)
 		} else {
 			log.Error(words.lostBefore[0], words.lostBefore[1:]...)
