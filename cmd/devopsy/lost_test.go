@@ -132,3 +132,24 @@ func TestDestroyHalfwayFixCopies(t *testing.T) {
 		}
 	}
 }
+
+// --import <service> --resolved's second session lost on the way, or
+// its devopsy on the server killed (ssh's 255 either way), left the
+// operator with exit 255 and not a word: whether the import was
+// resolved, what runs, that the mark may stay. Found by hand (OrbStack,
+// 2026-10-27: the server's devopsy --import --resolved SIGKILLed during
+// its owners' step; the mark and the record stayed, the services down).
+func TestLostResolvedSays(t *testing.T) {
+	t.Parallel()
+	s := newImportSetup(t)
+	if _, out, code := s.runIO(append(s.env, "FAKE_FAIL_IMPORT=1"), []byte("rows\n"), "@prod", "--import", "db", "--yes"); code == 0 || !s.mark().IsImport() {
+		t.Fatalf("a failing import (%d):\n%s", code, out)
+	}
+	_, errs, code := s.runIO([]string{"FAKE_SSH_LOST='--resolved'"}, nil, "@prod", "--import", "db", "--resolved", "--yes")
+	if code != 255 {
+		t.Fatalf("the fake lost no session (%d):\n%s", code, errs)
+	}
+	if !strings.Contains(errs, "devopsy: error:") {
+		t.Errorf("a --resolved whose session was lost (%d) said nothing of devopsy's:\n%s", code, errs)
+	}
+}
