@@ -2146,6 +2146,13 @@ func TestLeftoverImagesRecord(t *testing.T) {
 	if out := run(LeftoverScript(tg, true)); !strings.Contains(out, "forgetting the images "+filepath.Join(root, "app")+"'s removals left: mariadb:devopsy-app-prod-1") || fileExists(filepath.Join(root, "app")) {
 		t.Errorf("purge:\n%s", out)
 	}
+	// A level holding nothing to ask about (no .env, no record: its lock
+	// alone) goes without a word: a warning that its .env stays, about
+	// none, misled (found by hand, 2026-10-27).
+	write(t, filepath.Join(root, "app", ".lock"), "")
+	if out := run(LeftoverScript(tg, false)); strings.TrimSpace(out) != "" || fileExists(filepath.Join(root, "app")) {
+		t.Errorf("an empty level: %q, left: %v", out, fileExists(filepath.Join(root, "app")))
+	}
 }
 
 // A release fetched again whose listing changed loses the bookmarks the
