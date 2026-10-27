@@ -205,7 +205,11 @@ func (s *Set) containers() map[string]Container {
 // image its data moved past went
 // back outside devopsy: said, never written, so the history keeps the
 // newest. rel is the release whose listing names the data services;
-// those with a history count too.
+// those with a history count too. A container whose DigestLabel is not
+// the one rel gives its service predates rel's activation: what it ran
+// was counted when it did, on the data it ran then (review: a restore's
+// database, left down by the run step, put the replaced data's image on
+// the restored data's history as its newest).
 func (s *Set) Ran(base, rel string) error {
 	svcs := map[string]bool{}
 	for _, e := range readList(rel) {
@@ -221,6 +225,7 @@ func (s *Set) Ran(base, rel string) error {
 		return nil
 	}
 	forced := readForced(rel)
+	_, labels := composeFacts(rel)
 	cs := s.containers()
 	refs := map[string]string{}
 	for _, e := range readList(rel) {
@@ -229,7 +234,7 @@ func (s *Set) Ran(base, rel string) error {
 	changed := false
 	for _, svc := range sortedKeys(svcs) {
 		c, ok := cs[svc]
-		if !ok || !c.started() {
+		if !ok || !c.started() || labels[svc] != "" && c.Digest != labels[svc] {
 			continue
 		}
 		img, err := s.Docker.Inspect(c.Image)
