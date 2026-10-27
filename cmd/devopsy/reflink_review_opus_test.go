@@ -79,13 +79,29 @@ func TestReviewOpusShareEmptiesBeforeKnowingItClones(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync (%d):\n%s\n%s", code, out, docker)
 	}
-	for _, line := range strings.Split(docker, "\n") {
-		if strings.Contains(line, "-share-") && strings.Contains(line, "rm -rf") {
-			t.Errorf("the child's entry or volume emptied by a clone that cannot work here: %s", line)
-		}
+	// The first that will not clone (the fake's exit 4) stops the rest:
+	// one try, said once.
+	if n := strings.Count(docker, "-share-"); n != 1 {
+		t.Errorf("%d clones tried where the first found no reflinks:\n%s", n, docker)
 	}
-	if n := strings.Count(out, "no reflinks between the parent's and the child's"); n > 1 {
-		t.Errorf("said %d times, once per entry and volume, not once:\n%s", n, out)
+	if n := strings.Count(out, "no reflinks between the parent's data and the child's"); n != 1 {
+		t.Errorf("said %d times, not once:\n%s", n, out)
+	}
+	// And the script itself empties nothing where its file does not
+	// clone: run here, on a filesystem without reflinks.
+	if runtime.GOOS != "linux" {
+		return
+	}
+	tmp := t.TempDir()
+	src, dst := filepath.Join(tmp, "src"), filepath.Join(tmp, "dst")
+	write(t, filepath.Join(src, "file.txt"), "parent's\n", 0o644)
+	write(t, filepath.Join(dst, "keep.txt"), "child's\n", 0o644)
+	if exec.Command("cp", "--reflink=always", filepath.Join(src, "file.txt"), filepath.Join(tmp, "probe")).Run() == nil {
+		t.Skip("this filesystem clones by reflinks")
+	}
+	err := exec.Command("sh", "-c", shareScript, "sh", src, dst).Run()
+	if exitCode(err) != 4 || !fileExists(filepath.Join(dst, "keep.txt")) {
+		t.Errorf("the script without reflinks: %v, the child's file kept %v", err, fileExists(filepath.Join(dst, "keep.txt")))
 	}
 }
 
@@ -119,7 +135,7 @@ func TestReviewOpusShareFollowsLinkedEntry(t *testing.T) {
 	out, _ := s.run([]string{"FAKE_REFLINK=1"}, "@dev", "--sync", "--yes")
 	docker, _ := s.logs()
 	for _, line := range strings.Split(docker, "\n") {
-		if strings.Contains(line, "-share-") && strings.Contains(line, " -v "+entry+":/d ") {
+		if strings.Contains(line, "-share-") && strings.Contains(line, "source="+entry+",target=/d") {
 			t.Errorf("a root container emptied and wrote the child's entry, a link to %s, by its path (Docker follows it on the host):\n%s\n%s", elsewhere, line, out)
 		}
 	}

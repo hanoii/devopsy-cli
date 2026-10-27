@@ -1254,8 +1254,10 @@ the capability's `prepare child`, its side's set stopped; then it waits
 for the parent. On the parent's, under a shared hold of its release lock
 (a release of the parent waits for the copy) and a sync lock of its own
 (syncs from one parent run one at a time): `prepare parent`, its side's
-set stopped, the rsync, each stream (export, then the child's import),
-its services started, `finish parent go|abort`. Then the child's: its
+set stopped, the rsync, each stream's export into the child's spool, its
+services started, then the child's imports of the spools (an import
+reads its spool, never the parent: the parent is not down through a
+load), `finish parent go|abort`. Then the child's: its
 services started, `finish child go`, and its `run` step. The child's
 stopped services stay down through the imports, so an app never runs on
 a half-imported database, and after a copy that did not complete too
@@ -1924,12 +1926,15 @@ lists them with their contracts):
     its lock, and only when there is something to copy. A failure aborts
     the sync (`finish abort` runs).
   - `export <service>` writes a `custom` service's data to stdout: on the
-    parent's server, once what the sync stops there is stopped and the
-    rsync is done, once per `custom` service in `depends_on` order; and
+    parent's server, once per `custom` service in `depends_on` order,
+    with what the sync stops there stopped (where the data clones by
+    reflinks and nothing stopped is `custom` or `always`, after they
+    start again from the clone, `DEVOPSY_DATA_STOP` then empty); and
     `devopsy --export`. stdin is empty. devopsy spools what it writes and
-    imports it only once it exited 0. A service in `DEVOPSY_DATA_STOP` is
-    stopped: reach it with `devopsy run --rm --no-deps -T <service> ...`,
-    not `exec`, or refuse.
+    imports it only once every export exited 0, the parent's services
+    started again first. A service in `DEVOPSY_DATA_STOP` is stopped:
+    reach it with `devopsy run --rm --no-deps -T <service> ...`, not
+    `exec`, or refuse.
   - `import <service>` reads that data from stdin, complete: on the
     child's server and in `devopsy --import`, its service up (devopsy
     brings it up alone first) unless it is in `DEVOPSY_DATA_STOP`.

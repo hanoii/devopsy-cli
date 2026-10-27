@@ -363,8 +363,17 @@ func runExport(cwd string, args []string, color bool) int {
 		}
 		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, filepath.Dir(cwd), id, d)
 	}
+	checked := filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id)
+	if ctx.Err() != nil {
+		// Cancelled before anything stops (during the check, say).
+		_ = os.Remove(checked)
+		return fail("export " + name + ": interrupted: nothing exported")
+	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	if err != nil {
+		if canClone {
+			_ = os.Remove(checked)
+		}
 		code := fail(err.Error())
 		if err := restore(); err != nil {
 			fail(err.Error())
@@ -386,7 +395,7 @@ func runExport(cwd string, args []string, color bool) int {
 			restored, restoreErr = true, restore()
 		}
 	} else if canClone {
-		_ = os.Remove(filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id))
+		_ = os.Remove(checked)
 	}
 	if s.Copy == cli.CopyCustom {
 		report.Info("exporting " + name)

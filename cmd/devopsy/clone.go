@@ -57,21 +57,25 @@ done`, "sh")
 }
 
 // cloneData clones d into into (its mnt/ and volumes/<key>/), by
-// reflinks, owners and modes kept (cp -a).
+// reflinks, owners and modes kept (cp -a). Each cp runs twice when the
+// first fails: a sync clones what of its data runs on too, and a file a
+// running service removed meanwhile fails cp, which goes on with the
+// rest; the second pass finds the tree as it is now.
 func cloneData(ctx context.Context, name, into string, d dataSet, opts ...string) error {
 	mounts := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", into + ":/c"}
 	script := `set -e
 mkdir -p /c/mnt /c/volumes
 `
+	cp := func(from, to string) {
+		script += "cp -a --reflink=always " + remote.Quote(from) + " " + remote.Quote(to) + " || cp -a --reflink=always " + remote.Quote(from) + " " + remote.Quote(to) + "\n"
+	}
 	for _, e := range d.entries {
-		script += `cp -a --reflink=always "/m/mnt/` + e + `" /c/mnt/
-`
+		cp("/m/mnt/"+e, "/c/mnt/")
 	}
 	for _, v := range d.volumes {
 		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
-		script += `mkdir -p "/c/volumes/` + v.Key + `"
-cp -a --reflink=always "/m/volumes/` + v.Key + `/." "/c/volumes/` + v.Key + `/"
-`
+		script += "mkdir -p " + remote.Quote("/c/volumes/"+v.Key) + "\n"
+		cp("/m/volumes/"+v.Key+"/.", "/c/volumes/"+v.Key+"/")
 	}
 	if err := os.MkdirAll(into, 0o700); err != nil {
 		return err

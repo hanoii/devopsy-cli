@@ -1937,14 +1937,19 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   service, in `depends_on` order over every service
   (`SyncStreamServices`: dependencies first, ties alphabetical, a cycle
   an error), the parent runs the capability's `export <service>`
-  (`syncStream`) into the child's spool,
+  (`exportStream`) into the child's spool,
   `$base/.devopsy-sync.stream.<service>.<sync id>` (`remote.StreamSpool`:
   one per sync, so an export that outlived its push, killed outright,
   never writes into the next sync's): on the
   same server directly, across servers through `cat >` in an SSH
-  session to the child (`exportInto`). Only once the export exited 0
-  does the child's `--sync-services import <service>` run. Never a
-  pipe into the import: a cut export never reaches it.
+  session to the child (`exportInto`). Only once every export exited 0
+  do the parent's services start again and the child's `--sync-services
+  import <service>` run, each in the same order (`importStream`).
+  Never a pipe into the import: a cut export never reaches it. Why
+  every export first (decided 2026-10-27): an import reads its spool,
+  never the parent, so a parent stopped for its exports was down through
+  the child's load too, often several times the dump. Cost: every spool
+  at once on the child's disk.
 - **The import:** the service brought up (`upFor`, `--no-deps` but on
   a first release: Compose would start a dependency the sync stopped)
   unless the child's side stopped it (down again after if it was down), `import <service>` with the spool
@@ -1966,8 +1971,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`cloneCheck`), as a take's: only the clone is downtime (review). The
   streams run before the start when the set holds a `custom` service or
   one stopped `always` (down while another's data is exported, so its
-  files and the dump are of one moment: review), after it otherwise; the
-  rsync is then the last write. The clone's containers are
+  files and the dump are of one moment: review), after it otherwise,
+  told nothing is stopped (`DEVOPSY_DATA_STOP` empty: review round 2,
+  a script following the contract would `run --rm` beside the running
+  service); the rsync is then the last write. A cancel during the check
+  stops nothing (round 2). The clone's containers are
   `<SyncContainerPrefix>parent-<id>-...` (`cloneContainer`), never the
   sync's own prefix, which the child's holder removes as writers into
   the child (review: it could kill the clone's removal). Never under `snapshots/.clone`: a take's
@@ -1988,12 +1996,18 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   clone). Before anything is emptied (`shareable`, review): an entry
   that is a link on either side is rsynced (Docker would mount its
   target alone, which the clone empties as root; a missing one is made,
-  `makeEntry`), and one file must clone into the child's mnt, else all
-  rsync, said once (an emptied entry rsynced again was a full copy every
-  sync on ext4). No device nodes, FIFOs or sockets (`shareScript`: a
-  source holding one is rsynced, `--no-D`; one made meanwhile is
-  deleted after the clone). A clone that fails falls back to the rsync,
-  which replaces what it left. File entries and syncs across servers always rsync. No
+  `makeEntry`). The script tries one file at the real destination
+  before it empties anything (`shareScript`'s exit 4: the entry's or the
+  volume's own filesystem, round 2: one probe into the child's mnt took
+  a volume on another disk for no reflinks at all), and the first that
+  will not clone has the rest rsynced, said once (an emptied entry
+  rsynced again was a full copy every sync on ext4). No device nodes,
+  FIFOs or sockets (exit 3: a source holding one is rsynced, `--no-D`;
+  one made meanwhile is deleted after the clone). The clone runs twice
+  when the first fails, as `cloneData` does: a live source's file
+  removed during `cp` fails it (round 2). Mounts by `--mount`
+  (`shareMount`), so any entry name works. A clone that fails falls back
+  to the rsync, which replaces what it left. File entries and syncs across servers always rsync. No
   named feature: one devopsy does both sides on one server. Why opt in
   and for files only: every page a database writes while a child
   shares it lands elsewhere (4,000 writes made 5,600 extents of one).

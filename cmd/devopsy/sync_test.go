@@ -354,7 +354,7 @@ case "$*" in
     m= c=
     for a; do case $a in *:/m/mnt:ro) m=${a%:/m/mnt:ro} ;; *:/c) c=${a%:/c} ;; esac; done
     mkdir -p "$c/mnt" "$c/volumes"
-    for e in $(printf '%s\n' "$last" | sed -n 's|^cp -a --reflink=always "/m/mnt/\([^"]*\)" /c/mnt/$|\1|p'); do cp -Rp "$m/$e" "$c/mnt/"; done
+    for e in $(printf '%s\n' "$last" | sed -n "s|^cp -a --reflink=always '/m/mnt/\\([^']*\\)' '/c/mnt/' .*|\\1|p"); do cp -Rp "$m/$e" "$c/mnt/"; done
     for a; do case $a in *:/m/volumes/*:ro) vn=${a%%:*}; k=${a#*:/m/volumes/}; k=${k%:ro}; mkdir -p "$c/volumes/$k"; cp -Rp "$vols/$vn/." "$c/volumes/$k/" ;; esac; done ;;
   "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-sync-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
@@ -385,12 +385,18 @@ case "$*" in
     ftar "$m/$tdir" "$tentry" ;;
   "run --rm --network none "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
-  # A clone into the child's entry or volume (-v <src>:/s:ro, -v <dst>:/d,
-  # each a path or a volume's name), emptied first: only with
-  # FAKE_REFLINK, as reflinks between them.
+  # A clone into the child's entry or volume (--mount
+  # type=bind|volume,source=<path or volume>,target=/s|/d), emptied first:
+  # only with FAKE_REFLINK, as reflinks between them; without, the
+  # script's exit 4, nothing changed.
   "run --rm --name devopsy-sync-"*"-share-"*)
-    [ -n "${FAKE_REFLINK:-}" ] || exit 1
-    for a; do case $a in /*:/s:ro) sh_src=${a%:/s:ro} ;; *:/s:ro) sh_src="$vols/${a%:/s:ro}" ;; /*:/d) sh_dst=${a%:/d} ;; *:/d) sh_dst="$vols/${a%:/d}" ;; esac; done
+    [ -n "${FAKE_REFLINK:-}" ] || exit 4
+    for a; do case $a in
+      type=bind,source=*,target=/s*) sh_src=${a#type=bind,source=}; sh_src=${sh_src%%,target=*} ;;
+      type=volume,source=*,target=/s*) sh_src=${a#type=volume,source=}; sh_src="$vols/${sh_src%%,target=*}" ;;
+      type=bind,source=*,target=/d) sh_dst=${a#type=bind,source=}; sh_dst=${sh_dst%%,target=*} ;;
+      type=volume,source=*,target=/d) sh_dst=${a#type=volume,source=}; sh_dst="$vols/${sh_dst%%,target=*}" ;;
+    esac; done
     mkdir -p "$sh_dst" && find "$sh_dst" -mindepth 1 -maxdepth 1 -exec rm -rf {} + && cp -Rp "$sh_src/." "$sh_dst/" ;;
   "run --rm --name devopsy-sync-"*|"run --rm --name devopsy-snapshot-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
@@ -1070,7 +1076,7 @@ func TestSyncReflinkShare(t *testing.T) {
 		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
 	}
 	// db rsynced, storage cloned, then given to its owner; never rsynced.
-	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-[0-9.a-f]+-share-1 --network none -v [^ ]*:/s:ro -v `+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`:/d devopsy-util:3`).MatchString(docker) {
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-[0-9.a-f]+-share-1 --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:3`).MatchString(docker) {
 		t.Errorf("shared docker:\n%s", docker)
 	}
 	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
@@ -1449,15 +1455,17 @@ func TestSyncCapability(t *testing.T) {
 	inOrder("--log", out, code, "prepare child in shop-dev", "devopsy: copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
 
 	// Two streams, db stopped (own) and app with it (it depends on db):
-	// in depends_on order, neither brought up for its import (no
-	// exception for streams).
+	// in depends_on order, both exported with the parent's stopped, the
+	// parent started, then both imported, neither brought up for its
+	// import (no exception for streams): the parent is never down
+	// through the child's load.
 	s.labels("FAKE_APP=stream\nFAKE_DB=stream+own")
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	if code != 0 {
 		t.Fatalf("two streams (%d):\n%s", code, out)
 	}
-	inOrder("two streams", out, code, "prepare child in shop-dev volumes= custom=db app stop=db app", "devopsy: stopping db (own), app (depends on db)", "devopsy: copying", "devopsy: stopping db (own), app (depends on db)", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db app", "devopsy: starting db app", "deploy in shop-dev")
+	inOrder("two streams", out, code, "prepare child in shop-dev volumes= custom=db app stop=db app", "devopsy: stopping db (own), app (depends on db)", "devopsy: copying", "devopsy: stopping db (own), app (depends on db)", "devopsy: exporting db", "devopsy: exporting app", "devopsy: starting db app", "import db into shop-dev", "import app into shop-dev", "devopsy: starting db app", "deploy in shop-dev")
 	if strings.Contains(docker, "up -d --wait") || strings.Contains(out, "rsync mnt/") {
 		t.Errorf("two streams docker:\n%s", docker)
 	}
