@@ -157,7 +157,9 @@ func VarsUnsetScript(t *Target, level *Level) string {
 
 // VarsApplied starts the line an environment's --vars set or unset
 // prints after the file's path: plain for a plain directory, first with
-// nothing released yet, else its --check-images --hint exit (0: a reload
+// nothing released yet, marked when its data is from a sync, an import
+// or a restore that did not complete (a reload and a release refuse
+// there), else its --check-images --hint exit (0: a reload
 // applies the change, 3: only a release, 4: compose requires a variable
 // not set), its output on the lines after (ParseVarsApplied). The check
 // reads the imports again as a reload does (--prepare-release reload,
@@ -174,6 +176,8 @@ func varsApply(t *Target, level *Level) string {
   printf '` + VarsApplied + `plain\n'
 elif [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
   printf '` + VarsApplied + `first\n'
+elif [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  printf '` + VarsApplied + `marked\n'
 else
   # Never a reason for the edit to fail: what it says is a hint.
   va_rel=$(readlink "$base/current") || va_rel=

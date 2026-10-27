@@ -1752,7 +1752,8 @@ Values travel over SSH's stdin, never as arguments. Running containers see
 changes when recreated: `--vars set` and `unset` on an environment say
 what applies them, never refusing one: `--reload`; a release, when the
 variables now give a service another image than the release fetched;
-or nothing until a variable compose requires is set again.
+nothing until a variable compose requires is set again, or until data
+a sync, an import or a restore did not complete is settled.
 
 **Reloads.** `devopsy @<target> --reload` applies what changed since the
 release without another one: its variables (`--vars`, `--inherit`, an
@@ -1787,7 +1788,9 @@ and restarts nothing. Locally, `devopsy --reload` runs `defaults:`'
 variables are set. A `--sync` and a `--snapshots restore --no-code`
 check the images the same way before anything stops: both run the
 current release's run step on its images again (`--with-env`: under the
-snapshot's variables).
+snapshot's variables, refused then with the full restore as the way).
+A full restore `--with-env` reads the snapshot's variables from its
+checks on, so its images are fetched for them.
 
 **Release settings** belong to the server, in its deploy user's
 `~/.config/devopsy/config.yaml`, so your machine and CI always agree:

@@ -1222,8 +1222,11 @@ devopsy's: devopsy -- --help, devopsy <command> --help.
 // loadedProject is a project with its environment loaded.
 type loadedProject struct {
 	dir, composeFile, dotenvFile string
-	env                          *Env
-	verbose                      []string
+	// envFile is the file a pending stand-in (DotenvPendingEnv) puts in
+	// .env's place, which compose is told to read instead of its own.
+	envFile string
+	env     *Env
+	verbose []string
 	// secrets are config.yaml's secrets: names.
 	secrets []string
 	// address is a local command's, when the devopsy that read it gave one.
@@ -1272,6 +1275,10 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		if _, err := os.Stat(p); err == nil {
 			loaded = p
 		}
+	}
+	envFile := ""
+	if loaded != dotenvFile {
+		envFile = loaded
 	}
 	if err := load(loaded); err != nil {
 		return nil, err
@@ -1341,7 +1348,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
+	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
 }
 
 // TraceEnv explains the project's environment as every devopsy command
@@ -1558,6 +1565,11 @@ func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
+	}
+	// Compose reads .env beside the compose file on its own, for what the
+	// environment leaves unset: a stand-in for it must be compose's too.
+	if p.envFile != "" {
+		composeArgs = append(composeArgs, "--env-file", p.envFile)
 	}
 	// The release's devopsy-compose.yaml goes right after compose.yaml,
 	// before the override.

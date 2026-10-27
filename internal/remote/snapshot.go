@@ -250,11 +250,12 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 `
 	// Its run step starts the current release's images on the variables
 	// it leaves: with --with-env, the snapshot's.
-	env := ""
+	env, flags := "", []string(nil)
 	if r.WithEnv {
 		env = DotenvPendingEnv + `="$snap/` + SnapshotData + `/shared.env" ` + InheritPendingEnv + `="$snap/` + SnapshotData + `/inherit.env" `
+		flags = []string{"--restore", r.Snapshot}
 	}
-	s += checkImages(t, projectName, true, env, "nothing restored")
+	s += checkImages(t, projectName, true, env, "nothing restored", flags...)
 	// With release snapshots on, the data it replaces first, as a
 	// release's: what it stops stays down for the data step, and anything
 	// that ends this before it starts them again (rd_unsnap).

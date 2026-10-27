@@ -978,6 +978,15 @@ done
 		up := toBase + strings.Repeat("../", strings.Count(t.Path, "/")-strings.Count(l.Dir, "/"))
 		s += fmt.Sprintf("ln -sfn %s.env \"$code/.devopsy/%s\"\n", up, l.Link)
 	}
+	if restore != nil && restore.WithEnv {
+		// --with-env: the new release reads the snapshot's variables (a
+		// file it carries) from its checks to its data step, which puts
+		// them into shared/: its images are listed and fetched for them,
+		// compose's own .env read included.
+		s += `[ ! -f "$snap/` + SnapshotData + `/shared.env" ] || ln -sfn "$snap/` + SnapshotData + `/shared.env" "$code/.devopsy/.env"
+[ ! -f "$snap/` + SnapshotData + `/inherit.env" ] || ln -sfn "$snap/` + SnapshotData + `/inherit.env" "$code/.devopsy/` + InheritFile + `"
+`
+	}
 	if sync != nil && sync.Images != "" {
 		// The parent's data images, for the check at the end of the fetch
 		// (img record) and the take-over once the copy is complete.
@@ -1160,7 +1169,9 @@ fi
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
-		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
+		s += "trap '' PIPE\n" + followOutput + `ln -sfn "$base/shared/.env" "$code/.devopsy/.env"
+ln -sfn "$base/shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
+[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
 rd_status=0
 (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
 if [ "$rd_status" != 0 ]; then

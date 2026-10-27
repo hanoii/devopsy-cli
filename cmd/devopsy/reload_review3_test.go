@@ -33,18 +33,19 @@ func TestReview3RestoreWithEnvFixLoops(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "db's image is mariadb:11 now") {
 		t.Fatalf("the restore (%d):\n%s", code, out)
 	}
-	fix := "$ devopsy @devopsy@one:prod --release"
+	fix := "$ devopsy @devopsy@one:prod --snapshots restore " + m[1] + " --with-env"
 	if !strings.Contains(out, fix+"\n") {
 		t.Fatalf("the restore names another fix than %q:\n%s", fix, out)
 	}
 	s.logs()
-	// The fix as named.
-	if out, code := s.run(nil, "@prod", "--release"); code != 0 {
-		t.Fatalf("the release the restore named (%d):\n%s", code, out)
+	// The fix as named: the full restore, the snapshot's code, images and
+	// variables together; the environment then reloads as it is.
+	if out, code := s.run(nil, "@prod", "--snapshots", "restore", m[1], "--with-env", "--yes"); code != 0 {
+		t.Fatalf("the restore the check named (%d):\n%s", code, out)
 	}
 	s.logs()
-	if out, code := s.run(nil, restore...); code != 0 || strings.Contains(out, "db's image is mariadb:11 now") {
-		t.Errorf("the same restore after the fix it named is refused again (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@prod", "--reload"); code != 0 || strings.Contains(out, "now, the release fetched") {
+		t.Errorf("a reload after the fix it named is refused (%d):\n%s", code, out)
 	}
 }
 

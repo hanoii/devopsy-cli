@@ -1175,7 +1175,14 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   `--no-code` restore
   before its data step (with the snapshot's `shared.env` and
   `inherit.env` under `--with-env`, through `DotenvPendingEnv` and
-  `InheritPendingEnv`). Not a release that syncs: it fetches anew.
+  `InheritPendingEnv`; devopsy passes the stand-in to compose as
+  `--env-file`, which otherwise reads `.devopsy/.env` itself for what
+  the environment leaves unset, review 3; refused, its fix is the full
+  restore, `--check-images --restore <id>`). A full restore `--with-env`
+  needs no check: its release's `.env` and `inherit.env` link to the
+  snapshot's from its checks to its data step, so its images are listed
+  and fetched for the variables it leaves (review 3: it fetched for
+  today's). Not a release that syncs: it fetches anew.
 - **`--vars set|unset` say what applies the change, refusing none**
   (`varsApply`, `--check-images --hint`, `ParseVarsApplied`): on an
   environment with a current release, still under the lock, with the
@@ -1183,8 +1190,9 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   into the pending file, removed after) and the env capability's values
   (`MissingVarsIn`), a reload (exit 0), a release (3, the images'
   lines), or nothing until a required variable is set (4, a warning). A
-  plain directory and an environment not released yet say so, never
-  `--reload`, which refuses there (review 1). Any value is a release away
+  plain directory, an environment not released yet and a marked one
+  (`--inherit` into one too) say so, never `--reload`, which refuses
+  there (reviews 1, 3 and 4). Any value is a release away
   from applying, so nothing is refused there. The instance's and the
   project's files, several environments', get the plain line, and
   `--inherit` the `--reload` line.

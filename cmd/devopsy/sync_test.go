@@ -48,15 +48,27 @@ const syncFakeDocker = `#!/bin/sh
 # the tests here match the project's compose commands.
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
-if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
+# The project directory, the first -f's; --env-file, compose's .env in
+# its place.
+if [ "$1" = compose ]; then
+  fa=
+  for a; do
+    case $fa in
+      -f) [ -n "${dir:-}" ] || dir=$(dirname "$a") ;;
+      --env-file) envf=$a ;;
+    esac
+    fa=$a
+  done
+fi
 # FAKE_DOTENV: compose reads the .env beside the first compose file (its
-# project directory) for what the environment leaves unset, as compose
-# does: plain KEY=value lines.
-if [ -n "${FAKE_DOTENV:-}" ] && [ -f "${dir:-}/.env" ]; then
+# project directory), or --env-file's, for what the environment leaves
+# unset, as compose does: plain KEY=value lines.
+dotenv=${envf:-${dir:-}/.env}
+if [ -n "${FAKE_DOTENV:-}" ] && [ -f "$dotenv" ]; then
   while IFS='=' read -r fk fv; do
     case $fk in ''|*[!A-Za-z0-9_]*) continue ;; esac
     eval "[ -n \"\${$fk+x}\" ] || export $fk=\"\$fv\""
-  done <"$dir/.env"
+  done <"$dotenv"
 fi
 # The compose calls made holding the release lock (fd 9, which the
 # scripts open): what a devopsy killed outright leaves running holds it,

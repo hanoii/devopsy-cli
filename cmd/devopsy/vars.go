@@ -205,6 +205,8 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 		report.Info(said, "running containers keep their old values until they are recreated")
 	case "first":
 		report.Info(said, "nothing is released there yet: its first release applies it")
+	case "marked":
+		report.Info(said, markedSays, report.CmdMark+"devopsy @"+targetRef(t)+" --status")
 	case "0":
 		report.Info(said, "running containers keep their old values until they are recreated: to apply it now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
 	case "3":
@@ -279,3 +281,8 @@ func localSecrets(projectDir string) []string {
 	}
 	return p.Secrets
 }
+
+// markedSays is what a change of variables says on an environment whose
+// data a sync, an import or a restore did not complete: a reload and a
+// release refuse there until that is settled, as --status shows.
+const markedSays = "its data is from a sync, an import or a restore that did not complete: a reload or a release applies it once that is settled, as --status shows:"

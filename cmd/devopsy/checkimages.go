@@ -31,23 +31,27 @@ const (
 // name, a build argument, a profile turned on) is refused, naming it,
 // exit 3, the release to run as the fix (address, as the operator typed
 // it; --sync, a sync's holder: a release that syncs, which inherits
-// first). With --hint (after --vars set or unset, which refuse nothing), it
+// first; --restore <snapshot>, a --no-code restore --with-env: the full
+// restore, or the restore without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
 // follow-up: "missing <name>" lines, exit 4, when compose requires a
 // variable that is not set; else "image <what>" lines, exit 3, when a
 // release applies the change; else nothing, exit 0: a reload does.
 func runCheckImages(cwd string, args []string) int {
-	hint, sync, address := false, false, ""
-	for _, a := range args {
-		switch {
+	hint, sync, address, snapshot := false, false, "", ""
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
 		case a == "--hint":
 			hint = true
 		case a == "--sync":
 			sync = true
+		case a == "--restore" && i+1 < len(args):
+			snapshot = args[i+1]
+			i++
 		case address == "" && !strings.HasPrefix(a, "-"):
 			address = a
 		default:
-			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync] [<address>]")
+			report.Error("usage: devopsy " + cli.CheckImagesFlag + " [--hint] [--sync | --restore <snapshot>] [<address>]")
 			return 2
 		}
 	}
@@ -97,10 +101,20 @@ func runCheckImages(cwd string, args []string) int {
 		// keeps the child's inherit.env: the next sync refused again).
 		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" --release-sync")
 	}
+	fixes := []report.Remedy{fix}
+	if snapshot != "" {
+		// A --no-code restore --with-env: the snapshot's variables, which
+		// a release from here would not have; its full restore brings its
+		// code and images with them.
+		fixes = []report.Remedy{
+			report.Fix("restore it with its code and images, which ran on those variables:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --with-env"),
+			report.Fix("or its data alone, under the variables there now:", "devopsy @"+addr+" --snapshots restore "+snapshot+" --no-code"),
+		}
+	}
 	report.Fail(&report.Failure{
 		Msg:     "the variables now need another image than the release fetched, and only a release fetches one",
 		Details: needs,
-		Fixes:   []report.Remedy{fix},
+		Fixes:   fixes,
 	})
 	return checkImagesExit
 }
