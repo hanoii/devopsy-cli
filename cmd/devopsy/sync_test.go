@@ -3251,6 +3251,57 @@ func TestSyncSettle(t *testing.T) {
 	}
 }
 
+// A sync's holder killed outright mid-copy (SIGKILL, a reboot) leaves its
+// record (what its prepare stopped, as the sync's own), the claimed file
+// with the copy's writers and no mark: the data may be anything from
+// untouched to half the parent's. The next lock-taker's settle marks it
+// and keeps what the holder stopped down, as a holder deciding on a cut
+// copy would: the record's stop lines are no leftover of an operation
+// that wrote nothing while the sync's files are there. An export of such
+// an environment (its script settles no sync files) must not start them
+// either.
+func TestSyncSettleKeepsKilledHolderStopsDown(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	record := filepath.Join(dev, ".devopsy-sync.services")
+	killed := func() {
+		write(t, record, "stop db\nstop app\nown 1.2 db\nown 1.2 app\n", 0o644)
+		write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", 999999, "running")+"\n", 0o644)
+		write(t, s.log+".stopped.shop-dev", "db\napp\n", 0o644)
+		os.Remove(filepath.Join(dev, remote.SyncIncompleteFile))
+		s.logs()
+	}
+	killed()
+	out, code := s.run(nil, "@dev", "--rollback")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Fatalf("a rollback after a killed holder (%d):\n%s\n%s", code, out, docker)
+	}
+	down := readString(s.log + ".stopped.shop-dev")
+	if strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" start ") || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
+		t.Errorf("the settle started what the killed holder stopped, on a copy that may be half the parent's (down: %q):\n%s\n%s", down, out, docker)
+	}
+	if rec := readString(record); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") {
+		t.Errorf("the record no longer names what stays down (the next sync's finish starts them):\n%q", rec)
+	}
+
+	// An export of the environment, before anything settled it.
+	killed()
+	s.labels("FAKE_DB=mnt+own\nFAKE_APP=mnt")
+	defer s.labels("")
+	_, errs, _ := s.runIO(nil, nil, "@dev", "--export", "db")
+	docker, _ = s.logs()
+	down = readString(s.log + ".stopped.shop-dev")
+	if strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" start ") || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
+		t.Errorf("an export started what the killed holder stopped (down: %q):\n%s\n%s", down, errs, docker)
+	}
+}
+
 // The sync log, appended to by every sync whose session went, keeps its
 // last lines once too big.
 func TestTrimSyncLog(t *testing.T) {
