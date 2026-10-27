@@ -3303,6 +3303,67 @@ func TestTakeStartsLeftoverStops(t *testing.T) {
 	}
 }
 
+// A reboot in the middle of an operation (a take's stopped pass, an
+// export, a release past its switch) leaves what it stopped down:
+// Docker brings back no container compose stopped, and nothing on the
+// server settles at boot (no daemon, no boot hook). Until a lock-taker
+// of the environment comes, --status names them, and every command that
+// only reads leaves them as they are; each command its line names then
+// starts them. This pins today's behavior, so a change to it (a settle
+// at boot, a command of its own) is a decision, not an accident.
+func TestLeftStopsAfterReboot(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*syncSetup, string) {
+		s := newSyncSetup(t)
+		s.releaseProd(nil)
+		if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+			t.Fatalf("dev's first release (%d):\n%s", code, out)
+		}
+		record := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")
+		write(t, record, "stop db\nstop app\n", 0o644)
+		write(t, s.log+".stopped.shop-dev", "db\napp\n", 0o644)
+		s.logs()
+		return s, record
+	}
+	down := func(s *syncSetup) bool {
+		stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+		return slices.Contains(stopped, "db") && slices.Contains(stopped, "app")
+	}
+
+	t.Run("read only", func(t *testing.T) {
+		t.Parallel()
+		s, record := setup(t)
+		for _, args := range [][]string{{"--status"}, {"--releases"}, {"--log"}, {"--snapshots"}, {"--status"}} {
+			out, _ := s.run(nil, append([]string{"@dev"}, args...)...)
+			if !down(s) || readString(record) != "stop db\nstop app\n" {
+				t.Errorf("%v changed what was left stopped, record %q:\n%s", args, readString(record), out)
+			}
+		}
+		if out, _ := s.run(nil, "@dev", "--status"); !strings.Contains(out, "an operation cut off recorded db app as stopped: the next release, sync, import or snapshot here starts what of them is down") {
+			t.Errorf("--status after a reboot:\n%s", out)
+		}
+	})
+
+	for name, run := range map[string]func(s *syncSetup) (string, int){
+		"release": func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--release") },
+		"sync":    func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--sync", "--yes") },
+		"import": func(s *syncSetup) (string, int) {
+			_, errs, code := s.runIO(nil, tarOf(s.t, map[string]string{"db/ibdata": "rows\n"}), "@dev", "--import", "db", "--yes")
+			return errs, code
+		},
+		"snapshot": func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--snapshot") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, record := setup(t)
+			out, code := run(s)
+			if code != 0 || down(s) || strings.Contains(readString(record), "stop ") {
+				t.Errorf("%s after a reboot (%d) left stopped %v, record %q:\n%s", name, code, strings.Fields(readString(s.log+".stopped.shop-dev")), readString(record), out)
+			}
+		})
+	}
+}
+
 // An --export killed outright on the server (SIGKILL, the OOM killer)
 // while its tar runs leaves what it stopped down, as a push killed there
 // does: its stops must be recorded, so --status names them and the next
