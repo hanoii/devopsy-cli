@@ -278,3 +278,47 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Errorf("a sync of a child whose release was cut (%d), mark %q:\n%s", code, readString(devMark), out)
 	}
 }
+
+// cutRollback makes three releases of solo (rollback: deploy, or yaml's)
+// and kills the rollback from the third past its switch: current is the
+// second, the activation's mark says so. It returns the three ids.
+func cutRollback(t *testing.T, s *syncSetup, yaml string) []string {
+	t.Helper()
+	s.envConfig("solo", yaml)
+	var ids []string
+	for range 3 {
+		if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+			t.Fatalf("release (%d):\n%s", code, out)
+		}
+		ids = append(ids, strings.TrimPrefix(s.current("solo"), "releases/"))
+	}
+	mark := filepath.Join(s.root, "shop", "solo", remote.ActivatingFile)
+	out, _ := s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@solo", "--rollback", "--yes")
+	if s.current("solo") != "releases/"+ids[1] || !strings.HasPrefix(readString(mark), ids[1]+"\trollback\t"+ids[2]+"\t") {
+		t.Fatalf("a rollback killed past its switch: current %q, mark %q:\n%s", s.current("solo"), readString(mark), out)
+	}
+	return ids
+}
+
+// A --rollback that finishes a cut rollback says "finishing the rollback
+// to <id> from <from>", never "rolling back to <id>", which is the line
+// the operator's devopsy finds the restored release by to save the
+// session's log on the server (rollingBackTo, cmd/devopsy/remote.go's
+// save): the finishing rollback's log is never saved, and --log shows
+// nothing of it.
+func TestCutRollbackFinishedLogSaved(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	ids := cutRollback(t, s, "{rollback: deploy}")
+	out, code := s.run(nil, "@solo", "--rollback", "--yes")
+	if code != 0 || !strings.Contains(out, "finishing the rollback to "+ids[1]) {
+		t.Fatalf("the rollback finishing the cut one (%d):\n%s", code, out)
+	}
+	log := readString(filepath.Join(s.root, "shop", "solo", "releases", ids[1], remote.LogFile))
+	if !strings.Contains(log, "finishing the rollback to "+ids[1]) || !strings.Contains(log, "rollback exited 0") {
+		t.Errorf("the session log of the rollback that finished the cut one was not saved in %s's:\n%s", ids[1], log)
+	}
+}
