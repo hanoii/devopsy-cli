@@ -585,7 +585,6 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 	}
 	p := t.ParentTarget
 	job := &syncJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
-	marked := false
 	for _, x := range []*remote.Target{p, t} {
 		var out bytes.Buffer
 		script := remote.CurrentExistsScript(x, nil)
@@ -599,14 +598,12 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		if code != 0 {
 			return fail(fmt.Sprintf("could not check @%s (%d)", x.Address, code))
 		}
-		c := remote.ParseCurrent(out.String())
-		if !c.Current {
+		if !remote.ParseCurrent(out.String()).Current {
 			return fail(fmt.Sprintf("@%s (%s:%s) has no current release: release it first", x.Address, x.Host, x.Path))
 		}
 		if x == p {
 			job.inherit = remote.ParseInherit(out.String())
 		}
-		marked = x == t && c.Mark != nil
 	}
 	if len(job.inherit) == 0 {
 		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release", t.Address, p.Name, p.Address))
@@ -615,11 +612,12 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
-	if marked {
-		report.Info(markedSays, report.CmdMark+"devopsy @"+targetRef(t)+" --status")
-		return 0
+	// What applies them, as --vars set says it.
+	var out bytes.Buffer
+	if code, err := remote.SSH(t, remote.VarsHintScript(t), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
+		_, applied, lines := remote.ParseVarsApplied(out.String())
+		sayApplied(t, fmt.Sprintf("inherited into %s (%s:%s)", t.Address, t.Host, t.Path), applied, lines)
 	}
-	report.Info("running containers keep their old values until they are recreated: to apply them now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
 	return 0
 }
 

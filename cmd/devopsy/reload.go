@@ -96,7 +96,11 @@ func runLocalReload(cwd string, args []string, color bool) int {
 	}
 	a := reloadArgs(step)
 	if step != "" {
-		if _, err := cli.CheckCommand(projectDir, a[0], cli.Bare); err != nil {
+		where := cli.Bare
+		if cli.InRelease(projectDir) {
+			where = cli.OnServer
+		}
+		if _, err := cli.CheckCommand(projectDir, a[0], where); err != nil {
 			report.Error("the reload step: " + err.Error())
 			return 1
 		}

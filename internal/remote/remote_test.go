@@ -244,6 +244,7 @@ func allScripts() map[string]string {
 		"keys remove":     KeysRemoveScript(),
 		"destroy":         DestroyScript(tg, "app"),
 		"reload":          ReloadScript(tg, "app"),
+		"vars hint":       VarsHintScript(tg),
 		"environments":    EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app"}}),
 		"environments+i":  EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app", Instances: true}}),
 		"role holders":    RoleHoldersScript(tg, "proxy"),

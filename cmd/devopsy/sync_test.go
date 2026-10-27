@@ -1784,7 +1784,7 @@ func TestSyncInherit(t *testing.T) {
 	s.logs()
 	out, code = s.run(nil, "@a/dev", "--inherit")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || !strings.Contains(out, "to apply them now,\ndevopsy: | $ devopsy @devopsy@one:a/dev --reload\n") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
+	if code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || !strings.Contains(out, "to apply it now,\ndevopsy: | $ devopsy @devopsy@one:a/dev --reload\n") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
 		t.Fatalf("--inherit (%d): %q\n%s\n%s", code, readString(childInherit), out, docker)
 	}
 	if out, code := s.run(nil, "@a/prod", "--inherit"); code == 0 || !strings.Contains(out, "is not a child") {

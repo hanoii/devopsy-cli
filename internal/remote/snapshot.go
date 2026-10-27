@@ -318,6 +318,9 @@ if [ "$rs" = 0 ]; then
   # Once restored started the set on the images it holds: a data service
   # the run step left as it was still ran the replaced data (ActivateScript).
   [ "$rs" != 0 ] || img ran "$base" "$base/$cur" || true
+  # A release cut off past its switch has had its run step now, the one
+  # it skipped (as a sync's run step clears it).
+  if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "${cur#releases/}")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
   devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true

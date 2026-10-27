@@ -159,7 +159,8 @@ func VarsUnsetScript(t *Target, level *Level) string {
 // prints after the file's path: plain for a plain directory, first with
 // nothing released yet, marked when its data is from a sync, an import
 // or a restore that did not complete (a reload and a release refuse
-// there), else its --check-images --hint exit (0: a reload
+// there), cut when its release was cut off past its switch (the lock is
+// held: no activation runs), else its --check-images --hint exit (0: a reload
 // applies the change, 3: only a release, 4: compose requires a variable
 // not set), its output on the lines after (ParseVarsApplied). The check
 // reads the imports again as a reload does (--prepare-release reload,
@@ -178,6 +179,8 @@ elif [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
   printf '` + VarsApplied + `first\n'
 elif [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   printf '` + VarsApplied + `marked\n'
+elif [ -f "$base/` + ActivatingFile + `" ]; then
+  printf '` + VarsApplied + `cut\n'
 else
   # Never a reason for the edit to fail: what it says is a hint.
   va_rel=$(readlink "$base/current") || va_rel=
@@ -191,6 +194,16 @@ else
   printf '` + VarsApplied + `%s\n%s\n' "$va" "$va_out"
 fi
 `
+}
+
+// VarsHintScript is the follow-up alone, for what changed t's variables
+// another way (--inherit): an empty line where --vars prints its file's
+// path, then varsApply's, under the release lock.
+func VarsHintScript(t *Target) string {
+	return varsPrelude(t, nil) + `if [ -z "$plain" ]; then
+  ` + releaseLock(false, false) + `fi
+printf '\n'
+` + varsApply(t, nil)
 }
 
 // ParseVarsApplied reads what a --vars set or unset printed: the file's

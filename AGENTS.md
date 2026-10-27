@@ -781,9 +781,11 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   link, as `$base/releases/<id>` at the fetch and resolved at a check),
   then a
   short hash per argument, never a value (an argument can be a secret).
-  A listing again of the same image keeps the key it had (`keep`: a
-  rollback lists its release anew under today's variables, its image
-  built under the old ones). What a reload checks (Reload).
+  A bookmark put back keeps the key its listing had (`Restore`'s
+  retag: built under the old values); a listing after a fetch records
+  today's, whatever image id the build gave (review 5: a cached build
+  of the same image kept the old key, and every reload refused). What a
+  reload checks (Reload).
 - **Bookmarks are the reference count:** each release tags every image
   it runs as `<repo>:devopsy-<compose name>-<id>` (`bookmarkPrefix`: a
   long compose name is cut and hashed so the tag fits Docker's 128; a
@@ -1196,7 +1198,8 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   lines), or nothing until a required variable is set (4, a warning). A
   plain directory, an environment not released yet and a marked one
   (`--inherit` into one too) say so, never `--reload`, which refuses
-  there (reviews 1, 3 and 4). Any value is a release away
+  there (reviews 1, 3 and 4). `--inherit` gets the same follow-up
+  (`VarsHintScript`: one short session under the lock). Any value is a release away
   from applying, so nothing is refused there. The instance's and the
   project's files, several environments', get the plain line, and
   `--inherit` the `--reload` line.
@@ -1208,17 +1211,24 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   `ActivatingFile` while the reload holds the lock): an `up` alone would
   start its code without its run step. The first refusal of a cut
   activation: the others each run a run step or replace it (a release,
-  a rollback finishing a cut one, a sync's run step), and nothing else
-  of devopsy's starts its code.
+  a rollback finishing a cut one, a sync's run step, a `--no-code`
+  restore's run step, which clears a cut release's mark as a sync's
+  does: review 6). `--vars` and `--inherit` say so too (`cut`).
 - **Rollbacks build again what was built with other values** (decided
   with the user): a rollback, the restart after a failed run step and a
   full restore restore own images from their bookmarks, and one whose
   build key differs from what today's variables give is built again
-  from the release's code, before the switch. Why: refusing or warning
-  left the rollback failing (the image's files the old user's, the
-  container the new one); a rollback brings back code, and variables
-  are today's. Only when a `build:` input changed; any other variable is
-  the run step's, as before.
+  from the release's code (before the switch, but for the restart,
+  which runs after current went back). Why: refusing or warning left
+  the rollback failing (the image's files the old user's, the container
+  the new one); a rollback brings back code, and variables are today's.
+  Only when a `build:` input changed, and only in build mode (image
+  mode's fetch builds nothing: review 5); any other variable is the run
+  step's, as before. The restart's build failing, `img restore
+  --as-built` puts the bookmarks back as they are (review 5: it
+  restarted on the failed release's image under the name). The image a
+  rebuild replaced is left without a name, which the pruning after any
+  removal frees (`img prune`, review 6).
 - **`devopsy --reload` in a release on a server** runs that environment's
   `reload:` (`reloadStep`, as `destroyStep` does); unguarded there, as
   any command typed in `--shell-host` is.
