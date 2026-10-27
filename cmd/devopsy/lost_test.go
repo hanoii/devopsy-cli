@@ -435,3 +435,26 @@ func TestStatusCutNotCurrent(t *testing.T) {
 		t.Errorf("--status says a release that is not current was cut off past its switch (current is %s):\n%s", cur, out)
 	}
 }
+
+// A --destroy moves the environment aside before removing it
+// (removeBase: <base>.rm.<pid>, so a session arriving meanwhile makes a
+// new one). Killed outright or rebooted during that rm -rf, the
+// directory stays for good: --destroy again, which the lost session's
+// message names to finish it, finds nothing at <base> and leaves it, and
+// --environments lists it as an environment (its releases/ is there).
+// Staged by hand: the move itself.
+func TestDestroyCutLeavesMovedBase(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	moved := filepath.Join(s.root, "shop", "prod.rm.4242")
+	if err := os.Rename(filepath.Join(s.root, "shop", "prod"), moved); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--environments"); code != 0 || strings.Contains(out, "prod.rm.4242") {
+		t.Errorf("--environments (%d) lists what a cut destroy left:\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 || fileExists(moved) {
+		t.Errorf("a --destroy run again (%d) left what the cut one moved aside, %s:\n%s", code, moved, out)
+	}
+}
