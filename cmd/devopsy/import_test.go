@@ -1220,3 +1220,17 @@ func TestImportRecreatesBeforeDependents(t *testing.T) {
 		t.Errorf("app started (at %d) before db was made again on the export's image (at %d), import %d:\n%s\n%s", j, i, code, errs, docker)
 	}
 }
+
+// An --import whose connection is lost before the server started
+// writing (a network gone during the upload) says so, as a release's
+// does, rather than leaving the operator with ssh's line and exit 255.
+// Found by hand (2026-10-27): nothing of devopsy's was said.
+func TestImportLostBeforeWriteSays(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	_, errs, code := s.runIO([]string{"FAKE_SSH_LOST_IMPORT=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@prod", "--import", "app", "--yes")
+	if code == 0 || !strings.Contains(errs, "devopsy: error:") {
+		t.Errorf("an import whose connection was lost before its first write (%d) said nothing of what happened:\n%s", code, errs)
+	}
+}

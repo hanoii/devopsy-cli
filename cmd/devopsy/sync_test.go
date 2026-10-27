@@ -440,6 +440,9 @@ exec 3<&0
 # devopsy there first.
 case "$opts" in *BatchMode=yes*) [ -z "${FAKE_CHILD_PATH:-}" ] || PATH="$FAKE_CHILD_PATH:$PATH" ;; esac
 case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
+# FAKE_SSH_LOST_IMPORT: an --import's session lost on the way (a network
+# gone during the upload), as ssh says it.
+case "$s" in *"--import "*) [ -z "${FAKE_SSH_LOST_IMPORT:-}" ] || { echo "Read from remote host one: Operation timed out" >&2; exit 255; } ;; esac
 # FAKE_IMPORT_DETACH: the same for a stream's import session.
 case "$s" in *sync-services*import*) if [ -n "${FAKE_IMPORT_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
 # FAKE_HOLDER_DIE: the holder's session dies once the copy started (the
