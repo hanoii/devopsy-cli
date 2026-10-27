@@ -3291,7 +3291,7 @@ func TestTakeStartsLeftoverStops(t *testing.T) {
 			record := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")
 			write(t, record, rec, 0o644)
 			write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
-			if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off left db app stopped") {
+			if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off recorded db app as stopped") {
 				t.Errorf("--status over %s named nothing left stopped:\n%s", name, out)
 			}
 			out, code := s.run(nil, "@prod", "--snapshot")
@@ -3318,7 +3318,7 @@ func TestExportKilledLeavesItsStops(t *testing.T) {
 	if !slices.Contains(stopped, "db") {
 		t.Fatalf("the killed export left nothing stopped (%v), the fake did not kill it:\n%s", stopped, errs)
 	}
-	if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off left") {
+	if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off recorded") {
 		t.Errorf("--status after an export killed outright named nothing left stopped (%v):\n%s", stopped, out)
 	}
 	out, code := s.run(nil, "@prod", "--snapshot")

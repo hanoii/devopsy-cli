@@ -237,7 +237,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		}
 		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
 	case left != "":
-		fmt.Println(st.bad("data        an operation cut off left " + left + " stopped: the next release, sync, import or snapshot here starts them"))
+		fmt.Println(st.bad("data        an operation cut off recorded " + left + " as stopped: the next release, sync, import or snapshot here starts what of them is down"))
 	}
 	fmt.Print(rest)
 	return 0
