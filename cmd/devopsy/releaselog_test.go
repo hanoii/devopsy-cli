@@ -88,3 +88,28 @@ func TestJoinLogs(t *testing.T) {
 		t.Errorf("joined:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// A release snapshot's tars run detached from before the switch, their
+// output appended to the new release's server log (release-tar), so its
+// first lines land before the activation's section: "snapshot <id>:
+// mnt/database" and, in a release that syncs, every line of it,
+// "snapshot <id> taken" or its failure included. --log shows them all
+// the same (found by hand on an OrbStack server, 2026-10-27: neither the
+// session nor --log showed them).
+func TestJoinLogsBeforeTheFirstSection(t *testing.T) {
+	t.Parallel()
+	anchor := remote.LogAnchor
+	session := "2026-10-27 02:26:04 devopsy release: release of @dev\n" +
+		"2026-10-27 02:26:32 " + anchor + " a1\n" +
+		"2026-10-27 02:26:40 devopsy: release exited 0\n"
+	server := "devopsy: snapshot 20261027022606: mnt/database\n" +
+		"devopsy: snapshot 20261027022606 taken\n" +
+		remote.LogSection + "2026-10-27 02:26:32 a1\n" +
+		"devopsy: current is now 20261027022604\n"
+	got := string(joinLogs([]byte(session + remote.LogServerPart + "\n" + server)))
+	for _, want := range []string{"snapshot 20261027022606: mnt/database", "snapshot 20261027022606 taken", "current is now 20261027022604"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
