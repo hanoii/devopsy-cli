@@ -390,6 +390,9 @@ case "$*" in
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    # FAKE_KILL_IMPORT: the devopsy that started the extraction killed
+    # outright (SIGKILL, the OOM killer) as it writes.
+    [ -z "${FAKE_KILL_IMPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted from the tar mounted at
     # /in (a snapshot's .tar.zst is a plain tar here), as the util image

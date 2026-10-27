@@ -3268,3 +3268,42 @@ func TestTakeStartsLeftoverStops(t *testing.T) {
 		})
 	}
 }
+
+// A restore's data step or an import killed outright on the server
+// (SIGKILL, the OOM killer) after its first write leaves the
+// environment marked, its services down: the operator is told so, with
+// the way out, as after one that failed. Found by hand (2026-10-27): an
+// --import and a --no-code restore printed only the shell's "Killed",
+// a full restore "release ... not made current", as if nothing changed.
+func TestKilledDataStepSaysMark(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--import"}, {"--no-code"}, {}} {
+		name := strings.Join(args, " ")
+		if name == "" {
+			name = "full restore"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			base := filepath.Join(s.root, "shop", "prod")
+			var errs string
+			if len(args) > 0 && args[0] == "--import" {
+				_, errs, _ = s.runIO([]string{"FAKE_KILL_IMPORT=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@prod", "--import", "app", "--yes")
+			} else {
+				out, code := s.run(nil, "@prod", "--snapshot")
+				m := snapshotID.FindStringSubmatch(out)
+				if code != 0 || m == nil {
+					t.Fatalf("take (%d):\n%s", code, out)
+				}
+				errs, _ = s.run([]string{"FAKE_KILL_IMPORT=1"}, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+			}
+			if readMark(base) == nil {
+				t.Fatalf("no mark: the kill came before the first write:\n%s", errs)
+			}
+			if !strings.Contains(errs, "did not complete") {
+				t.Errorf("killed after its first write, the environment marked, the operator was not told:\n%s", errs)
+			}
+		})
+	}
+}
