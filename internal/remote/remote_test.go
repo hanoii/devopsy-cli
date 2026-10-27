@@ -2502,8 +2502,9 @@ exit 0
 	}
 }
 
-// --status's last sync is the last copy that went through (SyncCopied),
-// whatever its run step did: a failed copy after it does not count.
+// --status's last sync is the child's own record of its last completed
+// sync (SyncedFile), never the operator's session logs, which a session
+// lost before it saved them lacks: a copy line there does not count.
 func TestStatusLastSync(t *testing.T) {
 	t.Parallel()
 	bin, root := t.TempDir(), t.TempDir()
@@ -2517,23 +2518,22 @@ func TestStatusLastSync(t *testing.T) {
 	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(base, "releases", "1", LogFile), ""+
-		"2026-10-01 10:00:00 devopsy release: release of @dev\n"+
-		"2026-10-01 10:00:01 Syncing @prod's data into it before its run step\n"+
-		"2026-10-01 10:00:05 "+SyncCopied+"prod\n"+
-		"2026-10-01 10:00:09 devopsy: release exited 0\n"+
-		"\n"+
-		"2026-10-02 10:00:00 devopsy dev: sync of @dev\n"+
-		"2026-10-02 10:00:03 "+SyncCopied+"prod\n"+
-		"2026-10-02 10:00:05 devopsy: sync exited 1\n"+
-		"\n"+
-		"2026-10-03 10:00:00 devopsy dev: sync of @dev\n"+
-		"2026-10-03 10:00:05 devopsy: sync exited 1\n")
-	cmd := exec.Command("sh", "-c", StatusScript(tg))
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "synced\t2026-10-02 10:00:03\n") {
-		t.Errorf("last sync (%v):\n%s", err, out)
+	write(t, filepath.Join(base, "releases", "1", LogFile), "2026-10-03 10:00:05 "+SyncCopied+"prod\n")
+	status := func() string {
+		cmd := exec.Command("sh", "-c", StatusScript(tg))
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("status (%v):\n%s", err, out)
+		}
+		return string(out)
+	}
+	if out := status(); !strings.Contains(out, "synced\t\n") {
+		t.Errorf("no record, a log's copy line:\n%s", out)
+	}
+	write(t, filepath.Join(base, SyncedFile), "2026-10-02 10:00:03\tprod\n")
+	if out := status(); !strings.Contains(out, "synced\t2026-10-02 10:00:03\n") {
+		t.Errorf("last sync:\n%s", out)
 	}
 }
 

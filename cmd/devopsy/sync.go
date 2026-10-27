@@ -305,7 +305,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		}
 		answer := "go\n"
 		if code == 0 && !interrupted {
-			// What --status counts as a sync (remote.SyncCopied).
+			// The log's word that the copy went through (remote.SyncCopied).
 			rlog.Line(remote.SyncCopied + job.parent.Address)
 		}
 		if interrupted {
@@ -2340,6 +2340,12 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			if err := markIncomplete(base, "", remote.IncompleteFinish, why, false); err != nil {
 				fail(err.Error())
 			}
+		}
+	} else if word == "go" {
+		// What --status says is the last sync (remote.SyncedFile).
+		line := time.Now().UTC().Format("2006-01-02 15:04:05") + "\t" + os.Getenv(remote.SyncFromTargetEnv) + "\n"
+		if err := os.WriteFile(filepath.Join(base, remote.SyncedFile), []byte(line), 0o644); err != nil {
+			report.Warn("could not record the sync for --status: " + err.Error())
 		}
 	}
 	return code

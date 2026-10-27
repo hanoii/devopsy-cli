@@ -34,9 +34,8 @@ tr -d '\n' < "$base/$cur/%s" 2>/dev/null || true
 echo
 kept=0; for r in "$base"/releases/*; do [ ! -d "$r" ] || { case "$r" in *.tmp) continue ;; esac; [ -e "$r/`+FailedFile+`" ] || [ -e "$r/`+FetchingFile+`" ] || [ -e "$r/`+PendingFile+`" ] || [ -e "$r/`+RolledBackFile+`" ] || kept=$((kept + 1)); }; done
 printf 'kept\t%%s\n' "$kept"
-# The last sync whose copy went through (SyncCopied), whatever its run
-# step did after it.
-printf 'synced\t%%s\n' "$(grep -h '^[0-9-]* [0-9:]* `+SyncCopied+`' "$base"/releases/*/`+LogFile+` 2>/dev/null | cut -c1-19 | sort | tail -n 1)"
+# The last sync that completed, whatever its run step did after it.
+printf 'synced\t%%s\n' "$(cut -f1 "$base/`+SyncedFile+`" 2>/dev/null)"
 `+partialStatus+`
 echo ---
 cd "$base/current" && exec devopsy --status

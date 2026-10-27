@@ -2780,8 +2780,11 @@ Smaller features, each with the rule an agent must keep.
 - **`--status`** (`cmd/devopsy/status.go`): locally, the containers as
   a table, then the `status` capability's `show`. With a target,
   `StatusScript` prints header lines from the server's files (the
-  record, live releases kept, the last copy from the session logs'
-  `SyncCopied` lines, a partial or running sync from `partialStatus`:
+  record, live releases kept, the last completed sync from the child's
+  own `SyncedFile`, written by `finish go` once its hook accepted the
+  copy (decided 2026-10-27: read from the session logs' `SyncCopied`
+  lines, it missed every sync whose session was lost before the
+  operator saved its log), a partial or running sync from `partialStatus`:
   "syncing" while a holder holds the child's lock, from its holding file
   on, its prepare included, `SyncRunning`; "source" while a push or an
   export holds the parent's sync lock, `SourceBusy`; `--releases` marks

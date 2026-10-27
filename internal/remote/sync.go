@@ -68,6 +68,13 @@ const (
 	// lock (ImportScript writes it once it holds it, and removes it on
 	// its way out): with the lock held (ImportRunning), an import runs.
 	SyncImportingFile = ".devopsy-sync.importing"
+	// SyncedFile is the child's record of its last sync that completed
+	// (finish child go accepted it): its UTC time and the parent's
+	// address, tab separated, written by the child's devopsy itself, so
+	// --status's "last synced" holds whatever happened to the operator's
+	// session (its log, which said it before, is saved only by a session
+	// that lasted).
+	SyncedFile = ".devopsy-sync.synced"
 )
 
 // ImportContainerPrefix and the compose project start the name of the
@@ -310,7 +317,7 @@ const IncompleteWhy = `$(cut -f4 "$base/` + SyncIncompleteFile + `" 2>/dev/null)
 
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
-// does after it: --status's last sync.
+// does after it (--status's last sync is SyncedFile's).
 const SyncCopied = report.Prefix + "copied the data from @"
 
 // SyncMarker starts the line the holder prints (on stderr: holders print

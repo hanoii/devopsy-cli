@@ -2052,7 +2052,11 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 // completed: what the copy wrote decides, so the child goes on, and the
 // operator is told that, never that the sync aborts. Found by hand
 // (2026-10-27): "the copy ... failed (255): aborting the sync", then the
-// child's finish and deploy ran.
+// child's finish and deploy ran. --status says it synced: the child
+// records its last completed sync itself (remote.SyncedFile), where the
+// operator's log, which said it before, has no copy line for a session
+// lost (found by hand, 2026-10-27: "never synced" after a sync that
+// completed).
 func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -2063,6 +2067,20 @@ func TestSyncPushLostSaysCopyDecides(t *testing.T) {
 	out, _ := s.run([]string{"FAKE_SSH_LOST_PUSH=1"}, "@dev", "--sync", "--yes")
 	if strings.Contains(out, "aborting the sync") || !strings.Contains(out, "what the copy wrote decides how the sync ends") || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
 		t.Errorf("a push lost after its copy completed:\n%s", out)
+	}
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  last synced just now") {
+		t.Errorf("--status after a sync whose push was lost once its copy completed (%d):\n%s", code, out)
+	}
+
+	// A sync that does not complete (its finish refuses the copy) is no
+	// sync to --status.
+	os.Remove(filepath.Join(s.root, "shop", "dev", remote.SyncedFile))
+	write(t, filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "capabilities", "data", "finish"), "#!/bin/sh\n[ \"$1 $2\" != \"child go\" ] || exit 3\n", 0o755)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 {
+		t.Fatalf("a sync whose finish child go refuses (%d):\n%s", code, out)
+	}
+	if out, _ := s.run(nil, "@dev", "--status"); !strings.Contains(out, "never synced") {
+		t.Errorf("--status after a sync whose finish refused it:\n%s", out)
 	}
 }
 
