@@ -458,3 +458,24 @@ func TestDestroyCutLeavesMovedBase(t *testing.T) {
 		t.Errorf("a --destroy run again (%d) left what the cut one moved aside, %s:\n%s", code, moved, out)
 	}
 }
+
+// A session lost past an activation's switch may be its devopsy killed
+// there, which --log never shows the end of: the words point to
+// --status, which names a cut activation (review round 9). A full
+// restore's point of no return is its data step, before its switch.
+func TestActivationLostWords(t *testing.T) {
+	t.Parallel()
+	tg := &remote.Target{Address: "vm1:prod"}
+	for _, kind := range []string{"release", "rollback"} {
+		w := releaseWords(tg, kind)
+		if !strings.Contains(strings.Join(w.lostAfter, "\n"), "--status") {
+			t.Errorf("a %s's session lost past its switch does not name --status: %q", kind, w.lostAfter)
+		}
+	}
+	w := restoreWords(tg, false)
+	for _, words := range [][]string{w.goesOn, w.lostAfter, w.hadGone} {
+		if strings.Contains(strings.Join(words, "\n"), "past its switch") {
+			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %q", words)
+		}
+	}
+}

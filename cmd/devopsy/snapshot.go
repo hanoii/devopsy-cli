@@ -2757,16 +2757,19 @@ func envKeysDiffer(a, b string) (keys []string, differs bool) {
 // log the session's is appended to.
 var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `restoring snapshot [0-9]{14}'s data under ([0-9]{14})`)
 
-// restoreDataWords are what liveSession says of a --no-code restore: past
-// the disarm it writes the data, on its own.
-func restoreDataWords(t *remote.Target) liveWords {
+// restoreWords are what liveSession says of a restore: past its point
+// of no return it writes the data on its own, a full restore before its
+// switch. Before it, a full restore's release went live nowhere; a
+// --no-code restore's data is as it was.
+func restoreWords(t *remote.Target, noCode bool) liveWords {
 	w := releaseWords(t, "restore")
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
-	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
-	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), logs}
-	w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}
+	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), w.lostAfter[1]}
 	w.hadGone = []string{"it was writing the data already, and went on", logs}
+	if noCode {
+		w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}
+	}
 	return w
 }
 
@@ -2861,7 +2864,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 	log.Info(fmt.Sprintf("restoring %s (%s:%s) from snapshot %s", t.Address, t.Host, t.Path, id))
 	opts := &remote.RestoreOptions{Snapshot: id, WithEnv: withEnv, By: remote.Whoami()}
 	if noCode {
-		code = liveSession(t, remote.RestoreDataScript(t, projectName, opts), rlog, log, restoreDataWords(t))
+		code = liveSession(t, remote.RestoreDataScript(t, projectName, opts), rlog, log, restoreWords(t, true))
 		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 		text := rlog.Text()
 		if m := restoringUnder.FindSubmatch(text); m != nil {
@@ -2871,7 +2874,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		}
 		return code
 	}
-	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t, "restore"))
+	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, restoreWords(t, false))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {

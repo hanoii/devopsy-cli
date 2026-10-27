@@ -1383,8 +1383,10 @@ func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 	if s.current("prod") == before {
 		t.Fatalf("the restore did not go live (%d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
-	if strings.Contains(said, "cancelling the") || !strings.Contains(said, "interrupted: the restore goes on on @devopsy@one:prod, past its switch") {
-		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it, or not that the restore goes on (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	// Interrupted in its data step, which comes before its switch: it
+	// goes on writing the data, never "past its switch" (review round 9).
+	if strings.Contains(said, "cancelling the") || !strings.Contains(said, "interrupted: the restore goes on on @devopsy@one:prod, writing the data") {
+		t.Errorf("a Ctrl-C past the restore's point of no return, in its data step, said it was cancelling it, or not that the restore goes on writing the data (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
 }
 

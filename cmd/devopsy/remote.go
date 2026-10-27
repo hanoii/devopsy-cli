@@ -1050,7 +1050,8 @@ func releaseWords(t *remote.Target, kind string) liveWords {
 		goesOn:     goesOnSays(t, kind, "past its switch", logs),
 		cancelling: []string{"interrupted: cancelling the " + kind + " on @" + t.Address},
 		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
-		lostAfter:  []string{lostSays(t, "after the switch", "the "+kind+" was past its switch there"), logs},
+		// Killed there, it never ends: --status names it (cut).
+		lostAfter:  []string{lostSays(t, "after the switch", "the "+kind+" was past its switch there"), "devopsy @" + targetRef(t) + " --log shows how it ends, --status whether it was cut off"},
 		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
 	}
