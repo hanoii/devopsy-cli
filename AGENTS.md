@@ -595,7 +595,9 @@ step's rules):
    `--log` only said "unhealthy"), `current` back, the previous
    release restarted with its images restored as a rollback's are
    (`get_images`; when that fails, `img hold` still holds its data
-   services on their data's newest image), owners (`--mnt-owners
+   services on their data's newest image, its listing and bookmarks
+   following, so a snapshot of that release holds what it runs: review
+   after v0.52.2), owners (`--mnt-owners
    restored`, a failure only said) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the

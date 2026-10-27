@@ -250,7 +250,10 @@ func shownEntry(e entry) string {
 // data ran (the history's last), in its ComposeFile, when nothing else
 // could restore its images (the restart after a failed run whose fetch
 // failed): what its last activation held may be older. An image gone is
-// pulled by compose's up, by its digest.
+// pulled by compose's up, by its digest. Its listing and bookmark follow
+// the hold (keep), so what holds the image is what rel runs: a snapshot
+// of rel copies both (review: its bookmark held the image the database
+// no longer ran, and nothing the one it did).
 func (s *Set) HoldData(base, rel string) error {
 	h := readHistory(base)
 	holds, _ := composeFacts(rel)
@@ -270,6 +273,9 @@ func (s *Set) HoldData(base, rel string) error {
 	}
 	if !changed {
 		return nil
+	}
+	if err := s.keep(rel, es); err != nil {
+		return err
 	}
 	return writeCompose(rel, es, holds)
 }
