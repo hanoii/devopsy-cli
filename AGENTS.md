@@ -290,8 +290,9 @@ The section that covers each part is in parentheses.
   (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
   (`releaselog.go`), `--releases`, `--images` and `--server-info`
-  (`serverinfo.go`, its statfs and clone per OS); tests run the built
-  binary against a fake `docker` and `ssh`.
+  (`serverinfo.go`, its statfs and clone per OS), `--reload` and
+  `--check-images` (`reload.go`, `checkimages.go`, Reload); tests run
+  the built binary against a fake `docker` and `ssh`.
 - `internal/cli/`: finds the project, loads `.env` and decides what to
   run (`Build` returns a `Plan`; it only runs helpers, like the `env`
   capability, never the command); `cli.Flags`; roles (`roles.go`);
@@ -492,8 +493,9 @@ before changing anything".
   is deployed decides on the server"): a rollback's (hidden
   `--release-steps rollback <phase> [<release>]`, `runReleaseSteps`),
   the restart after a failed run, the run step a `--sync` reruns
-  (`--release-steps release run`), the keys a parent's `inherit:` gives
-  its children (`--release-inherit`) and `--destroy`'s step
+  (`--release-steps release run`), a reload's (`--release-steps reload
+  run`), the keys a parent's `inherit:` gives its children
+  (`--release-inherit`) and `--destroy`'s step
   (`destroyStep`) are read from the release's own `config.yaml`, its environment from
   `devopsy-target.env` (`ReleaseEnvironment`). A release's steps come
   from the checkout, which is what is uploaded; a rollback's local
@@ -770,7 +772,15 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   containerd store built and loaded
   images carry `RepoDigests` too (checked 2026-10-23), and a pulled
   image's id is its index digest. The version is display only: no field
-  is common to images.
+  is common to images. A service the release builds also gets the build
+  it was built with (`images.BuildKey`, a seventh column): a hash of its
+  interpolated `build:` section, paths relative to the release's code
+  with links resolved (compose prints them absolute, and the code is
+  `releases/<id>/code` at the fetch, `current` at a reload), then a
+  short hash per argument, never a value (an argument can be a secret).
+  A listing again of the same image keeps the key it had (`keep`: a
+  rollback lists its release anew under today's variables, its image
+  built under the old ones). What a reload checks (Reload).
 - **Bookmarks are the reference count:** each release tags every image
   it runs as `<repo>:devopsy-<compose name>-<id>` (`bookmarkPrefix`: a
   long compose name is cut and hashed so the tag fits Docker's 128; a
@@ -1103,6 +1113,74 @@ cancels; after it nothing interrupts").
   copy's lines reach the session's log through the push.
 - Without GNU's `tail` (macOS, in tests) only the traps apply
   (`TestAfterSwitchSurvives` skips).
+
+### Reload
+
+`devopsy @<target> --reload` (`ReloadScript`, `runReload`): the current
+release with its variables as they are now and its imports read again,
+then its `reload:` step. Decided 2026-10-27, after the templates each
+grew a `reload` command (whoami's and drupal11's the same `up -d --wait
+--no-build`) and `--vars set` had no word to apply what it changed.
+
+- **One flag, no `--stop` or `--start`.** A flag needs a mechanic of
+  devopsy's behind it: here the lock, the guards, imports, owners, the
+  images check and the log. Stopping is compose's word; a stop with a
+  maintenance page is one template's policy (drupal11's `maintenance`).
+- **Its own step, never the run step** (decided with the user): a sync
+  reruns the run step because its data moved; a reload's data stays,
+  and a run step may do far more than apply variables (drush deploy)
+  and is not promised to be idempotent. `reload:` (a single command,
+  like `destroy:`, `defaults:` and per environment) is read from the
+  release's own config on the server; without one devopsy runs
+  `remote.ReloadDefault`, `up -d --wait --no-build --pull never`
+  through `devopsy --`, which only devopsy can pass (`--pull never`: a
+  project's own step has no such flag). Projects whose deploy is what
+  applies their variables (Traefik's, the registry's) set `reload:
+  deploy` themselves.
+- **Checked like an activation before its switch, then it goes on:**
+  the release lock, `recoverFetch`, `settleSync`, `markRefusal` (a
+  marked environment refuses, as a release does), then in `current`:
+  `--prepare-release reload`, `--missing-vars`, `--check-names`,
+  `--check-mounts`, `--check-images`. A session gone or a signal until
+  `waitBeat` changes nothing; from there `followOutput` into the
+  release's server log, the imports in place, `--mnt-owners`, the step,
+  `img ran`. A step that fails is said and restarts nothing: the
+  release did not change.
+- **Imports are read again without touching the release until the
+  checks pass:** `cli.PrepareRelease` with `reload` counts a value whose
+  winning definition was imported (`EnvImported`) as unset, writes the
+  release's own lines and the new imports into
+  `devopsy-target.env.reload` (`TargetReloadFile`), which every command
+  reads in place of `devopsy-target.env` while `TargetPendingEnv` names
+  it (`loadProject`), as a sync's pending inherit file stands in for
+  `inherit.env`; it moves into place right after the point of no
+  return. Why: a proxy's base domain changed otherwise needed a release
+  of every site.
+- **A reload never builds or pulls** (`--check-images`,
+  `images.ReloadCheck`): with the variables as they are, each default
+  service's image name must be the listing's, a built one's build key
+  too (naming the arguments that changed), and no service may be new (a
+  profile turned on). Why: `--no-build` leaves a build argument applied
+  by half (drupal11's `APP_UID` is a build argument and `user:` and the
+  owner label: the container would run as the new UID on files of the
+  old), and a project's step without `--pull never` would pull a new
+  name outside a release, held by no bookmark. The same check runs
+  wherever a run step starts the current release's images on variables
+  that may have changed: a `--sync`'s holder before anything stops
+  (with the pending inherited variables) and a `--no-code` restore
+  before its data step (with the snapshot's `shared.env` and
+  `inherit.env` under `--with-env`, through `DotenvPendingEnv` and
+  `InheritPendingEnv`). Not a release that syncs: it fetches anew.
+- **`--vars set|unset` say what applies the change, refusing none**
+  (`varsApply`, `--check-images --hint`, `ParseVarsApplied`): on an
+  environment with a current release, still under the lock, a reload
+  (exit 0), a release (3, the images' lines), or nothing until a
+  required variable is set (4, a warning). Any value is a release away
+  from applying, so nothing is refused there. The instance's and the
+  project's files, several environments', get the plain line.
+- **Gated by `check-images`:** a feature flag, so an older server
+  refuses a reload, a sync, a `--no-code` restore and `--vars set`
+  until upgraded, before anything changes.
 
 ### Logs
 
@@ -2984,7 +3062,7 @@ Smaller features, each with the rule an agent must keep.
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
   `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`, `HELD_STOPS`,
-  `RESTORE_ENV`, `RESTORE_BY`):
+  `RESTORE_ENV`, `RESTORE_BY`, `TARGET_FILE`, `DOTENV_FILE`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`
   names.
