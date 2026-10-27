@@ -36,6 +36,9 @@ kept=0; for r in "$base"/releases/*; do [ ! -d "$r" ] || { case "$r" in *.tmp) c
 printf 'kept\t%%s\n' "$kept"
 # The last sync that completed, whatever its run step did after it.
 printf 'synced\t%%s\n' "$(cut -f1 "$base/`+SyncedFile+`" 2>/dev/null)"
+# An activation cut off past its switch (ActivatingFile), its run step
+# perhaps never run: its line, while nothing holds the lock.
+if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+`; then printf 'cut\t%%s\n' "$(cat "$base/`+ActivatingFile+`")"; fi
 `+partialStatus+`
 echo ---
 cd "$base/current" && exec devopsy --status

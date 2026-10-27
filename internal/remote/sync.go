@@ -766,8 +766,12 @@ status=0
 trap '' PIPE
 ` + followOutput
 		s += "rs=0\nwith_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + " || rs=$?\n"
-		// What ran on the data, as after a release's run step.
-		s += "img ran \"$base\" \"$rel\" || true\nexit \"$rs\"\n"
+		// What ran on the data, as after a release's run step; and a
+		// release cut off past its switch (ActivatingFile) has had its run
+		// step now, the one it skipped.
+		s += "img ran \"$base\" \"$rel\" || true\n" + `if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "$id")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
+exit "$rs"
+`
 	}
 	return s
 }

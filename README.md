@@ -675,7 +675,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   second Ctrl-C only ends the session. To go back, `--rollback` once it
   ends. A release that syncs is the exception during its copy: Ctrl-C
   there aborts the sync, and the release goes back (Parent environments
-  and syncs).
+  and syncs). Only something that kills devopsy on the server outright
+  (the OOM killer, a reboot) stops it there: then its release is
+  current, but its run step may not have run. `--status` and
+  `--releases` (`CUT`) say so and what finishes it: the release again;
+  for a rollback, `--rollback` again, which finishes that rollback
+  rather than going one release further back; for a restore, the
+  restore again. A child's `--sync`, which runs the release's run step
+  again, finishes a cut release too.
 - **Logs:** each release and rollback is recorded on the server, in the
   release's directory (a rollback's and a sync's added to the release they
   go to), failed ones included once the server was reached, in two logs:

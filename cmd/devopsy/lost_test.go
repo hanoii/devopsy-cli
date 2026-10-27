@@ -1,10 +1,12 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
@@ -197,5 +199,82 @@ func TestDestroyDataKilledSays(t *testing.T) {
 	}
 	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+report.CmdMark+"devopsy @devopsy@one:prod --destroy") {
 		t.Errorf("a destroy whose data step was killed past its down says neither that it stopped halfway nor how to finish it (%d):\n%s", code, errs)
+	}
+}
+
+// A release or a rollback whose activation is killed outright past its
+// switch (SIGKILL, the OOM killer, a reboot) looked like a good one:
+// current is its release, but its run step never ran, nothing interrupts
+// past the switch, and --log just ends; a killed --rollback run again went
+// one release further back. The activation's mark (remote.ActivatingFile)
+// says so: --status and --releases name it CUT with what finishes it; a
+// --rollback run again finishes the cut one; a release replaces it; a
+// sync's run step (the release's own, run again) clears a cut release's.
+func TestActivationCutPastSwitch(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	s.envConfig("solo", "{rollback: deploy}")
+	base := filepath.Join(s.root, "shop", "solo")
+	mark := filepath.Join(base, remote.ActivatingFile)
+	var ids []string
+	for range 3 {
+		if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+			t.Fatalf("release (%d):\n%s", code, out)
+		}
+		ids = append(ids, strings.TrimPrefix(s.current("solo"), "releases/"))
+	}
+	if fileExists(mark) {
+		t.Fatalf("a release that went through left its mark: %q", readString(mark))
+	}
+
+	// A rollback cut past its switch, then run again: finished, current
+	// still its target, the release it left marked rolled back.
+	out, _ := s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@solo", "--rollback", "--yes")
+	if s.current("solo") != "releases/"+ids[1] || !strings.HasPrefix(readString(mark), ids[1]+"\trollback\t"+ids[2]+"\t") {
+		t.Fatalf("a rollback killed past its switch: current %q, mark %q:\n%s", s.current("solo"), readString(mark), out)
+	}
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the rollback to "+ids[1]+" was cut off past its switch: its run step may not have run: devopsy @devopsy@one:solo --rollback finishes it") {
+		t.Errorf("--status after a cut rollback:\n%s", out)
+	}
+	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, ids[1]) || !strings.Contains(out, "  CUT") {
+		t.Errorf("--releases after a cut rollback:\n%s", out)
+	}
+	out, code := s.run(nil, "@solo", "--rollback", "--yes")
+	if code != 0 || s.current("solo") != "releases/"+ids[1] || !strings.Contains(out, "finishing the rollback to "+ids[1]+" from "+ids[2]) || !fileExists(filepath.Join(base, "releases", ids[2], remote.RolledBackFile)) || fileExists(mark) {
+		t.Errorf("a rollback over a cut one (%d), current %q, mark %q:\n%s", code, s.current("solo"), readString(mark), out)
+	}
+	if out, _ := s.run(nil, "@solo", "--status"); strings.Contains(out, "cut off") {
+		t.Errorf("--status after the rollback finished:\n%s", out)
+	}
+
+	// A release cut past its switch: named, and a release replaces it.
+	out, _ = s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@solo", "--release", "--yes")
+	cut := strings.TrimPrefix(s.current("solo"), "releases/")
+	if cut == ids[1] || !strings.HasPrefix(readString(mark), cut+"\trelease\t"+ids[1]+"\t") {
+		t.Fatalf("a release killed past its switch: current %q, mark %q:\n%s", cut, readString(mark), out)
+	}
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the release of "+cut+" was cut off past its switch: its run step may not have run: devopsy @devopsy@one:solo --release releases it again") {
+		t.Errorf("--status after a cut release:\n%s", out)
+	}
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 || fileExists(mark) {
+		t.Errorf("a release over a cut one (%d), mark %q:\n%s", code, readString(mark), out)
+	}
+
+	// A child's release cut past its switch: its sync runs the release's
+	// run step again, which is what it skipped.
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	devMark := filepath.Join(s.root, "shop", "dev", remote.ActivatingFile)
+	s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@dev", "--release-no-sync")
+	if !strings.Contains(readString(devMark), "\trelease\t") {
+		t.Fatalf("dev's release killed past its switch left no mark")
+	}
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
+		t.Errorf("a sync of a child whose release was cut (%d), mark %q:\n%s", code, readString(devMark), out)
 	}
 }

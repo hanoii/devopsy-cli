@@ -120,6 +120,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial, left := "", "", "", ""
+	var cut []string
 	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
@@ -158,6 +159,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			}
 		case "left":
 			left = strings.TrimSpace(value)
+		case "cut":
+			cut = strings.Split(value, "\t")
 		case "syncing":
 			syncing = true
 		case "importing":
@@ -192,6 +195,22 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			line += "  (" + kept + " kept)"
 		}
 		fmt.Println(line)
+	}
+	if len(cut) >= 2 {
+		// remote.ActivatingFile: id, kind, the release it replaced, a
+		// restore's snapshot.
+		what, fix := "the release of "+cut[0], "devopsy @"+releaseRef(t)+" --release releases it again"
+		switch cut[1] {
+		case "rollback":
+			what, fix = "the rollback to "+cut[0], "devopsy @"+targetRef(t)+" --rollback finishes it"
+		case "restore":
+			snap := ""
+			if len(cut) > 3 {
+				snap = cut[3]
+			}
+			what, fix = "the restore of snapshot "+snap+" as "+cut[0], "devopsy @"+targetRef(t)+" --snapshots restore "+snap+" runs it again"
+		}
+		fmt.Println(st.bad("release     " + what + " was cut off past its switch: its run step may not have run: " + fix))
 	}
 	if t.Parent != "" {
 		line := "parent      " + t.Parent

@@ -579,7 +579,8 @@ step's rules):
    rollback after its switch).
 7. The images (`fetch_release`, Images). `ServerLogFile` is created
    here, so a full disk fails the release before it goes live.
-8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
+8. `PendingFile` removed, `ActivatingFile` written (below),
+   `make_current`, `--mnt-owners` (Data,
    destroying and removing; before the sync of a release that syncs,
    after `followOutput` otherwise, and in a rollback from the restored
    release's labels, `--mnt-owners restored`, where labels this devopsy
@@ -1018,6 +1019,18 @@ interrupts" and "The server never waits on the operator for long".
   nothing stops a release after its switch, the run step included
   (decided: stopping it restarted the previous release while
   `script`'s compose ran on, two `up`s on one project).
+- **What kills the shell past the switch leaves a mark**
+  (`ActivatingFile`, `$base/.devopsy-activating`: id, kind, the release
+  replaced, a restore's snapshot), written right before `make_current`
+  and removed wherever the activation ends, its failure paths included:
+  one there while nothing holds the release lock is an activation cut
+  off past its switch (the OOM killer, a reboot), whose run step may
+  not have run. `--status` and `--releases` (`CUT`) say so with what
+  finishes it; a `--rollback` finishes a cut rollback (its target
+  current, the release it left to mark), never going one further back;
+  a sync's run step clears a cut release's; any activation replaces it.
+  Decided 2026-10-27: nothing finishes it by itself (a run step started
+  by whatever takes the lock next would surprise more than help).
 - **`script` gets its own session past a fetch** (`setsid -w`,
   `tty_detach` in `with_tty`): it reads its signals through a signalfd,
   ignored ones too, and exits 0 when signaled (a restart's `get_images`

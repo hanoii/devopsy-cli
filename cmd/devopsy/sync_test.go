@@ -539,7 +539,14 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
-	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\nif [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n[ -z \"${FAKE_FAIL_DEPLOY:-}\" ] || exit 3\n", 0o755)
+	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\n"+
+		// FAKE_KILL_RUN: the activation's shell killed outright (SIGKILL,
+		// the OOM killer) during its run step, once (the file made), on
+		// Linux (/proc): the topmost ancestor running the script itself
+		// (its first line its needs; its subshells have the same command
+		// line, and above it is ssh's sh -c of it, a connection).
+		"if [ -n \"${FAKE_KILL_RUN:-}\" ] && [ ! -e \"$FAKE_KILL_RUN\" ]; then : >\"$FAKE_KILL_RUN\"; p=$PPID; k=; while [ \"$p\" -gt 1 ]; do [ \"$(tr '\\0' '\\n' </proc/$p/cmdline | sed -n 3p | cut -c1-14)\" != devopsy_needs= ] || k=$p; p=$(cut -d' ' -f4 /proc/$p/stat); done; [ -z \"$k\" ] || kill -KILL $k; exit 0; fi\n"+
+		"if [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n[ -z \"${FAKE_FAIL_DEPLOY:-}\" ] || exit 3\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,

@@ -73,6 +73,20 @@ const (
 	ServerLogFile = "devopsy-log-server"
 )
 
+// ActivatingFile marks an environment ($base) from an activation's switch
+// to its end, whichever way it ends: the release's id, the activation's
+// kind (release, rollback, restore), the release it replaced and a
+// restore's snapshot, tab separated. One there while nothing holds the
+// release lock is an activation cut off past its switch (killed outright,
+// a reboot), which nothing interrupts otherwise: its run step may not
+// have run. --status and --releases say so (CUT); a --rollback finishes
+// a cut rollback, never going one release further back; the next
+// activation replaces it, and a sync's run step (the release's own, run
+// again) removes a cut release's. Decided 2026-10-27 over finishing it
+// by itself: a run step started by whatever takes the lock next would
+// surprise more than help.
+const ActivatingFile = ".devopsy-activating"
+
 // ReleaseFile is name, one of a release's devopsy files, for the project
 // at projectDir (its .devopsy/, through current or not): beside the
 // release's code/. "" when projectDir is not under a code/ directory; the
@@ -799,8 +813,21 @@ devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
-		s += `id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
-devopsy --say info "rolling back to $id"
+		// A rollback cut off past its switch (ActivatingFile: this script
+		// holds the lock, so none runs) is finished, never followed by one
+		// further back: current is its target, the release it left the one
+		// to mark rolled back.
+		s += `id=
+cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
+cut_from=$(printf '%s' "$cut_line" | cut -f3)
+if [ "$(printf '%s' "$cut_line" | cut -f2)" = rollback ] && [ "releases/$(printf '%s' "$cut_line" | cut -f1)" = "$prev" ] && [ -n "$cut_from" ] && [ -d "$base/releases/$cut_from" ]; then
+  id=${prev#releases/}; prev=releases/$cut_from
+  devopsy --say info "finishing the rollback to $id from $cut_from, cut off past its switch"
+fi
+if [ -z "$id" ]; then
+  id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
+  devopsy --say info "rolling back to $id"
+fi
 ` + RollbackNotLive
 	default:
 		s += "id=" + Quote(id) + "\n" + NotLive
@@ -1074,7 +1101,15 @@ fi
 exec 7<&-
 `
 	}
-	s += `make_current "releases/$id"
+	activating, snapField := "release", ""
+	switch {
+	case restore != nil:
+		activating, snapField = "restore", restore.Snapshot
+	case rollback:
+		activating = "rollback"
+	}
+	s += `printf '%s\t%s\t%s\t%s\n' "$id" ` + activating + ` "${prev#releases/}" ` + Quote(snapField) + ` >"$base/` + ActivatingFile + `" || not_live 1
+make_current "releases/$id"
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
@@ -1101,7 +1136,7 @@ exec 7<&-
       else
         devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
-      exit "$status"
+      rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
     get_images "$base/$prev" "$rel" || {
       gi_s=$?
@@ -1120,7 +1155,7 @@ exec 7<&-
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
       devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
-      exit "$status"
+      rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
@@ -1215,12 +1250,14 @@ fi
 ` + firstDown(projectName) + `    rm -f "$base/current"
     devopsy --say error "$failed failed ($status), no previous release to go back to"
   fi
+  # The activation ended, failed: no cut one (ActivatingFile).
+  rm -f "$base/` + ActivatingFile + `"
   exit "$status"
 fi
 `
 	if restore != nil {
 		// Its mark and record go once the run step started the set.
-		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || exit 1\n"
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || { rm -f \"$base/" + ActivatingFile + "\"; exit 1; }\n"
 		s += `img ran "$base" "$rel" || true
 `
 	}
@@ -1231,6 +1268,10 @@ fi
 devopsy --say info "${prev#releases/} is marked rolled back"
 `
 	}
+	// The activation went through: what follows (pruning, after steps)
+	// resumes or only reports when cut.
+	s += `rm -f "$base/` + ActivatingFile + `"
+`
 	// keep: the target's or project's, else the server's, at most its
 	// max_keep. Only releases that went live and stayed count: failed ones
 	// never ran, a rolled-back one was left, and a rollback skips both. One
@@ -1861,6 +1902,9 @@ left=`+leftPath(t)+`
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 syncing=; if `+SyncRunning+`; then syncing=1; fi
+# An activation cut off past its switch (ActivatingFile, nothing holding
+# the lock): the release it made current.
+cut_id=; if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+`; then cut_id=$(cut -f1 "$base/`+ActivatingFile+`"); fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A pending release is under way while its activation holds its
@@ -1879,6 +1923,7 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
     # The current release, while a sync into it runs.
     [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
+    [ "$c" != current ] || [ "$r" != "$cut_id" ] || [ "$f" != - ] || f=cut
   fi
   # Names, each with its version or short digest (name=version): the
   # ids stay on the server.
@@ -1902,6 +1947,9 @@ type Release struct {
 	Incomplete, InProgress bool
 	// Syncing: current, while a sync into it runs (SyncRunning).
 	Syncing bool
+	// Cut: current, made so by an activation cut off past its switch
+	// (ActivatingFile).
+	Cut bool
 	// Images are the names it runs (ImagesFile), each followed by = and
 	// its version or short digest when the listing has one: what a
 	// rollback to it restores, and what removing it may free.
@@ -1918,7 +1966,7 @@ func ParseReleases(out string) []Release {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back",
-			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing"}
+			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing", Cut: parts[2] == "cut"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1963,6 +2011,8 @@ func (r Release) Line() string {
 		status = "  IN PROGRESS"
 	case r.Syncing:
 		status = "  SYNCING"
+	case r.Cut:
+		status = "  CUT"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
