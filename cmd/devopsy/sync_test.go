@@ -140,6 +140,9 @@ case "$*" in
   *" stop "*)
     # FAKE_STOP_WAIT: a stop that writes its caller's pid there and takes
     # until $FAKE_STOP_WAIT.go exists.
+    # FAKE_STOPPED_WAIT: the same once the services are stopped (a
+    # devopsy killed then: its orphaned stop never races the settle).
+    if [ -n "${FAKE_STOPPED_WAIT:-}" ]; then after stop "$@" >> "$stopped"; echo $PPID >"$FAKE_STOPPED_WAIT"; n=0; while [ ! -e "$FAKE_STOPPED_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; exit 0; fi
     if [ -n "${FAKE_STOP_WAIT:-}" ]; then echo $PPID >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     after stop "$@" >> "$stopped"
     # FAIL_STOP: a stop that fails partway, its services stopped.
@@ -202,7 +205,9 @@ case "$*" in
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_WAIT: an up that writes its caller's pid there and takes
     # until $FAKE_UP_WAIT.go exists.
-    if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # Its caller killed meanwhile, it changes nothing: the script's settle
+    # then starts what was stopped, never raced by this one's state write.
+    if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; kill -0 "$PPID" 2>/dev/null || exit 1; fi
     # FAKE_UP_MKDIR: an up that makes that directory (where a file
     # devopsy writes next goes, so the write fails).
     [ -z "${FAKE_UP_MKDIR:-}" ] || mkdir -p "$FAKE_UP_MKDIR"

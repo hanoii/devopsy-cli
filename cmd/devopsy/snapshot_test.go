@@ -3364,7 +3364,7 @@ func TestKilledRestoreBeforeFirstWriteStartsSet(t *testing.T) {
 	}
 	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
 	cmd.Dir = s.project
-	cmd.Env = append(append([]string{}, s.env...), "FAKE_STOP_WAIT="+stopping)
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STOPPED_WAIT="+stopping)
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout, cmd.Stderr = outFile, outFile
 	if err := cmd.Start(); err != nil {

@@ -261,15 +261,16 @@ fi
 // status in $<status>: killed by a signal (above 128: SIGKILL, the OOM
 // killer), it said nothing of how it left the environment, so this
 // says: a mark (its first write done) with the ways out, else, with
-// nothing (non-empty), what it stopped started again (settleLeftover)
-// and nothing written. A failure of its own said so itself.
+// nothing (non-empty), what it stopped started again in the current
+// release, whatever the script's directory (settleSync), and nothing
+// written. A failure of its own said so itself.
 func killedSays(t *Target, projectName, status, nothing string) string {
 	killed := "its devopsy on the server was killed ($" + status + ")"
 	s := `if [ "$` + status + `" -gt 128 ]; then
 ` + markRefusal(t, killed, `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" `+resetFixLines(t), ":")
 	if nothing != "" {
 		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
-` + settleLeftover(projectName) + `  devopsy --say error "` + killed + ` before its first write: ` + nothing + `" || true
+` + settleSync(projectName) + `  devopsy --say error "` + killed + ` before its first write: ` + nothing + `" || true
 fi
 `
 	}

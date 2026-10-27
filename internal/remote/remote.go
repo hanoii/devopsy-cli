@@ -1051,7 +1051,7 @@ rd_status=0
 (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
 if [ "$rd_status" != 0 ]; then
   set +e
-` + killedSays(t, projectName, "rd_status", "") + `  if image_lock shared undoing; then
+` + killedSays(t, projectName, "rd_status", "nothing restored") + `  if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
     image_unlock
   fi
