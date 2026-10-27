@@ -173,6 +173,11 @@ type Set struct {
 	// SyncData is a parent's ParentData, in a sync's activation or
 	// holder: Record and SyncCheck check the child against it.
 	SyncData string
+	// AsBuilt has Restore put own images' bookmarks back even when their
+	// build changed since (changed): the restart after a failed run step
+	// whose build again failed runs what the release built, never the
+	// failed release's image under the name.
+	AsBuilt bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
 	// exports them): a snapshot's directory holds a release's listing
@@ -483,16 +488,6 @@ func (s *Set) keep(rel string, es []entry) error {
 	// digest in another repository (a sync's hold through the parent's
 	// mirror) no removal of es takes: it is recorded (review: it outlived
 	// every release).
-	// An image listed again as it was (a rollback's, restored from its
-	// bookmark) was built with what the listing said then, whatever the
-	// variables say now.
-	for i, e := range es {
-		for _, o := range old {
-			if o.Service == e.Service && o.ID == e.ID && o.Build != "" && e.Build != "" {
-				es[i].Build = o.Build
-			}
-		}
-	}
 	named := map[string]bool{}
 	for _, e := range es {
 		listed[familiar(e.Ref)+" "+e.ID] = true

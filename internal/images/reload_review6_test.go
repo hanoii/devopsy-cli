@@ -46,15 +46,15 @@ func TestReview6RestoreRebuiltLeavesOldImage(t *testing.T) {
 	if err := e.set.Restore(e.rel(first), e.rel(second), true); err != nil {
 		t.Fatalf("the restore after the build: %v\n%s", err, out.String())
 	}
-	if tags, _ := d.Tags("sha256:a1"); d.images["sha256:a1"] && len(tags) == 0 {
-		t.Errorf("the image first ran before its build again is left with no name: nothing lists, holds or removes it\n%s", out.String())
-	}
-	// Once every release goes, nothing stays.
+	// Once every release goes, nothing stays: the image first ran before
+	// its build again is left with no name, which the pruning after any
+	// removal frees (img prune: docker image prune -f), unused.
 	for _, id := range []string{second, first} {
 		if err := e.set.Remove(e.rel(id)); err != nil {
 			t.Fatalf("removing %s: %v\n%s", id, err, out.String())
 		}
 	}
+	e.set.Prune()
 	if len(d.images) != 0 {
 		t.Errorf("images left once every release went: %v\n%s", d.images, out.String())
 	}

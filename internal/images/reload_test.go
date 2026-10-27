@@ -95,12 +95,12 @@ func TestReloadCheck(t *testing.T) {
 		}
 	}
 
-	// Listed again with the variables changed, the same image keeps the
-	// key it was built with: a rollback's restore lists its release anew.
+	// Listed again after a fetch (Bookmark), the build just made is
+	// today's: its key is the one recorded.
 	e.svcs[id] = []Service{changed, proxySvc}
 	e.set.Bookmark(e.rel(id))
-	if got, _ := e.set.ReloadCheck(e.rel(id)); len(got) != 1 || !strings.Contains(got[0], "APP_UID") {
-		t.Errorf("after a listing again: %q, want the APP_UID change still seen", got)
+	if got, _ := e.set.ReloadCheck(e.rel(id)); len(got) != 0 {
+		t.Errorf("after a fetch: %q, want nothing", got)
 	}
 
 	if got, _ := e.set.ReloadCheck(e.rel(e.release(app))); len(got) != 1 || !strings.Contains(got[0], "no record") {
@@ -143,5 +143,36 @@ func TestRestoreRebuildsChangedBuild(t *testing.T) {
 	err := e.set.Restore(e.rel(first), e.rel(second), false)
 	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
 		t.Errorf("a restore whose build did not change: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
+	}
+}
+
+// The restart after a failed run step whose build again failed puts the
+// release's bookmarks back as built (AsBuilt), whatever the build keys
+// say: never the failed release's image left on the name.
+func TestRestoreAsBuilt(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
+	built := appSvc
+	built.Data = false
+	built.BuildKey = "k1;APP_UID=aaaaaaaa"
+	d.pull("app-prod-app", "sha256:a1")
+	first := e.release(built)
+	if err := e.set.Record(e.rel(first), ""); err != nil {
+		t.Fatal(err)
+	}
+	changed := built
+	changed.BuildKey = "k2;APP_UID=bbbbbbbb"
+	d.pull("app-prod-app", "sha256:a2")
+	second := e.release(changed)
+	if err := e.set.Record(e.rel(second), e.rel(first)); err != nil {
+		t.Fatal(err)
+	}
+	e.svcs[first] = []Service{changed}
+	e.set.AsBuilt = true
+	err := e.set.Restore(e.rel(first), e.rel(second), false)
+	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
+		t.Errorf("as built: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
 	}
 }

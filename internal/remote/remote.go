@@ -828,11 +828,13 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// get_images <dir> <against>, for the restart after a failed run:
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
-	// is gone.
+	// is gone or was built with other build arguments; that build failing,
+	// its bookmarks as they are (--as-built), never the failed release's
+	// image under the name.
 	s += `get_images() {
   image_lock shared fetching || return $?
   gi=0
-  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || gi=$?
+  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || img restore --as-built "$1" "$2" || gi=$?
   image_unlock
   return "$gi"
 }

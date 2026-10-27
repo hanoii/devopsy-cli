@@ -92,7 +92,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if !haveOld || o.ID == "" || i < 0 {
 				return s.gone(tid, svc)
 			}
-			if changed(o, svc) {
+			if s.changed(o, svc) {
 				return s.rebuilt(tid, o, svc)
 			}
 			if _, err := s.Docker.ID(names[i]); err != nil {
@@ -131,7 +131,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				if !haveOld || o.ID == "" || i < 0 {
 					return s.gone(tid, svc)
 				}
-				if changed(o, svc) {
+				if s.changed(o, svc) {
 					return s.rebuilt(tid, o, svc)
 				}
 				if _, err := s.Docker.ID(names[i]); err != nil {
@@ -173,7 +173,13 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					return err
 				}
 			}
-			es = append(es, s.entryOf(svc, svc.Ref))
+			// Its bookmark, put back: built with what its listing said then,
+			// whatever the variables say now.
+			e := s.entryOf(svc, svc.Ref)
+			if o.Build != "" && e.Build != "" {
+				e.Build = o.Build
+			}
+			es = append(es, e)
 		case st.hold != "":
 			if _, err := s.Docker.Inspect(st.hold); err != nil {
 				if err := s.Docker.Pull(st.hold); err != nil {
@@ -233,9 +239,11 @@ func (s *Set) gone(tid string, svc Service) error {
 // changed says whether svc's build: section resolves otherwise now than
 // when o's image was built (a build argument changed since): its bookmark
 // holds code built for the old values, which would run under the new
-// ones (an image built for APP_UID 10001 run as 10002).
-func changed(o entry, svc Service) bool {
-	return o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
+// ones (an image built for APP_UID 10001 run as 10002). Only where this
+// mode's fetch builds it: image mode's only pulls (a pull_policy: never
+// service with a build: is never built on the server).
+func (s *Set) changed(o entry, svc Service) bool {
+	return !s.AsBuilt && svc.Build && s.Mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
 }
 
 // rebuilt says that o's image is built again for what its build: section
