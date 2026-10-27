@@ -958,7 +958,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		return 1
 	}
 	if code == sshLost {
-		report.Error("the connection to @"+t.Address+" failed or was lost: the destroy may have stopped halfway there", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy again finishes it")
+		report.Error("the connection to @"+t.Address+" failed or was lost: the destroy may have stopped halfway there", "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
 	}
 	if code != 0 {
 		return code

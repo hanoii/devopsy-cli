@@ -334,7 +334,7 @@ func destroyData(cwd string, step []string, color bool) int {
 		again = "devopsy @" + targetAddress(root) + " --destroy"
 	}
 	half := func(msg string) int {
-		report.Error(msg+": the destroy stopped halfway, its containers and volumes perhaps gone", report.CmdMark+again+" finishes it")
+		report.Error(msg+": the destroy stopped halfway, its containers and volumes perhaps gone", "to finish it:", report.CmdMark+again)
 		return 1
 	}
 	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
