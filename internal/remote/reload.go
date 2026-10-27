@@ -47,7 +47,7 @@ rm -f "$rl_pending"
 # gone) ends it, nothing changed.
 trap 'rm -f "$rl_pending"; devopsy --say error "interrupted: nothing reloaded" || true; exit 130' INT TERM HUP
 ` + releaseImages(projectName, t, mode) + recoverFetch(`"$rel"`) + settleSync(projectName) +
-		markRefusal(t, "nothing reloaded", syncFixLines(t), "exit 1") + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
+		markRefusal(t, "nothing reloaded", syncFixLines(t), "exit 1") + cutRefusal(t) + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
 cd "$base/current"
 ` + call("--prepare-release", "reload") + ` || ` + refuse + `
 export ` + TargetPendingEnv + `="$rl_pending"
@@ -82,5 +82,25 @@ func checkImages(t *Target, projectName string, run bool, env, nothing string, f
 		return ""
 	}
 	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append(append([]string{"--check-images"}, flags...), hintAddress(t)), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
+`
+}
+
+// cutRefusal refuses a reload of an activation cut off past its switch
+// (ActivatingFile while this script holds the release lock): its run step
+// may not have run, and an up alone would start its code without it. The
+// fix by the kind cut, as --status words it.
+func cutRefusal(t *Target) string {
+	a := hintAddress(t)
+	return `if [ -f "$base/` + ActivatingFile + `" ]; then
+  rl_cut=$(cat "$base/` + ActivatingFile + `")
+  rl_id=$(printf '%s' "$rl_cut" | cut -f1)
+  case $(printf '%s' "$rl_cut" | cut -f2) in
+    rollback) rl_what="the rollback to $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --rollback" ;;
+    restore) rl_snap=$(printf '%s' "$rl_cut" | cut -f4); rl_what="the restore of snapshot $rl_snap as $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --snapshots restore $rl_snap" ;;
+    *) rl_what="the release of $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --release" ;;
+  esac
+  devopsy --say error "$rl_what was cut off past its switch, its run step may not have run: nothing reloaded" "to finish it:" "$rl_fix"
+  exit 1
+fi
 `
 }

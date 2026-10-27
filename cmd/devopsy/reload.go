@@ -53,6 +53,24 @@ func runReload(t *remote.Target, projectName string, args []string) int {
 	return code
 }
 
+// reloadStep is the reload: step where the project is: in a release on a
+// server, its environment's (as destroyStep's), else defaults:' (no
+// environment is local).
+func reloadStep(projectDir string) (string, error) {
+	if cli.InRelease(projectDir) {
+		t, err := remote.ReleaseEnvironment(projectDir)
+		if err != nil {
+			return "", err
+		}
+		return t.Reload, nil
+	}
+	c, err := remote.LoadConfig(projectDir)
+	if err != nil || c.Defaults == nil {
+		return "", err
+	}
+	return c.Defaults.Reload, nil
+}
+
 // runLocalReload is --reload without a target, in place: compose's
 // required variables checked, then defaults:' reload step, else
 // remote.ReloadDefault. No imports nor owners: a local release has none
@@ -71,14 +89,10 @@ func runLocalReload(cwd string, args []string, color bool) int {
 		report.Fail(err)
 		return 1
 	}
-	c, err := remote.LoadConfig(projectDir)
+	step, err := reloadStep(projectDir)
 	if err != nil {
 		report.Fail(err)
 		return 1
-	}
-	step := ""
-	if c.Defaults != nil {
-		step = c.Defaults.Reload
 	}
 	a := reloadArgs(step)
 	if step != "" {
