@@ -874,7 +874,7 @@ func TestSnapshotRefusalOnSyncMarkSaysFix(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "did not complete") {
 		t.Fatalf("a take on a marked child went through (%d):\n%s", code, out)
 	}
-	if !strings.Contains(out, "$ devopsy @dev --sync") || !strings.Contains(out, "--reset") {
+	if !strings.Contains(out, "$ devopsy @devopsy@one:dev --sync") || !strings.Contains(out, "--reset") {
 		t.Errorf("a take refused on a child's partial sync names no way out (--sync, --reset):\n%s", out)
 	}
 }

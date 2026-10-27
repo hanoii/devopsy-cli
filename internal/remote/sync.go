@@ -219,6 +219,13 @@ func ResetFix(ref string) [2]string {
 	return [2]string{"or start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @" + ref + " --reset"}
 }
 
+// syncFixLines are a sync mark's ways out as --say's details for a
+// script: a sync, the details in more (each double-quoted), a reset.
+func syncFixLines(t *Target, more ...string) string {
+	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"`}
+	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
+}
+
 // resetFixLines is ResetFix as --say's details for a script.
 func resetFixLines(t *Target) string {
 	f := ResetFix(hintAddress(t))
@@ -267,7 +274,7 @@ fi
 func killedSays(t *Target, projectName, status, nothing string) string {
 	killed := "its devopsy on the server was killed ($" + status + ")"
 	s := `if [ "$` + status + `" -gt 128 ]; then
-` + markRefusal(t, killed, `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" `+resetFixLines(t), ":")
+` + markRefusal(t, killed, syncFixLines(t), ":")
 	if nothing != "" {
 		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
 ` + settleSync(projectName) + `  devopsy --say error "` + killed + ` before its first write: ` + nothing + `" || true
@@ -770,7 +777,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + markRefusal(p, "nothing synced from it", `"`+report.CmdMark+`devopsy @`+hintAddress(p)+` --sync" `+resetFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi

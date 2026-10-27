@@ -126,7 +126,7 @@ umask 077
 mkdir -p "$snaps"
 cd "$base/current"
 `
-	refuse := markRefusal(t, "no snapshot taken", `"`+"a snapshot of it would restore as complete"+`"`, "exit 1")
+	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixLines(t), "exit 1")
 	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
 	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + "\n" + settleSync(projectName) + snapLock + refuse

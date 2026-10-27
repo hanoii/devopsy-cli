@@ -610,7 +610,7 @@ func UploadScript(t *Target, syncs bool) string {
   devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
   exit 1
 fi
-` + markRefusal(t, "nothing released", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), "exit 1")
+` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
 	}
 	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
@@ -1451,7 +1451,7 @@ exec 4<&-
 func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ]; then
 ` + settleSync(projectName) + `fi
-` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+` + markRefusal(t, "nothing changed", syncFixLines(t, `"or --release-sync to release with it"`), refuse)
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img
