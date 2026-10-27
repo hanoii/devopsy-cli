@@ -2446,7 +2446,7 @@ else
   [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; devopsy --say error "$base stays as it was"; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; devopsy --say error "$base is not removed: what the destroy took down before it stopped stays down, and --destroy again finishes it" || true; exit "$s"; }
 else
   devopsy --say info "no release: nothing to take down"
 fi

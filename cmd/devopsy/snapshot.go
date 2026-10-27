@@ -1601,6 +1601,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			report.Fail(err)
 			return 1
 		}
+		if code == sshLost {
+			report.Error("the connection to @" + t.Address + " failed or was lost: the export of snapshot " + id + " is incomplete")
+		}
 		return code
 	}
 	if len(words) > 0 && words[0] == "import" {
@@ -1616,6 +1619,10 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		if err != nil {
 			report.Fail(err)
 			return 1
+		}
+		if code == sshLost {
+			// The server keeps a snapshot only once it read the whole tar.
+			report.Error("the connection to @"+t.Address+" failed or was lost: the snapshot is imported only if the server got all of it", "devopsy @"+targetRef(t)+" --snapshots shows whether it did")
 		}
 		return code
 	}

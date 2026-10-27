@@ -327,11 +327,21 @@ func destroyData(cwd string, step []string, color bool) int {
 	ctx, stop := interruptible()
 	defer stop()
 	report.Info("taking the containers, volumes and built images down")
+	// From the down on a failure leaves the environment half destroyed:
+	// said, with the way to finish it.
+	again := "devopsy --destroy"
+	if cli.InRelease(projectDir) {
+		again = "devopsy @" + targetAddress(root) + " --destroy"
+	}
+	half := func(msg string) int {
+		report.Error(msg+": the destroy stopped halfway, its containers and volumes perhaps gone", report.CmdMark+again+" finishes it")
+		return 1
+	}
 	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
-		return fail("docker compose down: " + err.Error())
+		return half("docker compose down: " + err.Error())
 	}
 	if err := emptyMnt(ctx, projectDir, fmt.Sprintf("devopsy-destroy-%d", os.Getpid())); err != nil {
-		return fail(err.Error())
+		return half(err.Error())
 	}
 	// The history of the images that ran on the data goes with it: a
 	// --destroy whose image removal fails keeps the directory, and the

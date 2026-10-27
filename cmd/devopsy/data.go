@@ -1722,6 +1722,9 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	if err != nil {
 		return fail(err.Error())
 	}
+	if code == sshLost {
+		report.Error("the connection to @"+t.Address+" failed or was lost: the export is incomplete, and what it stopped there comes back once the server notices", "devopsy @"+targetRef(t)+" --status shows it")
+	}
 	return code
 }
 
