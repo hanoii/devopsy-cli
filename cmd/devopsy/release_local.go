@@ -381,10 +381,16 @@ func destroyData(cwd string, step []string, color bool) int {
 		}
 		// The snapshots' mirror, root's (rsync as root), as root, wherever
 		// the server's snapshot root puts them (basePrelude exports it).
-		// A take's reflink clone, root's too, among its own snapshots.
-		if fileExists(filepath.Join(base, "snapshots", ".clone")) {
-			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), "-v", filepath.Join(base, "snapshots")+":/s", remote.UtilImage, "rm", "-rf", "/s/.clone"); err != nil {
-				return fail("removing the snapshots' clone: " + err.Error())
+		// A take's reflink clone, root's too, among its own snapshots, and
+		// one a push or an export killed outright left (--destroy holds the
+		// sync lock: none is in use).
+		if err := removeClone(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), filepath.Join(base, "snapshots"), snapshotClone); err != nil {
+			return fail("removing the snapshots' clone: " + err.Error())
+		}
+		clones, _ := filepath.Glob(filepath.Join(base, remote.SyncClonePrefix+"*"))
+		for _, c := range clones {
+			if err := removeClone(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), base, filepath.Base(c)); err != nil {
+				return fail("removing " + filepath.Base(c) + ": " + err.Error())
 			}
 		}
 		snaps := snapshotsOf(base)

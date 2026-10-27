@@ -94,7 +94,7 @@ func snapshotCheckCopy(ctx context.Context, cwd string, p snapshotPaths, d *snap
 		// The clone shares the data's blocks only until the services write
 		// over them, then takes room of its own on the data's filesystem
 		// while the tars are made: said when that room is short.
-		if data, err := duData(ctx, d); err == nil && freeBytes(p.clone()) < data {
+		if data, err := duData(ctx, d.dataSet); err == nil && freeBytes(p.clone()) < data {
 			report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while its tars are made", size(freeBytes(p.clone())), size(data), p.clone()))
 		}
 	case refused:
@@ -128,6 +128,10 @@ func takeCopy(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData)
 
 // snapshotReflinks is reflinks into the take's clones' place.
 func snapshotReflinks(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData) bool {
+	// Its image first: a server's first take has none yet.
+	if len(d.entries)+len(d.volumes) == 0 || ensureUtilImage(ctx) != nil {
+		return false
+	}
 	return reflinks(ctx, "devopsy-snapshot-"+composeName(cwd)+"-reflink", p.clone(), d.dataSet)
 }
 
@@ -442,7 +446,7 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	data, err := duData(ctx, d)
+	data, err := duData(ctx, d.dataSet)
 	if err != nil {
 		return err
 	}
@@ -465,7 +469,7 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 
 // duData is the size of d's entries and volumes, in bytes, from du -sk
 // as root in the util image.
-func duData(ctx context.Context, d *snapshotData) (int64, error) {
+func duData(ctx context.Context, d dataSet) (int64, error) {
 	if len(d.entries)+len(d.volumes) == 0 {
 		return 0, nil
 	}

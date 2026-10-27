@@ -30,16 +30,12 @@ type dataSet struct {
 // reflinks (the same XFS or btrfs, say): one regular file of each tried
 // with cp --reflink=always, the copy removed at once (an entry or volume
 // without a file has nothing to try). Read-only on the data; nothing
-// stops.
+// stops. The caller readies the util image (ensureUtilImage).
 func reflinks(ctx context.Context, name, into string, d dataSet, opts ...string) bool {
 	if len(d.entries)+len(d.volumes) == 0 {
 		return false
 	}
 	if err := os.MkdirAll(into, 0o700); err != nil {
-		return false
-	}
-	// Its image first: a server's first take has none yet.
-	if err := ensureUtilImage(ctx); err != nil {
 		return false
 	}
 	mounts, srcs := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", into + ":/c"}, []string{}

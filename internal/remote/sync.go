@@ -58,6 +58,12 @@ const (
 	// SyncLockFile is an environment's sync lock: a push from it or an
 	// export of it holds it exclusively (syncSourceLock).
 	SyncLockFile = ".devopsy-sync.lock"
+	// SyncClonePrefix, then the sync's id (an export's: export.<pid>),
+	// names a push's or an export's reflink clone of what it copies, on
+	// the parent: the services stop for the clone, the copy is made from
+	// it. Root's files, removed as root once copied; one a devopsy killed
+	// outright left goes with the next holder of the sync lock.
+	SyncClonePrefix = ".devopsy-sync.clone."
 	// SyncIncompleteFile marks an environment whose data no sync
 	// completed on, or whose import did not complete (IncompleteImport):
 	// one line, IncompleteLine. Releases and rollbacks refuse, a push

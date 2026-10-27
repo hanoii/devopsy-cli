@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -304,7 +305,8 @@ case "$*" in
     grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
     from=$(grep "^$m " "$DOCKER_LOG.daemonvols" | cut -d' ' -f2)
     for a; do case $a in *:/vol/*) to=${a%%:*} ;; esac; done
-    mkdir -p "$vols/$to" && cp -R "$vols/$from/." "$vols/$to" ;;
+    case $from in /*) ;; *) from="$vols/$from" ;; esac
+    mkdir -p "$vols/$to" && cp -R "$from/." "$vols/$to" ;;
   "run --rm --name devopsy-sync-"*"-receive --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
@@ -334,12 +336,13 @@ case "$*" in
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
-  # FAKE_REFLINK: the data clones by reflinks (it does not by default).
-  "run --rm --name devopsy-snapshot-"*"-reflink "*)
+  # FAKE_REFLINK: the data clones by reflinks (it does not by default),
+  # for a snapshot's take and a sync's or an export's copy.
+  "run --rm --name devopsy-snapshot-"*"-reflink "*|"run --rm --name devopsy-sync-"*"-reflink "*)
     [ -n "${FAKE_REFLINK:-}" ] || exit 1 ;;
   # A reflink clone: -v <mnt>:/m/mnt:ro, -v <volume>:/m/volumes/<key>:ro,
   # -v <clone>:/c; copied as cp -a would.
-  "run --rm --name devopsy-snapshot-"*"-clone "*)
+  "run --rm --name devopsy-snapshot-"*"-clone "*|"run --rm --name devopsy-sync-"*"-clone "*)
     # FAIL_CLONE: part of the data does not clone (another filesystem
     # mounted inside an entry, a btrfs nodatacow file), whatever the check
     # found of the one file it tried.
@@ -349,7 +352,7 @@ case "$*" in
     mkdir -p "$c/mnt" "$c/volumes"
     for e in $(printf '%s\n' "$last" | sed -n 's|^cp -a --reflink=always "/m/mnt/\([^"]*\)" /c/mnt/$|\1|p'); do cp -Rp "$m/$e" "$c/mnt/"; done
     for a; do case $a in *:/m/volumes/*:ro) vn=${a%%:*}; k=${a#*:/m/volumes/}; k=${k%:ro}; mkdir -p "$c/volumes/$k"; cp -Rp "$vols/$vn/." "$c/volumes/$k/" ;; esac; done ;;
-  "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
+  "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-sync-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
     rm -rf "$sd/${last#/s/}" ;;
   "run --rm --name devopsy-snapshot-"*"-unmirror "*)
@@ -386,9 +389,10 @@ case "$*" in
     # $DOCKER_LOG.mirrorhook: what happens on the server while a take's
     # first pass copies (a release switching current), run once.
     case "$*" in *-mirror-0\ *) [ ! -f "$DOCKER_LOG.mirrorhook" ] || { sh "$DOCKER_LOG.mirrorhook"; rm -f "$DOCKER_LOG.mirrorhook"; } ;; esac
-    # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>.
+    # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>; from a
+    # clone, its directory (a path) as the source.
     vsrc= vdst=
-    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
+    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; /*:/src/*:ro) vsrc=${a%%:*} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
     if [ -n "$vsrc" ]; then mkdir -p "$vdst" && cp -R "$vsrc/." "$vdst"; exit $?; fi
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
@@ -861,6 +865,137 @@ func TestReleaseFrom(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@devopsy@one:dev", "--release-no-sync", "--from", "@devopsy@one:prod"); code == 0 || !strings.Contains(out, "--from: --release-no-sync never syncs") {
 		t.Fatalf("--release-no-sync --from (%d):\n%s", code, out)
+	}
+}
+
+// Where the parent's data clones by reflinks, the services a sync stops
+// for its copy are down for the clone only: started again before the
+// rsync, which copies from the clone, removed after. A custom service
+// stopped by its labels is exported before they start, one running
+// after; across servers the daemon serves the clone, and an export on a
+// target tars from one. Nothing of what the rsync copies stopped: no
+// clone. A clone that fails copies from the stopped data, as before; one
+// a push killed outright left goes with the next push and with
+// --destroy.
+func TestSyncReflinkClone(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	prod := filepath.Join(s.root, "shop", "prod")
+	clone := filepath.Join(prod, remote.SyncClonePrefix)
+	reflink := []string{"FAKE_REFLINK=1"}
+	inOrder := func(name, all string, want ...string) {
+		t.Helper()
+		rest := all
+		for _, w := range want {
+			i := strings.Index(rest, w)
+			if i < 0 {
+				t.Fatalf("%s: missing %q in order, after:\n%s\nall:\n%s", name, w, rest, all)
+			}
+			rest = rest[i+len(w):]
+		}
+	}
+	noClone := func(name string) {
+		t.Helper()
+		if left, _ := filepath.Glob(clone + "*"); len(left) > 0 {
+			t.Errorf("%s: the clone left: %v", name, left)
+		}
+	}
+
+	out, code := s.run(reflink, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "the data clones by reflinks") || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	inOrder("first release", docker, "shop-prod compose", "stop db", "-reflink ", "-clone ", "shop-prod compose", "start db",
+		" -v "+clone, "/mnt:/src:ro -v "+s.mnt("dev")+":/dst devopsy-util:3 rsync", "/src/db/ /dst/db/", "-unclone ")
+	noClone("first release")
+
+	// db not stopped (no stop label): the rsync reads the live data.
+	s.labels("FAKE_DB=mnt")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(docker, "-clone ") || !strings.Contains(docker, " -v "+s.mnt("prod")+":/src:ro") {
+		t.Errorf("nothing stopped (%d):\n%s\n%s", code, out, docker)
+	}
+	s.labels("")
+
+	// A clone that fails though the check passed: from the stopped data.
+	out, code = s.run(append(reflink, "FAIL_CLONE=1"), "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "copying from the stopped data instead") {
+		t.Fatalf("a clone that fails (%d):\n%s", code, out)
+	}
+	inOrder("a clone that fails", docker, "stop db", "-clone ", "-unclone ", " -v "+s.mnt("prod")+":/src:ro", "/src/db/", "shop-prod compose", "start db")
+	noClone("a clone that fails")
+
+	// Streams: one stopped by its labels exported before the start, one
+	// running after it; the rsync from the clone last.
+	caps := filepath.Join(s.dot, "capabilities", "data")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1\"\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev with the scripts (%d):\n%s", code, out)
+	}
+	s.logs()
+	s.labels("FAKE_APP=mnt+own\nFAKE_DB=stream+own")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 {
+		t.Fatalf("a stopped stream (%d):\n%s", code, out)
+	}
+	inOrder("a stopped stream", out, "the data clones by reflinks", "exporting db", "starting db app", "rsync mnt/storage")
+	inOrder("a stopped stream", docker, "-clone ", "start db app", " -v "+clone, "/src/storage/")
+	s.labels("FAKE_APP=mnt+own\nFAKE_DB=stream")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 {
+		t.Fatalf("a running stream (%d):\n%s", code, out)
+	}
+	inOrder("a running stream", out, "exporting db", "rsync mnt/storage")
+	inOrder("a running stream", docker, "stop app", "-clone ", "start app", " -v "+clone, "/src/storage/")
+	if i, j := strings.Index(out, "starting app"), strings.Index(out, "exporting db"); i < 0 || j < i {
+		t.Errorf("a running stream exported before the start:\n%s", out)
+	}
+	s.labels("")
+
+	// Across servers the daemon serves the clone.
+	across := append([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}, reflink...)
+	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
+		t.Fatalf("across servers (%d):\n%s", code, out)
+	}
+	inOrder("across servers", docker, "stop db", "-clone ", "start db", "run --rm -d --name devopsy-sync-", " -v "+clone, "/mnt:/mnt:ro", "-unclone ")
+	noClone("across servers")
+
+	// An export on a target tars from a clone, db started first.
+	cmd := exec.Command(binary, "@prod", "--export", "db")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), reflink...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("export: %v\n%s", err, stderr.String())
+	}
+	docker, _ = s.logs()
+	inOrder("export", docker, "stop db", "-clone ", "start db", "run --rm --name devopsy-export-", "source="+clone+"export.", "-unclone ")
+	noClone("export")
+
+	// What a push killed outright left: removed by the next push, then by
+	// --destroy.
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "a clone an earlier copy left") {
+		t.Fatalf("a leftover clone (%d):\n%s", code, out)
+	}
+	noClone("a leftover clone")
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	s.logs()
+	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
+		t.Fatalf("--destroy (%d):\n%s", code, out)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("--destroy did not remove the clone as root:\n%s", docker)
 	}
 }
 
