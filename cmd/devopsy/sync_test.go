@@ -540,6 +540,9 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
 	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\n"+
+		// FAKE_FAIL_ONCE: the run step fails once (the file made), so a
+		// FAKE_KILL_RUN beside it kills the restart that follows.
+		"if [ -n \"${FAKE_FAIL_ONCE:-}\" ] && [ ! -e \"$FAKE_FAIL_ONCE\" ]; then : >\"$FAKE_FAIL_ONCE\"; exit 3; fi\n"+
 		// FAKE_KILL_RUN: the activation's shell killed outright (SIGKILL,
 		// the OOM killer) during its run step, once (the file made), on
 		// Linux (/proc): the topmost ancestor running the script itself
@@ -3265,11 +3268,18 @@ func TestSyncSettle(t *testing.T) {
 	dev, prod := filepath.Join(s.root, "shop", "dev"), filepath.Join(s.root, "shop", "prod")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
 	write(t, filepath.Join(dev, remote.SyncOpenFile("1.2")), "devopsy@one:prod 1.2\n", 0o644)
+	// A stream's spool the killed sync left, dump-sized: the settle
+	// removes it, as a finish would (review round 9).
+	spool := remote.StreamSpool(dev, "db", "1.2")
+	write(t, spool, "rows\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code == 0 || !strings.Contains(out, "did not complete") {
 		t.Errorf("a release after an undecided sync (%d):\n%s", code, out)
 	}
 	if out, code := s.run(nil, "@dev", "--rollback"); code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) || fileExists(filepath.Join(dev, remote.SyncOpenFile("1.2"))) {
 		t.Errorf("a rollback after an undecided sync (%d):\n%s", code, out)
+	}
+	if fileExists(spool) {
+		t.Errorf("the settle of an undecided sync left its stream's spool %s", spool)
 	}
 	if _, _, code, _ := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); code != remote.IncompleteSettled {
 		t.Errorf("the mark of an undecided sync: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))

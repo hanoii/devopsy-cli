@@ -1302,6 +1302,7 @@ case "$*" in
     echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
   --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
+  "--check-mounts restored restart") exit ${FAIL_RESTART_CHECK:-0} ;;
 esac
 exit 0
 `
@@ -1388,6 +1389,13 @@ exit 0
 	}
 	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n") {
 		t.Errorf("failed owners calls:\n%s", got)
+	}
+
+	// The restart's mounts check refusing (a link, or the util image with
+	// Docker gone): the previous release stays down, the fix named for
+	// whatever the check said, not always a link (review round 9).
+	if out, err := release("33", "FAIL_RUN=4", "FAIL_RESTART_CHECK=1"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "not restarting 1") || strings.Contains(out, "once the link is gone") || !strings.Contains(out, "once what the check says is fixed") {
+		t.Fatalf("failed run, the restart's check refusing (%v), current %q:\n%s", err, current(), out)
 	}
 
 	// Another failed run, while another compose project runs the
@@ -3074,5 +3082,36 @@ func TestSyncScriptsFitOneArgument(t *testing.T) {
 	}
 	if n := len(WithNeeds(ActivateScript(tg, "20261023000000", false, "shop-dev", Phases{Run: []string{"deploy"}}, o))); n >= limit {
 		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, limit)
+	}
+}
+
+// An activation's mark read back, and what --status says of each kind
+// cut off with what finishes it.
+func TestParseActivating(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{"", "\n", "20261027000000\n", "\trelease\t\t\n"} {
+		if a := ParseActivating(line); a != nil {
+			t.Errorf("%q parses as %+v", line, *a)
+		}
+	}
+	for _, c := range []struct {
+		line      string
+		partial   bool
+		what, fix string
+	}{
+		{"3\trelease\t2\t\n", false, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @app-prod --release releases it again"},
+		{"3\trelease\t2\t\n", true, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --sync finishes it"},
+		{"2\trollback\t3\t\n", false, "the rollback to 2 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --rollback finishes it"},
+		{"2\trestart\t3\t\n", false, "the restart of 2 after 3 failed was cut off: its run step may not have run", "devopsy @app-prod --release releases it again"},
+		{"4\trestore\t3\t1\n", false, "the restore of snapshot 1 as 4 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --snapshots restore 1 runs it again"},
+	} {
+		a := ParseActivating(c.line)
+		if a == nil {
+			t.Errorf("%q does not parse", c.line)
+			continue
+		}
+		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix != c.fix {
+			t.Errorf("%q (partial %v): %q, %q; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
+		}
 	}
 }

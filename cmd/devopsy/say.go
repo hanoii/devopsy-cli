@@ -16,7 +16,8 @@ import (
 // everything devopsy says. A write that fails (the session gone) fails
 // it, as it fails echo: a script relies on that before its switch, to
 // notice a session that dropped without a signal. Never by SIGPIPE: an
-// exit code the script decides on, as with echo under trap '' PIPE.
+// exit code the script decides on, as with echo in a shell ignoring
+// SIGPIPE.
 func runSay(args []string) int {
 	lv, ok := remote.SayLevels[strings.Join(args[:min(1, len(args))], "")]
 	if len(args) < 2 || !ok {

@@ -994,8 +994,11 @@ interrupts" and "The server never waits on the operator for long".
   says the release goes on, and a second ends the session; the log is
   saved either way. "After the switch" is `SSHStreams`' flag on
   `SwitchMarker` (`WithSwitched`), never the release log, which stops
-  at its cap; a switch already under way when the pipe closed goes on,
-  said. During the upload (`signal.NotifyContext`) the progress line
+  at its cap, or the disarm's byte answered (`WithBeaten`): from it the
+  script goes on to its switch on its own, so a Ctrl-C or a session
+  lost between the two says the release goes on, at or past its switch,
+  never that nothing went live (review round 9); a switch already under
+  way when the pipe closed goes on, said. During the upload (`signal.NotifyContext`) the progress line
   goes and nothing changed.
 - **An interrupted fetch is undone under the lock, once:** a signal
   only sets `fetch_sig` (INT, TERM, HUP); the fetch's child gets it too
@@ -1021,14 +1024,22 @@ interrupts" and "The server never waits on the operator for long".
   `script`'s compose ran on, two `up`s on one project).
 - **What kills the shell past the switch leaves a mark**
   (`ActivatingFile`, `$base/.devopsy-activating`: id, kind, the release
-  replaced, a restore's snapshot), written right before `make_current`
-  and removed wherever the activation ends, its failure paths included:
-  one there while nothing holds the release lock is an activation cut
-  off past its switch (the OOM killer, a reboot), whose run step may
-  not have run. `--status` and `--releases` (`CUT`) say so with what
-  finishes it; a `--rollback` finishes a cut rollback (its target
-  current, the release it left to mark), never going one further back;
-  a sync's run step clears a cut release's; any activation replaces it.
+  replaced, a restore's snapshot), written right before the pending
+  file goes and `make_current`, and removed wherever the activation
+  ends, its failure paths included: one there naming current while
+  nothing holds the release lock is an activation cut off past its
+  switch (the OOM killer, a reboot), whose run step may not have run
+  (one naming another release was cut before its switch: still
+  pending). `--releases` marks it `CUT`, `--status` says so with what
+  finishes it (`--sync` on a sync's partial copy, which refuses a
+  release; the words and the fix in one place, `remote.Activating`'s
+  `Cut`, as `ImportFixes` and `RestoreFixes` for the marks); a `--rollback` finishes a cut rollback (its target current,
+  the release it left, `rb_from`, to mark and to go back to; `$prev`
+  stays current until the switch), never going one further back; a
+  release or a restore over it marks that release rolled back, as the
+  rollback would have (review round 9: it stayed live, the next
+  rollback's target); a sync's run step clears a cut release's or full
+  restore's (the run step they skipped); any activation replaces it.
   Decided 2026-10-27: nothing finishes it by itself (a run step started
   by whatever takes the lock next would surprise more than help).
 - **`script` gets its own session past a fetch** (`setsid -w`,
@@ -1243,7 +1254,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   runs `--check-mounts restored restart` first, and keeps the previous
   release down when it refuses (what the failed run step started runs
   on, from its code, until a release goes live: said, with the
-  `--release` to run once the link is gone). And the net under all of them (decided after
+  `--release` to run once what the check says is fixed: a link, or the
+  util image with Docker gone). And the net under all of them (decided after
   review round 5, whose every hole was a start no check per flow
   preceded): on a server nothing in a release starts while a bind source
   leads out of its entry, whatever brought the link
@@ -1500,8 +1512,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `partialGuard`, takes its record as the holder would, ends what it
   names (`endWriters`), and counts its data as not completed (marked,
   keeping a mark the holder wrote before dying, `finish child
-  partial`); a sync's files while nothing holds the lock (`LockBusy`)
-  are a leftover, a running sync is not.
+  partial`), and removes what syncs left as a finish does
+  (`syncLeftovers`: streams' spools, stale pending inherited variables;
+  review round 9, a dump-sized spool stayed until the next finish); a
+  sync's files while nothing holds the lock (`LockBusy`) are a leftover,
+  a running sync is not.
 - **The answer comes on fd 3, never stdin:** the holder reads it from a
   fifo the watcher writes (`--answer-fd`; both ends opened before the
   watcher starts, so no open ever waits) and gives every command

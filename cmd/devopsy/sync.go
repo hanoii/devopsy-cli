@@ -2183,6 +2183,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		for _, g := range gates {
 			_ = os.Remove(g)
 		}
+		syncLeftovers(base)
 		if err := runDataHook(context.Background(), cwd, projectDir, recordEnv(), nil, nil, nil, "finish", "child", "partial"); err != nil {
 			code = fail("the data capability's finish child partial: " + err.Error())
 		}
@@ -2328,22 +2329,8 @@ func runSyncServices(cwd string, args []string, color bool) int {
 		}
 		hookEnv = recordEnv()
 	}
-	// Whatever the word: this sync's imports took their spools, and any
-	// other is an earlier sync's, stale (another's push starts only once
-	// its holder holds the lock).
-	spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
-	for _, f := range spools {
-		_ = os.Remove(f)
-	}
-	// Another sync's pending inherited variables may be fresh (written
-	// before its holder waits for the lock): only those older than any
-	// wait go, left by a sync cut before its holder ran.
-	pendings, _ := filepath.Glob(filepath.Join(base, remote.SyncInheritPrefix+"*"))
-	for _, f := range pendings {
-		if fi, err := os.Stat(f); err == nil && time.Since(fi.ModTime()) > staleInherit {
-			_ = os.Remove(f)
-		}
-	}
+	// Whatever the word: this sync's imports took their spools.
+	syncLeftovers(base)
 	if err := runDataHook(context.Background(), cwd, projectDir, hookEnv, nil, nil, nil, "finish", "child", word); err != nil {
 		code = fail("the data capability's finish child " + word + ": " + err.Error())
 		// A sync completes with its finish: until one does, nothing runs
@@ -3159,4 +3146,23 @@ func agentHasKeys(parent, child string) error {
 		return fmt.Errorf("the parent's server (%s) reaches the child's (%s) with your SSH agent, forwarded for the sync, and none answers at SSH_AUTH_SOCK (%s): eval $(ssh-agent); ssh-add (in CI, add the key to an agent)", parent, child, os.Getenv("SSH_AUTH_SOCK"))
 	}
 	return nil
+}
+
+// syncLeftovers removes what earlier syncs left in base, as a finish or
+// a settle of a killed holder does (both under the release lock): every
+// stream's spool, dump-sized (another sync's push starts only once its
+// holder holds the lock, so none is being written), and the pending
+// inherited variables older than any wait for the lock (one may be
+// fresh: written before its holder waits).
+func syncLeftovers(base string) {
+	spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*"))
+	for _, f := range spools {
+		_ = os.Remove(f)
+	}
+	pendings, _ := filepath.Glob(filepath.Join(base, remote.SyncInheritPrefix+"*"))
+	for _, f := range pendings {
+		if fi, err := os.Stat(f); err == nil && time.Since(fi.ModTime()) > staleInherit {
+			_ = os.Remove(f)
+		}
+	}
 }

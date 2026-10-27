@@ -75,17 +75,58 @@ const (
 
 // ActivatingFile marks an environment ($base) from an activation's switch
 // to its end, whichever way it ends: the release's id, the activation's
-// kind (release, rollback, restore), the release it replaced and a
-// restore's snapshot, tab separated. One there while nothing holds the
+// kind (release, rollback, restore; restart once a failed run step goes
+// back, its id the release restarted, the failed one next), the release
+// it replaced and a restore's snapshot, tab separated. One there while nothing holds the
 // release lock is an activation cut off past its switch (killed outright,
 // a reboot), which nothing interrupts otherwise: its run step may not
-// have run. --status and --releases say so (CUT); a --rollback finishes
-// a cut rollback, never going one release further back; the next
-// activation replaces it, and a sync's run step (the release's own, run
-// again) removes a cut release's. Decided 2026-10-27 over finishing it
+// have run (one naming a release that is not current was cut before its
+// switch). --status and --releases say so (CUT); a --rollback finishes
+// a cut rollback, never going one release further back, and any other
+// activation marks the release it left rolled back; the next activation
+// replaces it, and a sync's run step (the release's own, run again)
+// removes a cut release's or full restore's. Decided 2026-10-27 over finishing it
 // by itself: a run step started by whatever takes the lock next would
 // surprise more than help.
 const ActivatingFile = ".devopsy-activating"
+
+// Activating is an ActivatingFile's line: the release's id, the
+// activation's kind, the release it replaced (the failed one for a
+// restart) and a restore's snapshot.
+type Activating struct{ ID, Kind, From, Snapshot string }
+
+// ParseActivating reads an ActivatingFile's line; nil without an id and
+// a kind.
+func ParseActivating(line string) *Activating {
+	f := strings.Split(strings.TrimRight(line, "\n"), "\t")
+	if len(f) < 2 || f[0] == "" || f[1] == "" {
+		return nil
+	}
+	f = append(f, "", "")
+	return &Activating{ID: f[0], Kind: f[1], From: f[2], Snapshot: f[3]}
+}
+
+// Cut is what --status says of a cut activation, and what finishes it:
+// the release again (ref the release's address as typed, an alias's
+// with its source), a rollback again, a restore again (ref the target's
+// as typed); a sync where a sync's partial copy (syncPartial) refuses a
+// release, and its run step finishes the cut one.
+func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what, fix string) {
+	what, past, fix := "the release of "+a.ID, " past its switch", "devopsy @"+releaseRef+" --release releases it again"
+	if syncPartial {
+		fix = "devopsy @" + ref + " --sync finishes it"
+	}
+	switch a.Kind {
+	case "rollback":
+		what, fix = "the rollback to "+a.ID, "devopsy @"+ref+" --rollback finishes it"
+	case "restart":
+		// A failed run step's way back: current restarted.
+		what, past = "the restart of "+a.ID+" after "+a.From+" failed", ""
+	case "restore":
+		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, "devopsy @"+ref+" --snapshots restore "+a.Snapshot+" runs it again"
+	}
+	return what + " was cut off" + past + ": its run step may not have run", fix
+}
 
 // ReleaseFile is name, one of a release's devopsy files, for the project
 // at projectDir (its .devopsy/, through current or not): beside the
@@ -465,6 +506,16 @@ if [ -e "$base/` + SyncImportingFile + `" ] || [ -e "$base/` + SyncHoldingFile +
 // new one exists already, so running it again finds it.
 const removeBase = `mv "$base" "$base.rm.$$" && { rm -rf "$base.rm.$$" || { [ -e "$base" ] || mv "$base.rm.$$" "$base"; false; }; }`
 
+// removeMoved removes what a removeBase cut off during its rm -rf (killed
+// outright, a reboot) left moved aside, once its devopsy is gone: its
+// data and images went before the move.
+const removeMoved = `for m in "$base".rm.*; do
+  [ -d "$m" ] || continue
+  ! kill -0 "${m##*.rm.}" 2>/dev/null || continue
+  rm -rf "$m" && devopsy --say info "removed $m, left by a --destroy cut off while it removed it"
+done
+`
+
 // ProtocolCheckEnv set to warn turns the refusal of an older server's
 // devopsy into a warning, the command going on at the operator's risk
 // (a local build ahead of the servers): passed to every session
@@ -780,9 +831,25 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
-prev=${prev%/` + CodeDir + `}
+prev=${prev%/` + CodeDir + `}; rb_from=$prev
 ` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
 `
+	// A rollback cut off past its switch (ActivatingFile: this script
+	// holds the lock, so none runs), current its target: cut_from is the
+	// release it left. A rollback finishes it (below); a release or a
+	// restore leaves it as it is, marking that release rolled back as
+	// the rollback would have.
+	s += `cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
+cut_from=$(printf '%s' "$cut_line" | cut -f3)
+if [ "$(printf '%s' "$cut_line" | cut -f2)" != rollback ] || [ "releases/$(printf '%s' "$cut_line" | cut -f1)" != "$prev" ] || [ ! -d "$base/releases/${cut_from:-.}" ]; then cut_from=; fi
+`
+	if !rollback || restore != nil {
+		s += `if [ -n "$cut_from" ] && [ ! -e "$base/releases/$cut_from/` + RolledBackFile + `" ]; then
+  : >"$base/releases/$cut_from/` + RolledBackFile + `"
+  devopsy --say info "$cut_from is marked rolled back: the rollback from it was cut off past its switch"
+fi
+`
+	}
 	// That last line: what runs on the data now goes into its history
 	// before anything reads it. A release killed past its switch ran its
 	// run step's up on the image it holds the data on, and its img ran
@@ -813,15 +880,14 @@ devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
-		// A rollback cut off past its switch (ActivatingFile: this script
-		// holds the lock, so none runs) is finished, never followed by one
-		// further back: current is its target, the release it left the one
-		// to mark rolled back.
+		// A cut rollback (cut_from) is finished, never followed by one
+		// further back: current is its target, the release it left
+		// (rb_from) the one to mark rolled back. $prev stays current until
+		// the switch (the undo, not_live's words), then becomes rb_from:
+		// what a failure goes back to.
 		s += `id=
-cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
-cut_from=$(printf '%s' "$cut_line" | cut -f3)
-if [ "$(printf '%s' "$cut_line" | cut -f2)" = rollback ] && [ "releases/$(printf '%s' "$cut_line" | cut -f1)" = "$prev" ] && [ -n "$cut_from" ] && [ -d "$base/releases/$cut_from" ]; then
-  id=${prev#releases/}; prev=releases/$cut_from
+if [ -n "$cut_from" ]; then
+  id=${prev#releases/}; rb_from=releases/$cut_from
   devopsy --say info "finishing the rollback to $id from $cut_from, cut off past its switch"
 fi
 if [ -z "$id" ]; then
@@ -981,7 +1047,7 @@ done
 	// (exit 1). A signal during either (img ignores it) skips the fetch.
 	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
 	if rollback {
-		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
+		fetchStep = `{ img restore "$1" "$base/$rb_from" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$rb_from"; }; }`
 	}
 	// A release with snapshots on, replacing a current one, takes the
 	// snapshot of what it replaces (part 4 of snapshots): its locks and
@@ -1096,20 +1162,26 @@ if [ "$rd_status" != 0 ]; then
 fi
 `
 	}
-	if !rollback || restore != nil {
-		s += `rm -f "$rel/` + PendingFile + `"
-exec 7<&-
-`
-	}
 	activating, snapField := "release", ""
 	switch {
 	case restore != nil:
 		activating, snapField = "restore", restore.Snapshot
 	case rollback:
 		activating = "rollback"
+		// From the switch on, $prev is what a failure goes back to.
+		s += "prev=$rb_from\n"
 	}
+	// The mark before the pending file goes: a shell killed between them
+	// leaves a release still INCOMPLETE, whose mark --status and
+	// --releases ignore (its id is not current).
 	s += `printf '%s\t%s\t%s\t%s\n' "$id" ` + activating + ` "${prev#releases/}" ` + Quote(snapField) + ` >"$base/` + ActivatingFile + `" || not_live 1
-make_current "releases/$id"
+`
+	if !rollback || restore != nil {
+		s += `rm -f "$rel/` + PendingFile + `"
+exec 7<&-
+`
+	}
+	s += `make_current "releases/$id"
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
@@ -1154,7 +1226,7 @@ make_current "releases/$id"
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
@@ -1244,6 +1316,8 @@ fi
 	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
+    # Killed in the restart, the mark names the release restarted, current.
+    printf '%s\trestart\t%s\t\n' "${prev#releases/}" "$id" >"$base/` + ActivatingFile + `" || true
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else
@@ -2219,7 +2293,12 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	// live session goes on in a round trip. Taken out of both the
 	// terminal's and the log's lines.
 	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
-		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) { _, _ = w.Write([]byte{0}) }}
+		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) {
+			_, _ = w.Write([]byte{0})
+			if f, ok := ctx.Value(beatenKey{}).(*atomic.Bool); ok {
+				f.Store(true)
+			}
+		}}
 		mw := lm.Writer(cmd.Stderr)
 		flush = append([]*MarkerWriter{mw}, flush...)
 		cmd.Stderr = mw
@@ -2346,6 +2425,16 @@ const gatedRead = `gated_read() {
 type switchedKey struct{}
 
 type beatKey struct{}
+
+type beatenKey struct{}
+
+// WithBeaten is ctx for a session that sets beaten once devopsy answered
+// its BeatMarker: an activation's or a --no-code restore's disarm, past
+// which the script goes on on its own (its point of no return), before
+// it prints SwitchMarker.
+func WithBeaten(ctx context.Context, beaten *atomic.Bool) context.Context {
+	return context.WithValue(ctx, beatenKey{}, beaten)
+}
 
 // WithBeat is ctx for a session whose stdin devopsy writes through w, the
 // pipe it keeps open with a heartbeat: a BeatMarker line the script
@@ -2482,7 +2571,7 @@ cat "$d/` + ServerLogFile + `" 2>/dev/null || true
 // before anything goes: compose's down removes images too); then the
 // directory. A failure before the removal removes nothing.
 func DestroyScript(t *Target, projectName string) string {
-	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base" ]; then
+	return "set -eu\n" + basePrelude(t) + removeMoved + `if [ ! -d "$base" ]; then
   devopsy --say info "nothing at $base"
   exit 0
 fi
@@ -2553,6 +2642,8 @@ func EnvironmentsScript(t *Target) string {
 for r in ` + glob + `; do
   [ -d "$r" ] || continue
   d=${r%/releases}
+  # A --destroy cut off while it removed one (removeBase).
+  case "${d##*/}" in *.rm.*) continue ;; esac
   printf '%s\n' "${d#"$dir"/}"
 done
 `

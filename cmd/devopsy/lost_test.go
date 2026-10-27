@@ -263,6 +263,71 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Errorf("a release over a cut one (%d), mark %q:\n%s", code, readString(mark), out)
 	}
 
+	// Bug (review round 9): an activation whose run step fails goes back
+	// to the release before and restarts it; killed during that restart,
+	// its mark still names the release that failed, with current back on
+	// the one before. --status then says the rollback to the failed
+	// release was cut off past its switch and that --rollback finishes
+	// it, while --rollback goes elsewhere (the failed release is no
+	// target): the mark is read without checking it names current.
+	cur := strings.TrimPrefix(s.current("solo"), "releases/")
+	dir := t.TempDir()
+	out, _ = s.run([]string{"FAKE_FAIL_ONCE=" + filepath.Join(dir, "failed"), "FAKE_KILL_RUN=" + filepath.Join(dir, "killed")}, "@solo", "--rollback", "--yes")
+	// The mark names the restart: current, then the release that failed.
+	failed := ""
+	if f := strings.Split(readString(mark), "\t"); len(f) > 2 && f[0] == cur && f[1] == "restart" {
+		failed = f[2]
+	}
+	if s.current("solo") != "releases/"+cur || failed == "" || failed == cur || !fileExists(filepath.Join(base, "releases", failed, remote.FailedFile)) {
+		t.Fatalf("a rollback whose run step failed, killed in its restart: current %q (want %s), mark %q:\n%s", s.current("solo"), cur, readString(mark), out)
+	}
+	if out, _ := s.run(nil, "@solo", "--status"); strings.Contains(out, "the rollback to "+failed+" was cut off past its switch") {
+		t.Errorf("--status names the failed rollback to %s as cut off, finished by --rollback, while current is %s, whose restart was cut:\n%s", failed, cur, out)
+	}
+	// It names the restart that was cut instead, on current.
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run: devopsy @devopsy@one:solo --release releases it again") {
+		t.Errorf("--status does not name the restart of %s that was cut:\n%s", cur, out)
+	}
+	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, "  CUT") {
+		t.Errorf("--releases does not mark %s, whose restart was cut, CUT:\n%s", cur, out)
+	}
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+
+	// Bug (review round 9): a session lost, or its shell killed, between
+	// the switch and SwitchMarker (release-record live, the "current is
+	// now" line, followOutput's start) reads as before the switch: the
+	// operator says "nothing went live there", while the release is
+	// current and cut (its mark there). Here the shell is killed at
+	// followOutput's first command, past make_current.
+	tailDir := t.TempDir()
+	write(t, filepath.Join(tailDir, "tail"), "#!/bin/sh\n"+
+		"if [ \"$1\" = --version ] && [ -n \"${FAKE_KILL_SWITCH:-}\" ] && [ ! -e \"$FAKE_KILL_SWITCH\" ]; then : >\"$FAKE_KILL_SWITCH\"; p=$PPID; k=; while [ \"$p\" -gt 1 ]; do [ \"$(tr '\\0' '\\n' </proc/$p/cmdline | sed -n 3p | cut -c1-14)\" != devopsy_needs= ] || k=$p; p=$(cut -d' ' -f4 /proc/$p/stat); done; [ -z \"$k\" ] || kill -KILL $k; exit 0; fi\n"+
+		"exec /usr/bin/tail \"$@\"\n", 0o755)
+	before := s.current("solo")
+	var path, sshCmd string
+	for _, kv := range s.env {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+		if strings.HasPrefix(kv, "DEVOPSY_SSH_COMMAND=") {
+			sshCmd = strings.TrimPrefix(kv, "DEVOPSY_SSH_COMMAND=")
+		}
+	}
+	// As ssh does when what it ran on the server is killed outright: 255.
+	write(t, filepath.Join(tailDir, "ssh255"), "#!/bin/sh\n"+sshCmd+" \"$@\"\nc=$?\n[ \"$c\" != 137 ] || exit 255\nexit \"$c\"\n", 0o755)
+	out, _ = s.run([]string{"PATH=" + tailDir + ":" + path, "DEVOPSY_SSH_COMMAND=" + filepath.Join(tailDir, "ssh255"), "FAKE_KILL_SWITCH=" + filepath.Join(tailDir, "killed")}, "@solo", "--release", "--yes")
+	if s.current("solo") == before || !strings.Contains(readString(mark), "\trelease\t") {
+		t.Fatalf("a release killed right past its switch: current %q (before %q), mark %q:\n%s", s.current("solo"), before, readString(mark), out)
+	}
+	if strings.Contains(out, "nothing went live there") {
+		t.Errorf("a release killed past its switch, before its marker, says nothing went live, while %s is current and cut:\n%s", s.current("solo"), out)
+	}
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+
 	// A child's release cut past its switch: its sync runs the release's
 	// run step again, which is what it skipped.
 	s.releaseProd(nil)
@@ -276,5 +341,214 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
 		t.Errorf("a sync of a child whose release was cut (%d), mark %q:\n%s", code, readString(devMark), out)
+	}
+	// A full restore cut past its switch is a release whose run step may
+	// not have run likewise (its data went in before the switch): the
+	// sync's run step finishes it too (review round 9). Staged by hand.
+	devCur := strings.TrimPrefix(s.current("dev"), "releases/")
+	write(t, devMark, devCur+"\trestore\t"+devCur+"\t20261027000000\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
+		t.Errorf("a sync of a child whose full restore was cut (%d), mark %q:\n%s", code, readString(devMark), out)
+	}
+}
+
+// cutRollback makes three releases of solo (rollback: deploy, or yaml's)
+// and kills the rollback from the third past its switch: current is the
+// second, the activation's mark says so. It returns the three ids.
+func cutRollback(t *testing.T, s *syncSetup, yaml string) []string {
+	t.Helper()
+	s.envConfig("solo", yaml)
+	var ids []string
+	for range 3 {
+		if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+			t.Fatalf("release (%d):\n%s", code, out)
+		}
+		ids = append(ids, strings.TrimPrefix(s.current("solo"), "releases/"))
+	}
+	mark := filepath.Join(s.root, "shop", "solo", remote.ActivatingFile)
+	out, _ := s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@solo", "--rollback", "--yes")
+	if s.current("solo") != "releases/"+ids[1] || !strings.HasPrefix(readString(mark), ids[1]+"\trollback\t"+ids[2]+"\t") {
+		t.Fatalf("a rollback killed past its switch: current %q, mark %q:\n%s", s.current("solo"), readString(mark), out)
+	}
+	return ids
+}
+
+// A --rollback that finishes a cut rollback says "finishing the rollback
+// to <id> from <from>", never "rolling back to <id>", which is the line
+// the operator's devopsy finds the restored release by to save the
+// session's log on the server (rollingBackTo, cmd/devopsy/remote.go's
+// save): the finishing rollback's log is never saved, and --log shows
+// nothing of it.
+func TestCutRollbackFinishedLogSaved(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	ids := cutRollback(t, s, "{rollback: deploy}")
+	out, code := s.run(nil, "@solo", "--rollback", "--yes")
+	if code != 0 || !strings.Contains(out, "finishing the rollback to "+ids[1]) {
+		t.Fatalf("the rollback finishing the cut one (%d):\n%s", code, out)
+	}
+	log := readString(filepath.Join(s.root, "shop", "solo", "releases", ids[1], remote.LogFile))
+	if !strings.Contains(log, "finishing the rollback to "+ids[1]) || !strings.Contains(log, "rollback exited 0") {
+		t.Errorf("the session log of the rollback that finished the cut one was not saved in %s's:\n%s", ids[1], log)
+	}
+}
+
+// A --rollback that finishes a cut rollback takes $prev for the release
+// the cut one left (what it marks rolled back and goes back to when its
+// run step fails), but everything before its switch that means "current"
+// reads $prev too: a failure there says "nothing changed: current is
+// still <the release the cut rollback left>", while current is the cut
+// rollback's target (internal/remote/remote.go, RollbackNotLive after
+// the cut check); img undo --rollback there puts that release's own
+// names back as if it were current.
+func TestCutRollbackFinishingSaysCurrent(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "commands", "flaky"), "#!/bin/sh\n## Description: a before step that fails when asked\n[ -z \"${FAKE_FAIL_FLAKY:-}\" ] || exit 3\n", 0o755)
+	ids := cutRollback(t, s, "{rollback: {before: [remote: flaky], run: deploy}}")
+	out, code := s.run([]string{"FAKE_FAIL_FLAKY=1"}, "@solo", "--rollback", "--yes")
+	if code == 0 || !strings.Contains(out, "finishing the rollback to "+ids[1]) || s.current("solo") != "releases/"+ids[1] {
+		t.Fatalf("the finishing rollback's before step failing (%d), current %q:\n%s", code, s.current("solo"), out)
+	}
+	if !strings.Contains(out, "current is still "+ids[1]) || strings.Contains(out, "current is still "+ids[2]) {
+		t.Errorf("a finishing rollback that failed before its switch names the wrong release as current (current is %s):\n%s", ids[1], out)
+	}
+}
+
+// A release over a cut rollback replaces the activation's mark, but
+// leaves the release the cut rollback left as it was: never marked
+// rolled back, so it stays a live release, counted toward keep and the
+// next --rollback's target, where a rollback that ended marks it (the
+// README: a later rollback never goes back to a release a rollback
+// left). The cut rollback was past its switch: that release was left.
+func TestReleaseOverCutRollback(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	ids := cutRollback(t, s, "{rollback: deploy}")
+	base := filepath.Join(s.root, "shop", "solo")
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 || fileExists(filepath.Join(base, remote.ActivatingFile)) {
+		t.Fatalf("a release over a cut rollback (%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(base, "releases", ids[2], remote.RolledBackFile)) {
+		t.Errorf("the release the cut rollback left (%s) is not marked rolled back after a release replaced the cut rollback", ids[2])
+	}
+	out, code := s.run(nil, "@solo", "--rollback", "--yes")
+	if code != 0 || s.current("solo") != "releases/"+ids[1] {
+		t.Errorf("a rollback after that (%d) went to %q, not to %s, the cut rollback's target:\n%s", code, s.current("solo"), ids[1], out)
+	}
+}
+
+// --status's line for a cut release names "--release releases it again"
+// whatever else the environment holds: on a child whose release that
+// syncs was cut during its copy (the sync's files left, or its mark once
+// settled), --release is refused there (UploadScript: nothing released),
+// and --sync is what completes the data and runs the run step, which
+// clears the mark (HolderScript). The line names a fix that does not run.
+func TestCutReleaseFixOnChildWithSyncFiles(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	s.run([]string{"FAKE_KILL_RUN=" + filepath.Join(t.TempDir(), "killed")}, "@dev", "--release-no-sync")
+	if !strings.Contains(readString(filepath.Join(dev, remote.ActivatingFile)), "\trelease\t") {
+		t.Fatalf("dev's release killed past its switch left no mark")
+	}
+	// Killed during its copy: the sync's files are there too.
+	write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
+	status, _ := s.run(nil, "@dev", "--status")
+	fix := ""
+	for _, line := range strings.Split(status, "\n") {
+		if _, f, ok := strings.Cut(line, "its run step may not have run: "); ok {
+			fix = f
+		}
+	}
+	if fix == "" {
+		t.Fatalf("--status names no cut release:\n%s", status)
+	}
+	if out, code := s.run(nil, "@dev", "--release"); code == 0 || !strings.Contains(out, "did not complete") {
+		t.Fatalf("a release of a child holding a cut sync's files (%d) was not refused:\n%s", code, out)
+	}
+	if strings.Contains(fix, "--release ") {
+		t.Errorf("--status names --release to finish the cut release, which is refused there (%q); --sync finishes it:\n%s", fix, status)
+	}
+}
+
+// --status reads the activation's mark alone: an activation killed
+// between writing it and make_current (ActivatingFile is written right
+// before the switch) leaves a mark naming a release that never went
+// live, and --status says that release was cut off past its switch while
+// its release line names another as current; --releases checks the mark
+// against current and says nothing. The mark is written by hand here:
+// the window is two shell commands wide.
+func TestStatusCutNotCurrent(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	cur := strings.TrimPrefix(s.current("solo"), "releases/")
+	write(t, filepath.Join(s.root, "shop", "solo", remote.ActivatingFile), "20991231235959\trelease\t"+cur+"\t\n", 0o644)
+	out, _ := s.run(nil, "@solo", "--status")
+	if strings.Contains(out, "20991231235959 was cut off past its switch") {
+		t.Errorf("--status says a release that is not current was cut off past its switch (current is %s):\n%s", cur, out)
+	}
+}
+
+// A --destroy moves the environment aside before removing it
+// (removeBase: <base>.rm.<pid>, so a session arriving meanwhile makes a
+// new one). Killed outright or rebooted during that rm -rf, the
+// directory stays for good: --destroy again, which the lost session's
+// message names to finish it, finds nothing at <base> and leaves it, and
+// --environments lists it as an environment (its releases/ is there).
+// Staged by hand: the move itself.
+func TestDestroyCutLeavesMovedBase(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	moved := filepath.Join(s.root, "shop", "prod.rm.4242")
+	if err := os.Rename(filepath.Join(s.root, "shop", "prod"), moved); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := s.run(nil, "@devopsy@one:", "--environments"); code != 0 || strings.Contains(out, "prod.rm.4242") {
+		t.Errorf("--environments (%d) lists what a cut destroy left:\n%s", code, out)
+	}
+	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 || fileExists(moved) {
+		t.Errorf("a --destroy run again (%d) left what the cut one moved aside, %s:\n%s", code, moved, out)
+	}
+}
+
+// A session lost past an activation's switch may be its devopsy killed
+// there, which --log never shows the end of: the words point to
+// --status, which names a cut activation (review round 9). A full
+// restore's point of no return is its data step, before its switch.
+func TestActivationLostWords(t *testing.T) {
+	t.Parallel()
+	tg := &remote.Target{Address: "vm1:prod"}
+	for _, kind := range []string{"release", "rollback"} {
+		w := releaseWords(tg, kind)
+		if !strings.Contains(strings.Join(w.lostAfter, "\n"), "--status") {
+			t.Errorf("a %s's session lost past its switch does not name --status: %q", kind, w.lostAfter)
+		}
+	}
+	w := restoreWords(tg, false)
+	for _, words := range [][]string{w.goesOn, w.lostAfter, w.hadGone} {
+		if strings.Contains(strings.Join(words, "\n"), "past its switch") {
+			t.Errorf("a full restore past its point of no return, writing its data before its switch, says past its switch: %q", words)
+		}
 	}
 }
