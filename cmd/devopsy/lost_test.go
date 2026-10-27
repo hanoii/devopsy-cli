@@ -322,3 +322,28 @@ func TestCutRollbackFinishedLogSaved(t *testing.T) {
 		t.Errorf("the session log of the rollback that finished the cut one was not saved in %s's:\n%s", ids[1], log)
 	}
 }
+
+// A --rollback that finishes a cut rollback takes $prev for the release
+// the cut one left (what it marks rolled back and goes back to when its
+// run step fails), but everything before its switch that means "current"
+// reads $prev too: a failure there says "nothing changed: current is
+// still <the release the cut rollback left>", while current is the cut
+// rollback's target (internal/remote/remote.go, RollbackNotLive after
+// the cut check); img undo --rollback there puts that release's own
+// names back as if it were current.
+func TestCutRollbackFinishingSaysCurrent(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "commands", "flaky"), "#!/bin/sh\n## Description: a before step that fails when asked\n[ -z \"${FAKE_FAIL_FLAKY:-}\" ] || exit 3\n", 0o755)
+	ids := cutRollback(t, s, "{rollback: {before: [remote: flaky], run: deploy}}")
+	out, code := s.run([]string{"FAKE_FAIL_FLAKY=1"}, "@solo", "--rollback", "--yes")
+	if code == 0 || !strings.Contains(out, "finishing the rollback to "+ids[1]) || s.current("solo") != "releases/"+ids[1] {
+		t.Fatalf("the finishing rollback's before step failing (%d), current %q:\n%s", code, s.current("solo"), out)
+	}
+	if !strings.Contains(out, "current is still "+ids[1]) || strings.Contains(out, "current is still "+ids[2]) {
+		t.Errorf("a finishing rollback that failed before its switch names the wrong release as current (current is %s):\n%s", ids[1], out)
+	}
+}
