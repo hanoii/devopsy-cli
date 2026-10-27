@@ -224,7 +224,20 @@ func TestVarsApply(t *testing.T) {
 	if out := vars(nil, "unset", "REQUIRED"); !strings.Contains(out, "warning: unset REQUIRED in") || !strings.Contains(out, "refuses until they are: REQUIRED") {
 		t.Errorf("a required variable unset:\n%s", out)
 	}
-	if out, code := s.run([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); code != 0 || !strings.Contains(out, "devopsy @<environment> --reload applies it") {
+	if out, code := s.run([]string{"X=1"}, "@prod", "--vars-project", "set", "X"); code != 0 || !strings.Contains(out, "each environment's --reload applies it") {
 		t.Errorf("the project's file (%d):\n%s", code, out)
+	}
+}
+
+// A release refuses, before its upload, a reload: step naming a command
+// that only runs locally: the server runs it, past a reload's checks.
+func TestReloadStepScope(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "commands", "here"), "#!/bin/sh\n## Description: local only\n## Run: local\necho here\n", 0o755)
+	write(t, filepath.Join(s.dot, "config.yaml"), strings.Replace(readString(filepath.Join(s.dot, "config.yaml")), "  release: deploy\n", "  release: deploy\n  reload: here\n", 1), 0o644)
+	out, code := s.run(nil, "@prod", "--release")
+	if code == 0 || !strings.Contains(out, "a remote step") || s.current("prod") != "" {
+		t.Errorf("a release with a local-only reload: step (%d):\n%s", code, out)
 	}
 }

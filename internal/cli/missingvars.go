@@ -94,10 +94,14 @@ func MissingVars(p *loadedProject) ([][2]string, error) {
 }
 
 // MissingVarsIn is MissingVars for the project at cwd, its variables
-// loaded from environ and its files: each name and where it is required.
+// loaded from environ and its files and computed by its env capability,
+// as --missing-vars has them: each name and where it is required.
 func MissingVarsIn(cwd string, environ []string) ([][2]string, error) {
 	p, err := loadProject(cwd, environ)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.computeEnv(); err != nil {
 		return nil, err
 	}
 	return MissingVars(p)

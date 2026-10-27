@@ -775,8 +775,10 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   is common to images. A service the release builds also gets the build
   it was built with (`images.BuildKey`, a seventh column): a hash of its
   interpolated `build:` section, paths relative to the release's code
-  with links resolved (compose prints them absolute, and the code is
-  `releases/<id>/code` at the fetch, `current` at a reload), then a
+  with links resolved (compose prints them absolute, and the same code is
+  reached by other paths: through `current`, a release root behind a
+  link, as `$base/releases/<id>` at the fetch and resolved at a check),
+  then a
   short hash per argument, never a value (an argument can be a secret).
   A listing again of the same image keeps the key it had (`keep`: a
   rollback lists its release anew under today's variables, its image
@@ -1173,11 +1175,19 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   `InheritPendingEnv`). Not a release that syncs: it fetches anew.
 - **`--vars set|unset` say what applies the change, refusing none**
   (`varsApply`, `--check-images --hint`, `ParseVarsApplied`): on an
-  environment with a current release, still under the lock, a reload
-  (exit 0), a release (3, the images' lines), or nothing until a
-  required variable is set (4, a warning). Any value is a release away
+  environment with a current release, still under the lock, with the
+  imports read again as a reload reads them (`--prepare-release reload`
+  into the pending file, removed after) and the env capability's values
+  (`MissingVarsIn`), a reload (exit 0), a release (3, the images'
+  lines), or nothing until a required variable is set (4, a warning). A
+  plain directory and an environment not released yet say so, never
+  `--reload`, which refuses there (review 1). Any value is a release away
   from applying, so nothing is refused there. The instance's and the
   project's files, several environments', get the plain line.
+- **A release checks its `reload:` and `destroy:` steps' scope**
+  (`checkStepScopes`) with its own: they go with it and run on the
+  server, a command that only runs locally failing a reload past its
+  checks.
 - **Gated by `check-images`:** a feature flag, so an older server
   refuses a reload, a sync, a `--no-code` restore and `--vars set`
   until upgraded, before anything changes.

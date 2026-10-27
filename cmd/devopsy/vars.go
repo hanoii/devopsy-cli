@@ -201,17 +201,24 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 		}
 	}
 	switch applied {
-	case 0:
+	case "plain":
+		report.Info(said, "running containers keep their old values until they are recreated")
+	case "first":
+		report.Info(said, "nothing is released there yet: its first release applies it")
+	case "0":
 		report.Info(said, "running containers keep their old values until they are recreated: to apply it now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
-	case 3:
+	case "3":
 		report.Info(said, append(append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), "to apply it:", report.CmdMark+"devopsy @"+targetRef(t)+" --release")...)
-	case 4:
+	case "4":
 		report.Warn(said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "),
 			"to set them:", report.CmdMark+"devopsy @"+targetRef(t)+" --vars set <KEY>...")
+	case "":
+		// The instance's or the project's file, several environments'.
+		report.Info(said, "running containers keep their old values until they are recreated: each environment's --reload applies it")
 	default:
-		// The instance's or the project's file, several environments', or
-		// an environment with nothing released yet.
-		report.Info(said, "running containers keep their old values until they are recreated: devopsy @<environment> --reload applies it")
+		// The check could not tell (compose's configuration unreadable):
+		// a reload says why.
+		report.Info(said, "running containers keep their old values until they are recreated: a reload applies it once its checks pass", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
 	}
 	return 0
 }
