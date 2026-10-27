@@ -357,12 +357,21 @@ case "$*" in
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
-    # Volumes (-v <name>:/vol/<key>:ro) copied under a directory of their
-    # own, which tar's -C /vol then names.
-    vroot="$DOCKER_LOG.vroot"; rm -rf "$vroot"; mkdir -p "$vroot"
-    while [ $# -gt 0 ]; do case $1 in *:/mnt:ro) src=${1%:/mnt:ro} ;; *:/vol/*:ro) v=${1%:ro}; cp -R "$vols/${1%%:*}" "$vroot/${v##*/}" ;; --numeric-owner) shift; break ;; esac; shift; done
-    set -- $(for a; do [ "$a" = /vol ] && echo "$vroot" || echo "$a"; done)
-    COPYFILE_DISABLE=1 exec tar -C "$src" -cf - "$@" ;;
+    # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
+    # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
+    # where the script that follows the image runs, /x being it.
+    # Hard links kept, as the container's bind mount shows them (GNU
+    # cp -a; macOS's cp keeps none).
+    x="$DOCKER_LOG.x"; rm -rf "$x"; mkdir -p "$x"
+    cpx="cp -Rp"; cp --version 2>/dev/null | grep -q GNU && cpx="cp -a"
+    while [ $# -gt 0 ]; do case $1 in
+      --mount) m=${2%,readonly}; src=${m#type=bind,source=}; src=${src%%,target=*}; $cpx "$src" "$x/${m##*,target=/x/}"; shift ;;
+      *:/x/*:ro) v=${1%:ro}; cp -Rp "$vols/${1%%:*}" "$x/${v##*/}" ;;
+      -c) script=$2; shift 2; break ;;
+    esac; shift; done
+    # bsdtar (macOS) has neither --hard-dereference nor --sparse.
+    gnu=; tar --version 2>/dev/null | grep -q GNU || gnu="s| --hard-dereference --sparse||;"
+    COPYFILE_DISABLE=1 exec sh -c "$(printf '%s' "$script" | sed "$gnu s|set -o pipefail; ||; s|cd /x|cd '$x'|")" "$@" ;;
   "run --rm --name devopsy-import-"*)
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
@@ -2159,7 +2168,7 @@ func TestExportImport(t *testing.T) {
 	out, errs, code = s.runIO(nil, nil, "--export", "app")
 	docker, _ = s.logs()
 	mnt := filepath.Join(s.dot, "mnt")
-	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "-v "+mnt+":/mnt:ro devopsy-util:3 tar -C /mnt -cf - --numeric-owner storage\n") {
+	if code != 0 || !strings.Contains(docker, "run --rm --name devopsy-export-") || !strings.Contains(docker, "--mount type=bind,source="+mnt+"/storage,target=/x/storage,readonly devopsy-util:3 sh -c ") || !strings.Contains(docker, " sh storage\n") {
 		t.Fatalf("--export rsync (%d):\n%s\n%s", code, errs, docker)
 	}
 	var names []string
@@ -2352,32 +2361,18 @@ func TestExportImport(t *testing.T) {
 		{"storage/pipe a FIFO", "/storage", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/pipe", Typeflag: tar.TypeFifo}, "")
 		})},
-		// A link out of mnt through another link of the tar (review of
-		// 2026-10-23, round 4): storage/x -> . never descends, so each
-		// x/.. pair path.Clean cancels climbs one directory for real.
-		// Judged lexically, storage/w's target was storage/etc/shadow,
-		// inside its entry; GNU tar extracts both links (checked in
-		// devopsy-util:3, one container mounting storage alone), and on
-		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
-		// root's, in the entry for whatever follows it on the host
-		// (Docker resolves a bind's source there). The ways a tar's links
-		// can lead are tarEntries' (TestTarLinks).
-		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
-			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
-			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
-			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
-		})},
-		// A link out of mnt through another link of the tar (review of
-		// 2026-10-23, round 4): storage/x -> . never descends, so each
-		// x/.. pair path.Clean cancels climbs one directory for real.
-		// Judged lexically, storage/w's target was storage/etc/shadow,
-		// inside its entry; GNU tar extracts both links (checked in
-		// devopsy-util:3, one container mounting storage alone), and on
-		// the server `realpath shared/mnt/storage/w` was /etc/shadow,
-		// root's, in the entry for whatever follows it on the host
-		// (Docker resolves a bind's source there). The ways a tar's links
-		// can lead are tarEntries' (TestTarLinks).
-		{"storage/w a link out of mnt through storage/x", "/storage", reaching(func(tw *tar.Writer) {
+		// A bind source made a link out of mnt through another link of
+		// the tar (review of 2026-10-23, round 4): storage/x -> . never
+		// descends, so each x/.. pair path.Clean cancels climbs one
+		// directory for real. Judged lexically, storage/w's target was
+		// storage/etc/shadow, inside its entry; GNU tar extracts both
+		// links (checked in devopsy-util:3, one container mounting
+		// storage alone), and on the server `realpath
+		// shared/mnt/storage/w` was /etc/shadow, which Docker follows for
+		// a bind of mnt/storage/w. A link alone is the data's
+		// (TestImportAppAbsoluteLink); the ways a tar's links can lead a
+		// bind source are linkAtBind's (TestTarLinks).
+		{"storage/w, a bind source, a link out of mnt through storage/x", "/storage/w", reaching(func(tw *tar.Writer) {
 			member(tw, &tar.Header{Name: "storage/", Typeflag: tar.TypeDir}, "")
 			member(tw, &tar.Header{Name: "storage/x", Typeflag: tar.TypeSymlink, Linkname: "."}, "")
 			member(tw, &tar.Header{Name: "storage/w", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x/", 12) + strings.Repeat("../", 12) + "etc/shadow"}, "")
@@ -2611,11 +2606,12 @@ func TestExportImport(t *testing.T) {
 	os.Remove(s.log + ".shop-prod")
 }
 
-// tarEntries follows the tar's own links to judge where a link leads,
-// as the kernel resolves it (tarLinks.check): relative links within
-// their entry pass, a way that leaves the entry at any point is refused,
-// however path.Clean reads it, and so are the members whose names would
-// not be where they land (review of 2026-10-23, round 4). A pax global
+// tarEntries refuses the members whose names would not be where they
+// land (review of 2026-10-23, round 4), and takes a symbolic link's
+// target as the data, wherever it leads; a bind source through the
+// tar's links is judged by where it leads as the host resolves it
+// (linkAtBind, tarLinks.walkMnt): through mnt only back into its entry,
+// however path.Clean reads the way, a loop refused. A pax global
 // header is no member, but GNU tar applies its records (linkpath, path,
 // size...) to every member after it, where archive/tar, which the check
 // reads the tar with, applies none (checked in devopsy-util:3, GNU tar
@@ -2640,6 +2636,9 @@ func TestTarLinks(t *testing.T) {
 		name    string
 		members []*tar.Header
 		refused string
+		// bind, a bind source under mnt, is refused by linkAtBind with
+		// atBind (passes when empty).
+		bind, atBind string
 	}{
 		{"links within their entry", []*tar.Header{
 			dir("storage/"), dir("storage/sub/"), file("storage/sub/f"),
@@ -2647,45 +2646,48 @@ func TestTarLinks(t *testing.T) {
 			sym("storage/c", "self/sub/./f"), sym("storage/d", "sub/"), sym("storage/sub/up", ".."),
 			sym("storage/e", "sub/up/sub/f"), sym("storage/dangling", "gone/away"),
 			hard("storage/h", "storage/sub/f"), hard("./storage/i", "./storage/sub/f"),
-		}, ""},
+		}, "", "", ""},
+		{"links leading anywhere, the data's own", []*tar.Header{
+			dir("storage/"), sym("storage/abs", "/app/storage/f"), sym("storage/root", "/"), sym("storage/db", "../db/x"),
+		}, "", "", ""},
 		{"through a link to the entry, path.Clean inside", []*tar.Header{
 			dir("storage/"), sym("storage/x", "."), sym("storage/w", strings.Repeat("x/", 3)+strings.Repeat("../", 3)+"etc/shadow"),
-		}, "storage/w, whose target leads out of mnt/storage"},
+		}, "", "storage/w", "leads out of mnt/storage, above mnt"},
 		{"through a link to a parent, path.Clean inside", []*tar.Header{
 			dir("storage/sub/"), sym("storage/sub/up", ".."), sym("storage/w", "sub/up/../x"),
-		}, "storage/w, whose target leads out of mnt/storage"},
+		}, "", "storage/w", "leads out of mnt/storage, into mnt/x"},
 		{"a link in a subdirectory through another", []*tar.Header{
 			dir("storage/sub/"), sym("storage/x", "."), sym("storage/sub/up", "../x/.."),
-		}, "storage/sub/up, whose target leads out of mnt/storage"},
+		}, "", "storage/sub/up", "leads out of mnt/storage, to mnt itself"},
 		{"out and back through mnt", []*tar.Header{
 			file("storage/b"), sym("storage/a", "../storage/b"),
-		}, "storage/a, whose target leads out of mnt/storage"},
+		}, "", "storage/a", ""},
 		{"a loop", []*tar.Header{
 			sym("storage/a", "b"), sym("storage/b", "a"),
-		}, "follows more than 40 links"},
+		}, "", "storage/a", "follows more than 40 links"},
 		{"a member below a link", []*tar.Header{
 			sym("storage/x", "sub"), dir("storage/sub/"), file("storage/x/f"),
-		}, "storage/x/f is below the link storage/x"},
+		}, "storage/x/f is below the link storage/x", "", ""},
 		{"a link and a directory of one name", []*tar.Header{
 			sym("storage/x", "sub"), dir("storage/x/"),
-		}, "storage/x is a link and another member of the same name"},
+		}, "storage/x is a link and another member of the same name", "", ""},
 		{"a hard link to a link", []*tar.Header{
 			dir("storage/sub/"), file("storage/f"), sym("storage/sub/s", "../f"), hard("storage/h", "storage/sub/s"),
-		}, "storage/h is a hard link to the link storage/sub/s"},
+		}, "storage/h is a hard link to the link storage/sub/s", "", ""},
 		{"a hard link below a link", []*tar.Header{
 			file("storage/f"), sym("storage/x", "."), hard("storage/h", "storage/x/f"),
-		}, "storage/h is a hard link below the link storage/x"},
+		}, "storage/h is a hard link below the link storage/x", "", ""},
 		{"the export's record alone in a global header", []*tar.Header{
 			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n"}),
 			dir("storage/"), sym("storage/x", "sub"),
-		}, ""},
+		}, "", "", ""},
 		{"a global linkpath beside the export's record", []*tar.Header{
 			global(map[string]string{images.ExportKey: "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n", "linkpath": "../../../../etc"}),
 			dir("storage/"), sym("storage/x", "sub"),
-		}, "*"},
+		}, "*", "", ""},
 		{"a global linkpath after a member", []*tar.Header{
 			dir("storage/"), global(map[string]string{"linkpath": "../../../../etc"}), sym("storage/x", "sub"),
-		}, "*"},
+		}, "*", "", ""},
 	} {
 		var b bytes.Buffer
 		tw := tar.NewWriter(&b)
@@ -2699,7 +2701,16 @@ func TestTarLinks(t *testing.T) {
 		}
 		spool := filepath.Join(t.TempDir(), "spool")
 		write(t, spool, b.String(), 0o644)
-		_, err := tarEntries(spool)
+		es, err := tarEntries(spool)
+		if c.bind != "" && err == nil {
+			err = linkAtBind(es[0], []cli.SyncService{{Name: "app", Binds: []string{c.bind}}})
+			if c.atBind == "" && err != nil {
+				t.Errorf("%s: a bind of %s refused: %v", c.name, c.bind, err)
+			} else if c.atBind != "" && (!errors.Is(err, errOutside) || !strings.Contains(err.Error(), c.atBind)) {
+				t.Errorf("%s: a bind of %s: %v, want %q", c.name, c.bind, err, c.atBind)
+			}
+			continue
+		}
 		switch {
 		case c.refused == "" && err != nil:
 			t.Errorf("%s: refused: %v", c.name, err)
@@ -3775,5 +3786,197 @@ func TestOlderServerRefusesBeforeBeforeSteps(t *testing.T) {
 	}
 	if dev := filepath.Join(s.root, "shop", "dev"); fileExists(dev) {
 		t.Errorf("the release wrote %s before the server refused it (inherit.env: %v):\n%s", dev, fileExists(filepath.Join(dev, "shared", remote.InheritFile)), out)
+	}
+}
+
+// A sync's push checks the parent's start gate before it stops the
+// parent's set, for the start that follows, as an export does: with the
+// set down already (app and db exited, a parent in maintenance) it stops
+// nothing there and starts nothing, so a link out of its entry at a bind
+// source on the parent is no reason to refuse the copy.
+func TestSyncPushNothingRunningIgnoresLeavingBinds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/storage/public\n", 0o644)
+	s.releaseProd(nil)
+	if err := os.Symlink("/", filepath.Join(s.mnt("prod"), "storage", "public")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, s.log+".stopped.shop-prod", "app\ndb\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@dev", "--release")
+	if code != 0 || strings.Contains(out, "nothing started") || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("a child's first release from a parent with its set down and a link out of its entry at a bind source (%d):\n%s", code, out)
+	}
+}
+
+// An app writes links in its own data that point where it sees that data
+// in its container (storage/latest -> /app/storage/file.txt): a sync
+// copies them as they are, a snapshot's restore takes them (anyTarget:
+// "an app's absolute links made every snapshot unrestorable"), and an
+// --import extracts each entry in a container that mounts that entry
+// alone, as a restore does. So the same data moved by --export and
+// --import is no reason to refuse: the tar devopsy's own export made of
+// it must import.
+func TestImportAppAbsoluteLink(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := os.Symlink("/app/storage/file.txt", filepath.Join(s.mnt("prod"), "storage", "latest")); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	if l, _ := os.Readlink(filepath.Join(s.mnt("dev"), "storage", "latest")); code != 0 || l != "/app/storage/file.txt" {
+		t.Errorf("prod's storage, with a link the app wrote to where it sees its data, into dev (%d), the link %q:\n%s", code, l, errs)
+	}
+}
+
+// --export lists each entry's files with find, the entries its starting
+// points (cd /x && find "$@" ...), and a snapshot's tar names its entry
+// the same way (find "$2"): GNU find takes a first argument that is ! or
+// ( as the start of its expression, not a path, so an entry named ! made
+// find fail on the entries after it, or, alone, negate the types test
+// over the current directory and list nothing: the export wrote a tar
+// without the entry's files (review). Refused where labels are read, as
+// a leading dash is, before anything stops.
+func TestExportEntryNamedBang(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, s.log+".shop-prod", "FAKE_APP_MOUNT2=/!\n", 0o644)
+	write(t, filepath.Join(s.mnt("prod"), "!", "f"), "bang\n", 0o644)
+	s.logs()
+	_, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code == 0 || !strings.Contains(errs, "./mnt/!: an entry of mnt a copy carries cannot have whitespace in its name, start with a dash or be ! or (: rename it") {
+		t.Errorf("an export of app, whose entries are ! and storage (%d):\n%s", code, errs)
+	}
+	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
+		t.Errorf("a refused export stopped something:\n%s", docker)
+	}
+}
+
+// An app's data may hold a FIFO (a mail spool's public/pickup): a sync
+// skips it (--no-D) and a snapshot's tar leaves it out (find -type f -o
+// -type d -o -type l), while an --import refuses one (errMember). The
+// tar devopsy's own --export makes of that data must import all the
+// same: the export leaves out what no copy carries, as the others do.
+func TestImportExportWithFIFO(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if err := syscall.Mkfifo(filepath.Join(s.mnt("prod"), "storage", "pickup"), 0o622); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" {
+		t.Errorf("prod's storage, with a FIFO in it, into dev (%d):\n%s", code, errs)
+	}
+}
+
+// An app's data may hold two names of one inode: a hard link to a
+// symbolic link (storage/b to storage/a, which Linux makes with link(2)
+// on a link), or a file hard-linked across two entries (cache/dup to
+// storage/file.txt). --export ran GNU tar over find's list without
+// --hard-dereference, so the second name came out as a hard link
+// member, which an --import refused: a hard link to a link, and one that
+// links into another entry (tarLinks.check, tarMember). A snapshot's tar
+// takes --hard-dereference for that reason, and a sync's rsync without
+// -H copies them as files: the tar devopsy's own --export makes of that
+// data must import all the same, as TestImportExportWithFIFO says of a
+// FIFO. (macOS's link follows the symbolic link, so only the second
+// case arises there, and the fake's cp keeps no hard links: Linux shows
+// it.)
+func TestImportExportHardLinks(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.labels("FAKE_APP_MOUNT2=/cache")
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	storage := filepath.Join(s.mnt("prod"), "storage")
+	if err := os.Symlink("file.txt", filepath.Join(storage, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(storage, "a"), filepath.Join(storage, "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(storage, "file.txt"), filepath.Join(s.mnt("prod"), "cache", "dup")); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	dev := s.mnt("dev")
+	// storage/b as prod has it: a link on Linux, its target's copy on
+	// macOS.
+	want := "file.txt"
+	if fi, err := os.Lstat(filepath.Join(storage, "b")); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		want = ""
+	}
+	if l, _ := os.Readlink(filepath.Join(dev, "storage", "b")); code != 0 || readString(filepath.Join(dev, "storage", "file.txt")) != "from prod\n" || readString(filepath.Join(dev, "cache", "dup")) != "from prod\n" || l != want {
+		t.Errorf("prod's storage and cache, with a hard link to a link and one across the entries, into dev (%d), storage/b %q:\n%s", code, l, errs)
+	}
+}
+
+// A database's files may have holes (pages it punched out): a sync
+// keeps them (rsync --sparse) and so does a snapshot's tar (--sparse:
+// "a database's punched pages came back as zeros, more disk than the
+// data took"). An --export of the same data writes each hole as zeros,
+// so the stream, the import's spool and the file it extracts take the
+// file's whole size: --export then --import must keep holes holes too.
+func TestExportImportKeepsHoles(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	const size = 64 << 20
+	f, err := os.Create(filepath.Join(s.mnt("prod"), "storage", "ibdata"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("page\n"), size-5); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	var st syscall.Stat_t
+	if err := syscall.Stat(f.Name(), &st); err != nil || st.Blocks*512 >= size/8 {
+		t.Skipf("no holes on this filesystem (%v, %d blocks)", err, st.Blocks)
+	}
+	if v, _ := exec.Command("tar", "--version").Output(); !strings.Contains(string(v), "GNU") {
+		t.Skip("the fake's tar is no GNU tar, which keeps holes (--sparse)")
+	}
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	if code != 0 {
+		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
+	}
+	if len(out) >= size/8 {
+		t.Errorf("--export of a %d-byte file with %d bytes of data wrote %d bytes: its hole as zeros", size, st.Blocks*512, len(out))
+	}
+	_, errs, code = s.runIO(nil, out, "@dev", "--import", "app", "--yes")
+	var dst syscall.Stat_t
+	if err := syscall.Stat(filepath.Join(s.mnt("dev"), "storage", "ibdata"), &dst); code != 0 || err != nil || dst.Size != size || dst.Blocks*512 >= size/8 {
+		t.Errorf("the import of it (%d, %v): %d bytes on disk for %d:\n%s", code, err, dst.Blocks*512, dst.Size, errs)
 	}
 }

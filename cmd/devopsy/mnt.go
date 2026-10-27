@@ -249,18 +249,13 @@ func checkStartBinds(cwd string) error {
 		report.Warn("the release's labels cannot be read: its bind sources are not checked before the start", err.Error())
 		return nil
 	}
-	var bad []string
-	for _, s := range services {
-		for _, l := range s.LeavingBinds {
-			bad = append(bad, fmt.Sprintf("%s mounts ./mnt/%s through a symbolic link out of its entry: Docker would mount that of the host", s.Name, l))
-		}
-	}
+	bad, fixes := cli.LeavingLines(services, nil)
 	if len(bad) == 0 {
 		return nil
 	}
 	// The message whole in its first line: callers wrap it (docker
 	// compose start: ...), which keeps only that.
-	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": remove the link in shared/mnt (a restored snapshot's, a sync's, or one made by hand), or bind-mount where it leads explicitly"}
+	return &report.Failure{Msg: "nothing started: " + strings.Join(bad, "; ") + ": " + strings.Join(fixes, "; or ")}
 }
 
 // mntOwnersRestored is --mnt-owners' word for a restored release

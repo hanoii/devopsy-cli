@@ -1112,9 +1112,10 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}
 	// The parent starts again on its own data what it stops: refused
-	// before anything stops when that start would be (checkStartBinds).
-	if err := checkStartBinds(cwd); err != nil {
-		return finish(fail(err.Error()), false)
+	// before anything stops when that start would be (gateBeforeStop:
+	// nothing when none of the set runs, as for a take and an export).
+	if err := gateBeforeStop(cwd, cwd, set); err != nil {
+		return finish(fail("the parent: "+err.Error()), false)
 	}
 	if err := stopServices(cwd, set); err != nil {
 		// What it stopped before failing comes back: restoring reads the

@@ -432,6 +432,55 @@ func TestCheckMounts(t *testing.T) {
 	}
 }
 
+// The mounts check and the start gate resolve a bind source's links as
+// the deploy user, and Docker resolves it as root. A directory below an
+// entry the deploy user cannot search hides a link in it from
+// resolvePath, which then takes the path as written, so a bind source
+// that leads out of its entry passes both, and Docker mounts that of the
+// host at the next start. Such a directory is an import's to make: a tar
+// is extracted as root with the modes and owners it carries (storage/priv
+// 0700, the app's UID, which then makes the link in it), and ownMnt
+// changes nothing of an entry nobody owns, below which a bind source is
+// allowed. The check must refuse, or fail, a bind source it cannot
+// resolve, never pass it.
+func TestLeavingBindsUnreadableDirectory(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root searches every directory: run as another user")
+	}
+	root := filepath.Join(t.TempDir(), "code")
+	dot := filepath.Join(root, ProjectDirName)
+	shared := filepath.Join(filepath.Dir(root), "shared")
+	priv := filepath.Join(shared, "mnt", "storage", "priv")
+	for _, d := range []string{priv, dot} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(shared, "mnt"), filepath.Join(dot, "mnt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(priv, "public")); err != nil {
+		t.Fatal(err)
+	}
+	// No search permission, as a 0700 directory of another user has none
+	// for the deploy user.
+	if err := os.Chmod(priv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(priv, 0o755) })
+	parsed, err := parseSyncServices([]byte(`{"services":{"app":{"volumes":[{"type":"bind","source":"`+dot+`/mnt/storage/priv/public","target":"/x","read_only":false}]}}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckMounts(parsed); err == nil || !strings.Contains(strings.Join(report.Details(err), "\n"), "storage/priv/public") {
+		t.Errorf("a bind source a link leads out of its entry, in a directory the deploy user cannot search: the mounts check lets Docker mount the host's root: %v %q", err, report.Details(err))
+	}
+	if err := CheckLeavingBinds(parsed, nil, "the start"); err == nil {
+		t.Errorf("a bind source a link leads out of its entry, in a directory the deploy user cannot search: the start gate lets Docker mount the host's root")
+	}
+}
+
 // Compose lists the implicit dependencies under depends_on too (as
 // docker compose v5.5.0 prints a.network_mode service:db, b.links,
 // c.volumes_from, and d's required: false), so they count for the
@@ -589,5 +638,50 @@ func TestSyncStreamOrder(t *testing.T) {
 	services[1].Stop = StopAlways
 	if got := DataStops(services, ExportOne, "b"); len(got) != 2 {
 		t.Errorf("stops with a cycle: %+v", got)
+	}
+}
+
+// A bind source below a directory the deploy user cannot search is
+// refused (TestLeavingBindsUnreadableDirectory), link or no link: devopsy
+// cannot see what is there. The refusal must say so, never that a
+// symbolic link leads out of the entry, nor have the operator remove a
+// link in shared/mnt: here there is none, and the deploy user cannot
+// even list the directory to look for one. storage/priv is 0700, the
+// app's (an import or a sync writes the owners and modes the parent
+// had), and storage/priv/public a plain directory.
+func TestLeavingBindsUnsearchableSaysSo(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root searches every directory: run as another user")
+	}
+	root := filepath.Join(t.TempDir(), "code")
+	dot := filepath.Join(root, ProjectDirName)
+	shared := filepath.Join(filepath.Dir(root), "shared")
+	priv := filepath.Join(shared, "mnt", "storage", "priv")
+	for _, d := range []string{filepath.Join(priv, "public"), dot} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(shared, "mnt"), filepath.Join(dot, "mnt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(priv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(priv, 0o755) })
+	parsed, err := parseSyncServices([]byte(`{"services":{"app":{"volumes":[{"type":"bind","source":"`+dot+`/mnt/storage/priv/public","target":"/x","read_only":false}]}}}`), dot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, err := range map[string]error{"the mounts check": CheckMounts(parsed), "the start gate": CheckLeavingBinds(parsed, nil, "the start")} {
+		var said []string
+		for _, f := range report.Fixes(err) {
+			said = append(said, f.Text)
+		}
+		said = append(said, report.Details(err)...)
+		if err == nil || strings.Contains(strings.Join(said, "\n"), "symbolic link out of its entry") || strings.Contains(strings.Join(said, "\n"), "remove the link") {
+			t.Errorf("%s, of a bind source below a directory the deploy user cannot search, with no link at all: %v\n%s", what, err, strings.Join(said, "\n"))
+		}
 	}
 }

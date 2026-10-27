@@ -1216,9 +1216,10 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   push's is: review, the child refused the `--reset` it named as the way
   out; accepted: a reset whose push aborts before its wipe, the data as
   it was, leaves the child's set down, the gate saying which link); a
-  restore in the entries it keeps (`check-tars`). A take and an export
-  check only when something of their set runs (`gateBeforeStop`: none
-  running, they stop and start nothing). Its message carries the links
+  restore in the entries it keeps (`check-tars`). A take, an export and
+  a sync's push check only when something of their set runs
+  (`gateBeforeStop`: none running, they stop and start nothing; review
+  after v0.52.1, the push was refused for a start that never came). Its message carries the links
   in its first line, which callers wrap.
   A bind source that reaches mnt
   through links (the release tree's `files -> .devopsy/mnt/storage/files`,
@@ -1245,7 +1246,14 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   one alone for `TreeBinds` and `WholeMnt`. Why (review of 2026-10-23,
   round 3): the check was lexical, so a release-tree link to below an
   owned entry, or a `shared/mnt` link into the release, passed. Links
-  into `shared/` lead out of the release tree, so they stay fine.
+  into `shared/` lead out of the release tree, so they stay fine. A
+  bind source below an entry that the deploy user cannot resolve (a
+  directory on the way it cannot search: an import's tar sets the modes
+  and owners it carries) is refused as one leading out of it is
+  (`HiddenBinds`), in its own words (`LeavingLines`, one
+  place for the mounts check, the start gate and `CheckLeavingBinds`):
+  Docker resolves it as root (review after v0.52.1: a 0700 directory of
+  the app's hid a link to `/`).
 - **A bind source below an owned entry is refused** (decided, review
   of 2026-10-23, round 2), by any service, read-only too: the entry's
   owner (the app, writing it) can replace `storage/files` with a
@@ -1589,7 +1597,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   with a dash too (an owned one as well, and a data service's volume
   key), since find, chown and tar take
   entries as arguments (decided over `./` prefixes in every tool: a
-  snapshot's take failed on find's predicate, review).
+  snapshot's take failed on find's predicate, review), and one named
+  `!` or `(`, which GNU find takes for its expression (`argName`;
+  review after v0.52.1: an export of `!` wrote none of its files).
 - **The child guard: each side reads its own labels, and the parent
   checks the child's before changing anything.** `--sync-push` asks the
   child for `--sync-services list` (through `--sync-exec`, one more
@@ -2037,7 +2047,14 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   `export` and `import` (`runDataHook`, the lists in their
   environment). `volumes`: a tar of
   the service's entries of `mnt` (exclude honored, file entries
-  included) made in `UtilImage` as root with `--numeric-owner`. The
+  included) made in `UtilImage` as root with `--numeric-owner`, each
+  entry and volume mounted at `/x/<name>`, only files, directories and
+  links (`find ... | tar --null --no-recursion -T -`, as a sync's
+  `--no-D` and a snapshot's tars: review after v0.52.1, a FIFO in the
+  data made an export its import refused), hard links as files of their
+  own and holes kept (`--hard-dereference --sparse`, as a snapshot's
+  tars: a hard link to a link or across entries made an export its
+  import refused, and a database's holes came back as zeros). The
   set (`cli.DataStops`, `ExportOne` or `ImportOne`) is stopped around
   either and restored (`stopSet`), interrupts and a stop that failed
   included (it may have stopped them all the same) up to the first
@@ -2057,25 +2074,31 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   `tarEntry.volume`, extracted into the volume by name, one carried as
   a file refused) are refused, an excluded one by its label, and
   so is a member that reaches out of its entry (`tarMember`): a `..` or
-  absolute path, a link out of `mnt`, a top-level entry that is no
-  directory or file, a link into another entry, and `./`, `mnt` itself.
-  Why: GNU tar extracted those through to another entry, refused them
-  only once the entries were emptied, or (`../x` into `.`, before `.`
-  went) emptied the container's root. Where a link leads is judged
-  through the tar's own links, never lexically alone (`tarLinks.check`,
-  after the whole tar is read): a symbolic link's target is walked
-  component by component from its directory as the kernel resolves it,
-  following every link of the tar on the way (40 at most, Linux's own
-  limit), and refused when the way leaves its entry at any point (a `..`
-  above it, `../storage/b` going through `mnt` included), as are a
-  member below a link of the tar or sharing a link's name (a tar never
-  writes them, and then every name is where it lands) and a hard link
-  to a link or below one (GNU tar links the symbolic link itself, whose
-  relative target then leads elsewhere: checked in `devopsy-util:2`).
-  Why: `path.Clean` read `storage/w -> x/x/../../etc/shadow`, with
-  `storage/x -> .`, as `storage/etc/shadow`, and on the server it was
-  `/etc/shadow` (review of 2026-10-23, round 4). What the tar does not
-  carry is a directory to the walk: the entry is emptied first. A pax
+  absolute path, a hard link out of its entry, a top-level entry that
+  is no directory or file, and `./`, `mnt` itself. Why: GNU tar
+  extracted those through to another entry, refused them only once the
+  entries were emptied, or (`../x` into `.`, before `.` went) emptied
+  the container's root. Nothing is written through a link
+  (`tarLinks.check`, after the whole tar is read): a member below a
+  link of the tar or sharing a link's name is refused (a tar never
+  writes them, and then every name is where it lands), and so is a hard
+  link to a link or below one (GNU tar links the symbolic link itself,
+  whose relative target then leads elsewhere: checked in
+  `devopsy-util:2`). A symbolic link's target is the data's own,
+  wherever it leads, as a sync copies it and a restore takes it: the
+  extraction mounts its entry alone, so nothing of the host is in its
+  way (decided after v0.52.1: an app's absolute link, `storage/latest
+  -> /app/storage/f`, made devopsy's own export refuse its import).
+  What Docker follows on the host is refused: a bind source of the
+  current code that the tar's links make lead out of its entry
+  (`linkAtBind`, as a restore's, locally too), walked through the
+  tar's own links as the host resolves them in mnt (`tarLinks.walkMnt`,
+  40 links at most, Linux's own limit; through mnt only back into the
+  entry), never lexically alone: `path.Clean` read `storage/w ->
+  x/x/../../etc/shadow`, with `storage/x -> .`, as `storage/etc/shadow`,
+  and on the server it was `/etc/shadow` (review of 2026-10-23, round
+  4). What the tar does not carry is a directory to the walk: the entry
+  is emptied first. A pax
   global header is no member to `archive/tar`, but GNU tar applies its
   records to every member after it (a `path` or `linkpath` renames
   members and retargets links these checks never saw: review of
@@ -2443,7 +2466,7 @@ settled every rule here after nine reviews (2026-10-25).
   existing volumes only; decided 2026-10-26: a warning, sparse files
   counting whole make the estimate high; disk space as a whole is a plan
   of its own), the import's checks but a symbolic link's
-  target, which is the data's own wherever it leads (`anyTarget`:
+  target, which is the data's own wherever it leads (as an import's:
   nothing is written through a link, the other rules hold, and an
   extraction mounts its entry alone; review: an app's absolute links
   made every snapshot unrestorable), but none that makes a bind source

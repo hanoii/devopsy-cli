@@ -370,16 +370,27 @@ func runExport(cwd string, args []string, color bool) int {
 			err = exportHeader(os.Stdout, record)
 		}
 		if err == nil {
-			// Volumes at the tar's top level by their key, beside the
+			// Each entry and volume mounted at /x by its name, so the tar
+			// has volumes at its top level by their key, beside the
 			// entries (cli.SyncServices refuses a key named like one).
-			run := []string{"-v", mnt + ":/mnt:ro"}
+			// Only files, directories and links, as a sync (--no-D) and a
+			// snapshot's tars: an import refuses anything else (tarTypes),
+			// so a FIFO in the data made an export no import took
+			// (review). Hard links as files of their own and holes kept,
+			// as a snapshot's tars (an import refuses a hard link to a
+			// link, and a database's holes came back as zeros: review).
+			var run []string
+			for _, e := range entries {
+				m, merr := bindMount(filepath.Join(mnt, e), "/x/"+e)
+				if merr != nil {
+					return fail(merr.Error())
+				}
+				run = append(run, "--mount", m+",readonly")
+			}
 			for _, v := range vols {
-				run = append(run, "-v", v.Name+":/vol/"+v.Key+":ro")
+				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
-			run = append(append(run, remote.UtilImage, "tar", "-C", "/mnt", "-cf", "-", "--numeric-owner"), entries...)
-			if len(vols) > 0 {
-				run = append(append(run, "-C", "/vol"), cli.VolumeKeys(vols)...)
-			}
+			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
 			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
 		}
 	}
@@ -547,14 +558,15 @@ func tarEntries(spool string) ([]tarEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return tarEntriesIn(f, false)
+	return tarEntriesIn(f)
 }
 
 // tarEntriesIn is tarEntries of the tar f streams (a snapshot's,
-// decompressed on the way). With anyTarget, a symbolic link may lead
-// anywhere (a snapshot's: its data as it was, an app's absolute links
-// included); everything else is checked as for an import.
-func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
+// decompressed on the way). A symbolic link may lead anywhere: it is the
+// data, an app's absolute links included (review: a snapshot's made
+// every restore refuse, and an export's its import); what a bind source
+// makes of them is linkAtBind's.
+func tarEntriesIn(f io.Reader) ([]tarEntry, error) {
 	// archive/tar ends at its end-of-archive blocks and at a plain end
 	// of file alike; only the first leaves a read that returned data
 	// last.
@@ -599,7 +611,7 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 		if p == "" || p == "." || p == "./" {
 			return nil, fmt.Errorf("%w: %s is mnt itself: a tar of its entries carries them alone (tar -C mnt -cf - <entry>...)", errOutside, h.Name)
 		}
-		top, err := tarMember(h, p, anyTarget)
+		top, err := tarMember(h, p)
 		if err != nil {
 			return nil, err
 		}
@@ -630,7 +642,7 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 			return nil, fmt.Errorf("%w: mnt/%s is a file and a directory in the tar", errMember, top)
 		}
 	}
-	if err := links.check(anyTarget); err != nil {
+	if err := links.check(); err != nil {
 		return nil, err
 	}
 	var entries []tarEntry
@@ -643,9 +655,9 @@ func tarEntriesIn(f io.Reader, anyTarget bool) ([]tarEntry, error) {
 }
 
 // tarLinks are the members of an import's tar as links see them, for a
-// check of the whole tar once it is read (check): tarMember judges each
-// link's target alone, lexically, which is right only while no
-// component of the way is a link. storage/x -> . plus storage/w ->
+// check of the whole tar once it is read (check) and a walk through its
+// links (walkMnt): a target judged alone, lexically, is right only while
+// no component of the way is a link. storage/x -> . plus storage/w ->
 // x/x/../../etc/shadow is storage/etc/shadow to path.Clean, and
 // /etc/shadow on the host (review of 2026-10-23, round 4).
 type tarLinks struct {
@@ -675,41 +687,30 @@ func (l *tarLinks) add(h *tar.Header, clean string) {
 	l.header[clean] = h.Name
 }
 
-// maxLinks is how many links a target's walk follows (check): Linux's
-// own limit for one path, so a longer chain is one the kernel would not
+// maxLinks is how many links a walk follows (walkMnt): Linux's own
+// limit for one path, so a longer chain is one the kernel would not
 // follow either.
 const maxLinks = 40
 
-// check refuses links that lead out of their entry once the tar's own
-// links are followed, so a link out of mnt is refused however it is
-// written (errOutside):
+// check refuses the members a link would put elsewhere than their names
+// say (errOutside):
 //
 //   - a member below a symbolic link of the tar (storage/x/f with
 //     storage/x a link), and a link with another member of its name: a
 //     tar writes neither (tar never descends into a link), and then
-//     every member's name is where it lands, which the walk relies on;
-//   - a symbolic link whose target, walked component by component from
-//     the link's directory and through every link of the tar on the way,
-//     as the kernel resolves it, leaves its entry at any point (a ..
-//     above it: storage/a -> ../storage/b too, which goes through mnt),
-//     or follows more than maxLinks links (a loop included);
+//     every member's name is where it lands, so nothing is written
+//     through a link;
 //   - a hard link whose target is below a link, or is a symbolic link
 //     itself: GNU tar links the symbolic link, whose relative target
 //     then leads elsewhere from the hard link's directory.
 //
-// A relative link within its entry (storage/a -> sub/f, storage/sub/b ->
-// ../f, storage/self -> .) passes. A component the tar does not carry is
-// a directory to the walk: the entry is emptied before the extraction,
-// so only the tar's links are there (what a running service makes there
-// itself is its own).
-//
-// With anyTarget (a snapshot's tars) a symbolic link's target is not
-// walked: it is the data, never followed, since the first two rules
-// leave no member written through a link and the hard links' rule still
-// holds. An extraction mounts its entry alone, so nothing of the host is
-// in the way of a link anyway; what the restored app makes of its links
-// is its own, as it was when the snapshot was taken.
-func (l *tarLinks) check(anyTarget bool) error {
+// A symbolic link's target is not judged: it is the data, never
+// followed by the extraction, which mounts its entry alone, so nothing
+// of the host is in the way of a link; what the app makes of its links
+// is its own, as a sync copies them (decided after review: an export's
+// absolute links, storage/latest -> /app/storage/f, made its import
+// refuse). A bind source through one is linkAtBind's.
+func (l *tarLinks) check() error {
 	under := func(name string) string {
 		for i := range len(name) {
 			if name[i] != '/' {
@@ -729,16 +730,6 @@ func (l *tarLinks) check(anyTarget bool) error {
 			return fmt.Errorf("%w: %s is a link and another member of the same name", errOutside, l.header[name])
 		}
 	}
-	for _, name := range slices.Sorted(maps.Keys(l.symlinks)) {
-		if anyTarget {
-			break
-		}
-		dir := strings.Split(path.Dir(name), "/")
-		hops := 0
-		if _, err := l.walk(dir, l.symlinks[name], &hops); err != nil {
-			return fmt.Errorf("%w: %s, whose target %s", errOutside, l.header[name], err)
-		}
-	}
 	for _, name := range slices.Sorted(maps.Keys(l.hard)) {
 		target := l.hard[name]
 		if link := under(target); link != "" {
@@ -751,20 +742,12 @@ func (l *tarLinks) check(anyTarget bool) error {
 	return nil
 }
 
-// walk follows target from the directory dir (its components, its entry
-// first) as the kernel would, through the tar's symbolic links, its last
-// component's too, and returns where it leads. It fails when
-// the way leaves the entry (a .. above it, an absolute target) or
-// follows more than maxLinks links, hops counting them.
-func (l *tarLinks) walk(dir []string, target string, hops *int) ([]string, error) {
-	return l.walkIn(dir, target, hops, "")
-}
-
-// walkMnt is walk as the host resolves it in mnt, where a .. above the
-// entry is mnt itself: the way may pass through mnt, but only back into
-// entry (storage/public -> ../storage/v1), never into another entry or
-// above mnt (linkAtBind; an extraction's container holds the entry alone,
-// so an import's check keeps walk).
+// walkMnt follows target from entry as the host resolves it in mnt,
+// through the tar's symbolic links, its last component's too, and
+// returns where it leads: the way may pass through mnt, a .. above the
+// entry, but only back into entry (storage/public -> ../storage/v1),
+// never into another entry or above mnt, nor follow more than maxLinks
+// links, hops counting them (linkAtBind).
 func (l *tarLinks) walkMnt(entry, target string, hops *int) ([]string, error) {
 	return l.walkIn([]string{entry}, target, hops, entry)
 }
@@ -832,12 +815,12 @@ var errMember = errors.New("a member devopsy does not extract")
 var tarTypes = []byte{tar.TypeReg, tar.TypeRegA, tar.TypeGNUSparse, tar.TypeCont, tar.TypeDir, tar.TypeSymlink, tar.TypeLink}
 
 // tarMember checks a member (p, its name without ./) stays in its
-// top-level entry of mnt, and returns that entry. A path or a link out
-// of its entry (into another entry too), and a top-level entry that is
-// no directory or file, are errOutside; a member of another type than
-// tarTypes (a device node, a FIFO) is errMember. With anyTarget a
-// symbolic link's target is not judged (tarLinks.check).
-func tarMember(h *tar.Header, p string, anyTarget bool) (top string, err error) {
+// top-level entry of mnt, and returns that entry. A path or a hard link
+// out of its entry (into another entry too), and a top-level entry that
+// is no directory or file, are errOutside; a member of another type than
+// tarTypes (a device node, a FIFO) is errMember. A symbolic link's
+// target is not judged (tarLinks.check).
+func tarMember(h *tar.Header, p string) (top string, err error) {
 	outside := func() (string, error) { return "", fmt.Errorf("%w: %s", errOutside, h.Name) }
 	if !slices.Contains(tarTypes, h.Typeflag) {
 		kind := map[byte]string{tar.TypeBlock: "a block device", tar.TypeChar: "a character device", tar.TypeFifo: "a FIFO"}[h.Typeflag]
@@ -854,27 +837,13 @@ func tarMember(h *tar.Header, p string, anyTarget bool) (top string, err error) 
 	if !nested && h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeGNUSparse {
 		return outside()
 	}
-	var target string
-	switch h.Typeflag {
-	case tar.TypeSymlink:
-		if anyTarget {
-			return top, nil
-		}
-		if path.IsAbs(h.Linkname) {
-			return outside()
-		}
-		target = path.Clean(path.Join(path.Dir(clean), h.Linkname))
-	case tar.TypeLink:
-		if path.IsAbs(h.Linkname) || slices.Contains(strings.Split(h.Linkname, "/"), "..") {
-			return outside()
-		}
-		target = path.Clean(strings.TrimPrefix(h.Linkname, "./"))
-	default:
+	if h.Typeflag != tar.TypeLink {
 		return top, nil
 	}
-	if target == ".." || strings.HasPrefix(target, "../") {
+	if path.IsAbs(h.Linkname) || slices.Contains(strings.Split(h.Linkname, "/"), "..") {
 		return outside()
 	}
+	target := path.Clean(strings.TrimPrefix(h.Linkname, "./"))
 	if t, _, _ := strings.Cut(target, "/"); t != top {
 		return "", fmt.Errorf("%w: %s links into %s", errOutside, h.Name, t)
 	}
@@ -1156,6 +1125,15 @@ func runImport(cwd string, args []string, color bool) int {
 				return fail(fmt.Sprintf("the tar carries %s, which %s neither bind-mounts from mnt (%s) nor mounts as a volume (%s): nothing imported", e, name, cmp.Or(strings.Join(s.Dirs, ", "), "none"), cmp.Or(strings.Join(cli.VolumeKeys(s.Volumes), ", "), "none")))
 			default:
 				names = append(names, e)
+			}
+			// Its links may lead anywhere, but none may make a bind
+			// source lead out of its entry: Docker follows it on the host
+			// (an import's own check as a restore's, locally too, where
+			// no mounts check runs).
+			if entries[i].volume == nil {
+				if err := linkAtBind(t, services); err != nil {
+					return fail("the tar has " + err.Error() + ": nothing imported")
+				}
 			}
 		}
 		if mnt, err = dataMnt(projectDir); err != nil {

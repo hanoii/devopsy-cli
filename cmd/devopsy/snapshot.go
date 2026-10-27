@@ -1971,7 +1971,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) e
 		if err != nil {
 			return err
 		}
-		es, err := tarEntriesIn(r, true)
+		es, err := tarEntriesIn(r)
 		_, _ = io.Copy(io.Discard, r)
 		// Docker's failure first: what the tar's check says then follows
 		// from it (a container that never wrote reads as a cut tar).
@@ -2117,11 +2117,11 @@ func restoredEntries(m *manifest, services []cli.SyncService) []string {
 	return out
 }
 
-// linkAtBind refuses a snapshot's entry e whose tar makes a bind source
-// of services (or a directory above one) a symbolic link that leads out
-// of the entry, walked through the tar's own links as the kernel would
-// (tarLinks.walk): a snapshot's links may lead anywhere (tarEntriesIn's
-// anyTarget), and Docker resolves a bind source on the host, so
+// linkAtBind refuses an entry e of a snapshot's or an import's tar that
+// makes a bind source of services (or a directory above one) a symbolic
+// link that leads out of the entry, walked through the tar's own links
+// as the host would (tarLinks.walkMnt): a tar's links may lead anywhere
+// (tarEntriesIn), and Docker resolves a bind source on the host, so
 // storage/public -> / mounts the host's root into the service binding
 // ./mnt/storage/public (review: the mounts check allows a bind below an
 // entry nobody owns). A link that stays in its entry (storage/public ->
@@ -2139,7 +2139,7 @@ func linkAtBind(e tarEntry, services []cli.SyncService) error {
 			}
 			hops := 0
 			if _, err := e.tar.walkMnt(e.name, rest, &hops); err != nil {
-				return fmt.Errorf("%w: %s bind-mounts mnt/%s, which the snapshot's links make a path that %v, which Docker would follow on the host", errOutside, s.Name, b, err)
+				return fmt.Errorf("%w: %s bind-mounts mnt/%s, which the tar's links make a path that %v, which Docker would follow on the host", errOutside, s.Name, b, err)
 			}
 		}
 	}

@@ -2449,7 +2449,7 @@ func TestRestoreLinkAtBindSource(t *testing.T) {
 		if target, err := os.Readlink(filepath.Join(s.mnt("prod"), "storage", "public")); err == nil {
 			t.Errorf("the restore (%d) made mnt/storage/public, a bind source of app below its entry, a link to %s: Docker mounts that path of the host:\n%s", code, target, out)
 		}
-		if code == 0 || strings.Contains(out, "panic:") || !strings.Contains(out, "bind-mounts mnt/storage/public, which the snapshot's links make a path that") {
+		if code == 0 || strings.Contains(out, "panic:") || !strings.Contains(out, "bind-mounts mnt/storage/public, which the tar's links make a path that") {
 			t.Errorf("the restore of a snapshot whose storage/public -> %s, a bind source of app (%d): not refused as a link out of its entry:\n%s", link, code, out)
 		}
 	}
@@ -2808,7 +2808,7 @@ func TestSnapshotEntryLeadingDash(t *testing.T) {
 	write(t, filepath.Join(s.mnt("prod"), "-files", "a.jpg"), "pic\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@prod", "--snapshot")
-	if code == 0 || !strings.Contains(out, "./mnt/-files: an entry of mnt a copy carries cannot have whitespace in its name or start with a dash: rename it") {
+	if code == 0 || !strings.Contains(out, "./mnt/-files: an entry of mnt a copy carries cannot have whitespace in its name, start with a dash or be ! or (: rename it") {
 		t.Errorf("a take of mnt/-files (%d):\n%s", code, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, " stop ") {
