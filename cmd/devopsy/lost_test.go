@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // A run step that exits 255 (drush does, on a PHP error) failed: the
@@ -85,5 +87,48 @@ func TestDestroyDataFailedSays(t *testing.T) {
 	}
 	if strings.Contains(out, "stays as it was") {
 		t.Errorf("a destroy that took the containers and volumes down, then failed, says its environment stays as it was:\n%s", out)
+	}
+}
+
+// A --destroy that stopped halfway, its connection lost or its data step
+// failed past its down, says how to finish it as a command to copy ($
+// ...), but with words after the command ("devopsy @prod --destroy again
+// finishes it", "devopsy @prod --destroy finishes it"): copied, they are
+// usage errors (--destroy takes --yes and --purge alone). Every other fix
+// after report.CmdMark is the command alone.
+func TestDestroyHalfwayFixCopies(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	for name, env := range map[string]string{
+		"its connection lost":            "FAKE_SSH_LOST=--destroy-data",
+		"its data step failed past down": "FAIL_DESTROY=1",
+	} {
+		_, errs, code := s.runIO([]string{env}, nil, "@prod", "--destroy", "--yes")
+		if code == 0 {
+			t.Fatalf("%s: the destroy went through:\n%s", name, errs)
+		}
+		fixes := 0
+		for _, line := range strings.Split(errs, "\n") {
+			_, cmd, ok := strings.Cut(line, report.Bar+report.CmdMark)
+			if !ok {
+				continue
+			}
+			fixes++
+			words := strings.Fields(cmd)
+			if len(words) == 0 || words[0] != "devopsy" {
+				t.Errorf("%s: the fix %q is no devopsy command", name, cmd)
+				continue
+			}
+			for _, w := range words[1:] {
+				if !strings.HasPrefix(w, "@") && !strings.HasPrefix(w, "-") {
+					t.Errorf("%s: the fix %q has words after its command, which copied is a usage error:\n%s", name, cmd, errs)
+					break
+				}
+			}
+		}
+		if fixes == 0 {
+			t.Errorf("%s: no command to copy shown:\n%s", name, errs)
+		}
 	}
 }
