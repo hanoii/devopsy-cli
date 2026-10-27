@@ -17,7 +17,10 @@ func StatusScript(t *Target) string {
   cd "$base" && exec devopsy --status
 fi
 ` + EnvStatus + `
-[ -d "$base/current/.devopsy" ] || exit 0
+# As EnvStatus tells it: current a link to a release (a directory there
+# is what Docker made of a failed release's bind mounts: "none").
+cur=$(readlink "$base/current" 2>/dev/null || true)
+[ -n "$cur" ] && [ -d "$base/$cur/.devopsy" ] || exit 0
 echo ---
 cd "$base/current" && exec devopsy --status
 `

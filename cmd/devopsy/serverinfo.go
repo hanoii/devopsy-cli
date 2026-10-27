@@ -42,7 +42,7 @@ var serverTools = []struct{ name, without string }{
 	{"setsid", "the run step runs plainly, and a fetch's live progress shows only before it"},
 	{"script", "builds and pulls show no live progress"},
 	{"mkfifo", "no sync runs"},
-	{"tail", "only the traps protect a release after its switch (GNU tail)"},
+	{"tail", "only the traps protect a release after its switch (a tail that answers --version)"},
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
@@ -67,10 +67,9 @@ func runServerFacts() int {
 	for _, t := range serverTools {
 		if _, err := exec.LookPath(t.name); err != nil {
 			info.Missing = append(info.Missing, t.name)
-		} else if t.name == "tail" {
-			if out, _ := exec.Command("tail", "--version").Output(); !bytes.Contains(out, []byte("GNU")) {
-				info.Missing = append(info.Missing, "tail")
-			}
+		} else if t.name == "tail" && exec.Command("tail", "--version").Run() != nil {
+			// As the scripts tell (followOutput): GNU's, or uutils'.
+			info.Missing = append(info.Missing, "tail")
 		}
 	}
 	info.Containers = hostContainers()
@@ -329,10 +328,9 @@ func hostContainers() []remote.HostContainer {
 	if len(ids) == 0 {
 		return nil
 	}
-	out, err = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
-	if err != nil {
-		return nil
-	}
+	// A container gone since ps (a run --rm, a util container) fails
+	// inspect, which printed every other one all the same.
+	out, _ = exec.Command("docker", append([]string{"inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}} {{json .Config.Labels}}"}, ids...)...).Output()
 	return parseHostContainers(out)
 }
 
@@ -695,7 +693,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				}
 			}
 		}
-		compose := strings.ReplaceAll(env.Path, "/", "-")
+		compose := composeNameOf(env.Path)
 		running, all := 0, 0
 		var bad []string
 		for _, c := range info.Containers {
@@ -706,10 +704,12 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			if c.State == "running" {
 				running++
 			}
+			// Docker says unhealthy of a stopped container's health too:
+			// it means something only while it runs.
 			switch {
 			case c.State == "restarting":
 				bad = append(bad, c.Service+" restarting")
-			case c.Health == "unhealthy":
+			case c.State == "running" && c.Health == "unhealthy":
 				bad = append(bad, c.Service+" unhealthy")
 			}
 		}
@@ -750,6 +750,15 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 	return lines, warnings
+}
+
+// composeNameOf is the compose name of the environment at path,
+// <project>/[<instance>/]<environment>, as Target.ComposeName makes it:
+// the environment's name lowercased.
+func composeNameOf(path string) string {
+	parts := strings.Split(path, "/")
+	parts[len(parts)-1] = strings.ToLower(parts[len(parts)-1])
+	return strings.Join(parts, "-")
 }
 
 // statusFix is the --status of the environment at path, in its project.
