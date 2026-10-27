@@ -149,8 +149,19 @@ func TestLostResolvedSays(t *testing.T) {
 	if code != 255 {
 		t.Fatalf("the fake lost no session (%d):\n%s", code, errs)
 	}
-	if !strings.Contains(errs, "devopsy: error:") {
+	if !strings.Contains(errs, "devopsy: error:") || !strings.Contains(errs, report.CmdMark+"devopsy @devopsy@one:prod --import db --resolved") {
 		t.Errorf("a --resolved whose session was lost (%d) said nothing of devopsy's:\n%s", code, errs)
+	}
+	// Its devopsy killed as it starts the record: the mark stays, said.
+	_, errs, code = s.runIO([]string{"FAKE_KILL_START=1"}, nil, "@prod", "--import", "db", "--resolved", "--yes")
+	if code == 0 || !s.mark().IsImport() {
+		t.Fatalf("the fake killed no --resolved (%d):\n%s", code, errs)
+	}
+	if !strings.Contains(errs, "was killed") || !strings.Contains(errs, report.CmdMark+"devopsy @devopsy@one:prod --import db --resolved") {
+		t.Errorf("a --resolved whose devopsy was killed (%d) says neither so nor how to finish it:\n%s", code, errs)
+	}
+	if _, errs, code = s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes"); code != 0 || s.mark() != nil {
+		t.Errorf("the --resolved again did not finish it (%d):\n%s", code, errs)
 	}
 }
 

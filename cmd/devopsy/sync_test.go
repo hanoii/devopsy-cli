@@ -150,6 +150,9 @@ case "$*" in
   *" start "*)
     # FAKE_START_WAIT: a start that takes until $FAKE_START_WAIT.go exists.
     if [ -n "${FAKE_START_WAIT:-}" ]; then : >"$FAKE_START_WAIT"; n=0; while [ ! -e "$FAKE_START_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # FAKE_KILL_START: the devopsy starting them killed outright (SIGKILL,
+    # the OOM killer) as they start.
+    [ -z "${FAKE_KILL_START:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do case " $svcs " in *" $s "*) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done

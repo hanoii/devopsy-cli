@@ -899,7 +899,15 @@ grep '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null || true
 func ResolvedScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
 ` + releaseLock(false, false) + `cd "$base/current"
-` + settleLeftover(projectName) + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, true) + "\n"
+` + settleLeftover(projectName) + `rv_status=0
+` + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, false) + ` || rv_status=$?
+# Killed (SIGKILL, the OOM killer), it said nothing: the mark stays, what
+# it started perhaps running under it.
+if [ "$rv_status" -gt 128 ]; then
+  devopsy --say error "its devopsy on the server was killed ($rv_status): the import of ` + service + ` is not resolved, its mark still there and what it started perhaps running" "to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --import ` + service + ` --resolved" || true
+fi
+exit "$rv_status"
+`
 }
 
 // SyncStateFile is the record of what a sync or an import stopped, in the

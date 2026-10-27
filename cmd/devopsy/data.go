@@ -1723,7 +1723,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 		return fail(err.Error())
 	}
 	if code == sshLost {
-		report.Error("the connection to @"+t.Address+" failed or was lost: the export is incomplete, and what it stopped there comes back once the server notices", "devopsy @"+targetRef(t)+" --status shows it")
+		report.Error("the connection to @"+t.Address+" failed or was lost: the export is incomplete, and what it stopped there comes back once the server notices, or with the next release, sync, import or snapshot there", "devopsy @"+targetRef(t)+" --status shows it")
 	}
 	return code
 }
@@ -1961,6 +1961,9 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	code, err = remote.SSH(t, remote.ResolvedScript(t, projectName, name), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		return fail(err.Error())
+	}
+	if code == sshLost {
+		report.Error("the connection to @"+t.Address+" failed or was lost: the import of "+name+" may not be resolved there", "devopsy @"+targetRef(t)+" --status shows whether its mark is still there; to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --import "+name+" --resolved")
 	}
 	return code
 }
