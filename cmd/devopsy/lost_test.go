@@ -284,6 +284,39 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Fatalf("a release (%d):\n%s", code, out)
 	}
 
+	// Bug (review round 9): a session lost, or its shell killed, between
+	// the switch and SwitchMarker (release-record live, the "current is
+	// now" line, followOutput's start) reads as before the switch: the
+	// operator says "nothing went live there", while the release is
+	// current and cut (its mark there). Here the shell is killed at
+	// followOutput's first command, past make_current.
+	tailDir := t.TempDir()
+	write(t, filepath.Join(tailDir, "tail"), "#!/bin/sh\n"+
+		"if [ \"$1\" = --version ] && [ -n \"${FAKE_KILL_SWITCH:-}\" ] && [ ! -e \"$FAKE_KILL_SWITCH\" ]; then : >\"$FAKE_KILL_SWITCH\"; p=$PPID; k=; while [ \"$p\" -gt 1 ]; do [ \"$(tr '\\0' '\\n' </proc/$p/cmdline | sed -n 3p | cut -c1-14)\" != devopsy_needs= ] || k=$p; p=$(cut -d' ' -f4 /proc/$p/stat); done; [ -z \"$k\" ] || kill -KILL $k; exit 0; fi\n"+
+		"exec /usr/bin/tail \"$@\"\n", 0o755)
+	before := s.current("solo")
+	var path, sshCmd string
+	for _, kv := range s.env {
+		if strings.HasPrefix(kv, "PATH=") {
+			path = strings.TrimPrefix(kv, "PATH=")
+		}
+		if strings.HasPrefix(kv, "DEVOPSY_SSH_COMMAND=") {
+			sshCmd = strings.TrimPrefix(kv, "DEVOPSY_SSH_COMMAND=")
+		}
+	}
+	// As ssh does when what it ran on the server is killed outright: 255.
+	write(t, filepath.Join(tailDir, "ssh255"), "#!/bin/sh\n"+sshCmd+" \"$@\"\nc=$?\n[ \"$c\" != 137 ] || exit 255\nexit \"$c\"\n", 0o755)
+	out, _ = s.run([]string{"PATH=" + tailDir + ":" + path, "DEVOPSY_SSH_COMMAND=" + filepath.Join(tailDir, "ssh255"), "FAKE_KILL_SWITCH=" + filepath.Join(tailDir, "killed")}, "@solo", "--release", "--yes")
+	if s.current("solo") == before || !strings.Contains(readString(mark), "\trelease\t") {
+		t.Fatalf("a release killed right past its switch: current %q (before %q), mark %q:\n%s", s.current("solo"), before, readString(mark), out)
+	}
+	if strings.Contains(out, "nothing went live there") {
+		t.Errorf("a release killed past its switch, before its marker, says nothing went live, while %s is current and cut:\n%s", s.current("solo"), out)
+	}
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+
 	// A child's release cut past its switch: its sync runs the release's
 	// run step again, which is what it skipped.
 	s.releaseProd(nil)
