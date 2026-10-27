@@ -200,6 +200,11 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		// remote.ActivatingFile: id, kind, the release it replaced, a
 		// restore's snapshot.
 		what, fix := "the release of "+cut[0], "devopsy @"+releaseRef(t)+" --release releases it again"
+		if partial != "" && !mark.IsImport() && !mark.IsRestore() {
+			// A sync's partial copy refuses a release; the sync, which
+			// runs the release's run step, finishes both.
+			fix = "devopsy @" + targetRef(t) + " --sync finishes it"
+		}
 		switch cut[1] {
 		case "rollback":
 			what, fix = "the rollback to "+cut[0], "devopsy @"+targetRef(t)+" --rollback finishes it"

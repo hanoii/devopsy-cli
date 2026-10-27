@@ -90,8 +90,8 @@ func (l *releaseLog) Line(s string) {
 }
 
 // rollingBackTo is the line a rollback's script prints once it has picked
-// the release to restore.
-var rollingBackTo = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `rolling back to ([0-9]{14})`)
+// the release to restore, or the one finishing a cut rollback.
+var rollingBackTo = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `(?:rolling back|finishing the rollback) to ([0-9]{14})`)
 
 // terminalCodes are colors and cursor movements, which make no sense in a
 // file.

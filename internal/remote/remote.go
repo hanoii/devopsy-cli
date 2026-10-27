@@ -790,9 +790,25 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// The release lock is held until a dropped session's fetch ends, so
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
-prev=${prev%/` + CodeDir + `}
+prev=${prev%/` + CodeDir + `}; rb_from=$prev
 ` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
 `
+	// A rollback cut off past its switch (ActivatingFile: this script
+	// holds the lock, so none runs), current its target: cut_from is the
+	// release it left. A rollback finishes it (below); a release or a
+	// restore leaves it as it is, marking that release rolled back as
+	// the rollback would have.
+	s += `cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
+cut_from=$(printf '%s' "$cut_line" | cut -f3)
+if [ "$(printf '%s' "$cut_line" | cut -f2)" != rollback ] || [ "releases/$(printf '%s' "$cut_line" | cut -f1)" != "$prev" ] || [ ! -d "$base/releases/${cut_from:-.}" ]; then cut_from=; fi
+`
+	if !rollback || restore != nil {
+		s += `if [ -n "$cut_from" ] && [ ! -e "$base/releases/$cut_from/` + RolledBackFile + `" ]; then
+  : >"$base/releases/$cut_from/` + RolledBackFile + `"
+  devopsy --say info "$cut_from is marked rolled back: the rollback from it was cut off past its switch"
+fi
+`
+	}
 	// That last line: what runs on the data now goes into its history
 	// before anything reads it. A release killed past its switch ran its
 	// run step's up on the image it holds the data on, and its img ran
@@ -823,15 +839,14 @@ devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
-		// A rollback cut off past its switch (ActivatingFile: this script
-		// holds the lock, so none runs) is finished, never followed by one
-		// further back: current is its target, the release it left the one
-		// to mark rolled back.
+		// A cut rollback (cut_from) is finished, never followed by one
+		// further back: current is its target, the release it left
+		// (rb_from) the one to mark rolled back. $prev stays current until
+		// the switch (the undo, not_live's words), then becomes rb_from:
+		// what a failure goes back to.
 		s += `id=
-cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
-cut_from=$(printf '%s' "$cut_line" | cut -f3)
-if [ "$(printf '%s' "$cut_line" | cut -f2)" = rollback ] && [ "releases/$(printf '%s' "$cut_line" | cut -f1)" = "$prev" ] && [ -n "$cut_from" ] && [ -d "$base/releases/$cut_from" ]; then
-  id=${prev#releases/}; prev=releases/$cut_from
+if [ -n "$cut_from" ]; then
+  id=${prev#releases/}; rb_from=releases/$cut_from
   devopsy --say info "finishing the rollback to $id from $cut_from, cut off past its switch"
 fi
 if [ -z "$id" ]; then
@@ -991,7 +1006,7 @@ done
 	// (exit 1). A signal during either (img ignores it) skips the fetch.
 	fetchStep := `{ [ -z "$fetch_sig" ] && img names "$1" && [ -z "$fetch_sig" ] && fetch_images "$1" && img record "$1" ${prev:+"$base/$prev"}; }`
 	if rollback {
-		fetchStep = `{ img restore "$1" "$base/$prev" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$prev"; }; }`
+		fetchStep = `{ img restore "$1" "$base/$rb_from" || { [ $? -eq 1 ] && [ -z "$fetch_sig" ] && fetch_images "$1" && img restore --fetched "$1" "$base/$rb_from"; }; }`
 	}
 	// A release with snapshots on, replacing a current one, takes the
 	// snapshot of what it replaces (part 4 of snapshots): its locks and
@@ -1106,20 +1121,26 @@ if [ "$rd_status" != 0 ]; then
 fi
 `
 	}
-	if !rollback || restore != nil {
-		s += `rm -f "$rel/` + PendingFile + `"
-exec 7<&-
-`
-	}
 	activating, snapField := "release", ""
 	switch {
 	case restore != nil:
 		activating, snapField = "restore", restore.Snapshot
 	case rollback:
 		activating = "rollback"
+		// From the switch on, $prev is what a failure goes back to.
+		s += "prev=$rb_from\n"
 	}
+	// The mark before the pending file goes: a shell killed between them
+	// leaves a release still INCOMPLETE, whose mark --status and
+	// --releases ignore (its id is not current).
 	s += `printf '%s\t%s\t%s\t%s\n' "$id" ` + activating + ` "${prev#releases/}" ` + Quote(snapField) + ` >"$base/` + ActivatingFile + `" || not_live 1
-make_current "releases/$id"
+`
+	if !rollback || restore != nil {
+		s += `rm -f "$rel/` + PendingFile + `"
+exec 7<&-
+`
+	}
+	s += `make_current "releases/$id"
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
