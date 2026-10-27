@@ -283,7 +283,7 @@ trap '' INT TERM HUP PIPE
 # current release's server log, which the session follows.
 out="$base/$cur/` + ServerLogFile + `"
 ` + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
-` + step("restore-data", `"$snap"`, `"$base/$cur"`) + ` || { ` + unsnap + `exit 1; }
+` + step("restore-data", `"$snap"`, `"$base/$cur"`, "no-code") + ` || { ` + unsnap + `exit 1; }
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?

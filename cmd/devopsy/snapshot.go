@@ -372,10 +372,10 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		return 0
 	case "restore-data":
-		if len(args) != 3 {
-			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release>")
+		if len(args) != 3 && (len(args) != 4 || args[3] != "no-code") {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release> [no-code]")
 		}
-		return snapshotRestoreData(cwd, p, args[1], args[2])
+		return snapshotRestoreData(cwd, p, args[1], args[2], len(args) == 4)
 	case "receive":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " receive <directory>")
@@ -2318,7 +2318,7 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 // held on the images that ran on the data, with its history; then the
 // mark goes (it covers every service with data the restored code runs),
 // and so do its stop lines: the run step starts them.
-func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
+func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
@@ -2532,7 +2532,13 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		if len(keys) == 0 {
 			in = ""
 		}
-		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id+" --with-env")
+		// The same restore again, its env too (review: a --no-code
+		// restore's hint was a full one when copied).
+		again := " --snapshots restore " + id + " --with-env"
+		if noCode {
+			again = " --snapshots restore " + id + " --no-code --with-env"
+		}
+		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+again)
 	}
 	// The mark and the record stay until the run step has started the set
 	// (restored): a shell killed before it leaves the set down, marked.
