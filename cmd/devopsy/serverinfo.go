@@ -129,6 +129,12 @@ func systemFacts(info *remote.ServerInfo) {
 	if data, err := os.ReadFile("/sys/module/apparmor/parameters/enabled"); err == nil {
 		info.AppArmor = strings.TrimSpace(string(data)) == "Y"
 	}
+	// In sbin, which a deploy user's PATH lacks.
+	for _, p := range []string{"/usr/sbin/apparmor_parser", "/sbin/apparmor_parser"} {
+		if _, err := os.Stat(p); err == nil {
+			info.AppArmorParser = true
+		}
+	}
 }
 
 // osRelease is os-release's PRETTY_NAME, else its NAME and VERSION.
@@ -392,7 +398,12 @@ func environments(root string) []remote.Environment {
 		entries, _ := os.ReadDir(dir)
 		var out []string
 		for _, e := range entries {
-			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !removing.MatchString(e.Name()) {
+			if strings.HasPrefix(e.Name(), ".") || removing.MatchString(e.Name()) {
+				continue
+			}
+			// A project or an environment moved to another disk and linked
+			// back is one, as the scripts reach it.
+			if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.IsDir() {
 				out = append(out, filepath.Join(dir, e.Name()))
 			}
 		}
@@ -560,18 +571,18 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			parts = append(parts, "cgroup "+d.Cgroup)
 		}
 		row("docker", strings.Join(parts, ", "))
+		// Docker lists apparmor whenever the kernel has it, and then loads
+		// its profile with apparmor_parser: without it no container
+		// starts ("the docker-default profile could not be loaded").
 		security := "security " + strings.Join(d.Security, " ")
-		switch {
-		case slices.Contains(d.Security, "apparmor"):
-		case info.AppArmor:
-			// The kernel has it, Docker does not use it: Docker found no
-			// apparmor_parser when it started.
-			warn("Docker applies no AppArmor profile to containers, though the kernel has AppArmor",
-				report.Fix("install the apparmor package and restart Docker, as root (devopsy-server's docker step does both)"))
-		default:
+		if !info.AppArmor {
 			security += " (no AppArmor in this kernel)"
 		}
 		more(security)
+		if info.AppArmor && !info.AppArmorParser {
+			warn("the kernel has AppArmor and the server has no apparmor_parser: Docker cannot load its profile, so containers fail to start",
+				report.Fix("install the apparmor package, as root"))
+		}
 		logs := "logs " + d.LogDriver
 		if d.LogOptsKnown {
 			for _, k := range sortedKeysOf(d.LogOpts) {
@@ -591,6 +602,22 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 	}
 
 	// The disks.
+	freeing := func(disk remote.Disk) []report.Remedy {
+		var fixes []report.Remedy
+		has := func(what string) bool {
+			return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
+		}
+		if has("docker") || has("containerd") {
+			fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+		}
+		if has("snapshots") || (has("releases") && info.SnapshotRoot == "") {
+			fixes = append(fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
+		}
+		if len(fixes) == 0 {
+			fixes = append(fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+		}
+		return fixes
+	}
 	release := -1
 	snapshotDisk := -1
 	for i, disk := range info.Disks {
@@ -632,11 +659,11 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		row(key, value)
 		if pct >= diskUsedWarn || disk.Free < diskFreeWarn {
 			warn(fmt.Sprintf("%s is %d%% full, %s free: builds, pulls, uploads, logs and databases fail once it is full", strings.Join(paths, ", "), pct, humanBytes(disk.Free)),
-				report.Fix("see what takes it, then empty Docker's build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+				freeing(disk)...)
 		}
 		if disk.Reflinks == "no" {
 			warn("the release root's filesystem ("+disk.Type+") makes no reflinks: a snapshot, and a release snapshot, keep its services stopped for the whole copy",
-				report.Fix("snapshots: {mirror: true} for the environments with large data, in their project's .devopsy/config.yaml (a kept mirror copies most while they run), or data on XFS (a new server from devopsy-server's cloud-init.yaml)"))
+				reflinkFix(info.MirrorsOff))
 		}
 	}
 	if info.SnapshotRoot != "" && snapshotDisk >= 0 && snapshotDisk == release {
@@ -693,7 +720,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 
-	// Environments.
+	// Environments. Without flock every lock reads held: no environment
+	// is busy then, nothing can run there (warned above).
+	noFlock := slices.Contains(info.Missing, "flock")
 	if len(info.Environments) == 0 {
 		row("environments", "none")
 	}
@@ -738,6 +767,10 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 				bad = append(bad, c.Service+" restarting")
 			case c.State == "running" && c.Health == "unhealthy":
 				bad = append(bad, c.Service+" unhealthy")
+			case c.State == "paused":
+				// devopsy never pauses: Traefik drops a paused container's
+				// router.
+				bad = append(bad, c.Service+" paused")
 			}
 		}
 		if all > 0 {
@@ -752,7 +785,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			value += "  taking a snapshot"
 		case h.source:
 			value += "  a sync or an export from it"
-		case h.busy:
+		case h.busy && !noFlock:
 			value += "  an operation running"
 		}
 		row(key, value)
@@ -767,7 +800,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			problems = append(problems, "an activation was cut off past its switch, its run step perhaps never run")
 		}
 		switch {
-		case h.busy:
+		case h.busy && !noFlock:
 		case h.mark.IsImport():
 			problems = append(problems, "the import of "+h.mark.From+" did not complete")
 		case h.mark.IsRestore():
@@ -785,6 +818,17 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 	return lines, warnings
+}
+
+// reflinkFix is the way to keep services up through a snapshot's copy
+// on a filesystem without reflinks: a mirror, unless the server's
+// snapshots: {mirror: false} refuses every one, or XFS.
+func reflinkFix(mirrorsOff bool) report.Remedy {
+	mirror := "snapshots: {mirror: true} for the environments with large data, in their project's .devopsy/config.yaml (a kept mirror copies most while they run)"
+	if mirrorsOff {
+		mirror = "the server's snapshots: {mirror: false} (its devopsy config) lifted, then " + mirror
+	}
+	return report.Fix(mirror + ", or data on XFS (a new server from devopsy-server's cloud-init.yaml)")
 }
 
 // composeNameOf is the compose name of the environment at path,

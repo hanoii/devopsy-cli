@@ -34,8 +34,10 @@ type ServerInfo struct {
 	// NTP is timedatectl's NTPSynchronized, yes or no; empty unknown.
 	NTP string `json:"ntp,omitempty"`
 	// AppArmor: the kernel has it on (/sys/module/apparmor), whether
-	// Docker uses it or not.
-	AppArmor bool `json:"apparmor,omitempty"`
+	// Docker uses it or not; AppArmorParser: apparmor_parser is there,
+	// which Docker loads its profile with.
+	AppArmor       bool `json:"apparmor,omitempty"`
+	AppArmorParser bool `json:"apparmor_parser,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
 	Disks  []Disk      `json:"disks"`

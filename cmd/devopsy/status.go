@@ -188,6 +188,10 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			fixes = append(fixes, f[1])
 		}
 		fmt.Println(st.bad("data        the import of " + h.mark.From + " did not complete: " + h.partial + ": nothing runs on it until one does: " + strings.Join(fixes, ", or ")))
+	case h.mark.IsRestore() && h.busy:
+		// Its mark is there from its first write to its run step, the
+		// release lock held all along.
+		fmt.Println(st.bad("data        restoring snapshot " + h.mark.From + ": what it stopped stays down until it completes"))
 	case h.mark.IsRestore():
 		var fixes []string
 		for _, f := range remote.RestoreFixes(targetRef(t), h.mark.From, t.Parent != "") {

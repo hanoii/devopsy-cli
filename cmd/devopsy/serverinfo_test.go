@@ -57,6 +57,7 @@ func TestServerInfoReport(t *testing.T) {
 			Version: "0.53.0", Protocol: 8, Root: "/home/devopsy", Keep: 5, MaxKeep: 5, SnapshotMaxKeep: 5,
 			OS: "Debian GNU/Linux 13 (trixie)", Kernel: "6.12.48+deb13-amd64", Arch: "amd64", CPUs: 2,
 			MemTotal: 4 << 30, MemAvailable: 2 << 30, Load: "0.10 0.20 0.30", Uptime: 3 * 86400, NTP: "yes",
+			AppArmor: true, AppArmorParser: true,
 			Docker: remote.DockerFacts{Version: "29.9.1", Compose: "5.5.0", Containerd: true, Driver: "overlayfs", Cgroup: "v2",
 				RootDir: "/var/lib/docker", Security: []string{"apparmor", "seccomp"}, LogDriver: "json-file",
 				LogOpts: map[string]string{"max-size": "20m", "max-file": "5"}, LogOptsKnown: true},
@@ -115,11 +116,21 @@ func TestServerInfoReport(t *testing.T) {
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized|timedatectl set-ntp true"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
 		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
-		{"no apparmor", func(i *remote.ServerInfo) { i.Docker.Security, i.AppArmor = []string{"seccomp"}, true }, "", "no AppArmor profile to containers, though the kernel has AppArmor|install the apparmor package"},
+		// Docker lists apparmor whenever the kernel has it, and needs
+		// apparmor_parser to load its profile (review).
+		{"no apparmor_parser", func(i *remote.ServerInfo) { i.AppArmorParser = false }, "", "no apparmor_parser: Docker cannot load its profile, so containers fail to start|install the apparmor package"},
 		{"unbounded logs", func(i *remote.ServerInfo) { i.Docker.LogOpts = nil }, "", "grow without a limit|max-size"},
 		{"full disk", func(i *remote.ServerInfo) { i.Disks[0].Free, i.Disks[0].Used = 4e9, 76e9 }, "", "/ is 95% full, 4.0 GB free|devopsy @vm1: --shell-host"},
 		{"little free", func(i *remote.ServerInfo) { i.Disks[0].Size, i.Disks[0].Free, i.Disks[0].Used = 9e9, 4.5e9, 4.5e9 }, "", "is 50% full, 4.5 GB free|"},
 		{"no reflinks", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks = "ext4", "no" }, "", "(ext4) makes no reflinks|mirror: true} for the environments with large data, in their project's .devopsy/config.yaml"},
+		// The server's mirror: false refuses every project's (review).
+		{"no reflinks, no mirrors", func(i *remote.ServerInfo) { i.Disks[0].Type, i.Disks[0].Reflinks, i.MirrorsOff = "ext4", "no", true }, "", "(ext4) makes no reflinks|the server's snapshots: {mirror: false} (its devopsy config) lifted, then snapshots: {mirror: true}"},
+		// A full backup volume: snapshots to remove, not Docker's cache
+		// (review).
+		{"full snapshot disk", func(i *remote.ServerInfo) {
+			i.SnapshotRoot = "/backups"
+			i.Disks = append(i.Disks, remote.Disk{Paths: []string{"snapshots=/backups"}, Type: "ext4", Size: 100e9, Free: 1e9, Used: 99e9})
+		}, "", "snapshots /backups is 99% full|$ devopsy @<target> --snapshots remove <id>"},
 		{"snapshot root on the data", func(i *remote.ServerInfo) {
 			i.SnapshotRoot = "/backups"
 			i.Disks[0].Paths = append(i.Disks[0].Paths, "snapshots=/backups")
@@ -146,6 +157,9 @@ func TestServerInfoReport(t *testing.T) {
 		{"restarting", func(i *remote.ServerInfo) {
 			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "db", State: "restarting"}, remote.HostContainer{Project: "shop-prod", Service: "worker", State: "running", Health: "unhealthy"})
 		}, "", "shop/prod: db restarting, worker unhealthy|"},
+		{"paused", func(i *remote.ServerInfo) {
+			i.Containers = append(i.Containers, remote.HostContainer{Project: "shop-prod", Service: "web", State: "paused"})
+		}, "", "shop/prod: web paused|"},
 	} {
 		info := healthy()
 		c.change(&info)
@@ -172,10 +186,20 @@ func TestServerInfoReport(t *testing.T) {
 
 	// A kernel without AppArmor is said, not warned: nothing to install.
 	info := healthy()
-	info.Docker.Security = []string{"seccomp"}
+	info.Docker.Security, info.AppArmor, info.AppArmorParser = []string{"seccomp"}, false, false
 	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "security seccomp (no AppArmor in this kernel)") {
 		t.Errorf("no AppArmor in the kernel: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	}
+
+	// Without flock every lock reads held: no environment is busy, its
+	// mark warned (review).
+	info = healthy()
+	info.Missing = []string{"flock"}
+	info.Environments[1].Status += "busy\npartial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "db", remote.IncompleteImport, "the import was cut")
+	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 2 || !strings.Contains(warnings[1].msg, "shop/prod: the import of db did not complete") || strings.Contains(strings.Join(lines, "\n"), "an operation running") {
+		t.Errorf("no flock: %+v\n%s", warnings, strings.Join(lines, "\n"))
 	}
 
 	// Every problem of an environment is warned, as --status says each
@@ -261,5 +285,37 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	// It left nothing of its own in the release root.
 	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {
 		t.Errorf("left %v", m)
+	}
+}
+
+// Environments are found as the scripts reach them, through links too:
+// a project or an environment moved to another disk and linked back
+// (review).
+func TestServerInfoEnvironments(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	root, elsewhere := filepath.Join(tmp, "root"), filepath.Join(tmp, "data")
+	for _, d := range []string{
+		filepath.Join(elsewhere, "shop", "prod", "releases"),
+		filepath.Join(elsewhere, "blog-prod", "releases"),
+		filepath.Join(root, "blog"),
+		filepath.Join(root, "app", "prod", "releases"),
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, "shop"), filepath.Join(root, "shop")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, "blog-prod"), filepath.Join(root, "blog", "prod")); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range environments(root) {
+		got = append(got, e.Path)
+	}
+	if !slices.Equal(got, []string{"app/prod", "blog/prod", "shop/prod"}) {
+		t.Errorf("environments: %v", got)
 	}
 }

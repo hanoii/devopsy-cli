@@ -1000,13 +1000,13 @@ hold and what they export, and every environment under the release
 root with its current release, its containers and its state.
 
 What needs attention is a warning with its fix: an older devopsy, a
-reboot the system asks for, a clock out of sync, Docker not using the
-kernel's AppArmor, logs without a size limit, a disk 90% full or with less than 5 GB free, no
+reboot the system asks for, a clock out of sync, a kernel with AppArmor
+and no apparmor_parser (no container starts), logs without a size limit, a disk 90% full or with less than 5 GB free, no
 reflinks, a snapshot root on the release root's filesystem, a tool the
 server needs missing, a role held twice, and an environment whose first
 release failed, cut off past its switch, with a sync, an import or a
 restore that did not complete, services an operation left stopped, or
-containers restarting or unhealthy (what is running, a sync, an import
+containers restarting, unhealthy or paused (what is running, a sync, an import
 or a restore, is said, not warned). It then exits 3, for CI: 0 says
 nothing needs attention.
 `,

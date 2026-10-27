@@ -556,14 +556,15 @@ release root, Docker's and containerd's data, the snapshot root and `/`
 projects hold and what they export, and every environment under the release root
 with its current release, its containers and its state. What needs
 attention is a warning with its fix: an older devopsy, a reboot the
-system asks for, a clock out of sync, Docker not using the kernel's
-AppArmor or with logs that grow without a limit, a disk 90% full or with less than 5 GB
+system asks for, a clock out of sync, a kernel with AppArmor and no
+`apparmor_parser` (no container starts), Docker logs that grow without
+a limit, a disk 90% full or with less than 5 GB
 free, no reflinks, a snapshot root on the release root's filesystem (a
 backup volume not mounted), a tool the server needs missing, a role
 held twice, and an environment with a failed first release, an
 activation cut off past its switch, a sync, an import or a restore that
 did not complete, services an operation left stopped, or containers
-restarting or unhealthy; what is running (a sync, an import, a
+restarting, unhealthy or paused; what is running (a sync, an import, a
 restore) is said, not warned. It exits 3 when it warned, so CI can run
 it as a check.
 

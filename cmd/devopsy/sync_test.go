@@ -2145,6 +2145,25 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// A restore under way holds the release lock with its mark there, from
+// its first write to its run step: --status says it is restoring, not
+// that it did not complete (review).
+func TestStatusRestoreRunning(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	write(t, filepath.Join(base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-27 11:00:00", "20261020000000", remote.IncompleteRestore, "restoring"), 0o644)
+	// The release lock held: the probes of it (LockBusy, flock -n -s
+	// .lock) fail.
+	bin := filepath.Join(t.TempDir(), "bin")
+	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\ncase \"$*\" in \"-n -s \"*\"/.lock true\") exit 1 ;; esac\nexec "+filepath.Join(filepath.Dir(s.root), "bin", "flock")+" \"$@\"\n", 0o755)
+	out, code := s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "@prod", "--status")
+	if code != 0 || strings.Contains(out, "did not complete") || !strings.Contains(out, "restoring snapshot 20261020000000") {
+		t.Errorf("--status during a restore (%d):\n%s", code, out)
+	}
+}
+
 // A release never takes over another project's network: the networks a
 // project names are its own, or external.
 func TestReleaseNetworkOwned(t *testing.T) {
