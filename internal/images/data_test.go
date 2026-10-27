@@ -524,7 +524,18 @@ func dataRandom(t *testing.T, seed int64) {
 	left := filepath.Join(t.TempDir(), LeftFile)
 	for _, m := range envs {
 		m.e.set.Left = left
+		m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
 	}
+	// Each environment's snapshots: a directory with the release's listing,
+	// bookmarked as s<id>, and the record of its data services' images
+	// (SnapshotData), the database's among them: what a restore holds it
+	// on.
+	type snapshot struct {
+		dir, image string
+		svcs       []Service
+	}
+	snaps := map[*sim][]snapshot{}
+	snapN := 0
 	// mariadb:11.8 also spelled in full: a hold must never depend on it.
 	refs := []string{"mariadb:11.8", "mariadb:11", "mariadb:11.8.9", "mirror.example/mariadb:11.8", "docker.io/library/mariadb:11.8"}
 	img := 0
@@ -573,6 +584,19 @@ func dataRandom(t *testing.T, seed int64) {
 					}
 				}
 			}
+			// A snapshot's bookmarks hold what it lists until it goes (rule
+			// 5 for snapshots): a restore finds its images.
+			for _, sn := range snaps[m] {
+				es := readList(sn.dir)
+				for i, b := range bookmarks(es, m.e.set.Name, m.e.set.idOf(sn.dir)) {
+					if es[i].ID == "" {
+						continue
+					}
+					if got, _ := d.ID(b); got != es[i].ID {
+						t.Fatalf("after %v: snapshot %s's bookmark %s is %q, want %q\n%s", log, filepath.Base(sn.dir), b, got, es[i].ID, out.String())
+					}
+				}
+			}
 		}
 	}
 	// Each environment builds its own app, named after its compose project.
@@ -590,7 +614,88 @@ func dataRandom(t *testing.T, seed int64) {
 	d.publish("caddy:2-alpine", "C1")
 	for step := 0; step < 40; step++ {
 		m = envs[rng.Intn(2)]
-		switch op := rng.Intn(12); op {
+		switch op := rng.Intn(16); op {
+		case 12: // a snapshot of the current release and its data
+			if m.cur == "" {
+				continue
+			}
+			snapN++
+			dir := filepath.Join(m.e.set.Snapshots, fmt.Sprintf("2026101700%04d", snapN))
+			if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data := m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))
+			if err := os.WriteFile(filepath.Join(dir, "data", "images"), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.e.set.BookmarkFrom(dir, m.e.rel(m.cur)); err != nil {
+				t.Fatalf("after %v: snapshot: %v\n%s", log, err, out.String())
+			}
+			sn := snapshot{dir: dir, svcs: m.e.svcs[m.cur]}
+			if p := parseParentData(data)["database"]; p != nil {
+				sn.image = p.Image.ID
+			}
+			snaps[m] = append(snaps[m], sn)
+			check(m.e.set.Name + " snapshot " + filepath.Base(dir))
+		case 13, 14: // a restore of a snapshot: full (a release made from it), or --no-code
+			if m.cur == "" || len(snaps[m]) == 0 {
+				continue
+			}
+			sn := snaps[m][rng.Intn(len(snaps[m]))]
+			data, err := os.ReadFile(filepath.Join(sn.dir, "data", "images"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The restore's check: the images the data ran, pulled when gone.
+			if err := m.e.set.SnapshotPull(sn.dir, string(data)); err != nil {
+				t.Fatalf("after %v: restore of %s: %v\n%s", log, filepath.Base(sn.dir), err, out.String())
+			}
+			rel := m.e.rel(m.cur)
+			word := "--no-code"
+			if op == 13 {
+				word = "full"
+				id := m.e.release(sn.svcs...)
+				rel = m.e.rel(id)
+				if err := m.e.set.BookmarkFrom(rel, sn.dir); err != nil {
+					t.Fatalf("after %v: make-release: %v\n%s", log, err, out.String())
+				}
+				err := m.e.set.Restore(rel, m.prev(), false)
+				if errors.Is(err, ErrGone) {
+					m.fetch(sn.svcs)
+					err = m.e.set.Restore(rel, m.prev(), true)
+				}
+				if err != nil {
+					t.Fatalf("after %v: the restore's images: %v\n%s", log, err, out.String())
+				}
+				m.cur = id
+			}
+			// The data step: held on the snapshot's images, the history the
+			// snapshot's; then the run step on it.
+			if err := m.e.set.ImportDone(m.base(), rel, string(data)); err != nil {
+				t.Fatalf("after %v: restore-data: %v\n%s", log, err, out.String())
+			}
+			m.activation = true
+			m.up()
+			if err := m.e.set.Ran(m.base(), rel); err != nil {
+				t.Fatal(err)
+			}
+			if sn.image != "" && pulledData(m) && m.runs("database") != sn.image {
+				t.Fatalf("after %v: %s's database runs %s after the %s restore of %s, whose data ran %s\n%s", log, m.e.set.Name, m.runs("database"), word, filepath.Base(sn.dir), sn.image, out.String())
+			}
+			check(m.e.set.Name + " " + word + " restore " + filepath.Base(sn.dir))
+		case 15: // a snapshot removed
+			if len(snaps[m]) == 0 {
+				continue
+			}
+			i := rng.Intn(len(snaps[m]))
+			sn := snaps[m][i]
+			if err := m.e.set.Remove(sn.dir); err != nil {
+				t.Fatal(err)
+			}
+			os.RemoveAll(sn.dir)
+			m.e.set.Prune()
+			snaps[m] = append(snaps[m][:i], snaps[m][i+1:]...)
+			check(m.e.set.Name + " remove snapshot " + filepath.Base(sn.dir))
 		case 10: // a complete mnt import
 			if m.cur == "" {
 				continue
@@ -776,6 +881,10 @@ func dataRandom(t *testing.T, seed int64) {
 	}
 	d.containers = nil
 	for _, m := range envs {
+		for _, sn := range snaps[m] {
+			m.e.set.Remove(sn.dir)
+			os.RemoveAll(sn.dir)
+		}
 		for _, id := range m.e.releases() {
 			m.e.set.Remove(m.e.rel(id))
 			os.RemoveAll(m.e.rel(id))
@@ -1182,7 +1291,10 @@ func TestDataRefusalLeavesOthersNames(t *testing.T) {
 
 // A restart whose images could not be restored still holds the data
 // services on the newest image their data ran, never on what the
-// release's last activation held.
+// release's last activation held. The release's listing and bookmark
+// follow the hold: what it lists is what it runs, so a snapshot of it
+// (its listing copied, bookmarked as the snapshot's) holds the image its
+// data ran, and its removal frees that one, not the image it left.
 func TestHoldData(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1197,6 +1309,13 @@ func TestHoldData(t *testing.T) {
 	}
 	if got := holdsIn(m.e.rel(r1))["database"]; got != "mariadb@I2" {
 		t.Errorf("held on %q, want mariadb@I2", got)
+	}
+	e, ok := match(readList(m.e.rel(r1)), entry{Service: "database"})
+	if !ok || e.ID != "I2" || e.Digest != "mariadb@I2" {
+		t.Errorf("%s's listing names %s (%s) for its database, which it runs as mariadb@I2: a snapshot of it would bookmark that image, not the one its data ran", r1, e.ID, e.Digest)
+	}
+	if got, _ := d.ID("mariadb:devopsy-app-prod-" + r1); got != "I2" {
+		t.Errorf("%s's bookmark holds %s, not the image its database runs (I2)", r1, got)
 	}
 }
 

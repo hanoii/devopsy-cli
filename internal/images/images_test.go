@@ -75,20 +75,31 @@ func (d *fakeDocker) Inspect(ref string) (Image, error) {
 	id, err := d.ID(ref)
 	if err != nil {
 		// A pulled image is found by any of its digests, name or not.
-		if digest := digestOf(ref); digest != "" {
-			for i, ds := range d.digests {
-				for _, x := range ds {
-					if digestOf(x) == digest && d.images[i] && (!d.strictRepo || repoKey(x) == repoKey(ref)) {
-						id, err = i, nil
-					}
-				}
-			}
+		if i, ok := d.byDigest(ref); ok {
+			id, err = i, nil
 		}
 		if err != nil {
 			return Image{}, err
 		}
 	}
 	return Image{ID: id, Digests: d.digests[id], Created: d.created[id], Version: d.versions[id]}, nil
+}
+
+// byDigest is the image a <repository>@<digest> reference names among the
+// images' registry digests (RepoDigests), as Docker resolves one that is
+// no name of its own.
+func (d *fakeDocker) byDigest(ref string) (string, bool) {
+	id, ok := "", false
+	if digest := digestOf(ref); digest != "" {
+		for i, ds := range d.digests {
+			for _, x := range ds {
+				if digestOf(x) == digest && d.images[i] && (!d.strictRepo || repoKey(x) == repoKey(ref)) {
+					id, ok = i, true
+				}
+			}
+		}
+	}
+	return id, ok
 }
 
 func (d *fakeDocker) ID(ref string) (string, error) {
@@ -126,7 +137,13 @@ func (d *fakeDocker) Tags(id string) ([]string, error) {
 func (d *fakeDocker) Tag(src, dst string) error {
 	id, err := d.ID(src)
 	if err != nil {
-		return err
+		// docker tag takes a digest reference as its source too, resolved
+		// as inspect resolves it.
+		i, ok := d.byDigest(src)
+		if !ok {
+			return err
+		}
+		id = i
 	}
 	d.names[familiar(dst)] = id
 	// As Docker's containerd store: a pulled image tagged into another
