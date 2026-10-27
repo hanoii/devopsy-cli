@@ -75,8 +75,9 @@ const (
 
 // ActivatingFile marks an environment ($base) from an activation's switch
 // to its end, whichever way it ends: the release's id, the activation's
-// kind (release, rollback, restore), the release it replaced and a
-// restore's snapshot, tab separated. One there while nothing holds the
+// kind (release, rollback, restore; restart once a failed run step goes
+// back, its id the release restarted, the failed one next), the release
+// it replaced and a restore's snapshot, tab separated. One there while nothing holds the
 // release lock is an activation cut off past its switch (killed outright,
 // a reboot), which nothing interrupts otherwise: its run step may not
 // have run (one naming a release that is not current was cut before its
@@ -1277,6 +1278,8 @@ fi
 	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
+    # Killed in the restart, the mark names the release restarted, current.
+    printf '%s\trestart\t%s\t\n' "${prev#releases/}" "$id" >"$base/` + ActivatingFile + `" || true
     make_current "$prev"
     devopsy --say error "$failed failed ($status), current is back to ${prev#releases/}"
 ` + restart + `  else

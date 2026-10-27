@@ -273,12 +273,23 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	cur := strings.TrimPrefix(s.current("solo"), "releases/")
 	dir := t.TempDir()
 	out, _ = s.run([]string{"FAKE_FAIL_ONCE=" + filepath.Join(dir, "failed"), "FAKE_KILL_RUN=" + filepath.Join(dir, "killed")}, "@solo", "--rollback", "--yes")
-	failed := strings.SplitN(readString(mark), "\t", 2)[0]
+	// The mark names the restart: current, then the release that failed.
+	failed := ""
+	if f := strings.Split(readString(mark), "\t"); len(f) > 2 && f[0] == cur && f[1] == "restart" {
+		failed = f[2]
+	}
 	if s.current("solo") != "releases/"+cur || failed == "" || failed == cur || !fileExists(filepath.Join(base, "releases", failed, remote.FailedFile)) {
 		t.Fatalf("a rollback whose run step failed, killed in its restart: current %q (want %s), mark %q:\n%s", s.current("solo"), cur, readString(mark), out)
 	}
 	if out, _ := s.run(nil, "@solo", "--status"); strings.Contains(out, "the rollback to "+failed+" was cut off past its switch") {
 		t.Errorf("--status names the failed rollback to %s as cut off, finished by --rollback, while current is %s, whose restart was cut:\n%s", failed, cur, out)
+	}
+	// It names the restart that was cut instead, on current.
+	if out, _ := s.run(nil, "@solo", "--status"); !strings.Contains(out, "the restart of "+cur+" after "+failed+" failed was cut off: its run step may not have run: devopsy @devopsy@one:solo --release releases it again") {
+		t.Errorf("--status does not name the restart of %s that was cut:\n%s", cur, out)
+	}
+	if out, _ := s.run(nil, "@solo", "--releases"); !strings.Contains(out, "  CUT") {
+		t.Errorf("--releases does not mark %s, whose restart was cut, CUT:\n%s", cur, out)
 	}
 	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
 		t.Fatalf("a release (%d):\n%s", code, out)

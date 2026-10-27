@@ -770,7 +770,7 @@ trap '' PIPE
 		// release or a full restore cut off past its switch
 		// (ActivatingFile) has had its run step now, the one it skipped.
 		s += "img ran \"$base\" \"$rel\" || true\n" + `if [ "$rs" = 0 ] && [ "$(cut -f1 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$id" ]; then
-  case "$(cut -f2 "$base/` + ActivatingFile + `")" in release|restore) rm -f "$base/` + ActivatingFile + `" ;; esac
+  case "$(cut -f2 "$base/` + ActivatingFile + `")" in release|restore|restart) rm -f "$base/` + ActivatingFile + `" ;; esac
 fi
 exit "$rs"
 `
