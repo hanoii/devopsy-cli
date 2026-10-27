@@ -540,6 +540,9 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
 	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\n"+
+		// FAKE_FAIL_ONCE: the run step fails once (the file made), so a
+		// FAKE_KILL_RUN beside it kills the restart that follows.
+		"if [ -n \"${FAKE_FAIL_ONCE:-}\" ] && [ ! -e \"$FAKE_FAIL_ONCE\" ]; then : >\"$FAKE_FAIL_ONCE\"; exit 3; fi\n"+
 		// FAKE_KILL_RUN: the activation's shell killed outright (SIGKILL,
 		// the OOM killer) during its run step, once (the file made), on
 		// Linux (/proc): the topmost ancestor running the script itself

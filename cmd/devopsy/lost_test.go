@@ -263,6 +263,27 @@ func TestActivationCutPastSwitch(t *testing.T) {
 		t.Errorf("a release over a cut one (%d), mark %q:\n%s", code, readString(mark), out)
 	}
 
+	// Bug (review round 9): an activation whose run step fails goes back
+	// to the release before and restarts it; killed during that restart,
+	// its mark still names the release that failed, with current back on
+	// the one before. --status then says the rollback to the failed
+	// release was cut off past its switch and that --rollback finishes
+	// it, while --rollback goes elsewhere (the failed release is no
+	// target): the mark is read without checking it names current.
+	cur := strings.TrimPrefix(s.current("solo"), "releases/")
+	dir := t.TempDir()
+	out, _ = s.run([]string{"FAKE_FAIL_ONCE=" + filepath.Join(dir, "failed"), "FAKE_KILL_RUN=" + filepath.Join(dir, "killed")}, "@solo", "--rollback", "--yes")
+	failed := strings.SplitN(readString(mark), "\t", 2)[0]
+	if s.current("solo") != "releases/"+cur || failed == "" || failed == cur || !fileExists(filepath.Join(base, "releases", failed, remote.FailedFile)) {
+		t.Fatalf("a rollback whose run step failed, killed in its restart: current %q (want %s), mark %q:\n%s", s.current("solo"), cur, readString(mark), out)
+	}
+	if out, _ := s.run(nil, "@solo", "--status"); strings.Contains(out, "the rollback to "+failed+" was cut off past its switch") {
+		t.Errorf("--status names the failed rollback to %s as cut off, finished by --rollback, while current is %s, whose restart was cut:\n%s", failed, cur, out)
+	}
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 {
+		t.Fatalf("a release (%d):\n%s", code, out)
+	}
+
 	// A child's release cut past its switch: its sync runs the release's
 	// run step again, which is what it skipped.
 	s.releaseProd(nil)
@@ -280,8 +301,8 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	// A full restore cut past its switch is a release whose run step may
 	// not have run likewise (its data went in before the switch): the
 	// sync's run step finishes it too (review round 9). Staged by hand.
-	cur := strings.TrimPrefix(s.current("dev"), "releases/")
-	write(t, devMark, cur+"\trestore\t"+cur+"\t20261027000000\n", 0o644)
+	devCur := strings.TrimPrefix(s.current("dev"), "releases/")
+	write(t, devMark, devCur+"\trestore\t"+devCur+"\t20261027000000\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
 		t.Errorf("a sync of a child whose full restore was cut (%d), mark %q:\n%s", code, readString(devMark), out)
 	}
