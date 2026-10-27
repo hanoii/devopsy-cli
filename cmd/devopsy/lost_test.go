@@ -347,3 +347,29 @@ func TestCutRollbackFinishingSaysCurrent(t *testing.T) {
 		t.Errorf("a finishing rollback that failed before its switch names the wrong release as current (current is %s):\n%s", ids[1], out)
 	}
 }
+
+// A release over a cut rollback replaces the activation's mark, but
+// leaves the release the cut rollback left as it was: never marked
+// rolled back, so it stays a live release, counted toward keep and the
+// next --rollback's target, where a rollback that ended marks it (the
+// README: a later rollback never goes back to a release a rollback
+// left). The cut rollback was past its switch: that release was left.
+func TestReleaseOverCutRollback(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the fake finds the activation's shell there")
+	}
+	s := newSyncSetup(t)
+	ids := cutRollback(t, s, "{rollback: deploy}")
+	base := filepath.Join(s.root, "shop", "solo")
+	if out, code := s.run(nil, "@solo", "--release", "--yes"); code != 0 || fileExists(filepath.Join(base, remote.ActivatingFile)) {
+		t.Fatalf("a release over a cut rollback (%d):\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(base, "releases", ids[2], remote.RolledBackFile)) {
+		t.Errorf("the release the cut rollback left (%s) is not marked rolled back after a release replaced the cut rollback", ids[2])
+	}
+	out, code := s.run(nil, "@solo", "--rollback", "--yes")
+	if code != 0 || s.current("solo") != "releases/"+ids[1] {
+		t.Errorf("a rollback after that (%d) went to %q, not to %s, the cut rollback's target:\n%s", code, s.current("solo"), ids[1], out)
+	}
+}
