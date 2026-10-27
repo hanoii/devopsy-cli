@@ -856,6 +856,29 @@ func TestSnapshotSettlesLeftoverSync(t *testing.T) {
 	}
 }
 
+// A take refused on a child whose data is from a sync that did not
+// complete says what completes it, as every other refusal on a marked
+// child does (--sync, or --reset: remote.ResetFix): it gave only "a
+// snapshot of it would restore as complete", with no way out, where an
+// import's or a restore's mark gets theirs. Found by hand (OrbStack,
+// 2026-10-27: staging's holder killed mid-copy, then a take there).
+func TestSnapshotRefusalOnSyncMarkSaysFix(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-27 12:55:45", "devopsy@one:prod", remote.IncompleteCopy, "the copy was cut"), 0o644)
+	out, code := s.run(nil, "@dev", "--snapshot")
+	if code == 0 || !strings.Contains(out, "did not complete") {
+		t.Fatalf("a take on a marked child went through (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "$ devopsy @dev --sync") || !strings.Contains(out, "--reset") {
+		t.Errorf("a take refused on a child's partial sync names no way out (--sync, --reset):\n%s", out)
+	}
+}
+
 // A --snapshots import killed outright (SIGKILL, a reboot) leaves its
 // .import directory under the snapshots, gigabytes nothing lists: the
 // next holder of the snapshot lock removes it, as it does a take's .tmp.
