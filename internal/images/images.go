@@ -464,8 +464,16 @@ func (s *Set) keep(rel string, es []entry) error {
 	// may give it another image (a rollback holding a newer one), which
 	// leaves the old pair to nothing that would remove it.
 	listed := map[string]bool{}
+	// The names es still gives an image, by name and id: one of them is
+	// no name left behind (review: an import's sync:<service> entry,
+	// dropped, recorded the release's own mariadb:11.8 and its hold).
+	named := map[string]bool{}
 	for _, e := range es {
 		listed[familiar(e.Ref)+" "+e.ID] = true
+		named[familiar(digestRef(e.Ref))+" "+e.ID] = true
+		if e.Digest != "" {
+			named[familiar(e.Digest)+" "+e.ID] = true
+		}
 	}
 	if err := writeList(rel, es); err != nil {
 		return err
@@ -495,12 +503,12 @@ func (s *Set) keep(rel string, es []entry) error {
 			// repositories counted on it to take (Remove): the next pruning
 			// retries them, removing a name only once nothing holds or uses
 			// its image.
-			if cur, err := s.Docker.ID(digestRef(e.Ref)); err == nil && cur == e.ID {
+			if cur, err := s.Docker.ID(digestRef(e.Ref)); err == nil && cur == e.ID && !named[familiar(digestRef(e.Ref))+" "+e.ID] {
 				s.record(digestRef(e.Ref), e.ID, id, "no release lists it any more")
 			}
 			tags, _ := s.Docker.Tags(e.ID)
 			for _, t := range tags {
-				if !isBookmark(t) && repoKey(t) == repoKey(e.Ref) {
+				if !isBookmark(t) && repoKey(t) == repoKey(e.Ref) && !named[familiar(t)+" "+e.ID] {
 					s.record(t, e.ID, id, "no release lists it any more")
 				}
 			}
