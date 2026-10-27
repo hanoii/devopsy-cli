@@ -313,7 +313,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return 1
 		}
 		session := func(script string) int {
-			return liveSession(t, script, rlog, log, releaseWords(t))
+			return liveSession(t, script, rlog, log, releaseWords(t, kind))
 		}
 		// save ends the log with code and saves it in release id's
 		// directory on the server: a rollback's is appended to the log of
@@ -632,7 +632,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return stop(err)
 			}
 			if code == sshLost {
-				log.Error("the connection to @" + t.Address + " failed or was lost during the upload: nothing changed there")
+				log.Error(lostSays(t, "during the upload", "nothing changed there"))
 			}
 			return code
 		}
@@ -957,6 +957,9 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		report.Fail(err)
 		return 1
 	}
+	if code == sshLost {
+		report.Error(lostSays(t, "", "the destroy may have stopped halfway there"), "to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --destroy")
+	}
 	if code != 0 {
 		return code
 	}
@@ -1022,15 +1025,33 @@ type liveWords struct {
 	goesOn, cancelling, slow, lostAfter, lostBefore, hadGone []string
 }
 
-// releaseWords are a release's.
-func releaseWords(t *remote.Target) liveWords {
+// goesOnSays is what every session says once interrupted past its point
+// of no return (a release's switch, a take's stopped pass, an import's
+// first write, a sync's copy): what goes on, where it is (past, or
+// empty), and what shows how it ends; a second Ctrl-C ends the session,
+// never what goes on.
+func goesOnSays(t *remote.Target, what, past, shows string) []string {
+	s := "interrupted: the " + what + " goes on on @" + t.Address
+	if past != "" {
+		s += ", " + past
+	}
+	return []string{s, shows + "; Ctrl-C again ends the session, not the " + what}
+}
+
+// leavesNow is the detail of a cancel that takes a while: a second
+// Ctrl-C leaves without waiting for it.
+const leavesNow = "Ctrl-C again leaves now"
+
+// releaseWords are an activation's, named by its kind: a release, a
+// rollback, a full restore (a release of the snapshot's copy).
+func releaseWords(t *remote.Target, kind string) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     []string{"interrupted: the release goes on on @" + t.Address + ", past its switch", logs + "; Ctrl-C again ends the session, not the release"},
-		cancelling: []string{"interrupted: cancelling the release on @" + t.Address},
-		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now"},
-		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the switch: the release goes on there", logs},
-		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the switch: the server cancels the release once it notices, within a minute", "devopsy @" + targetRef(t) + " --releases shows it"},
+		goesOn:     goesOnSays(t, kind, "past its switch", logs),
+		cancelling: []string{"interrupted: cancelling the " + kind + " on @" + t.Address},
+		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
+		lostAfter:  []string{lostSays(t, "after the switch", "the "+kind+" was past its switch there"), logs},
+		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
 	}
 }

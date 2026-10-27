@@ -179,10 +179,20 @@ func joinLogs(out []byte) []byte {
 				byTag[p.tag] = p
 			}
 			parts = append(parts, p)
-		} else if len(parts) > 0 {
+		} else {
+			// Lines before any section (a detached step's, written ahead
+			// of the activation's) are a part of their own, at the first
+			// section's time, never dropped (review: a release snapshot's
+			// lines were in no --log).
+			if len(parts) == 0 {
+				parts = append(parts, &part{})
+			}
 			p := parts[len(parts)-1]
 			p.lines = append(p.lines, logLine{text: line})
 		}
+	}
+	if len(parts) > 1 && parts[0].at == "" {
+		parts[0].at = parts[1].at
 	}
 	indent := strings.Repeat(" ", len(logTime)+1)
 	var b strings.Builder

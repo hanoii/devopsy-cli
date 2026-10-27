@@ -286,10 +286,10 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(err)
+			report.Fail(interrupted(ctx, err))
 			return 1
 		}
 		return 0
@@ -298,19 +298,19 @@ func runSnapshotStep(cwd string, args []string) int {
 		defer stop()
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if takeCopy(ctx, cwd, p, d) != "mirror" {
 			// No first pass: the stopped one clones the data or writes the
 			// tars.
 			if err := removeMirror(ctx, cwd, p); err != nil {
-				return fail("removing the snapshots' mirror: " + err.Error())
+				return fail("removing the snapshots' mirror: " + interrupted(ctx, err).Error())
 			}
 			return 0
 		}
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
 		if err := copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-mirror"); err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		return 0
 	case "stopped":
@@ -372,10 +372,10 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		return 0
 	case "restore-data":
-		if len(args) != 3 {
-			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release>")
+		if len(args) != 3 && (len(args) != 4 || args[3] != "no-code") {
+			return fail("usage: devopsy " + remote.SnapshotStepFlag + " restore-data <snapshot> <release> [no-code]")
 		}
-		return snapshotRestoreData(cwd, p, args[1], args[2])
+		return snapshotRestoreData(cwd, p, args[1], args[2], len(args) == 4)
 	case "receive":
 		if len(args) != 2 {
 			return fail("usage: devopsy " + remote.SnapshotStepFlag + " receive <directory>")
@@ -400,14 +400,14 @@ func runSnapshotStep(cwd string, args []string) int {
 		}
 		d, err := readSnapshotData(ctx, cwd)
 		if err != nil {
-			return fail(err.Error())
+			return fail(interrupted(ctx, err).Error())
 		}
 		if len(d.data) == 0 {
 			report.Info("no release snapshot: no service has data (" + cli.DataLabel + "=true)")
 			return 3
 		}
 		if err := snapshotCheckCopy(ctx, cwd, p, d); err != nil {
-			report.Fail(err)
+			report.Fail(interrupted(ctx, err))
 			return 1
 		}
 		return 0
@@ -664,7 +664,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	}
 	ctx, stopSig := interruptible()
 	defer stopSig()
-	if err := settleSnapshots(cwd, p.base); err != nil {
+	if err := settleStops(cwd, p.base); err != nil {
 		return fail(err.Error())
 	}
 	d, err := readSnapshotData(ctx, cwd)
@@ -1465,13 +1465,28 @@ func releaseSnapshots(p snapshotPaths) []releaseSnapshot {
 	return rs
 }
 
-// settleSnapshots starts what a take killed outright left stopped (the
-// record's snapshot lines), unless the environment is marked: a mark
-// keeps its set down. Every stop under the release lock runs it first,
-// so a snapshot line it finds is a leftover by construction.
-func settleSnapshots(cwd, base string) error {
+// settleStops starts what an operation killed outright left stopped,
+// unless the environment is marked (a mark keeps its set down): a take's
+// snapshot lines, and the stop lines a push, an import before its mark
+// or a release past its switch left (a release snapshot's, which
+// release-record live made stop lines). Every caller holds the release
+// lock (a push and an export shared, with the sync lock) and runs it
+// before it stops anything, so such a line is a leftover by
+// construction, but for a killed sync holder's (its files are there:
+// they become its mark) and the release's own stop lines inside its
+// activation or a data hook (remote.HeldStopsEnv: the sync of a release that syncs
+// settles past its switch). A start of stop lines that fails only warns
+// and keeps them (a start gate refusing a link would fail every release
+// that could remove it); a take's lines fail it as before.
+func settleStops(cwd, base string) error {
 	rec, ok := readSyncRecord(cwd)
-	if !ok || len(rec.snaps) == 0 {
+	// A sync's claimed or taken record means its holder was killed while
+	// the copy wrote: its stop lines keep the services off a copy that may
+	// be half the parent's, and the settle after this marks it (review
+	// round 6: started here first, the database ran on it before the mark).
+	syncing := fileExists(filepath.Join(base, remote.SyncStartedFile)) || fileExists(filepath.Join(base, remote.SyncTakenFile))
+	stops := len(rec.stops) > 0 && len(rec.writers) == 0 && !syncing && os.Getenv(remote.HeldStopsEnv) == ""
+	if !ok || (len(rec.snaps) == 0 && !stops) {
 		return nil
 	}
 	if readMark(base) != nil {
@@ -1490,19 +1505,72 @@ func settleSnapshots(cwd, base string) error {
 	}
 	if start := intersect(rec.snaps, names); len(start) > 0 {
 		report.Info("starting what snapshot " + rec.snapID + ", cut off, left stopped: " + strings.Join(start, " "))
-		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-			return fmt.Errorf("docker compose start: %w", err)
-		}
-		if err := waitHealthy(cwd, start); err != nil {
+		if err := startStops(cwd, start); err != nil {
 			return err
 		}
 	}
 	rec, _ = readSyncRecord(cwd)
 	rec.snaps, rec.snapID = nil, ""
+	if stops {
+		start := intersect(rec.stops, names)
+		if len(start) > 0 {
+			report.Info("starting what an operation cut off left stopped: " + strings.Join(start, " "))
+		}
+		if err := startStops(cwd, start); err != nil {
+			report.Warn(err.Error(), "they stay down, recorded, for the next release, sync, import or snapshot here to start")
+		} else {
+			rec.stops, rec.own, rec.ownID = nil, nil, ""
+		}
+	}
+	ranOnData(cwd, base)
 	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.writers) == 0 {
-		return os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
+		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
 	}
 	return rec.write(cwd)
+}
+
+// ranOnData records in the data's history what the current release's
+// data services run now, as img ran after a run step does: a settle that
+// made one again on the image the release holds it on ran that image on
+// the data (a release killed past its switch: OrbStack cuts, round 8),
+// and a rollback would hold the data on the older one.
+func ranOnData(cwd, base string) {
+	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
+	if rel == "" {
+		return
+	}
+	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	_ = set.RanCut(base, rel)
+}
+
+// startStops starts names and waits until they are healthy. One whose
+// container another image than the current release gives it runs (a
+// release cut between its switch and its run step: its stopped set is
+// the release before's containers) is made again, as startLeftDown and
+// restoreServices do: compose start would run the old code under the
+// new current (review round 6, a reboot mid-release).
+func startStops(cwd string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	again := intersect(names, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+	var start []string
+	for _, s := range names {
+		if !slices.Contains(again, s) {
+			start = append(start, s)
+		}
+	}
+	if len(again) > 0 {
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
+			return fmt.Errorf("docker compose up: %w", err)
+		}
+	}
+	if len(start) > 0 {
+		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+			return fmt.Errorf("docker compose start: %w", err)
+		}
+	}
+	return waitHealthy(cwd, names)
 }
 
 // runSnapshots implements devopsy @<target> --snapshots [remove
@@ -1548,6 +1616,9 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			report.Fail(err)
 			return 1
 		}
+		if code == sshLost {
+			report.Error(lostSays(t, "", "the export of snapshot "+id+" is incomplete"))
+		}
 		return code
 	}
 	if len(words) > 0 && words[0] == "import" {
@@ -1563,6 +1634,10 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		if err != nil {
 			report.Fail(err)
 			return 1
+		}
+		if code == sshLost {
+			// The server keeps a snapshot only once it read the whole tar.
+			report.Error(lostSays(t, "", "the snapshot is imported only if the server got all of it"), "devopsy @"+targetRef(t)+" --snapshots shows whether it did")
 		}
 		return code
 	}
@@ -1727,11 +1802,11 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 func snapshotWords(t *remote.Target) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     []string{"interrupted: the snapshot goes on on @" + t.Address + ", past its stopped pass", logs + "; Ctrl-C again ends the session, not the snapshot"},
+		goesOn:     goesOnSays(t, "snapshot", "past its stopped pass", logs),
 		cancelling: []string{"interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"},
-		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", "Ctrl-C again leaves now"},
-		lostAfter:  []string{"the connection to @" + t.Address + " was lost after the stopped pass: the snapshot goes on there", logs},
-		lostBefore: []string{"the connection to @" + t.Address + " failed or was lost before the stopped pass ended: the server cancels the snapshot once it notices, within a minute, its services started again"},
+		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", leavesNow},
+		lostAfter:  []string{lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs},
+		lostBefore: []string{lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
 		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
 	}
 }
@@ -1935,9 +2010,14 @@ func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait
 // carrying its own
 // entry or volume alone and of the kind the manifest says; and has the
 // images its data services ran there (pulled by digest when gone).
-func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) error {
+func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (err error) {
 	ctx, stop := interruptible()
 	defer stop()
+	defer func() {
+		if err != nil && interrupted(ctx, err) == errInterrupted {
+			err = fmt.Errorf("%w: %s", errInterrupted, map[bool]string{true: "nothing restored", false: "nothing imported"}[restore])
+		}
+	}()
 	m, err := readManifest(snap)
 	if err != nil {
 		return err
@@ -2318,7 +2398,7 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 // held on the images that ran on the data, with its history; then the
 // mark goes (it covers every service with data the restored code runs),
 // and so do its stop lines: the run step starts them.
-func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
+func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
@@ -2338,7 +2418,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 	// script's hook, which starts it again.
 	own := os.Getenv(remote.RestoreSnapshotEnv)
 	if rec, ok := readSyncRecord(cwd); own == "" || !ok || rec.snapID != own {
-		if err := settleSnapshots(cwd, p.base); err != nil {
+		if err := settleStops(cwd, p.base); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -2532,7 +2612,13 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string) int {
 		if len(keys) == 0 {
 			in = ""
 		}
-		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id+" --with-env")
+		// The same restore again, its env too (review: a --no-code
+		// restore's hint was a full one when copied).
+		again := " --snapshots restore " + id + " --with-env"
+		if noCode {
+			again = " --snapshots restore " + id + " --no-code --with-env"
+		}
+		report.Warn("the snapshot's shared/.env differs from the environment's"+in+": kept as it is", "--with-env brings it back too:", report.CmdMark+"devopsy @"+targetAddress(cwd)+again)
 	}
 	// The mark and the record stay until the run step has started the set
 	// (restored): a shell killed before it leaves the set down, marked.
@@ -2674,12 +2760,12 @@ var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `resto
 // restoreDataWords are what liveSession says of a --no-code restore: past
 // the disarm it writes the data, on its own.
 func restoreDataWords(t *remote.Target) liveWords {
-	w := releaseWords(t)
+	w := releaseWords(t, "restore")
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
-	w.goesOn = []string{"interrupted: the restore goes on on @" + t.Address + ", writing the data", logs + "; Ctrl-C again ends the session, not the restore"}
+	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
 	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
-	w.lostAfter = []string{"the connection to @" + t.Address + " was lost while it wrote the data: the restore goes on there", logs}
-	w.lostBefore = []string{"the connection to @" + t.Address + " failed or was lost before the restore wrote anything: the server cancels it once it notices"}
+	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), logs}
+	w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}
 	w.hadGone = []string{"it was writing the data already, and went on", logs}
 	return w
 }
@@ -2785,7 +2871,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		}
 		return code
 	}
-	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t))
+	code = liveSession(t, remote.RestoreScript(t, projectName, opts), rlog, log, releaseWords(t, "restore"))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {

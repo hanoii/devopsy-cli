@@ -675,7 +675,14 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   second Ctrl-C only ends the session. To go back, `--rollback` once it
   ends. A release that syncs is the exception during its copy: Ctrl-C
   there aborts the sync, and the release goes back (Parent environments
-  and syncs).
+  and syncs). Only something that kills devopsy on the server outright
+  (the OOM killer, a reboot) stops it there: then its release is
+  current, but its run step may not have run. `--status` and
+  `--releases` (`CUT`) say so and what finishes it: the release again;
+  for a rollback, `--rollback` again, which finishes that rollback
+  rather than going one release further back; for a restore, the
+  restore again. A child's `--sync`, which runs the release's run step
+  again, finishes a cut release too.
 - **Logs:** each release and rollback is recorded on the server, in the
   release's directory (a rollback's and a sync's added to the release they
   go to), failed ones included once the server was reached, in two logs:
@@ -1288,7 +1295,10 @@ every entry of `shared/mnt`, the ones no label copies included (logs,
 an unlabeled service's files). The parent's data then goes in as on a
 first release, the services with data are created before `finish
 child go`, and the run step starts the rest. The release, its images
-and the child's `shared/.env` (its secrets) stay. It is the way out of
+and the child's `shared/.env` (its secrets) stay. Nothing of the child
+answers from the wipe until its run step is done: a service a sync
+keeps up to hold visitors goes with the rest, so they get the proxy's
+errors meanwhile. It is the way out of
 data nothing else fixes: a sync or an import that did not complete, a
 half-written entry the parent does not have. Everything a sync checks
 comes first, and the child is wiped only at the copy's first write, so
@@ -1495,7 +1505,15 @@ before deciding is decided, as not completed, by whatever takes its lock
 next: a sync, a release or a rollback; the last two then refuse (a release
 that syncs is a sync). Restoring means what the sync stopped
 (`<environment>/.devopsy-sync.services` meanwhile): a service that was
-down before it, stopped for maintenance, stays down. Only what the
+down before it, stopped for maintenance, stays down. A side whose devopsy
+on the server is killed outright (the OOM killer, `kill -9`) restores
+nothing itself: what it stopped stays down until the next release, sync,
+import, export or snapshot of that environment starts it first (one not
+marked: on a mark it stays down until the mark goes), and `--status`
+names it meanwhile; so does what an `--export` killed that way stopped,
+and what a release killed between its switch and its run step left
+stopped for its release snapshot, which then starts on the images that
+release gives it. Only what the
 child's side stopped is kept off partial data: a service left running
 during the copy (a `volumes` one labeled `never`, a `custom` one imported
 into while running) sees it change, as it chose.
@@ -1538,9 +1556,13 @@ and hard links come back as files of their own. Plain
 service that holds visitors, like drupal11's `alwaysup`, answers
 meanwhile). Before the services start again, a Ctrl-C or a session gone
 cancels it and starts them; past that it finishes on its own (`--log`
-shows how). A take killed outright leaves what it stopped for the next
-release, rollback, take, restore, import, export or sync of the
-environment, which starts it first. Refused, nothing
+shows how). A take whose devopsy on the server is killed outright starts
+what it stopped again at once and says so; one whose whole session went
+(a reboot) leaves it for the next release, rollback, take, restore,
+import, export or sync of the environment, which starts it first, and
+`--status` names it meanwhile. An import or a restore killed that way
+after its first write says so too, with the mark it left and the ways
+out. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, one with

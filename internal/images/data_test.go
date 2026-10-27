@@ -524,7 +524,18 @@ func dataRandom(t *testing.T, seed int64) {
 	left := filepath.Join(t.TempDir(), LeftFile)
 	for _, m := range envs {
 		m.e.set.Left = left
+		m.e.set.Snapshots = filepath.Join(m.base(), "snapshots")
 	}
+	// Each environment's snapshots: a directory with the release's listing,
+	// bookmarked as s<id>, and the record of its data services' images
+	// (SnapshotData), the database's among them: what a restore holds it
+	// on.
+	type snapshot struct {
+		dir, image string
+		svcs       []Service
+	}
+	snaps := map[*sim][]snapshot{}
+	snapN := 0
 	// mariadb:11.8 also spelled in full: a hold must never depend on it.
 	refs := []string{"mariadb:11.8", "mariadb:11", "mariadb:11.8.9", "mirror.example/mariadb:11.8", "docker.io/library/mariadb:11.8"}
 	img := 0
@@ -573,6 +584,19 @@ func dataRandom(t *testing.T, seed int64) {
 					}
 				}
 			}
+			// A snapshot's bookmarks hold what it lists until it goes (rule
+			// 5 for snapshots): a restore finds its images.
+			for _, sn := range snaps[m] {
+				es := readList(sn.dir)
+				for i, b := range bookmarks(es, m.e.set.Name, m.e.set.idOf(sn.dir)) {
+					if es[i].ID == "" {
+						continue
+					}
+					if got, _ := d.ID(b); got != es[i].ID {
+						t.Fatalf("after %v: snapshot %s's bookmark %s is %q, want %q\n%s", log, filepath.Base(sn.dir), b, got, es[i].ID, out.String())
+					}
+				}
+			}
 		}
 	}
 	// Each environment builds its own app, named after its compose project.
@@ -590,7 +614,88 @@ func dataRandom(t *testing.T, seed int64) {
 	d.publish("caddy:2-alpine", "C1")
 	for step := 0; step < 40; step++ {
 		m = envs[rng.Intn(2)]
-		switch op := rng.Intn(12); op {
+		switch op := rng.Intn(16); op {
+		case 12: // a snapshot of the current release and its data
+			if m.cur == "" {
+				continue
+			}
+			snapN++
+			dir := filepath.Join(m.e.set.Snapshots, fmt.Sprintf("2026101700%04d", snapN))
+			if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data := m.e.set.SnapshotData(m.base(), m.e.rel(m.cur))
+			if err := os.WriteFile(filepath.Join(dir, "data", "images"), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.e.set.BookmarkFrom(dir, m.e.rel(m.cur)); err != nil {
+				t.Fatalf("after %v: snapshot: %v\n%s", log, err, out.String())
+			}
+			sn := snapshot{dir: dir, svcs: m.e.svcs[m.cur]}
+			if p := parseParentData(data)["database"]; p != nil {
+				sn.image = p.Image.ID
+			}
+			snaps[m] = append(snaps[m], sn)
+			check(m.e.set.Name + " snapshot " + filepath.Base(dir))
+		case 13, 14: // a restore of a snapshot: full (a release made from it), or --no-code
+			if m.cur == "" || len(snaps[m]) == 0 {
+				continue
+			}
+			sn := snaps[m][rng.Intn(len(snaps[m]))]
+			data, err := os.ReadFile(filepath.Join(sn.dir, "data", "images"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The restore's check: the images the data ran, pulled when gone.
+			if err := m.e.set.SnapshotPull(sn.dir, string(data)); err != nil {
+				t.Fatalf("after %v: restore of %s: %v\n%s", log, filepath.Base(sn.dir), err, out.String())
+			}
+			rel := m.e.rel(m.cur)
+			word := "--no-code"
+			if op == 13 {
+				word = "full"
+				id := m.e.release(sn.svcs...)
+				rel = m.e.rel(id)
+				if err := m.e.set.BookmarkFrom(rel, sn.dir); err != nil {
+					t.Fatalf("after %v: make-release: %v\n%s", log, err, out.String())
+				}
+				err := m.e.set.Restore(rel, m.prev(), false)
+				if errors.Is(err, ErrGone) {
+					m.fetch(sn.svcs)
+					err = m.e.set.Restore(rel, m.prev(), true)
+				}
+				if err != nil {
+					t.Fatalf("after %v: the restore's images: %v\n%s", log, err, out.String())
+				}
+				m.cur = id
+			}
+			// The data step: held on the snapshot's images, the history the
+			// snapshot's; then the run step on it.
+			if err := m.e.set.ImportDone(m.base(), rel, string(data)); err != nil {
+				t.Fatalf("after %v: restore-data: %v\n%s", log, err, out.String())
+			}
+			m.activation = true
+			m.up()
+			if err := m.e.set.Ran(m.base(), rel); err != nil {
+				t.Fatal(err)
+			}
+			if sn.image != "" && pulledData(m) && m.runs("database") != sn.image {
+				t.Fatalf("after %v: %s's database runs %s after the %s restore of %s, whose data ran %s\n%s", log, m.e.set.Name, m.runs("database"), word, filepath.Base(sn.dir), sn.image, out.String())
+			}
+			check(m.e.set.Name + " " + word + " restore " + filepath.Base(sn.dir))
+		case 15: // a snapshot removed
+			if len(snaps[m]) == 0 {
+				continue
+			}
+			i := rng.Intn(len(snaps[m]))
+			sn := snaps[m][i]
+			if err := m.e.set.Remove(sn.dir); err != nil {
+				t.Fatal(err)
+			}
+			os.RemoveAll(sn.dir)
+			m.e.set.Prune()
+			snaps[m] = append(snaps[m][:i], snaps[m][i+1:]...)
+			check(m.e.set.Name + " remove snapshot " + filepath.Base(sn.dir))
 		case 10: // a complete mnt import
 			if m.cur == "" {
 				continue
@@ -776,6 +881,10 @@ func dataRandom(t *testing.T, seed int64) {
 	}
 	d.containers = nil
 	for _, m := range envs {
+		for _, sn := range snaps[m] {
+			m.e.set.Remove(sn.dir)
+			os.RemoveAll(sn.dir)
+		}
 		for _, id := range m.e.releases() {
 			m.e.set.Remove(m.e.rel(id))
 			os.RemoveAll(m.e.rel(id))
@@ -832,6 +941,50 @@ func TestStatusLines(t *testing.T) {
 	want := []string{"database held on mariadb@I1", "alwaysup runs caddy@C2, not caddy@C1 its activation gave it: caddy:2-alpine moved since (a plain up follows names)"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("status lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A rollback whose activation is killed outright past its switch (by
+// hand on OrbStack: the shell holding the release lock, SIGKILLed right
+// after "current is now") leaves current on the older release while the
+// newer release's containers run on, their own labels matching what they
+// run. --status names the service that runs another image than the
+// current release gives it, else the operator sees nothing amiss.
+func TestStatusLinesRollbackCutPastSwitch(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, err := m.release(false, appSvc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.release(false, appSvc); err != nil {
+		t.Fatal(err)
+	}
+	newer := m.runs("app")
+	// The rollback restores r1's images and switches, then dies before
+	// its run step: nothing recreates the containers.
+	if err := m.e.set.Restore(m.e.rel(r1), m.prev(), false); err != nil {
+		t.Fatal(err)
+	}
+	m.cur = r1
+	if m.runs("app") != newer {
+		t.Fatalf("setup: app runs %s, want the newer release's %s", m.runs("app"), newer)
+	}
+	rel := m.e.rel(r1)
+	if got := Recreate(d, "app-prod", rel); strings.Join(got, " ") != "app" {
+		t.Fatalf("setup: Recreate says %v, want app (current gives it another image)", got)
+	}
+	got := StatusLines(d, "app-prod", rel)
+	named := false
+	for _, l := range got {
+		if strings.HasPrefix(l, "app ") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("status lines %q name no app, which runs %s while the current release gives it another image", got, newer)
 	}
 }
 
@@ -1086,6 +1239,77 @@ func TestDataRollbackToForcedReleaseKeepsHistory(t *testing.T) {
 	}
 }
 
+// A release let through with --accept-image and killed past its switch,
+// its database stopped for a release snapshot on the image before: the
+// next lock-taker's RanCut (an activation's, before anything reads the
+// history) sees the old image and must keep the forced line, so the
+// settle that then makes the database again on the forced image starts
+// its history over from it. Removed at the first Ran, the image ran as a
+// plain one (OrbStack cuts, round 8).
+func TestDataForcedKeptUntilItRuns(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8.3", "I1")
+	if _, err := m.release(false, dbSvc("mariadb:11.8.3")); err != nil {
+		m.fail("r1: %v", err)
+	}
+	d.publish("mariadb:11.8", "I2")
+	id := m.e.release(db118)
+	rel := m.e.rel(id)
+	if err := m.e.set.SaveNames(rel); err != nil {
+		t.Fatal(err)
+	}
+	m.fetch([]Service{db118})
+	m.e.set.Accept = acceptAll([]Service{db118})
+	if err := m.e.set.Record(rel, m.prev()); err != nil {
+		m.fail("--accept-image: %v", err)
+	}
+	m.e.set.Accept = nil
+	m.cur = id
+	for i := range d.containers {
+		d.containers[i].state = "exited"
+	}
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); err != nil {
+		t.Fatalf("a Ran with the database still on its old image removed the forced line: %v", err)
+	}
+	// It lingers at most until its release's next activation ends (a
+	// rollback to it): that Ran removes it whatever ran, and marks
+	// nothing forced that its image did not run.
+	keep := filepath.Join(t.TempDir(), "forced")
+	if data, err := os.ReadFile(filepath.Join(rel, ForcedFile)); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(keep, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.e.set.Ran(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); !os.IsNotExist(err) || strings.Contains(strings.Join(m.history("database"), " "), "forced:") {
+		t.Errorf("an activation's own Ran, the database on its old image, kept the forced line (%v) or marked it forced: %v", err, m.history("database"))
+	}
+	if data, err := os.ReadFile(keep); err != nil {
+		t.Fatal(err)
+	} else if err := os.WriteFile(filepath.Join(rel, ForcedFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.activation = true
+	m.up()
+	if err := m.e.set.RanCut(m.base(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 forced:I2" {
+		t.Errorf("history once the forced image ran: %s, want ran:I1 forced:I2", got)
+	}
+	if _, err := os.Stat(filepath.Join(rel, ForcedFile)); !os.IsNotExist(err) {
+		t.Errorf("the forced line stays once its image ran (%v)", err)
+	}
+}
+
 // Bug: Ran marks forced whatever a forced release's data service runs,
 // not the image --yes let through: a forced release whose run step fails
 // before the database is recreated appends a forced line for the old
@@ -1182,7 +1406,10 @@ func TestDataRefusalLeavesOthersNames(t *testing.T) {
 
 // A restart whose images could not be restored still holds the data
 // services on the newest image their data ran, never on what the
-// release's last activation held.
+// release's last activation held. The release's listing and bookmark
+// follow the hold: what it lists is what it runs, so a snapshot of it
+// (its listing copied, bookmarked as the snapshot's) holds the image its
+// data ran, and its removal frees that one, not the image it left.
 func TestHoldData(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -1197,6 +1424,13 @@ func TestHoldData(t *testing.T) {
 	}
 	if got := holdsIn(m.e.rel(r1))["database"]; got != "mariadb@I2" {
 		t.Errorf("held on %q, want mariadb@I2", got)
+	}
+	e, ok := match(readList(m.e.rel(r1)), entry{Service: "database"})
+	if !ok || e.ID != "I2" || e.Digest != "mariadb@I2" {
+		t.Errorf("%s's listing names %s (%s) for its database, which it runs as mariadb@I2: a snapshot of it would bookmark that image, not the one its data ran", r1, e.ID, e.Digest)
+	}
+	if got, _ := d.ID("mariadb:devopsy-app-prod-" + r1); got != "I2" {
+		t.Errorf("%s's bookmark holds %s, not the image its database runs (I2)", r1, got)
 	}
 }
 
@@ -2342,5 +2576,172 @@ func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
 	tags, _ := d.Tags("IT")
 	if prod.runs("database") == "IT" || holdsIn(rel)["database"] == "mariadb@IT" {
 		t.Errorf("the --no-code restore of an imported snapshot runs traefik's image on the database (hold %s, traefik's names %v): the listing's id named it, and the import tagged it as mariadb's\n%s", holdsIn(rel)["database"], tags, out.String())
+	}
+}
+
+// An import of an environment's own export (an --export database, then
+// --import database of it, as on a server) records nothing as left: the
+// release still lists mariadb:11.8 and runs that very image. ImportCheck
+// lists the export's image as a sync:database entry, ImportDone drops
+// it, and keep took the dropped entry for a name no release lists,
+// recording mariadb:11.8 and its digest in the project's record, which
+// --releases then shows as "the project's removals left (Docker
+// refused)" (found by hand on an OrbStack server, 2026-10-27).
+func TestImportRecordsNothingLeft(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := prod.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	if err := importInto(t, prod, prod, false); err != nil {
+		t.Fatalf("import (%v)\n%s", err, out.String())
+	}
+	if prod.runs("database") != "I1" {
+		t.Fatalf("after the import: runs %s", prod.runs("database"))
+	}
+	for _, l := range readLeft(prod.e.set.Left) {
+		t.Errorf("recorded as left after an import of the same image: %s (%s), %s", l.ref, l.id, l.why)
+	}
+}
+
+// A sync across servers whose parent moved to a mirror serving the very
+// image it ran from docker.io (its history names mariadb:11.8, its
+// release mirror.example/mariadb:11.8), into a child a release behind on
+// docker.io: the child's server has the parent's image under no name of
+// its own, so localHold holds it by the digest in the parent's
+// repository, pulled by digest for the sync:database entry, which
+// syncDone drops. The child's release never lists that repository, so
+// its removal takes no name there (Remove: the listed refs'
+// repositories), and only the record keep writes when the entry is
+// dropped brings the name to the retry once nothing holds the image. The
+// database entry's Digest now exempts it (named): once every release of
+// the child goes, mirror.example/mariadb@I1 keeps the image, a name
+// pulled by digest that docker image prune never removes.
+func TestSyncParentRepositoryHoldRemoved(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	d.strictRepo = true
+	var out bytes.Buffer
+	prod := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	if _, err := prod.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mirror.example/mariadb:11.8", "I1")
+	if _, err := prod.release(false, dbSvc("mirror.example/mariadb:11.8")); err != nil {
+		t.Fatalf("the parent moving to a mirror of the image it runs: %v\n%s", err, out.String())
+	}
+	// The child's server: mariadb:11.8 is I0 there, and the mirror serves
+	// the parent's image by digest.
+	cd := newFake()
+	cd.strictRepo = true
+	cd.publish("mariadb:11.8", "I0")
+	cd.registry["I1"] = []string{"mirror.example/mariadb@I1"}
+	dev := newSim(t, cd, "app-dev", &out)
+	if _, err := dev.release(false, db118); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncInto(t, prod, dev, false); err != nil {
+		t.Fatalf("sync (%v)\n%s", err, out.String())
+	}
+	rel := dev.e.rel(dev.cur)
+	if hold := holdsIn(rel)["database"]; hold != "mirror.example/mariadb@I1" || dev.runs("database") != "I1" {
+		t.Fatalf("held on %q, runs %s: not the case this covers (the parent's repository)\n%s", hold, dev.runs("database"), out.String())
+	}
+	// Every release of the child goes, with its images.
+	cd.containers = nil
+	for _, id := range dev.e.releases() {
+		if err := dev.e.set.Remove(dev.e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		os.RemoveAll(dev.e.rel(id))
+	}
+	dev.e.set.Prune()
+	cd.Prune()
+	for id := range cd.images {
+		var ns []string
+		for n, i := range cd.names {
+			if i == id {
+				ns = append(ns, n)
+			}
+		}
+		sort.Strings(ns)
+		t.Errorf("after every release of the child went, %s is left under %v: no release lists that repository, and nothing recorded the name\n%s", id, ns, out.String())
+	}
+}
+
+// A release whose run step leaves the database as it is (a deploy that
+// ups the app alone) gives it a hold its container does not run yet; a
+// plain up later recreates it on that hold, which nothing records. After
+// another such release, img ran finds that container and appends its
+// image, the newest the data ran; it now skips it, since its label is
+// the earlier release's and not this one's, so the image is in no
+// history and a rollback holds the database on the one before it: data
+// goes back.
+func TestDataRanCountsPlainUpOnEarlierHold(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, appSvc, db118)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A release whose run step ups the app alone: the database's
+	// container stays as it was, its image and label the release before's.
+	leaveDatabase := func() string {
+		t.Helper()
+		id := m.e.release(appSvc, db118)
+		m.e.set.SaveNames(m.e.rel(id))
+		m.fetch(m.e.svcs[id])
+		if err := m.e.set.Record(m.e.rel(id), m.prev()); err != nil {
+			m.fail("%s: %v", id, err)
+		}
+		m.cur = id
+		var db container
+		for _, c := range d.containers {
+			if c.project == m.e.set.Name && c.service == "database" {
+				db = c
+			}
+		}
+		m.activation = true
+		m.up()
+		for i, c := range d.containers {
+			if c.project == m.e.set.Name && c.service == "database" {
+				d.containers[i] = db
+			}
+		}
+		if err := m.e.set.Ran(m.base(), m.e.rel(id)); err != nil {
+			m.fail("%s: %v", id, err)
+		}
+		return id
+	}
+	d.publish("mariadb:11.8", "I2")
+	leaveDatabase()
+	if m.runs("database") != "I1" {
+		m.fail("the run step moved the database: %s", m.runs("database"))
+	}
+	// A plain up: compose recreates the database on the release's hold.
+	m.up()
+	if m.runs("database") != "I2" {
+		m.fail("the plain up: %s", m.runs("database"))
+	}
+	d.publish("mariadb:11.8", "I3")
+	r3 := leaveDatabase()
+	if m.runs("database") != "I2" {
+		m.fail("%s's run step moved the database: %s", r3, m.runs("database"))
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I1 ran:I2" {
+		t.Errorf("after %s's img ran, the history is %s: I2, which the database runs, is missing", r3, got)
+	}
+	if err := m.rollback(r1); err != nil {
+		m.fail("rollback: %v", err)
+	}
+	if got := m.runs("database"); got != "I2" {
+		t.Errorf("the rollback to %s runs the database on %s: its data ran I2 (the plain up after the release that held it), which must stay the newest", r1, got)
 	}
 }

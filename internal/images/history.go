@@ -206,7 +206,16 @@ func (s *Set) containers() map[string]Container {
 // back outside devopsy: said, never written, so the history keeps the
 // newest. rel is the release whose listing names the data services;
 // those with a history count too.
-func (s *Set) Ran(base, rel string) error {
+func (s *Set) Ran(base, rel string) error { return s.ran(base, rel, false) }
+
+// RanCut is Ran on a release whose activation was cut off past its
+// switch (an activation's start, a settle that made services again): a
+// ForcedFile line goes only once its service runs that image, so one
+// still on the image before (stopped for a release snapshot) keeps it
+// for the settle that makes it again.
+func (s *Set) RanCut(base, rel string) error { return s.ran(base, rel, true) }
+
+func (s *Set) ran(base, rel string, cut bool) error {
 	svcs := map[string]bool{}
 	for _, e := range readList(rel) {
 		if e.Kind == KindData {
@@ -227,6 +236,7 @@ func (s *Set) Ran(base, rel string) error {
 		refs[e.Service] = e.Ref
 	}
 	changed := false
+	ranForced := map[string]bool{}
 	for _, svc := range sortedKeys(svcs) {
 		c, ok := cs[svc]
 		if !ok || !c.started() {
@@ -244,6 +254,7 @@ func (s *Set) Ran(base, rel string) error {
 		how := Ran
 		if id := forced[svc]; id != "" && id == img.ID {
 			how = Forced
+			ranForced[svc] = true
 		}
 		if last, ok := h.last(svc); ok && last.is(img) {
 			if how != Forced || last.How == Forced {
@@ -262,12 +273,31 @@ func (s *Set) Ran(base, rel string) error {
 			return err
 		}
 	}
-	if forced != nil {
+	if forced != nil && !cut {
 		if err := os.Remove(filepath.Join(rel, ForcedFile)); err != nil && !os.IsNotExist(err) {
 			s.say(report.WarnLevel, "could not remove %s: %v", ForcedFile, err)
 		}
+	} else if forced != nil {
+		s.keepForced(rel, forced, ranForced)
 	}
 	return nil
+}
+
+// keepForced rewrites rel's ForcedFile with the lines of the services
+// not seen on their forced image (ran), removing it once none is left.
+func (s *Set) keepForced(rel string, forced map[string]string, ran map[string]bool) {
+	var left []string
+	for _, svc := range sortedKeysOf(forced) {
+		if !ran[svc] {
+			left = append(left, svc+"\t"+forced[svc])
+		}
+	}
+	if len(left) == len(forced) {
+		return
+	}
+	if err := writeForced(rel, left); err != nil {
+		s.say(report.WarnLevel, "could not rewrite %s: %v", ForcedFile, err)
+	}
 }
 
 func mustLast(h history, svc string) ran {
@@ -302,6 +332,15 @@ func readForced(rel string) map[string]string {
 		}
 	}
 	return m
+}
+
+func sortedKeysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sortStrings(ks)
+	return ks
 }
 
 func sortedKeys(m map[string]bool) []string {

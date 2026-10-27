@@ -68,6 +68,13 @@ const (
 	// lock (ImportScript writes it once it holds it, and removes it on
 	// its way out): with the lock held (ImportRunning), an import runs.
 	SyncImportingFile = ".devopsy-sync.importing"
+	// SyncedFile is the child's record of its last sync that completed
+	// (finish child go accepted it): its UTC time and the parent's
+	// address, tab separated, written by the child's devopsy itself, so
+	// --status's "last synced" holds whatever happened to the operator's
+	// session (its log, which said it before, is saved only by a session
+	// that lasted).
+	SyncedFile = ".devopsy-sync.synced"
 )
 
 // ImportContainerPrefix and the compose project start the name of the
@@ -219,6 +226,13 @@ func ResetFix(ref string) [2]string {
 	return [2]string{"or start it over from its parent (all its data goes, its shared/.env stays):", "devopsy @" + ref + " --reset"}
 }
 
+// syncFixLines are a sync mark's ways out as --say's details for a
+// script: a sync, the details in more (each double-quoted), a reset.
+func syncFixLines(t *Target, more ...string) string {
+	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"`}
+	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
+}
+
 // resetFixLines is ResetFix as --say's details for a script.
 func resetFixLines(t *Target) string {
 	f := ResetFix(hintAddress(t))
@@ -257,13 +271,53 @@ fi
 `
 }
 
+// killedSays is shell after a devopsy on the server ended with the
+// status in $<status>: killed by a signal (above 128: SIGKILL, the OOM
+// killer), it said nothing of how it left the environment, so this
+// says: a mark (its first write done) with the ways out, else, with
+// nothing (non-empty), what it stopped started again in the current
+// release, whatever the script's directory (settleSync), and nothing
+// written. A failure of its own said so itself.
+func killedSays(t *Target, projectName, status, nothing string) string {
+	s := `if [ "$` + status + `" -gt 128 ]; then
+` + markRefusal(t, killed(status), syncFixLines(t), ":")
+	if nothing != "" {
+		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
+` + settleSync(projectName) + "  " + killedLine(status, "before its first write", nothing, "") + `fi
+`
+	}
+	return s + "fi\n"
+}
+
+// killed opens what every script says once the devopsy it ran was
+// killed (its status in $<status>, above 128: SIGKILL, the OOM killer),
+// which said nothing itself. killedLine is the line: when it was killed
+// ("before its first write", or empty), what that left, and the command
+// that finishes it, if any. The operator's side says the same when only
+// ssh's 255 is left (cmd/devopsy's lostSays).
+func killed(status string) string {
+	return "its devopsy on the server was killed ($" + status + ")"
+}
+
+func killedLine(status, when, left, finish string) string {
+	s := killed(status)
+	if when != "" {
+		s += " " + when
+	}
+	s = `devopsy --say error "` + s + `: ` + left + `"`
+	if finish != "" {
+		s += ` "to finish it:" "` + report.CmdMark + finish + `"`
+	}
+	return s + " || true\n"
+}
+
 // IncompleteWhy is shell printing the mark's why and since ($base set),
 // for a message.
 const IncompleteWhy = `$(cut -f4 "$base/` + SyncIncompleteFile + `" 2>/dev/null) (since $(cut -f1 "$base/` + SyncIncompleteFile + `" 2>/dev/null) UTC)`
 
 // SyncCopied starts the line a sync's log gets, followed by the
 // parent's address, once the copy went through, whatever the run step
-// does after it: --status's last sync.
+// does after it (--status's last sync is SyncedFile's).
 const SyncCopied = report.Prefix + "copied the data from @"
 
 // SyncMarker starts the line the holder prints (on stderr: holders print
@@ -712,8 +766,12 @@ status=0
 trap '' PIPE
 ` + followOutput
 		s += "rs=0\nwith_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + " || rs=$?\n"
-		// What ran on the data, as after a release's run step.
-		s += "img ran \"$base\" \"$rel\" || true\nexit \"$rs\"\n"
+		// What ran on the data, as after a release's run step; and a
+		// release cut off past its switch (ActivatingFile) has had its run
+		// step now, the one it skipped.
+		s += "img ran \"$base\" \"$rel\" || true\n" + `if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "$id")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
+exit "$rs"
+`
 	}
 	return s
 }
@@ -750,7 +808,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 		exports += " " + k + "=" + Quote(env[k])
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
-` + syncSourceLock() + markRefusal(p, "nothing synced from it", `"`+report.CmdMark+`devopsy @`+hintAddress(p)+` --sync" `+resetFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
   devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
   exit 1
 fi
@@ -765,6 +823,12 @@ export` + exports + "\n" + devopsyCall(projectName, push, true) + "\n"
 // export does.
 func ExportScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to export"; exit 1; }
+if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  # A sync's holder killed before it decided left its files: settled into
+  # a mark first, which needs the lock exclusively, so the export warns
+  # that the data is a partial copy (its shared hold could not settle it).
+  ` + strings.ReplaceAll(releaseLock(false, false), "\n", "\n  ") + settleSync(projectName) + `  exec 9>&-
+fi
 ` + syncSourceLock() + `cd "$base/current"
 ` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
 }
@@ -827,14 +891,22 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     exit 1
   fi
 fi
-export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + ` || {
+  im_status=$?
+  set +e
+  # A devopsy killed outright leaves its spool too, which only the next
+  # import, --resolved or sync would remove.
+  rm -f "$base/` + StreamSpoolPrefix + `"` + Quote(service) + `.*
+` + killedSays(t, projectName, "im_status", "nothing imported") + `  exit "$im_status"
+}
+`
 }
 
 // settleLeftover settles a sync's holder killed outright: its record's
 // writers end first, and its data becomes a sync's mark (replacing an
 // import's), which the checks after it see. Under the release lock.
 func settleLeftover(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
 `
@@ -864,7 +936,14 @@ grep '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null || true
 func ResolvedScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to resolve"; exit 1; }
 ` + releaseLock(false, false) + `cd "$base/current"
-` + settleLeftover(projectName) + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, true) + "\n"
+` + settleLeftover(projectName) + `rv_status=0
+` + devopsyCall(projectName, []string{"--import", service, "--resolved", "--yes"}, false) + ` || rv_status=$?
+# Killed (SIGKILL, the OOM killer), it said nothing: the mark stays, what
+# it started perhaps running under it.
+if [ "$rv_status" -gt 128 ]; then
+  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+hintAddress(t)+" --import "+service+" --resolved") + `fi
+exit "$rv_status"
+`
 }
 
 // SyncStateFile is the record of what a sync or an import stopped, in the

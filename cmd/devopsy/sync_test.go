@@ -48,6 +48,10 @@ const syncFakeDocker = `#!/bin/sh
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
 if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
+# The compose calls made holding the release lock (fd 9, which the
+# scripts open): what a devopsy killed outright leaves running holds it,
+# so the next lock-taker waits for it.
+[ "$1" != compose ] || [ ! -e /dev/fd/9 ] || echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*##g' >> "$DOCKER_LOG.locked"
 # $DOCKER_LOG.current.<compose project> sets them for the current
 # release's code alone: a restore reads the restored release's too.
 case ${dir:-} in */current/.devopsy) [ ! -f "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.current.${COMPOSE_PROJECT_NAME:-}" ;; esac
@@ -115,15 +119,22 @@ app2=
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
 [ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME"); }
+# FAKE_DB_IMAGE: db's image: (none by default: compose names a build).
+dbimg=
+[ -z "${FAKE_DB_IMAGE:-}" ] || dbimg=$(printf '"image":"%s",' "$FAKE_DB_IMAGE")
 # FAKE_DB_NO_BIND: db mounts no entry of mnt (its data inside its
 # container: an anonymous volume its image declares, say).
 dbmounts=$(printf '{"type":"bind","source":"%s/mnt/db"}%s' "${dir:-}" "$dbvol")
 [ -z "${FAKE_DB_NO_BIND:-}" ] || dbmounts=${dbvol#,}
 [ -z "${FAKE_APP_VOLUME:-}" ] || { appvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_APP_VOLUME"); [ "$FAKE_APP_VOLUME" = "${FAKE_DB_VOLUME:-}" ] || topvols="${topvols:+$topvols,}$(printf '"%s":{"name":"%s_%s"}' "$FAKE_APP_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_APP_VOLUME")"; }
 vols="$DOCKER_LOG.vol"
+# FAKE_RUN_WAIT: a docker run whose arguments hold $FAKE_RUN_WAIT_ON (a
+# long check, copy or tar) takes until $FAKE_RUN_WAIT.go exists, or its
+# client is killed.
+if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
@@ -135,14 +146,21 @@ case "$*" in
     rm -f "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"; for s in $svcs; do echo "$s"; done > "$DOCKER_LOG.down.${COMPOSE_PROJECT_NAME:-}"
     case "$* " in *" --volumes "*) rm -rf "$vols/${COMPOSE_PROJECT_NAME:-}"_* ;; esac ;;
   *" stop "*)
-    # FAKE_STOP_WAIT: a stop that takes until $FAKE_STOP_WAIT.go exists.
-    if [ -n "${FAKE_STOP_WAIT:-}" ]; then : >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # FAKE_STOP_WAIT: a stop that writes its caller's pid there and takes
+    # until $FAKE_STOP_WAIT.go exists.
+    # FAKE_STOPPED_WAIT: the same once the services are stopped (a
+    # devopsy killed then: its orphaned stop never races the settle).
+    if [ -n "${FAKE_STOPPED_WAIT:-}" ]; then after stop "$@" >> "$stopped"; echo $PPID >"$FAKE_STOPPED_WAIT"; n=0; while [ ! -e "$FAKE_STOPPED_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; exit 0; fi
+    if [ -n "${FAKE_STOP_WAIT:-}" ]; then echo $PPID >"$FAKE_STOP_WAIT"; n=0; while [ ! -e "$FAKE_STOP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     after stop "$@" >> "$stopped"
     # FAIL_STOP: a stop that fails partway, its services stopped.
     [ "${FAIL_STOP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1 ;;
   *" start "*)
     # FAKE_START_WAIT: a start that takes until $FAKE_START_WAIT.go exists.
     if [ -n "${FAKE_START_WAIT:-}" ]; then : >"$FAKE_START_WAIT"; n=0; while [ ! -e "$FAKE_START_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # FAKE_KILL_START: the devopsy starting them killed outright (SIGKILL,
+    # the OOM killer) as they start.
+    [ -z "${FAKE_KILL_START:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # FAIL_START: a start that fails, its services left stopped.
     [ "${FAIL_START:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     for s in $(after start "$@"); do case " $svcs " in *" $s "*) ;; *) echo "no such service: $s" >&2; exit 1 ;; esac; done
@@ -177,7 +195,16 @@ case "$*" in
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
+    [ ! -e "$DOCKER_LOG.rm-done" ] || exit 0
     for c in ${FAKE_SYNC_CONTAINERS:-}; do case $c in "${4#name=}"*) echo "$c" ;; esac; done ;;
+  # FAKE_RM_IN_PROGRESS: a sync's containers removed meanwhile by
+  # another (the push's own removal), which Docker refuses as in
+  # progress; they are gone right after.
+  "rm -f devopsy-sync-"*)
+    [ -n "${FAKE_RM_IN_PROGRESS:-}" ] || exit 0
+    : >"$DOCKER_LOG.rm-done"
+    echo "Error response from daemon: removal of container $3 is already in progress" >&2
+    exit 1 ;;
   *" ps --all --format json")
     for s in $svcs; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
@@ -189,7 +216,9 @@ case "$*" in
     [ "${FAIL_UP:-}" != "${COMPOSE_PROJECT_NAME:-}" ] || exit 1
     # FAKE_UP_WAIT: an up that writes its caller's pid there and takes
     # until $FAKE_UP_WAIT.go exists.
-    if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
+    # Its caller killed meanwhile, it changes nothing: the script's settle
+    # then starts what was stopped, never raced by this one's state write.
+    if [ -n "${FAKE_UP_WAIT:-}" ]; then echo $PPID >"$FAKE_UP_WAIT"; n=0; while [ ! -e "$FAKE_UP_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; kill -0 "$PPID" 2>/dev/null || exit 1; fi
     # FAKE_UP_MKDIR: an up that makes that directory (where a file
     # devopsy writes next goes, so the write fails).
     [ -z "${FAKE_UP_MKDIR:-}" ] || mkdir -p "$FAKE_UP_MKDIR"
@@ -200,9 +229,18 @@ case "$*" in
       *" --no-deps "*) ;;
       *) [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac ;;
     esac
+    # A container of $DOCKER_LOG.containers.<project> is made again on
+    # what the release's devopsy-compose.yaml gives its service: its
+    # devopsy.digest label, and that digest as its image.
+    cf=$(cd -P "$dir/.." 2>/dev/null && cd .. && pwd)/devopsy-compose.yaml
+    cfile="$DOCKER_LOG.containers.${COMPOSE_PROJECT_NAME:-}"
     for s in $ups; do
       echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
+      if [ -f "$cfile" ] && [ -f "$cf" ] && grep -q "^$s " "$cfile"; then
+        l=$(awk -v svc="  \"$s\":" '$0 == svc { in_s = 1; next } /^  [^ ]/ { in_s = 0 } in_s && /"devopsy.digest":/ { sub(/.*"devopsy.digest": "/, ""); sub(/"$/, ""); print; exit }' "$cf")
+        [ -z "$l" ] || { grep -v "^$s " "$cfile" > "$cfile.new"; echo "$s $l ${l#*@}" >> "$cfile.new"; mv "$cfile.new" "$cfile"; }
+      fi
     done ;;
   "run --rm -d "*)
     : >"$DOCKER_LOG.daemonvols"
@@ -224,8 +262,9 @@ case "$*" in
   # default.
   "ps -a --filter ancestor="*) for u in ${FAKE_USERS:-}; do echo "c1 $u"; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
-  # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
-  # exited, its id ctr:<project>:<service>.
+  # line "<service> <devopsy.digest label> [<image id>]" of
+  # $DOCKER_LOG.containers.<project>, exited, its id ctr:<project>:<service>,
+  # its image sha256:<service> unless the line names one.
   "ps -a -q --no-trunc --filter label=com.docker.compose.project="*)
     p=${6#label=com.docker.compose.project=}
     [ ! -f "$DOCKER_LOG.containers.$p" ] || while read -r cs cl; do echo "ctr:$p:$cs"; done <"$DOCKER_LOG.containers.$p" ;;
@@ -234,7 +273,8 @@ case "$*" in
     for c; do
       p=${c#ctr:}; cs=${p#*:}; p=${p%%:*}
       cl=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f2)
-      printf '{"Name":"/%s-%s-1","Image":"sha256:%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "$cs" "$p" "$cs" "$cl"
+      ci=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f3)
+      printf '{"Name":"/%s-%s-1","Image":"%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "${ci:-sha256:$cs}" "$p" "$cs" "$cl"
     done ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),
@@ -317,6 +357,9 @@ case "$*" in
     rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-snapshot-"*"-tar "*)
     [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
+    # FAKE_KILL_SNAPSHOT_TAR: the devopsy writing the tars killed
+    # outright (SIGKILL, the OOM killer).
+    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # FAKE_SLOW_TAR: a tar that takes until $FAKE_SLOW_TAR.go exists.
     if [ -n "${FAKE_SLOW_TAR:-}" ]; then : >"$FAKE_SLOW_TAR"; n=0; while [ ! -e "$FAKE_SLOW_TAR.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # From the mirror (-v <mirror>:/m:ro), or a take without one from the
@@ -353,10 +396,18 @@ case "$*" in
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
     rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-destroy-"*)
+    # FAIL_DESTROY: emptying mnt fails (or its devopsy is killed).
+    [ -z "${FAIL_DESTROY:-}" ] || exit "$FAIL_DESTROY"
+    # FAKE_KILL_DESTROY: its devopsy (--destroy-data, which runs this)
+    # killed outright meanwhile, as SIGKILL or the OOM killer would.
+    [ -z "${FAKE_KILL_DESTROY:-}" ] || kill -9 "$PPID"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    # FAKE_KILL_EXPORT: the devopsy exporting killed outright (SIGKILL,
+    # the OOM killer) as its tar runs.
+    [ -z "${FAKE_KILL_EXPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
     # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
     # where the script that follows the image runs, /x being it.
@@ -376,6 +427,9 @@ case "$*" in
     # Which of the release's lock descriptors the client got.
     for fd in 8 9; do [ ! -e /dev/fd/$fd ] || echo "$fd" >> "$DOCKER_LOG.fds"; done
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    # FAKE_KILL_IMPORT: the devopsy that started the extraction killed
+    # outright (SIGKILL, the OOM killer) as it writes.
+    [ -z "${FAKE_KILL_IMPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # One entry per container (--mount, its source the entry): emptied,
     # then the members named after it extracted from the tar mounted at
     # /in (a snapshot's .tar.zst is a plain tar here), as the util image
@@ -423,6 +477,15 @@ exec 3<&0
 # devopsy there first.
 case "$opts" in *BatchMode=yes*) [ -z "${FAKE_CHILD_PATH:-}" ] || PATH="$FAKE_CHILD_PATH:$PATH" ;; esac
 case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
+# FAKE_SSH_LOST_PUSH: the push's connection lost once it ran (ssh's 255),
+# its copy complete.
+case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_LOST_PUSH:-}" ]; then sh -c "$s" <&3; exit 255; fi ;; esac
+# FAKE_SSH_LOST_IMPORT: an --import's session lost on the way (a network
+# gone during the upload), as ssh says it.
+case "$s" in *"--import "*) [ -z "${FAKE_SSH_LOST_IMPORT:-}" ] || { echo "Read from remote host one: Operation timed out" >&2; exit 255; } ;; esac
+# FAKE_SSH_LOST: any session whose script holds this text lost on the
+# way, as ssh says it (its 255).
+if [ -n "${FAKE_SSH_LOST:-}" ]; then case "$s" in *"$FAKE_SSH_LOST"*) echo "Read from remote host one: Operation timed out" >&2; exit 255 ;; esac; fi
 # FAKE_IMPORT_DETACH: the same for a stream's import session.
 case "$s" in *sync-services*import*) if [ -n "${FAKE_IMPORT_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
 # FAKE_HOLDER_DIE: the holder's session dies once the copy started (the
@@ -476,7 +539,14 @@ func newSyncSetup(t *testing.T) *syncSetup {
 	write(t, filepath.Join(s.dot, "compose.yaml"), "services:\n  app:\n    image: x\n  db:\n    image: y\n", 0o644)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {}\n  nosnap: {snapshots: {manual: false}}\n  snap1: {snapshots: {manual: {keep: 1}}}\n  slow: {release: {prepare: [slow], run: deploy}}\n  bare: {parent: prod, release: {before: [local: deploy]}}\n", 0o644)
 	write(t, filepath.Join(s.dot, ".env"), "DEVOPSY_SERVER=devopsy@one\n", 0o644)
-	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\nif [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n[ -z \"${FAKE_FAIL_DEPLOY:-}\" ] || exit 3\n", 0o755)
+	write(t, filepath.Join(s.dot, "commands", "deploy"), "#!/bin/sh\necho \"deploy in $COMPOSE_PROJECT_NAME parent=${DEVOPSY_PARENT:-} ${DEVOPSY_PARENT_TARGET:-}\"\n"+
+		// FAKE_KILL_RUN: the activation's shell killed outright (SIGKILL,
+		// the OOM killer) during its run step, once (the file made), on
+		// Linux (/proc): the topmost ancestor running the script itself
+		// (its first line its needs; its subshells have the same command
+		// line, and above it is ssh's sh -c of it, a connection).
+		"if [ -n \"${FAKE_KILL_RUN:-}\" ] && [ ! -e \"$FAKE_KILL_RUN\" ]; then : >\"$FAKE_KILL_RUN\"; p=$PPID; k=; while [ \"$p\" -gt 1 ]; do [ \"$(tr '\\0' '\\n' </proc/$p/cmdline | sed -n 3p | cut -c1-14)\" != devopsy_needs= ] || k=$p; p=$(cut -d' ' -f4 /proc/$p/stat); done; [ -z \"$k\" ] || kill -KILL $k; exit 0; fi\n"+
+		"if [ -n \"${FAKE_SLOW_RUN:-}\" ]; then touch \"$FAKE_SLOW_RUN\"; sleep 3; echo \"deployed slowly\"; fi\n[ -z \"${FAKE_FAIL_DEPLOY:-}\" ] || exit 3\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "slow"), "#!/bin/sh\n## Description: a slow prepare step\nif [ -n \"${FAKE_SLOW_PREPARE:-}\" ]; then touch \"$FAKE_SLOW_PREPARE\"; exec sleep 20; fi\n", 0o755)
 	write(t, filepath.Join(s.dot, "commands", "show"), "#!/bin/sh\necho \"show project=$COMPOSE_PROJECT_NAME pw=${DB_PASSWORD:-}\"\ncat\n", 0o755)
 	s.env = []string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "fakessh"), "PATH=" + bin + ":/usr/bin:/bin", "HOME=" + tmp, "DEVOPSY_HOME=" + home,
@@ -1993,6 +2063,42 @@ func TestReleaseCurrentDirectory(t *testing.T) {
 	}
 }
 
+// A sync whose push's connection is lost (ssh's 255) after a copy that
+// completed: what the copy wrote decides, so the child goes on, and the
+// operator is told that, never that the sync aborts. Found by hand
+// (2026-10-27): "the copy ... failed (255): aborting the sync", then the
+// child's finish and deploy ran. --status says it synced: the child
+// records its last completed sync itself (remote.SyncedFile), where the
+// operator's log, which said it before, has no copy line for a session
+// lost (found by hand, 2026-10-27: "never synced" after a sync that
+// completed).
+func TestSyncPushLostSaysCopyDecides(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	out, _ := s.run([]string{"FAKE_SSH_LOST_PUSH=1"}, "@dev", "--sync", "--yes")
+	if strings.Contains(out, "aborting the sync") || !strings.Contains(out, "what the copy wrote decides how the sync ends") || fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Errorf("a push lost after its copy completed:\n%s", out)
+	}
+	if out, code := s.run(nil, "@dev", "--status"); code != 0 || !strings.Contains(out, "parent      prod  last synced just now") {
+		t.Errorf("--status after a sync whose push was lost once its copy completed (%d):\n%s", code, out)
+	}
+
+	// A sync that does not complete (its finish refuses the copy) is no
+	// sync to --status.
+	os.Remove(filepath.Join(s.root, "shop", "dev", remote.SyncedFile))
+	write(t, filepath.Join(s.root, "shop", "dev", "current", ".devopsy", "capabilities", "data", "finish"), "#!/bin/sh\n[ \"$1 $2\" != \"child go\" ] || exit 3\n", 0o755)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code == 0 {
+		t.Fatalf("a sync whose finish child go refuses (%d):\n%s", code, out)
+	}
+	if out, _ := s.run(nil, "@dev", "--status"); !strings.Contains(out, "never synced") {
+		t.Errorf("--status after a sync whose finish refused it:\n%s", out)
+	}
+}
+
 // --status: the containers and the status capability's lines, locally;
 // with a target, the release's record and the last sync first.
 func TestStatus(t *testing.T) {
@@ -3140,7 +3246,7 @@ func TestReleaseInterrupt(t *testing.T) {
 		return
 	}
 	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
-	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
+	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "Ctrl-C again ends the session, not the release") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
 		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
 	}
 }
@@ -3195,6 +3301,66 @@ func TestSyncSettle(t *testing.T) {
 	}
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Errorf("a release after (%d):\n%s", code, out)
+	}
+
+	// An export after an undecided sync settles it first, so it warns that
+	// the data is a partial copy, as it does for any mark: its shared lock
+	// alone could not (settling takes it exclusively), and it exported a
+	// half copy as the data, silently.
+	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
+	if _, errs, code := s.runIO(nil, nil, "@dev", "--export", "db"); code != 0 || !strings.Contains(errs, "this environment's data is from a sync that did not complete: exporting it anyway") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+		t.Errorf("an export after an undecided sync (%d):\n%s", code, errs)
+	}
+}
+
+// A sync's holder killed outright mid-copy (SIGKILL, a reboot) leaves its
+// record (what its prepare stopped, as the sync's own), the claimed file
+// with the copy's writers and no mark: the data may be anything from
+// untouched to half the parent's. The next lock-taker's settle marks it
+// and keeps what the holder stopped down, as a holder deciding on a cut
+// copy would: the record's stop lines are no leftover of an operation
+// that wrote nothing while the sync's files are there. An export of such
+// an environment (its script settles no sync files) must not start them
+// either.
+func TestSyncSettleKeepsKilledHolderStopsDown(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	record := filepath.Join(dev, ".devopsy-sync.services")
+	killed := func() {
+		write(t, record, "stop db\nstop app\nown 1.2 db\nown 1.2 app\n", 0o644)
+		write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", 999999, "running")+"\n", 0o644)
+		write(t, s.log+".stopped.shop-dev", "db\napp\n", 0o644)
+		os.Remove(filepath.Join(dev, remote.SyncIncompleteFile))
+		s.logs()
+	}
+	killed()
+	out, code := s.run(nil, "@dev", "--rollback")
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(out, "left its files") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+		t.Fatalf("a rollback after a killed holder (%d):\n%s\n%s", code, out, docker)
+	}
+	down := readString(s.log + ".stopped.shop-dev")
+	if strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" start ") || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
+		t.Errorf("the settle started what the killed holder stopped, on a copy that may be half the parent's (down: %q):\n%s\n%s", down, out, docker)
+	}
+	if rec := readString(record); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") {
+		t.Errorf("the record no longer names what stays down (the next sync's finish starts them):\n%q", rec)
+	}
+
+	// An export of the environment, before anything settled it.
+	killed()
+	s.labels("FAKE_DB=mnt+own\nFAKE_APP=mnt")
+	defer s.labels("")
+	_, errs, _ := s.runIO(nil, nil, "@dev", "--export", "db")
+	docker, _ = s.logs()
+	down = readString(s.log + ".stopped.shop-dev")
+	if strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" start ") || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
+		t.Errorf("an export started what the killed holder stopped (down: %q):\n%s\n%s", down, errs, docker)
 	}
 }
 
@@ -3384,7 +3550,7 @@ func TestSyncEndWriters(t *testing.T) {
 		defer func() { _ = c.cmd.Process.Kill() }()
 	}
 	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n"+remote.WriterLine("db", other.Process.Pid, "running")+"\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
 	s.logs()
 	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
 	cmd.Dir = filepath.Join(dev, "current")
@@ -3398,6 +3564,11 @@ func TestSyncEndWriters(t *testing.T) {
 	}
 	if strings.Contains(docker, "devopsy-sync-9.9") {
 		t.Errorf("another sync's container removed:\n%s", docker)
+	}
+	// One whose removal Docker had under way already (the push's own,
+	// cancelled) is gone all the same: no error.
+	if strings.Contains(string(out), "already in progress") {
+		t.Errorf("a removal already in progress said as an error:\n%s", out)
 	}
 	// app, depending on db, stops with it, recorded.
 	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") || !strings.Contains(docker, " stop db app\n") {
@@ -3978,5 +4149,36 @@ func TestExportImportKeepsHoles(t *testing.T) {
 	var dst syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(s.mnt("dev"), "storage", "ibdata"), &dst); code != 0 || err != nil || dst.Size != size || dst.Blocks*512 >= size/8 {
 		t.Errorf("the import of it (%d, %v): %d bytes on disk for %d:\n%s", code, err, dst.Blocks*512, dst.Size, errs)
+	}
+}
+
+// settleStops takes every unmarked stop line of the record for a leftover
+// of an operation killed outright, and --export on a target runs it
+// first. A custom service's export hook that itself runs devopsy --export
+// of another service (the hooks are the project's: AGENTS.md counts on
+// one running devopsy --export) runs it inside the outer export, which
+// holds the locks and has its own stops recorded: the inner export's
+// settle starts them, in the middle of the outer copy, so the dump is
+// taken from a database devopsy had stopped for it and started again
+// behind its back. The same holds for a sync's push whose export hook
+// does so (its stops are recorded alike).
+func TestNestedExportKeepsOuterStops(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP=stream\nFAKE_DB=mnt+always\n", 0o644)
+	s.releaseProd(nil)
+	// app's export dumps through devopsy --export of db, then checks db
+	// is still stopped, as the outer export left it (DEVOPSY_DATA_STOP).
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "data", "export"),
+		"#!/bin/sh\ndevopsy --export db >/dev/null 2>\"$DOCKER_LOG.inner\" || { echo \"inner export failed\" >&2; exit 1; }\n"+
+			"grep -qx db \"$DOCKER_LOG.stopped.$COMPOSE_PROJECT_NAME\" || echo \"db ran during the export of app\" >&2\necho dump\n", 0o755)
+	s.logs()
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	docker, _ := s.logs()
+	if code != 0 || string(out) != "dump\n" || !strings.Contains(errs, "stopping db (always)") {
+		t.Fatalf("the export of app with db stopped around it (%d) %q:\n%s\n%s", code, out, errs, readString(s.log+".inner"))
+	}
+	if strings.Contains(errs, "db ran during the export of app") {
+		t.Errorf("the inner export started what the outer stopped (said: %q):\n%s\n%s", strings.TrimSpace(readString(s.log+".inner")), errs, docker)
 	}
 }

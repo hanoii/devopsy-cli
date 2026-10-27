@@ -42,8 +42,9 @@ func newest(t *testing.T, env string) string {
 // A release that syncs dropped silently during its images' fetch, before
 // its switch: its watcher counts a holder's quiet time (its stdin is the
 // sync's answer too), then cancels the fetch, the build killed; nothing
-// live changed and no sync began. devopsy, its connection lost, says the
-// server cancels the release, never that it finishes the sync.
+// live changed and no sync began. devopsy, its connection lost, says it
+// was lost before the copy, its data as it was, never that the copy
+// decides how the sync ends.
 func TestReleaseSyncDropDuringFetch(t *testing.T) {
 	dir := phasesProject(t, "rsfetch", map[string]string{
 		".devopsy/config.yaml": "project: rsfetch\ndefaults:\n  mode: build\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
@@ -97,8 +98,8 @@ func TestReleaseSyncDropDuringFetch(t *testing.T) {
 	if syncState(t, "rsfetch", "dev", "data") != "running" || gate || exists(t, "rsfetch/dev/.devopsy-sync.incomplete") {
 		t.Errorf("the sync began: dev data %q, gate %v, marked %v", syncState(t, "rsfetch", "dev", "data"), gate, exists(t, "rsfetch/dev/.devopsy-sync.incomplete"))
 	}
-	if out, _ := op(t, "/", "cat /tmp/rsfetch.log"); strings.Contains(out, "finishes the sync") || !strings.Contains(out, "cancels the release") {
-		t.Errorf("devopsy does not say the release is cancelled:\n%s", out)
+	if out, _ := op(t, "/", "cat /tmp/rsfetch.log"); strings.Contains(out, "decides how the sync ends") || !strings.Contains(out, "before the copy, or its devopsy on the server was killed: its data there is as it was") {
+		t.Errorf("devopsy does not say the release lost its connection before the copy:\n%s", out)
 	}
 	if log, _ := srv(t, "cat rsfetch/dev/releases/"+id+"/devopsy-log-server"); !strings.Contains(log, "undoing the fetch") {
 		t.Errorf("the undo is not in the release's log:\n%s", log)

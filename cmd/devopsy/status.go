@@ -119,7 +119,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
-	kept, synced, partial := "", "", ""
+	kept, synced, partial, left := "", "", "", ""
+	var cut []string
 	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
@@ -156,6 +157,10 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			} else if mark.Why != "" {
 				partial = mark.Why + " (since " + mark.Since + " UTC, from @" + mark.From + ")"
 			}
+		case "left":
+			left = strings.TrimSpace(value)
+		case "cut":
+			cut = strings.Split(value, "\t")
 		case "syncing":
 			syncing = true
 		case "importing":
@@ -190,6 +195,22 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			line += "  (" + kept + " kept)"
 		}
 		fmt.Println(line)
+	}
+	if len(cut) >= 2 {
+		// remote.ActivatingFile: id, kind, the release it replaced, a
+		// restore's snapshot.
+		what, fix := "the release of "+cut[0], "devopsy @"+releaseRef(t)+" --release releases it again"
+		switch cut[1] {
+		case "rollback":
+			what, fix = "the rollback to "+cut[0], "devopsy @"+targetRef(t)+" --rollback finishes it"
+		case "restore":
+			snap := ""
+			if len(cut) > 3 {
+				snap = cut[3]
+			}
+			what, fix = "the restore of snapshot "+snap+" as "+cut[0], "devopsy @"+targetRef(t)+" --snapshots restore "+snap+" runs it again"
+		}
+		fmt.Println(st.bad("release     " + what + " was cut off past its switch: its run step may not have run: " + fix))
 	}
 	if t.Parent != "" {
 		line := "parent      " + t.Parent
@@ -234,6 +255,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
 		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
+	case left != "":
+		fmt.Println(st.bad("data        an operation cut off recorded " + left + " as stopped: the next release, sync, import or snapshot here starts what of them is down"))
 	}
 	fmt.Print(rest)
 	return 0

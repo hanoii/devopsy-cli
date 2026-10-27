@@ -88,8 +88,8 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 
 // stopSetFor is stopSet, recording each as a snapshot's line (snapshot
 // <id> <name>) with snapshot: what a take killed outright leaves for the
-// next settle to start (settleSnapshots), where a stop line would be kept
-// down.
+// next settle to start (settleStops), inside a release's activation too,
+// which keeps its own stop lines down.
 func stopSetFor(cwd string, set []cli.Stopped, record bool, snapshot string) (stopped []string, restore func() error, err error) {
 	restore = func() error { return nil }
 	if len(set) == 0 {
@@ -267,7 +267,7 @@ func runExport(cwd string, args []string, color bool) int {
 	// On a target, what a snapshot's take killed outright left stopped
 	// starts again first (ExportScript holds the release lock).
 	if cli.InRelease(projectDir) {
-		if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+		if err := settleStops(cwd, filepath.Dir(cwd)); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -345,7 +345,10 @@ func runExport(cwd string, args []string, color bool) int {
 			return 1
 		}
 	}
-	_, restore, err := stopSet(cwd, set, false)
+	// On a target recorded, as a push's stops are: an export killed
+	// outright leaves them for the next settle to start, --status naming
+	// them meanwhile (review round 6: prod stayed down, unrecorded).
+	_, restore, err := stopSet(cwd, set, cli.InRelease(projectDir))
 	if err != nil {
 		code := fail(err.Error())
 		if err := restore(); err != nil {
@@ -395,9 +398,7 @@ func runExport(cwd string, args []string, color bool) int {
 		}
 	}
 	if err != nil {
-		if ctx.Err() != nil {
-			err = errors.New("interrupted")
-		}
+		err = interrupted(ctx, err)
 		code = fail("export " + name + ": " + err.Error() + ": what was written is incomplete")
 	}
 	if err := restore(); err != nil {
@@ -1032,6 +1033,11 @@ func runImport(cwd string, args []string, color bool) int {
 		// command for its whole load. This devopsy keeps them to its end.
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
+		// Its compose calls keep the release lock (composeLock): a stop
+		// or a start a killed devopsy left running holds it, so the next
+		// lock-taker waits for it instead of racing it (Docker finishes a
+		// stop whose client went).
+		composeLock = os.NewFile(9, "release lock")
 		if m := readMark(base); m != nil {
 			if m.IsRestore() {
 				return fail("the restore of snapshot " + m.From + " did not complete, and only a restore completes it: nothing imported")
@@ -1286,9 +1292,7 @@ func runImport(cwd string, args []string, color bool) int {
 		}
 	}
 	if err != nil {
-		if ctx.Err() != nil {
-			err = errors.New("interrupted")
-		}
+		err = interrupted(ctx, err)
 		return importFailed(cwd, base, name, services, stopped, onTarget, wasUp, err)
 	}
 	code := 0
@@ -1362,7 +1366,7 @@ func recreateRunning(cwd, rel, name string) error {
 	if err != nil || !slices.Contains(running, name) {
 		return err
 	}
-	report.Info("recreating " + name + " on the image its data now needs")
+	report.Info("recreating " + name + " on the image its release gives it now")
 	if err := compose(cwd, errOut, "up", "-d", "--no-deps", "--wait", name); err != nil {
 		return fmt.Errorf("docker compose up: %w", err)
 	}
@@ -1719,6 +1723,9 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	if err != nil {
 		return fail(err.Error())
 	}
+	if code == sshLost {
+		report.Error(lostSays(t, "", "the export is incomplete, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
+	}
 	return code
 }
 
@@ -1831,7 +1838,8 @@ wait:
 			first := !interrupted
 			interrupted = true
 			if first && started {
-				report.Warn("interrupted: the import of "+name+" goes on on @"+t.Address, "devopsy @"+targetRef(t)+" --status shows it; Ctrl-C again ends the session, not the import")
+				w := goesOnSays(t, "import of "+name, "", "devopsy @"+targetRef(t)+" --status shows how it ends")
+				report.Warn(w[0], w[1:]...)
 			} else if first {
 				report.Error("interrupted: nothing imported into @" + t.Address + ", and what was stopped there comes back")
 				closeIn()
@@ -1861,10 +1869,16 @@ wait:
 		report.Warn("the session is ended: the import of "+name+" goes on on @"+t.Address, "devopsy @"+targetRef(t)+" --status shows it")
 		return 130
 	case wasStarted && res.code == sshLost:
-		report.Error("the connection to @"+t.Address+" was lost during the import: it goes on on the server", "devopsy @"+targetRef(t)+" --status shows it")
+		report.Error(lostSays(t, "during the import", "the import was under way there"), "devopsy @"+targetRef(t)+" --status shows how it ends")
 		return sshLost
 	case interrupted && !wasStarted:
 		return 130
+	case res.code == sshLost:
+		// Before the byte the server waits for (ImportMarker), it never
+		// writes: no byte within its quiet time, it restores what it
+		// stopped (killed, the next lock-taker does).
+		report.Error(lostSays(t, "before the import started", "nothing imported there, and "+staysDown), "devopsy @"+targetRef(t)+" --status shows it")
+		return sshLost
 	}
 	return res.code
 }
@@ -1949,6 +1963,9 @@ func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int
 	code, err = remote.SSH(t, remote.ResolvedScript(t, projectName, name), bytes.NewReader(nil), nil, false)
 	if err != nil {
 		return fail(err.Error())
+	}
+	if code == sshLost {
+		report.Error(lostSays(t, "", "the import of "+name+" may not be resolved there"), "devopsy @"+targetRef(t)+" --status shows whether its mark is still there; to finish it:", report.CmdMark+"devopsy @"+targetRef(t)+" --import "+name+" --resolved")
 	}
 	return code
 }

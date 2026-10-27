@@ -856,6 +856,29 @@ func TestSnapshotSettlesLeftoverSync(t *testing.T) {
 	}
 }
 
+// A take refused on a child whose data is from a sync that did not
+// complete says what completes it, as every other refusal on a marked
+// child does (--sync, or --reset: remote.ResetFix): it gave only "a
+// snapshot of it would restore as complete", with no way out, where an
+// import's or a restore's mark gets theirs. Found by hand (OrbStack,
+// 2026-10-27: staging's holder killed mid-copy, then a take there).
+func TestSnapshotRefusalOnSyncMarkSaysFix(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-27 12:55:45", "devopsy@one:prod", remote.IncompleteCopy, "the copy was cut"), 0o644)
+	out, code := s.run(nil, "@dev", "--snapshot")
+	if code == 0 || !strings.Contains(out, "did not complete") {
+		t.Fatalf("a take on a marked child went through (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, "$ devopsy @devopsy@one:dev --sync") || !strings.Contains(out, "--reset") {
+		t.Errorf("a take refused on a child's partial sync names no way out (--sync, --reset):\n%s", out)
+	}
+}
+
 // A --snapshots import killed outright (SIGKILL, a reboot) leaves its
 // .import directory under the snapshots, gigabytes nothing lists: the
 // next holder of the snapshot lock removes it, as it does a take's .tmp.
@@ -931,6 +954,33 @@ func TestSnapshotRestoreEnvKeysOnly(t *testing.T) {
 	}
 	if strings.Contains(out, "SecretPart") || !strings.Contains(out, "differs from the environment's in TLS_KEY:") {
 		t.Errorf("the keys that differ, as said:\n%s", out)
+	}
+}
+
+// A --no-code restore that keeps shared/.env names the way to bring it
+// back as a --no-code restore too: copied as said, the hint's command
+// (--snapshots restore <id> --with-env) is a full restore, a new release
+// made from the snapshot's code, where the operator restored the data
+// alone (found by hand on an OrbStack server, 2026-10-27).
+func TestSnapshotRestoreNoCodeEnvHint(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	env := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, env, "DB_PASSWORD=old\n", 0o600)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, env, "DB_PASSWORD=new\n", 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || !strings.Contains(out, "differs from the environment's in DB_PASSWORD") {
+		t.Fatalf("--no-code restore (%d):\n%s", code, out)
+	}
+	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + m[1] + `\b.* --no-code`).MatchString(out) {
+		t.Errorf("the --with-env hint of a --no-code restore is a full restore:\n%s", out)
 	}
 }
 
@@ -1333,8 +1383,82 @@ func TestSnapshotRestoreInterruptDuringData(t *testing.T) {
 	if s.current("prod") == before {
 		t.Fatalf("the restore did not go live (%d):\n%s", cmd.ProcessState.ExitCode(), out)
 	}
-	if strings.Contains(said, "cancelling the release") {
-		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	if strings.Contains(said, "cancelling the") || !strings.Contains(said, "interrupted: the restore goes on on @devopsy@one:prod, past its switch") {
+		t.Errorf("a Ctrl-C past the restore's point of no return said it was cancelling it, or not that the restore goes on (it went live, exit %d):\n%s", cmd.ProcessState.ExitCode(), out)
+	}
+}
+
+// A full restore cancelled while it checks the snapshot's tars (minutes
+// for a large one) says it cancels a restore, not a release, and that
+// nothing was restored, not the check's tool killed with it ("signal:
+// killed", which reads as a broken snapshot). Found by hand (2026-10-27,
+// a hands-on run): "cancelling the release", then "snapshot ...'s
+// mnt.database.tar.zst: signal: killed: nothing restored".
+func TestSnapshotRestoreInterruptDuringCheck(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	before := s.current("prod")
+	checking := filepath.Join(t.TempDir(), "checking")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_RUN_WAIT="+checking, "FAKE_RUN_WAIT_ON=-check ")
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, checking, "the restore's tar check", startWait, func() string { return readString(outFile.Name()) })
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	if cmd.ProcessState.ExitCode() != 130 || s.current("prod") != before || !strings.Contains(out, "interrupted: cancelling the restore on @devopsy@one:prod") || strings.Contains(out, "the release") {
+		t.Errorf("a restore cancelled during its tar check (%d), current %q, was %q:\n%s", cmd.ProcessState.ExitCode(), s.current("prod"), before, out)
+	}
+
+	// Each step that can be interrupted before its point of no return,
+	// signalled as the cancel signals it (the watcher's SIGTERM) while
+	// what it runs in Docker works: the session above is gone by then,
+	// so its words show in the step's own output. The take's checks and
+	// mirror pass, a release snapshot's check and the restore's tar check.
+	base := filepath.Join(s.root, "shop", "prod")
+	for _, c := range []struct {
+		on, want string
+		args     []string
+		env      []string
+	}{
+		{"du -sk", "interrupted", []string{"check"}, nil},
+		{"-mirror-", "interrupted", []string{"mirror"}, []string{remote.SnapshotMirrorEnv + "=1"}},
+		{"du -sk", "interrupted", []string{"release-check"}, nil},
+		{"-check ", "interrupted: nothing restored", []string{"check-tars", filepath.Join(base, "snapshots", m[1])}, nil},
+	} {
+		waiting := filepath.Join(t.TempDir(), "waiting")
+		step := exec.Command(binary, append([]string{remote.SnapshotStepFlag}, c.args...)...)
+		step.Dir = filepath.Join(base, "current")
+		step.Env = append(append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-prod", "PWD="+step.Dir, "FAKE_RUN_WAIT="+waiting, "FAKE_RUN_WAIT_ON="+c.on), c.env...)
+		saidFile, err := os.CreateTemp(t.TempDir(), "said")
+		if err != nil {
+			t.Fatal(err)
+		}
+		step.Stdout, step.Stderr = saidFile, saidFile
+		if err := step.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waitFile(t, waiting, c.args[0]+"'s docker run", startWait, func() string { return readString(saidFile.Name()) })
+		_ = step.Process.Signal(syscall.SIGTERM)
+		_ = step.Wait()
+		if said := readString(saidFile.Name()); step.ProcessState.ExitCode() == 0 || !strings.Contains(said, c.want) || strings.Contains(said, "signal:") {
+			t.Errorf("%s interrupted (%d):\n%s", c.args[0], step.ProcessState.ExitCode(), said)
+		}
 	}
 }
 
@@ -1957,7 +2081,10 @@ func (s *syncSetup) childSnapshotted() {
 // leaves the child partial, its services down until a sync completes,
 // and the record must keep saying so: the next sync's finish go starts
 // what the record names before its hook, and nothing started them here
-// (the restart of the release before skips a marked environment).
+// (the restart of the release before skips a marked environment), the
+// sync's own settle included, which takes stop lines for leftovers but
+// in their release's activation (remote.HeldStopsEnv): it started
+// them under the new code on the old data, before the copy.
 func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -1974,8 +2101,54 @@ func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	if code == 0 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" stop db app") || !strings.Contains(out, "db app stay down: the data is partial until a sync completes") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
 		t.Fatalf("a release that syncs, its copy cut after the release snapshot (%d), down: %q:\n%s\n%s", code, down, out, docker)
 	}
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.Contains(line, "shop-dev compose ") && strings.Contains(line, " start ") {
+			t.Errorf("the release's stopped services started before its copy: %s\n%s", line, out)
+		}
+	}
 	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") {
 		t.Errorf("db and app stay down on the partial copy, and the record no longer says so (nothing would start them before the next sync's finish hook):\n%q", rec)
+	}
+}
+
+// A release that syncs with release snapshots on, its sync complete or
+// aborted before its copy (here the parent's prepare refuses): the
+// release snapshot's stopped set, which the switch made the release's
+// stop lines, starts again, by the sync's finish or by the restart of
+// the release before, and the record names none of it after; no mark.
+// TestReleaseSnapshotSyncPartialKeepsStops is the third end, a cut copy.
+func TestReleaseSnapshotSyncEnds(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		env  []string
+		live bool
+	}{
+		"complete": {nil, true},
+		"aborted":  {[]string{"FAIL_PREPARE=parent"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.childSnapshotted()
+			write(t, filepath.Join(s.dot, "capabilities", "data", "prepare"), "#!/bin/sh\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ] || { echo 'prepare refuses'; exit 3; }\n", 0o755)
+			s.releaseProd(nil)
+			if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+				t.Fatalf("dev's first release (%d):\n%s", code, out)
+			}
+			before := s.current("dev")
+			dev := filepath.Join(s.root, "shop", "dev")
+			s.logs()
+			out, code := s.run(c.env, "@dev", "--release-sync", "--yes")
+			s.waitReleaseTars()
+			if docker, _ := s.logs(); !strings.Contains(docker, " stop db app\n") || len(releaseSnapshots(snapshotPaths{snaps: filepath.Join(dev, "snapshots")})) != 1 || !c.live && !strings.Contains(out, "prepare refuses") {
+				t.Fatalf("no release snapshot's stopped pass, or no refusal (%d):\n%s\n%s", code, out, docker)
+			}
+			down := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+			rec := readString(filepath.Join(dev, ".devopsy-sync.services"))
+			if (code == 0) != c.live || (s.current("dev") != before) != c.live || len(down) > 0 || strings.Contains(rec, "stop ") || strings.Contains(rec, "snapshot ") || fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) {
+				t.Errorf("a release that syncs, %s (%d), current %q (was %q), down %v, record %q:\n%s", name, code, s.current("dev"), before, down, rec, out)
+			}
+		})
 	}
 }
 
@@ -3083,6 +3256,60 @@ func TestRestoredStartsOnHeldImage(t *testing.T) {
 	}
 }
 
+// A restore's data step holds the database on the image the snapshot's
+// data ran and replaces its history with the snapshot's (ImportDone); a
+// run step that leaves the database stopped leaves its container the one
+// from before, on the image the replaced data ran, for restored to make
+// again on the hold (startLeftDown, images.Recreate). img ran, between
+// the run step and restored, must not take that exited container's image
+// for one that ran on the restored data: recorded as the data's newest,
+// a release of that image (here another series, accepted on the data
+// the restore replaced, never run by the snapshot's) passes the next
+// check without --accept-image, and a rollback holds the database on it.
+func TestRestoreRanKeepsHeldImage(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--no-code"}, {}} {
+		s := newSyncSetup(t)
+		s.releaseProd(nil)
+		out, code := s.run(nil, "@prod", "--snapshot")
+		m := snapshotID.FindStringSubmatch(out)
+		if code != 0 || m == nil {
+			t.Fatalf("%v: take (%d):\n%s", args, code, out)
+		}
+		base := filepath.Join(s.root, "shop", "prod")
+		snap := filepath.Join(base, "snapshots", m[1])
+		// The snapshot: db ran mariadb:11.8 (sha256:snap) when it was taken.
+		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+		write(t, filepath.Join(snap, remote.SnapshotData, "images"), "image\tdb\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n", 0o600)
+		// Since: a release of mariadb:12 (sha256:twelve), accepted, ran on
+		// the data; its container, stopped by the restore, is still on it,
+		// as the fake's deploy starts nothing.
+		current := filepath.Join(base, "current")
+		write(t, releaseFile(t, current, images.ListFile), "mariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+		history := filepath.Join(base, images.HistoryFile)
+		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n2\tdb\tforced\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\n", 0o644)
+		write(t, s.log+".containers.shop-prod", "db mariadb@sha256:twelve\n", 0o644)
+		// The code's image (the snapshot's, which a full restore runs, says
+		// mariadb:11.8): a full restore lists it again from the compose
+		// config before the data step holds it.
+		env := []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_IMAGES=sha256:db=mariadb@sha256:twelve sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap mariadb:12=mariadb@sha256:twelve"}
+		s.logs()
+		out, code = s.run(env, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+		docker, _ := s.logs()
+		if code != 0 || !strings.Contains(docker, " up -d --no-deps --wait db\n") {
+			t.Fatalf("%v: the restore (%d), db not made again on the snapshot's image:\n%s\n%s", args, code, out, docker)
+		}
+		if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:snap"`) {
+			t.Fatalf("%v: not held on the snapshot's image:\n%s", args, c)
+		}
+		h := readString(history)
+		lines := strings.Split(strings.TrimSpace(h), "\n")
+		if last := lines[len(lines)-1]; strings.Contains(h, "\tsha256:db\t") || !strings.Contains(last, "\tdb\t"+images.Imported+"\tmariadb:11.8\tsha256:snap\t") {
+			t.Errorf("%v: the history after the restore names the image the replaced data ran, from db's exited container, as the newest that ran on the restored data:\n%s", args, h)
+		}
+	}
+}
+
 // A take stops every service with data and its dependents, then starts
 // them again: on data where a bind source already leads out of its entry
 // through a link (left by hand, or by a release before the mounts check
@@ -3153,5 +3380,339 @@ func TestReleaseSnapshotGateJudgesTheNewRelease(t *testing.T) {
 	docker, _ := s.logs()
 	if code != 0 || s.current("prod") == a {
 		t.Errorf("a release dropping the mount through the link, with release snapshots (%d), current %q (was %q):\n%s\n%s", code, s.current("prod"), a, out, docker)
+	}
+}
+
+// A sync's push killed outright on the parent (SIGKILL, the OOM killer)
+// leaves the parent's services it stopped down, the record's stop and
+// own lines naming them; a release killed between its switch and its
+// run step leaves its release snapshot's stop lines the same way (or a
+// reboot there: the containers stopped stay stopped). Nothing holds the
+// locks then, so a take, holding the release, sync and snapshot locks,
+// finds them a leftover, as it does a cut take's snapshot lines: it
+// starts them. Found by hand (2026-10-27): prod's site stayed down
+// through a take until a child happened to sync, and --status said
+// nothing.
+func TestTakeStartsLeftoverStops(t *testing.T) {
+	t.Parallel()
+	for name, rec := range map[string]string{
+		"a push killed outright":       "stop db\nstop app\nown 1793075295.e34744 db\nown 1793075295.e34744 app\n",
+		"a release killed past switch": "stop db\nstop app\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			record := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")
+			write(t, record, rec, 0o644)
+			write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+			if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off recorded db app as stopped") {
+				t.Errorf("--status over %s named nothing left stopped:\n%s", name, out)
+			}
+			out, code := s.run(nil, "@prod", "--snapshot")
+			stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+			if code != 0 || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(readString(record), "stop ") {
+				t.Errorf("a take over %s (%d) left %v stopped, record %q:\n%s", name, code, stopped, readString(record), out)
+			}
+		})
+	}
+}
+
+// A reboot in the middle of an operation (a take's stopped pass, an
+// export, a release past its switch) leaves what it stopped down:
+// Docker brings back no container compose stopped, and nothing on the
+// server settles at boot (no daemon, no boot hook). Until a lock-taker
+// of the environment comes, --status names them, and every command that
+// only reads leaves them as they are; each command its line names then
+// starts them. This pins today's behavior, so a change to it (a settle
+// at boot, a command of its own) is a decision, not an accident.
+func TestLeftStopsAfterReboot(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*syncSetup, string) {
+		s := newSyncSetup(t)
+		s.releaseProd(nil)
+		if out, code := s.run(nil, "@dev", "--release"); code != 0 {
+			t.Fatalf("dev's first release (%d):\n%s", code, out)
+		}
+		record := filepath.Join(s.root, "shop", "dev", ".devopsy-sync.services")
+		write(t, record, "stop db\nstop app\n", 0o644)
+		write(t, s.log+".stopped.shop-dev", "db\napp\n", 0o644)
+		s.logs()
+		return s, record
+	}
+	down := func(s *syncSetup) bool {
+		stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
+		return slices.Contains(stopped, "db") && slices.Contains(stopped, "app")
+	}
+
+	t.Run("read only", func(t *testing.T) {
+		t.Parallel()
+		s, record := setup(t)
+		for _, args := range [][]string{{"--status"}, {"--releases"}, {"--log"}, {"--snapshots"}, {"--status"}} {
+			out, _ := s.run(nil, append([]string{"@dev"}, args...)...)
+			if !down(s) || readString(record) != "stop db\nstop app\n" {
+				t.Errorf("%v changed what was left stopped, record %q:\n%s", args, readString(record), out)
+			}
+		}
+		if out, _ := s.run(nil, "@dev", "--status"); !strings.Contains(out, "an operation cut off recorded db app as stopped: the next release, sync, import or snapshot here starts what of them is down") {
+			t.Errorf("--status after a reboot:\n%s", out)
+		}
+	})
+
+	for name, run := range map[string]func(s *syncSetup) (string, int){
+		"release": func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--release") },
+		"sync":    func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--sync", "--yes") },
+		"import": func(s *syncSetup) (string, int) {
+			_, errs, code := s.runIO(nil, tarOf(s.t, map[string]string{"db/ibdata": "rows\n"}), "@dev", "--import", "db", "--yes")
+			return errs, code
+		},
+		"snapshot": func(s *syncSetup) (string, int) { return s.run(nil, "@dev", "--snapshot") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, record := setup(t)
+			out, code := run(s)
+			if code != 0 || down(s) || strings.Contains(readString(record), "stop ") {
+				t.Errorf("%s after a reboot (%d) left stopped %v, record %q:\n%s", name, code, strings.Fields(readString(s.log+".stopped.shop-dev")), readString(record), out)
+			}
+		})
+	}
+}
+
+// An --export killed outright on the server (SIGKILL, the OOM killer)
+// while its tar runs leaves what it stopped down, as a push killed there
+// does: its stops must be recorded, so --status names them and the next
+// lock-taker starts them. Found by hand (2026-10-27): prod's database
+// and app stayed down, with no record, through a take, --status silent,
+// and the operator saw only ssh's 255; only a release brought them back.
+func TestExportKilledLeavesItsStops(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	_, errs, _ := s.runIO([]string{"FAKE_KILL_EXPORT=1"}, nil, "@prod", "--export", "db")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	if !slices.Contains(stopped, "db") {
+		t.Fatalf("the killed export left nothing stopped (%v), the fake did not kill it:\n%s", stopped, errs)
+	}
+	if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off recorded") {
+		t.Errorf("--status after an export killed outright named nothing left stopped (%v):\n%s", stopped, out)
+	}
+	out, code := s.run(nil, "@prod", "--snapshot")
+	if stopped := strings.Fields(readString(s.log + ".stopped.shop-prod")); code != 0 || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") {
+		t.Errorf("a take after an export killed outright (%d) left %v stopped:\n%s", code, stopped, out)
+	}
+}
+
+// A release killed between its switch and its run step (its activation's
+// shell killed outright, or a reboot there) leaves its release snapshot's
+// stopped set as stop lines, their containers the previous release's, on
+// the previous release's images. The next lock-taker's settle starts them
+// (settleStops): a plain compose start runs those containers, the old
+// code's image under the new current, which --status, comparing a
+// container with its own label, never names. It must make them again on
+// what the current release gives them, as startLeftDown and
+// restoreServices do (images.Recreate). Found by hand (2026-10-27, a
+// reboot mid-release): prod ran the release before's app while
+// --releases and --status named the new one current.
+func TestSettleStopsStartsCurrentImages(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	// The new release, current: app given x@sha256:new. Its container is
+	// the release before's, on x@sha256:old, stopped by the release
+	// snapshot and never made again: the run step did not run.
+	write(t, filepath.Join(base, s.current("prod"), "devopsy-compose.yaml"),
+		"services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"x@sha256:new\"\n", 0o644)
+	write(t, s.log+".containers.shop-prod", "app x@sha256:old\n", 0o644)
+	write(t, filepath.Join(base, ".devopsy-sync.services"), "stop db\nstop app\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	starts := ""
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.Contains(line, " start ") || strings.Contains(line, " up ") {
+			starts += line + "\n"
+		}
+	}
+	if c := readString(s.log + ".containers.shop-prod"); code != 0 || !strings.Contains(c, "app x@sha256:new") {
+		t.Errorf("the settle (take %d) started app's container from the release before, on x@sha256:old, never made again on the current release's x@sha256:new (containers %q):\n%s\n%s", code, c, out, starts)
+	}
+}
+
+// The settle that makes a data service again on what the current release
+// holds it on (startStops, a release killed between its switch and its
+// run step) runs that image on the data, so the data's history must say
+// so, as img ran after a run step does. Found by hand (OrbStack,
+// 2026-10-27): a --release --accept-image database (mariadb:11.8 to
+// 12.1) whose activation shell was killed right after its switch; the
+// next take's settle made the database again on 12.1, which upgraded its
+// data, while the history still ended on 11.8 and the release's
+// devopsy-forced stayed; a --rollback then held the database on 11.8,
+// the history's last, and ran it on the data 12.1 had upgraded: data
+// went back, which images only going forward forbids. A floating tag
+// that moved (11.8.9 to 11.8.10) does the same without --accept-image.
+// The same when the activation's shell is killed during its run step,
+// after its up made the database on 12.1: img ran never came, the
+// settle after starts nothing, and the next release without
+// --accept-image was refused, the database said never to have run the
+// image it was running.
+func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// container is db's container: the release before's, stopped by
+		// the release snapshot, its run step never run; or already the
+		// run step's, on the new image, its shell killed before img ran
+		// and release-record done.
+		container, stopped string
+		// record is the record's lines (none without release
+		// snapshots); then runs the next lock-taker: a take, else a
+		// rollback's activation, which records before anything reads the
+		// history (a failed --rollback: no release before it).
+		record string
+		next   []string
+	}{
+		{"the run step never ran", "db y@sha256:old sha256:old\n", "db\n", "stop db\n", []string{"--snapshot"}},
+		{"the run step killed after its up", "db y@sha256:new sha256:new\n", "", "stop db\n", []string{"--snapshot"}},
+		{"no release snapshots, the next activation", "db y@sha256:new sha256:new\n", "", "", []string{"--rollback"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			base := filepath.Join(s.root, "shop", "prod")
+			rel := filepath.Join(base, s.current("prod"))
+			// The new release, current: db held on y@sha256:new, a data
+			// service in its listing; the history's last is y@sha256:old.
+			write(t, filepath.Join(rel, "devopsy-compose.yaml"),
+				"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
+			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tdata\ty@sha256:new\n", 0o644)
+			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\n", 0o644)
+			write(t, s.log+".containers.shop-prod", c.container, 0o644)
+			if c.record != "" {
+				write(t, filepath.Join(base, ".devopsy-sync.services"), c.record, 0o644)
+			}
+			write(t, s.log+".stopped.shop-prod", c.stopped, 0o644)
+			out, code := s.run([]string{"FAKE_IMAGES=sha256:new=y@sha256:new sha256:old=y@sha256:old"}, append([]string{"@prod"}, c.next...)...)
+			if cs := readString(s.log + ".containers.shop-prod"); (code != 0) != (c.next[0] == "--rollback") || !strings.Contains(cs, "db y@sha256:new") {
+				t.Fatalf("setup: after the settle (take %d) db does not run y@sha256:new (containers %q):\n%s", code, cs, out)
+			}
+			h := readString(filepath.Join(base, ".devopsy-data-images"))
+			lines := strings.Split(strings.TrimSpace(h), "\n")
+			if last := lines[len(lines)-1]; !strings.Contains(last, "sha256:new") {
+				t.Errorf("db runs y@sha256:new on its data, but after the settle its history still ends on %q: the next release refuses that image as one the data never ran, and a rollback holds db on the older one again\n%s", last, out)
+			}
+		})
+	}
+}
+
+// A take's stopped pass killed outright on the server (SIGKILL, the OOM
+// killer) starts what it stopped at once, under the locks the take still
+// holds, and says so: found by hand (2026-10-27), the site stayed down
+// until the next lock-taker, with only the shell's "Killed".
+func TestTakeKilledStartsItsSet(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run([]string{"FAKE_KILL_SNAPSHOT_TAR=1"}, "@prod", "--snapshot")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	record := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services"))
+	if code == 0 || !strings.Contains(out, "its devopsy on the server was killed") || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(record, "snapshot ") {
+		t.Errorf("a take killed in its stopped pass (%d) left %v stopped, record %q:\n%s", code, stopped, record, out)
+	}
+}
+
+// A restore's data step or an import killed outright on the server
+// (SIGKILL, the OOM killer) after its first write leaves the
+// environment marked, its services down: the operator is told so, with
+// the way out, as after one that failed. Found by hand (2026-10-27): an
+// --import and a --no-code restore printed only the shell's "Killed",
+// a full restore "release ... not made current", as if nothing changed.
+func TestKilledDataStepSaysMark(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--import"}, {"--no-code"}, {}} {
+		name := strings.Join(args, " ")
+		if name == "" {
+			name = "full restore"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSyncSetup(t)
+			s.releaseProd(nil)
+			base := filepath.Join(s.root, "shop", "prod")
+			var errs string
+			if len(args) > 0 && args[0] == "--import" {
+				_, errs, _ = s.runIO([]string{"FAKE_KILL_IMPORT=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@prod", "--import", "app", "--yes")
+				// Its spool, a whole dump, goes with it.
+				if spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*")); len(spools) > 0 {
+					t.Errorf("the killed import left its spool: %v", spools)
+				}
+			} else {
+				out, code := s.run(nil, "@prod", "--snapshot")
+				m := snapshotID.FindStringSubmatch(out)
+				if code != 0 || m == nil {
+					t.Fatalf("take (%d):\n%s", code, out)
+				}
+				errs, _ = s.run([]string{"FAKE_KILL_IMPORT=1"}, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
+			}
+			if readMark(base) == nil {
+				t.Fatalf("no mark: the kill came before the first write:\n%s", errs)
+			}
+			if !strings.Contains(errs, "did not complete") {
+				t.Errorf("killed after its first write, the environment marked, the operator was not told:\n%s", errs)
+			}
+		})
+	}
+}
+
+// A full restore's data step killed outright on the server (SIGKILL, the
+// OOM killer) before its first write, here during its stop: nothing
+// restored, no mark, and its script, still holding the locks, starts
+// what the record names it stopped and says so, as a --no-code restore's
+// and an import's do (TestImportBeforeFirstWrite, killedSays). Otherwise
+// the set stays down, unmarked, until the next release, sync, import or
+// snapshot of the environment, the operator told only that the release
+// was not made current.
+func TestKilledRestoreBeforeFirstWriteStartsSet(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	s.logs()
+	stopping := filepath.Join(t.TempDir(), "stopping")
+	outFile, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "@prod", "--snapshots", "restore", m[1], "--yes")
+	cmd.Dir = s.project
+	cmd.Env = append(append([]string{}, s.env...), "FAKE_STOPPED_WAIT="+stopping)
+	cmd.Stdin = strings.NewReader("")
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, stopping, "the restore's stop", startWait, func() string { return readString(outFile.Name()) })
+	pid, err := strconv.Atoi(strings.TrimSpace(readString(stopping)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	write(t, stopping+".go", "", 0o644)
+	_ = cmd.Wait()
+	out = readString(outFile.Name())
+	base := filepath.Join(s.root, "shop", "prod")
+	down := strings.TrimSpace(readString(s.log + ".stopped.shop-prod"))
+	if cmd.ProcessState.ExitCode() == 0 || readMark(base) != nil {
+		t.Fatalf("restored (%d), or marked %+v, though killed before its first write:\n%s", cmd.ProcessState.ExitCode(), readMark(base), out)
+	}
+	if down != "" || fileExists(filepath.Join(base, ".devopsy-sync.services")) || !strings.Contains(out, "before its first write") {
+		t.Errorf("killed before its first write: %q left down, record %q, said:\n%s", down, readString(filepath.Join(base, ".devopsy-sync.services")), out)
 	}
 }

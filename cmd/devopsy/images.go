@@ -28,8 +28,8 @@ import (
 // record <release> [<release it replaces>] (exit 3 when its checks
 // refuse, 1 when it cannot), restore <release> <release it replaces>
 // [--fetched] (exit 1 when an own image must be built again, 3 when it
-// cannot), ran <environment> <release> (the history of what ran on the
-// data), hold <environment> <release> (its data services held on their
+// cannot), ran <environment> <release> [cut] (the history of what ran on the
+// data; cut: of an activation cut off past its switch), hold <environment> <release> (its data services held on their
 // data's newest image), remove <release>... (exit 1 when Docker failed: keep the
 // release), undo [--rollback] <release> [<current release>], recover
 // <environment> [<current release>], prune; for an environment's
@@ -160,10 +160,15 @@ func runImages(args []string, color bool) int {
 			return 1
 		}
 	case "ran":
-		if len(rest) != 2 {
+		// cut: on a release whose activation was cut off past its switch.
+		if len(rest) < 2 || len(rest) > 3 || (len(rest) == 3 && rest[2] != "cut") {
 			return imagesUsage(color)
 		}
-		if s.Ran(rest[0], rest[1]) != nil {
+		ran := s.Ran
+		if len(rest) == 3 {
+			ran = s.RanCut
+		}
+		if ran(rest[0], rest[1]) != nil {
 			return 1
 		}
 	case "undo":

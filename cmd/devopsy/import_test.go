@@ -115,6 +115,7 @@ func (s *importSetup) start(extra []string, stdin []byte, args ...string) (*exec
 func TestImportMarkOnTarget(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
+	os.Remove(s.log + ".locked")
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	waitFile(t, wait, "the import's hook", startWait, errs.String)
@@ -131,6 +132,13 @@ func TestImportMarkOnTarget(t *testing.T) {
 	}
 	if s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
 		t.Errorf("after a complete import: mark %+v, record %q, stopped %v", s.mark(), s.record(), s.stopped())
+	}
+	// Its compose calls do hold the release lock, unlike its writer: a
+	// stop or a start a devopsy killed outright left running would race
+	// the next lock-taker's (Docker finishes a stop its client left), so
+	// that one must wait for it, as it waits for any other script's.
+	if locked := readString(s.log + ".locked"); !strings.Contains(locked, "shop-prod compose stop app") || !strings.Contains(locked, "shop-prod compose start app") {
+		t.Errorf("the import's stop and start without the release lock:\n%s", locked)
 	}
 	if !strings.Contains(errs.String(), "devopsy: stopping app (import)\n") || !strings.Contains(errs.String(), "worker depends on db and keeps running while it is imported") || strings.Contains(errs.String(), remote.ImportMarker) {
 		t.Errorf("a complete import said:\n%s", errs)
@@ -207,7 +215,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 // or a stop that fails restores the set, the session closed before the
 // byte the first write waits for imports nothing, and none of them leaves
 // a mark. A devopsy killed between the stop and that byte leaves the
-// record, so the next import restores what it stopped.
+// record, which its script, the lock still held, restores at once.
 func TestImportBeforeFirstWrite(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
@@ -236,8 +244,9 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 	s.logs()
 
-	// Killed between the stop and the byte (here, its stream's up): the
-	// record names what it stopped, no mark; the next import restores it.
+	// Killed between the stop and the byte (here, its stream's up): no
+	// mark, and its script, still holding the lock, starts what the
+	// record names it stopped, and says so.
 	up := filepath.Join(s.tmp, "up")
 	cmd, errs := s.start([]string{"FAKE_UP_WAIT=" + up}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	waitFile(t, up, "the import's up", startWait, errs.String)
@@ -248,7 +257,7 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	write(t, up+".go", "", 0o644)
 	_ = cmd.Wait()
-	if s.mark() != nil || s.record() != "stop app\n" || !slices.Contains(s.stopped(), "app") {
+	if s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") || !strings.Contains(errs.String(), "killed (137) before its first write: nothing imported") {
 		t.Fatalf("killed before the byte: mark %+v, record %q, stopped %v:\n%s", s.mark(), s.record(), s.stopped(), errs)
 	}
 	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
@@ -284,7 +293,7 @@ func TestImportSession(t *testing.T) {
 	_ = cmd.Process.Signal(syscall.SIGINT)
 	time.Sleep(300 * time.Millisecond)
 	write(t, wait+".go", "", 0o644)
-	if err := s.wait(cmd, errs, "a Ctrl-C during the load"); err != nil || !strings.Contains(errs.String(), "interrupted: the import of db goes on on @devopsy@one:prod") || readString(s.imported) != "import db into shop-prod\nrows\n" || s.mark() != nil {
+	if err := s.wait(cmd, errs, "a Ctrl-C during the load"); err != nil || !strings.Contains(errs.String(), "interrupted: the import of db goes on on @devopsy@one:prod") || !strings.Contains(errs.String(), "Ctrl-C again ends the session, not the import of db") || readString(s.imported) != "import db into shop-prod\nrows\n" || s.mark() != nil {
 		t.Errorf("a Ctrl-C during the load (%v), mark %+v:\n%s", err, s.mark(), errs)
 	}
 	if strings.Contains(errs.String(), remote.ImportMarker) {
@@ -970,7 +979,7 @@ func TestImportExportImages(t *testing.T) {
 		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
 	}
 	docker, _ := s.logs()
-	if !strings.Contains(errs, "recreating app on the image its data now needs") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
+	if !strings.Contains(errs, "recreating app on the image its release gives it now") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
 		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
 	}
 	os.Remove(s.log + ".containers.shop-prod")
@@ -1218,5 +1227,19 @@ func TestImportRecreatesBeforeDependents(t *testing.T) {
 	docker, _ := s.logs()
 	if i, j := strings.Index(docker, " up -d --no-deps --wait db\n"), strings.Index(docker, " start app\n"); code != 0 || i < 0 || j < i {
 		t.Errorf("app started (at %d) before db was made again on the export's image (at %d), import %d:\n%s\n%s", j, i, code, errs, docker)
+	}
+}
+
+// An --import whose connection is lost before the server started
+// writing (a network gone during the upload) says so, as a release's
+// does, rather than leaving the operator with ssh's line and exit 255.
+// Found by hand (2026-10-27): nothing of devopsy's was said.
+func TestImportLostBeforeWriteSays(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	_, errs, code := s.runIO([]string{"FAKE_SSH_LOST_IMPORT=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@prod", "--import", "app", "--yes")
+	if code == 0 || !strings.Contains(errs, "devopsy: error:") {
+		t.Errorf("an import whose connection was lost before its first write (%d) said nothing of what happened:\n%s", code, errs)
 	}
 }

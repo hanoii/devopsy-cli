@@ -263,7 +263,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 			case <-slow:
 				// The holder reads the abort once its prepare ends, and
 				// then restores what it stopped.
-				log.Warn("the server is cancelling it, after the step it is in, and restores what it stopped", "Ctrl-C again leaves now")
+				log.Warn("the server is cancelling it, after the step it is in, and restores what it stopped", leavesNow)
 			case <-sigs:
 				endHolder()
 				<-done
@@ -305,11 +305,16 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		}
 		answer := "go\n"
 		if code == 0 && !interrupted {
-			// What --status counts as a sync (remote.SyncCopied).
+			// The log's word that the copy went through (remote.SyncCopied).
 			rlog.Line(remote.SyncCopied + job.parent.Address)
 		}
 		if interrupted {
 			answer = "abort\n"
+		} else if code == sshLost {
+			// The push's session is gone, not necessarily the push: what
+			// the copy wrote decides, never the answer.
+			answer = "abort\n"
+			log.Error(lostSays(job.parent, "during the copy", "what the copy wrote decides how the sync ends on @"+job.child.Address), "devopsy @"+targetRef(job.child)+" --status shows it")
 		} else if code != 0 {
 			answer = "abort\n"
 			log.Error(fmt.Sprintf("the copy from @%s failed (%d): aborting the sync", job.parent.Address, code))
@@ -343,7 +348,8 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		select {
 		case res = <-done:
 		case <-sigs:
-			log.Warn("interrupted: the run step goes on on @"+job.child.Address, "devopsy @"+targetRef(job.child)+" --log shows how it ends; Ctrl-C again ends the session, not the step")
+			w := goesOnSays(job.child, "run step", "", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Warn(w[0], w[1:]...)
 			select {
 			case res = <-done:
 			case <-sigs:
@@ -363,16 +369,15 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		return 1
 	}
 	if res.code == sshLost {
-		lost := "the connection to @" + job.child.Address + " was lost"
 		switch {
 		case !marked && release:
-			log.Error(lost+" before the copy: the server cancels the release once it notices, within two minutes, and past its switch the previous release, if any, comes back", "devopsy @"+targetRef(job.child)+" --releases shows it")
+			log.Error(lostSays(job.child, "before the copy", "its data there is as it was"), "devopsy @"+targetRef(job.child)+" --releases shows whether the release went live")
 		case !marked:
-			log.Error(lost+" before the copy: the server leaves it as it was once it notices", "devopsy @"+targetRef(job.child)+" --status shows it")
+			log.Error(lostSays(job.child, "before the copy", "its data there is as it was, and "+staysDown), "devopsy @"+targetRef(job.child)+" --status shows it")
 		case answered:
-			log.Error(lost+" after the copy: the server goes on as far as the copy went, the run step too if it went through", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Error(lostSays(job.child, "after the copy", "the sync was past its copy there"), "devopsy @"+targetRef(job.child)+" --log shows how it ends")
 		default:
-			log.Error(lost+": the server finishes the sync as far as its copy went", "devopsy @"+targetRef(job.child)+" --status says how it ended")
+			log.Error(lostSays(job.child, "during the copy", "what the copy wrote decides how the sync ends there"), "devopsy @"+targetRef(job.child)+" --status shows how it ended")
 		}
 	}
 	return res.code
@@ -380,6 +385,24 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 
 // sshLost is ssh's exit code when the connection failed or was lost.
 const sshLost = 255
+
+// lostSays is what devopsy says of a session that ended with sshLost:
+// the connection failed or was lost, or what ssh ran on the server was
+// killed outright, which ssh reports the same way (a script that runs
+// devopsy as its child says the kill itself: remote's killedLine). when
+// places it ("before the switch", or empty); left is what that may have
+// left there, true of both, and the caller's details name what shows it.
+func lostSays(t *remote.Target, when, left string) string {
+	s := "the connection to @" + t.Address + " failed or was lost"
+	if when != "" {
+		s += " " + when
+	}
+	return s + ", or its devopsy on the server was killed: " + left
+}
+
+// staysDown is what an operation cut off may leave stopped there, until
+// the next lock-taker of the environment starts it (settleStops).
+const staysDown = "what it stopped may stay down until the next release, sync, import or snapshot there"
 
 // runPush is the push session: devopsy --sync-push on the parent's
 // server, into the child's directory base. Across servers it forwards the
@@ -774,6 +797,22 @@ func interruptible() (context.Context, func()) {
 	return ctx, func() { signal.Stop(sigs); cancel() }
 }
 
+// errInterrupted is the error of a step its signal ended (a cancel, the
+// watcher's SIGTERM, the session gone).
+var errInterrupted = errors.New("interrupted")
+
+// interrupted is err, or errInterrupted once ctx ended, whatever err
+// says then: what the step ran under ctx (docker, zstd, rsync) was
+// killed with it and says only "signal: killed", which reads as a fault
+// of the data. Every interruptible step's failure goes through it, so a
+// cancel always says "interrupted" and what did not happen.
+func interrupted(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return errInterrupted
+	}
+	return err
+}
+
 // watchSession cancels ctx when stdin reaches EOF: devopsy keeps the push
 // session's stdin open (SyncWatchEnv), so EOF means the session is gone.
 // Without it, a silent copy would only notice at its next write. With
@@ -839,7 +878,7 @@ func ensureUtilImage(ctx context.Context) error {
 	report.Info("updating " + remote.UtilImage + ", built over a week ago")
 	if err := buildUtilImage(ctx, true); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return interrupted(ctx, err)
 		}
 		report.Warn("updating "+remote.UtilImage+" failed: going on with the one there", err.Error())
 		return nil
@@ -1098,7 +1137,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// an export (PushScript holds the release lock, shared, so no take's
 	// stopped pass runs): the push's restore removes the record whole, its
 	// snapshot lines with it (review of 2026-10-25, round 3).
-	if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+	if err := settleStops(cwd, filepath.Dir(cwd)); err != nil {
 		return finish(fail(err.Error()), false)
 	}
 	if err := runDataHook(ctx, cwd, projectDir, env, nil, nil, nil, "prepare", "parent"); err != nil {
@@ -1229,9 +1268,11 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	// The session's watching is devopsy's, never the hook's: a hook
 	// running devopsy --export would take its own /dev/null stdin for a
 	// session gone.
-	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+	// Its operation holds what the record says it stopped: a devopsy the
+	// hook runs leaves those down (settleStops).
+	cmd.Env = append(append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		return strings.HasPrefix(kv, remote.SyncWatchEnv+"=") || strings.HasPrefix(kv, remote.HeartbeatEnv+"=")
-	}), env...)
+	}), env...), remote.HeldStopsEnv+"=1")
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	if stdout == nil {
@@ -1278,10 +1319,7 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 			err = nil
 		}
 	}
-	if ctx.Err() != nil {
-		return errors.New("interrupted")
-	}
-	return err
+	return interrupted(ctx, err)
 }
 
 // hookStartEnv tells the devopsy runDataHook starts that its hook runs
@@ -1330,7 +1368,7 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 		return fmt.Errorf("export %s: %w: nothing imported", name, err)
 	}
 	if ctx.Err() != nil {
-		return errors.New("interrupted")
+		return interrupted(ctx, nil)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -1370,7 +1408,7 @@ func syncStream(ctx context.Context, cwd, projectDir, name string, env []string,
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		return fmt.Errorf("import %s: %w", name, err)
 	}
@@ -1723,7 +1761,7 @@ func rsyncRun(ctx context.Context, name string, args []string, what string) erro
 		}
 		report.Info(what + " " + remote.HalfCopiedNotice)
 		if ctx.Err() != nil {
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		return fmt.Errorf("rsync %s: %w", what, err)
 	}
@@ -1915,7 +1953,7 @@ func syncRsync(ctx context.Context, projectDir string, dirs []string, vols []cli
 			// The child's script says which entry when rsync fails; cut
 			// by the session's end, it says nothing.
 			report.Info("the copy into " + to + " was cut: an entry " + remote.HalfCopiedNotice)
-			return errors.New("interrupted")
+			return interrupted(ctx, err)
 		}
 		if strings.Contains(stderr.String(), "remote port forwarding failed") {
 			if attempt < 2 {
@@ -2118,7 +2156,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	settle := func() int {
 		// What a take killed outright left stopped starts again first,
 		// unless the environment is marked.
-		if err := settleSnapshots(cwd, base); err != nil {
+		if err := settleStops(cwd, base); err != nil {
 			return fail(err.Error())
 		}
 		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
@@ -2315,6 +2353,12 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			if err := markIncomplete(base, "", remote.IncompleteFinish, why, false); err != nil {
 				fail(err.Error())
 			}
+		}
+	} else if word == "go" {
+		// What --status says is the last sync (remote.SyncedFile).
+		line := time.Now().UTC().Format("2006-01-02 15:04:05") + "\t" + os.Getenv(remote.SyncFromTargetEnv) + "\n"
+		if err := os.WriteFile(filepath.Join(base, remote.SyncedFile), []byte(line), 0o644); err != nil {
+			report.Warn("could not record the sync for --status: " + err.Error())
 		}
 	}
 	return code
@@ -2596,11 +2640,20 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 	cmd := exec.CommandContext(ctx, "docker", plan.Args[1:]...)
 	cmd.Env = plan.Env
 	cmd.Stdout, cmd.Stderr = stdout, errOut
+	if composeLock != nil {
+		// As fd 9 (ExtraFiles[i] is fd 3+i; nil ones are closed).
+		cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, nil, nil, composeLock}
+	}
 	if detach {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	return cmd.Run()
 }
+
+// composeLock is the release lock (fd 9) once an import made it
+// close-on-exec so its writer never holds it: composeRun gives it back
+// to compose, which must hold it as in every other script.
+var composeLock *os.File
 
 // composeProfiles is COMPOSE_PROFILES as compose sees it in the project
 // at cwd: the caller's, else the project's .env.
@@ -2706,12 +2759,13 @@ const syncFirst = "first"
 // all: syncFirst), the services it stopped ("stop <name>" lines), those
 // of them a sync stopped itself, by its id ("own <sync id> <name>": what
 // a sync that writes nothing starts again; the rest is an earlier sync's
-// or import's, kept down), an import's hook while it runs ("writer
+// or import's, kept down under a mark, else started by the next settle:
+// settleStops), an import's hook while it runs ("writer
 // <process group>", then " down" when its service was not running
 // before the import: writerDown), and what a snapshot's stopped pass
 // stopped ("snapshot <id> <name>": started again by its own end, or, a
 // take killed outright, by the next settle unless the environment is
-// marked: settleSnapshots).
+// marked: settleStops).
 type syncRecord struct {
 	first      bool
 	stops      []string
@@ -2957,7 +3011,7 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 			again = intersect(start, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
 		}
 		if len(again) > 0 {
-			report.Info("recreating " + strings.Join(again, " ") + " on the image its data now needs")
+			report.Info("recreating " + strings.Join(again, " ") + " on the image its release gives it now")
 			if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
 				errs = append(errs, fmt.Errorf("docker compose up: %w", err))
 			}

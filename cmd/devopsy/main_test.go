@@ -1108,6 +1108,9 @@ func TestInstancesEndToEnd(t *testing.T) {
 	}
 	write(t, filepath.Join(root, "shop", "c", "pr-12", "current", ".devopsy", "commands", "destroy"), "#!/bin/sh\necho \"destroy env=$DEVOPSY_ENVIRONMENT\"\n", 0o755)
 	write(t, filepath.Join(root, "shop", "c", "pr-12", "shared", "mnt", "db", "data"), "x", 0o644)
+	// The instance's .env (--vars-instance), which outlives its last
+	// environment.
+	write(t, filepath.Join(root, "shop", "c", ".env"), "REGION=eu\n", 0o644)
 	out, code = run(nil, "@devopsy@server:c/pr-12", "--destroy", "--yes")
 	if code != 0 || !strings.Contains(out, "destroy env=pr-12") || !strings.Contains(out, "[down][--volumes][--remove-orphans][--rmi][local]") || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") || !strings.Contains(out, "removed") {
 		t.Fatalf("--destroy (%d):\n%s", code, out)

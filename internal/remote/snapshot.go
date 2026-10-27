@@ -126,14 +126,20 @@ umask 077
 mkdir -p "$snaps"
 cd "$base/current"
 `
-	refuse := markRefusal(t, "no snapshot taken", `"`+"a snapshot of it would restore as complete"+`"`, "exit 1")
+	refuse := markRefusal(t, "no snapshot taken", `"a snapshot of it would restore as complete" `+syncFixLines(t), "exit 1")
 	s += refuse + snapLock + step("leftovers") + "\n" + step("check") + "\n" + step("mirror") + "\nexec 6>&-\n"
 	s += releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + "\n" + settleSync(projectName) + snapLock + refuse
 	s += `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 id=$(devopsy ` + ReleaseIDFlag + ` "$snaps")
 devopsy --say info "taking snapshot $id of ${cur#releases/}"
-` + step("stopped", `"$id"`, `"$base/$cur"`) + `
+` + strings.Replace(step("stopped", `"$id"`, `"$base/$cur"`), `[ "$sb" = 0 ] || exit "$sb"`, `if [ "$sb" -gt 128 ]; then
+  # Killed outright (SIGKILL, the OOM killer): what it stopped starts
+  # again now, under the locks it held, rather than at the next settle.
+  set +e
+  `+strings.TrimSpace(strings.ReplaceAll(settleSync(projectName), "\n", "\n  "))+`
+  `+killedLine("sb", "during the stopped pass of snapshot $id", "its services started again, and the next snapshot here finishes or removes it", "")+`fi
+[ "$sb" = 0 ] || exit "$sb"`, 1) + `
 # Past the stopped pass the snapshot is consistent in the mirror: it
 # finishes on its own, whatever happens to the session.
 trap '' INT TERM HUP
@@ -160,6 +166,14 @@ func snapshotEnv(t *Target, keep int) string {
 // before, in the same session), whose stopped services its data step keeps
 // down and owns from its mark.
 const RestoreSnapshotEnv = "DEVOPSY_INTERNAL_RESTORE_SNAPSHOT"
+
+// HeldStopsEnv says the record's stop lines are held by a live
+// operation, so a settle inside it leaves them down: an activation once
+// release-record live made its release snapshot's lines stop lines (the
+// sync of a release that syncs settles, its run step starts them), and
+// every data hook, whose devopsy --export or --import would otherwise
+// start what its operation stopped (review round 7).
+const HeldStopsEnv = "DEVOPSY_INTERNAL_HELD_STOPS"
 
 // SnapshotReleaseKeepEnv is how many release snapshots a pruning keeps
 // (KeepAll: every one whose release is kept), sent by the operator from
@@ -249,7 +263,7 @@ case $rs in
   *) exit 1 ;;
 esac
 rd_unsnap() {
-  if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+  if grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
   fi
 }
@@ -266,7 +280,7 @@ if [ -n "$rs_id" ]; then
   [ -z "$rd_sig" ] || { devopsy --say error "interrupted: nothing restored" || true; exit 130; }
   ` + step("release-stopped", `"$rs_id"`, `"$base/$cur"`, `"$base/$cur"`) + ` || { rd_unsnap; exit 1; }
   [ -z "$rd_sig" ] || { rd_unsnap; devopsy --say error "interrupted: nothing restored, the services started again" || true; exit 130; }
-  rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+  rs_tar="cd \"\$base/current\" && echo \"` + LogSection + `\$(date -u '+%Y-%m-%d %H:%M:%S') snapshot.\$rs_id\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
   if command -v setsid >/dev/null 2>&1; then
     base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$base/$cur/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
   else
@@ -283,13 +297,19 @@ trap '' INT TERM HUP PIPE
 # current release's server log, which the session follows.
 out="$base/$cur/` + ServerLogFile + `"
 ` + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
-` + step("restore-data", `"$snap"`, `"$base/$cur"`) + ` || { ` + unsnap + `exit 1; }
+` + step("restore-data", `"$snap"`, `"$base/$cur"`, "no-code") + ` || {
+  rd_status=$?
+  set +e
+` + killedSays(t, projectName, "rd_status", "nothing restored") + `  ` + unsnap + `exit 1
+}
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
-img ran "$base" "$base/$cur" || true
 if [ "$rs" = 0 ]; then
   ` + step("restored", `"$snap"`) + ` || rs=1
+  # Once restored started the set on the images it holds: a data service
+  # the run step left as it was still ran the replaced data (ActivateScript).
+  [ "$rs" != 0 ] || img ran "$base" "$base/$cur" || true
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
   devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true

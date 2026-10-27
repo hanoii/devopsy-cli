@@ -579,7 +579,8 @@ step's rules):
    rollback after its switch).
 7. The images (`fetch_release`, Images). `ServerLogFile` is created
    here, so a full disk fails the release before it goes live.
-8. `PendingFile` removed, `make_current`, `--mnt-owners` (Data,
+8. `PendingFile` removed, `ActivatingFile` written (below),
+   `make_current`, `--mnt-owners` (Data,
    destroying and removing; before the sync of a release that syncs,
    after `followOutput` otherwise, and in a rollback from the restored
    release's labels, `--mnt-owners restored`, where labels this devopsy
@@ -595,7 +596,9 @@ step's rules):
    `--log` only said "unhealthy"), `current` back, the previous
    release restarted with its images restored as a rollback's are
    (`get_images`; when that fails, `img hold` still holds its data
-   services on their data's newest image), owners (`--mnt-owners
+   services on their data's newest image, its listing and bookmarks
+   following, so a snapshot of that release holds what it runs: review
+   after v0.52.2), owners (`--mnt-owners
    restored`, a failure only said) and run step
    (`--release-steps restart run`: its `rollback:`, else `release:`),
    except on a partial copy. A rollback whose run step fails marks the
@@ -781,11 +784,26 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   (`$base/.devopsy-data-images`) keeps every image that ran on each such
   service's data, appended only after something ran (`img ran` after the
   run step, failed or not, before a restart), never at `img record` (a
-  release cancelled after it ran nothing). "Newer" means "ran later on
-  this data". `img record` refuses an image the history moved past, or
+  release cancelled after it ran nothing). A restore runs it only once
+  `restored` started its set on the images it holds, and not when its
+  run step failed: a database the run step left as it was is still the
+  container that ran the replaced data (review after v0.52.2: its image
+  became the restored data's newest; a rule in `Ran` skipping containers
+  of another label instead dropped one a plain `up` had made, which no
+  `img ran` counted). A release killed past its switch never gets
+  there, so every activation runs it on current first, before anything
+  reads the history, and so does a settle once it started anything
+  (`ranOnData`): the run step's `up`, or the settle's recreate, ran the
+  release's image on the data (round 8, by hand on OrbStack: mariadb
+  12.1 upgraded the data, the history still ended on 11.8, and a
+  rollback ran 11.8 on it). "Newer" means "ran later on this data". `img record` refuses an image the history moved past, or
   one it never ran under a changed name (`check`), unless the operator
   names the service (`--accept-image`, `ImagesAcceptEnv`), whose
-  `ForcedFile` starts its history over once that image runs. `--yes`
+  `ForcedFile` starts its history over once that image runs (the
+  activation's `img ran` removes it; a cut activation's record, `img ran
+  ... cut`, `RanCut`, keeps each line until its service runs that image,
+  so one finding the database still on the image before, stopped for a
+  release snapshot, leaves it to the settle that makes it again). `--yes`
   never does (decided 2026-10-23): it skips prompts, so CI passed it
   everywhere and skipped every check. A built service whose data has a
   history (it ran a pulled image) is checked by its name too: a switch
@@ -1001,6 +1019,18 @@ interrupts" and "The server never waits on the operator for long".
   nothing stops a release after its switch, the run step included
   (decided: stopping it restarted the previous release while
   `script`'s compose ran on, two `up`s on one project).
+- **What kills the shell past the switch leaves a mark**
+  (`ActivatingFile`, `$base/.devopsy-activating`: id, kind, the release
+  replaced, a restore's snapshot), written right before `make_current`
+  and removed wherever the activation ends, its failure paths included:
+  one there while nothing holds the release lock is an activation cut
+  off past its switch (the OOM killer, a reboot), whose run step may
+  not have run. `--status` and `--releases` (`CUT`) say so with what
+  finishes it; a `--rollback` finishes a cut rollback (its target
+  current, the release it left to mark), never going one further back;
+  a sync's run step clears a cut release's; any activation replaces it.
+  Decided 2026-10-27: nothing finishes it by itself (a run step started
+  by whatever takes the lock next would surprise more than help).
 - **`script` gets its own session past a fetch** (`setsid -w`,
   `tty_detach` in `with_tty`): it reads its signals through a signalfd,
   ignored ones too, and exits 0 when signaled (a restart's `get_images`
@@ -1008,8 +1038,21 @@ interrupts" and "The server never waits on the operator for long".
 - **255 is ssh's:** ssh exits 255 for a connection that failed or was
   lost, and passes a script's own status on, so activations and holders
   never exit 255 (`NoExit255`, `followOutput`'s trap: 254 instead;
-  drush on a PHP error exits 255). The operator's lost-connection
-  messages (`sshLost`) then mean what they say. An ssh killed by a
+  drush on a PHP error exits 255). ssh also exits 255 when what it ran
+  on the server was killed outright (SIGKILL, the OOM killer), so every
+  message on `sshLost` says both, in one wording (`lostSays`: "failed
+  or was lost, or its devopsy on the server was killed"), and only what
+  holds for both (never "once the server notices": after a kill the
+  next lock-taker settles), with what shows it; a script that runs
+  devopsy as its child sees the kill and says it itself, in the same
+  words (`killedLine`, `killedSays`). Decided 2026-10-27 over
+  scripts that never exec, for one rule rather than one per script.
+  A step a cancel interrupts on the server says so (`interrupted`:
+  what it ran under its context, docker, zstd or rsync, was killed with
+  it and says only "signal: killed", which read as a broken snapshot),
+  and the operator's words name what runs (`releaseWords` by kind:
+  release, rollback, restore; `goesOnSays` past the point of no return).
+  An ssh killed by a
   signal devopsy did not send reads as 255 too (`SSHStreams`), and
   `DEVOPSY_SSH_COMMAND` runs through `exec`, so signals reach the
   command, never only a shell around it.
@@ -1681,7 +1724,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   record means restore the side's whole set (a sync's; nothing for an
   import or `--resolved`, whose mark and record are written together),
   one down on purpose included. One left by an earlier sync or import
-  that could not restore is kept and added to (`syncRecord`, rewritten
+  that could not restore is kept and added to (under a mark; unmarked,
+  the settle first starts it: below) (`syncRecord`, rewritten
   whole, `writer <pgid>` lines kept), and what a sync stops itself is
   marked `own <sync id>`.
 - **Restoring brings back only the recorded services,** whatever their
@@ -1695,6 +1739,37 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`serviceEntries`: a hook's `run --rm` still running would read as its
   service running, which then never started again); the sync tests'
   fake docker remembers stops and starts to answer it.
+- **What a killed operation left stopped starts with the next
+  settle** (`settleStops`; review round 5, by hand on OrbStack: a push
+  killed outright left prod down through a take, `--status` silent,
+  until a child synced): the record's `stop` lines with no mark (a push
+  killed outright on the parent, an export on a target, which records
+  its stops for it, an import before its mark, a release between its
+  switch and its run step, whose release snapshot's lines
+  `release-record live` made `stop` lines) start where a take's
+  `snapshot` lines do (Snapshots), only those the current release has,
+  their `own` lines going with them; one whose container another image
+  than the current release gives it runs (that release's cut: the
+  release before's containers) is made again (`startStops`,
+  `images.Recreate`; round 6, compose start ran the old code under the
+  new current). Every settle's caller holds the
+  release lock (a push and an export shared, with the sync lock) and
+  runs it before it stops anything, so such a line is a leftover, but a
+  killed sync holder's (its claimed or taken record there: the settle
+  after makes it its mark; round 6, started first, the database ran on
+  a half copy), in a data hook (`HeldStopsEnv`, set by `runDataHook`:
+  round 7, a hook's `devopsy --export` started what its export
+  stopped) and in the activation that made them (`HeldStopsEnv`, exported past
+  `release-record live`: the sync of a release that syncs settles there,
+  and started them under the new code on the old data before its copy).
+  A mark keeps them down. A start that fails only warns and keeps them
+  (a start gate refusing a link would fail every release that could
+  remove it). `--status` names them while nothing holds the locks
+  (`left`). A server's devopsy killed by a signal (above 128) in an
+  import, a restore's data step or a take's stopped pass said nothing
+  of it: its script, still holding the locks, says the mark and its ways
+  out after the first write (`killedSays`), else settles at once (an
+  import's spool removed too) and says nothing was written.
 - **A child's first release gets its data services and its side's set
   before its finish hook:** a release with nothing current before it (`prepare
   first`, from the activation), or no container at all when prepare
@@ -2028,7 +2103,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   removes it, and in `syncImport` after its writer line), and the record set to
   `first` with nothing stopped, so `finish go` creates the services
   with data and the child's set and the run step the rest. Its
-  `shared/.env` and release stay.
+  `shared/.env` and release stay. Accepted (decided 2026-10-27): the
+  `down` takes every container, a holding service (`alwaysup`) too, so
+  the child answers nothing until its run step is done; keeping what no
+  label stops would leave containers across a start-over.
 - **What a reset skips and refuses:** the child guard
   (`syncConflicts`: nothing of the child runs under the copy) and the
   import mark's `copiesService` (it replaces everything); the stream
@@ -2431,8 +2509,10 @@ settled every rule here after nine reviews (2026-10-25).
   review; a restore: any service of the current release mounting what
   it writes, round 2), and their dependents, in one stop and one start, recorded as `snapshot <id>
   <name>` lines (their own kind: `readSyncRecord` keeps them). A take
-  killed outright leaves them for the next settle
-  (`settleSnapshots`: `--sync-services settle`, `partialGuard` and
+  whose stopped pass is killed outright starts them from its script at
+  once (the locks still held); a take gone whole leaves them for the
+  next settle
+  (`settleStops`: `--sync-services settle`, `partialGuard` and
   `settleLeftover` when the record has them, an export on a target, a
   sync's push on the parent: round 3, its restore removed the record
   whole),
@@ -2644,8 +2724,9 @@ settled every rule here after nine reviews (2026-10-25).
   snapshot step would make every release need a server with
   snapshots). At the switch
   `release-record live` turns the `snapshot` lines into the release's
-  `stop` lines (a release that syncs runs a settle past the switch,
-  which would start them), and once something started them, the run
+  `stop` lines (kept down by a mark, and by a settle inside its own
+  activation, `HeldStopsEnv`: a release that syncs runs one past the
+  switch; any other settle starts them as leftovers, Syncs), and once something started them, the run
   step or the restart of the release before, `release-record done`
   removes them (a cut sync's copy or a failed restore keeps them down,
   the record saying so: review), first starting what of them the run
@@ -2718,17 +2799,23 @@ Smaller features, each with the rule an agent must keep.
 - **`--status`** (`cmd/devopsy/status.go`): locally, the containers as
   a table, then the `status` capability's `show`. With a target,
   `StatusScript` prints header lines from the server's files (the
-  record, live releases kept, the last copy from the session logs'
-  `SyncCopied` lines, a partial or running sync from `partialStatus`:
+  record, live releases kept, the last completed sync from the child's
+  own `SyncedFile`, written by `finish go` once its hook accepted the
+  copy (decided 2026-10-27: read from the session logs' `SyncCopied`
+  lines, it missed every sync whose session was lost before the
+  operator saved its log), a partial or running sync from `partialStatus`:
   "syncing" while a holder holds the child's lock, from its holding file
   on, its prepare included, `SyncRunning`; "source" while a push or an
   export holds the parent's sync lock, `SourceBusy`; `--releases` marks
   the current release SYNCING the same way),
   `---`, then `devopsy --status` in the current release; the operator
   formats the header and prints the rest as it came. In a release,
-  `images.StatusLines`: the services held by digest, and those running
-  another image than their `devopsy.digest` label says (a plain up
-  followed a moved name).
+  `images.StatusLines`: the services held by digest, those running
+  another image than the current release's `ComposeFile` gives them
+  (another activation's container: one cut off past its switch, a
+  rollback's whose newer containers run on; round 8, `--status` was
+  silent), and those running another image than their `devopsy.digest`
+  label says (a plain up followed a moved name).
 - **`--ssh-keys` edits only the deploy user's own
   `~/.ssh/authorized_keys`** (`cmd/devopsy/sshkeys.go`,
   `internal/remote/keys.go`), over the usual session. Why: no root, so
@@ -2772,7 +2859,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`,
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`, `HELD_STOPS`,
   `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`

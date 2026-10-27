@@ -73,6 +73,20 @@ const (
 	ServerLogFile = "devopsy-log-server"
 )
 
+// ActivatingFile marks an environment ($base) from an activation's switch
+// to its end, whichever way it ends: the release's id, the activation's
+// kind (release, rollback, restore), the release it replaced and a
+// restore's snapshot, tab separated. One there while nothing holds the
+// release lock is an activation cut off past its switch (killed outright,
+// a reboot), which nothing interrupts otherwise: its run step may not
+// have run. --status and --releases say so (CUT); a --rollback finishes
+// a cut rollback, never going one release further back; the next
+// activation replaces it, and a sync's run step (the release's own, run
+// again) removes a cut release's. Decided 2026-10-27 over finishing it
+// by itself: a run step started by whatever takes the lock next would
+// surprise more than help.
+const ActivatingFile = ".devopsy-activating"
+
 // ReleaseFile is name, one of a release's devopsy files, for the project
 // at projectDir (its .devopsy/, through current or not): beside the
 // release's code/. "" when projectDir is not under a code/ directory; the
@@ -610,7 +624,7 @@ func UploadScript(t *Target, syncs bool) string {
   devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
   exit 1
 fi
-` + markRefusal(t, "nothing released", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), "exit 1")
+` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
 	}
 	return prelude(t, true) + guard + lockedGate(false, "") + `id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 rel="$base/releases/$id"
@@ -767,7 +781,14 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// none is still running.
 	s += `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
-` + recoverFetch(`${prev:+"$base/$prev"}`)
+` + recoverFetch(`${prev:+"$base/$prev"}`) + `[ -z "$prev" ] || img ran "$base" "$base/$prev" cut || true
+`
+	// That last line: what runs on the data now goes into its history
+	// before anything reads it. A release killed past its switch ran its
+	// run step's up on the image it holds the data on, and its img ran
+	// never came (OrbStack cuts, round 8: a rollback then held the data
+	// on the older image); a settle below that makes a service again
+	// records it itself (ranOnData).
 	switch {
 	case restore != nil:
 		// A restore goes through a mark (a complete one clears it), as a
@@ -792,8 +813,21 @@ devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
 		s += partialGuard(t, projectName, "exit 1")
 		// The newest live release older than current (images.RollbackTarget):
 		// never a failed, rolled-back or still fetching one.
-		s += `id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
-devopsy --say info "rolling back to $id"
+		// A rollback cut off past its switch (ActivatingFile: this script
+		// holds the lock, so none runs) is finished, never followed by one
+		// further back: current is its target, the release it left the one
+		// to mark rolled back.
+		s += `id=
+cut_line=$(cat "$base/` + ActivatingFile + `" 2>/dev/null || true)
+cut_from=$(printf '%s' "$cut_line" | cut -f3)
+if [ "$(printf '%s' "$cut_line" | cut -f2)" = rollback ] && [ "releases/$(printf '%s' "$cut_line" | cut -f1)" = "$prev" ] && [ -n "$cut_from" ] && [ -d "$base/releases/$cut_from" ]; then
+  id=${prev#releases/}; prev=releases/$cut_from
+  devopsy --say info "finishing the rollback to $id from $cut_from, cut off past its switch"
+fi
+if [ -z "$id" ]; then
+  id=$(img rollback-target "$base") || { devopsy --say error "no release before the current one"; exit 1; }
+  devopsy --say info "rolling back to $id"
+fi
 ` + RollbackNotLive
 	default:
 		s += "id=" + Quote(id) + "\n" + NotLive
@@ -1047,13 +1081,18 @@ fi
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
 		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
-if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
+rd_status=0
+(cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
+if [ "$rd_status" != 0 ]; then
   set +e
+  # The images' names back first: what the settle below starts again, or
+  # makes again (images.Recreate), must run the current release's images,
+  # never the ones the restore's fetch gave the names.
   if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
     image_unlock
   fi
-  not_live 1
+` + killedSays(t, projectName, "rd_status", "nothing restored") + `  not_live 1
 fi
 `
 	}
@@ -1062,10 +1101,19 @@ fi
 exec 7<&-
 `
 	}
-	s += `make_current "releases/$id"
+	activating, snapField := "release", ""
+	switch {
+	case restore != nil:
+		activating, snapField = "restore", restore.Snapshot
+	case rollback:
+		activating = "rollback"
+	}
+	s += `printf '%s\t%s\t%s\t%s\n' "$id" ` + activating + ` "${prev#releases/}" ` + Quote(snapField) + ` >"$base/` + ActivatingFile + `" || not_live 1
+make_current "releases/$id"
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
+` + `[ -z "${rs_id:-}" ] || export ` + HeldStopsEnv + `=1
 `
 	}
 	s += `devopsy --say info "current is now $id" || true
@@ -1088,7 +1136,7 @@ exec 7<&-
       else
         devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
-      exit "$status"
+      rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
     get_images "$base/$prev" "$rel" || {
       gi_s=$?
@@ -1107,7 +1155,7 @@ exec 7<&-
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
       devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
-      exit "$status"
+      rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
 	restart += `    devopsy --say info "restarting ${prev#releases/} with its own run step"
@@ -1183,8 +1231,17 @@ fi
 		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
 `
 	}
-	s += `img ran "$base" "$rel" || true
-if [ "$status" != 0 ]; then
+	// A restore records what ran only once restored started its set on
+	// the images it holds (startLeftDown makes again what another image
+	// runs): a data service its run step left as it was is still the
+	// container that ran the replaced data, on that data's image (review:
+	// its old image became the restored data's newest). A failed one ran
+	// nothing on the restored data but its hold.
+	if restore == nil {
+		s += `img ran "$base" "$rel" || true
+`
+	}
+	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
     make_current "$prev"
@@ -1193,12 +1250,16 @@ if [ "$status" != 0 ]; then
 ` + firstDown(projectName) + `    rm -f "$base/current"
     devopsy --say error "$failed failed ($status), no previous release to go back to"
   fi
+  # The activation ended, failed: no cut one (ActivatingFile).
+  rm -f "$base/` + ActivatingFile + `"
   exit "$status"
 fi
 `
 	if restore != nil {
 		// Its mark and record go once the run step started the set.
-		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || exit 1\n"
+		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || { rm -f \"$base/" + ActivatingFile + "\"; exit 1; }\n"
+		s += `img ran "$base" "$rel" || true
+`
 	}
 	if rollback && restore == nil {
 		// The release it left: never counted toward keep, never rolled back
@@ -1207,6 +1268,10 @@ fi
 devopsy --say info "${prev#releases/} is marked rolled back"
 `
 	}
+	// The activation went through: what follows (pruning, after steps)
+	// resumes or only reports when cut.
+	s += `rm -f "$base/` + ActivatingFile + `"
+`
 	// keep: the target's or project's, else the server's, at most its
 	// max_keep. Only releases that went live and stayed count: failed ones
 	// never ran, a rolled-back one was left, and a rollback skips both. One
@@ -1437,7 +1502,7 @@ exec 4<&-
 func partialGuard(t *Target, projectName, refuse string) string {
 	return `if [ -n "$prev" ]; then
 ` + settleSync(projectName) + `fi
-` + markRefusal(t, "nothing changed", `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" "or --release-sync to release with it" `+resetFixLines(t), refuse)
+` + markRefusal(t, "nothing changed", syncFixLines(t, `"or --release-sync to release with it"`), refuse)
 }
 
 // recoverFetch finishes what a release's fetch killed outright left (img
@@ -1500,7 +1565,7 @@ if [ -n "$prev" ]; then
     : >"$base/` + SnapshotHoldingFile + `"
     (umask 077; : >>"$rel/` + ServerLogFile + `") || not_live 1
     not_live_hook() {
-      if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+      if grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
         (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
       fi
     }
@@ -1543,7 +1608,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
     if [ "$fr" -eq 0 ] && [ -z "$fetch_sig" ]; then
       (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-stopped"}, false) + ` "$rs_id" "$base/$prev" "$1") || fr=$?
       if [ "$fr" -eq 0 ]; then
-        rs_tar="cd \"\$base/current\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
+        rs_tar="cd \"\$base/current\" && echo \"` + LogSection + `\$(date -u '+%Y-%m-%d %H:%M:%S') snapshot.\$rs_id\" && COMPOSE_PROJECT_NAME=` + Quote(projectName) + ` exec nice devopsy ` + quoteAll([]string{SnapshotStepFlag, "release-tar"}) + ` \"\$rs_id\" $$"
         if command -v setsid >/dev/null 2>&1; then
           base="$base" rs_id="$rs_id" setsid sh -c "$rs_tar" </dev/null >>"$1/` + ServerLogFile + `" 2>&1 3<&- 5>&- 7<&- 8>&- 9>&- &
         else
@@ -1560,7 +1625,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
 // stopped services start), under the release lock, in the current
 // release, before anything reads the mark.
 func settleSync(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 `
@@ -1837,6 +1902,9 @@ left=`+leftPath(t)+`
 [ -d "$base/releases" ] || exit 0
 cur=$(readlink "$base/current" 2>/dev/null || true)
 syncing=; if `+SyncRunning+`; then syncing=1; fi
+# An activation cut off past its switch (ActivatingFile, nothing holding
+# the lock): the release it made current.
+cut_id=; if [ -e "$base/`+ActivatingFile+`" ] && ! `+LockBusy+`; then cut_id=$(cut -f1 "$base/`+ActivatingFile+`"); fi
 ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
   c=-; [ "releases/$r/`+CodeDir+`" = "$cur" ] && c=current
   # A pending release is under way while its activation holds its
@@ -1855,6 +1923,7 @@ ls -1 "$base/releases" | grep -v '\.tmp$' | sort -r | while read -r r; do
     [ ! -e "$base/releases/$r/`+RolledBackFile+`" ] || f=rolled-back
     # The current release, while a sync into it runs.
     [ "$c" != current ] || [ -z "$syncing" ] || [ "$f" != - ] || f=syncing
+    [ "$c" != current ] || [ "$r" != "$cut_id" ] || [ "$f" != - ] || f=cut
   fi
   # Names, each with its version or short digest (name=version): the
   # ids stay on the server.
@@ -1878,6 +1947,9 @@ type Release struct {
 	Incomplete, InProgress bool
 	// Syncing: current, while a sync into it runs (SyncRunning).
 	Syncing bool
+	// Cut: current, made so by an activation cut off past its switch
+	// (ActivatingFile).
+	Cut bool
 	// Images are the names it runs (ImagesFile), each followed by = and
 	// its version or short digest when the listing has one: what a
 	// rollback to it restores, and what removing it may free.
@@ -1894,7 +1966,7 @@ func ParseReleases(out string) []Release {
 			continue
 		}
 		r := Release{ID: parts[0], Current: parts[1] == "current", Failed: parts[2] == "failed", RolledBack: parts[2] == "rolled-back",
-			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing"}
+			Incomplete: parts[2] == "incomplete", InProgress: parts[2] == "in-progress", Syncing: parts[2] == "syncing", Cut: parts[2] == "cut"}
 		if len(parts) > 3 {
 			r.Images = strings.Fields(parts[3])
 		}
@@ -1939,6 +2011,8 @@ func (r Release) Line() string {
 		status = "  IN PROGRESS"
 	case r.Syncing:
 		status = "  SYNCING"
+	case r.Cut:
+		status = "  CUT"
 	}
 	return fmt.Sprintf("%s %s  %-24s  %s%s", mark, r.ID, r.Record.By, src, status)
 }
@@ -2432,7 +2506,15 @@ else
   [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; devopsy --say error "$base stays as it was"; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || {
+    s=$?; image_unlock
+    # Killed (SIGKILL, the OOM killer), it said nothing of where it was.
+    if [ "$s" -gt 128 ]; then
+      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+hintAddress(t)+" --destroy") + `    else
+      devopsy --say error "$base is not removed" || true
+    fi
+    exit "$s"
+  }
 else
   devopsy --say info "no release: nothing to take down"
 fi
@@ -2497,10 +2579,13 @@ func RoleHoldersScript(t *Target, role string) string {
 // instance's, then its project's) that hold nothing but their .env (and
 // the lock --vars-project and --vars-instance take) once no environment
 // is left in them: what --destroy leaves, since the .env is shared by
-// every environment of that level. With remove, it removes them instead,
+// every environment of that level; one with neither is removed. With remove, it removes them instead,
 // checking again under the same rules: --destroy --purge.
 func LeftoverScript(t *Target, remove bool) string {
-	act := `echo "$d"`
+	// Listing, a level holding nothing to ask about (no .env, no record:
+	// a lock alone) goes without a word (review: --destroy warned that
+	// its .env stays, about none).
+	act := `if [ -e "$d/.env" ] || [ -s "$d/` + ImagesLeftFile + `" ]; then echo "$d"; else rm -f "$d/.lock" "$d/` + ImagesLeftFile + `" "$d/` + ImagesLeftFile + `.tmp" && rmdir "$d" 2>/dev/null || exit 0; fi`
 	if remove {
 		act = `if [ -s "$d/` + ImagesLeftFile + `" ]; then
   devopsy --say warning "forgetting the images $d's removals left: $(cut -f 4 "$d/` + ImagesLeftFile + `" | tr '\n' ' ')"
