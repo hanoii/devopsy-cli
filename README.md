@@ -680,10 +680,11 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   current, but its run step may not have run. `--releases` marks it
   `CUT`, and `--status` says so with what finishes it: the release
   again (a child's `--sync`, which runs the release's run step again,
-  when a cut sync refuses the release); for a rollback, `--rollback`
+  finishes it too, and is the way when a cut sync refuses the release); for a rollback, `--rollback`
   again, which finishes that rollback rather than going one release
   further back (a release instead leaves it as it is, the release it
-  left marked rolled back); for a restore, the restore again.
+  left marked rolled back); for a restore, the restore again, or a
+  child's `--sync`.
 - **Logs:** each release and rollback is recorded on the server, in the
   release's directory (a rollback's and a sync's added to the release they
   go to), failed ones included once the server was reached, in two logs:

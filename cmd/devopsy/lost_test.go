@@ -277,6 +277,14 @@ func TestActivationCutPastSwitch(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
 		t.Errorf("a sync of a child whose release was cut (%d), mark %q:\n%s", code, readString(devMark), out)
 	}
+	// A full restore cut past its switch is a release whose run step may
+	// not have run likewise (its data went in before the switch): the
+	// sync's run step finishes it too (review round 9). Staged by hand.
+	cur := strings.TrimPrefix(s.current("dev"), "releases/")
+	write(t, devMark, cur+"\trestore\t"+cur+"\t20261027000000\n", 0o644)
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(devMark) {
+		t.Errorf("a sync of a child whose full restore was cut (%d), mark %q:\n%s", code, readString(devMark), out)
+	}
 }
 
 // cutRollback makes three releases of solo (rollback: deploy, or yaml's)

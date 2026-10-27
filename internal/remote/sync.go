@@ -767,9 +767,11 @@ trap '' PIPE
 ` + followOutput
 		s += "rs=0\nwith_tty " + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + " || rs=$?\n"
 		// What ran on the data, as after a release's run step; and a
-		// release cut off past its switch (ActivatingFile) has had its run
-		// step now, the one it skipped.
-		s += "img ran \"$base\" \"$rel\" || true\n" + `if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "$id")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
+		// release or a full restore cut off past its switch
+		// (ActivatingFile) has had its run step now, the one it skipped.
+		s += "img ran \"$base\" \"$rel\" || true\n" + `if [ "$rs" = 0 ] && [ "$(cut -f1 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$id" ]; then
+  case "$(cut -f2 "$base/` + ActivatingFile + `")" in release|restore) rm -f "$base/` + ActivatingFile + `" ;; esac
+fi
 exit "$rs"
 `
 	}

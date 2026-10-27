@@ -1034,8 +1034,8 @@ interrupts" and "The server never waits on the operator for long".
   stays current until the switch), never going one further back; a
   release or a restore over it marks that release rolled back, as the
   rollback would have (review round 9: it stayed live, the next
-  rollback's target); a sync's run step clears a cut release's; any
-  activation replaces it.
+  rollback's target); a sync's run step clears a cut release's or full
+  restore's (the run step they skipped); any activation replaces it.
   Decided 2026-10-27: nothing finishes it by itself (a run step started
   by whatever takes the lock next would surprise more than help).
 - **`script` gets its own session past a fetch** (`setsid -w`,

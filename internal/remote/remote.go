@@ -84,7 +84,7 @@ const (
 // a cut rollback, never going one release further back, and any other
 // activation marks the release it left rolled back; the next activation
 // replaces it, and a sync's run step (the release's own, run again)
-// removes a cut release's. Decided 2026-10-27 over finishing it
+// removes a cut release's or full restore's. Decided 2026-10-27 over finishing it
 // by itself: a run step started by whatever takes the lock next would
 // surprise more than help.
 const ActivatingFile = ".devopsy-activating"
