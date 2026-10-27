@@ -1033,6 +1033,11 @@ func runImport(cwd string, args []string, color bool) int {
 		// command for its whole load. This devopsy keeps them to its end.
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
+		// Its compose calls keep the release lock (composeLock): a stop
+		// or a start a killed devopsy left running holds it, so the next
+		// lock-taker waits for it instead of racing it (Docker finishes a
+		// stop whose client went).
+		composeLock = os.NewFile(9, "release lock")
 		if m := readMark(base); m != nil {
 			if m.IsRestore() {
 				return fail("the restore of snapshot " + m.From + " did not complete, and only a restore completes it: nothing imported")

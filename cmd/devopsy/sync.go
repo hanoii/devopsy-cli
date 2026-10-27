@@ -2640,11 +2640,20 @@ func composeRun(ctx context.Context, cwd string, stdout io.Writer, detach bool, 
 	cmd := exec.CommandContext(ctx, "docker", plan.Args[1:]...)
 	cmd.Env = plan.Env
 	cmd.Stdout, cmd.Stderr = stdout, errOut
+	if composeLock != nil {
+		// As fd 9 (ExtraFiles[i] is fd 3+i; nil ones are closed).
+		cmd.ExtraFiles = []*os.File{nil, nil, nil, nil, nil, nil, composeLock}
+	}
 	if detach {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	return cmd.Run()
 }
+
+// composeLock is the release lock (fd 9) once an import made it
+// close-on-exec so its writer never holds it: composeRun gives it back
+// to compose, which must hold it as in every other script.
+var composeLock *os.File
 
 // composeProfiles is COMPOSE_PROFILES as compose sees it in the project
 // at cwd: the caller's, else the project's .env.

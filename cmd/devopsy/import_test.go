@@ -115,6 +115,7 @@ func (s *importSetup) start(extra []string, stdin []byte, args ...string) (*exec
 func TestImportMarkOnTarget(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
+	os.Remove(s.log + ".locked")
 	wait := filepath.Join(s.tmp, "hook")
 	cmd, errs := s.start([]string{"FAKE_HOOK_WAIT=" + wait}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	waitFile(t, wait, "the import's hook", startWait, errs.String)
@@ -131,6 +132,13 @@ func TestImportMarkOnTarget(t *testing.T) {
 	}
 	if s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {
 		t.Errorf("after a complete import: mark %+v, record %q, stopped %v", s.mark(), s.record(), s.stopped())
+	}
+	// Its compose calls do hold the release lock, unlike its writer: a
+	// stop or a start a devopsy killed outright left running would race
+	// the next lock-taker's (Docker finishes a stop its client left), so
+	// that one must wait for it, as it waits for any other script's.
+	if locked := readString(s.log + ".locked"); !strings.Contains(locked, "shop-prod compose stop app") || !strings.Contains(locked, "shop-prod compose start app") {
+		t.Errorf("the import's stop and start without the release lock:\n%s", locked)
 	}
 	if !strings.Contains(errs.String(), "devopsy: stopping app (import)\n") || !strings.Contains(errs.String(), "worker depends on db and keeps running while it is imported") || strings.Contains(errs.String(), remote.ImportMarker) {
 		t.Errorf("a complete import said:\n%s", errs)
