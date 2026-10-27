@@ -76,7 +76,7 @@ defaults:
   # Per-environment settings, written into each release's devopsy-target.env.
   # "" sets an empty value; ~ (null) removes a default.
   env:
-    CERTRESOLVER: letsencrypt1
+    PROXY_CERTRESOLVER: le-dns01-selfhosted
   # Snapshots of the environment's data, code and the images that ran on
   # them (devopsy @prod --snapshot, --snapshots). manual: on by default,
   # 3 kept, never more than the server's snapshots: max_keep. true and
@@ -102,7 +102,7 @@ defaults:
 environments:
   prod:
     env:
-      DEVOPSY_DOMAINS: example.org www.example.org
+      PROXY_DOMAINS: example.org www.example.org
     # Variables its children get: read from prod's .env files on its
     # server (shared/.env, the instance's, the project's) and written as
     # the child's shared/inherit.env, below its own shared/.env, on a

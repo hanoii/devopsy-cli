@@ -86,7 +86,7 @@ type Target struct {
 	Path string `yaml:"-"`
 	Mode string `yaml:"mode"`
 	// Env is written into each release as .devopsy/target.env: per-
-	// environment, committed, non-secret settings like DEVOPSY_DOMAINS.
+	// environment, committed, non-secret settings like PROXY_DOMAINS.
 	Env map[string]string `yaml:"env"`
 	// Release and Rollback are what --release and --rollback run: required
 	// for them, see Steps.

@@ -124,7 +124,7 @@ its features.
 - [devopsy-template-traefik](https://github.com/hanoii/devopsy-template-traefik):
   the reverse proxy the others route through, one per server.
   - Automatic HTTPS certificates, including before DNS points to the server.
-  - A wildcard domain, so every environment gets its own URL.
+  - A base domain, so every environment gets its own URL.
   - Real visitor IPs behind CDNs and other proxies.
   - A `domains` report: DNS, certificates and what to do next.
   - Cloudflare aware: its IP ranges, automatic DNS challenges with an API
@@ -429,12 +429,12 @@ defaults:                       # what every environment takes unless it sets it
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
-  env: {CERTRESOLVER: acmedns}  # per-environment variables, not secrets
+  env: {PROXY_CERTRESOLVER: le-dns01-selfhosted}  # per-environment variables, not secrets
   snapshots: {manual: {keep: 3}, release: false, mirror: false}  # optional: manual ones kept (on, 3), release snapshots (off), a mirror (off)
 environments:
   prod:
     env:
-      DEVOPSY_DOMAINS: example.org www.example.org
+      PROXY_DOMAINS: example.org www.example.org
     inherit: [DATA_DATABASE]   # variables its children get from its server
   staging: {}
   develop:
@@ -1754,10 +1754,10 @@ template's:
 ```yaml
 # the proxy, on its traefik service
 - devopsy.role=proxy
-- devopsy.export.WILDCARD_DOMAIN=${DEVOPSY_PROXY_WILDCARD_DOMAIN:-}
+- devopsy.export.BASE_DOMAIN=${PROXY_BASE_DOMAIN:-}
 
 # a project, on any service
-- devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN
+- devopsy.import.PROXY_BASE_DOMAIN=proxy/BASE_DOMAIN
 ```
 
 - `devopsy.role=<name>`: only one compose project per host holds it; a
@@ -1807,7 +1807,7 @@ lists them with their contracts):
   devopsy sets those not set yet, at the lowest precedence, and `--env`
   shows them. For values a project derives from others, like the site
   templates' hosts and Traefik rule from `COMPOSE_PROJECT_NAME`, the
-  imported `DEVOPSY_WILDCARD_DOMAIN` and their own `DEVOPSY_DOMAINS`. It
+  imported `PROXY_BASE_DOMAIN` and their own `PROXY_DOMAINS`. It
   runs every time, so keep it fast; a devopsy it calls skips it. A failure
   stops the command.
 - **shell:** `open [service] [exec options...] [-- command...]` replaces
