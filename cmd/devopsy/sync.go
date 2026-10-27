@@ -1098,7 +1098,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// an export (PushScript holds the release lock, shared, so no take's
 	// stopped pass runs): the push's restore removes the record whole, its
 	// snapshot lines with it (review of 2026-10-25, round 3).
-	if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+	if err := settleStops(cwd, filepath.Dir(cwd)); err != nil {
 		return finish(fail(err.Error()), false)
 	}
 	if err := runDataHook(ctx, cwd, projectDir, env, nil, nil, nil, "prepare", "parent"); err != nil {
@@ -2118,7 +2118,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 	settle := func() int {
 		// What a take killed outright left stopped starts again first,
 		// unless the environment is marked.
-		if err := settleSnapshots(cwd, base); err != nil {
+		if err := settleStops(cwd, base); err != nil {
 			return fail(err.Error())
 		}
 		started, taken := filepath.Join(base, remote.SyncStartedFile), filepath.Join(base, remote.SyncTakenFile)
@@ -2706,12 +2706,13 @@ const syncFirst = "first"
 // all: syncFirst), the services it stopped ("stop <name>" lines), those
 // of them a sync stopped itself, by its id ("own <sync id> <name>": what
 // a sync that writes nothing starts again; the rest is an earlier sync's
-// or import's, kept down), an import's hook while it runs ("writer
+// or import's, kept down under a mark, else started by the next settle:
+// settleStops), an import's hook while it runs ("writer
 // <process group>", then " down" when its service was not running
 // before the import: writerDown), and what a snapshot's stopped pass
 // stopped ("snapshot <id> <name>": started again by its own end, or, a
 // take killed outright, by the next settle unless the environment is
-// marked: settleSnapshots).
+// marked: settleStops).
 type syncRecord struct {
 	first      bool
 	stops      []string

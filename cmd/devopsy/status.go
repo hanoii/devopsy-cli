@@ -119,7 +119,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	header, rest, _ := strings.Cut(out.String(), "\n---\n")
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
-	kept, synced, partial := "", "", ""
+	kept, synced, partial, left := "", "", "", ""
 	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
@@ -156,6 +156,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			} else if mark.Why != "" {
 				partial = mark.Why + " (since " + mark.Since + " UTC, from @" + mark.From + ")"
 			}
+		case "left":
+			left = strings.TrimSpace(value)
 		case "syncing":
 			syncing = true
 		case "importing":
@@ -234,6 +236,8 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
 		}
 		fmt.Println(st.bad("data        from a sync that did not complete: " + partial + ": nothing runs on it until one does: " + fix))
+	case left != "":
+		fmt.Println(st.bad("data        an operation cut off left " + left + " stopped: the next release, sync, import or snapshot here starts them"))
 	}
 	fmt.Print(rest)
 	return 0

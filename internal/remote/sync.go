@@ -257,6 +257,25 @@ fi
 `
 }
 
+// killedSays is shell after a devopsy on the server ended with the
+// status in $<status>: killed by a signal (above 128: SIGKILL, the OOM
+// killer), it said nothing of how it left the environment, so this
+// says: a mark (its first write done) with the ways out, else, with
+// nothing (non-empty), what it stopped started again (settleLeftover)
+// and nothing written. A failure of its own said so itself.
+func killedSays(t *Target, projectName, status, nothing string) string {
+	killed := "its devopsy on the server was killed ($" + status + ")"
+	s := `if [ "$` + status + `" -gt 128 ]; then
+` + markRefusal(t, killed, `"`+report.CmdMark+`devopsy @`+hintAddress(t)+` --sync" `+resetFixLines(t), ":")
+	if nothing != "" {
+		s += `if [ ! -e "$base/` + SyncIncompleteFile + `" ]; then
+` + settleLeftover(projectName) + `  devopsy --say error "` + killed + ` before its first write: ` + nothing + `" || true
+fi
+`
+	}
+	return s + "fi\n"
+}
+
 // IncompleteWhy is shell printing the mark's why and since ($base set),
 // for a message.
 const IncompleteWhy = `$(cut -f4 "$base/` + SyncIncompleteFile + `" 2>/dev/null) (since $(cut -f1 "$base/` + SyncIncompleteFile + `" 2>/dev/null) UTC)`
@@ -827,14 +846,22 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     exit 1
   fi
 fi
-export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + "\n"
+export ` + ImportEndEnv + "=" + Quote(end) + "\n" + acceptLine + devopsyCall(projectName, []string{"--import", service, "--yes"}, false) + ` || {
+  im_status=$?
+  set +e
+  # A devopsy killed outright leaves its spool too, which only the next
+  # import, --resolved or sync would remove.
+  rm -f "$base/` + StreamSpoolPrefix + `"` + Quote(service) + `.*
+` + killedSays(t, projectName, "im_status", "nothing imported") + `  exit "$im_status"
+}
+`
 }
 
 // settleLeftover settles a sync's holder killed outright: its record's
 // writers end first, and its data becomes a sync's mark (replacing an
 // import's), which the checks after it see. Under the release lock.
 func settleLeftover(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + ` || true
 fi
 `

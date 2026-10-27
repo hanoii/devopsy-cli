@@ -133,7 +133,14 @@ cd "$base/current"
 	s += `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 id=$(devopsy ` + ReleaseIDFlag + ` "$snaps")
 devopsy --say info "taking snapshot $id of ${cur#releases/}"
-` + step("stopped", `"$id"`, `"$base/$cur"`) + `
+` + strings.Replace(step("stopped", `"$id"`, `"$base/$cur"`), `[ "$sb" = 0 ] || exit "$sb"`, `if [ "$sb" -gt 128 ]; then
+  # Killed outright (SIGKILL, the OOM killer): what it stopped starts
+  # again now, under the locks it held, rather than at the next settle.
+  set +e
+  `+strings.TrimSpace(strings.ReplaceAll(settleSync(projectName), "\n", "\n  "))+`
+  devopsy --say error "the stopped pass of snapshot $id was killed on the server ($sb): its services started again, and the next snapshot here finishes or removes it" || true
+fi
+[ "$sb" = 0 ] || exit "$sb"`, 1) + `
 # Past the stopped pass the snapshot is consistent in the mirror: it
 # finishes on its own, whatever happens to the session.
 trap '' INT TERM HUP
@@ -160,6 +167,11 @@ func snapshotEnv(t *Target, keep int) string {
 // before, in the same session), whose stopped services its data step keeps
 // down and owns from its mark.
 const RestoreSnapshotEnv = "DEVOPSY_INTERNAL_RESTORE_SNAPSHOT"
+
+// ReleaseStopsEnv is set in an activation once release-record live made
+// its release snapshot's lines stop lines: a settle inside it (the sync
+// of a release that syncs) leaves those down, for its run step to start.
+const ReleaseStopsEnv = "DEVOPSY_INTERNAL_RELEASE_STOPS"
 
 // SnapshotReleaseKeepEnv is how many release snapshots a pruning keeps
 // (KeepAll: every one whose release is kept), sent by the operator from
@@ -249,7 +261,7 @@ case $rs in
   *) exit 1 ;;
 esac
 rd_unsnap() {
-  if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+  if grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
     (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
   fi
 }
@@ -283,7 +295,11 @@ trap '' INT TERM HUP PIPE
 # current release's server log, which the session follows.
 out="$base/$cur/` + ServerLogFile + `"
 ` + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
-` + step("restore-data", `"$snap"`, `"$base/$cur"`, "no-code") + ` || { ` + unsnap + `exit 1; }
+` + step("restore-data", `"$snap"`, `"$base/$cur"`, "no-code") + ` || {
+  rd_status=$?
+  set +e
+` + killedSays(t, projectName, "rd_status", "nothing restored") + `  ` + unsnap + `exit 1
+}
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?

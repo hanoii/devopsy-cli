@@ -664,7 +664,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 	}
 	ctx, stopSig := interruptible()
 	defer stopSig()
-	if err := settleSnapshots(cwd, p.base); err != nil {
+	if err := settleStops(cwd, p.base); err != nil {
 		return fail(err.Error())
 	}
 	d, err := readSnapshotData(ctx, cwd)
@@ -1465,13 +1465,22 @@ func releaseSnapshots(p snapshotPaths) []releaseSnapshot {
 	return rs
 }
 
-// settleSnapshots starts what a take killed outright left stopped (the
-// record's snapshot lines), unless the environment is marked: a mark
-// keeps its set down. Every stop under the release lock runs it first,
-// so a snapshot line it finds is a leftover by construction.
-func settleSnapshots(cwd, base string) error {
+// settleStops starts what an operation killed outright left stopped,
+// unless the environment is marked (a mark keeps its set down): a take's
+// snapshot lines, and the stop lines a push, an import before its mark
+// or a release past its switch left (a release snapshot's, which
+// release-record live made stop lines). Every caller holds the release
+// lock (a push and an export shared, with the sync lock) and runs it
+// before it stops anything, so such a line is a leftover by
+// construction, but for the release's own stop lines inside its
+// activation (remote.ReleaseStopsEnv: the sync of a release that syncs
+// settles past its switch). A start of stop lines that fails only warns
+// and keeps them (a start gate refusing a link would fail every release
+// that could remove it); a take's lines fail it as before.
+func settleStops(cwd, base string) error {
 	rec, ok := readSyncRecord(cwd)
-	if !ok || len(rec.snaps) == 0 {
+	stops := len(rec.stops) > 0 && len(rec.writers) == 0 && os.Getenv(remote.ReleaseStopsEnv) == ""
+	if !ok || (len(rec.snaps) == 0 && !stops) {
 		return nil
 	}
 	if readMark(base) != nil {
@@ -1490,19 +1499,38 @@ func settleSnapshots(cwd, base string) error {
 	}
 	if start := intersect(rec.snaps, names); len(start) > 0 {
 		report.Info("starting what snapshot " + rec.snapID + ", cut off, left stopped: " + strings.Join(start, " "))
-		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
-			return fmt.Errorf("docker compose start: %w", err)
-		}
-		if err := waitHealthy(cwd, start); err != nil {
+		if err := startStops(cwd, start); err != nil {
 			return err
 		}
 	}
 	rec, _ = readSyncRecord(cwd)
 	rec.snaps, rec.snapID = nil, ""
+	if stops {
+		start := intersect(rec.stops, names)
+		if len(start) > 0 {
+			report.Info("starting what an operation cut off left stopped: " + strings.Join(start, " "))
+		}
+		if err := startStops(cwd, start); err != nil {
+			report.Warn(err.Error(), "they stay down, recorded, for the next release, sync, import or snapshot here to start")
+		} else {
+			rec.stops, rec.own, rec.ownID = nil, nil, ""
+		}
+	}
 	if !rec.first && len(rec.stops) == 0 && len(rec.own) == 0 && len(rec.writers) == 0 {
-		return os.Remove(filepath.Join(filepath.Dir(cwd), syncState))
+		return removeIfThere(filepath.Join(filepath.Dir(cwd), syncState))
 	}
 	return rec.write(cwd)
+}
+
+// startStops starts names and waits until they are healthy.
+func startStops(cwd string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	if err := compose(cwd, errOut, append([]string{"start"}, names...)...); err != nil {
+		return fmt.Errorf("docker compose start: %w", err)
+	}
+	return waitHealthy(cwd, names)
 }
 
 // runSnapshots implements devopsy @<target> --snapshots [remove
@@ -2338,7 +2366,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// script's hook, which starts it again.
 	own := os.Getenv(remote.RestoreSnapshotEnv)
 	if rec, ok := readSyncRecord(cwd); own == "" || !ok || rec.snapID != own {
-		if err := settleSnapshots(cwd, p.base); err != nil {
+		if err := settleStops(cwd, p.base); err != nil {
 			return fail(err.Error())
 		}
 	}

@@ -331,6 +331,9 @@ case "$*" in
     rm -rf "$sd/.mirror" ;;
   "run --rm --name devopsy-snapshot-"*"-tar "*)
     [ -z "${FAIL_SNAPSHOT_TAR:-}" ] || exit "$FAIL_SNAPSHOT_TAR"
+    # FAKE_KILL_SNAPSHOT_TAR: the devopsy writing the tars killed
+    # outright (SIGKILL, the OOM killer).
+    [ -z "${FAKE_KILL_SNAPSHOT_TAR:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # FAKE_SLOW_TAR: a tar that takes until $FAKE_SLOW_TAR.go exists.
     if [ -n "${FAKE_SLOW_TAR:-}" ]; then : >"$FAKE_SLOW_TAR"; n=0; while [ ! -e "$FAKE_SLOW_TAR.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done; fi
     # From the mirror (-v <mirror>:/m:ro), or a take without one from the

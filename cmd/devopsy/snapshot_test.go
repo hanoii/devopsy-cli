@@ -1984,7 +1984,10 @@ func (s *syncSetup) childSnapshotted() {
 // leaves the child partial, its services down until a sync completes,
 // and the record must keep saying so: the next sync's finish go starts
 // what the record names before its hook, and nothing started them here
-// (the restart of the release before skips a marked environment).
+// (the restart of the release before skips a marked environment), the
+// sync's own settle included, which takes stop lines for leftovers but
+// in their release's activation (remote.ReleaseStopsEnv): it started
+// them under the new code on the old data, before the copy.
 func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -2000,6 +2003,11 @@ func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	down := readString(s.log + ".stopped.shop-dev")
 	if code == 0 || !strings.Contains(docker, "shop-dev compose -f "+filepath.Join(dev, "current", ".devopsy", "compose.yaml")+" stop db app") || !strings.Contains(out, "db app stay down: the data is partial until a sync completes") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || !strings.Contains(down, "db\n") || !strings.Contains(down, "app\n") {
 		t.Fatalf("a release that syncs, its copy cut after the release snapshot (%d), down: %q:\n%s\n%s", code, down, out, docker)
+	}
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.Contains(line, "shop-dev compose ") && strings.Contains(line, " start ") {
+			t.Errorf("the release's stopped services started before its copy: %s\n%s", line, out)
+		}
 	}
 	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") {
 		t.Errorf("db and app stay down on the partial copy, and the record no longer says so (nothing would start them before the next sync's finish hook):\n%q", rec)
@@ -3260,12 +3268,31 @@ func TestTakeStartsLeftoverStops(t *testing.T) {
 			record := filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services")
 			write(t, record, rec, 0o644)
 			write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+			if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off left db app stopped") {
+				t.Errorf("--status over %s named nothing left stopped:\n%s", name, out)
+			}
 			out, code := s.run(nil, "@prod", "--snapshot")
 			stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
 			if code != 0 || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(readString(record), "stop ") {
 				t.Errorf("a take over %s (%d) left %v stopped, record %q:\n%s", name, code, stopped, readString(record), out)
 			}
 		})
+	}
+}
+
+// A take's stopped pass killed outright on the server (SIGKILL, the OOM
+// killer) starts what it stopped at once, under the locks the take still
+// holds, and says so: found by hand (2026-10-27), the site stayed down
+// until the next lock-taker, with only the shell's "Killed".
+func TestTakeKilledStartsItsSet(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run([]string{"FAKE_KILL_SNAPSHOT_TAR=1"}, "@prod", "--snapshot")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	record := readString(filepath.Join(s.root, "shop", "prod", ".devopsy-sync.services"))
+	if code == 0 || !strings.Contains(out, "was killed on the server") || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") || strings.Contains(record, "snapshot ") {
+		t.Errorf("a take killed in its stopped pass (%d) left %v stopped, record %q:\n%s", code, stopped, record, out)
 	}
 }
 
@@ -3290,6 +3317,10 @@ func TestKilledDataStepSaysMark(t *testing.T) {
 			var errs string
 			if len(args) > 0 && args[0] == "--import" {
 				_, errs, _ = s.runIO([]string{"FAKE_KILL_IMPORT=1"}, tarOf(t, map[string]string{"storage/f": "x\n"}), "@prod", "--import", "app", "--yes")
+				// Its spool, a whole dump, goes with it.
+				if spools, _ := filepath.Glob(filepath.Join(base, remote.StreamSpoolPrefix+"*")); len(spools) > 0 {
+					t.Errorf("the killed import left its spool: %v", spools)
+				}
 			} else {
 				out, code := s.run(nil, "@prod", "--snapshot")
 				m := snapshotID.FindStringSubmatch(out)

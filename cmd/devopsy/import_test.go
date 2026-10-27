@@ -207,7 +207,7 @@ func TestImportMarkOnTarget(t *testing.T) {
 // or a stop that fails restores the set, the session closed before the
 // byte the first write waits for imports nothing, and none of them leaves
 // a mark. A devopsy killed between the stop and that byte leaves the
-// record, so the next import restores what it stopped.
+// record, which its script, the lock still held, restores at once.
 func TestImportBeforeFirstWrite(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
@@ -236,8 +236,9 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	}
 	s.logs()
 
-	// Killed between the stop and the byte (here, its stream's up): the
-	// record names what it stopped, no mark; the next import restores it.
+	// Killed between the stop and the byte (here, its stream's up): no
+	// mark, and its script, still holding the lock, starts what the
+	// record names it stopped, and says so.
 	up := filepath.Join(s.tmp, "up")
 	cmd, errs := s.start([]string{"FAKE_UP_WAIT=" + up}, []byte("rows\n"), "@prod", "--import", "db", "--yes")
 	waitFile(t, up, "the import's up", startWait, errs.String)
@@ -248,7 +249,7 @@ func TestImportBeforeFirstWrite(t *testing.T) {
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	write(t, up+".go", "", 0o644)
 	_ = cmd.Wait()
-	if s.mark() != nil || s.record() != "stop app\n" || !slices.Contains(s.stopped(), "app") {
+	if s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") || !strings.Contains(errs.String(), "killed (137) before its first write: nothing imported") {
 		t.Fatalf("killed before the byte: mark %+v, record %q, stopped %v:\n%s", s.mark(), s.record(), s.stopped(), errs)
 	}
 	if _, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes"); code != 0 || fileExists(filepath.Join(s.base, syncState)) || slices.Contains(s.stopped(), "app") {

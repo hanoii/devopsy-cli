@@ -1047,9 +1047,11 @@ fi
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
 		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
-if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel"); then
+rd_status=0
+(cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
+if [ "$rd_status" != 0 ]; then
   set +e
-  if image_lock shared undoing; then
+` + killedSays(t, projectName, "rd_status", "") + `  if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
     image_unlock
   fi
@@ -1066,6 +1068,7 @@ exec 7<&-
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
+` + `[ -z "${rs_id:-}" ] || export ` + ReleaseStopsEnv + `=1
 `
 	}
 	s += `devopsy --say info "current is now $id" || true
@@ -1511,7 +1514,7 @@ if [ -n "$prev" ]; then
     : >"$base/` + SnapshotHoldingFile + `"
     (umask 077; : >>"$rel/` + ServerLogFile + `") || not_live 1
     not_live_hook() {
-      if grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+      if grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
         (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
       fi
     }
@@ -1571,7 +1574,7 @@ func releaseSnapshotStopped(projectName string, restore bool) string {
 // stopped services start), under the release lock, in the current
 // release, before anything reads the mark.
 func settleSync(projectName string) string {
-	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q '^snapshot ' "$base/` + SyncStateFile + `" 2>/dev/null; then
+	return `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ] || grep -q -e '^snapshot ' -e '^stop ' "$base/` + SyncStateFile + `" 2>/dev/null; then
   (cd "$base/current" && ` + devopsyCall(projectName, []string{"--sync-services", "settle"}, false) + `) || true
 fi
 `

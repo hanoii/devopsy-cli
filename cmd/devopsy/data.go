@@ -88,8 +88,8 @@ func stopSet(cwd string, set []cli.Stopped, record bool) (stopped []string, rest
 
 // stopSetFor is stopSet, recording each as a snapshot's line (snapshot
 // <id> <name>) with snapshot: what a take killed outright leaves for the
-// next settle to start (settleSnapshots), where a stop line would be kept
-// down.
+// next settle to start (settleStops), inside a release's activation too,
+// which keeps its own stop lines down.
 func stopSetFor(cwd string, set []cli.Stopped, record bool, snapshot string) (stopped []string, restore func() error, err error) {
 	restore = func() error { return nil }
 	if len(set) == 0 {
@@ -267,7 +267,7 @@ func runExport(cwd string, args []string, color bool) int {
 	// On a target, what a snapshot's take killed outright left stopped
 	// starts again first (ExportScript holds the release lock).
 	if cli.InRelease(projectDir) {
-		if err := settleSnapshots(cwd, filepath.Dir(cwd)); err != nil {
+		if err := settleStops(cwd, filepath.Dir(cwd)); err != nil {
 			return fail(err.Error())
 		}
 	}

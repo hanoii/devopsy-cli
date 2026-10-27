@@ -1495,7 +1495,13 @@ before deciding is decided, as not completed, by whatever takes its lock
 next: a sync, a release or a rollback; the last two then refuse (a release
 that syncs is a sync). Restoring means what the sync stopped
 (`<environment>/.devopsy-sync.services` meanwhile): a service that was
-down before it, stopped for maintenance, stays down. Only what the
+down before it, stopped for maintenance, stays down. A side whose devopsy
+on the server is killed outright (the OOM killer, `kill -9`) restores
+nothing itself: what it stopped stays down until the next release, sync,
+import, export or snapshot of that environment starts it first (one not
+marked: on a mark it stays down until the mark goes), and `--status`
+names it meanwhile; so does what a release killed between its switch and
+its run step left stopped for its release snapshot. Only what the
 child's side stopped is kept off partial data: a service left running
 during the copy (a `volumes` one labeled `never`, a `custom` one imported
 into while running) sees it change, as it chose.
@@ -1538,9 +1544,13 @@ and hard links come back as files of their own. Plain
 service that holds visitors, like drupal11's `alwaysup`, answers
 meanwhile). Before the services start again, a Ctrl-C or a session gone
 cancels it and starts them; past that it finishes on its own (`--log`
-shows how). A take killed outright leaves what it stopped for the next
-release, rollback, take, restore, import, export or sync of the
-environment, which starts it first. Refused, nothing
+shows how). A take whose devopsy on the server is killed outright starts
+what it stopped again at once and says so; one whose whole session went
+(a reboot) leaves it for the next release, rollback, take, restore,
+import, export or sync of the environment, which starts it first, and
+`--status` names it meanwhile. An import or a restore killed that way
+after its first write says so too, with the mark it left and the ways
+out. Refused, nothing
 stopped: an environment a sync, an import or a restore left incomplete
 (a snapshot of it would restore as complete), nothing with data, a
 service with data writing a bind from outside the project, one with
