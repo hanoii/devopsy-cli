@@ -1472,14 +1472,20 @@ func releaseSnapshots(p snapshotPaths) []releaseSnapshot {
 // release-record live made stop lines). Every caller holds the release
 // lock (a push and an export shared, with the sync lock) and runs it
 // before it stops anything, so such a line is a leftover by
-// construction, but for the release's own stop lines inside its
+// construction, but for a killed sync holder's (its files are there:
+// they become its mark) and the release's own stop lines inside its
 // activation (remote.ReleaseStopsEnv: the sync of a release that syncs
 // settles past its switch). A start of stop lines that fails only warns
 // and keeps them (a start gate refusing a link would fail every release
 // that could remove it); a take's lines fail it as before.
 func settleStops(cwd, base string) error {
 	rec, ok := readSyncRecord(cwd)
-	stops := len(rec.stops) > 0 && len(rec.writers) == 0 && os.Getenv(remote.ReleaseStopsEnv) == ""
+	// A sync's claimed or taken record means its holder was killed while
+	// the copy wrote: its stop lines keep the services off a copy that may
+	// be half the parent's, and the settle after this marks it (review
+	// round 6: started here first, the database ran on it before the mark).
+	syncing := fileExists(filepath.Join(base, remote.SyncStartedFile)) || fileExists(filepath.Join(base, remote.SyncTakenFile))
+	stops := len(rec.stops) > 0 && len(rec.writers) == 0 && !syncing && os.Getenv(remote.ReleaseStopsEnv) == ""
 	if !ok || (len(rec.snaps) == 0 && !stops) {
 		return nil
 	}

@@ -1713,8 +1713,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   `snapshot` lines do (Snapshots), only those the current release has,
   their `own` lines going with them. Every settle's caller holds the
   release lock (a push and an export shared, with the sync lock) and
-  runs it before it stops anything, so such a line is a leftover, but in
-  the activation that made them (`ReleaseStopsEnv`, exported past
+  runs it before it stops anything, so such a line is a leftover, but a
+  killed sync holder's (its claimed or taken record there: the settle
+  after makes it its mark; round 6, started first, the database ran on
+  a half copy) and in the activation that made them (`ReleaseStopsEnv`, exported past
   `release-record live`: the sync of a release that syncs settles there,
   and started them under the new code on the old data before its copy).
   A mark keeps them down. A start that fails only warns and keeps them
