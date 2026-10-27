@@ -389,6 +389,9 @@ case "$*" in
     find "$dst" -mindepth 1 -delete ;;
   "run --rm --name devopsy-export-"*)
     [ -z "${FAIL_TAR:-}" ] || exit "$FAIL_TAR"
+    # FAKE_KILL_EXPORT: the devopsy exporting killed outright (SIGKILL,
+    # the OOM killer) as its tar runs.
+    [ -z "${FAKE_KILL_EXPORT:-}" ] || { kill -KILL "$PPID"; exit 137; }
     # Each entry (--mount type=bind,source=<path>,target=/x/<entry>) and
     # volume (-v <name>:/x/<key>:ro) copied into a directory of its own,
     # where the script that follows the image runs, /x being it.

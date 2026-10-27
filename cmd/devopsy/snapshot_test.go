@@ -3280,6 +3280,30 @@ func TestTakeStartsLeftoverStops(t *testing.T) {
 	}
 }
 
+// An --export killed outright on the server (SIGKILL, the OOM killer)
+// while its tar runs leaves what it stopped down, as a push killed there
+// does: its stops must be recorded, so --status names them and the next
+// lock-taker starts them. Found by hand (2026-10-27): prod's database
+// and app stayed down, with no record, through a take, --status silent,
+// and the operator saw only ssh's 255; only a release brought them back.
+func TestExportKilledLeavesItsStops(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	_, errs, _ := s.runIO([]string{"FAKE_KILL_EXPORT=1"}, nil, "@prod", "--export", "db")
+	stopped := strings.Fields(readString(s.log + ".stopped.shop-prod"))
+	if !slices.Contains(stopped, "db") {
+		t.Fatalf("the killed export left nothing stopped (%v), the fake did not kill it:\n%s", stopped, errs)
+	}
+	if out, _ := s.run(nil, "@prod", "--status"); !strings.Contains(out, "an operation cut off left") {
+		t.Errorf("--status after an export killed outright named nothing left stopped (%v):\n%s", stopped, out)
+	}
+	out, code := s.run(nil, "@prod", "--snapshot")
+	if stopped := strings.Fields(readString(s.log + ".stopped.shop-prod")); code != 0 || slices.Contains(stopped, "db") || slices.Contains(stopped, "app") {
+		t.Errorf("a take after an export killed outright (%d) left %v stopped:\n%s", code, stopped, out)
+	}
+}
+
 // A take's stopped pass killed outright on the server (SIGKILL, the OOM
 // killer) starts what it stopped at once, under the locks the take still
 // holds, and says so: found by hand (2026-10-27), the site stayed down
