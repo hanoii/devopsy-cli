@@ -1225,7 +1225,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 				code = fail("interrupted: nothing copied")
 				return
 			}
-			if err := syncRsync(ctx, from, parentMnt, childOwners(child), last); err != nil {
+			if err := syncRsync(ctx, from, parentMnt, childOwners(child), childShares(child), last); err != nil {
 				code = fail(err.Error())
 			}
 		}
@@ -1632,6 +1632,28 @@ type childService struct {
 	Name, Copy, Stop, State string
 	Dirs, Volumes           []string
 	Owners                  map[string]string
+	// Reflink is its cli.DataCopyReflinkLabel.
+	Reflink bool
+}
+
+// listReflink is the list's seventh field for a service labeled
+// cli.DataCopyReflinkLabel=true, empty otherwise.
+const listReflink = "reflink"
+
+// childShares are the entries and volumes (by key: no entry is named
+// like one) the child's labels share with the parent by reflinks (its
+// list's seventh field).
+func childShares(child []childService) map[string]bool {
+	shares := map[string]bool{}
+	for _, c := range child {
+		if !c.Reflink {
+			continue
+		}
+		for _, d := range append(slices.Clone(c.Dirs), c.Volumes...) {
+			shares[d] = true
+		}
+	}
+	return shares
 }
 
 // childOwners are the owners of the child's entries, from its list: what
@@ -1710,8 +1732,8 @@ func childUtilImage(ctx context.Context) error {
 }
 
 // parseChildServices reads --sync-services list: per service its name,
-// label (<copy>+<stop word>), state, entries, owners (listOwners) and
-// volumes,
+// label (<copy>+<stop word>), state, entries, owners (listOwners),
+// volumes and listReflink,
 // the import mark's line (listMark), whose service it returns, and a
 // restore mark's (listRestore), its services with their entries and
 // volumes.
@@ -1742,6 +1764,9 @@ func parseChildServices(out string) (services []childService, mark string, resto
 		}
 		if len(f) > 5 {
 			c.Volumes = strings.Fields(f[5])
+		}
+		if len(f) > 6 {
+			c.Reflink = f[6] == listReflink
 		}
 		services = append(services, c)
 	}
@@ -1900,6 +1925,28 @@ func rsyncRun(ctx context.Context, name string, args []string, what string) erro
 	return nil
 }
 
+// shareInto clones src (the parent's entry, or its volume's name or
+// clone) into dst (the child's entry, or its volume's name) by reflinks,
+// as root in the util image: dst emptied first, never removed (a
+// container bind-mounts it), then cp -a --reflink=always, so the child
+// shares the parent's blocks until either side writes. What labels it
+// (cli.DataCopyReflinkLabel) asks for no more than that: where the
+// filesystem clones nothing (another one, a filesystem without
+// reflinks), false, said, and the caller rsyncs it, which replaces
+// whatever the clone left.
+func shareInto(ctx context.Context, name, src, dst, what string) bool {
+	err := dockerRun(ctx, name, "--network", "none", "-v", src+":/s:ro", "-v", dst+":/d", remote.UtilImage, "sh", "-c",
+		`set -e; find /d -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -a --reflink=always /s/. /d/`)
+	if err != nil {
+		if ctx.Err() == nil {
+			report.Info(what + ": no reflinks between the parent's and the child's (" + cli.DataCopyReflinkLabel + "): copied")
+		}
+		return false
+	}
+	report.Info(what + " shared with the parent by reflinks (" + cli.DataCopyReflinkLabel + ")")
+	return true
+}
+
 // rsyncdConf serves the entries of mnt and the named volumes being
 // copied, each as a module of its name (the volumes mounted at
 // /vol/<key>), read-only, as root, so every owner's files are read;
@@ -1988,7 +2035,7 @@ func (d dataSet) in(dir string) dataSet {
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[string]string, last bool) error {
+func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[string]string, shares map[string]bool, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -2027,8 +2074,18 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 				return err
 			}
 		}
+		id := os.Getenv(remote.SyncIDEnv)
+		shared := map[string]string{}
 		for i, d := range present {
-			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
+			if shares[d] && !slices.Contains(files, d) {
+				if shareInto(ctx, fmt.Sprintf("%s%s-share-%d", remote.SyncContainerPrefix, id, i), filepath.Join(src.mnt, d), filepath.Join(childMnt, d), "mnt/"+d) {
+					if o := owners[d]; o != "" {
+						shared[d] = o
+					}
+					continue
+				}
+			}
+			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, id, i)
 			var opts []string
 			if o := owners[d]; o != "" {
 				opts = append(opts, "--chown="+o)
@@ -2038,10 +2095,18 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 			}
 		}
 		for i, v := range volumes {
-			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, os.Getenv(remote.SyncIDEnv), i)
+			if shares[v.Key] && shareInto(ctx, fmt.Sprintf("%s%s-share-v%d", remote.SyncContainerPrefix, id, i), v.Name, toProject+"_"+v.Key, "the volume "+v.Key) {
+				continue
+			}
+			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, id, i)
 			if err := rsyncVolume(ctx, name, v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
 				return err
 			}
+		}
+		// A clone keeps the parent's owners: the child's own, as the
+		// rsync's --chown gives them.
+		if err := ownMnt(ctx, childMnt, shared, remote.SyncContainerPrefix+id+"-owners"); err != nil {
+			return err
 		}
 		if last {
 			return recordWrite(toBase, remote.CheckedDoneLine(os.Getenv(remote.SyncIDEnv)))
@@ -2279,7 +2344,11 @@ func runSyncServices(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		for _, s := range services {
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "))
+			reflink := ""
+			if s.Reflink {
+				reflink = listReflink
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, syncListLabel(s), cmp.Or(states[s.Name], "none"), strings.Join(s.Dirs, " "), listOwners(s), strings.Join(cli.VolumeKeys(s.Volumes), " "), reflink)
 		}
 		if m := readMark(base); m.IsImport() {
 			fmt.Printf("%s\t%s\n", listMark, m.From)

@@ -28,6 +28,15 @@ const DataLabel = "devopsy.data"
 // project can flip DataLabel through a variable and keep it.
 const DataCopyLabel = "devopsy.data.copy"
 
+// DataCopyReflinkLabel, true, says a child on the same server shares the
+// parent's blocks of the service's volumes copy, cloned by reflinks where
+// the filesystem has them, rather than written again: for mostly static
+// files (uploads), never a database writing its pages in place (the
+// parent's files fragment as it writes over blocks a child shares). Read
+// on the child's side; ignored without data or with another copy, as
+// DataExcludeLabel is.
+const DataCopyReflinkLabel = DataCopyLabel + ".reflink"
+
 // DataStopLabel says when devopsy stops the service while data moves:
 // StopNever (the default), StopOwn, StopImport or StopAlways (DataStops).
 const DataStopLabel = "devopsy.data.stop"
@@ -156,8 +165,11 @@ type SyncService struct {
 	StopLabeled    bool
 	Dirs, Excluded []string
 	HasData        bool
-	DependsOn      []string
-	Restart        string
+	// Reflink is its DataCopyReflinkLabel: a child on the same server
+	// clones its entries and volumes from the parent's by reflinks.
+	Reflink   bool
+	DependsOn []string
+	Restart   string
 	// Profiles are the service's compose profiles: none means always on.
 	Profiles []string
 	// Owner is its MntOwnerLabel, <uid>:<gid>, "" without one; Writable
@@ -364,6 +376,16 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			}
 		} else if cs.HasData {
 			cs.Copy = CopyVolumes
+		}
+		if v, ok := s.Labels[DataCopyReflinkLabel]; ok && cs.HasData && cs.Copy == CopyVolumes {
+			switch v {
+			case "true", "false":
+				cs.Reflink = v == "true"
+			case "":
+				return nil, fmt.Errorf("service %s: %s is empty: true or false (a variable left unset?)", name, DataCopyReflinkLabel)
+			default:
+				return nil, fmt.Errorf("service %s: %s=%s: true or false", name, DataCopyReflinkLabel, v)
+			}
 		}
 		if v, ok := s.Labels[DataStopLabel]; ok {
 			switch v {

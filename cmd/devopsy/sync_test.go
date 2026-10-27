@@ -113,6 +113,10 @@ dblab=$(lab "${FAKE_DB:-mnt+own}")
 if [ -n "${FAKE_APP_OWNER:-}" ]; then
   case $applab in '{}') applab="{\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; *) applab="${applab%\}},\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; esac
 fi
+# FAKE_APP_REFLINK: app's devopsy.data.copy.reflink.
+if [ -n "${FAKE_APP_REFLINK:-}" ]; then
+  case $applab in '{}') applab="{\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; *) applab="${applab%\}},\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; esac
+fi
 app2=
 [ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
 # FAKE_DB_VOLUME: a named volume db mounts, by key, the environment's own
@@ -381,6 +385,13 @@ case "$*" in
     ftar "$m/$tdir" "$tentry" ;;
   "run --rm --network none "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
+  # A clone into the child's entry or volume (-v <src>:/s:ro, -v <dst>:/d,
+  # each a path or a volume's name), emptied first: only with
+  # FAKE_REFLINK, as reflinks between them.
+  "run --rm --name devopsy-sync-"*"-share-"*)
+    [ -n "${FAKE_REFLINK:-}" ] || exit 1
+    for a; do case $a in /*:/s:ro) sh_src=${a%:/s:ro} ;; *:/s:ro) sh_src="$vols/${a%:/s:ro}" ;; /*:/d) sh_dst=${a%:/d} ;; *:/d) sh_dst="$vols/${a%:/d}" ;; esac; done
+    mkdir -p "$sh_dst" && find "$sh_dst" -mindepth 1 -maxdepth 1 -exec rm -rf {} + && cp -Rp "$sh_src/." "$sh_dst/" ;;
   "run --rm --name devopsy-sync-"*|"run --rm --name devopsy-snapshot-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
@@ -996,6 +1007,65 @@ func TestSyncReflinkClone(t *testing.T) {
 	}
 	if docker, _ := s.logs(); !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") {
 		t.Errorf("--destroy did not remove the clone as root:\n%s", docker)
+	}
+}
+
+// A child's service labeled devopsy.data.copy.reflink=true gets its
+// entries cloned from the parent's by reflinks on the same server: the
+// child's entry emptied, never removed, then cloned, its owner given;
+// the rest rsynced. Where nothing clones, and across servers, rsync. A
+// reset wipes, then clones.
+func TestSyncReflinkShare(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, s.log+".shop-dev", "FAKE_APP_REFLINK=true\nFAKE_APP_OWNER=10001:10001\n", 0o644)
+	reflink := []string{"FAKE_REFLINK=1"}
+	stale := filepath.Join(s.mnt("dev"), "storage", "stale.txt")
+
+	write(t, stale, "dev's own\n", 0o644)
+	out, code := s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "mnt/storage shared with the parent by reflinks (devopsy.data.copy.reflink)") || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || fileExists(stale) {
+		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
+	}
+	// db rsynced, storage cloned, then given to its owner; never rsynced.
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-[0-9.a-f]+-share-1 --network none -v [^ ]*:/s:ro -v `+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`:/d devopsy-util:3`).MatchString(docker) {
+		t.Errorf("shared docker:\n%s", docker)
+	}
+	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
+		t.Errorf("the owner not given after the clone:\n%s", docker)
+	}
+
+	// No reflinks between them: rsync, said (its --delete removes what the
+	// child has of its own; the fake's copy does not).
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "mnt/storage: no reflinks between the parent's and the child's (devopsy.data.copy.reflink): copied") || !strings.Contains(docker, "--chown=10001:10001 /src/storage/ /dst/storage/") {
+		t.Errorf("no reflinks (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// A reset wipes at the claim, then clones.
+	write(t, stale, "dev's own\n", 0o644)
+	out, code = s.run(reflink, "@dev", "--reset", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || fileExists(stale) {
+		t.Fatalf("reset (%d):\n%s\n%s", code, out, docker)
+	}
+	if i, j := strings.Index(docker, "-wipe "), strings.Index(docker, "-share-1 "); i < 0 || j < i {
+		t.Errorf("reset: the clone not after the wipe:\n%s", docker)
+	}
+
+	// Across servers: rsync.
+	across := append([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}, reflink...)
+	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(docker, "-share-") || !strings.Contains(docker, "rsync://127.0.0.1:") {
+		t.Errorf("across servers (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
@@ -2093,6 +2163,15 @@ func TestChildServicesParse(t *testing.T) {
 	}
 	if m := stopMismatches(parent, got); len(m) != 2 || m[0] != "app is devopsy.data.stop=never on the parent and import on the child, which stops it by its own" || !strings.HasPrefix(m[1], "db is devopsy.data.stop=own on the parent and never") {
 		t.Errorf("stop mismatches: %q", m)
+	}
+	// The seventh field: a service whose entries and volumes the child
+	// shares with the parent by reflinks; a list without it shares none.
+	shared, _, _ := parseChildServices("app\tvolumes+never\trunning\tstorage\t\tuploads\treflink\ndb\tvolumes+own\trunning\tdb\t\t\t\n")
+	if got := childShares(shared); len(got) != 2 || !got["storage"] || !got["uploads"] {
+		t.Errorf("shares: %v", got)
+	}
+	if got := childShares(want); len(got) != 0 {
+		t.Errorf("shares without the field: %v", got)
 	}
 }
 
