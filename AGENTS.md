@@ -1707,11 +1707,16 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   settle** (`settleStops`; review round 5, by hand on OrbStack: a push
   killed outright left prod down through a take, `--status` silent,
   until a child synced): the record's `stop` lines with no mark (a push
-  killed outright on the parent, an import before its mark, a release
-  between its switch and its run step, whose release snapshot's lines
+  killed outright on the parent, an export on a target, which records
+  its stops for it, an import before its mark, a release between its
+  switch and its run step, whose release snapshot's lines
   `release-record live` made `stop` lines) start where a take's
   `snapshot` lines do (Snapshots), only those the current release has,
-  their `own` lines going with them. Every settle's caller holds the
+  their `own` lines going with them; one whose container another image
+  than the current release gives it runs (that release's cut: the
+  release before's containers) is made again (`startStops`,
+  `images.Recreate`; round 6, compose start ran the old code under the
+  new current). Every settle's caller holds the
   release lock (a push and an export shared, with the sync lock) and
   runs it before it stops anything, so such a line is a leftover, but a
   killed sync holder's (its claimed or taken record there: the settle

@@ -1528,13 +1528,32 @@ func settleStops(cwd, base string) error {
 	return rec.write(cwd)
 }
 
-// startStops starts names and waits until they are healthy.
+// startStops starts names and waits until they are healthy. One whose
+// container another image than the current release gives it runs (a
+// release cut between its switch and its run step: its stopped set is
+// the release before's containers) is made again, as startLeftDown and
+// restoreServices do: compose start would run the old code under the
+// new current (review round 6, a reboot mid-release).
 func startStops(cwd string, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	if err := compose(cwd, errOut, append([]string{"start"}, names...)...); err != nil {
-		return fmt.Errorf("docker compose start: %w", err)
+	again := intersect(names, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
+	var start []string
+	for _, s := range names {
+		if !slices.Contains(again, s) {
+			start = append(start, s)
+		}
+	}
+	if len(again) > 0 {
+		if err := compose(cwd, errOut, append([]string{"up", "-d", "--no-deps", "--wait"}, again...)...); err != nil {
+			return fmt.Errorf("docker compose up: %w", err)
+		}
+	}
+	if len(start) > 0 {
+		if err := compose(cwd, errOut, append([]string{"start"}, start...)...); err != nil {
+			return fmt.Errorf("docker compose start: %w", err)
+		}
 	}
 	return waitHealthy(cwd, names)
 }

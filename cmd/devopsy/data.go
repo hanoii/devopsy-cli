@@ -345,7 +345,10 @@ func runExport(cwd string, args []string, color bool) int {
 			return 1
 		}
 	}
-	_, restore, err := stopSet(cwd, set, false)
+	// On a target recorded, as a push's stops are: an export killed
+	// outright leaves them for the next settle to start, --status naming
+	// them meanwhile (review round 6: prod stayed down, unrecorded).
+	_, restore, err := stopSet(cwd, set, cli.InRelease(projectDir))
 	if err != nil {
 		code := fail(err.Error())
 		if err := restore(); err != nil {

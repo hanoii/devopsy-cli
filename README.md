@@ -1500,8 +1500,10 @@ on the server is killed outright (the OOM killer, `kill -9`) restores
 nothing itself: what it stopped stays down until the next release, sync,
 import, export or snapshot of that environment starts it first (one not
 marked: on a mark it stays down until the mark goes), and `--status`
-names it meanwhile; so does what a release killed between its switch and
-its run step left stopped for its release snapshot. Only what the
+names it meanwhile; so does what an `--export` killed that way stopped,
+and what a release killed between its switch and its run step left
+stopped for its release snapshot, which then starts on the images that
+release gives it. Only what the
 child's side stopped is kept off partial data: a service left running
 during the copy (a `volumes` one labeled `never`, a `custom` one imported
 into while running) sees it change, as it chose.
