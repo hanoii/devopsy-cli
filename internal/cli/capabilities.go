@@ -37,7 +37,7 @@ type CapabilityAction struct {
 var Capabilities = []Capability{
 	{
 		Name:     "env",
-		What:     "values a project derives from its environment, like its hosts from COMPOSE_PROJECT_NAME and an imported wildcard domain, computed by the project so devopsy knows none of them",
+		What:     "values a project derives from its environment, like its hosts from COMPOSE_PROJECT_NAME and an imported base domain, computed by the project so devopsy knows none of them",
 		Who:      "projects whose compose files or commands need derived values",
 		CalledBy: "every devopsy command in the project (not help or completion), locally and on servers",
 		Actions: []CapabilityAction{

@@ -2682,7 +2682,7 @@ settled every rule here after nine reviews (2026-10-25).
 Facts shared between projects on a host, through labels on running
 containers (`internal/cli/roles.go`). Governed by "Projects own
 policy": devopsy knows no role or key names (`proxy` and
-`WILDCARD_DOMAIN` are the Traefik template's convention), and its core
+`BASE_DOMAIN` are the Traefik template's convention), and its core
 defines no proxy contract (a `domains` contract in the core was shaped
 by one pairing, the Traefik template and its projects).
 
