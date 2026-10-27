@@ -993,6 +993,33 @@ func TestSyncReflinkClone(t *testing.T) {
 	inOrder("export", docker, "stop db", "-clone ", "start db", "run --rm --name devopsy-export-", "source="+clone+"export.", "-unclone ")
 	noClone("export")
 
+	// Interrupted during the rsync from the clone: the clone goes too.
+	started := filepath.Join(t.TempDir(), "started")
+	cut := exec.Command(binary, "@dev", "--sync", "--yes")
+	cut.Dir, cut.Env, cut.Stdin = s.project, append(append([]string{}, s.env...), append(reflink, "FAKE_SLOW_RSYNC="+started, "FAKE_SSH_DETACH=1")...), strings.NewReader("")
+	if err := cut.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			_ = cut.Process.Kill()
+			t.Fatalf("the copy never started:\n%s", readString(s.log))
+		}
+	}
+	_ = cut.Process.Signal(syscall.SIGTERM)
+	_ = cut.Wait()
+	for start := time.Now(); !strings.Contains(readString(s.log), "-unclone "); time.Sleep(100 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the clone not removed after the interrupt:\n%s", readString(s.log))
+		}
+	}
+	noClone("interrupted")
+	s.logs()
+	// The interrupted copy left the child partial: a sync completes it.
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("the sync after the interrupt (%d):\n%s", code, out)
+	}
+
 	// What a push killed outright left: removed by the next push, then by
 	// --destroy.
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
