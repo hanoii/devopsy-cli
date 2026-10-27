@@ -3084,3 +3084,34 @@ func TestSyncScriptsFitOneArgument(t *testing.T) {
 		t.Errorf("a release that syncs: its script is %d bytes, over the %d one argument takes", n, limit)
 	}
 }
+
+// An activation's mark read back, and what --status says of each kind
+// cut off with what finishes it.
+func TestParseActivating(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{"", "\n", "20261027000000\n", "\trelease\t\t\n"} {
+		if a := ParseActivating(line); a != nil {
+			t.Errorf("%q parses as %+v", line, *a)
+		}
+	}
+	for _, c := range []struct {
+		line      string
+		partial   bool
+		what, fix string
+	}{
+		{"3\trelease\t2\t\n", false, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @app-prod --release releases it again"},
+		{"3\trelease\t2\t\n", true, "the release of 3 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --sync finishes it"},
+		{"2\trollback\t3\t\n", false, "the rollback to 2 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --rollback finishes it"},
+		{"2\trestart\t3\t\n", false, "the restart of 2 after 3 failed was cut off: its run step may not have run", "devopsy @app-prod --release releases it again"},
+		{"4\trestore\t3\t1\n", false, "the restore of snapshot 1 as 4 was cut off past its switch: its run step may not have run", "devopsy @vm1:prod --snapshots restore 1 runs it again"},
+	} {
+		a := ParseActivating(c.line)
+		if a == nil {
+			t.Errorf("%q does not parse", c.line)
+			continue
+		}
+		if what, fix := a.Cut("vm1:prod", "app-prod", c.partial); what != c.what || fix != c.fix {
+			t.Errorf("%q (partial %v): %q, %q; want %q, %q", c.line, c.partial, what, fix, c.what, c.fix)
+		}
+	}
+}

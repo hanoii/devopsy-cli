@@ -90,6 +90,44 @@ const (
 // surprise more than help.
 const ActivatingFile = ".devopsy-activating"
 
+// Activating is an ActivatingFile's line: the release's id, the
+// activation's kind, the release it replaced (the failed one for a
+// restart) and a restore's snapshot.
+type Activating struct{ ID, Kind, From, Snapshot string }
+
+// ParseActivating reads an ActivatingFile's line; nil without an id and
+// a kind.
+func ParseActivating(line string) *Activating {
+	f := strings.Split(strings.TrimRight(line, "\n"), "\t")
+	if len(f) < 2 || f[0] == "" || f[1] == "" {
+		return nil
+	}
+	f = append(f, "", "")
+	return &Activating{ID: f[0], Kind: f[1], From: f[2], Snapshot: f[3]}
+}
+
+// Cut is what --status says of a cut activation, and what finishes it:
+// the release again (ref the release's address as typed, an alias's
+// with its source), a rollback again, a restore again (ref the target's
+// as typed); a sync where a sync's partial copy (syncPartial) refuses a
+// release, and its run step finishes the cut one.
+func (a *Activating) Cut(ref, releaseRef string, syncPartial bool) (what, fix string) {
+	what, past, fix := "the release of "+a.ID, " past its switch", "devopsy @"+releaseRef+" --release releases it again"
+	if syncPartial {
+		fix = "devopsy @" + ref + " --sync finishes it"
+	}
+	switch a.Kind {
+	case "rollback":
+		what, fix = "the rollback to "+a.ID, "devopsy @"+ref+" --rollback finishes it"
+	case "restart":
+		// A failed run step's way back: current restarted.
+		what, past = "the restart of "+a.ID+" after "+a.From+" failed", ""
+	case "restore":
+		what, fix = "the restore of snapshot "+a.Snapshot+" as "+a.ID, "devopsy @"+ref+" --snapshots restore "+a.Snapshot+" runs it again"
+	}
+	return what + " was cut off" + past + ": its run step may not have run", fix
+}
+
 // ReleaseFile is name, one of a release's devopsy files, for the project
 // at projectDir (its .devopsy/, through current or not): beside the
 // release's code/. "" when projectDir is not under a code/ directory; the

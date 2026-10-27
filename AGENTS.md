@@ -1032,7 +1032,8 @@ interrupts" and "The server never waits on the operator for long".
   (one naming another release was cut before its switch: still
   pending). `--releases` marks it `CUT`, `--status` says so with what
   finishes it (`--sync` on a sync's partial copy, which refuses a
-  release); a `--rollback` finishes a cut rollback (its target current,
+  release; the words and the fix in one place, `remote.Activating`'s
+  `Cut`, as `ImportFixes` and `RestoreFixes` for the marks); a `--rollback` finishes a cut rollback (its target current,
   the release it left, `rb_from`, to mark and to go back to; `$prev`
   stays current until the switch), never going one further back; a
   release or a restore over it marks that release rolled back, as the

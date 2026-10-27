@@ -120,7 +120,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	st := styleFor(os.Stdout)
 	fmt.Println(st.name(fmt.Sprintf("@%s (%s:%s)", targetRef(t), t.Host, t.Path)))
 	kept, synced, partial, left := "", "", "", ""
-	var cut []string
+	var cut *remote.Activating
 	syncing, source, importing, snapshotting := false, false, false, false
 	var mark *remote.Incomplete
 	var record *remote.Record
@@ -160,7 +160,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		case "left":
 			left = strings.TrimSpace(value)
 		case "cut":
-			cut = strings.Split(value, "\t")
+			cut = remote.ParseActivating(value)
 		case "syncing":
 			syncing = true
 		case "importing":
@@ -196,29 +196,9 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		}
 		fmt.Println(line)
 	}
-	if len(cut) >= 2 {
-		// remote.ActivatingFile: id, kind, the release it replaced, a
-		// restore's snapshot.
-		what, past, fix := "the release of "+cut[0], " past its switch", "devopsy @"+releaseRef(t)+" --release releases it again"
-		if partial != "" && !mark.IsImport() && !mark.IsRestore() {
-			// A sync's partial copy refuses a release; the sync, which
-			// runs the release's run step, finishes both.
-			fix = "devopsy @" + targetRef(t) + " --sync finishes it"
-		}
-		switch cut[1] {
-		case "rollback":
-			what, fix = "the rollback to "+cut[0], "devopsy @"+targetRef(t)+" --rollback finishes it"
-		case "restart":
-			// A failed run step's way back: current restarted.
-			what, past = "the restart of "+cut[0]+" after "+cut[2]+" failed", ""
-		case "restore":
-			snap := ""
-			if len(cut) > 3 {
-				snap = cut[3]
-			}
-			what, fix = "the restore of snapshot "+snap+" as "+cut[0], "devopsy @"+targetRef(t)+" --snapshots restore "+snap+" runs it again"
-		}
-		fmt.Println(st.bad("release     " + what + " was cut off" + past + ": its run step may not have run: " + fix))
+	if cut != nil {
+		what, fix := cut.Cut(targetRef(t), releaseRef(t), partial != "" && !mark.IsImport() && !mark.IsRestore())
+		fmt.Println(st.bad("release     " + what + ": " + fix))
 	}
 	if t.Parent != "" {
 		line := "parent      " + t.Parent
