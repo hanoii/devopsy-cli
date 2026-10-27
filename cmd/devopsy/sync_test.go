@@ -124,6 +124,10 @@ app2=
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
 [ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME"); }
+# FAKE_APP_BUILD: app has a build: section, its context the release's
+# code, its argument APP_UID FAKE_APP_UID (10001 by default).
+appbuild=
+[ -z "${FAKE_APP_BUILD:-}" ] || appbuild=$(printf '"build":{"context":"%s/..","dockerfile":".devopsy/Dockerfile","args":{"APP_UID":"%s"}},' "${dir:-}" "${FAKE_APP_UID:-10001}")
 # FAKE_DB_IMAGE: db's image: (none by default: compose names a build).
 dbimg=
 [ -z "${FAKE_DB_IMAGE:-}" ] || dbimg=$(printf '"image":"%s",' "$FAKE_DB_IMAGE")
@@ -139,7 +143,7 @@ vols="$DOCKER_LOG.vol"
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;

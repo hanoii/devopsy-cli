@@ -799,6 +799,34 @@ never asks: --yes is accepted, and changes nothing. A rollback cut off
 past its switch (--status says so) is finished by --rollback again, never
 followed by one further back.
 `,
+	"--reload": `Usage: devopsy @<target> --reload
+       devopsy --reload
+
+Applies what changed since the release without another one: variables
+(--vars set, --inherit, an edit of shared/.env) and the facts it imports
+(a proxy's base domain), in the current release, under the release lock.
+It reads the imports again, then checks what a release checks before its
+switch: compose's required variables, names, mounts, and that the
+variables give every service the image the release fetched (a changed
+image: name, build argument or profile needs a release: a reload never
+builds or pulls). A failure changes nothing, and so does a session gone
+before the checks pass. Then, whatever happens to the session, the new
+imports go in, the entries of mnt to their owners, and it runs the
+release's reload step (reload: in its config.yaml on the server):
+
+  environments:
+    prod:
+      reload: deploy
+
+Without one, devopsy's own up -d --wait --no-build --pull never, which
+recreates what changed. Never the run step on its own: it may do more
+than apply variables (a schema update). A reload that fails leaves the
+release live and restarts nothing: --log shows it. Refused on data a
+sync, an import or a restore did not complete, as a release is.
+
+Without a target, --reload runs the reload step under defaults: in place,
+once compose's required variables are set.
+`,
 	"--releases": `Usage: devopsy @<target> --releases
        devopsy @<target> --releases remove <id|failed>... [--yes]
 

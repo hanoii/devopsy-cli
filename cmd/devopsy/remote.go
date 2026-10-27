@@ -201,6 +201,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--snapshots":
 		return runSnapshots(t, projectName, args[1:], color)
 
+	case "--reload":
+		return runReload(t, projectName, args[1:])
+
 	case "--sync", "--reset":
 		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 

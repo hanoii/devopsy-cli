@@ -174,6 +174,8 @@ func run() int {
 		return runLocalRelease(cwd, args[1:], color)
 	case "--destroy":
 		return runLocalDestroy(cwd, args[1:], color)
+	case "--reload":
+		return runLocalReload(cwd, args[1:], color)
 	case cli.ExportFlag:
 		return runExport(cwd, args[1:], color)
 	case cli.ImportFlag:

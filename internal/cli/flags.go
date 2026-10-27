@@ -59,6 +59,7 @@ var Flags = []FlagGroup{
 		{Name: "--release-no-sync", Args: "[--accept-image <svc>] [--yes]", Scope: Target, Desc: "the same, never syncing"},
 		{Name: "--release", Scope: Local, Desc: "locally, in place: prepare, images, run\n(defaults: release steps)"},
 		{Name: "--rollback", Args: "[--yes]", Scope: Target, Desc: "back to the previous release"},
+		{Name: "--reload", Scope: LocalOrTarget, Desc: "the release again with its variables and\nimports as they are now: its reload: step"},
 		{Name: "--releases", Args: "[remove <id|failed>... [--yes]]", Scope: Target, Desc: "the releases there; or remove some,\nwith the images only they hold"},
 		{Name: "--log", Args: "[<id>]", Scope: Target, Desc: "what the last release (or <id>) printed"},
 		{Name: "--destroy", Args: "[--yes] [--purge]", Scope: Target, Desc: "remove the environment, data included"},
