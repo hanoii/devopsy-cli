@@ -1288,7 +1288,10 @@ every entry of `shared/mnt`, the ones no label copies included (logs,
 an unlabeled service's files). The parent's data then goes in as on a
 first release, the services with data are created before `finish
 child go`, and the run step starts the rest. The release, its images
-and the child's `shared/.env` (its secrets) stay. It is the way out of
+and the child's `shared/.env` (its secrets) stay. Nothing of the child
+answers from the wipe until its run step is done: a service a sync
+keeps up to hold visitors goes with the rest, so they get the proxy's
+errors meanwhile. It is the way out of
 data nothing else fixes: a sync or an import that did not complete, a
 half-written entry the parent does not have. Everything a sync checks
 comes first, and the child is wiped only at the copy's first write, so

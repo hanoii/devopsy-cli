@@ -2084,7 +2084,10 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   removes it, and in `syncImport` after its writer line), and the record set to
   `first` with nothing stopped, so `finish go` creates the services
   with data and the child's set and the run step the rest. Its
-  `shared/.env` and release stay.
+  `shared/.env` and release stay. Accepted (decided 2026-10-27): the
+  `down` takes every container, a holding service (`alwaysup`) too, so
+  the child answers nothing until its run step is done; keeping what no
+  label stops would leave containers across a start-over.
 - **What a reset skips and refuses:** the child guard
   (`syncConflicts`: nothing of the child runs under the copy) and the
   import mark's `copiesService` (it replaces everything); the stream
