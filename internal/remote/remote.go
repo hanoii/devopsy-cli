@@ -2446,7 +2446,16 @@ else
   [ -z "$last" ] || dir="$base/releases/$last/` + CodeDir + `"
 fi
 if [ -n "$dir" ]; then
-  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || { s=$?; image_unlock; devopsy --say error "$base is not removed" || true; exit "$s"; }
+  (cd "$dir" && ` + devopsyCall(projectName, []string{"--destroy-data"}, false) + `) || {
+    s=$?; image_unlock
+    # Killed (SIGKILL, the OOM killer), it said nothing of where it was.
+    if [ "$s" -gt 128 ]; then
+      devopsy --say error "$base is not removed: its devopsy on the server was killed ($s), and the destroy may have stopped halfway, its containers and volumes perhaps gone" "to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --destroy" || true
+    else
+      devopsy --say error "$base is not removed" || true
+    fi
+    exit "$s"
+  }
 else
   devopsy --say info "no release: nothing to take down"
 fi

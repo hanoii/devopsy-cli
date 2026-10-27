@@ -172,7 +172,7 @@ func TestDestroyDataKilledSays(t *testing.T) {
 	if code == 0 || !strings.Contains(docker, " down --volumes") {
 		t.Fatalf("the fake killed no destroy after its down (%d):\n%s\n%s", code, errs, docker)
 	}
-	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+report.CmdMark+"devopsy @prod --destroy") {
+	if !strings.Contains(errs, "halfway") || !strings.Contains(errs, report.Bar+report.CmdMark+"devopsy @devopsy@one:prod --destroy") {
 		t.Errorf("a destroy whose data step was killed past its down says neither that it stopped halfway nor how to finish it (%d):\n%s", code, errs)
 	}
 }
