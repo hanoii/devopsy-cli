@@ -2777,9 +2777,12 @@ Smaller features, each with the rule an agent must keep.
   the current release SYNCING the same way),
   `---`, then `devopsy --status` in the current release; the operator
   formats the header and prints the rest as it came. In a release,
-  `images.StatusLines`: the services held by digest, and those running
-  another image than their `devopsy.digest` label says (a plain up
-  followed a moved name).
+  `images.StatusLines`: the services held by digest, those running
+  another image than the current release's `ComposeFile` gives them
+  (another activation's container: one cut off past its switch, a
+  rollback's whose newer containers run on; round 8, `--status` was
+  silent), and those running another image than their `devopsy.digest`
+  label says (a plain up followed a moved name).
 - **`--ssh-keys` edits only the deploy user's own
   `~/.ssh/authorized_keys`** (`cmd/devopsy/sshkeys.go`,
   `internal/remote/keys.go`), over the usual session. Why: no root, so

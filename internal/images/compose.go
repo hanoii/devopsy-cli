@@ -96,11 +96,14 @@ func composeFacts(rel string) (holds, labels map[string]string) {
 }
 
 // StatusLines are --status's lines on rel's images, one per service
-// worth a word: held by digest (its activation's), or running another
-// image than its activation gave it (DigestLabel: a plain up followed a
-// name another environment's pull moved, or something outside devopsy).
+// worth a word: held by digest (its activation's), running another image
+// than rel gives it (its container another activation's: one cut off
+// past its switch, a rollback's whose newer containers run on; OrbStack
+// cuts, round 8), or another image than its activation gave it
+// (DigestLabel: a plain up followed a name another environment's pull
+// moved, or something outside devopsy).
 func StatusLines(d Docker, project, rel string) []string {
-	holds := holdsIn(rel)
+	holds, labels := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
 		return []string{"could not list the containers: " + err.Error()}
@@ -119,6 +122,9 @@ func StatusLines(d Docker, project, rel string) []string {
 		img, err := d.Inspect(c.Image)
 		gave := c.Digest
 		switch {
+		case err == nil && labels[c.Service] != "" && gave != labels[c.Service] && !sameImage(img, labels[c.Service]):
+			lines = append(lines, fmt.Sprintf("%s runs %s, not %s the current release gives it: an activation was cut off, and the next release makes it again", c.Service, shownImage(refs[c.Service], img), shortName(labels[c.Service])))
+			continue
 		case err != nil || gave == "":
 		case !sameImage(img, gave):
 			l := fmt.Sprintf("%s runs %s, not %s its activation gave it", c.Service, shownImage(refs[c.Service], img), shortName(gave))
