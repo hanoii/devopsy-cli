@@ -1721,7 +1721,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   runs it before it stops anything, so such a line is a leftover, but a
   killed sync holder's (its claimed or taken record there: the settle
   after makes it its mark; round 6, started first, the database ran on
-  a half copy) and in the activation that made them (`ReleaseStopsEnv`, exported past
+  a half copy), in a data hook (`HeldStopsEnv`, set by `runDataHook`:
+  round 7, a hook's `devopsy --export` started what its export
+  stopped) and in the activation that made them (`HeldStopsEnv`, exported past
   `release-record live`: the sync of a release that syncs settles there,
   and started them under the new code on the old data before its copy).
   A mark keeps them down. A start that fails only warns and keeps them
@@ -2684,7 +2686,7 @@ settled every rule here after nine reviews (2026-10-25).
   snapshots). At the switch
   `release-record live` turns the `snapshot` lines into the release's
   `stop` lines (kept down by a mark, and by a settle inside its own
-  activation, `ReleaseStopsEnv`: a release that syncs runs one past the
+  activation, `HeldStopsEnv`: a release that syncs runs one past the
   switch; any other settle starts them as leftovers, Syncs), and once something started them, the run
   step or the restart of the release before, `release-record done`
   removes them (a cut sync's copy or a failed restore keeps them down,
@@ -2812,7 +2814,7 @@ Smaller features, each with the rule an agent must keep.
 - **`DEVOPSY_INTERNAL_*` are devopsy talking to devopsy** (`COLOR`,
   `TTY`, `ENV_COMPUTE`, `WATCH`, `SYNC_WATCH`, `SYNC_ID`, `HEARTBEAT`,
   `HEARTBEAT_EVERY`, `COMMAND_TARGET`, `IMPORT_END`, `INHERIT_FILE`,
-  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`, `RELEASE_STOPS`,
+  `SYNC_NEEDS`, `HOOK_START`, `SNAPSHOTS`, `BASE`, `SNAPSHOT_KEEP`, `SNAPSHOT_RELEASE_KEEP`, `SNAPSHOT_MIRROR`, `SYNC_CHECKED`, `RESTORE_SNAPSHOT`, `HELD_STOPS`,
   `RESTORE_ENV`, `RESTORE_BY`):
   never documented as settings, free to change in any release. Settings
   people set and the contract projects read keep plain `DEVOPSY_*`

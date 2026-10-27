@@ -1234,9 +1234,11 @@ func runDataHook(ctx context.Context, cwd, projectDir string, env []string, stdi
 	// The session's watching is devopsy's, never the hook's: a hook
 	// running devopsy --export would take its own /dev/null stdin for a
 	// session gone.
-	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+	// Its operation holds what the record says it stopped: a devopsy the
+	// hook runs leaves those down (settleStops).
+	cmd.Env = append(append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		return strings.HasPrefix(kv, remote.SyncWatchEnv+"=") || strings.HasPrefix(kv, remote.HeartbeatEnv+"=")
-	}), env...)
+	}), env...), remote.HeldStopsEnv+"=1")
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	if stdout == nil {

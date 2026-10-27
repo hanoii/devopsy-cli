@@ -1986,7 +1986,7 @@ func (s *syncSetup) childSnapshotted() {
 // what the record names before its hook, and nothing started them here
 // (the restart of the release before skips a marked environment), the
 // sync's own settle included, which takes stop lines for leftovers but
-// in their release's activation (remote.ReleaseStopsEnv): it started
+// in their release's activation (remote.HeldStopsEnv): it started
 // them under the new code on the old data, before the copy.
 func TestReleaseSnapshotSyncPartialKeepsStops(t *testing.T) {
 	t.Parallel()

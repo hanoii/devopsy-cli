@@ -1068,7 +1068,7 @@ exec 7<&-
 `
 	if releaseSnap {
 		s += `[ -z "${rs_id:-}" ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "live"}, false) + ` "$rel") || true
-` + `[ -z "${rs_id:-}" ] || export ` + ReleaseStopsEnv + `=1
+` + `[ -z "${rs_id:-}" ] || export ` + HeldStopsEnv + `=1
 `
 	}
 	s += `devopsy --say info "current is now $id" || true

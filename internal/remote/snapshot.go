@@ -168,10 +168,13 @@ func snapshotEnv(t *Target, keep int) string {
 // down and owns from its mark.
 const RestoreSnapshotEnv = "DEVOPSY_INTERNAL_RESTORE_SNAPSHOT"
 
-// ReleaseStopsEnv is set in an activation once release-record live made
-// its release snapshot's lines stop lines: a settle inside it (the sync
-// of a release that syncs) leaves those down, for its run step to start.
-const ReleaseStopsEnv = "DEVOPSY_INTERNAL_RELEASE_STOPS"
+// HeldStopsEnv says the record's stop lines are held by a live
+// operation, so a settle inside it leaves them down: an activation once
+// release-record live made its release snapshot's lines stop lines (the
+// sync of a release that syncs settles, its run step starts them), and
+// every data hook, whose devopsy --export or --import would otherwise
+// start what its operation stopped (review round 7).
+const HeldStopsEnv = "DEVOPSY_INTERNAL_HELD_STOPS"
 
 // SnapshotReleaseKeepEnv is how many release snapshots a pruning keeps
 // (KeepAll: every one whose release is kept), sent by the operator from
