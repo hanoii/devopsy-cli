@@ -464,14 +464,18 @@ func (s *Set) keep(rel string, es []entry) error {
 	// may give it another image (a rollback holding a newer one), which
 	// leaves the old pair to nothing that would remove it.
 	listed := map[string]bool{}
-	// The names es still gives an image, by name and id: one of them is
-	// no name left behind (review: an import's sync:<service> entry,
-	// dropped, recorded the release's own mariadb:11.8 and its hold).
+	// The names es still gives an image in its refs' repositories, by
+	// name and id, which its removal takes (Remove): one of them is no
+	// name left behind (review: an import's sync:<service> entry,
+	// dropped, recorded the release's own mariadb:11.8 and its hold). A
+	// digest in another repository (a sync's hold through the parent's
+	// mirror) no removal of es takes: it is recorded (review: it outlived
+	// every release).
 	named := map[string]bool{}
 	for _, e := range es {
 		listed[familiar(e.Ref)+" "+e.ID] = true
 		named[familiar(digestRef(e.Ref))+" "+e.ID] = true
-		if e.Digest != "" {
+		if e.Digest != "" && repoKey(e.Digest) == repoKey(e.Ref) {
 			named[familiar(e.Digest)+" "+e.ID] = true
 		}
 	}
