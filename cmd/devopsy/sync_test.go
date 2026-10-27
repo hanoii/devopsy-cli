@@ -4103,3 +4103,34 @@ func TestExportImportKeepsHoles(t *testing.T) {
 		t.Errorf("the import of it (%d, %v): %d bytes on disk for %d:\n%s", code, err, dst.Blocks*512, dst.Size, errs)
 	}
 }
+
+// settleStops takes every unmarked stop line of the record for a leftover
+// of an operation killed outright, and --export on a target runs it
+// first. A custom service's export hook that itself runs devopsy --export
+// of another service (the hooks are the project's: AGENTS.md counts on
+// one running devopsy --export) runs it inside the outer export, which
+// holds the locks and has its own stops recorded: the inner export's
+// settle starts them, in the middle of the outer copy, so the dump is
+// taken from a database devopsy had stopped for it and started again
+// behind its back. The same holds for a sync's push whose export hook
+// does so (its stops are recorded alike).
+func TestNestedExportKeepsOuterStops(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, s.log+".shop-prod", "FAKE_APP=stream\nFAKE_DB=mnt+always\n", 0o644)
+	s.releaseProd(nil)
+	// app's export dumps through devopsy --export of db, then checks db
+	// is still stopped, as the outer export left it (DEVOPSY_DATA_STOP).
+	write(t, filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "capabilities", "data", "export"),
+		"#!/bin/sh\ndevopsy --export db >/dev/null 2>\"$DOCKER_LOG.inner\" || { echo \"inner export failed\" >&2; exit 1; }\n"+
+			"grep -qx db \"$DOCKER_LOG.stopped.$COMPOSE_PROJECT_NAME\" || echo \"db ran during the export of app\" >&2\necho dump\n", 0o755)
+	s.logs()
+	out, errs, code := s.runIO(nil, nil, "@prod", "--export", "app")
+	docker, _ := s.logs()
+	if code != 0 || string(out) != "dump\n" || !strings.Contains(errs, "stopping db (always)") {
+		t.Fatalf("the export of app with db stopped around it (%d) %q:\n%s\n%s", code, out, errs, readString(s.log+".inner"))
+	}
+	if strings.Contains(errs, "db ran during the export of app") {
+		t.Errorf("the inner export started what the outer stopped (said: %q):\n%s\n%s", strings.TrimSpace(readString(s.log+".inner")), errs, docker)
+	}
+}
