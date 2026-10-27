@@ -823,7 +823,9 @@ Two modes, `mode:` in the config:
 - **image** mode uploads `.devopsy/` only; images come from a registry. Tag
   them with the commit,
   `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`, so rollbacks
-  run their own image. devopsy pulls them before the release
+  run their own image. In build mode a rollback runs the image its
+  release built, built again from its code when a build argument changed
+  since (`--vars set APP_UID`), before it goes live. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
 
 **Choosing tags.** Float third-party images on the series upstream
@@ -1783,9 +1785,10 @@ Without one, devopsy's own `up -d --wait --no-build --pull never`, which
 recreates what changed. Never the run step on its own: a sync reruns it
 because its data moved, but a run step may do far more than apply
 variables (a schema update). A step that fails leaves the release live
-and restarts nothing. Locally, `devopsy --reload` runs `defaults:`'
-`reload:` step in place, else the same up, once compose's required
-variables are set. A `--sync` and a `--snapshots restore --no-code`
+and restarts nothing. A release cut off past its switch is refused, with
+what finishes it. Locally, `devopsy --reload` runs `defaults:`'
+`reload:` step in place (in a release on a server, its environment's),
+else the same up, once compose's required variables are set. A `--sync` and a `--snapshots restore --no-code`
 check the images the same way before anything stops: both run the
 current release's run step on its images again (`--with-env`: under the
 snapshot's variables, refused then with the full restore as the way).

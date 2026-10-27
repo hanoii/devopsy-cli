@@ -736,7 +736,8 @@ step's rules):
 ### Images
 
 Every image a release runs stays until its last release goes. A
-rollback runs exactly what the release built; other pulled images run
+rollback runs exactly what the release built, built again when a build
+argument changed since (Reload); other pulled images run
 what its names give now; a pulled data service only goes forward (below). The rules live in Go
 (`internal/images`, whose comments say how each action decides), run
 on the server as the hidden `--images` (`runImages`; `img` in the
@@ -837,7 +838,10 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   never reads devopsy's own file: `NoReleaseComposeEnv`): data, the
   history's last (else its container's, else against's); any other
   pulled image, what target's name holds now, pulled when gone; own
-  images from their bookmarks, `ErrGone` (exit 1) to build again. A
+  images from their bookmarks, `ErrGone` (exit 1) to build again, also
+  when the listing's build key differs from what the `build:` section
+  gives now (`changed`, `rebuilt`: a bookmark built for `APP_UID` 10001
+  would run as 10002, its files the old user's). A
   rollback brings back code (decided 2026-10-23): it once restored a
   changed name's exact image, held or pulled by digest, which cost
   stateless holds and digest refetches for what a pin or a commit tag
@@ -1200,6 +1204,24 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   (`checkStepScopes`) with its own: they go with it and run on the
   server, a command that only runs locally failing a reload past its
   checks.
+- **A release cut off past its switch is refused** (`cutRefusal`,
+  `ActivatingFile` while the reload holds the lock): an `up` alone would
+  start its code without its run step. The first refusal of a cut
+  activation: the others each run a run step or replace it (a release,
+  a rollback finishing a cut one, a sync's run step), and nothing else
+  of devopsy's starts its code.
+- **Rollbacks build again what was built with other values** (decided
+  with the user): a rollback, the restart after a failed run step and a
+  full restore restore own images from their bookmarks, and one whose
+  build key differs from what today's variables give is built again
+  from the release's code, before the switch. Why: refusing or warning
+  left the rollback failing (the image's files the old user's, the
+  container the new one); a rollback brings back code, and variables
+  are today's. Only when a `build:` input changed; any other variable is
+  the run step's, as before.
+- **`devopsy --reload` in a release on a server** runs that environment's
+  `reload:` (`reloadStep`, as `destroyStep` does); unguarded there, as
+  any command typed in `--shell-host` is.
 - **Gated by `check-images`:** a feature flag, so an older server
   refuses a reload, a sync, a `--no-code` restore and `--vars set`
   until upgraded, before anything changes.
