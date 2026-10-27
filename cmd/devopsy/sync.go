@@ -263,7 +263,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 			case <-slow:
 				// The holder reads the abort once its prepare ends, and
 				// then restores what it stopped.
-				log.Warn("the server is cancelling it, after the step it is in, and restores what it stopped", "Ctrl-C again leaves now")
+				log.Warn("the server is cancelling it, after the step it is in, and restores what it stopped", leavesNow)
 			case <-sigs:
 				endHolder()
 				<-done
@@ -348,7 +348,8 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 		select {
 		case res = <-done:
 		case <-sigs:
-			log.Warn("interrupted: the run step goes on on @"+job.child.Address, "devopsy @"+targetRef(job.child)+" --log shows how it ends; Ctrl-C again ends the session, not the step")
+			w := goesOnSays(job.child, "run step", "", "devopsy @"+targetRef(job.child)+" --log shows how it ends")
+			log.Warn(w[0], w[1:]...)
 			select {
 			case res = <-done:
 			case <-sigs:

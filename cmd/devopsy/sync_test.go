@@ -3213,7 +3213,7 @@ func TestReleaseInterrupt(t *testing.T) {
 		return
 	}
 	out, code, _ = interrupt("FAKE_SLOW_RUN", "@slow", "--release", "--yes")
-	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
+	if code != 0 || !strings.Contains(out, "the release goes on on @devopsy@one:slow") || !strings.Contains(out, "Ctrl-C again ends the session, not the release") || !strings.Contains(out, "deployed slowly") || s.current("slow") == "" {
 		t.Errorf("during the run step (%d), current %q:\n%s", code, s.current("slow"), out)
 	}
 }

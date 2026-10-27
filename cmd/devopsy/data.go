@@ -1837,7 +1837,8 @@ wait:
 			first := !interrupted
 			interrupted = true
 			if first && started {
-				report.Warn("interrupted: the import of "+name+" goes on on @"+t.Address, "devopsy @"+targetRef(t)+" --status shows it; Ctrl-C again ends the session, not the import")
+				w := goesOnSays(t, "import of "+name, "", "devopsy @"+targetRef(t)+" --status shows how it ends")
+				report.Warn(w[0], w[1:]...)
 			} else if first {
 				report.Error("interrupted: nothing imported into @" + t.Address + ", and what was stopped there comes back")
 				closeIn()

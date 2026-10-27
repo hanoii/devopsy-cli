@@ -285,7 +285,7 @@ func TestImportSession(t *testing.T) {
 	_ = cmd.Process.Signal(syscall.SIGINT)
 	time.Sleep(300 * time.Millisecond)
 	write(t, wait+".go", "", 0o644)
-	if err := s.wait(cmd, errs, "a Ctrl-C during the load"); err != nil || !strings.Contains(errs.String(), "interrupted: the import of db goes on on @devopsy@one:prod") || readString(s.imported) != "import db into shop-prod\nrows\n" || s.mark() != nil {
+	if err := s.wait(cmd, errs, "a Ctrl-C during the load"); err != nil || !strings.Contains(errs.String(), "interrupted: the import of db goes on on @devopsy@one:prod") || !strings.Contains(errs.String(), "Ctrl-C again ends the session, not the import of db") || readString(s.imported) != "import db into shop-prod\nrows\n" || s.mark() != nil {
 		t.Errorf("a Ctrl-C during the load (%v), mark %+v:\n%s", err, s.mark(), errs)
 	}
 	if strings.Contains(errs.String(), remote.ImportMarker) {

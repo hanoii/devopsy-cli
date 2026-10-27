@@ -1802,9 +1802,9 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 func snapshotWords(t *remote.Target) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     []string{"interrupted: the snapshot goes on on @" + t.Address + ", past its stopped pass", logs + "; Ctrl-C again ends the session, not the snapshot"},
+		goesOn:     goesOnSays(t, "snapshot", "past its stopped pass", logs),
 		cancelling: []string{"interrupted: cancelling the snapshot on @" + t.Address + ", its services started again"},
-		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", "Ctrl-C again leaves now"},
+		slow:       []string{"the server is cancelling it, first waiting for a lock if a release, a sync or another snapshot holds it", leavesNow},
 		lostAfter:  []string{lostSays(t, "after the stopped pass", "the snapshot was past its stopped pass there"), logs},
 		lostBefore: []string{lostSays(t, "before the stopped pass ended", "the snapshot may not be taken, and "+staysDown), "devopsy @" + targetRef(t) + " --snapshots shows whether it was taken"},
 		hadGone:    []string{"it was past its stopped pass already, and went on", logs},
@@ -2757,7 +2757,7 @@ var restoringUnder = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `resto
 func restoreDataWords(t *remote.Target) liveWords {
 	w := releaseWords(t)
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
-	w.goesOn = []string{"interrupted: the restore goes on on @" + t.Address + ", writing the data", logs + "; Ctrl-C again ends the session, not the restore"}
+	w.goesOn = goesOnSays(t, "restore", "writing the data", logs)
 	w.cancelling = []string{"interrupted: cancelling the restore on @" + t.Address}
 	w.lostAfter = []string{lostSays(t, "while it wrote the data", "the restore was under way there"), logs}
 	w.lostBefore = []string{lostSays(t, "before the restore wrote anything", "its data there is as it was, and "+staysDown), "devopsy @" + targetRef(t) + " --status shows it"}

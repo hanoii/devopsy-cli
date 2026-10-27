@@ -1025,13 +1025,30 @@ type liveWords struct {
 	goesOn, cancelling, slow, lostAfter, lostBefore, hadGone []string
 }
 
+// goesOnSays is what every session says once interrupted past its point
+// of no return (a release's switch, a take's stopped pass, an import's
+// first write, a sync's copy): what goes on, where it is (past, or
+// empty), and what shows how it ends; a second Ctrl-C ends the session,
+// never what goes on.
+func goesOnSays(t *remote.Target, what, past, shows string) []string {
+	s := "interrupted: the " + what + " goes on on @" + t.Address
+	if past != "" {
+		s += ", " + past
+	}
+	return []string{s, shows + "; Ctrl-C again ends the session, not the " + what}
+}
+
+// leavesNow is the detail of a cancel that takes a while: a second
+// Ctrl-C leaves without waiting for it.
+const leavesNow = "Ctrl-C again leaves now"
+
 // releaseWords are a release's.
 func releaseWords(t *remote.Target) liveWords {
 	logs := "devopsy @" + targetRef(t) + " --log shows how it ends"
 	return liveWords{
-		goesOn:     []string{"interrupted: the release goes on on @" + t.Address + ", past its switch", logs + "; Ctrl-C again ends the session, not the release"},
+		goesOn:     goesOnSays(t, "release", "past its switch", logs),
 		cancelling: []string{"interrupted: cancelling the release on @" + t.Address},
-		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", "Ctrl-C again leaves now"},
+		slow:       []string{"the server is cancelling it, first waiting for the release lock if another release holds it", leavesNow},
 		lostAfter:  []string{lostSays(t, "after the switch", "the release was past its switch there"), logs},
 		lostBefore: []string{lostSays(t, "before the switch", "nothing went live there"), "devopsy @" + targetRef(t) + " --releases shows it"},
 		hadGone:    []string{"it had switched already, and went on", logs},
