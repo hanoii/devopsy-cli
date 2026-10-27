@@ -3304,6 +3304,44 @@ func TestExportKilledLeavesItsStops(t *testing.T) {
 	}
 }
 
+// A release killed between its switch and its run step (its activation's
+// shell killed outright, or a reboot there) leaves its release snapshot's
+// stopped set as stop lines, their containers the previous release's, on
+// the previous release's images. The next lock-taker's settle starts them
+// (settleStops): a plain compose start runs those containers, the old
+// code's image under the new current, which --status, comparing a
+// container with its own label, never names. It must make them again on
+// what the current release gives them, as startLeftDown and
+// restoreServices do (images.Recreate). Found by hand (2026-10-27, a
+// reboot mid-release): prod ran the release before's app while
+// --releases and --status named the new one current.
+func TestSettleStopsStartsCurrentImages(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	base := filepath.Join(s.root, "shop", "prod")
+	// The new release, current: app given x@sha256:new. Its container is
+	// the release before's, on x@sha256:old, stopped by the release
+	// snapshot and never made again: the run step did not run.
+	write(t, filepath.Join(base, s.current("prod"), "devopsy-compose.yaml"),
+		"services:\n  \"app\":\n    labels:\n      \"devopsy.digest\": \"x@sha256:new\"\n", 0o644)
+	write(t, s.log+".containers.shop-prod", "app x@sha256:old\n", 0o644)
+	write(t, filepath.Join(base, ".devopsy-sync.services"), "stop db\nstop app\n", 0o644)
+	write(t, s.log+".stopped.shop-prod", "db\napp\n", 0o644)
+	s.logs()
+	out, code := s.run(nil, "@prod", "--snapshot")
+	docker, _ := s.logs()
+	starts := ""
+	for _, line := range strings.Split(docker, "\n") {
+		if strings.Contains(line, " start ") || strings.Contains(line, " up ") {
+			starts += line + "\n"
+		}
+	}
+	if c := readString(s.log + ".containers.shop-prod"); code != 0 || !strings.Contains(c, "app x@sha256:new") {
+		t.Errorf("the settle (take %d) started app's container from the release before, on x@sha256:old, never made again on the current release's x@sha256:new (containers %q):\n%s\n%s", code, c, out, starts)
+	}
+}
+
 // A take's stopped pass killed outright on the server (SIGKILL, the OOM
 // killer) starts what it stopped at once, under the locks the take still
 // holds, and says so: found by hand (2026-10-27), the site stayed down
