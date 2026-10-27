@@ -1253,7 +1253,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   runs `--check-mounts restored restart` first, and keeps the previous
   release down when it refuses (what the failed run step started runs
   on, from its code, until a release goes live: said, with the
-  `--release` to run once the link is gone). And the net under all of them (decided after
+  `--release` to run once what the check says is fixed: a link, or the
+  util image with Docker gone). And the net under all of them (decided after
   review round 5, whose every hole was a start no check per flow
   preceded): on a server nothing in a release starts while a bind source
   leads out of its entry, whatever brought the link

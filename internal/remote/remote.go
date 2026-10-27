@@ -1188,7 +1188,7 @@ exec 7<&-
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once the link is gone:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `

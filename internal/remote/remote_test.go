@@ -1302,6 +1302,7 @@ case "$*" in
     echo "$id" > "$FAKE_ROOT/images/app-prod-app" ;;
   deploy) exit ${FAIL_RUN:-0} ;;
   --mnt-owners*) [ "$id" != "${FAIL_OWNERS:-}" ] || exit 5 ;;
+  "--check-mounts restored restart") exit ${FAIL_RESTART_CHECK:-0} ;;
 esac
 exit 0
 `
@@ -1388,6 +1389,13 @@ exit 0
 	}
 	if got := calls(root); strings.Contains(got, "current: deploy") || !strings.HasSuffix(got, "current: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n") {
 		t.Errorf("failed owners calls:\n%s", got)
+	}
+
+	// The restart's mounts check refusing (a link, or the util image with
+	// Docker gone): the previous release stays down, the fix named for
+	// whatever the check said, not always a link (review round 9).
+	if out, err := release("33", "FAIL_RUN=4", "FAIL_RESTART_CHECK=1"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "not restarting 1") || strings.Contains(out, "once the link is gone") || !strings.Contains(out, "once what the check says is fixed") {
+		t.Fatalf("failed run, the restart's check refusing (%v), current %q:\n%s", err, current(), out)
 	}
 
 	// Another failed run, while another compose project runs the
