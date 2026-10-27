@@ -95,6 +95,8 @@ case "$1 ${2:-}" in
   "--snapshot-step make-release")
     cp -a "$FAKE_SNAP_REL" "$4" && rm -f "$4/`+FailedFile+`" && : >"$4/`+PendingFile+`"; exit ;;
   "--snapshot-step restore-data") exit "${FAIL_RESTORE_DATA:-0}" ;;
+  # What the build name holds when a settle starts what is recorded.
+  "--sync-services settle") cp "$FAKE_ROOT/images/app-prod-app" "$FAKE_ROOT/settled-on"; exit 0 ;;
 esac
 case "$*" in
   "-- config --format json") printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
@@ -131,6 +133,16 @@ exit 0
 	}
 	if got := fakeImage(root, "app-prod-app"); got != "2" {
 		t.Errorf("after a restore that did not go live, app-prod-app holds %q's image, not the live release 2's:\n%s", got, out)
+	}
+
+	// Its data step killed outright before its first write, with what it
+	// stopped recorded: the settle that starts it again (killedSays) runs
+	// once the names are back, or what it makes again (images.Recreate)
+	// runs the snapshot's build under the live release's code.
+	write(t, filepath.Join(base, SyncStateFile), "stop db\n")
+	out, err = run(RestoreScript(tg, "app-prod", &RestoreOptions{Snapshot: "20261025000000"}), "FAIL_RESTORE_DATA=137")
+	if got := readFile(filepath.Join(root, "settled-on")); err == nil || strings.TrimSpace(got) != "2" {
+		t.Errorf("a restore killed in its data step (%v) settled with app-prod-app on %q's image, not the live release 2's:\n%s", err, strings.TrimSpace(got), out)
 	}
 }
 

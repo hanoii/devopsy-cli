@@ -1058,11 +1058,14 @@ rd_status=0
 (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
 if [ "$rd_status" != 0 ]; then
   set +e
-` + killedSays(t, projectName, "rd_status", "nothing restored") + `  if image_lock shared undoing; then
+  # The images' names back first: what the settle below starts again, or
+  # makes again (images.Recreate), must run the current release's images,
+  # never the ones the restore's fetch gave the names.
+  if image_lock shared undoing; then
     ` + strings.ReplaceAll(undo, `"$1"`, `"$rel"`) + `
     image_unlock
   fi
-  not_live 1
+` + killedSays(t, projectName, "rd_status", "nothing restored") + `  not_live 1
 fi
 `
 	}
