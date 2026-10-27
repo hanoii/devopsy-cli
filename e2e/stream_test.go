@@ -141,7 +141,8 @@ func TestSyncStreamDatabase(t *testing.T) {
 	if imported, _ := srv(t, "cat imports-"+name+"-dev 2>/dev/null"); code == 0 || rows(t, name, "dev", "db") != "db1 db2" || strings.TrimSpace(imported) != "" {
 		t.Errorf("a failed export (%d): dev's db %q, imported %q:\n%s", code, rows(t, name, "dev", "db"), imported, out)
 	}
-	if left, _ := srv(t, "ls -a "+name+"/dev | grep devopsy-sync || true"); strings.TrimSpace(left) != "" {
+	// The record of the last sync that completed stays (remote.SyncedFile).
+	if left, _ := srv(t, "ls -a "+name+"/dev | grep devopsy-sync | grep -vx '\\.devopsy-sync\\.synced' || true"); strings.TrimSpace(left) != "" {
 		t.Errorf("the sync's files left: %s", left)
 	}
 	if syncState(t, name, "dev", "app") != "running" || syncState(t, name, "prod", "app") != "running" {
