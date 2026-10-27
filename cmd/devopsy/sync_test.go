@@ -180,7 +180,16 @@ case "$*" in
   # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
   # listed by a name filter.
   "ps -aq --filter name="*)
+    [ ! -e "$DOCKER_LOG.rm-done" ] || exit 0
     for c in ${FAKE_SYNC_CONTAINERS:-}; do case $c in "${4#name=}"*) echo "$c" ;; esac; done ;;
+  # FAKE_RM_IN_PROGRESS: a sync's containers removed meanwhile by
+  # another (the push's own removal), which Docker refuses as in
+  # progress; they are gone right after.
+  "rm -f devopsy-sync-"*)
+    [ -n "${FAKE_RM_IN_PROGRESS:-}" ] || exit 0
+    : >"$DOCKER_LOG.rm-done"
+    echo "Error response from daemon: removal of container $3 is already in progress" >&2
+    exit 1 ;;
   *" ps --all --format json")
     for s in $svcs; do [ "$(st $s)" = none ] || printf '{"Service":"%s","State":"%s"}\n' "$s" "$(st $s)"; done
     for s in ${FAKE_ORPHANS:-}; do printf '{"Service":"%s","State":"exited"}\n' "$s"; done
@@ -3428,7 +3437,7 @@ func TestSyncEndWriters(t *testing.T) {
 		defer func() { _ = c.cmd.Process.Kill() }()
 	}
 	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n"+remote.WriterLine("db", other.Process.Pid, "running")+"\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
 	s.logs()
 	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
 	cmd.Dir = filepath.Join(dev, "current")
@@ -3442,6 +3451,11 @@ func TestSyncEndWriters(t *testing.T) {
 	}
 	if strings.Contains(docker, "devopsy-sync-9.9") {
 		t.Errorf("another sync's container removed:\n%s", docker)
+	}
+	// One whose removal Docker had under way already (the push's own,
+	// cancelled) is gone all the same: no error.
+	if strings.Contains(string(out), "already in progress") {
+		t.Errorf("a removal already in progress said as an error:\n%s", out)
 	}
 	// app, depending on db, stops with it, recorded.
 	if rec := readString(filepath.Join(dev, ".devopsy-sync.services")); !strings.Contains(rec, "stop db\n") || !strings.Contains(rec, "stop app\n") || !strings.Contains(docker, " stop db app\n") {
