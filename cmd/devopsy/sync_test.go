@@ -467,6 +467,9 @@ case "$s" in *--sync-push*) if [ -n "${FAKE_SSH_LOST_PUSH:-}" ]; then sh -c "$s"
 # FAKE_SSH_LOST_IMPORT: an --import's session lost on the way (a network
 # gone during the upload), as ssh says it.
 case "$s" in *"--import "*) [ -z "${FAKE_SSH_LOST_IMPORT:-}" ] || { echo "Read from remote host one: Operation timed out" >&2; exit 255; } ;; esac
+# FAKE_SSH_LOST: any session whose script holds this text lost on the
+# way, as ssh says it (its 255).
+if [ -n "${FAKE_SSH_LOST:-}" ]; then case "$s" in *"$FAKE_SSH_LOST"*) echo "Read from remote host one: Operation timed out" >&2; exit 255 ;; esac; fi
 # FAKE_IMPORT_DETACH: the same for a stream's import session.
 case "$s" in *sync-services*import*) if [ -n "${FAKE_IMPORT_DETACH:-}" ]; then sh -c "$s" <&3 & wait $!; exit $?; fi ;; esac
 # FAKE_HOLDER_DIE: the holder's session dies once the copy started (the

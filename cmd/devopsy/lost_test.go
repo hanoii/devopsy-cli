@@ -27,3 +27,40 @@ func TestRunStepExit255(t *testing.T) {
 		t.Errorf("a run step exiting 255 reported as a lost connection:\n%s", out)
 	}
 }
+
+// A session lost on the way (ssh's 255: a network gone, the server
+// rebooted) is said by devopsy, as a release's, a sync's and an
+// import's are: --export, --destroy, --snapshots export and --snapshots
+// import left the operator with ssh's line alone and exit 255, which
+// says neither that devopsy's command did not complete nor what may be
+// left on the server (an export's services stopped until the server
+// notices, a destroy half done, a truncated file on stdout). Found by
+// hand (2026-10-27, iptables drops on an OrbStack machine).
+func TestLostSessionSays(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	for _, c := range []struct {
+		lost  string
+		stdin []byte
+		args  []string
+	}{
+		{"'--export'", nil, []string{"@prod", "--export", "db"}},
+		{"exec tar -C", nil, []string{"@prod", "--snapshots", "export", m[1]}},
+		{"'receive'", []byte("not a tar"), []string{"@prod", "--snapshots", "import"}},
+		{"'--destroy-data'", nil, []string{"@prod", "--destroy", "--yes"}},
+	} {
+		_, errs, code := s.runIO([]string{"FAKE_SSH_LOST=" + c.lost}, c.stdin, c.args...)
+		if code != 255 {
+			t.Fatalf("%v: the fake lost no session (%d):\n%s", c.args, code, errs)
+		}
+		if !strings.Contains(errs, "devopsy: error:") {
+			t.Errorf("%v: a session lost on the way (%d) said nothing of devopsy's:\n%s", c.args, code, errs)
+		}
+	}
+}
