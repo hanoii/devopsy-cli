@@ -3295,6 +3295,15 @@ func TestSyncSettle(t *testing.T) {
 	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
 		t.Errorf("a release after (%d):\n%s", code, out)
 	}
+
+	// An export after an undecided sync settles it first, so it warns that
+	// the data is a partial copy, as it does for any mark: its shared lock
+	// alone could not (settling takes it exclusively), and it exported a
+	// half copy as the data, silently.
+	write(t, filepath.Join(dev, remote.SyncStartedFile), "", 0o644)
+	if _, errs, code := s.runIO(nil, nil, "@dev", "--export", "db"); code != 0 || !strings.Contains(errs, "this environment's data is from a sync that did not complete: exporting it anyway") || !fileExists(filepath.Join(dev, remote.SyncIncompleteFile)) || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+		t.Errorf("an export after an undecided sync (%d):\n%s", code, errs)
+	}
 }
 
 // A sync's holder killed outright mid-copy (SIGKILL, a reboot) leaves its

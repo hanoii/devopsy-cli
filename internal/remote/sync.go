@@ -819,6 +819,12 @@ export` + exports + "\n" + devopsyCall(projectName, push, true) + "\n"
 // export does.
 func ExportScript(t *Target, projectName, service string) string {
 	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: nothing to export"; exit 1; }
+if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  # A sync's holder killed before it decided left its files: settled into
+  # a mark first, which needs the lock exclusively, so the export warns
+  # that the data is a partial copy (its shared hold could not settle it).
+  ` + strings.ReplaceAll(releaseLock(false, false), "\n", "\n  ") + settleSync(projectName) + `  exec 9>&-
+fi
 ` + syncSourceLock() + `cd "$base/current"
 ` + devopsyCall(projectName, []string{"--export", service}, true) + "\n"
 }
