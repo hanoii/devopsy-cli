@@ -1183,8 +1183,17 @@ fi
 		s += `[ -z "${rs_id:-}" ] || [ "$status" != 0 ] || (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "release-record", "done"}, false) + ` "$rel") || true
 `
 	}
-	s += `img ran "$base" "$rel" || true
-if [ "$status" != 0 ]; then
+	// A restore records what ran only once restored started its set on
+	// the images it holds (startLeftDown makes again what another image
+	// runs): a data service its run step left as it was is still the
+	// container that ran the replaced data, on that data's image (review:
+	// its old image became the restored data's newest). A failed one ran
+	// nothing on the restored data but its hold.
+	if restore == nil {
+		s += `img ran "$base" "$rel" || true
+`
+	}
+	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then
     make_current "$prev"
@@ -1199,6 +1208,8 @@ fi
 	if restore != nil {
 		// Its mark and record go once the run step started the set.
 		s += "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, "restored"}, false) + " \"$snap\") || exit 1\n"
+		s += `img ran "$base" "$rel" || true
+`
 	}
 	if rollback && restore == nil {
 		// The release it left: never counted toward keep, never rolled back

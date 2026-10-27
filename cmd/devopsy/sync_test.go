@@ -203,9 +203,18 @@ case "$*" in
       *" --no-deps "*) ;;
       *) [ -z "${FAKE_UP_DEPS:-}" ] || case " $ups " in *" app "*) ups="db $ups" ;; esac ;;
     esac
+    # A container of $DOCKER_LOG.containers.<project> is made again on
+    # what the release's devopsy-compose.yaml gives its service: its
+    # devopsy.digest label, and that digest as its image.
+    cf=$(cd -P "$dir/.." 2>/dev/null && cd .. && pwd)/devopsy-compose.yaml
+    cfile="$DOCKER_LOG.containers.${COMPOSE_PROJECT_NAME:-}"
     for s in $ups; do
       echo "$s" >> "$DOCKER_LOG.up.${COMPOSE_PROJECT_NAME:-}"
       grep -vx "$s" "$stopped" > "$stopped.new" 2>/dev/null; mv "$stopped.new" "$stopped"
+      if [ -f "$cfile" ] && [ -f "$cf" ] && grep -q "^$s " "$cfile"; then
+        l=$(awk -v svc="  \"$s\":" '$0 == svc { in_s = 1; next } /^  [^ ]/ { in_s = 0 } in_s && /"devopsy.digest":/ { sub(/.*"devopsy.digest": "/, ""); sub(/"$/, ""); print; exit }' "$cf")
+        [ -z "$l" ] || { grep -v "^$s " "$cfile" > "$cfile.new"; echo "$s $l ${l#*@}" >> "$cfile.new"; mv "$cfile.new" "$cfile"; }
+      fi
     done ;;
   "run --rm -d "*)
     : >"$DOCKER_LOG.daemonvols"
@@ -227,8 +236,9 @@ case "$*" in
   # default.
   "ps -a --filter ancestor="*) for u in ${FAKE_USERS:-}; do echo "c1 $u"; done ;;
   # Containers as devopsy's images rules read them (images.CLI): one per
-  # line "<service> <devopsy.digest label>" of $DOCKER_LOG.containers.<project>,
-  # exited, its id ctr:<project>:<service>.
+  # line "<service> <devopsy.digest label> [<image id>]" of
+  # $DOCKER_LOG.containers.<project>, exited, its id ctr:<project>:<service>,
+  # its image sha256:<service> unless the line names one.
   "ps -a -q --no-trunc --filter label=com.docker.compose.project="*)
     p=${6#label=com.docker.compose.project=}
     [ ! -f "$DOCKER_LOG.containers.$p" ] || while read -r cs cl; do echo "ctr:$p:$cs"; done <"$DOCKER_LOG.containers.$p" ;;
@@ -237,7 +247,8 @@ case "$*" in
     for c; do
       p=${c#ctr:}; cs=${p#*:}; p=${p%%:*}
       cl=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f2)
-      printf '{"Name":"/%s-%s-1","Image":"sha256:%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "$cs" "$p" "$cs" "$cl"
+      ci=$(grep "^$cs " "$DOCKER_LOG.containers.$p" | cut -d' ' -f3)
+      printf '{"Name":"/%s-%s-1","Image":"%s","State":{"Status":"exited"},"Config":{"Image":"y","Labels":{"com.docker.compose.project":"%s","com.docker.compose.service":"%s","devopsy.digest":"%s"}}}\n' "$p" "$cs" "${ci:-sha256:$cs}" "$p" "$cs" "$cl"
     done ;;
   "inspect "*) echo 172.17.0.9 ;;
   # devopsy-util: sha256:old built at FAKE_UTIL_CREATED (now by default),

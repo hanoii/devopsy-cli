@@ -783,12 +783,13 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   (`$base/.devopsy-data-images`) keeps every image that ran on each such
   service's data, appended only after something ran (`img ran` after the
   run step, failed or not, before a restart), never at `img record` (a
-  release cancelled after it ran nothing), and only from containers the
-  activation gave their image (`devopsy.digest` as its `ComposeFile`
-  says): an older one was counted when it ran, on the data it ran then
-  (review after v0.52.2: a restore's database, left down by the run
-  step, put the replaced data's image on the restored data's history as
-  its newest). "Newer" means "ran later on this data". `img record` refuses an image the history moved past, or
+  release cancelled after it ran nothing). A restore runs it only once
+  `restored` started its set on the images it holds, and not when its
+  run step failed: a database the run step left as it was is still the
+  container that ran the replaced data (review after v0.52.2: its image
+  became the restored data's newest; a rule in `Ran` skipping containers
+  of another label instead dropped one a plain `up` had made, which no
+  `img ran` counted). "Newer" means "ran later on this data". `img record` refuses an image the history moved past, or
   one it never ran under a changed name (`check`), unless the operator
   names the service (`--accept-image`, `ImagesAcceptEnv`), whose
   `ForcedFile` starts its history over once that image runs. `--yes`

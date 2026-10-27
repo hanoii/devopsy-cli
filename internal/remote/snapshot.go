@@ -287,9 +287,11 @@ out="$base/$cur/` + ServerLogFile + `"
 exec 6>&- 5>&-
 rs=0
 (cd "$base/current" && with_tty ` + Quote(devopsyCall(projectName, []string{"--release-steps", "release", "run"}, false)) + `) || rs=$?
-img ran "$base" "$base/$cur" || true
 if [ "$rs" = 0 ]; then
   ` + step("restored", `"$snap"`) + ` || rs=1
+  # Once restored started the set on the images it holds: a data service
+  # the run step left as it was still ran the replaced data (ActivateScript).
+  [ "$rs" != 0 ] || img ran "$base" "$base/$cur" || true
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
   devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true
