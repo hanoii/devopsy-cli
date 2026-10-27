@@ -934,6 +934,33 @@ func TestSnapshotRestoreEnvKeysOnly(t *testing.T) {
 	}
 }
 
+// A --no-code restore that keeps shared/.env names the way to bring it
+// back as a --no-code restore too: copied as said, the hint's command
+// (--snapshots restore <id> --with-env) is a full restore, a new release
+// made from the snapshot's code, where the operator restored the data
+// alone (found by hand on an OrbStack server, 2026-10-27).
+func TestSnapshotRestoreNoCodeEnvHint(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	env := filepath.Join(s.root, "shop", "prod", "shared", ".env")
+	write(t, env, "DB_PASSWORD=old\n", 0o600)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	write(t, env, "DB_PASSWORD=new\n", 0o600)
+	s.logs()
+	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || !strings.Contains(out, "differs from the environment's in DB_PASSWORD") {
+		t.Fatalf("--no-code restore (%d):\n%s", code, out)
+	}
+	if !regexp.MustCompile(`devopsy @\S+ --snapshots restore ` + m[1] + `\b.* --no-code`).MatchString(out) {
+		t.Errorf("the --with-env hint of a --no-code restore is a full restore:\n%s", out)
+	}
+}
+
 // A --no-code restore gives what it extracted into an owned entry to its
 // owner by the current labels, as an import does: the tars carry the
 // owners the files had when the snapshot was taken (another owner since,
