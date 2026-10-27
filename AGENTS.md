@@ -1962,9 +1962,15 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   cloned), its data is cloned into `$base/.devopsy-sync.clone.<sync
   id>`, the set started, and the rsync copies from the clone
   (`dataSet.in`: its volumes bound by path), which goes after, on a
-  cancel too. A `custom` service in the set is exported before the
-  start (its label promises it stopped), one running after; the rsync
-  is then the last write. Never under `snapshots/.clone`: a take's
+  cancel too. The reflink check and the room's `du` run before the stop
+  (`cloneCheck`), as a take's: only the clone is downtime (review). The
+  streams run before the start when the set holds a `custom` service or
+  one stopped `always` (down while another's data is exported, so its
+  files and the dump are of one moment: review), after it otherwise; the
+  rsync is then the last write. The clone's containers are
+  `<SyncContainerPrefix>parent-<id>-...` (`cloneContainer`), never the
+  sync's own prefix, which the child's holder removes as writers into
+  the child (review: it could kill the clone's removal). Never under `snapshots/.clone`: a take's
   leftovers step, which holds only the snapshot lock, removes a clone
   without its `.tmp`. One a devopsy killed outright left goes with the
   next holder of the sync lock (`removeLeftoverClones`, its containers
@@ -1979,8 +1985,15 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   child's on one server (`shareInto`, `childShares` from the list's
   seventh field): the entry emptied, never removed, `cp -a
   --reflink=always`, then `ownMnt` for owned ones (no `--chown` in a
-  clone). A clone that fails falls back to the rsync, which replaces
-  what it left. File entries and syncs across servers always rsync. No
+  clone). Before anything is emptied (`shareable`, review): an entry
+  that is a link on either side is rsynced (Docker would mount its
+  target alone, which the clone empties as root; a missing one is made,
+  `makeEntry`), and one file must clone into the child's mnt, else all
+  rsync, said once (an emptied entry rsynced again was a full copy every
+  sync on ext4). No device nodes, FIFOs or sockets (`shareScript`: a
+  source holding one is rsynced, `--no-D`; one made meanwhile is
+  deleted after the clone). A clone that fails falls back to the rsync,
+  which replaces what it left. File entries and syncs across servers always rsync. No
   named feature: one devopsy does both sides on one server. Why opt in
   and for files only: every page a database writes while a child
   shares it lands elsewhere (4,000 writes made 5,600 extents of one).

@@ -1094,10 +1094,14 @@ uploads: never a database, which writes its pages in place, each page
 it writes while a child shares it then landing elsewhere, so the
 parent's files fragment for good (measured on XFS: some 5,600 extents
 for 4,000 pages of 16 KiB written, where a file written in place keeps
-one; `xfs_fsr` puts them back together). The child's entry is emptied,
-never removed, then cloned, and an owned one given to its owner
-(`devopsy.mnt.owner`); where nothing clones (another filesystem), the
-entry is rsynced, said. Across servers it is rsynced as any.
+one; `xfs_fsr` puts them back together). Whether the data clones into
+the child is tried first, on one file: where nothing clones (another
+filesystem) everything is rsynced, said, the child's entries untouched.
+Otherwise the child's entry is emptied, never removed, then cloned, and
+an owned one given to its owner (`devopsy.mnt.owner`). An entry that is
+a symbolic link on either side, and one holding device nodes, FIFOs or
+sockets (which no copy carries), is rsynced instead. Across servers it
+is rsynced as any.
 
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:
@@ -1269,9 +1273,10 @@ snapshots), what its side stops for the copy is down for a clone only,
 seconds whatever the size: the parent's set stopped, its data cloned
 into `.devopsy-sync.clone.<id>` beside it, its services started, and
 the rsync made from the clone, which then goes (the same across
-servers: the daemon serves the clone). A `custom` service the parent's
-labels stop is exported before they start, as its label promises; one
-running is exported after. With nothing of what the rsync copies
+servers: the daemon serves the clone). Whether the data clones is tried
+before anything stops. A `custom` service the parent's labels stop,
+or any `custom` service while one labeled `always` is stopped, is
+exported before they start, as the labels promise; otherwise after. With nothing of what the rsync copies
 stopped (a database dumped, files under a running app) there is no
 clone: the rsync reads the live data as before. An `--export` of a
 `volumes` service on a target does the same, its tar from a clone. The

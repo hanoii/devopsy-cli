@@ -1170,17 +1170,31 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	if err := gateBeforeStop(cwd, cwd, set); err != nil {
 		return finish(fail("the parent: "+err.Error()), false)
 	}
+	// What an earlier push or export left (its devopsy killed outright):
+	// this push holds the sync lock, so nothing else is using it.
+	mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
+	if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
+		return finish(fail(err.Error()), false)
+	}
 	var src dataSet
 	if len(dirs)+len(vols) > 0 {
 		if src, err = syncData(ctx, projectDir, dirs, vols); err != nil {
 			return finish(fail(err.Error()), false)
 		}
-		// What an earlier push left (its devopsy killed outright): this
-		// push holds the sync lock, so nothing else is using it.
-		if err := removeLeftoverClones(filepath.Dir(cwd), src.mnt); err != nil {
-			return finish(fail(err.Error()), false)
-		}
 	}
+	// Where the data clones by reflinks, the services stopped for its
+	// copy are down for the clone only: the copy is made from the clone,
+	// they run again meanwhile. Only a stop the labels ask for of what the
+	// rsync copies: with none of it stopped (a database dumped, storage
+	// under a running app), the copy reads the live data as before. The
+	// check before anything stops: only the clone is downtime.
+	copiesStopped := func(names []string) bool {
+		return slices.ContainsFunc(services, func(s cli.SyncService) bool {
+			return s.HasData && s.Copy == cli.CopyVolumes && slices.Contains(names, s.Name)
+		})
+	}
+	id := os.Getenv(remote.SyncIDEnv)
+	canClone := copiesStopped(cli.StoppedNames(set)) && cloneCheck(ctx, filepath.Dir(cwd), id, src)
 	stopped, err := stopServices(cwd, set)
 	if err != nil {
 		// What it stopped before failing comes back: restoring reads the
@@ -1191,38 +1205,35 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 		return finish(code, false)
 	}
-	// Where the data clones by reflinks, the services stopped for its
-	// copy are down for the clone only: the copy is made from the clone,
-	// they run again meanwhile. Only a stop the labels ask for of what the
-	// rsync copies: with none of it stopped (a database dumped, storage
-	// under a running app), the copy reads the live data as before.
 	parentMnt := src.mnt
 	from, cloned := src, false
-	if slices.ContainsFunc(services, func(s cli.SyncService) bool {
-		return s.HasData && s.Copy == cli.CopyVolumes && slices.Contains(stopped, s.Name)
-	}) {
+	if canClone && copiesStopped(stopped) {
 		var clone string
-		if clone, cloned = syncClone(ctx, filepath.Dir(cwd), os.Getenv(remote.SyncIDEnv), src); cloned {
+		if clone, cloned = syncClone(ctx, filepath.Dir(cwd), id, src); cloned {
 			from = src.in(clone)
 			defer func() {
-				if err := removeClone(context.Background(), remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
 					report.Warn("removing the sync's clone: " + err.Error())
 				}
 			}()
 		}
 	}
+	if !cloned {
+		_ = os.Remove(filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id))
+	}
 	// The child's side writes remote.SyncStartedFile before its first
 	// change and SyncDoneFile after the last (the rsync's or the last
 	// import's): what its holder decides from, answer or not. The streams
 	// come first from a clone, whose rsync is the last write: before the
-	// services start when one of them is in the set (its labels promise
-	// it stopped), after otherwise.
+	// services start when the set holds one of them or a service stopped
+	// for every copy (always: down while another's data is exported, so
+	// its files and the dump are of one moment), after otherwise.
 	code := 0
 	copyFiles := func(last bool) {
 		if code == 0 && len(dirs)+len(vols) > 0 {
 			if ctx.Err() != nil {
-				// Before the claim: nothing written.
-				code = fail("interrupted: nothing copied")
+				// Before the rsync's claim: none of its files written.
+				code = fail("interrupted: the files not copied")
 				return
 			}
 			if err := syncRsync(ctx, from, parentMnt, childOwners(child), childShares(child), last); err != nil {
@@ -1256,7 +1267,10 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		copyFiles(len(streams) == 0)
 		copyStreams(true)
 	} else {
-		if slices.ContainsFunc(streams, func(name string) bool { return slices.Contains(stopped, name) }) {
+		if slices.ContainsFunc(stopped, func(name string) bool {
+			s, _ := cli.SyncFind(services, name)
+			return slices.Contains(streams, name) || s.Stop == cli.StopAlways
+		}) {
 			copyStreams(false)
 			restore()
 		} else {
@@ -1275,46 +1289,60 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	return finish(code, copied)
 }
 
-// syncClone clones src into base's SyncClonePrefix<id> where it clones
-// by reflinks, saying so (and when the room for it is short), and
-// reports where; false where it does not, or a clone that fails though
-// the check passed (another filesystem inside an entry), warned and
-// removed: the copy is made from the stopped data then.
-func syncClone(ctx context.Context, base, id string, src dataSet) (string, bool) {
+// cloneContainer starts the names of the containers of a push's or an
+// export's clone (id: its sync's, export.<pid>), never as the sync's own
+// (remote.SyncContainerPrefix<id>-): the child's holder removes those,
+// writers into the child, and must not end the parent's clone removal.
+func cloneContainer(id string) string { return remote.SyncContainerPrefix + "parent-" + id }
+
+// cloneCheck says, before anything stops, whether src clones into
+// base's SyncClonePrefix<id> by reflinks (reflinks), and warns when the
+// room for the clone is short there: neither belongs in the downtime.
+func cloneCheck(ctx context.Context, base, id string, src dataSet) bool {
 	dir := filepath.Join(base, remote.SyncClonePrefix+id)
-	name := remote.SyncContainerPrefix + id
-	label := []string{"--label", sourceLabel(src.mnt)}
-	if !reflinks(ctx, name+"-reflink", dir, src, label...) {
+	if !reflinks(ctx, cloneContainer(id)+"-reflink", dir, src, "--label", sourceLabel(src.mnt)) {
 		_ = os.Remove(dir)
-		return "", false
+		return false
 	}
-	report.Info("the data clones by reflinks: the services are stopped for the clone only, the copy made from it")
 	if data, err := duData(ctx, src); err == nil && freeBytes(base) < data {
 		report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while the copy is made", size(freeBytes(base)), size(data), base))
 	}
-	if err := cloneData(ctx, name+"-clone", dir, src, label...); err != nil {
+	return true
+}
+
+// syncClone clones src into base's SyncClonePrefix<id> (cloneCheck said
+// it clones), saying so, and reports where; false for a clone that fails
+// though the check passed (another filesystem inside an entry), warned
+// and removed: the copy is made from the stopped data then.
+func syncClone(ctx context.Context, base, id string, src dataSet) (string, bool) {
+	dir := filepath.Join(base, remote.SyncClonePrefix+id)
+	label := []string{"--label", sourceLabel(src.mnt)}
+	if err := cloneData(ctx, cloneContainer(id)+"-clone", dir, src, label...); err != nil {
 		if ctx.Err() == nil {
 			report.Warn(err.Error() + ": copying from the stopped data instead")
 		}
-		if rerr := removeClone(context.Background(), name+"-unclone", base, filepath.Base(dir), label...); rerr != nil {
+		if rerr := removeClone(context.Background(), cloneContainer(id)+"-unclone", base, filepath.Base(dir), label...); rerr != nil {
 			report.Warn("removing the sync's clone: " + rerr.Error())
 		}
 		return "", false
 	}
+	report.Info("the data clones by reflinks: cloned, the services start again, the copy made from the clone")
 	return dir, true
 }
 
 // removeLeftoverClones removes the clones a push or an export killed
 // outright left in base (remote.SyncClonePrefix), and their containers
-// (sourceLabel of mnt), as root: the caller holds the sync lock, so none
-// is in use.
+// (sourceLabel of mnt, the parent's resolved mnt; none when ""), as
+// root: the caller holds the sync lock, so none is in use.
 func removeLeftoverClones(base, mnt string) error {
 	left, _ := filepath.Glob(filepath.Join(base, remote.SyncClonePrefix+"*"))
 	if len(left) == 0 {
 		return nil
 	}
-	if err := removeContainers("label=" + sourceLabel(mnt)); err != nil {
-		return err
+	if mnt != "" {
+		if err := removeContainers("label=" + sourceLabel(mnt)); err != nil {
+			return err
+		}
 	}
 	for _, dir := range left {
 		report.Info("removing " + filepath.Base(dir) + ", a clone an earlier copy left")
@@ -1925,26 +1953,75 @@ func rsyncRun(ctx context.Context, name string, args []string, what string) erro
 	return nil
 }
 
+// shareable is what of src the child's labels share (shares, its list's)
+// that a copy into the child can clone, before anything is emptied: an
+// entry that is a directory on both sides, never a link (Docker would
+// mount what it points to, which the clone empties as root), made in the
+// child when missing (makeEntry); a volume; and only where one file of
+// them clones into the child's mnt by reflinks (reflinks), said once
+// when it does not. The rest is rsynced.
+func shareable(ctx context.Context, id string, src dataSet, childMnt string, shares map[string]bool) map[string]bool {
+	ok := map[string]bool{}
+	var d dataSet
+	d.mnt = src.mnt
+	for _, e := range src.entries {
+		if !shares[e] || slices.Contains(src.files, e) {
+			continue
+		}
+		if fi, err := os.Lstat(filepath.Join(src.mnt, e)); err != nil || !fi.IsDir() {
+			continue
+		}
+		if err := makeEntry(childMnt, e); err != nil {
+			report.Info("mnt/" + e + ": " + err.Error() + ": rsynced, not shared (" + cli.DataCopyReflinkLabel + ")")
+			continue
+		}
+		d.entries, ok[e] = append(d.entries, e), true
+	}
+	for _, v := range src.volumes {
+		if shares[v.Key] {
+			d.volumes, ok[v.Key] = append(d.volumes, v), true
+		}
+	}
+	if len(ok) == 0 || reflinks(ctx, remote.SyncContainerPrefix+id+"-child-reflink", childMnt, d) {
+		return ok
+	}
+	report.Info("no reflinks between the parent's data and the child's: " + cli.DataCopyReflinkLabel + " rsynced as any")
+	return nil
+}
+
+// shareScript is shareInto's, for $1 the parent's data and $2 the
+// child's: exit 3 when $1 holds anything but files, directories and
+// links.
+const shareScript = `set -e
+[ -z "$(find "$1" \( ! -type f ! -type d ! -type l \) -print -quit)" ] || exit 3
+find "$2" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+cp -a --reflink=always "$1/." "$2/"
+find "$2" \( ! -type f ! -type d ! -type l \) -delete
+`
+
 // shareInto clones src (the parent's entry, or its volume's name or
 // clone) into dst (the child's entry, or its volume's name) by reflinks,
 // as root in the util image: dst emptied first, never removed (a
 // container bind-mounts it), then cp -a --reflink=always, so the child
-// shares the parent's blocks until either side writes. What labels it
-// (cli.DataCopyReflinkLabel) asks for no more than that: where the
-// filesystem clones nothing (another one, a filesystem without
-// reflinks), false, said, and the caller rsyncs it, which replaces
-// whatever the clone left.
+// shares the parent's blocks until either side writes. Never device
+// nodes, FIFOs or sockets, as a sync's rsync (--no-D): src holding one
+// is not cloned, and one the parent made meanwhile is removed. What
+// labels it (cli.DataCopyReflinkLabel) asks for no more than that: on
+// failure false, said, and the caller rsyncs it, which replaces whatever
+// the clone left. shareable checked the rest before.
 func shareInto(ctx context.Context, name, src, dst, what string) bool {
-	err := dockerRun(ctx, name, "--network", "none", "-v", src+":/s:ro", "-v", dst+":/d", remote.UtilImage, "sh", "-c",
-		`set -e; find /d -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -a --reflink=always /s/. /d/`)
-	if err != nil {
-		if ctx.Err() == nil {
-			report.Info(what + ": no reflinks between the parent's and the child's (" + cli.DataCopyReflinkLabel + "): copied")
-		}
-		return false
+	err := dockerRun(ctx, name, "--network", "none", "-v", src+":/s:ro", "-v", dst+":/d", remote.UtilImage, "sh", "-c", shareScript, "sh", "/s", "/d")
+	switch {
+	case err == nil:
+		report.Info(what + " shared with the parent by reflinks (" + cli.DataCopyReflinkLabel + ")")
+		return true
+	case ctx.Err() != nil:
+	case exitCode(err) == 3:
+		report.Info(what + " holds device nodes, FIFOs or sockets, which no copy carries: rsynced, not shared (" + cli.DataCopyReflinkLabel + ")")
+	default:
+		report.Info(what + ": the clone into the child failed: rsynced (" + cli.DataCopyReflinkLabel + ")")
 	}
-	report.Info(what + " shared with the parent by reflinks (" + cli.DataCopyReflinkLabel + ")")
-	return true
+	return false
 }
 
 // rsyncdConf serves the entries of mnt and the named volumes being
@@ -2075,9 +2152,10 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 			}
 		}
 		id := os.Getenv(remote.SyncIDEnv)
+		shares = shareable(ctx, id, src, childMnt, shares)
 		shared := map[string]string{}
 		for i, d := range present {
-			if shares[d] && !slices.Contains(files, d) {
+			if shares[d] {
 				if shareInto(ctx, fmt.Sprintf("%s%s-share-%d", remote.SyncContainerPrefix, id, i), filepath.Join(src.mnt, d), filepath.Join(childMnt, d), "mnt/"+d) {
 					if o := owners[d]; o != "" {
 						shared[d] = o

@@ -351,10 +351,17 @@ func runExport(cwd string, args []string, color bool) int {
 	// A clone an earlier export or push left (its devopsy killed
 	// outright): ExportScript holds the sync lock, so none is in use.
 	onTarget := cli.InRelease(projectDir)
+	// On a target where the data clones by reflinks, what it stops is
+	// down for the clone only, the tar made from it (as a sync's copy):
+	// checked before anything stops.
+	d := dataSet{mnt: mnt, entries: entries, volumes: vols}
+	id := fmt.Sprintf("export.%d", os.Getpid())
+	canClone := false
 	if onTarget && s.Copy == cli.CopyVolumes {
 		if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
 			return fail(err.Error())
 		}
+		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, filepath.Dir(cwd), id, d)
 	}
 	stopped, restore, err := stopSet(cwd, set, onTarget)
 	if err != nil {
@@ -365,16 +372,12 @@ func runExport(cwd string, args []string, color bool) int {
 		return code
 	}
 	code := 0
-	// On a target where the data clones by reflinks, what it stopped is
-	// down for the clone only, the tar made from it (as a sync's copy).
 	var restoreErr error
 	restored := false
-	if onTarget && s.Copy == cli.CopyVolumes && slices.Contains(stopped, name) {
-		d := dataSet{mnt: mnt, entries: entries, volumes: vols}
-		id := fmt.Sprintf("export.%d", os.Getpid())
+	if canClone && slices.Contains(stopped, name) {
 		if clone, ok := syncClone(ctx, filepath.Dir(cwd), id, d); ok {
 			defer func() {
-				if err := removeClone(context.Background(), remote.SyncContainerPrefix+id+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
 					report.Warn("removing the export's clone: " + err.Error())
 				}
 			}()
@@ -382,6 +385,8 @@ func runExport(cwd string, args []string, color bool) int {
 			mnt, vols = c.mnt, c.volumes
 			restored, restoreErr = true, restore()
 		}
+	} else if canClone {
+		_ = os.Remove(filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id))
 	}
 	if s.Copy == cli.CopyCustom {
 		report.Info("exporting " + name)

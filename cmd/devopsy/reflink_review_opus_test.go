@@ -17,10 +17,10 @@ import (
 // which makes FIFOs, sockets and device nodes in the child's entry on
 // the host, where bind mounts are not nodev: what a sync's rsync never
 // does (--no-D, decided in review round 4) and an import and a
-// snapshot's tars refuse. Run here as devopsy runs it (the script from
-// the docker call, its /s and /d this test's directories), it copies the
-// parent's FIFO. A FIFO stands for every special file: it needs no root
-// and no reflink.
+// snapshot's tars refuse. Run here as devopsy runs it (shareScript,
+// the parent's and the child's data this test's directories), it copied
+// the parent's FIFO. A FIFO stands for every special file: it needs no
+// root and no reflink.
 func TestReviewOpusShareCopiesSpecialFiles(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS != "linux" {
@@ -28,29 +28,6 @@ func TestReviewOpusShareCopiesSpecialFiles(t *testing.T) {
 	}
 	if out, err := exec.Command("cp", "--version").Output(); err != nil || !strings.Contains(string(out), "GNU") {
 		t.Skip("GNU cp runs the script")
-	}
-	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
-		t.Fatalf("dev (%d):\n%s", code, out)
-	}
-	s.logs()
-	write(t, s.log+".shop-dev", "FAKE_APP_REFLINK=true\n", 0o644)
-	out, code := s.run([]string{"FAKE_REFLINK=1"}, "@dev", "--sync", "--yes")
-	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "mnt/storage shared with the parent by reflinks") {
-		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
-	}
-	var script string
-	for _, line := range strings.Split(docker, "\n") {
-		if strings.Contains(line, "-share-") {
-			if i := strings.Index(line, " sh -c "); i >= 0 {
-				script = line[i+len(" sh -c "):]
-			}
-		}
-	}
-	if script == "" {
-		t.Fatalf("no share call:\n%s", docker)
 	}
 	tmp := t.TempDir()
 	src, dst := filepath.Join(tmp, "src"), filepath.Join(tmp, "dst")
@@ -62,12 +39,11 @@ func TestReviewOpusShareCopiesSpecialFiles(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(src, "pipe"), 0o666); err != nil {
 		t.Fatal(err)
 	}
-	run := strings.ReplaceAll(strings.ReplaceAll(script, "/s/.", src+"/."), " /d", " "+dst)
 	// Refusing (a failure, the entry then rsynced) or leaving none out
 	// alike keep it out of the child's entry.
-	_ = exec.Command("sh", "-c", run).Run()
+	_ = exec.Command("sh", "-c", shareScript, "sh", src, dst).Run()
 	if info, err := os.Lstat(filepath.Join(dst, "pipe")); err == nil && info.Mode()&os.ModeNamedPipe != 0 {
-		t.Errorf("the share made the parent's FIFO in the child's entry (an rsync's --no-D never does): %q", script)
+		t.Errorf("the share made the parent's FIFO in the child's entry (an rsync's --no-D never does)")
 	}
 }
 
@@ -147,7 +123,7 @@ func TestReviewOpusShareFollowsLinkedEntry(t *testing.T) {
 			t.Errorf("a root container emptied and wrote the child's entry, a link to %s, by its path (Docker follows it on the host):\n%s\n%s", elsewhere, line, out)
 		}
 	}
-	if fileExists(filepath.Join(elsewhere, "file.txt")) {
-		t.Errorf("the parent's files written through the child's linked entry into %s", elsewhere)
+	if !strings.Contains(out, "rsynced, not shared (devopsy.data.copy.reflink)") {
+		t.Errorf("the linked entry not left to the rsync, said:\n%s", out)
 	}
 }

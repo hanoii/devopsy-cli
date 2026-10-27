@@ -388,6 +388,12 @@ func destroyData(cwd string, step []string, color bool) int {
 			return fail("removing the snapshots' clone: " + err.Error())
 		}
 		clones, _ := filepath.Glob(filepath.Join(base, remote.SyncClonePrefix+"*"))
+		if mnt, err := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt")); err == nil && len(clones) > 0 {
+			// What a killed push's or export's containers still write there.
+			if err := removeContainers("label=" + sourceLabel(mnt)); err != nil {
+				return fail(err.Error())
+			}
+		}
 		for _, c := range clones {
 			if err := removeClone(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), base, filepath.Base(c)); err != nil {
 				return fail("removing " + filepath.Base(c) + ": " + err.Error())

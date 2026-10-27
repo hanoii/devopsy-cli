@@ -918,9 +918,14 @@ func TestSyncReflinkClone(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "the data clones by reflinks") || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
-	inOrder("first release", docker, "shop-prod compose", "stop db", "-reflink ", "-clone ", "shop-prod compose", "start db",
+	inOrder("first release", docker, "shop-prod compose", "-reflink ", "stop db", "-clone ", "shop-prod compose", "start db",
 		" -v "+clone, "/mnt:/src:ro -v "+s.mnt("dev")+":/dst devopsy-util:3 rsync", "/src/db/ /dst/db/", "-unclone ")
 	noClone("first release")
+	// The clone's containers are the parent's, never named as the sync's
+	// own, which the child's holder removes as writers into the child.
+	if !regexp.MustCompile(`run --rm --name devopsy-sync-parent-[0-9.a-f]+-clone `).MatchString(docker) {
+		t.Errorf("the clone's container name:\n%s", docker)
+	}
 
 	// db not stopped (no stop label): the rsync reads the live data.
 	s.labels("FAKE_DB=mnt")
@@ -1020,20 +1025,24 @@ func TestSyncReflinkClone(t *testing.T) {
 		t.Fatalf("the sync after the interrupt (%d):\n%s", code, out)
 	}
 
-	// What a push killed outright left: removed by the next push, then by
-	// --destroy.
+	// What a push killed outright left: removed by the next push, one
+	// that copies nothing as files too, then by --destroy, its containers
+	// first.
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	s.labels("FAKE_APP=keep\nFAKE_DB=stream")
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "a clone an earlier copy left") {
 		t.Fatalf("a leftover clone (%d):\n%s", code, out)
 	}
+	s.labels("")
 	noClone("a leftover clone")
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-clone\n", 0o644)
 	s.logs()
 	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
 	}
-	if docker, _ := s.logs(); !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") {
-		t.Errorf("--destroy did not remove the clone as root:\n%s", docker)
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-clone") || !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") || strings.Index(docker, "rm -f old-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("--destroy did not end the clone's containers, then remove it as root:\n%s", docker)
 	}
 }
 
@@ -1072,7 +1081,7 @@ func TestSyncReflinkShare(t *testing.T) {
 	// child has of its own; the fake's copy does not).
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(out, "mnt/storage: no reflinks between the parent's and the child's (devopsy.data.copy.reflink): copied") || !strings.Contains(docker, "--chown=10001:10001 /src/storage/ /dst/storage/") {
+	if code != 0 || !strings.Contains(out, "no reflinks between the parent's data and the child's: devopsy.data.copy.reflink rsynced as any") || !strings.Contains(docker, "--chown=10001:10001 /src/storage/ /dst/storage/") {
 		t.Errorf("no reflinks (%d):\n%s\n%s", code, out, docker)
 	}
 
