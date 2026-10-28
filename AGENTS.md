@@ -286,7 +286,7 @@ The section that covers each part is in parentheses.
   local release in `release_local.go`), syncs and the servers'
   `--sync-*` flags (`sync.go`, Syncs), `--export` and `--import`
   (`data.go`), snapshots (`snapshot.go`, named volumes' helpers in
-  `volumes.go`), the owners of `mnt`'s entries and the mounts check
+  `volumes.go`, reflink clones shared with syncs in `clone.go`), the owners of `mnt`'s entries and the mounts check
   (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
   (`releaselog.go`), `--releases`, `--images` and `--server-info`
@@ -1937,14 +1937,19 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   service, in `depends_on` order over every service
   (`SyncStreamServices`: dependencies first, ties alphabetical, a cycle
   an error), the parent runs the capability's `export <service>`
-  (`syncStream`) into the child's spool,
+  (`exportStream`) into the child's spool,
   `$base/.devopsy-sync.stream.<service>.<sync id>` (`remote.StreamSpool`:
   one per sync, so an export that outlived its push, killed outright,
   never writes into the next sync's): on the
   same server directly, across servers through `cat >` in an SSH
-  session to the child (`exportInto`). Only once the export exited 0
-  does the child's `--sync-services import <service>` run. Never a
-  pipe into the import: a cut export never reaches it.
+  session to the child (`exportInto`). Only once every export exited 0
+  do the parent's services start again and the child's `--sync-services
+  import <service>` run, each in the same order (`importStream`).
+  Never a pipe into the import: a cut export never reaches it. Why
+  every export first (decided 2026-10-27): an import reads its spool,
+  never the parent, so a parent stopped for its exports was down through
+  the child's load too, often several times the dump. Cost: every spool
+  at once on the child's disk.
 - **The import:** the service brought up (`upFor`, `--no-deps` but on
   a first release: Compose would start a dependency the sync stopped)
   unless the child's side stopped it (down again after if it was down), `import <service>` with the spool
@@ -1955,6 +1960,57 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Transport, SSH and environment
 
+- **Where the parent's data clones by reflinks, the stop lasts the
+  clone** (`syncClone`, the helpers in `clone.go` shared with
+  snapshots): once `stopServices` stopped a `volumes` service with
+  data (only a stop the labels ask for: nothing stopped, nothing
+  cloned), its data is cloned into `$base/.devopsy-sync.clone.<sync
+  id>`, the set started, and the rsync copies from the clone
+  (`dataSet.in`: its volumes bound by path), which goes after, on a
+  cancel too. The reflink check and the room's `du` run before the stop
+  (`cloneCheck`), as a take's: only the clone is downtime (review). The
+  streams run before the start when the set holds a `custom` service or
+  one stopped `always` (down while another's data is exported, so its
+  files and the dump are of one moment: review), after it otherwise,
+  told nothing is stopped (`DEVOPSY_DATA_STOP` empty: review round 2,
+  a script following the contract would `run --rm` beside the running
+  service); the rsync is then the last write. A cancel during the check
+  stops nothing (round 2). The clone's containers are
+  `<SyncContainerPrefix>parent-<id>-...` (`cloneContainer`), never the
+  sync's own prefix, which the child's holder removes as writers into
+  the child (review: it could kill the clone's removal). Never under `snapshots/.clone`: a take's
+  leftovers step, which holds only the snapshot lock, removes a clone
+  without its `.tmp`. One a devopsy killed outright left goes with the
+  next holder of the sync lock (`removeLeftoverClones`, its containers
+  by `sourceLabel`, as the daemon's) and with `--destroy-data`. An
+  `--export` of a `volumes` service on a target does the same
+  (`export.<pid>`). Accepted cost, measured on XFS (2026-10-27): the
+  parent's pages written while the clone exists fragment its files
+  (about two extents per 16 KiB page written, which stay after the
+  clone goes; `xfs_fsr` undoes it), as snapshots' clones already did.
+- **`devopsy.data.copy.reflink=true` on the child's service** clones
+  its entries and volumes from the parent's (or the clone) into the
+  child's on one server (`shareInto`, `childShares` from the list's
+  seventh field): the entry emptied, never removed, `cp -a
+  --reflink=always`, then `ownMnt` for owned ones (no `--chown` in a
+  clone). Before anything is emptied (`shareable`, review): an entry
+  that is a link on either side is rsynced (Docker would mount its
+  target alone, which the clone empties as root; a missing one is made,
+  `makeEntry`). The script tries one file at the real destination
+  before it empties anything (`shareScript`'s exit 4: the entry's or the
+  volume's own filesystem, round 2: one probe into the child's mnt took
+  a volume on another disk for no reflinks at all), and the first that
+  will not clone has the rest rsynced, said once (an emptied entry
+  rsynced again was a full copy every sync on ext4). No device nodes,
+  FIFOs or sockets (exit 3: a source holding one is rsynced, `--no-D`;
+  one made meanwhile is deleted after the clone). The clone runs twice
+  when the first fails, as `cloneData` does: a live source's file
+  removed during `cp` fails it (round 2). Mounts by `--mount`
+  (`shareMount`), so any entry name works. A clone that fails falls back
+  to the rsync, which replaces what it left. File entries and syncs across servers always rsync. No
+  named feature: one devopsy does both sides on one server. Why opt in
+  and for files only: every page a database writes while a child
+  shares it lands elsewhere (4,000 writes made 5,600 extents of one).
 - **rsync always runs in `devopsy-util:<n>`** (`UtilImage`, now `:3`, with `zstd` for snapshots;
   built on each host from `UtilDockerfile` when missing; GNU tar for
   `--export` and `--import` too, GNU find and chown for owners), as
@@ -2456,7 +2512,8 @@ settled every rule here after nine reviews (2026-10-25).
   change within minutes, and rsync copies a changed file whole between
   local directories, so its stopped pass is close to a full copy anyway.
   Reflinks are the answer for a large database.
-- **Reflinks first, whatever the setting** (`takeCopy`: reflink, mirror
+- **Reflinks first, whatever the setting** (`takeCopy`, over `clone.go`'s
+  `reflinks`, `cloneData` and `removeClone`, which syncs share: reflink, mirror
   or none, recorded as the manifest's `copy`): before anything stops,
   `reflinks` clones one file of each entry and volume into
   `$base/snapshots/.clone` (the release root's filesystem, never the
@@ -3035,7 +3092,13 @@ as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the operator's
 runs everything with the real timeouts, and one test always does. The
 test server's deploy user has `/bin/sh` (dash) as login shell, stricter
 than devopsy-server's bash (it found the watcher signalling only the
-script there). A scenario a review finds goes there, unless a unit
+script there). Its home, where the releases go, is a tmpfs (`entrypoint`),
+so nothing clones by reflinks there on any host (decided 2026-10-27: on
+OrbStack's btrfs the container's overlay clones, on CI's ext4 not, so a
+sync ran another order locally than in CI and six tests failed only
+locally); a test of reflinks mounts an XFS loop device of its own below
+it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`), and one of their
+absence an ext4 (`TestSyncReflinkExt4E2E`). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
 Lanes run the tests at once (`E2E_LANES`, default 4; `runLanes`): each

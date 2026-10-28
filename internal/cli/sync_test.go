@@ -41,13 +41,13 @@ func TestSyncServices(t *testing.T) {
 		"shared": map[string]any{"name": "shared", "external": true},
 	}, "services": map[string]any{
 		"app": map[string]any{
-			"labels":     map[string]string{DataLabel: "true", DataStopLabel: "import", DataExcludeLabel: "logs, cache"},
+			"labels":     map[string]string{DataLabel: "true", DataStopLabel: "import", DataExcludeLabel: "logs, cache", DataCopyReflinkLabel: "true"},
 			"volumes":    []any{bind(dot + "/mnt/storage/files"), bind(dot + "/mnt/logs"), bind("/etc/hosts"), map[string]string{"type": "volume", "source": "cache"}},
 			"depends_on": map[string]any{"database": map[string]any{"condition": "service_healthy"}},
 			"restart":    "always",
 		},
 		"database": map[string]any{
-			"labels":  map[string]string{DataLabel: "true", DataCopyLabel: "custom", DataStopLabel: "never"},
+			"labels":  map[string]string{DataLabel: "true", DataCopyLabel: "custom", DataStopLabel: "never", DataCopyReflinkLabel: "true"},
 			"volumes": []any{bind(dot + "/mnt/database"), map[string]string{"type": "volume", "source": "dbdata"}, map[string]string{"type": "volume", "source": ""}},
 		},
 		"goaccess": map[string]any{"profiles": []string{"tools"}, "labels": map[string]string{DataLabel: "true"}, "volumes": []any{bind(resolved + "/report")}},
@@ -55,7 +55,7 @@ func TestSyncServices(t *testing.T) {
 		// entries are still its own.
 		"kept": map[string]any{"labels": map[string]string{DataLabel: "true", DataCopyLabel: "none", DataStopLabel: "own"}, "volumes": []any{bind(dot + "/mnt/kept")}},
 		// A copy label without data is ignored, not an error.
-		"mntnot": map[string]any{"labels": map[string]string{DataCopyLabel: "pipe"}, "volumes": []any{bind(dot + "/mntx/a"), map[string]string{"type": "volume", "source": "shared"}}},
+		"mntnot": map[string]any{"labels": map[string]string{DataCopyLabel: "pipe", DataCopyReflinkLabel: "yes"}, "volumes": []any{bind(dot + "/mntx/a"), map[string]string{"type": "volume", "source": "shared"}}},
 		// false: no data, its own (from a variable) ignored, and its
 		// exclude.
 		"plain":  map[string]any{"labels": map[string]string{DataLabel: "false", DataStopLabel: "own", DataExcludeLabel: "a/b"}, "volumes": []any{bind(dot + "/mnt/plain")}},
@@ -91,6 +91,18 @@ func TestSyncServices(t *testing.T) {
 		w := want[i]
 		if s.Name != w.Name || s.Copy != w.Copy || s.Stop != w.Stop || s.StopLabeled != w.StopLabeled || s.HasData != w.HasData || s.Restart != w.Restart || strings.Join(s.Dirs, ",") != strings.Join(w.Dirs, ",") || strings.Join(s.DependsOn, ",") != strings.Join(w.DependsOn, ",") || strings.Join(s.Profiles, ",") != strings.Join(w.Profiles, ",") {
 			t.Errorf("%d: %+v, want %+v", i, s, w)
+		}
+	}
+	// The reflink label on a volumes copy only: a custom one's, and one
+	// without data, ignored.
+	for _, s := range services {
+		if s.Reflink != (s.Name == "app") {
+			t.Errorf("%s: reflink %v", s.Name, s.Reflink)
+		}
+	}
+	for v, want := range map[string]string{"": "devopsy.data.copy.reflink is empty: true or false", "yes": "devopsy.data.copy.reflink=yes: true or false"} {
+		if _, err := parseSyncServices([]byte(`{"services":{"x":{"labels":{"devopsy.data":"true","devopsy.data.copy.reflink":"`+v+`"}}}}`), dot); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("reflink %q: %v", v, err)
 		}
 	}
 	// Volumes: cache excluded by app's label, dbdata the database's with

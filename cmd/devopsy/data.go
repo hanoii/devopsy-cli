@@ -348,8 +348,32 @@ func runExport(cwd string, args []string, color bool) int {
 	// On a target recorded, as a push's stops are: an export killed
 	// outright leaves them for the next settle to start, --status naming
 	// them meanwhile (review round 6: prod stayed down, unrecorded).
-	_, restore, err := stopSet(cwd, set, cli.InRelease(projectDir))
+	// A clone an earlier export or push left (its devopsy killed
+	// outright): ExportScript holds the sync lock, so none is in use.
+	onTarget := cli.InRelease(projectDir)
+	// On a target where the data clones by reflinks, what it stops is
+	// down for the clone only, the tar made from it (as a sync's copy):
+	// checked before anything stops.
+	d := dataSet{mnt: mnt, entries: entries, volumes: vols}
+	id := fmt.Sprintf("export.%d", os.Getpid())
+	canClone := false
+	if onTarget && s.Copy == cli.CopyVolumes {
+		if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
+			return fail(err.Error())
+		}
+		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, filepath.Dir(cwd), id, d)
+	}
+	checked := filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id)
+	if ctx.Err() != nil {
+		// Cancelled before anything stops (during the check, say).
+		_ = os.Remove(checked)
+		return fail("export " + name + ": interrupted: nothing exported")
+	}
+	stopped, restore, err := stopSet(cwd, set, onTarget)
 	if err != nil {
+		if canClone {
+			_ = os.Remove(checked)
+		}
 		code := fail(err.Error())
 		if err := restore(); err != nil {
 			fail(err.Error())
@@ -357,6 +381,22 @@ func runExport(cwd string, args []string, color bool) int {
 		return code
 	}
 	code := 0
+	var restoreErr error
+	restored := false
+	if canClone && slices.Contains(stopped, name) {
+		if clone, ok := syncClone(ctx, filepath.Dir(cwd), id, d); ok {
+			defer func() {
+				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+					report.Warn("removing the export's clone: " + err.Error())
+				}
+			}()
+			c := d.in(clone)
+			mnt, vols = c.mnt, c.volumes
+			restored, restoreErr = true, restore()
+		}
+	} else if canClone {
+		_ = os.Remove(checked)
+	}
 	if s.Copy == cli.CopyCustom {
 		report.Info("exporting " + name)
 		err = runDataHook(ctx, cwd, projectDir, dataHookEnv(services, cli.StoppedNames(set)), nil, os.Stdout, nil, "export", name)
@@ -401,8 +441,11 @@ func runExport(cwd string, args []string, color bool) int {
 		err = interrupted(ctx, err)
 		code = fail("export " + name + ": " + err.Error() + ": what was written is incomplete")
 	}
-	if err := restore(); err != nil {
-		code = fail(err.Error())
+	if !restored {
+		restoreErr = restore()
+	}
+	if restoreErr != nil {
+		code = fail(restoreErr.Error())
 	}
 	return code
 }

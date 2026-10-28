@@ -1082,6 +1082,27 @@ start with a dash or be `!` or `(`, nor an entry a `devopsy.mnt.owner`
 owns: releases,
 copies and snapshots refuse them.
 
+`devopsy.data.copy.reflink=true` on a child's service copied as
+`volumes` has its entries and volumes cloned from the parent's by
+reflinks, where a sync runs on one server and its filesystem has them
+(XFS, btrfs): its blocks are the parent's until either side writes, so
+the copy is instant and the child takes next to no room. The child's
+labels decide; the parent's own are ignored, as is the label on a
+service without data or with another copy, and an empty value is an
+error. For mostly static files, added to and rarely rewritten, like
+uploads: never a database, which writes its pages in place, each page
+it writes while a child shares it then landing elsewhere, so the
+parent's files fragment for good (measured on XFS: some 5,600 extents
+for 4,000 pages of 16 KiB written, where a file written in place keeps
+one; `xfs_fsr` puts them back together). Whether the data clones into
+the child is tried first, on one file: where nothing clones (another
+filesystem) everything is rsynced, said, the child's entries untouched.
+Otherwise the child's entry is emptied, never removed, then cloned, and
+an owned one given to its owner (`devopsy.mnt.owner`). An entry that is
+a symbolic link on either side, and one holding device nodes, FIFOs or
+sockets (which no copy carries), is rsynced instead. Across servers it
+is rsynced as any.
+
 `devopsy.data.stop` says when devopsy stops the service while data
 moves:
 
@@ -1233,8 +1254,10 @@ the capability's `prepare child`, its side's set stopped; then it waits
 for the parent. On the parent's, under a shared hold of its release lock
 (a release of the parent waits for the copy) and a sync lock of its own
 (syncs from one parent run one at a time): `prepare parent`, its side's
-set stopped, the rsync, each stream (export, then the child's import),
-its services started, `finish parent go|abort`. Then the child's: its
+set stopped, the rsync, each stream's export into the child's spool, its
+services started, then the child's imports of the spools (an import
+reads its spool, never the parent: the parent is not down through a
+load), `finish parent go|abort`. Then the child's: its
 services started, `finish child go`, and its `run` step. The child's
 stopped services stay down through the imports, so an app never runs on
 a half-imported database, and after a copy that did not complete too
@@ -1245,6 +1268,25 @@ through them; one in a profile that is not up (`COMPOSE_PROFILES`) stays
 uncreated, as the run step's `up` would leave it. A lock held by something else is announced ("waiting for the
 release running on ..."), then waited for up to 10 minutes, like every
 release lock.
+
+**Where the parent's data clones by reflinks** (its entries and volumes
+on an XFS or btrfs together with the environment's directory, as for
+snapshots), what its side stops for the copy is down for a clone only,
+seconds whatever the size: the parent's set stopped, its data cloned
+into `.devopsy-sync.clone.<id>` beside it, its services started, and
+the rsync made from the clone, which then goes (the same across
+servers: the daemon serves the clone). Whether the data clones is tried
+before anything stops. A `custom` service the parent's labels stop,
+or any `custom` service while one labeled `always` is stopped, is
+exported before they start, as the labels promise; otherwise after. With nothing of what the rsync copies
+stopped (a database dumped, files under a running app) there is no
+clone: the rsync reads the live data as before. An `--export` of a
+`volumes` service on a target does the same, its tar from a clone. The
+cost is the parent's: a database's pages written while the clone
+exists go to new places, so its files fragment (measured on XFS: some
+400 extents for 200 pages of 16 KiB written meanwhile, where a file
+written in place keeps one), which stays once the clone is gone;
+`xfs_fsr` on the database's files puts them back together.
 
 The rsync runs as root in `devopsy-util`, devopsy's own image (alpine 3
 with rsync and GNU tar, find and chown; it replaced `devopsy-rsync` and
@@ -1884,12 +1926,15 @@ lists them with their contracts):
     its lock, and only when there is something to copy. A failure aborts
     the sync (`finish abort` runs).
   - `export <service>` writes a `custom` service's data to stdout: on the
-    parent's server, once what the sync stops there is stopped and the
-    rsync is done, once per `custom` service in `depends_on` order; and
+    parent's server, once per `custom` service in `depends_on` order,
+    with what the sync stops there stopped (where the data clones by
+    reflinks and nothing stopped is `custom` or `always`, after they
+    start again from the clone, `DEVOPSY_DATA_STOP` then empty); and
     `devopsy --export`. stdin is empty. devopsy spools what it writes and
-    imports it only once it exited 0. A service in `DEVOPSY_DATA_STOP` is
-    stopped: reach it with `devopsy run --rm --no-deps -T <service> ...`,
-    not `exec`, or refuse.
+    imports it only once every export exited 0, the parent's services
+    started again first. A service in `DEVOPSY_DATA_STOP` is stopped:
+    reach it with `devopsy run --rm --no-deps -T <service> ...`, not
+    `exec`, or refuse.
   - `import <service>` reads that data from stdin, complete: on the
     child's server and in `devopsy --import`, its service up (devopsy
     brings it up alone first) unless it is in `DEVOPSY_DATA_STOP`.

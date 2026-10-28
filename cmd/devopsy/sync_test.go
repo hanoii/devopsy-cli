@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +112,10 @@ dblab=$(lab "${FAKE_DB:-mnt+own}")
 [ -z "${FAKE_DB_OWNER:-}" ] || dblab="${dblab%\}},\"devopsy.mnt.owner\":\"$FAKE_DB_OWNER\"}"
 if [ -n "${FAKE_APP_OWNER:-}" ]; then
   case $applab in '{}') applab="{\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; *) applab="${applab%\}},\"devopsy.mnt.owner\":\"$FAKE_APP_OWNER\"}" ;; esac
+fi
+# FAKE_APP_REFLINK: app's devopsy.data.copy.reflink.
+if [ -n "${FAKE_APP_REFLINK:-}" ]; then
+  case $applab in '{}') applab="{\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; *) applab="${applab%\}},\"devopsy.data.copy.reflink\":\"$FAKE_APP_REFLINK\"}" ;; esac
 fi
 app2=
 [ -z "${FAKE_APP_MOUNT2:-}" ] || app2=$(printf ',{"type":"bind","source":"%s/mnt%s"}' "${dir:-}" "$FAKE_APP_MOUNT2")
@@ -304,7 +309,8 @@ case "$*" in
     grep -qx "\[$m\]" "$DOCKER_LOG.rsyncd" || { echo "@ERROR: Unknown module '$m'" >&2; exit 5; }
     from=$(grep "^$m " "$DOCKER_LOG.daemonvols" | cut -d' ' -f2)
     for a; do case $a in *:/vol/*) to=${a%%:*} ;; esac; done
-    mkdir -p "$vols/$to" && cp -R "$vols/$from/." "$vols/$to" ;;
+    case $from in /*) ;; *) from="$vols/$from" ;; esac
+    mkdir -p "$vols/$to" && cp -R "$from/." "$vols/$to" ;;
   "run --rm --name devopsy-sync-"*"-receive --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
@@ -334,12 +340,13 @@ case "$*" in
   "run --rm --name devopsy-snapshot-"*"-stale "*)
     for a; do case $a in *:/m) m=${a%:/m} ;; esac; done
     for a; do case $a in /m/*) rm -rf "$m/${a#/m/}" ;; esac; done ;;
-  # FAKE_REFLINK: the data clones by reflinks (it does not by default).
-  "run --rm --name devopsy-snapshot-"*"-reflink "*)
+  # FAKE_REFLINK: the data clones by reflinks (it does not by default),
+  # for a snapshot's take and a sync's or an export's copy.
+  "run --rm --name devopsy-snapshot-"*"-reflink "*|"run --rm --name devopsy-sync-"*"-reflink "*)
     [ -n "${FAKE_REFLINK:-}" ] || exit 1 ;;
   # A reflink clone: -v <mnt>:/m/mnt:ro, -v <volume>:/m/volumes/<key>:ro,
   # -v <clone>:/c; copied as cp -a would.
-  "run --rm --name devopsy-snapshot-"*"-clone "*)
+  "run --rm --name devopsy-snapshot-"*"-clone "*|"run --rm --name devopsy-sync-"*"-clone "*)
     # FAIL_CLONE: part of the data does not clone (another filesystem
     # mounted inside an entry, a btrfs nodatacow file), whatever the check
     # found of the one file it tried.
@@ -347,9 +354,9 @@ case "$*" in
     m= c=
     for a; do case $a in *:/m/mnt:ro) m=${a%:/m/mnt:ro} ;; *:/c) c=${a%:/c} ;; esac; done
     mkdir -p "$c/mnt" "$c/volumes"
-    for e in $(printf '%s\n' "$last" | sed -n 's|^cp -a --reflink=always "/m/mnt/\([^"]*\)" /c/mnt/$|\1|p'); do cp -Rp "$m/$e" "$c/mnt/"; done
+    for e in $(printf '%s\n' "$last" | sed -n "s|^cp -a --reflink=always '/m/mnt/\\([^']*\\)' '/c/mnt/' .*|\\1|p"); do cp -Rp "$m/$e" "$c/mnt/"; done
     for a; do case $a in *:/m/volumes/*:ro) vn=${a%%:*}; k=${a#*:/m/volumes/}; k=${k%:ro}; mkdir -p "$c/volumes/$k"; cp -Rp "$vols/$vn/." "$c/volumes/$k/" ;; esac; done ;;
-  "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
+  "run --rm --name devopsy-snapshot-"*"-unclone "*|"run --rm --name devopsy-sync-"*"-unclone "*|"run --rm --name devopsy-destroy-"*"-clone "*)
     for a; do case $a in *:/s) sd=${a%:/s} ;; esac; done
     rm -rf "$sd/${last#/s/}" ;;
   "run --rm --name devopsy-snapshot-"*"-unmirror "*)
@@ -378,6 +385,19 @@ case "$*" in
     ftar "$m/$tdir" "$tentry" ;;
   "run --rm --network none "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
+  # A clone into the child's entry or volume (--mount
+  # type=bind|volume,source=<path or volume>,target=/s|/d), emptied first:
+  # only with FAKE_REFLINK, as reflinks between them; without, the
+  # script's exit 4, nothing changed.
+  "run --rm --name devopsy-sync-"*"-share-"*)
+    [ -n "${FAKE_REFLINK:-}" ] || exit 4
+    for a; do case $a in
+      type=bind,source=*,target=/s*) sh_src=${a#type=bind,source=}; sh_src=${sh_src%%,target=*} ;;
+      type=volume,source=*,target=/s*) sh_src=${a#type=volume,source=}; sh_src="$vols/${sh_src%%,target=*}" ;;
+      type=bind,source=*,target=/d) sh_dst=${a#type=bind,source=}; sh_dst=${sh_dst%%,target=*} ;;
+      type=volume,source=*,target=/d) sh_dst=${a#type=volume,source=}; sh_dst="$vols/${sh_dst%%,target=*}" ;;
+    esac; done
+    mkdir -p "$sh_dst" && find "$sh_dst" -mindepth 1 -maxdepth 1 -exec rm -rf {} + && cp -Rp "$sh_src/." "$sh_dst/" ;;
   "run --rm --name devopsy-sync-"*|"run --rm --name devopsy-snapshot-"*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     if [ -n "${FAKE_SLOW_RSYNC:-}" ]; then touch "$FAKE_SLOW_RSYNC"; exec sleep 20; fi
@@ -386,9 +406,10 @@ case "$*" in
     # $DOCKER_LOG.mirrorhook: what happens on the server while a take's
     # first pass copies (a release switching current), run once.
     case "$*" in *-mirror-0\ *) [ ! -f "$DOCKER_LOG.mirrorhook" ] || { sh "$DOCKER_LOG.mirrorhook"; rm -f "$DOCKER_LOG.mirrorhook"; } ;; esac
-    # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>.
+    # A volume: -v <name>:/src/<key>:ro and -v <name>:/dst/<key>; from a
+    # clone, its directory (a path) as the source.
     vsrc= vdst=
-    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
+    for a; do case $a in *:/src:ro) src=${a%:/src:ro} ;; *:/dst) dst=${a%:/dst} ;; /*:/src/*:ro) vsrc=${a%%:*} ;; *:/src/*:ro) vsrc="$vols/${a%%:*}" ;; /*:/dst/*) vdst=${a%%:*} ;; *:/dst/*) vdst="$vols/${a%%:*}" ;; esac; done
     if [ -n "$vsrc" ]; then mkdir -p "$vdst" && cp -R "$vsrc/." "$vdst"; exit $?; fi
     d=${last2#/src/}
     if [ -f "$src/$d" ]; then cp "$src/$d" "$dst/"; else mkdir -p "$dst/$d" && cp -R "$src/$d." "$dst/$d"; fi ;;
@@ -864,6 +885,232 @@ func TestReleaseFrom(t *testing.T) {
 	}
 }
 
+// Where the parent's data clones by reflinks, the services a sync stops
+// for its copy are down for the clone only: started again before the
+// rsync, which copies from the clone, removed after. A custom service
+// stopped by its labels is exported before they start, one running
+// after; across servers the daemon serves the clone, and an export on a
+// target tars from one. Nothing of what the rsync copies stopped: no
+// clone. A clone that fails copies from the stopped data, as before; one
+// a push killed outright left goes with the next push and with
+// --destroy.
+func TestSyncReflinkClone(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	prod := filepath.Join(s.root, "shop", "prod")
+	clone := filepath.Join(prod, remote.SyncClonePrefix)
+	reflink := []string{"FAKE_REFLINK=1"}
+	inOrder := func(name, all string, want ...string) {
+		t.Helper()
+		rest := all
+		for _, w := range want {
+			i := strings.Index(rest, w)
+			if i < 0 {
+				t.Fatalf("%s: missing %q in order, after:\n%s\nall:\n%s", name, w, rest, all)
+			}
+			rest = rest[i+len(w):]
+		}
+	}
+	noClone := func(name string) {
+		t.Helper()
+		if left, _ := filepath.Glob(clone + "*"); len(left) > 0 {
+			t.Errorf("%s: the clone left: %v", name, left)
+		}
+	}
+
+	out, code := s.run(reflink, "@dev", "--release")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "the data clones by reflinks") || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	inOrder("first release", docker, "shop-prod compose", "-reflink ", "stop db", "-clone ", "shop-prod compose", "start db",
+		" -v "+clone, "/mnt:/src:ro -v "+s.mnt("dev")+":/dst devopsy-util:3 rsync", "/src/db/ /dst/db/", "-unclone ")
+	noClone("first release")
+	// The clone's containers are the parent's, never named as the sync's
+	// own, which the child's holder removes as writers into the child.
+	if !regexp.MustCompile(`run --rm --name devopsy-sync-parent-[0-9.a-f]+-clone `).MatchString(docker) {
+		t.Errorf("the clone's container name:\n%s", docker)
+	}
+
+	// db not stopped (no stop label): the rsync reads the live data.
+	s.labels("FAKE_DB=mnt")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(docker, "-clone ") || !strings.Contains(docker, " -v "+s.mnt("prod")+":/src:ro") {
+		t.Errorf("nothing stopped (%d):\n%s\n%s", code, out, docker)
+	}
+	s.labels("")
+
+	// A clone that fails though the check passed: from the stopped data.
+	out, code = s.run(append(reflink, "FAIL_CLONE=1"), "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "copying from the stopped data instead") {
+		t.Fatalf("a clone that fails (%d):\n%s", code, out)
+	}
+	inOrder("a clone that fails", docker, "stop db", "-clone ", "-unclone ", " -v "+s.mnt("prod")+":/src:ro", "/src/db/", "shop-prod compose", "start db")
+	noClone("a clone that fails")
+
+	// Streams: one stopped by its labels exported before the start, one
+	// running after it; the rsync from the clone last.
+	caps := filepath.Join(s.dot, "capabilities", "data")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1\"\n", 0o755)
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev with the scripts (%d):\n%s", code, out)
+	}
+	s.logs()
+	s.labels("FAKE_APP=mnt+own\nFAKE_DB=stream+own")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 {
+		t.Fatalf("a stopped stream (%d):\n%s", code, out)
+	}
+	inOrder("a stopped stream", out, "the data clones by reflinks", "exporting db", "starting db app", "rsync mnt/storage")
+	inOrder("a stopped stream", docker, "-clone ", "start db app", " -v "+clone, "/src/storage/")
+	s.labels("FAKE_APP=mnt+own\nFAKE_DB=stream")
+	out, code = s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 {
+		t.Fatalf("a running stream (%d):\n%s", code, out)
+	}
+	inOrder("a running stream", out, "exporting db", "rsync mnt/storage")
+	inOrder("a running stream", docker, "stop app", "-clone ", "start app", " -v "+clone, "/src/storage/")
+	if i, j := strings.Index(out, "starting app"), strings.Index(out, "exporting db"); i < 0 || j < i {
+		t.Errorf("a running stream exported before the start:\n%s", out)
+	}
+	s.labels("")
+
+	// Across servers the daemon serves the clone.
+	across := append([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}, reflink...)
+	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "db", "ibdata")) != "rows\n" {
+		t.Fatalf("across servers (%d):\n%s", code, out)
+	}
+	inOrder("across servers", docker, "stop db", "-clone ", "start db", "run --rm -d --name devopsy-sync-", " -v "+clone, "/mnt:/mnt:ro", "-unclone ")
+	noClone("across servers")
+
+	// An export on a target tars from a clone, db started first.
+	cmd := exec.Command(binary, "@prod", "--export", "db")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), reflink...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("export: %v\n%s", err, stderr.String())
+	}
+	docker, _ = s.logs()
+	inOrder("export", docker, "stop db", "-clone ", "start db", "run --rm --name devopsy-export-", "source="+clone+"export.", "-unclone ")
+	noClone("export")
+
+	// Interrupted during the rsync from the clone: the clone goes too.
+	started := filepath.Join(t.TempDir(), "started")
+	cut := exec.Command(binary, "@dev", "--sync", "--yes")
+	cut.Dir, cut.Env, cut.Stdin = s.project, append(append([]string{}, s.env...), append(reflink, "FAKE_SLOW_RSYNC="+started, "FAKE_SSH_DETACH=1")...), strings.NewReader("")
+	if err := cut.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for start := time.Now(); !fileExists(started); time.Sleep(50 * time.Millisecond) {
+		if time.Since(start) > startWait {
+			_ = cut.Process.Kill()
+			t.Fatalf("the copy never started:\n%s", readString(s.log))
+		}
+	}
+	_ = cut.Process.Signal(syscall.SIGTERM)
+	_ = cut.Wait()
+	for start := time.Now(); !strings.Contains(readString(s.log), "-unclone "); time.Sleep(100 * time.Millisecond) {
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the clone not removed after the interrupt:\n%s", readString(s.log))
+		}
+	}
+	noClone("interrupted")
+	s.logs()
+	// The interrupted copy left the child partial: a sync completes it.
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("the sync after the interrupt (%d):\n%s", code, out)
+	}
+
+	// What a push killed outright left: removed by the next push, one
+	// that copies nothing as files too, then by --destroy, its containers
+	// first.
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	s.labels("FAKE_APP=keep\nFAKE_DB=stream")
+	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "a clone an earlier copy left") {
+		t.Fatalf("a leftover clone (%d):\n%s", code, out)
+	}
+	s.labels("")
+	noClone("a leftover clone")
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-clone\n", 0o644)
+	s.logs()
+	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
+		t.Fatalf("--destroy (%d):\n%s", code, out)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-clone") || !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") || strings.Index(docker, "rm -f old-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("--destroy did not end the clone's containers, then remove it as root:\n%s", docker)
+	}
+}
+
+// A child's service labeled devopsy.data.copy.reflink=true gets its
+// entries cloned from the parent's by reflinks on the same server: the
+// child's entry emptied, never removed, then cloned, its owner given;
+// the rest rsynced. Where nothing clones, and across servers, rsync. A
+// reset wipes, then clones.
+func TestSyncReflinkShare(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	s.logs()
+	write(t, s.log+".shop-dev", "FAKE_APP_REFLINK=true\nFAKE_APP_OWNER=10001:10001\n", 0o644)
+	reflink := []string{"FAKE_REFLINK=1"}
+	stale := filepath.Join(s.mnt("dev"), "storage", "stale.txt")
+
+	write(t, stale, "dev's own\n", 0o644)
+	out, code := s.run(reflink, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code != 0 || !strings.Contains(out, "mnt/storage shared with the parent by reflinks (devopsy.data.copy.reflink)") || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || fileExists(stale) {
+		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
+	}
+	// db rsynced, storage cloned, then given to its owner; never rsynced.
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-[0-9.a-f]+-share-1 --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:3`).MatchString(docker) {
+		t.Errorf("shared docker:\n%s", docker)
+	}
+	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
+		t.Errorf("the owner not given after the clone:\n%s", docker)
+	}
+
+	// No reflinks between them: rsync, said (its --delete removes what the
+	// child has of its own; the fake's copy does not).
+	out, code = s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(out, "no reflinks between the parent's data and the child's: devopsy.data.copy.reflink rsynced as any") || !strings.Contains(docker, "--chown=10001:10001 /src/storage/ /dst/storage/") {
+		t.Errorf("no reflinks (%d):\n%s\n%s", code, out, docker)
+	}
+
+	// A reset wipes at the claim, then clones.
+	write(t, stale, "dev's own\n", 0o644)
+	out, code = s.run(reflink, "@dev", "--reset", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || readString(filepath.Join(s.mnt("dev"), "storage", "file.txt")) != "from prod\n" || fileExists(stale) {
+		t.Fatalf("reset (%d):\n%s\n%s", code, out, docker)
+	}
+	if i, j := strings.Index(docker, "-wipe "), strings.Index(docker, "-share-1 "); i < 0 || j < i {
+		t.Errorf("reset: the clone not after the wipe:\n%s", docker)
+	}
+
+	// Across servers: rsync.
+	across := append([]string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}, reflink...)
+	out, code = s.run(across, "@devopsy@two:dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || strings.Contains(docker, "-share-") || !strings.Contains(docker, "rsync://127.0.0.1:") {
+		t.Errorf("across servers (%d):\n%s\n%s", code, out, docker)
+	}
+}
+
 // A service bind-mounting a file of mnt: copied as a file, on both paths.
 func TestSyncFileEntry(t *testing.T) {
 	t.Parallel()
@@ -1156,6 +1403,45 @@ func TestSyncParentRestoreFails(t *testing.T) {
 // directory, the child's import reading it once the export exited 0, in
 // depends_on order; the hooks on both sides with their side and lists;
 // the child's commands run as the child, without the parent's environment.
+// The parent's services start again once every stream is exported,
+// before the child's imports: an import that then fails leaves the child
+// partial, marked, its stopped services down, and the parent running,
+// never stopped again for it.
+func TestSyncImportFailsAfterParentStarts(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "data")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1\"\n", 0o755)
+	// The child's hooks get a clean environment, HOME kept.
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$HOME/fail-import-$1\" ] || exit 3\necho \"import $1 into $COMPOSE_PROJECT_NAME\"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	s.logs()
+	s.labels("FAKE_APP=stream\nFAKE_DB=stream+own")
+	home := filepath.Dir(s.sshLog)
+	write(t, filepath.Join(home, "fail-import-app"), "", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("an import that fails (%d), marked %v:\n%s", code, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), out)
+	}
+	rest := out
+	for _, want := range []string{"devopsy: exporting db", "devopsy: exporting app", "devopsy: starting db app", "import db into shop-dev", "import app: exit status 3"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s", want, out)
+		}
+		rest = rest[i+len(want):]
+	}
+	// The parent ran on from its start: nothing of it stopped since.
+	start := strings.LastIndex(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db app")
+	if start < 0 || strings.Contains(docker[start:], "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.TrimSpace(readString(s.log+".stopped.shop-prod")) != "" {
+		t.Errorf("the parent not running after the child's import failed:\n%s", docker)
+	}
+}
+
 func TestSyncCapability(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -1208,15 +1494,17 @@ func TestSyncCapability(t *testing.T) {
 	inOrder("--log", out, code, "prepare child in shop-dev", "devopsy: copying", "rsync mnt/storage", "finish child go in shop-dev", "deploy in shop-dev")
 
 	// Two streams, db stopped (own) and app with it (it depends on db):
-	// in depends_on order, neither brought up for its import (no
-	// exception for streams).
+	// in depends_on order, both exported with the parent's stopped, the
+	// parent started, then both imported, neither brought up for its
+	// import (no exception for streams): the parent is never down
+	// through the child's load.
 	s.labels("FAKE_APP=stream\nFAKE_DB=stream+own")
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	if code != 0 {
 		t.Fatalf("two streams (%d):\n%s", code, out)
 	}
-	inOrder("two streams", out, code, "prepare child in shop-dev volumes= custom=db app stop=db app", "devopsy: stopping db (own), app (depends on db)", "devopsy: copying", "devopsy: stopping db (own), app (depends on db)", "devopsy: exporting db", "import db into shop-dev", "devopsy: exporting app", "import app into shop-dev", "devopsy: starting db app", "devopsy: starting db app", "deploy in shop-dev")
+	inOrder("two streams", out, code, "prepare child in shop-dev volumes= custom=db app stop=db app", "devopsy: stopping db (own), app (depends on db)", "devopsy: copying", "devopsy: stopping db (own), app (depends on db)", "devopsy: exporting db", "devopsy: exporting app", "devopsy: starting db app", "import db into shop-dev", "import app into shop-dev", "devopsy: starting db app", "deploy in shop-dev")
 	if strings.Contains(docker, "up -d --wait") || strings.Contains(out, "rsync mnt/") {
 		t.Errorf("two streams docker:\n%s", docker)
 	}
@@ -1958,6 +2246,15 @@ func TestChildServicesParse(t *testing.T) {
 	}
 	if m := stopMismatches(parent, got); len(m) != 2 || m[0] != "app is devopsy.data.stop=never on the parent and import on the child, which stops it by its own" || !strings.HasPrefix(m[1], "db is devopsy.data.stop=own on the parent and never") {
 		t.Errorf("stop mismatches: %q", m)
+	}
+	// The seventh field: a service whose entries and volumes the child
+	// shares with the parent by reflinks; a list without it shares none.
+	shared, _, _ := parseChildServices("app\tvolumes+never\trunning\tstorage\t\tuploads\treflink\ndb\tvolumes+own\trunning\tdb\t\t\t\n")
+	if got := childShares(shared); len(got) != 2 || !got["storage"] || !got["uploads"] {
+		t.Errorf("shares: %v", got)
+	}
+	if got := childShares(want); len(got) != 0 {
+		t.Errorf("shares without the field: %v", got)
 	}
 }
 
