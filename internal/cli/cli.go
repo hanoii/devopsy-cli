@@ -1085,9 +1085,10 @@ imported, then the env capability.
   --vars unset KEY... remove them, saying the value left, if any
 
 set and unset edit their file only, and say what that means against the
-others: a set over another value names the value it overrides now, and
-one that a nearer file hides, in each environment it reaches, names those
-files; each with the unset that undoes it.
+others: a set over another value names the value it overrides now, with
+the unset that brings it back, and one that a nearer file hides, in each
+environment it reaches, names those files (when an inherited value hides
+it, --vars set is where the environment's own goes).
 
 Values never go in arguments: they travel on SSH's stdin, so they stay out
 of ps, shell history and CI logs. Running containers keep their old values

@@ -692,8 +692,11 @@ step's rules):
   `--inherit`, and the child's `shared/.env` is where an override goes.
   A set warns, never prompts or refuses (overriding is what levels are
   for, and CI sets without a terminal): over a value it overrides now,
-  naming it, and, for each environment its file reaches, against every
-  nearer file that hides it; each with its `unset`. All of it from the
+  naming it, with the `unset` that brings it back, and, for each
+  environment its file reaches, against every nearer file that hides
+  it, with no list of unsets (decided with the user: confusing, rarely
+  what is wanted), only `--vars set` there when an inherited value
+  hides it and the environment's own file does not set it. All of it from the
   hidden `--env-trace` (`cli.EnvTrace`, a feature), `cli.TraceEnv` as
   JSON: what `--debug env` prints for people, never a second reading
   of the files (only before a first release, when `get` reads them

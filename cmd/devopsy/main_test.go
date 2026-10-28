@@ -1153,7 +1153,7 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out := stdin("inst\n", "@b/prod", "--vars-instance", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the instance's .env overrides, on @devopsy@server:b/prod, the value from the project's .env\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
 		t.Errorf("--vars-instance set over the project's:\n%s", out)
 	}
-	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\ndevopsy: | to let it through:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
+	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\n") || strings.Contains(warned(out), "devopsy: |") || strings.Contains(out, "pr-12") {
 		t.Errorf("--vars-project set under an instance's:\n%s", out)
 	}
 	stdin("", "@b/prod", "--vars-instance", "unset", "SHARED")

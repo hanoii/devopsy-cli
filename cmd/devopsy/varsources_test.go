@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+// warned is out from its first warning on: the info line before it has
+// details of its own.
+func warned(out string) string {
+	if i := strings.Index(out, "warning:"); i >= 0 {
+		return out[i:]
+	}
+	return ""
+}
+
 // --vars get gives the value the environment sees, whatever file defines
 // it, saying where from (the release's trace, else its files before a
 // first release); the list counts what reaches it from elsewhere; a set
@@ -95,7 +104,7 @@ func TestVarsSources(t *testing.T) {
 	// The project's, hidden on both: every nearer value named, with what
 	// lets it through.
 	out = set("hello-proj\n", "@prod", "--vars-project", "set", "GREETING")
-	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value from shared/.env and the value inherited from prod (shared/inherit.env) override it\ndevopsy: | to let it through:\ndevopsy: | $ devopsy @devopsy@one:dev --vars unset GREETING\ndevopsy: | the inherited value goes once prod's inherit: no longer lists GREETING") ||
+	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value from shared/.env and the value inherited from prod (shared/inherit.env) override it\n") || strings.Contains(warned(out), "devopsy: |") ||
 		!strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:prod: the value from shared/.env overrides it") {
 		t.Errorf("a project's set hidden:\n%s", out)
 	}
@@ -114,6 +123,13 @@ func TestVarsSources(t *testing.T) {
 	// An unset says what is left.
 	if out := set("", "@dev", "--vars", "unset", "GREETING"); !strings.Contains(out, "GREETING now has the value inherited from prod (shared/inherit.env)") {
 		t.Errorf("unset:\n%s", out)
+	}
+	// Hidden by the inherited value alone: the environment's own file is
+	// where its value goes.
+	out = set("hello-proj\n", "@prod", "--vars-project", "set", "GREETING")
+	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value inherited from prod (shared/inherit.env) overrides it\ndevopsy: | to set it there instead, over the inherited value:\ndevopsy: | $ devopsy @devopsy@one:dev --vars set GREETING\n") ||
+		!strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:prod: the value from shared/.env overrides it\n") || strings.Count(warned(out), "devopsy: |") != 2 {
+		t.Errorf("a project's set hidden by an inherited value:\n%s", out)
 	}
 
 	// Before a first release, its files: the project's here.

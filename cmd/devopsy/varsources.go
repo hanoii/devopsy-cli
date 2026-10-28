@@ -189,33 +189,24 @@ func sayLevels(t *remote.Target, level *remote.Level, verb string, keys []string
 
 // sayHidden warns that k, set in oursSays, has no effect on the
 // environment at addr, where nearer definitions override it (by
-// precedence), with what lets it through: the unset of each file of the
-// environment's or the instance's, and how an inherited one goes.
+// precedence). The one hint: when an inherited value hides it and the
+// environment's own file does not set it, that file is where a value of
+// the environment's goes, over the inherited one.
 func sayHidden(k, oursSays, addr string, nearer []cli.EnvTracedDef, own, parent string) {
 	says := make([]string, 0, len(nearer))
-	var fixes []string
+	inherited, owned := false, false
 	for _, d := range nearer {
 		says = append(says, "the value "+levelSays(d.Level, own, parent))
-		switch d.Level {
-		case cli.LevelEnv:
-			fixes = append(fixes, report.CmdMark+"devopsy @"+addr+" --vars unset "+k)
-		case cli.LevelInstance:
-			fixes = append(fixes, report.CmdMark+"devopsy @"+addr+" --vars-instance unset "+k)
-		case cli.LevelInherit:
-			from := "its parent"
-			if parent != "" {
-				from = parent
-			}
-			fixes = append(fixes, fmt.Sprintf("the inherited value goes once %s's inherit: no longer lists %s and @%s's next --inherit or --sync", from, k, addr))
-		}
+		inherited = inherited || d.Level == cli.LevelInherit
+		owned = owned || d.Level == cli.LevelEnv
 	}
 	verb := "overrides"
 	if len(says) > 1 {
 		verb = "override"
 	}
-	details := []string{}
-	if len(fixes) > 0 {
-		details = append([]string{"to let it through:"}, fixes...)
+	var details []string
+	if inherited && !owned {
+		details = []string{"to set it there instead, over the inherited value:", report.CmdMark + "devopsy @" + addr + " --vars set " + k}
 	}
 	report.Warn(fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, joinAnd(says), verb), details...)
 }

@@ -1787,8 +1787,10 @@ a set over another value warns that it overrides it now (the
 environment's own over an inherited value, the instance's over the
 project's), and a set that a nearer file hides warns, for each
 environment it reaches, which files do (the project's under an
-environment's own and its inherited one); each with the `unset` that
-undoes it. An `unset` says the value left, if any.
+environment's own and its inherited one). The first comes with the
+`unset` that brings the other value back; the second, when an inherited
+value hides it, with the `--vars set` that gives the environment its
+own. An `unset` says the value left, if any.
 
 Values travel over SSH's stdin, never as arguments. Running containers see
 changes when recreated: `--vars set` and `unset` on an environment say
