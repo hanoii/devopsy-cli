@@ -24,7 +24,7 @@ plane: compose, environment variables and SSH.
   has the install line).
 - Never touch a real server unless the user asks: a target's commands run
   there. Read-only ones are `--status`, bare `--releases`, `--log`,
-  `--env`, `--environments`, `--debug`.
+  `--env`, `--vars` and `--vars get`, `--environments`, `--debug`.
 - `devopsy --debug schema` documents every key of config.yaml, `--debug
   capabilities` the capabilities' contracts, `--debug env` where each
   variable comes from.
@@ -174,7 +174,9 @@ what `config.yaml` sets.
   moves one service's data; the same into a local project with
   `devopsy --import`.
 - `--status`, `--shell [service] [-- cmd]`, `--vars [get|set|unset KEY]`
-  (the environment's `shared/.env`), `--env` (what devopsy loads).
+  (`get`: the value the environment gets and where it comes from; the
+  list, `set` and `unset`: its `shared/.env`, warning of what a value
+  overrides or what overrides it), `--env` (what devopsy loads).
 - CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
   `devopsy @t --ssh-keys add <key>.pub --restricted`; the job loads the
   private key into an agent and runs `devopsy @t --release`.

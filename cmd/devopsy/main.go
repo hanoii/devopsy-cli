@@ -146,6 +146,8 @@ func run() int {
 		return runCheckMounts(cwd, args[1:])
 	case cli.CheckImagesFlag:
 		return runCheckImages(cwd, args[1:])
+	case cli.EnvTraceFlag:
+		return runEnvTrace(cwd, args[1:])
 	case cli.MntOwnersFlag:
 		return runMntOwners(cwd, args[1:])
 	case cli.SyncPushFlag:

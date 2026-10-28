@@ -20,7 +20,7 @@ import (
 // from what it calls; TestFeaturesCoverScripts fails on a flag a script
 // calls that is not listed here.
 var featureFlags = []string{
-	"check-images", "check-mounts", "check-names", "destroy-data", "export", "images",
+	"check-images", "check-mounts", "check-names", "destroy-data", "env-trace", "export", "images",
 	"import", "missing-vars", "mnt-owners", "prepare-release",
 	"release-id", "release-inherit", "release-settings", "release-steps",
 	"say", "server-facts",

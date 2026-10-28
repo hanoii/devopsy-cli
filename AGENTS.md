@@ -681,6 +681,26 @@ step's rules):
   link points to, with the file's mode, so no command reads it empty or
   cut (a `cat` into it truncated it first); a file of another user's is
   written over in place. Inherited values are written under `umask 077`.
+- **`--vars get` is the environment's value; edits stay in their
+  file** (decided 2026-10-27: a child's `get` said "not set" of a value
+  `--env` showed, inherited). `get` gives what the environment's commands
+  get, whatever defines it, and says where from; `--vars-instance get`
+  and `--vars-project get` stay their file (several environments', no
+  one value). The list stays the file `set` and `unset` edit, counting
+  what reaches the environment from elsewhere. No flag for
+  `inherit.env`: it is the parent's, replaced whole on every sync and
+  `--inherit`, and the child's `shared/.env` is where an override goes.
+  A set warns, never prompts or refuses (overriding is what levels are
+  for, and CI sets without a terminal): over a value it overrides now,
+  naming it, and, for each environment its file reaches, against every
+  nearer file that hides it; each with its `unset`. All of it from the
+  hidden `--env-trace` (`cli.EnvTrace`, a feature), `cli.TraceEnv` as
+  JSON: what `--debug env` prints for people, never a second reading
+  of the files (only before a first release, when `get` reads them
+  nearest first). Run in the release's `current` (a plain directory's
+  `$base`), in the read's session, and after an edit in the edit's
+  (`VarsTrace` lines, every `current` under a level's directory).
+  `--debug env` is for internals, never a hint for an everyday question.
 
 ### Locks
 

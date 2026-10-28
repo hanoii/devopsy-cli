@@ -1773,11 +1773,22 @@ Rollbacks bring back their release's `devopsy-target.env`.
 devopsy @vm1:prod --vars                       # KEY=value, secrets as *** (--show: all)
 devopsy @vm1:prod --vars set DB_PASSWORD       # from your environment or .env, else a prompt or stdin
 devopsy @vm1:prod --vars set --show LOG_LEVEL  # a visible prompt
-devopsy @vm1:prod --vars get DB_PASSWORD
+devopsy @vm1:prod --vars get DB_PASSWORD       # whatever defines it, saying where
 devopsy @vm1:prod --vars unset API_KEY
 devopsy @vm1:b/prod --vars-instance set SITE_ID   # the instance's .env
 devopsy @vm1 --vars-project set SHARED_KEY        # the project's .env on vm1
 ```
+
+`--vars` lists the environment's own file, and `get` gives the value the
+environment gets (inherited, the instance's or the project's, from
+`devopsy-target.env`, imported or computed: what `--env` shows), on
+stdout, saying where it comes from. Edits stay in their flag's file:
+a set over another value warns that it overrides it now (the
+environment's own over an inherited value, the instance's over the
+project's), and a set that a nearer file hides warns, for each
+environment it reaches, which files do (the project's under an
+environment's own and its inherited one); each with the `unset` that
+undoes it. An `unset` says the value left, if any.
 
 Values travel over SSH's stdin, never as arguments. Running containers see
 changes when recreated: `--vars set` and `unset` on an environment say
