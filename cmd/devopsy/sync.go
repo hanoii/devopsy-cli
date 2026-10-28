@@ -54,6 +54,9 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
+	// from: the parent is a --from's address, which the child's copy of
+	// its server's levels names as such (remote.ParentEnvHeader).
+	from bool
 	// images are the parent's data images (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
@@ -62,6 +65,15 @@ type syncJob struct {
 	// names (remote.ParseInherit), read in the preflight: inheritVars
 	// writes them, never what the checkout's names.
 	inherit []string
+}
+
+// sameServerFrom is the parent's directory when it is on the child's
+// server (remote.SyncOptions.SameServerFrom), else "".
+func (job *syncJob) sameServerFrom() string {
+	if job.sameHost {
+		return job.parent.Path
+	}
+	return ""
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -482,8 +494,8 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 // are printed.
 func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, pending, copy bool) error {
 	c, p := job.child, job.parent
-	// On one server nothing is copied (the holder removes a copy left
-	// from elsewhere: SyncOptions.SameServer).
+	// On one server the child copies its parent's parent.env itself
+	// (SyncOptions.SameServerFrom).
 	copy = copy && !job.sameHost
 	if len(job.inherit) == 0 && !copy {
 		return nil
@@ -493,8 +505,14 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	if err != nil {
 		return err
 	}
+	// Pending like the inherited variables: a sync that aborts leaves the
+	// child's copy, and the source it names, as they were.
+	pendingID := ""
+	if pending {
+		pendingID = job.id
+	}
 	if copy {
-		if err := writeParentEnv(ctx, c, p, files, false, log); err != nil {
+		if err := writeParentEnv(ctx, c, p, files, job.from, pendingID, log); err != nil {
 			return err
 		}
 	}
@@ -521,10 +539,6 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	}
 	var res bytes.Buffer
 	// Gated: the variables go once the child holds its release lock.
-	pendingID := ""
-	if pending {
-		pendingID = job.id
-	}
 	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pendingID), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
@@ -591,7 +605,13 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 	// copied it, whatever inherit: says.
 	refreshParentEnv(context.Background(), t, projectDir, projectEnv, report.Default().Tee(rlog.Line))
 	if len(job.inherit) == 0 {
-		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release", t.Address, p.Name, p.Address))
+		// Nothing inherited now: what was goes, as a sync naming keys
+		// replaces the file.
+		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.InheritWriteScript(t, nil, ""), strings.NewReader(remote.GatedInput("")), io.Discard, false, nil)
+		if err != nil || code != 0 {
+			return fail(fmt.Sprintf("could not empty @%s's shared/%s (%v, %d)", t.Address, remote.InheritFile, err, code))
+		}
+		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release, so its shared/%s is empty now", t.Address, p.Name, p.Address, remote.InheritFile))
 		return 0
 	}
 	if err := inheritVars(context.Background(), job, rlog, color, false, false); err != nil {
@@ -659,6 +679,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if err != nil {
 		return fail(err.Error())
 	}
+	job.from = from != ""
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {
@@ -683,7 +704,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, SameServer: job.sameHost}
+	o := &remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, SameServerFrom: job.sameServerFrom(), NoInherit: len(job.inherit) == 0}
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)

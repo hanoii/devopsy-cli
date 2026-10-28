@@ -402,49 +402,89 @@ const ParentEnvFile = "parent.env"
 
 // ParentEnvHeader is ParentEnvFile's first line: the address its
 // variables come from, which a release, a reload and --inherit copy from
-// again (a sync from its own source, and so names it anew).
-func ParentEnvHeader(address string) string {
-	return "# devopsy: copied from " + address + "'s instance and project .env"
-}
-
-var parentEnvRef = regexp.MustCompile(`^# devopsy: copied from (\S+)'s instance and project \.env`)
-
-// ParseParentEnvRef is the address ParentEnvHeader names, "" without one.
-func ParseParentEnvRef(line string) string {
-	if m := parentEnvRef.FindStringSubmatch(line); m != nil {
-		return m[1]
+// again (a sync from its own source, and so names it anew). With from
+// (a sync --from), that very address; otherwise the child's parent,
+// resolved again each time, as the operator names its server then (a
+// laptop's alias is not CI's).
+func ParentEnvHeader(address string, from bool) string {
+	s := "# devopsy: copied from " + address + "'s instance and project .env"
+	if from {
+		s += " (--from)"
 	}
-	return ""
+	return s
 }
+
+var parentEnvRef = regexp.MustCompile(`^# devopsy: copied from (\S+)'s instance and project \.env( \(--from\))?`)
+
+// ParseParentEnvRef is the address ParentEnvHeader names and whether a
+// --from named it; "" without one.
+func ParseParentEnvRef(line string) (address string, from bool) {
+	if m := parentEnvRef.FindStringSubmatch(line); m != nil {
+		return m[1], m[2] != ""
+	}
+	return "", false
+}
+
+// ParentEnvPlain is what ParentEnvReadScript prints for a plain
+// directory, which no copy goes into.
+const ParentEnvPlain = "plain"
 
 // ParentEnvReadScript prints the first line of t's ParentEnvFile, if it
-// has one.
+// has one, or ParentEnvPlain.
 func ParentEnvReadScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + `[ ! -f "$base/shared/` + ParentEnvFile + `" ] || head -n 1 "$base/shared/` + ParentEnvFile + `"
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  echo ` + ParentEnvPlain + `
+elif [ -f "$base/shared/` + ParentEnvFile + `" ]; then
+  head -n 1 "$base/shared/` + ParentEnvFile + `"
+fi
+`
+}
+
+// ParentEnvCopyScript copies, on one server, the ParentEnvFile of the
+// environment at from (its directory under the release root) as t's,
+// under t's release lock: what that parent reads from its own parent's
+// server, down a chain; none, removes t's.
+func ParentEnvCopyScript(t *Target, from string) string {
+	file := `"$base/shared/` + ParentEnvFile + `"`
+	return "set -eu\n" + basePrelude(t) + releaseLock(false, true) + `mkdir -p "$base/shared"
+umask 077
+if [ -f "$root"/` + Quote(from+"/shared/"+ParentEnvFile) + ` ]; then
+  cp "$root"/` + Quote(from+"/shared/"+ParentEnvFile) + ` ` + file + `.tmp
+  mv -f ` + file + `.tmp ` + file + `
+else
+  rm -f ` + file + `
+fi
 `
 }
 
 // ParentEnvWriteScript writes the lines on stdin (gated: GatedInput,
 // sent once the lock is held) as t's ParentEnvFile, under its release
-// lock and readable by the deploy user alone; empty, removes it (a parent
-// on the same server: those files are the child's own). It prints the
-// keys the file held before, one per line, for what is new in it.
-func ParentEnvWriteScript(t *Target) string {
+// lock and readable by the deploy user alone; empty, removes it. With
+// pendingID, a re-sync's: into that sync's pending copy instead
+// (ParentPendingOf), empty or not, which the sync reads and moves into
+// place on go. It prints the keys t's file held before, one per line,
+// for what is new in it.
+func ParentEnvWriteScript(t *Target, pendingID string) string {
 	file := `"$base/shared/` + ParentEnvFile + `"`
+	target := file
+	if pendingID != "" {
+		target = `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(pendingID)))
+	}
 	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain directory: nothing is copied into it"
   exit 1
 fi
 ` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
 file=` + file + `
+target=` + target + `
 umask 077
-gated_read "$file.tmp"
+gated_read "$target.tmp"
 [ ! -f "$file" ] || sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "$file"
-if [ -s "$file.tmp" ]; then
-  chmod 600 "$file.tmp"
-  mv -f "$file.tmp" "$file"
+if [ -s "$target.tmp" ] || [ "$target" != "$file" ]; then
+  chmod 600 "$target.tmp"
+  mv -f "$target.tmp" "$target"
 else
-  rm -f "$file.tmp" "$file"
+  rm -f "$target.tmp" "$file"
 fi
 `
 }

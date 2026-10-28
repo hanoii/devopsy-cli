@@ -996,12 +996,13 @@ ln -sfn "` + toBase + `shared/` + ParentEnvFile + `" "$code/.devopsy/` + ParentE
 		// (img record) and the take-over once the copy is complete.
 		s += sync.imagesExport()
 	}
-	if sync != nil && sync.Inherit {
-		// What the sync inherits this time, in the pending file the
-		// operator wrote: the checks before the switch (prepare,
-		// --missing-vars, the images) see what the release will run
-		// with, as a first release's do in inherit.env.
-		s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(sync.ID)) + "\n"
+	if sync != nil {
+		// What the sync inherits this time, in the pending files (the
+		// operator's, or the child's own from a parent on its server):
+		// the checks before the switch (prepare, --missing-vars, the
+		// images) see what the release will run with, as a first
+		// release's do in inherit.env. Read only where they exist.
+		s += sync.sameServerCopy() + "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(sync.ID)) + "\n"
 	}
 	if !rollback {
 		s += fmt.Sprintf(PrepareScript, devopsyCall(projectName, []string{"--prepare-release"}, false))
@@ -1288,7 +1289,7 @@ exec 7<&-
 ` + syncBlock(projectName, "the release does not go live", true) + `cd "$base"
 [ "$status" = 0 ] || failed=sync
 else
-  [ -z "${` + InheritPendingEnv + `:-}" ] || rm -f "$` + InheritPendingEnv + `"
+  [ -z "${` + InheritPendingEnv + `:-}" ] || rm -f "$` + InheritPendingEnv + `" "${` + InheritPendingEnv + `%.env}.` + ParentEnvFile + `"
 fi
 `
 	}

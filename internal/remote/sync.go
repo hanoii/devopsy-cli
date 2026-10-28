@@ -448,6 +448,17 @@ func SyncInheritPending(id string) string {
 	return SyncInheritPrefix + id + ".env"
 }
 
+// ParentPendingOf is the pending copy of a parent's server's levels
+// beside a pending inherit file (SyncInheritPending, or what
+// InheritPendingEnv names): read in place of shared/parent.env while it
+// exists, moved over it on go (removing it when empty: nothing to copy
+// any more), removed otherwise, with the inherit file it goes with. Its
+// name starts like it (SyncInheritPrefix), so the same leftovers' sweep
+// takes it.
+func ParentPendingOf(inheritPending string) string {
+	return strings.TrimSuffix(inheritPending, ".env") + "." + ParentEnvFile
+}
+
 // SyncInheritPrefix starts every sync's SyncInheritPending.
 const SyncInheritPrefix = ".devopsy-sync.inherit."
 
@@ -531,11 +542,35 @@ type SyncOptions struct {
 	// Reset is a --reset's: the child's side knows it from its prepare
 	// on (SyncResetEnv), as the push's devopsy does.
 	Reset bool
-	// SameServer: the parent is on the child's server, whose instance
-	// and project .env are the child's already, so a ParentEnvFile left
-	// from a sync from another server goes (its reference would point a
-	// release back there), under the child's lock.
-	SameServer bool
+	// SameServerFrom is the parent's directory under the release root
+	// when it is on the child's server, whose instance and project .env
+	// are the child's already: the child copies the parent's own
+	// ParentEnvFile (what it reads from its own parent's server, down a
+	// chain), or none, into the pending copy, under its lock, before its
+	// checks (sameServerCopy).
+	SameServerFrom string
+	// NoInherit: the parent's inherit: names nothing, so the child's
+	// inherit.env empties on go, as a sync writing keys replaces it.
+	NoInherit bool
+}
+
+// sameServerCopy is the child's side of what a sync carries of its
+// parent's variables, right after its lock: an empty pending inherit
+// file when the parent inherits nothing, and, from a parent on the same
+// server, its ParentEnvFile into the pending copy (empty when it has
+// none: the child's goes on go).
+func (o *SyncOptions) sameServerCopy() string {
+	s := ""
+	if o.NoInherit {
+		s += `(umask 077; : > "$base"/` + Quote(SyncInheritPending(o.ID)) + `)
+`
+	}
+	if o.SameServerFrom != "" {
+		pending := `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(o.ID)))
+		s += `(umask 077; cp "$root"/` + Quote(o.SameServerFrom+"/shared/"+ParentEnvFile) + ` ` + pending + ` 2>/dev/null || : > ` + pending + `)
+`
+	}
+	return s
 }
 
 // imagesExport exports the parent's data images for the child's img
@@ -549,9 +584,6 @@ func (o *SyncOptions) imagesExport() string {
 func (o *SyncOptions) exports(t *Target) string {
 	s := fmt.Sprintf("export %s=%s %s=%s %s=%s\n", SyncFromTargetEnv, Quote(o.From), SyncToTargetEnv, Quote(t.Address), SyncIDEnv, Quote(o.ID))
 	s += "export " + InheritPendingEnv + "=\"$base\"/" + Quote(SyncInheritPending(o.ID)) + "\n"
-	if o.SameServer {
-		s += `rm -f "$base/shared/` + ParentEnvFile + `"` + "\n"
-	}
 	if o.Reset {
 		s += "export " + SyncResetEnv + "=1\n"
 	}
@@ -567,13 +599,20 @@ func (o *SyncOptions) exports(t *Target) string {
 func syncFinish(projectName string) string {
 	pending := `"$` + InheritPendingEnv + `"`
 	shared := `"$base/shared/` + InheritFile + `"`
+	parentPending := `"${` + InheritPendingEnv + `%.env}.` + ParentEnvFile + `"`
+	parentShared := `"$base/shared/` + ParentEnvFile + `"`
 	return `sync_finish() {
   if [ "$1" = go ]; then
     if [ -f ` + pending + ` ]; then
       mv -Tf ` + pending + ` ` + shared + ` || return 1
     fi
+    if [ -s ` + parentPending + ` ]; then
+      mv -Tf ` + parentPending + ` ` + parentShared + ` || return 1
+    elif [ -f ` + parentPending + ` ]; then
+      rm -f ` + parentPending + ` ` + parentShared + `
+    fi
   else
-    rm -f ` + pending + `
+    rm -f ` + pending + ` ` + parentPending + `
   fi
   ` + devopsyCall(projectName, []string{"--sync-services", "finish"}, false) + ` "$1"
 }
@@ -761,7 +800,7 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
+` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
 # child's images, and the parent's image must be here (img sync-check
 # pulls it, maybe for long): an abort or a session gone meanwhile ends
 # this, nothing stopped.

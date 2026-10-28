@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -17,7 +18,10 @@ import (
 
 // parentLevels reads p's variables files in one session
 // (remote.InheritReadScript), by level: shared, inherit, instance,
-// project and parent, each parsed as compose reads a .env.
+// project and parent, each parsed as p's own commands read it (the
+// loader's LoadDotenv): against the nearer files, so a ${VAR} a level
+// takes from a nearer one is what p sees, and a ${VAR:?} a nearer one
+// sets passes.
 func parentLevels(ctx context.Context, p *remote.Target) (map[string]map[string]string, error) {
 	var out bytes.Buffer
 	code, err := remote.SSHContext(ctx, p, nil, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false, nil)
@@ -28,17 +32,28 @@ func parentLevels(ctx context.Context, p *remote.Target) (map[string]map[string]
 		return nil, fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
 	}
 	files := map[string]map[string]string{}
+	// What the nearer levels set, the nearest first, as the loader's
+	// environment holds them when it reads the next.
+	seen := map[string]string{}
 	level := ""
 	var content strings.Builder
 	flush := func() error {
 		if level == "" {
 			return nil
 		}
-		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(string) (string, bool) { return "", false })
+		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(k string) (string, bool) {
+			v, ok := seen[k]
+			return v, ok
+		})
 		if err != nil {
 			return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
 		}
 		files[level] = vars
+		for k, v := range vars {
+			if _, ok := seen[k]; !ok {
+				seen[k] = v
+			}
+		}
 		content.Reset()
 		return nil
 	}
@@ -67,34 +82,29 @@ func parentCopy(files map[string]map[string]string) map[string]string {
 	return vars
 }
 
-// writeParentEnv writes c's remote.ParentEnvFile from src's files (a
-// parentLevels read): with src on another server, its instance and
+// writeParentEnv writes c's remote.ParentEnvFile from the files of src,
+// a parent on another server (a parentLevels read): its instance and
 // project levels (parentCopy) under a header naming src, the copy's
-// reference; on the same server, nothing (removed: those files are c's
-// own already). A secret (config.yaml's secrets:) new in the copy is
-// named: a value that must stay on the parent's server belongs in its
-// environment's shared/.env, which only inherit: copies, key by key.
-func writeParentEnv(ctx context.Context, c, src *remote.Target, files map[string]map[string]string, sameServer bool, log *report.Logger) error {
+// reference (from: a --from's, kept as named). With pendingID, a
+// re-sync's: into its pending copy, moved into place once the copy is
+// in. A secret (config.yaml's secrets:) new in the copy is named: a value
+// that must stay on the parent's server belongs in its environment's
+// shared/.env, which only inherit: copies, key by key.
+func writeParentEnv(ctx context.Context, c, src *remote.Target, files map[string]map[string]string, from bool, pendingID string, log *report.Logger) error {
 	var content strings.Builder
-	var keys []string
-	if !sameServer {
-		vars := parentCopy(files)
-		keys = slices.Sorted(maps.Keys(vars))
-		content.WriteString(remote.ParentEnvHeader(src.Address) + "\n")
-		for _, k := range keys {
-			content.WriteString(cli.DotenvLine(k, vars[k]) + "\n")
-		}
+	vars := parentCopy(files)
+	keys := slices.Sorted(maps.Keys(vars))
+	content.WriteString(remote.ParentEnvHeader(src.Address, from) + "\n")
+	for _, k := range keys {
+		content.WriteString(cli.DotenvLine(k, vars[k]) + "\n")
 	}
 	var res bytes.Buffer
-	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentEnvWriteScript(c), strings.NewReader(remote.GatedInput(content.String())), &res, false, nil)
+	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentEnvWriteScript(c, pendingID), strings.NewReader(remote.GatedInput(content.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
 		return fmt.Errorf("could not write @%s's shared/%s (%d)", c.Address, remote.ParentEnvFile, code)
-	}
-	if sameServer {
-		return nil
 	}
 	log.Info(fmt.Sprintf("copied %d variables of @%s's instance and project .env into @%s's shared/%s", len(keys), src.Address, c.Address, remote.ParentEnvFile))
 	var names []string
@@ -118,11 +128,12 @@ func writeParentEnv(ctx context.Context, c, src *remote.Target, files map[string
 
 // refreshParentEnv copies c's parent's server's instance and project
 // levels again, for what changes c's variables without a sync (a release
-// that does not sync, a reload, --inherit): from the address its
-// remote.ParentEnvFile names (what its last sync copied from, --from
-// included), else its parent. Nothing without either. A parent it cannot
-// read is a warning, and the copy stays as it was: nothing of the child
-// waits on it.
+// that does not sync, a reload, --inherit): from what its
+// remote.ParentEnvFile names (a sync --from's address), else its parent,
+// resolved as the operator names its server now. A parent on c's server:
+// its own parent.env (down a chain), copied there, else none. A parent
+// it cannot read is a warning, and the copy stays as it was: nothing of
+// the child waits on it. A plain directory gets none.
 func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, projectEnv func(string) (string, bool), log *report.Logger) {
 	var out bytes.Buffer
 	code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvReadScript(c), bytes.NewReader(nil), &out, false, nil)
@@ -130,8 +141,13 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 		log.Warn(fmt.Sprintf("could not read @%s's shared/%s: its copy of its parent's variables stays as it was", c.Address, remote.ParentEnvFile))
 		return
 	}
+	line := strings.TrimSpace(out.String())
+	if line == remote.ParentEnvPlain {
+		return
+	}
 	src := c.ParentTarget
-	if ref := remote.ParseParentEnvRef(strings.TrimSpace(out.String())); ref != "" {
+	ref, from := remote.ParseParentEnvRef(line)
+	if from {
 		if src, err = remote.LoadTarget(projectDir, ref, projectEnv); err != nil {
 			log.Warn(fmt.Sprintf("@%s's shared/%s names %s, which does not resolve (%v): the copy stays as it was", c.Address, remote.ParentEnvFile, ref, err))
 			return
@@ -140,18 +156,19 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 	if src == nil {
 		return
 	}
-	same := sameHost(c.Host, src.Host)
-	if same && out.Len() == 0 {
+	if sameHost(c.Host, src.Host) {
+		code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvCopyScript(c, src.Path), bytes.NewReader(nil), io.Discard, false, nil)
+		if err != nil || code != 0 {
+			log.Warn(fmt.Sprintf("could not copy @%s's shared/%s into @%s's (%v, %d): the copy stays as it was", src.Address, remote.ParentEnvFile, c.Address, err, code))
+		}
 		return
 	}
-	var files map[string]map[string]string
-	if !same {
-		if files, err = parentLevels(ctx, src); err != nil {
-			log.Warn(fmt.Sprintf("could not read @%s's variables (%v): @%s's copy of them stays as it was", src.Address, err, c.Address))
-			return
-		}
+	files, err := parentLevels(ctx, src)
+	if err != nil {
+		log.Warn(fmt.Sprintf("could not read @%s's variables (%v): @%s's copy of them stays as it was", src.Address, err, c.Address))
+		return
 	}
-	if err := writeParentEnv(ctx, c, src, files, same, log); err != nil {
+	if err := writeParentEnv(ctx, c, src, files, from, "", log); err != nil {
 		log.Warn(err.Error() + ": the copy stays as it was")
 	}
 }

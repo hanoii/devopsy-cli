@@ -1322,6 +1322,13 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 				file = p
 			}
 		}
+		// Its pending copy of the parent's server's levels likewise.
+		if p, _ := env.Lookup(remote.InheritPendingEnv); shared == remote.ParentEnvFile && p != "" {
+			pp := remote.ParentPendingOf(p)
+			if _, err := os.Stat(pp); err == nil {
+				file = pp
+			}
+		}
 		if err := load(file); err != nil {
 			return nil, err
 		}

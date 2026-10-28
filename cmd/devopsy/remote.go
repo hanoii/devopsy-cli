@@ -537,7 +537,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
-					job.first = first
+					job.first, job.from = first, from != ""
 				}
 				// Replacing a live child's data asks, as --sync does; a first
 				// release has none to lose.
@@ -659,7 +659,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, SameServer: job.sameHost})
+			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, SameServerFrom: job.sameServerFrom(), NoInherit: len(job.inherit) == 0})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}

@@ -48,9 +48,16 @@ func TestParentEnvAcrossServers(t *testing.T) {
 		t.Errorf("a release that does not sync (%d):\n%s\n%s", code, out, readString(copied))
 	}
 
+	// The configured parent resolves anew, as the operator names its
+	// server now (CI's name for it, not the laptop's that synced).
+	ci := []string{"DEVOPSY_SERVER_PROD=devopsy@uno", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(ci, "@devopsy@two:dev", "--release"); code != 0 || !strings.Contains(out, "copied 2 variables of @devopsy@uno:prod's") {
+		t.Errorf("a release where the parent's server has another name (%d):\n%s", code, out)
+	}
+
 	// A sync from elsewhere names its source, which a reload follows.
 	out, code = s.run(agent, "@devopsy@two:dev", "--sync", "--from", "@devopsy@one:solo", "--yes")
-	if code != 0 || !strings.HasPrefix(readString(copied), "# devopsy: copied from devopsy@one:solo's instance and project .env\n") {
+	if code != 0 || !strings.HasPrefix(readString(copied), "# devopsy: copied from devopsy@one:solo's instance and project .env (--from)\n") {
 		t.Fatalf("sync --from (%d):\n%s\n%s", code, out, readString(copied))
 	}
 	if out, code := s.run(agent, "@devopsy@two:dev", "--reload"); code != 0 || !strings.Contains(out, "copied 2 variables of @devopsy@one:solo's") {

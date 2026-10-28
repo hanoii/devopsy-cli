@@ -1431,7 +1431,8 @@ that everything the sync runs on the child reads in place of
 variable follows the parent's in the same sync; once the copy is in it
 moves into place, before the child's services restart and its run step,
 and a failed copy removes it, leaving the child's variables as they
-were.
+were. A parent whose `inherit:` names nothing leaves the child's
+`shared/inherit.env` empty.
 
 **A parent on another server:** the instance's and the project's `.env`
 are each server's own, so a child elsewhere would not see the parent's.
@@ -1439,14 +1440,19 @@ It gets a copy of them instead, `shared/parent.env`, all of their keys,
 as the parent reads them (its instance's over its project's, over its
 own `parent.env` down a chain), read below the child's own server's
 instance and project files, so what the child's server says wins. Its
-first line names where it came from, the sync's source (`--from`
-included): every sync writes it, and a child's release that does not
-sync, `--reload` and `--inherit` copy it again from that address. A
-parent that cannot be read then is a warning, and the copy stays. A
-secret (`secrets:`) new in the copy is named: a value that must stay on
-a server belongs in its environment's `shared/.env`, which only
-`inherit:` copies, key by key. On the parent's own server nothing is
-copied: those files are the child's already.
+first line names where it came from: every sync writes it from its
+source (before the copy in a pending file, as `inherit.env`, so a
+failed sync leaves it as it was), and a child's release that does not
+sync, `--reload` and `--inherit` copy it again, from the child's parent
+(as you name its server then) or the address a `--from` gave. A parent
+that cannot be read then is a warning, and the copy stays. Values are
+read as the parent's server reads them (`${HOST}` from its
+`shared/.env` is its value). A secret (`secrets:`) new in the copy is
+named: a value that must stay on a server belongs in its environment's
+`shared/.env`, which only `inherit:` copies, key by key. On the
+parent's own server its instance and project files are the child's
+already: the child gets only the parent's own `parent.env`, down a
+chain.
 
 `devopsy @<child> --inherit` refreshes the variables alone, no
 data, no run step.
