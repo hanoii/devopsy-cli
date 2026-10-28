@@ -36,7 +36,12 @@ fi
 // VarsReadScript prints the variables file's path, then sections (see
 // ReadVarsOutput): the file's content, if any, and the configs of the
 // releases that read it, for their secrets: (every environment's current
-// one under a project's or an instance's directory).
+// one under a project's or an instance's directory). An environment's
+// also gets its other files (inherit, instance, project), for --vars get
+// before its first release, and the trace of every variable its current
+// release (or plain directory) gets, devopsy's own --env-trace: what
+// --vars get gives and the listing counts. A trace that fails is left
+// out (the env capability failing): get falls back to the files.
 func VarsReadScript(t *Target, level *Level) string {
 	configs := `"$base"/current/.devopsy/config*.yaml "$base"/.devopsy/config*.yaml`
 	if level != nil {
@@ -45,14 +50,47 @@ func VarsReadScript(t *Target, level *Level) string {
 			configs += ` "$base"/*/*/current/.devopsy/config*.yaml`
 		}
 	}
-	return varsPrelude(t, level) + `printf '%s\n' "$file"
+	s := varsPrelude(t, level) + `printf '%s\n' "$file"
 emit() { printf '%s %s\n' "$1" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; }
 if [ -f "$file" ]; then emit env "$file"; fi
 for c in ` + configs + `; do
   if [ -f "$c" ]; then emit config "$c"; fi
 done
 `
+	if level != nil {
+		return s
+	}
+	s += `if [ -z "$plain" ] && [ -f "$base/shared/` + InheritFile + `" ]; then emit ` + LevelInherit + ` "$base/shared/` + InheritFile + `"; fi
+`
+	for _, l := range t.Levels {
+		s += `if [ -z "$plain" ] && [ -f "$root"/` + Quote(l.Dir+"/.env") + ` ]; then emit ` + Quote(l.Name) + ` "$root"/` + Quote(l.Dir+"/.env") + `; fi
+`
+	}
+	return s + varsTraceDir + `if [ -n "$tdir" ] && vt=$(cd "$tdir" && ` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + ` 2>/dev/null); then
+  printf 'trace %s\n' "$(printf '%s' "$vt" | wc -c | tr -d ' ')"
+  printf '%s' "$vt"
+fi
+`
 }
+
+// LevelInherit names a child's inherited variables in VarsReadScript's
+// sections, as cli.LevelInherit names their definitions.
+const LevelInherit = "inherit"
+
+// envTraceFlag is cli.EnvTraceFlag (remote cannot import cli).
+const envTraceFlag = "--env-trace"
+
+// varsTraceDir sets $tdir to where devopsy reads the environment's
+// variables as its commands get them: a plain directory, else the
+// current release; empty before a first release.
+const varsTraceDir = `if [ -n "$plain" ]; then
+  tdir=$base
+elif [ -d "$base/current/.devopsy" ]; then
+  tdir=$base/current
+else
+  tdir=
+fi
+`
 
 // VarsOutput is what VarsReadScript printed.
 type VarsOutput struct {
@@ -60,6 +98,11 @@ type VarsOutput struct {
 	Content string
 	// Configs are the contents of the configs found.
 	Configs []string
+	// Files are the environment's other variables files, by level
+	// (inherit, instance, project), nearest first as Levels.
+	Files map[string]string
+	// Trace is devopsy's --env-trace there, empty without one.
+	Trace string
 }
 
 // ReadVarsOutput parses VarsReadScript's output: the file's path on a
@@ -79,6 +122,13 @@ func ReadVarsOutput(out string) (VarsOutput, error) {
 			v.Content = rest[:n]
 		case "config":
 			v.Configs = append(v.Configs, rest[:n])
+		case "trace":
+			v.Trace = rest[:n]
+		default:
+			if v.Files == nil {
+				v.Files = map[string]string{}
+			}
+			v.Files[kind] = rest[:n]
 		}
 		out = rest[n:]
 	}
@@ -145,14 +195,50 @@ rm -f "$file.vars" "$t.tmp"
 printf '%%s\n' "$file"
 `
 
-// VarsSetScript sets the KEY=value lines given on stdin.
-func VarsSetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set") + varsApply(t, level)
+// VarsSetScript sets the KEY=value lines given on stdin, keys their
+// names.
+func VarsSetScript(t *Target, level *Level, keys []string) string {
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set") + varsTrace(t, level, keys) + varsApply(t, level)
 }
 
-// VarsUnsetScript removes the keys given on stdin, one per line.
-func VarsUnsetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset") + varsApply(t, level)
+// VarsUnsetScript removes the keys given on stdin, one per line, keys
+// their names.
+func VarsUnsetScript(t *Target, level *Level, keys []string) string {
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset") + varsTrace(t, level, keys) + varsApply(t, level)
+}
+
+// VarsTrace starts the lines a --vars set or unset prints after the
+// file's path, one per environment its file reaches that has a current
+// release (the environment itself; every one under an instance's or a
+// project's directory): its directory under the edited level's ("" for
+// the environment's own), a tab, and the keys' --env-trace there, with
+// the change made (ParseVarsTraces). What --vars says: the value a set
+// overrides, the files that override what it set, what an unset leaves.
+// A trace that fails is left out: they are hints.
+const VarsTrace = "trace\t"
+
+func varsTrace(t *Target, level *Level, keys []string) string {
+	args := append([]string{envTraceFlag}, keys...)
+	if level == nil {
+		// As VarsReadScript's, with the target's compose name.
+		call := devopsyCall(t.ComposeName(), args, false)
+		return varsTraceDir + `if [ -n "$tdir" ] && vt=$(cd "$tdir" && ` + call + ` 2>/dev/null); then
+  printf '` + VarsTrace + `\t%s\n' "$vt"
+fi
+`
+	}
+	// An instance's environments are its directories; a project's, its
+	// directories or, with instances, theirs: each with its own compose
+	// name, from its release.
+	call := devopsyCall("", args, false)
+	return `for d in "$base"/*/current "$base"/*/*/current; do
+  [ -d "$d/.devopsy" ] || continue
+  e=${d%/current}
+  e=${e#"$base"/}
+  vt=$(cd "$d" && ` + call + ` 2>/dev/null) || continue
+  printf '` + VarsTrace + `%s\t%s\n' "$e" "$vt"
+done
+`
 }
 
 // VarsApplied starts the line an environment's --vars set or unset
@@ -211,6 +297,9 @@ printf '\n'
 // the check's lines; "" without them (an instance's or a project's file).
 func ParseVarsApplied(out string) (file, applied string, lines []string) {
 	file, rest, _ := strings.Cut(strings.TrimRight(out, "\n"), "\n")
+	for strings.HasPrefix(rest, VarsTrace) {
+		_, rest, _ = strings.Cut(rest, "\n")
+	}
 	head, more, _ := strings.Cut(rest, "\n")
 	if !strings.HasPrefix(head, VarsApplied) {
 		return file, "", nil
@@ -221,6 +310,20 @@ func ParseVarsApplied(out string) (file, applied string, lines []string) {
 		}
 	}
 	return file, strings.TrimPrefix(head, VarsApplied), lines
+}
+
+// ParseVarsTraces reads the VarsTrace lines of what a --vars set or
+// unset printed: each environment's directory ("" for the edited
+// environment's own) and its trace.
+func ParseVarsTraces(out string) map[string]string {
+	traces := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(l, VarsTrace); ok {
+			dir, trace, _ := strings.Cut(rest, "\t")
+			traces[dir] = trace
+		}
+	}
+	return traces
 }
 
 // InheritFile is a child's inherited variables, shared/inherit.env on its

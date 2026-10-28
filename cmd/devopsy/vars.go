@@ -103,11 +103,28 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if err != nil {
 			return fail(fmt.Sprintf("%s:%s: %v", t.Host, file, err))
 		}
-		if action == "get" {
-			v, ok := vars[args[0]]
-			if !ok {
-				return fail(fmt.Sprintf("%s is not set in %s:%s", args[0], t.Host, file))
+		// The environment's trace, when its current release (or plain
+		// directory) gave one: what get gives, and what the list counts.
+		var trace *cli.EnvTraced
+		if level == nil && read.Trace != "" {
+			if tr, err := cli.ParseEnvTrace([]byte(read.Trace)); err == nil {
+				trace = &tr
 			}
+		}
+		if action == "get" {
+			if level != nil {
+				v, ok := vars[args[0]]
+				if !ok {
+					return fail(fmt.Sprintf("%s is not set in %s:%s", args[0], t.Host, file))
+				}
+				fmt.Println(v)
+				return 0
+			}
+			v, where, ok := varsGet(args[0], vars, read, trace)
+			if !ok {
+				return fail(fmt.Sprintf("%s is not set in @%s", args[0], targetRef(t)))
+			}
+			report.Info(fmt.Sprintf("%s: the value %s", args[0], levelSays(where, ownFile(file), traceParent(trace))))
 			fmt.Println(v)
 			return 0
 		}
@@ -123,6 +140,21 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		report.Info(fmt.Sprintf("%s:%s%s", t.Host, file, note))
 		for _, k := range names {
 			fmt.Println(cli.DotenvLine(k, secrets.Value(k, vars[k])))
+		}
+		if trace != nil {
+			n := 0
+			for _, v := range trace.Vars {
+				if len(v.Defs) > 0 && v.Defs[0].Level != cli.LevelEnv {
+					n++
+				}
+			}
+			if n > 0 {
+				what := fmt.Sprintf("%d more variables reach @%s from elsewhere (its other files, imports, the env capability, devopsy)", n, targetRef(t))
+				if n == 1 {
+					what = fmt.Sprintf("1 more variable reaches @%s from elsewhere (its other files, imports, the env capability, devopsy)", targetRef(t))
+				}
+				report.Info(what, "all of them, with their values:", report.CmdMark+"devopsy @"+targetRef(t)+" --env")
+			}
 		}
 		return 0
 
@@ -144,13 +176,13 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 			}
 			lines.WriteString(cli.DotenvLine(k, v) + "\n")
 		}
-		return editVars(t, remote.VarsSetScript(t, level), lines.String(), "set", args, color)
+		return editVars(t, level, remote.VarsSetScript(t, level, args), lines.String(), "set", args, color)
 
 	case "unset":
 		if len(args) == 0 {
 			return fail(usage)
 		}
-		return editVars(t, remote.VarsUnsetScript(t, level), strings.Join(args, "\n")+"\n", "unset", args, color)
+		return editVars(t, level, remote.VarsUnsetScript(t, level, args), strings.Join(args, "\n")+"\n", "unset", args, color)
 	}
 	return fail(usage)
 }
@@ -181,7 +213,7 @@ func varValue(k string, only, show bool, lookup func(string) (string, bool)) (st
 	return "", fmt.Errorf("%s is not set in your environment or the project's .env, and stdin can only give one value", k)
 }
 
-func editVars(t *remote.Target, script, stdin, verb string, keys []string, color bool) int {
+func editVars(t *remote.Target, level *remote.Level, script, stdin, verb string, keys []string, color bool) int {
 	var out bytes.Buffer
 	// Gated: the values go once the server holds the release lock.
 	code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, script, strings.NewReader(remote.GatedInput(stdin)), &out, false, nil)
@@ -194,6 +226,7 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 	}
 	file, applied, lines := remote.ParseVarsApplied(out.String())
 	sayApplied(t, fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, file), applied, lines)
+	sayLevels(t, level, verb, keys, ownFile(file), remote.ParseVarsTraces(out.String()))
 	return 0
 }
 

@@ -923,9 +923,10 @@ ones by digest and builds the built ones from the snapshot's code.
 	"--env": `Usage: devopsy @<target> --env [--show]
 
 The variables devopsy loads and computes in the current release, as
-devopsy --env prints them there: shared/.env, the instance's and project's
-.env, devopsy-target.env and the project's env capability (capabilities/env/compute,
-from the release on the server, not your checkout). The values of the
+devopsy --env prints them there: shared/.env, a child's inherit.env, the
+instance's and project's .env, devopsy-target.env and the project's env
+capability (capabilities/env/compute, from the release on the server, not
+your checkout). The values of the
 variables the release's config.yaml names in secrets: print as ***, unless
 --show.
 `,
@@ -933,8 +934,9 @@ variables the release's config.yaml names in secrets: print as ***, unless
 
 devopsy --debug, run in the current release on the server: without a topic,
 the server's devopsy and docker versions and the project; env, where each
-variable of --env comes from there (shared/.env, the instance's and
-project's .env, devopsy-target.env and what it imported, the env capability) and
+variable of --env comes from there (shared/.env, a child's inherit.env, the
+instance's and project's .env, devopsy-target.env and what it imported, the
+env capability) and
 what each of those overrides, secrets masked unless --show; capabilities, the
 release's capabilities and their contracts; labels, the devopsy labels in
 its compose files; imports, the imports of every project running on that
@@ -1061,13 +1063,17 @@ release; config.yaml's env goes to devopsy-target.env instead.
                       project is the checkout's or an alias's, so a server
                       alone does (@vm1)
 
-Nearest wins: the caller, the environment's, the instance's, the project's,
-then devopsy-target.env.
+Nearest wins: the caller, the environment's, a child's inherit.env, the
+instance's, the project's, then devopsy-target.env and what the release
+imported, then the env capability.
 
-  --vars [--show]     every variable, secrets (config.yaml's secrets:,
-                      the release's or your checkout's) as *** unless
-                      --show
-  --vars get KEY      one value, on stdout
+  --vars [--show]     every variable of the file, secrets (config.yaml's
+                      secrets:, the release's or your checkout's) as ***
+                      unless --show, then how many more reach the
+                      environment from elsewhere (--env lists them all)
+  --vars get KEY      the value the environment gets, whatever defines it,
+                      on stdout, and where it comes from; --vars-instance
+                      and --vars-project get their file's
   --vars set KEY...   each value from your environment, else the project's
                       .env (not for aliases), else a hidden
                       prompt, else stdin (one key only). Existing keys are
@@ -1076,7 +1082,12 @@ then devopsy-target.env.
                       not list asks first (fails without a terminal).
     --show            echo what you type at the prompt, for values that are
                       not secrets
-  --vars unset KEY... remove them
+  --vars unset KEY... remove them, saying the value left, if any
+
+set and unset edit their file only, and say what that means against the
+others: a set over another value names the value it overrides now, and
+one that a nearer file hides, in each environment it reaches, names those
+files; each with the unset that undoes it.
 
 Values never go in arguments: they travel on SSH's stdin, so they stay out
 of ps, shell history and CI logs. Running containers keep their old values

@@ -457,7 +457,8 @@ func TestRemoteVars(t *testing.T) {
 	if out, code := run("", "@prod", "--vars", "--show"); code != 0 || !strings.Contains(out, "REG_PASSWORD='p@ss word'\nREG_USER='deploy'\nTOKEN='from-stdin'\n") {
 		t.Fatalf("list --show (%d):\n%s", code, out)
 	}
-	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "p@ss word\n" {
+	// The value alone on stdout; where it comes from on stderr.
+	if out, code := run("", "@prod", "--vars", "get", "REG_PASSWORD"); code != 0 || out != "devopsy: REG_PASSWORD: the value from shared/.env\np@ss word\n" {
 		t.Fatalf("get (%d): %q", code, out)
 	}
 	// FORCE_COLOR set here: colors forced, and exported into the session
@@ -488,7 +489,7 @@ func TestRemoteVars(t *testing.T) {
 	if out, code := run("shown\n", "@prod", "--vars", "set", "--show", "SHOWN"); code != 0 {
 		t.Fatalf("set --show (%d):\n%s", code, out)
 	}
-	if out, _ := run("", "@prod", "--vars", "get", "SHOWN"); out != "shown\n" {
+	if out, _ := run("", "@prod", "--vars", "get", "SHOWN"); !strings.HasSuffix(out, "\nshown\n") {
 		t.Fatalf("get SHOWN: %q", out)
 	}
 
@@ -1133,6 +1134,29 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run([]string{"DEVOPSY_INSTANCE=c"}, "@pr-12", "--release", "--yes"); code != 0 || !strings.Contains(out, "instance=c env=pr-12") {
 		t.Fatalf("pattern environment (%d):\n%s", code, out)
 	}
+	// The levels' sets warn against the other levels, in each
+	// environment under them, addressed with its instance: the
+	// instance's over the project's, and the project's under it. The
+	// value on stdin (the fake ssh passes the caller's environment on).
+	stdin := func(value string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = project
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(value)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	if out := stdin("inst\n", "@b/prod", "--vars-instance", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the instance's .env overrides, on @devopsy@server:b/prod, the value from the project's .env\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
+		t.Errorf("--vars-instance set over the project's:\n%s", out)
+	}
+	if out := stdin("yes\n", "@b/prod", "--vars-project", "set", "SHARED"); !strings.Contains(out, "warning: SHARED in the project's .env has no effect on @devopsy@server:b/prod: the value from the instance's .env overrides it\ndevopsy: | to let it through:\ndevopsy: | $ devopsy @devopsy@server:b/prod --vars-instance unset SHARED") || strings.Contains(out, "pr-12") {
+		t.Errorf("--vars-project set under an instance's:\n%s", out)
+	}
+	stdin("", "@b/prod", "--vars-instance", "unset", "SHARED")
 	// Only the project's layout is listed: an environment without an
 	// instance, made by hand, is not one of its environments.
 	if err := os.MkdirAll(filepath.Join(root, "shop", "staging", "releases"), 0o755); err != nil {
