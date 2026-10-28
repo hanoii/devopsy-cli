@@ -187,6 +187,17 @@ func TestParentEnvAbortedSync(t *testing.T) {
 	if got := readString(copied); got != before {
 		t.Errorf("an aborted sync --from changed parent.env:\n%s\nwas:\n%s", got, before)
 	}
+
+	// A parent with no current release (destroyed) is no source: a
+	// release of the child warns, its copy as it was.
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	if err := os.Rename(current, current+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(agent, "@devopsy@two:dev", "--release")
+	if got := readString(copied); code != 0 || !strings.Contains(out, "could not read @devopsy@one:prod's variables") || got != before {
+		t.Errorf("a release whose parent has no current release (%d):\n%s\n%s", code, out, got)
+	}
 }
 
 // A sync --from an environment on the child's own server names that

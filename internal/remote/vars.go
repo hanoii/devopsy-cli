@@ -346,7 +346,9 @@ func InheritWriteScript(t *Target, keys []string, pendingID string) string {
 
 // ParentVarsSeparator is the line between the sections of
 // ParentVarsWriteScript's stdin and of its output: no dotenv line starts
-// with "=" (cli.DotenvLine writes every value on one line).
+// with "=". Accepted: a line inside a quoted value of the copy, which is
+// the parent's text as written, that is exactly this (or starts with
+// ParentReadSeparator) would cut its section.
 const ParentVarsSeparator = "=devopsy-parent-env="
 
 // ParentVarsWriteScript writes what a child gets from its parent's server
@@ -440,14 +442,20 @@ const ParentReadSeparator = "=devopsy-vars= "
 // (ParentEnvFile), read on the child as the child would read those files
 // on its own server.
 func ParentReadScript(t *Target, trace bool) string {
+	// Only a parent with a current release: one destroyed, or a name that
+	// reaches another server, fails the read, and the child's copy stays.
+	// A file it cannot read fails it too, never an empty section.
 	s := "set -eu\n" + basePrelude(t) + `show() {
   printf '%s%s\n' ` + Quote(ParentReadSeparator) + ` "$1"
-  [ ! -f "$2" ] || { cat "$2"; echo; }
+  if [ -f "$2" ]; then
+    cat "$2" || exit 1
+    echo
+  fi
 }
+[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release"; exit 1; }
 `
 	if trace {
-		s += `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release"; exit 1; }
-printf '%s%s\n' ` + Quote(ParentReadSeparator) + ` trace
+		s += `printf '%s%s\n' ` + Quote(ParentReadSeparator) + ` trace
 (cd "$base/current" && ` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + `)
 `
 	}

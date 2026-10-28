@@ -112,8 +112,12 @@ func copyText(raw map[string]string) (string, []string, error) {
 	var text strings.Builder
 	seen := map[string]bool{}
 	for _, l := range []string{"instance", "project", "parent"} {
+		// A key a nearer file defines goes; within one file every line
+		// stays, in order, so a key defined twice reads as compose reads
+		// the file (the last wins, a reference between them the first).
+		nearer := maps.Clone(seen)
 		for _, c := range dotenvChunks(raw[l]) {
-			if seen[c.key] {
+			if nearer[c.key] {
 				continue
 			}
 			seen[c.key] = true
@@ -132,8 +136,10 @@ func copyText(raw map[string]string) (string, []string, error) {
 type envChunk struct{ key, text string }
 
 // dotenvLine is a .env line that defines a key: compose's KEY=value or
-// KEY: value, maybe after export; the value after the separator.
-var dotenvLine = regexp.MustCompile(`^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*[=:][ \t]*(.*)$`)
+// KEY: value, maybe after export, the key of whatever compose's parser
+// takes (letters and digits of any script, _ . - [ ]); the value after
+// the separator.
+var dotenvLine = regexp.MustCompile(`^[ \t]*(?:export[ \t]+)?([\p{L}\p{N}_.\-\[\]]+)[ \t]*[=:][ \t]*(.*)$`)
 
 // dotenvChunks splits a .env into its keys' lines, in order: a quoted
 // value goes on until its quote closes (as --vars' edit reads one,

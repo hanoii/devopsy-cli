@@ -2318,8 +2318,13 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 - **A parent on another server is copied whole, per child:**
   `shared/parent.env` (`remote.ParentEnvFile`, `writeParentEnv`), the
   parent's instance and project levels as written (`copyText`: each
-  key's lines from the nearest, merged per key, `dotenvChunks`), below
-  the child's own server's (what its server says wins). Why per
+  key's lines from the nearest, merged per key, `dotenvChunks`, nearest
+  first, so compose resolves a reference as it would across the files;
+  within one file every line in order, a key defined twice reading as
+  compose reads it; keys as compose's parser takes them, `-`, `.`,
+  `[]`, any script: reviews 4), below the child's own server's (what its
+  server says wins). The read needs the parent's current release: one
+  destroyed is no source, and the copy stays. Why per
   child, never a copy beside the child server's project `.env`
   (decided with the user, 2026-10-28): those levels are each server's,
   and two children of one server can have parents on two servers (an
