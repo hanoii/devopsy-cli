@@ -61,7 +61,7 @@ var fakeBinOnce = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
+	docker := "#!/bin/sh\ncase \"$*\" in *--help*) echo 'Usage:  docker compose ps [OPTIONS] [SERVICE...]'; exit 0 ;; *' config --format json') echo '{\"services\":{\"x\":{\"image\":\"x\"}}}'; exit 0 ;; 'image inspect --format '*|'image inspect -f '*) echo 'No such image' >&2; exit 1 ;;\n  *' ps -a --format {{.Name}} '*) [ -z \"${FAKE_PS:-}\" ] || { printf \"$FAKE_PS\"; exit 0; } ;;\n  version) [ -z \"${FAKE_DOCKER_DOWN:-}\" ] || exit 1 ;;\n  'inspect -f '*) [ -z \"${FAKE_HEALTH:-}\" ] || { echo \"$FAKE_HEALTH $4\"; exit 0; } ;; esac\nfor a in \"$@\"; do printf '[%s]' \"$a\"; done\necho\necho \"project=${COMPOSE_PROJECT_NAME:-unset} foo=${FOO:-unset}\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
 		return "", err
 	}
@@ -709,6 +709,18 @@ func TestReleaseSteps(t *testing.T) {
 	}
 	if out, code := run(nil, "@prod", "--log"); code != 0 || !strings.Contains(out, "devopsy: | cron: exited (2)") || !strings.Contains(out, "[logs][--no-color][--tail][100][web][cron][worker]") {
 		t.Errorf("--log of the failed run (%d):\n%s", code, out)
+	}
+
+	// A run step that failed while Docker does not answer (the machine
+	// shutting down, the daemon gone): no restart, which could only fail
+	// too, current left on the new release and its activation's mark kept,
+	// as one cut off past its switch, which the next release finishes.
+	out, code = run([]string{"FAIL_REMOTE=4", "FAKE_DOCKER_DOWN=1"}, "@prod", "--release")
+	if code != 4 || !strings.Contains(out, "Docker does not answer") || strings.Contains(out, "current is back to") || strings.Contains(out, "with its own run step") || current() == first || !fileExists(filepath.Join(server, remote.ActivatingFile)) {
+		t.Fatalf("run failure without Docker (%d), current %s:\n%s", code, current(), out)
+	}
+	if out, code := run(nil, "@prod", "--release"); code != 0 || fileExists(filepath.Join(server, remote.ActivatingFile)) {
+		t.Fatalf("the release after it (%d):\n%s", code, out)
 	}
 
 	// rollback: back to the release before, running its own rollback:.
