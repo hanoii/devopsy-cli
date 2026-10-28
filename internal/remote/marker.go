@@ -62,7 +62,17 @@ func (mw *MarkerWriter) Write(p []byte) (int, error) {
 		line := append(mw.line, p[:i]...)
 		mw.line = nil
 		p = p[i+1:]
-		if rest, ok := strings.CutPrefix(strings.TrimRight(string(line), "\r"), m.Prefix); ok {
+		text := strings.TrimRight(string(line), "\r")
+		k := escapes([]byte(text))
+		if rest, ok := strings.CutPrefix(text[k:], m.Prefix); ok {
+			// What a terminal's escape left before it (compose's build
+			// at a pseudo-terminal ends showing the cursor, no newline)
+			// still reaches the terminal.
+			if k > 0 {
+				if _, err := mw.w.Write([]byte(text[:k])); err != nil {
+					return n, err
+				}
+			}
 			m.found = true
 			if m.Found != nil {
 				m.Found(rest)
@@ -75,7 +85,7 @@ func (mw *MarkerWriter) Write(p []byte) (int, error) {
 	}
 	// A partial line that cannot become the marker goes through now
 	// (progress output); the rest after the marker as it comes.
-	if len(mw.line) > 0 && !strings.HasPrefix(m.Prefix, string(mw.line)) && !bytes.HasPrefix(mw.line, []byte(m.Prefix)) {
+	if part := mw.line[escapes(mw.line):]; len(mw.line) > 0 && !strings.HasPrefix(m.Prefix, string(part)) && !bytes.HasPrefix(part, []byte(m.Prefix)) {
 		if _, err := mw.w.Write(mw.line); err != nil {
 			return n, err
 		}
@@ -87,6 +97,27 @@ func (mw *MarkerWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// escapes is the length of the terminal escapes (CSI: ESC [, parameters,
+// a final byte) b starts with; one cut off at its end counts whole, so a
+// line holding only that much can still become the marker.
+func escapes(b []byte) int {
+	i := 0
+	for i+1 < len(b) && b[i] == 0x1b && b[i+1] == '[' {
+		j := i + 2
+		for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
+			j++
+		}
+		if j == len(b) {
+			return j
+		}
+		i = j + 1
+	}
+	if i+1 == len(b) && b[i] == 0x1b {
+		return len(b)
+	}
+	return i
 }
 
 // Flush writes what is left of a last line without a newline.

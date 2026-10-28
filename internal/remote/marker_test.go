@@ -51,6 +51,18 @@ func TestLineMarker(t *testing.T) {
 			writes: []string{marker + "/b\n" + marker + "/c\n"},
 			out:    marker + "/c\n", base: "/b",
 		},
+		// A terminal's escape left without a newline (compose's build at
+		// a pseudo-terminal ends showing the cursor again, \e[?25h)
+		// starts the marker's line: the marker is found, the escape goes
+		// through.
+		"after a terminal's escape": {
+			writes: []string{"Built 0.9s\r\n\x1b[?25h" + marker + "/b\nafter\n"},
+			out:    "Built 0.9s\r\n\x1b[?25hafter\n", base: "/b",
+		},
+		"after a terminal's escape, split": {
+			writes: []string{"Built\r\n\x1b[?2", "5h\x1b[0m" + marker[:5], marker[5:] + "/b\n"},
+			out:    "Built\r\n\x1b[?25h\x1b[0m", base: "/b",
+		},
 		"no marker": {
 			writes: []string{"just output\n", "tail"},
 			out:    "just output\ntail",

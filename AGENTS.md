@@ -3177,6 +3177,12 @@ Findings that are not one area's.
   `docker rmi <repo>@<digest>` removes every name of that repository on
   the image, bookmarks included.
 
+- Compose at a terminal (a pseudo-terminal from `with_tty` too) ends
+  its progress by showing the cursor again, `\e[?25h`, with no newline,
+  so the script's next line starts with it: `LineMarker` matches a
+  marker after a line's leading escapes and passes them on (found
+  2026-10-28: `devopsy-internal-beat` showed after a build at a
+  terminal, answered only by the next heartbeat).
 - Compose reads `--env-file` more than once: `<(devopsy --env)` fails,
   a file works.
 - `.env` values in double quotes are interpolated by compose's parser.
