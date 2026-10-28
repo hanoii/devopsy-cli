@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -34,7 +35,7 @@ func reloadWords(t *remote.Target) liveWords {
 // runReload implements devopsy @<target> --reload: ReloadScript's one
 // session, an activation's (liveSession), its log appended to the current
 // release's.
-func runReload(t *remote.Target, projectName string, args []string) int {
+func runReload(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string) int {
 	if len(args) > 0 {
 		report.Error("usage: devopsy @" + targetRef(t) + " --reload")
 		return 2
@@ -42,6 +43,11 @@ func runReload(t *remote.Target, projectName string, args []string) int {
 	rlog := newReleaseLog("reload", t)
 	log := report.Default().Tee(rlog.Line)
 	log.Info(fmt.Sprintf("reloading %s (%s:%s)", t.Address, t.Host, t.Path))
+	// A child's copy of its parent's server's levels, again: what the
+	// reload reads with the rest.
+	if t.Parent != "" {
+		refreshParentEnv(context.Background(), t, projectDir, projectEnv, log)
+	}
 	code := liveSession(t, remote.ReloadScript(t, projectName), rlog, log, reloadWords(t))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("reload exited %d", code)))
 	text := rlog.Text()

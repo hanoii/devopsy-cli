@@ -148,7 +148,7 @@ const DestroyDataFlag = "--destroy-data"
 const ReleaseStepsFlag = "--release-steps"
 
 // ReleaseInheritFlag prints the keys the inherit: of a server's release
-// names, hidden: run by InheritReadScript in a parent's current release.
+// names, hidden: run by ParentCheckScript in a parent's current release.
 const ReleaseInheritFlag = "--release-inherit"
 
 // --export and --import move one service's data, the way its

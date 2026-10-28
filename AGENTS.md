@@ -559,8 +559,9 @@ step's rules):
    older than current); `partialGuard` refuses a rollback, and a
    release that does not sync, on a partial copy (Syncs).
 3. The pending lock (fd 7), then remote before steps in `current`.
-4. Links into the release: `shared/*`, `inherit.env`, `project.env` and
-   `instance.env`, even when missing, so one created later applies.
+4. Links into the release: `shared/*`, `inherit.env`, `parent.env`,
+   `project.env` and `instance.env`, even when missing, so one created
+   later applies.
    Relative, like `current` (decided 2026-10-27): absolute ones broke
    every release when a server's release root moved.
 5. Releases only: `--prepare-release` when the compose files use role
@@ -664,7 +665,7 @@ step's rules):
   child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`). Why: it
   applies however devopsy runs on the server, and rollbacks restore it.
   Precedence there: caller, `shared/.env`, `inherit.env`,
-  `instance.env`, `project.env`, `devopsy-target.env`.
+  `instance.env`, `project.env`, `parent.env`, `devopsy-target.env`.
 - **Nothing of the local environment goes to a server:** a target's
   `COMPOSE_PROJECT_NAME` is always its compose name (`projectName` in
   `runRemote`). Why: one exported for local work put every environment
@@ -695,8 +696,10 @@ step's rules):
   naming it, with the `unset` that brings it back, and, for each
   environment its file reaches, against every nearer file that hides
   it, with no list of unsets (decided with the user: confusing, rarely
-  what is wanted), only `--vars set` there when an inherited value
-  hides it and the environment's own file does not set it. All of it from the
+  what is wanted), only, when an inherited value hides it, `--vars set`
+  there (when the environment's own file does not set it already) and
+  how the inherited value goes (the parent's `inherit:`, its release,
+  then `--inherit`). All of it from the
   hidden `--env-trace` (`cli.EnvTrace`, a feature), `cli.TraceEnv` as
   JSON: what `--debug env` prints for people, never a second reading
   of the files (only before a first release, when `get` reads them
@@ -2292,9 +2295,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 ### inherit
 
 - **A parent's `inherit:` keys become the child's
-  `shared/inherit.env`, whole:** `inheritVars` reads the parent's three
-  files in one session (`InheritReadScript`), takes each key from the
-  nearest level, and writes them all (`InheritWriteScript`, on stdin,
+  `shared/inherit.env`, whole:** `inheritVars` reads the parent's files
+  in one session (`ParentTraceScript`, `parentLevels`: its `shared/.env`,
+  its own `inherit.env`, so a chain passes what the middle inherited,
+  its instance's and project's `.env`, its `parent.env`), takes each key
+  from the nearest level, and writes them all (`InheritWriteScript`, on stdin,
   under the child's lock: a resync replaces the file), which every
   release links and the loader reads below `.env`. Notices name the
   keys the child's own `shared/.env` shadows, never values. `--inherit`
@@ -2304,12 +2309,51 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (`ParentCheckScript`; `--inherit`'s `ParentInheritScript`) runs the
   hidden `--release-inherit` in its `current`, which prints what its own
   config's `inherit:` names for the environment it was made for
-  (`ReleaseEnvironment`), into `job.inherit`; no session more, and none
-  reads the files when it names nothing. Why: a checkout (another
+  (`ReleaseEnvironment`), into `job.inherit`; no session more. Why: a checkout (another
   branch, an old clone, CI) naming any key would copy that value of the
   parent's into the child, whatever the parent's release says; the
   parent's own release decides what leaves it, as a child's decides its
   own `parent:` and run step (`TestSyncInherit`).
+- **A parent on another server is copied whole, per child:**
+  `shared/parent.env` (`remote.ParentEnvFile`, `writeParentEnv`), the
+  parent's instance and project levels as it reads them (`parentCopy`),
+  below the child's own server's (what its server says wins). Why per
+  child, never a copy beside the child server's project `.env`
+  (decided with the user, 2026-10-28): those levels are each server's,
+  and two children of one server can have parents on two servers (an
+  instance from each), each needing its own. The parent's files are
+  read by its own devopsy (`ParentTraceScript`: `--env-trace` in its
+  current release, each definition by level), never parsed here: its
+  loader interpolates each file against the server's environment and
+  the nearer files, so `${HOST}` and `${HOME:?}` are its values (reviews
+  1 and 2: parsed alone, or against the files only, they failed every
+  child's release). Its first line names the source (`ParentEnvHeader`): every
+  sync writes it from its own, and a release that does not sync,
+  `--reload` and `--inherit` copy again (`refreshParentEnv`): from the
+  child's parent resolved anew, or the address a `--from` named, kept
+  as named (review: a laptop's server alias, stored, failed every
+  refresh in CI); a parent out of reach a warning that keeps the copy.
+  Pending in a re-sync, as `inherit.env` is, beside its pending file
+  (`ParentPendingOf`, so everything passing `InheritPendingEnv` reads
+  it, and the leftovers' sweep takes it), moved into place on go
+  (review: a sync that aborted left its `--from` as the source). On the
+  same server, the parent's own `parent.env` (the child's side copies
+  it, under its lock, before its checks: `sameServerCopy`; down a chain
+  whose middle shares the child's server, review), else none; always
+  under the child's own header, its source (`sameServerParentEnv`:
+  never the parent's, whose `--from` is not the child's), alone for a
+  `--from` with nothing to copy, so its later copies follow it (review
+  2). A
+  release or a reload rewrites it before its checks, as `--vars set`
+  writes a file (accepted: the next activation applies it). Every key,
+  no exclude list (decided with the user): what must not leave a server
+  belongs in an environment's `shared/.env`; a secret (`secrets:`, the
+  checkout's) new in the copy is named, never its value. Snapshots do
+  not carry it: the next refresh writes it.
+- **An `inherit:` naming nothing empties the child's `inherit.env`:**
+  a sync's child side writes an empty pending file
+  (`SyncOptions.NoInherit`), `--inherit` an empty file. Why (review):
+  following the hint to drop an only key left it inherited for good.
 - **A first release inherits into `shared/inherit.env` before the
   upload,** so `--missing-vars` sees the values; kept on failure, since
   the next release is first again.

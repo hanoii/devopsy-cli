@@ -169,7 +169,11 @@ what `config.yaml` sets.
   nothing live, one after switches back. `--rollback` goes back one;
   `--releases` lists; `--log` shows what the last one printed.
 - A child (`parent:`) syncs its parent's data on its first release;
-  `--sync` again; `--reset` wipes it and syncs anew.
+  `--sync` again; `--reset` wipes it and syncs anew. It gets the keys
+  its parent's `inherit:` names, and, from a parent on another server,
+  a copy of that server's instance and project variables
+  (`shared/parent.env`): `--vars-project` and `--vars-instance` are
+  per server.
   `devopsy @prod --export <service> | devopsy @staging --import <service>`
   moves one service's data; the same into a local project with
   `devopsy --import`.

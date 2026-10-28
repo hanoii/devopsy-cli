@@ -234,7 +234,8 @@ func allScripts() map[string]string {
 		"vars":            VarsReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}, nil),
 		"vars set":        VarsSetScript(tg, nil, []string{"A", "B"}),
 		"vars unset":      VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}, []string{"A"}),
-		"inherit read":    InheritReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}),
+		"parent trace":    ParentTraceScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}),
+		"parent copy":     ParentEnvCopyScript(tg, "app/a/prod", ParentEnvHeader("vm1:a/prod", true), true),
 		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
 		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),
 		"keys read":       KeysReadScript(),
@@ -723,7 +724,10 @@ exit 0
 	// The capability's hooks run from --sync-services, never the script;
 	// the run step after it is no sync's: none of its variables.
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
-	if got := calls(root); got != "--missing-vars from= to=\n--check-names "+base+" from= to=\n--check-mounts from= to=\n-- config --format json from= to=\n-- --profile * pull --ignore-buildable from= to=\n-- build --pull from= to=\n-- config --format json from= to=\n--mnt-owners from= to=\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	// The pending files' path from before the checks (where the sync's
+	// inherited variables and its copy of the parent's server's levels
+	// are read, when they exist), to the run step.
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 

@@ -24,6 +24,7 @@ const (
 	LevelInherit  = "inherit"
 	LevelInstance = "instance"
 	LevelProject  = "project"
+	LevelParent   = "parent"
 	LevelTarget   = "target"
 	LevelImported = "imported"
 	LevelComputed = "computed"
@@ -32,7 +33,8 @@ const (
 // Level is where d comes from, by what the loader read (loadProject):
 // the environment's own .env (shared/.env on a server, a plain
 // directory's .devopsy/.env, a restore's pending one), its inherited
-// variables, the instance's or the project's .env, the release's
+// variables, the instance's or the project's .env, its copy of its
+// parent's server's (remote.ParentEnvFile), the release's
 // devopsy-target.env and what it imported, the env capability, devopsy
 // itself or the caller's environment.
 func (d EnvDef) Level() string {
@@ -47,6 +49,9 @@ func (d EnvDef) Level() string {
 		return LevelComputed
 	}
 	switch base := filepath.Base(d.Source); {
+	// A sync's pending copy is named after its pending inherit file.
+	case base == remote.ParentEnvFile || strings.HasSuffix(base, "."+remote.ParentEnvFile):
+		return LevelParent
 	case base == remote.InheritFile || strings.HasPrefix(base, ".devopsy-sync.inherit."):
 		return LevelInherit
 	case base == "instance.env":

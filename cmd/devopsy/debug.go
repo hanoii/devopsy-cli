@@ -87,7 +87,7 @@ func debugSummary(st style, projectDir string) {
 		field("project", st.warn("none (no .devopsy/ in this directory or above)"))
 	} else {
 		files := []string{"compose.yaml"}
-		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", "instance.env", "project.env", remote.ConfigFile, remote.LocalConfigFile} {
+		for _, f := range []string{"compose.override.yaml", "compose.override.yml", ".env", remote.InheritFile, "instance.env", "project.env", remote.ParentEnvFile, remote.ConfigFile, remote.LocalConfigFile} {
 			if _, err := os.Stat(filepath.Join(projectDir, f)); err == nil {
 				files = append(files, f)
 			}
@@ -404,7 +404,7 @@ func debugEnv(st style, cwd string, args []string, color bool) int {
 		}
 		return file(d.Source)
 	}
-	fmt.Println(st.dim("First wins: the caller's environment, .env, inherit.env, instance.env, project.env, devopsy-target.env, the env capability."))
+	fmt.Println(st.dim("First wins: the caller's environment, .env, inherit.env, instance.env, project.env, parent.env, devopsy-target.env, the env capability."))
 	for _, v := range vars {
 		if len(v.Defs) == 0 {
 			fmt.Printf("%s %s\n", st.name(v.Name), st.warn("not set"))

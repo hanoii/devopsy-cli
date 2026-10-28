@@ -22,8 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
-
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
@@ -56,6 +54,9 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
+	// from: the parent is a --from's address, which the child's copy of
+	// its server's levels names as such (remote.ParentEnvHeader).
+	from bool
 	// images are the parent's data images (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
@@ -64,6 +65,18 @@ type syncJob struct {
 	// names (remote.ParseInherit), read in the preflight: inheritVars
 	// writes them, never what the checkout's names.
 	inherit []string
+}
+
+// sameServer sets what a child's side copies of a parent on its own
+// server (remote.SyncOptions.SameServerFrom): its directory, the child's
+// copy's header naming the sync's source, kept alone for a --from.
+func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
+	if job.sameHost {
+		o.SameServerFrom = job.parent.Path
+		o.SameServerHeader = remote.ParentEnvHeader(job.parent.Address, job.from)
+		o.SameServerKeep = job.from
+	}
+	return o
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -466,67 +479,56 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	return code
 }
 
-// inheritVars writes the variables the parent's inherit: names, as its
-// current release's config says (never the checkout's: a checkout could
-// otherwise take any of the parent's variables into a child), read from
-// its server's files (its shared/.env, then its instance's and project's
-// .env, nearest first), as the child's shared/inherit.env: the whole file,
-// so a resync replaces it. With pending (a re-sync), into the child's
+// inheritVars writes what a child gets from its parent's server, from
+// one read of its files (parentLevels): the keys the parent's current
+// release's inherit: names (job.inherit, never the checkout's: a checkout
+// could otherwise take any of the parent's variables into a child), each
+// from the nearest of its shared/.env, its inherit.env (what it inherited
+// itself, down a chain), its instance's and project's .env and its
+// parent.env, as the child's shared/inherit.env: the whole file, so a
+// resync replaces it. With pending (a re-sync), into the child's
 // remote.SyncInheritPending instead, before the holder prepares: the sync
 // reads its labels and everything else from it, and moves it into place
 // on go, so a failed copy changes nothing. The child's own shared/.env
 // wins over it, and a key set there too is named. A key the parent does
-// not set is reported, never written. Values travel over SSH's stdin, and
-// only names are printed.
-func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, pending bool) error {
+// not set is reported, never written. With copy (a sync's: from its own
+// source), also the child's copy of the parent's instance and project
+// levels (writeParentEnv), when the parent is on another server. Values travel over SSH's stdin, and only names
+// are printed.
+func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, pending, copy bool) error {
 	c, p := job.child, job.parent
-	if len(job.inherit) == 0 {
+	// On one server the child copies its parent's parent.env itself
+	// (SyncOptions.SameServerFrom).
+	copy = copy && !job.sameHost
+	if len(job.inherit) == 0 && !copy {
 		return nil
 	}
 	log := report.Default().Tee(rlog.Line)
-	var out bytes.Buffer
-	code, err := remote.SSHContext(ctx, p, nil, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false, nil)
+	files, err := parentLevels(ctx, p)
 	if err != nil {
 		return err
 	}
-	if code != 0 {
-		return fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
+	// Pending like the inherited variables: a sync that aborts leaves the
+	// child's copy, and the source it names, as they were.
+	pendingID := ""
+	if pending {
+		pendingID = job.id
 	}
-	files := map[string]map[string]string{}
-	level := ""
-	var content strings.Builder
-	flush := func() error {
-		if level == "" {
-			return nil
+	if copy {
+		if err := writeParentEnv(ctx, c, p, files, job.from, pendingID, log); err != nil {
+			return err
 		}
-		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(string) (string, bool) { return "", false })
-		if err != nil {
-			return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
-		}
-		files[level] = vars
-		content.Reset()
+	}
+	if len(job.inherit) == 0 {
 		return nil
 	}
-	for _, line := range strings.SplitAfter(out.String(), "\n") {
-		if name, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), remote.InheritSeparator); ok {
-			if err := flush(); err != nil {
-				return err
-			}
-			level = name
-			continue
-		}
-		content.WriteString(line)
-	}
-	if err := flush(); err != nil {
-		return err
-	}
 
-	// Nearest first, as the server reads them.
+	// Nearest first, as the parent reads them.
 	var lines strings.Builder
 	var keys, missing []string
 	for _, k := range job.inherit {
 		found := false
-		for _, l := range []string{"shared", "instance", "project"} {
+		for _, l := range []string{"shared", "inherit", "instance", "project", "parent"} {
 			if v, ok := files[l][k]; ok {
 				lines.WriteString(cli.DotenvLine(k, v) + "\n")
 				keys = append(keys, k)
@@ -540,11 +542,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	}
 	var res bytes.Buffer
 	// Gated: the variables go once the child holds its release lock.
-	pendingID := ""
-	if pending {
-		pendingID = job.id
-	}
-	code, err = remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pendingID), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
+	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pendingID), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
@@ -568,7 +566,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 
 // runInherit implements devopsy @<child> --inherit: the parent's inherited
 // variables into the child, nothing copied, no run step.
-func runInherit(t *remote.Target, projectName string, args []string, color bool) int {
+func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (string, bool), projectName string, args []string, color bool) int {
 	fail := func(msg string) int {
 		report.Error(msg)
 		return 1
@@ -605,11 +603,21 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 			job.inherit = remote.ParseInherit(out.String())
 		}
 	}
+	rlog := newReleaseLog("inherit", t)
+	// The copy of the parent's server's levels, from where the last sync
+	// copied it, whatever inherit: says.
+	refreshParentEnv(context.Background(), t, projectDir, projectEnv, report.Default().Tee(rlog.Line))
 	if len(job.inherit) == 0 {
-		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release", t.Address, p.Name, p.Address))
+		// Nothing inherited now: what was goes, as a sync naming keys
+		// replaces the file.
+		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.InheritWriteScript(t, nil, ""), strings.NewReader(remote.GatedInput("")), io.Discard, false, nil)
+		if err != nil || code != 0 {
+			return fail(fmt.Sprintf("could not empty @%s's shared/%s (%v, %d)", t.Address, remote.InheritFile, err, code))
+		}
+		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release, so its shared/%s is empty now", t.Address, p.Name, p.Address, remote.InheritFile))
 		return 0
 	}
-	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
+	if err := inheritVars(context.Background(), job, rlog, color, false, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
 	// What applies them, as --vars set says it.
@@ -674,6 +682,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if err != nil {
 		return fail(err.Error())
 	}
+	job.from = from != ""
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {
@@ -694,11 +703,11 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	log.Info(fmt.Sprintf("%s @%s into @%s (%s:%s)", verb, p.Address, t.Address, t.Host, t.Path))
 	// The parent's variables first, into the child's pending file: the
 	// holder reads its labels from them; on go they move into place.
-	if err := inheritVars(context.Background(), job, rlog, color, true); err != nil {
+	if err := inheritVars(context.Background(), job, rlog, color, true, true); err != nil {
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset}
+	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0})
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)

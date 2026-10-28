@@ -202,13 +202,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		return runSnapshots(t, projectName, args[1:], color)
 
 	case "--reload":
-		return runReload(t, projectName, args[1:])
+		return runReload(t, projectDir, projectEnv, projectName, args[1:])
 
 	case "--sync", "--reset":
 		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 
 	case "--inherit":
-		return runInherit(t, projectName, args[1:], color)
+		return runInherit(t, projectDir, projectEnv, projectName, args[1:], color)
 
 	case cli.ExportFlag:
 		return runRemoteExport(t, projectName, args[1:], color)
@@ -537,7 +537,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
-					job.first = first
+					job.first, job.from = first, from != ""
 				}
 				// Replacing a live child's data asks, as --sync does; a first
 				// release has none to lose.
@@ -561,11 +561,15 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// What a sync inherits, after the local before steps and before
 		// the upload: a first release's into shared/inherit.env, so the
 		// variables check finds it; a later one's into the pending file
-		// the sync reads, moved into place once the copy is in.
+		// the sync reads, moved into place once the copy is in; and its
+		// copy of the parent's server's levels. A child's release that
+		// does not sync copies those again, from where its last sync did.
 		if job != nil {
-			if err := inheritVars(context.Background(), job, rlog, color, !job.first); err != nil {
+			if err := inheritVars(context.Background(), job, rlog, color, !job.first, true); err != nil {
 				return stop(fmt.Errorf("inherit: %w: nothing released", err))
 			}
+		} else if t.Parent != "" {
+			refreshParentEnv(context.Background(), t, projectDir, projectEnv, log)
 		}
 		src := record.Mode
 		if record.Commit != "" {
@@ -655,7 +659,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images})
+			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, job.sameServer(&remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images, NoInherit: len(job.inherit) == 0}))
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}

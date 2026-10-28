@@ -1412,8 +1412,10 @@ like `--sync`.
 about the data, as the parent's current release says: a checkout's
 `inherit:` changes nothing until the parent is released with it, so no
 one syncing a child takes more of the parent's variables than its own
-release gives. They are read from the parent's `shared/.env`, instance `.env` and
-project `.env` on its server (nearest first) and written as the child's
+release gives. They are read from the parent's `shared/.env`, its own
+`inherit.env` (what it inherited, so a chain passes values down), its
+instance `.env`, its project `.env` and its `parent.env` on its server
+(nearest first) and written as the child's
 `shared/inherit.env`, the whole file each time, so a resync replaces it.
 The child reads it below its own `shared/.env` and above its server's
 instance and project files: a value the child sets itself wins (devopsy
@@ -1429,7 +1431,30 @@ that everything the sync runs on the child reads in place of
 variable follows the parent's in the same sync; once the copy is in it
 moves into place, before the child's services restart and its run step,
 and a failed copy removes it, leaving the child's variables as they
-were. `devopsy @<child> --inherit` refreshes the variables alone, no
+were. A parent whose `inherit:` names nothing leaves the child's
+`shared/inherit.env` empty.
+
+**A parent on another server:** the instance's and the project's `.env`
+are each server's own, so a child elsewhere would not see the parent's.
+It gets a copy of them instead, `shared/parent.env`, all of their keys,
+as the parent reads them (its instance's over its project's, over its
+own `parent.env` down a chain), read below the child's own server's
+instance and project files, so what the child's server says wins. Its
+first line names where it came from: every sync writes it from its
+source (before the copy in a pending file, as `inherit.env`, so a
+failed sync leaves it as it was), and a child's release that does not
+sync, `--reload` and `--inherit` copy it again, from the child's parent
+(as you name its server then) or the address a `--from` gave. A parent
+that cannot be read then is a warning, and the copy stays. Values are
+read as the parent's server reads them (`${HOST}` from its
+`shared/.env` is its value). A secret (`secrets:`) new in the copy is
+named: a value that must stay on a server belongs in its environment's
+`shared/.env`, which only `inherit:` copies, key by key. On the
+parent's own server its instance and project files are the child's
+already: the child gets only the parent's own `parent.env`, down a
+chain.
+
+`devopsy @<child> --inherit` refreshes the variables alone, no
 data, no run step.
 Names are printed, never values; keys the parent does not set are
 listed. Not `DEVOPSY_*` or `COMPOSE_PROJECT_NAME`: those are the target's.
@@ -1763,7 +1788,9 @@ how many.
 **Variables on a server**, nearest first: the environment's `shared/.env`,
 a child's `shared/inherit.env` (what its parent's `inherit:` gave it),
 the instance's `.env` (`<project>/<instance>/.env`), the project's
-(`<project>/.env`), then the release's `devopsy-target.env`, written from the
+(`<project>/.env`), a child's `shared/parent.env` (its copy of its
+parent's server's instance and project `.env`, when that is another
+server), then the release's `devopsy-target.env`, written from the
 config with `COMPOSE_PROJECT_NAME`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`,
 `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET` and `DEVOPSY_RELEASE_COMMIT` (and a
 child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`).
@@ -1790,7 +1817,13 @@ environment it reaches, which files do (the project's under an
 environment's own and its inherited one). The first comes with the
 `unset` that brings the other value back; the second, when an inherited
 value hides it, with the `--vars set` that gives the environment its
-own. An `unset` says the value left, if any.
+own and how the inherited value goes (dropped from the parent's
+`inherit:`, released, then `--inherit`). An `unset` says the value left, if any.
+
+The instance's and the project's `.env` are that server's: two servers
+of one project each have their own, which `--vars-instance` and
+`--vars-project` edit through any of its environments (or the server
+alone, for the project's).
 
 Values travel over SSH's stdin, never as arguments. Running containers see
 changes when recreated: `--vars set` and `unset` on an environment say

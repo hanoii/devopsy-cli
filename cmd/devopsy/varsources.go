@@ -49,7 +49,7 @@ func varsGet(k string, own map[string]string, read remote.VarsOutput, trace *cli
 	if v, ok := own[k]; ok {
 		return v, cli.LevelEnv, true
 	}
-	for _, l := range []string{cli.LevelInherit, cli.LevelInstance, cli.LevelProject} {
+	for _, l := range []string{cli.LevelInherit, cli.LevelInstance, cli.LevelProject, cli.LevelParent} {
 		content, ok := read.Files[l]
 		if !ok {
 			continue
@@ -97,6 +97,8 @@ func levelSays(level, own, parent string) string {
 		return "from the instance's .env"
 	case cli.LevelProject:
 		return "from the project's .env"
+	case cli.LevelParent:
+		return "copied from its parent's server (shared/" + remote.ParentEnvFile + ")"
 	case cli.LevelTarget:
 		return "from the release's " + remote.TargetEnvFile + " (config.yaml)"
 	case cli.LevelImported:
@@ -189,9 +191,10 @@ func sayLevels(t *remote.Target, level *remote.Level, verb string, keys []string
 
 // sayHidden warns that k, set in oursSays, has no effect on the
 // environment at addr, where nearer definitions override it (by
-// precedence). The one hint: when an inherited value hides it and the
-// environment's own file does not set it, that file is where a value of
-// the environment's goes, over the inherited one.
+// precedence). Its hints, when an inherited value hides it: the
+// environment's own file, where a value of the environment's goes over
+// the inherited one (when that file does not set it already), and how the
+// inherited value goes (the parent's inherit:, then --inherit).
 func sayHidden(k, oursSays, addr string, nearer []cli.EnvTracedDef, own, parent string) {
 	says := make([]string, 0, len(nearer))
 	inherited, owned := false, false
@@ -207,6 +210,13 @@ func sayHidden(k, oursSays, addr string, nearer []cli.EnvTracedDef, own, parent 
 	var details []string
 	if inherited && !owned {
 		details = []string{"to set it there instead, over the inherited value:", report.CmdMark + "devopsy @" + addr + " --vars set " + k}
+	}
+	if inherited {
+		from := "its parent"
+		if parent != "" {
+			from = parent
+		}
+		details = append(details, fmt.Sprintf("to stop inheriting it: drop %s from %s's inherit: in config.yaml and release %s, then:", k, from, from), report.CmdMark+"devopsy @"+addr+" --inherit")
 	}
 	report.Warn(fmt.Sprintf("%s in %s has no effect on @%s: %s %s it", k, oursSays, addr, joinAnd(says), verb), details...)
 }
