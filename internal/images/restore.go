@@ -93,7 +93,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				return s.gone(tid, svc)
 			}
 			if s.changed(o, svc) {
-				return s.rebuilt(tid, o, svc)
+				if err := s.rebuilt(tid, o, svc); err != nil {
+					return err
+				}
 			}
 			if _, err := s.Docker.ID(names[i]); err != nil {
 				return s.gone(tid, svc)
@@ -132,7 +134,9 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					return s.gone(tid, svc)
 				}
 				if s.changed(o, svc) {
-					return s.rebuilt(tid, o, svc)
+					if err := s.rebuilt(tid, o, svc); err != nil {
+						return err
+					}
 				}
 				if _, err := s.Docker.ID(names[i]); err != nil {
 					return s.gone(tid, svc)
@@ -243,13 +247,20 @@ func (s *Set) gone(tid string, svc Service) error {
 // mode's fetch builds it: image mode's only pulls (a pull_policy: never
 // service with a build: is never built on the server).
 func (s *Set) changed(o entry, svc Service) bool {
-	return !s.AsBuilt && svc.Build && s.Mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
+	return svc.Build && s.Mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
 }
 
 // rebuilt says that o's image is built again for what its build: section
-// gives now, and asks for the build (ErrGone, as for an image gone).
+// gives now, and asks for the build (ErrGone, as for an image gone). As
+// built (AsBuilt: that build failed), its bookmark goes back all the
+// same, said, and nil.
 func (s *Set) rebuilt(tid string, o entry, svc Service) error {
-	s.say(report.InfoLevel, "%s's image of %s was built with other values of %s: building it again", tid, svc.Name, changedArgs(o.Build, svc.BuildKey))
+	what := changedArgs(o.Build, svc.BuildKey)
+	if s.AsBuilt {
+		s.say(report.WarnLevel, "%s's image of %s goes back as built, with other values of %s than now: a release builds it for them", tid, svc.Name, what)
+		return nil
+	}
+	s.say(report.InfoLevel, "%s's image of %s was built with other values of %s: building it again", tid, svc.Name, what)
 	return ErrGone
 }
 
