@@ -573,8 +573,13 @@ func TestAISkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, code = runDevopsy(t, dir, nil, "--ai-skill", "install")
-	if code != 0 || !strings.Contains(out, "wrote "+filepath.Join(dir, ".agents/skills/devopsy/SKILL.md")) {
+	// From a subdirectory of a project, into the project: a skill in a
+	// subdirectory is one no agent reads.
+	write(t, filepath.Join(dir, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	sub := filepath.Join(dir, "web")
+	os.MkdirAll(sub, 0o755)
+	out, code = runDevopsy(t, sub, nil, "--ai-skill", "install")
+	if code != 0 || !strings.Contains(out, "wrote "+filepath.Join(dir, ".agents/skills/devopsy/SKILL.md")+", linked from "+filepath.Join(dir, ".claude/skills/devopsy")) {
 		t.Fatalf("install (%d):\n%s", code, out)
 	}
 	if _, err := os.Readlink(filepath.Join(dir, ".claude/skills/devopsy")); err != nil {

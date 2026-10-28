@@ -106,7 +106,8 @@ To get there it makes choices for you:
 - **Secrets stay out of sight:** the ones the project names are masked in
   output, and values never go in arguments.
 
-Everything else is yours to make (an AI skill to help is coming soon).
+Everything else is yours to make; `devopsy --ai-skill` (Agents, below)
+teaches an agent how.
 
 ## Templates
 
@@ -218,11 +219,13 @@ A skill that teaches an agent (Claude Code, Codex, Cursor) to work on a
 project that runs on devopsy: what goes in `.devopsy/`, the labels,
 `config.yaml`, releases and what devopsy refuses. It is part of the
 binary, so it describes the devopsy that prints it. `install` writes it
-to `.agents/skills/devopsy/SKILL.md`, the directory those agents share,
-and links `.claude/skills/devopsy` to it for Claude Code; `--global` does
-the same under your home directory. Run it again after an upgrade: a
-copy devopsy wrote is replaced (its frontmatter says which version), any
-other file is left alone. `--stub` installs the short form instead, a
+to `.agents/skills/devopsy/SKILL.md` in the project (the directory with
+`.devopsy/`, found as every command finds it; outside one, the current
+directory), the directory those agents share, and links
+`.claude/skills/devopsy` to it for Claude Code; `--global` does the same
+under your home directory. Run it again after an upgrade: a copy devopsy
+wrote is replaced (its frontmatter says which version); any other file
+there is refused, so nothing of yours is overwritten. `--stub` installs the short form instead, a
 file that tells the agent to run `devopsy --ai-skill`: for a template, so
 every copy gets the reference matching its devopsy without carrying the
 text.

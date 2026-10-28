@@ -3119,12 +3119,18 @@ Smaller features, each with the rule an agent must keep.
   from practices: what devopsy enforces is stated as fact, what the
   templates do (10001, read-only, `alwaysup`) as what new projects should
   do. `TestContentNamesWhatExists` keeps it honest: every `--flag` it
-  names is in `cli.Flags` (its `notFlags` list is the words of
-  subcommands and project commands), every `devopsy.*` label one the
-  code reads. The install location is `.agents/skills/devopsy`, which
-  Codex, Cursor and the skills installer share, with a relative link
-  from `.claude/skills/devopsy`: Claude Code (2.1.x) reads only its own
-  directory (anthropics/claude-code#31005). Decided 2026-10-27.
+  names, anywhere in the text, is in `cli.Flags` or a flag one takes
+  (its `Args`), every `devopsy.*` label is in the test's `publicLabels`
+  (the README's, each checked against the code, so an internal or old
+  name never gets in) and its config.yaml example loads. The install
+  location is `.agents/skills/devopsy` in the project's directory
+  (`FindProjectDir`), which Codex, Cursor and the skills installer
+  share, with a link from `.claude/skills/devopsy`: Claude Code (2.1.x)
+  reads only its own directory (anthropics/claude-code#31005). The link
+  is relative from where the link really is (`EvalSymlinks` of both
+  ends: a `~/.claude` in a dotfiles checkout would dangle otherwise);
+  a dangling one is replaced, anything else there is left and said.
+  Decided 2026-10-27.
 - **`--debug` traces the loading itself, never a second implementation
   of it:** targets carry `From` (each value's origin), and `Env`
   records every definition of a variable as it loads (`EnvDef`,

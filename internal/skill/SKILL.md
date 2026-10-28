@@ -16,12 +16,15 @@ plane: compose, environment variables and SSH.
 - This text comes from devopsy `{{VERSION}}`. If `devopsy --version` says
   another, run `devopsy --ai-skill` for the text that matches it.
 - `devopsy --help` lists devopsy's own flags and where each applies
-  (locally, on a target, on a server); `devopsy <flag> --help` one flag's
-  own help. Bare `devopsy` in a project lists the project's own commands
-  (`.devopsy/commands/`). Anything else is passed to `docker compose`.
+  (locally, on a target, on a server); most take `--help` for their own
+  (`--release --help`, `--debug --help`). Bare `devopsy` in a project
+  lists the project's own commands (`.devopsy/commands/`); a word is one
+  of those, else a compose command (`devopsy up -d`), else an error.
+- devopsy comes from https://github.com/hanoii/devopsy-cli (its README
+  has the install line).
 - Never touch a real server unless the user asks: a target's commands run
-  there. Read-only ones are `--status`, `--releases`, `--log`, `--env`,
-  `--environments`, `--debug`.
+  there. Read-only ones are `--status`, bare `--releases`, `--log`,
+  `--env`, `--environments`, `--debug`.
 - `devopsy --debug schema` documents every key of config.yaml, `--debug
   capabilities` the capabilities' contracts, `--debug env` where each
   variable comes from.
@@ -51,9 +54,10 @@ server's own Traefik, devopsy-template-traefik, released once per server.
 
 What devopsy requires:
 
-- No `name:`. Each environment is its own compose project, named by
-  devopsy (`<project>[-<instance>]-<environment>`), and a fixed name would
-  make every environment on a server share containers, volumes and URL.
+- No `name:`. devopsy sets `COMPOSE_PROJECT_NAME` (locally `project:`,
+  on servers `<project>[-<instance>]-<environment>`: each environment is
+  its own compose project), which wins over a `name:`; leave it out so
+  the file says what runs.
 - Networks the project owns are named from its compose project
   (`${COMPOSE_PROJECT_NAME}_default`). To reach another project, join its
   network as `external` (the proxy's `traefik`); never a third, shared
@@ -76,10 +80,12 @@ What devopsy requires:
   stopped (`own` while its own data moves, `import` while any data is
   imported, `always`, `never`, the default); `devopsy.data.exclude=<entry>,...`
   leaves entries out. They drive syncs from a parent environment,
-  `--export`, `--import` and snapshots alike. A database stops for a raw
-  copy (`own`), an app while data is imported (`import`).
+  `--export` and `--import`; a snapshot takes every service with data,
+  whatever its copy label, and stops them all for the copy. A database
+  stops for a raw copy (`own`), an app while data is imported (`import`).
 - Facts between projects: `devopsy.role=<name>` (one holder per host),
-  `devopsy.export.<KEY>=<value>` on the running containers, and
+  `devopsy.export.<KEY>=<value>` on the running containers (visible to
+  anyone with Docker access: never a secret), and
   `devopsy.import.<VAR>=<role or project>/<KEY>[?]`, copied into each
   release before it goes live (`?`: optional). Sites import the proxy's
   base domain: `devopsy.import.PROXY_BASE_DOMAIN=proxy/BASE_DOMAIN`.
@@ -121,11 +127,11 @@ reference.
 
 ```yaml
 project: shop                   # its name on servers: directories, compose names, URLs
-secrets: [DB_PASSWORD, "*_TOKEN"]   # names only; devopsy masks their values
+secrets: [DB_PASSWORD, "*_TOKEN"]   # every secret, by name: masked, and never asked about
 defaults:
   mode: build                   # or image
-  release: deploy               # the run step: a project command
-  rollback: deploy
+  release: {prepare: secrets, run: deploy}   # project commands: secrets before it goes live, deploy once current
+  rollback: {prepare: secrets, run: deploy}
 environments:
   prod:
     inherit: [DB_PASSWORD]      # what children get from prod
@@ -141,13 +147,20 @@ release, `run` once it is current, `after`), each a devopsy command line;
 `destroy:` runs before `--destroy` while everything is up. Secrets are
 generated in a `prepare` step (the templates' `secrets` command) so the
 check of compose's required variables finds them; a value still missing
-fails the release before the switch. Variables precedence, highest
+fails the release before the switch. A name that looks secret
+(`PASSWORD`, `TOKEN`, `KEY`...) and is in neither `secrets:` nor
+`public:` makes a release ask, so list every secret before releasing.
+devopsy asks only at a terminal (`--destroy`, `--sync`, `--reset`, that
+name): without one it fails and says to add `--yes`. Variables precedence, highest
 first: the caller, the environment's `shared/.env` on the server, a
 child's inherited values, the instance's and project's `.env` there, then
 what `config.yaml` sets.
 
 ## Operating
 
+- Locally, `devopsy up -d` and the rest of compose; `devopsy --release`
+  runs the release steps in place (prepare, images, run) and
+  `devopsy --destroy` takes it all down, `mnt` emptied.
 - A target is `@[<server>:][<instance>/]<environment>`: `@vm1:prod`,
   `@prod` with `DEVOPSY_SERVER` in `.devopsy/.env` or CI's environment,
   or an alias from `~/.config/devopsy/config.yaml`.
@@ -168,7 +181,7 @@ what `config.yaml` sets.
 - Domains and certificates belong to the server's Traefik:
   `devopsy @<server's traefik> domains <compose project>` reports DNS,
   certificates and what to do next, and prints the `devopsy --probe`
-  line that checks the same from here. A custom domain is a CNAME to the
+  line that checks the same locally. A custom domain is a CNAME to the
   environment's wildcard URL.
 - A server older than the operator's devopsy refuses before anything
   changes: `devopsy @<server> --upgrade`.

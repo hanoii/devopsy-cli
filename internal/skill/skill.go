@@ -27,9 +27,9 @@ const Dir = ".agents/skills/devopsy"
 // ClaudeDir is Claude Code's own location, which Install links to Dir.
 const ClaudeDir = ".claude/skills/devopsy"
 
-// versionKey is the frontmatter line that marks a copy devopsy wrote,
+// versionKey is the frontmatter key that marks a copy devopsy wrote,
 // with the version it came from (`stub` for the stub).
-const versionKey = "devopsy: "
+const versionKey = "devopsy:"
 
 // Content is the skill, with version in its frontmatter. The stub is
 // the short form that sends the agent to `devopsy --ai-skill`, for a
@@ -44,44 +44,79 @@ func Content(version string, stub bool) string {
 // Install writes the skill under dir (a project, or the home directory
 // with --global) and links Claude Code's location to it. It overwrites
 // a copy devopsy wrote (marked by its version line) and refuses any
-// other file; an entry already at Claude Code's location that is not
-// that link is left alone, and noted. It returns the file written and
-// notes for the operator.
-func Install(dir, version string, stub bool) (path string, notes []string, err error) {
+// other file. It returns the file written, the link when Claude Code
+// reads the skill through it ("" when not), and notes for the operator:
+// an entry already at Claude Code's location that is not that link is
+// left alone, and said.
+func Install(dir, version string, stub bool) (path, link string, notes []string, err error) {
 	path = filepath.Join(dir, Dir, "SKILL.md")
 	if old, err := os.ReadFile(path); err == nil && !Written(old) {
-		return "", nil, fmt.Errorf("%s was not written by devopsy: remove or move it first", path)
+		return "", "", nil, fmt.Errorf("%s was not written by devopsy: remove or move it first", path)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	if err := os.WriteFile(path, []byte(Content(version, stub)), 0o644); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	link := filepath.Join(dir, ClaudeDir)
-	want := filepath.Join("..", "..", Dir)
-	switch got, err := os.Readlink(link); {
-	case err == nil && got == want:
-	case err == nil:
-		notes = append(notes, link+" links elsewhere ("+got+"), left as it is")
-	case errors.Is(err, os.ErrNotExist):
-		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-			return "", nil, err
-		}
-		if err := os.Symlink(want, link); err != nil {
-			return "", nil, err
-		}
-	default:
-		notes = append(notes, link+" exists and is not a link, left as it is")
+	link = filepath.Join(dir, ClaudeDir)
+	note, err := linkClaude(link, filepath.Dir(path))
+	if err != nil {
+		return "", "", nil, err
 	}
-	return path, notes, nil
+	if note != "" {
+		return path, "", []string{note}, nil
+	}
+	return path, link, nil, nil
+}
+
+// linkClaude makes link a symlink to target (the skill's directory), or
+// leaves what is there and says why. The link is relative, from where
+// the link really is: with ~/.claude itself a link (a dotfiles
+// checkout), "../.." from the name would climb out of the wrong place.
+// A link already there that reaches target is kept; a dangling one
+// (an install into a directory since moved) is replaced.
+func linkClaude(link, target string) (note string, err error) {
+	if _, err := os.Lstat(link); err == nil {
+		if same, _ := filepath.EvalSymlinks(link); same != "" {
+			if real, _ := filepath.EvalSymlinks(target); same == real {
+				return "", nil
+			}
+			return link + " exists, left as it is: Claude Code reads another skill there", nil
+		}
+		if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+			return link + " exists, left as it is: Claude Code reads another skill there", nil
+		}
+		if err := os.Remove(link); err != nil {
+			return "", err
+		}
+	}
+	parent := filepath.Dir(link)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "no link for Claude Code at " + link + ": " + err.Error(), nil
+	}
+	from, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", err
+	}
+	to, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(from, to)
+	if err != nil {
+		rel = to
+	}
+	return "", os.Symlink(rel, link)
 }
 
 // Written reports whether a SKILL.md is one devopsy wrote: its
-// frontmatter carries the version line.
+// frontmatter carries the version line. Line ends may be CRLF (a
+// checkout with core.autocrlf).
 func Written(data []byte) bool {
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	rest, ok := bytes.CutPrefix(data, []byte("---\n"))
 	if !ok {
 		return false
