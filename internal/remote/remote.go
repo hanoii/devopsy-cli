@@ -1171,8 +1171,8 @@ fi
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
-		s += "trap '' PIPE\n" + followOutput + `ln -sfn "$base/shared/.env" "$code/.devopsy/.env"
-ln -sfn "$base/shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
+		s += "trap '' PIPE\n" + followOutput + `ln -sfn "` + toBase + `shared/.env" "$code/.devopsy/.env"
+ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 [ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
 rd_status=0
 (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?

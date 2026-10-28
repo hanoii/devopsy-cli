@@ -303,6 +303,15 @@ func TestSnapshotRestore(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", id, "--with-env", "--yes"); code != 0 || readString(filepath.Join(base, "shared", ".env")) != "DB_PASSWORD=old\n" {
 		t.Errorf("--with-env (%d): %q\n%s", code, readString(filepath.Join(base, "shared", ".env")), out)
 	}
+	// Its links to shared/ relative again once the snapshot's values are
+	// in place, as every release's are.
+	for _, name := range []string{".env", remote.InheritFile} {
+		code, _ := filepath.EvalSymlinks(filepath.Join(base, "current"))
+		dot := filepath.Join(code, ".devopsy")
+		if link, err := os.Readlink(filepath.Join(dot, name)); err != nil || filepath.IsAbs(link) || filepath.Clean(filepath.Join(dot, link)) != filepath.Join(base, "shared", name) {
+			t.Errorf("after --with-env, .devopsy/%s is %q (%v), want a relative link to shared/%s", name, link, err, name)
+		}
+	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", "1999", "--yes"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing restored") {
 		t.Errorf("a snapshot that is none (%d):\n%s", code, out)
 	}
