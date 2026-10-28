@@ -211,8 +211,8 @@ the rule, why, and where it lives.
   differs locally and on a server (`--upgrade`) has one entry per
   scope. Lines fit 80 columns (`TestUsage`).
 - **A flag needs a server or an environment.** `cli.ServerScope`
-  (`--shell-host`, `--ssh-keys`, `--ssh-config`, `--environments`,
-  `--vars-project`, `--upgrade`) needs only a server
+  (`--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
+  `--environments`, `--vars-project`, `--upgrade`) needs only a server
   (`remote.ServerTarget`: `@<server>:` alone, a bare name that is no
   environment or alias, or any target leniently); a server named alone
   has no `Name`. Every other flag needs an environment, and says so
@@ -289,7 +289,8 @@ The section that covers each part is in parentheses.
   `volumes.go`), the owners of `mnt`'s entries and the mounts check
   (`mnt.go`), the watcher and the heartbeat (`watch.go`,
   `heartbeat.go`, Sessions, drops and signals), release logs
-  (`releaselog.go`), `--releases` and `--images`; tests run the built
+  (`releaselog.go`), `--releases`, `--images` and `--server-info`
+  (`serverinfo.go`, its statfs and clone per OS); tests run the built
   binary against a fake `docker` and `ssh`.
 - `internal/cli/`: finds the project, loads `.env` and decides what to
   run (`Build` returns a `Plan`; it only runs helpers, like the `env`
@@ -2813,7 +2814,9 @@ Smaller features, each with the rule an agent must keep.
 
 - **`--status`** (`cmd/devopsy/status.go`): locally, the containers as
   a table, then the `status` capability's `show`. With a target,
-  `StatusScript` prints header lines from the server's files (the
+  `StatusScript` prints header lines from the server's files
+  (`EnvStatus`, which `--server-info` runs per environment too, both
+  read by `parseStatus`: the
   record, live releases kept, the last completed sync from the child's
   own `SyncedFile`, written by `finish go` once its hook accepted the
   copy (decided 2026-10-27: read from the session logs' `SyncCopied`
@@ -2831,6 +2834,41 @@ Smaller features, each with the rule an agent must keep.
   rollback's whose newer containers run on; round 8, `--status` was
   silent), and those running another image than their `devopsy.digest`
   label says (a plain up followed a moved name).
+- **`--server-info` reports; the operator judges**
+  (`cmd/devopsy/serverinfo.go`): one session, `basePrelude` then the
+  hidden `--server-facts` (a feature), which prints `remote.ServerInfo`
+  as JSON and changes nothing, takes and waits for no lock (a
+  temporary file in the release root for the reflink try, `FICLONE`
+  as the deploy user, removed). The operator formats it and decides
+  every warning (`serverInfoReport`: the thresholds, the version
+  against its own, fixes naming the server as typed, `ServerRef`), so
+  a judgment changes with the operator's devopsy alone. Exit 3 when it
+  warned (`serverInfoWarned`), for CI. Environments are the directories
+  with `releases/` two or three levels under the release root, through
+  links as the scripts reach them (not a cut `--destroy`'s
+  `<base>.rm.<pid>`); their containers come from one
+  `docker inspect` of all, read even when it fails (a container gone
+  since `docker ps`: review), matched by compose name
+  (`composeNameOf`: the environment's name lowercased, as
+  `Target.ComposeName`). Facts agree with what the scripts read
+  (review): roles from what `docker ps` lists, restarting and paused
+  included (`RoleHoldersScript`, `cli.Running`); a `tail` that answers
+  `--version` (`followOutput`); health only of a running container
+  (Docker says unhealthy of a stopped one). Said, never warned: the
+  classic image store (devopsy's image rules never rely on `rmi -f`),
+  Docker's security options, and what is running (a sync, an import, a
+  snapshot, and a mark while the release lock is held, `EnvStatus`'s
+  `busy`: a restore in progress, which `--status` says too; `busy` is
+  ignored on a server without `flock`, where every lock reads held).
+  AppArmor (review round 2, from moby's source): `docker info` lists it
+  whenever the kernel has it, and Docker then loads its profile with
+  `apparmor_parser`, without which no container starts, so the warning
+  is a kernel with AppArmor and no parser (looked for in sbin, outside
+  the deploy user's PATH). A full disk's fix follows what is on it
+  (Docker's cache, snapshots); the no-reflinks fix names the server's
+  `snapshots: {mirror: false}` first when it refuses every mirror. Rejected: `--status` with a server
+  scope (`@vm1 --status` would mean two things by whether `vm1` is an
+  environment).
 - **`--ssh-keys` edits only the deploy user's own
   `~/.ssh/authorized_keys`** (`cmd/devopsy/sshkeys.go`,
   `internal/remote/keys.go`), over the usual session. Why: no root, so

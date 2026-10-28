@@ -611,6 +611,10 @@ fi
 // UpgradeHint is the command that upgrades t's server's devopsy.
 func UpgradeHint(t *Target) string { return "devopsy @" + upgradeRef(t) + " --upgrade" }
 
+// ServerRef names t's server in hints: the alias as typed, else the
+// server alone (<host>:).
+func ServerRef(t *Target) string { return upgradeRef(t) }
+
 // upgradeRef names t's server for --upgrade, a server's command: the
 // alias as typed, else the server alone (<host>:).
 func upgradeRef(t *Target) string {
