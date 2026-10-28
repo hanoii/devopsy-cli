@@ -104,6 +104,12 @@ func TestVarsSources(t *testing.T) {
 	if !strings.Contains(out, "warning: MODE in the project's .env overrides, on @devopsy@one:dev, the value from the release's devopsy-target.env (config.yaml)\ndevopsy: | to use that value again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars-project unset MODE") || strings.Contains(out, "no effect") {
 		t.Errorf("a project's set over config's env:\n%s", out)
 	}
+	// Over a value on several environments: each named.
+	out = set("x\n", "@prod", "--vars-project", "set", "DEVOPSY_ENVIRONMENT")
+	if !strings.Contains(out, "warning: DEVOPSY_ENVIRONMENT in the project's .env overrides another value on 2 environments\ndevopsy: | the values it overrides:\ndevopsy: | @devopsy@one:dev: the value from the release's devopsy-target.env (config.yaml)\ndevopsy: | @devopsy@one:prod: the value from the release's devopsy-target.env (config.yaml)\ndevopsy: | to use those values again:\ndevopsy: | $ devopsy @devopsy@one:prod --vars-project unset DEVOPSY_ENVIRONMENT") {
+		t.Errorf("a project's set over several environments' values:\n%s", out)
+	}
+	set("", "@prod", "--vars-project", "unset", "DEVOPSY_ENVIRONMENT")
 
 	// An unset says what is left.
 	if out := set("", "@dev", "--vars", "unset", "GREETING"); !strings.Contains(out, "GREETING now has the value inherited from prod (shared/inherit.env)") {
