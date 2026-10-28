@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -67,6 +68,22 @@ func TestVarsSources(t *testing.T) {
 	}
 	if out := set("1\n", "@dev", "--vars", "set", "FRESH"); strings.Contains(out, "warning") {
 		t.Errorf("a set over nothing warned:\n%s", out)
+	}
+	// The list's count leaves out what it printed, even when the
+	// session's environment overrides it there (the fake ssh passes
+	// this one's on, as ssh's SendEnv would LANG).
+	more := regexp.MustCompile(`(\d+) more variables? reach`)
+	count := func(extra ...string) string {
+		t.Helper()
+		_, out, _ := s.runIO(extra, nil, "@dev", "--vars")
+		m := more.FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("no count:\n%s", out)
+		}
+		return m[1]
+	}
+	if plain, over := count(), count("FRESH=session"); plain != over {
+		t.Errorf("the count with FRESH overridden from the session: %s, without: %s", over, plain)
 	}
 	// A value's bytes as the file has them, valid UTF-8 or not (a
 	// Latin-1 value): what the environment's commands get.

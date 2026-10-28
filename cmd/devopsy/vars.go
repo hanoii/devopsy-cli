@@ -144,7 +144,8 @@ func runVars(t *remote.Target, flag string, args []string, lookup func(string) (
 		if trace != nil {
 			n := 0
 			for _, v := range trace.Vars {
-				if len(v.Defs) > 0 && v.Defs[0].Level != cli.LevelEnv {
+				// Not one the list printed, whatever overrides it there.
+				if _, listed := vars[v.Name]; !listed && len(v.Defs) > 0 && v.Defs[0].Level != cli.LevelEnv {
 					n++
 				}
 			}
