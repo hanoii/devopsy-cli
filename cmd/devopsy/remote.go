@@ -463,6 +463,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		// checked before anything changes, so a release never goes live on
 		// empty data after a late failure.
 		var job *syncJob
+		// The first line of the child's copy of its parent's server's
+		// levels, read in this check, for its refresh below.
+		var parentEnv *string
 		if t.Parent != "" {
 			var out bytes.Buffer
 			code, err := remote.SSHContext(early, t, nil, remote.CurrentExistsScript(t, nil), bytes.NewReader(nil), &out, false, nil)
@@ -473,6 +476,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return code
 			}
 			cur := remote.ParseCurrent(out.String())
+			parentEnv = &cur.ParentEnv
 			current := cur.Current
 			first := !current
 			syncs := !noSync && (syncFlag || first)
@@ -569,7 +573,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return stop(fmt.Errorf("inherit: %w: nothing released", err))
 			}
 		} else if t.Parent != "" {
-			refreshParentEnv(context.Background(), t, projectDir, projectEnv, log)
+			refreshParentEnv(context.Background(), t, projectDir, projectEnv, parentEnv, log)
 		}
 		src := record.Mode
 		if record.Commit != "" {

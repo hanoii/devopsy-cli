@@ -1817,10 +1817,10 @@ func TestSyncInherit(t *testing.T) {
 	if i, j := strings.Index(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod for @devopsy@two:a/dev's sync (its shared/inherit.env once the copy is in)\n"), strings.Index(out, "syncing into"); i < 0 || j < i {
 		t.Errorf("not inherited before the holder:\n%s", out)
 	}
-	// The writes take the child's lock before the holder does: the
+	// One write takes the child's lock before the holder does: the
 	// inherited variables and, from another server, the copy of its
-	// instance and project levels (shared/parent.env).
-	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 3 {
+	// instance and project levels (shared/parent.env), together.
+	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 2 {
 		t.Errorf("the child's lock during a re-sync:\n%s", docker)
 	}
 	pending := filepath.Join(shop, "a", "dev", ".devopsy-sync.inherit.*")

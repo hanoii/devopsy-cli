@@ -2349,7 +2349,14 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   no exclude list (decided with the user): what must not leave a server
   belongs in an environment's `shared/.env`; a secret (`secrets:`, the
   checkout's) new in the copy is named, never its value. Snapshots do
-  not carry it: the next refresh writes it.
+  not carry it: the next refresh writes it. Sessions (decided with the
+  user, 2026-10-28): a sync writes the inherited variables and the copy
+  in one (`ParentVarsWriteScript`), and a child's release reads the
+  copy's header in its check of `current` (`CurrentExistsScript`'s
+  `parentenv` line), so a release that does not sync adds the parent's
+  trace and the write, the floor: the values are on the parent's
+  server, and carrying the copy in the upload would make it the
+  release's (a rollback bringing an old one back).
 - **An `inherit:` naming nothing empties the child's `inherit.env`:**
   a sync's child side writes an empty pending file
   (`SyncOptions.NoInherit`), `--inherit` an empty file. Why (review):

@@ -341,25 +341,86 @@ const InheritFile = "inherit.env"
 // what was just written. With pendingID, a re-sync's: into that sync's
 // SyncInheritPending instead, which it reads and moves into place on go.
 func InheritWriteScript(t *Target, keys []string, pendingID string) string {
-	file := `"$base/shared/` + InheritFile + `"`
+	return ParentVarsWriteScript(t, keys, pendingID, true, false)
+}
+
+// ParentVarsSeparator is the line between the sections of
+// ParentVarsWriteScript's stdin and of its output: no dotenv line starts
+// with "=" (cli.DotenvLine writes every value on one line).
+const ParentVarsSeparator = "=devopsy-parent-env="
+
+// ParentVarsWriteScript writes what a child gets from its parent's server
+// in one session, under its release lock (gated: GatedInput, sent once
+// the lock is held): with inherit, the lines on stdin before
+// ParentVarsSeparator as its InheritFile (ParentEnvFile's when copy, the
+// whole of stdin otherwise); with copy, the lines after it (all of them
+// without inherit) as its ParentEnvFile, removed when empty. With
+// pendingID, a re-sync's: both into that sync's pending files instead
+// (SyncInheritPending, ParentPendingOf), an empty copy kept (it removes
+// the child's on go). Everything readable by the deploy user alone. It
+// prints, with inherit, the keys given that the child's own shared/.env
+// also sets (those win over what was just written), then, with copy,
+// ParentVarsSeparator and the keys the child's copy held before (for what
+// is new in it).
+func ParentVarsWriteScript(t *Target, keys []string, pendingID string, inherit, copy bool) string {
+	inheritFile := `"$base/shared/` + InheritFile + `"`
+	copyFile := `"$base/shared/` + ParentEnvFile + `"`
+	inheritTarget, copyTarget := inheritFile, copyFile
 	if pendingID != "" {
-		file = `"$base"/` + Quote(SyncInheritPending(pendingID))
+		inheritTarget = `"$base"/` + Quote(SyncInheritPending(pendingID))
+		copyTarget = `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(pendingID)))
 	}
-	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  devopsy --say error "$base is a plain directory: nothing inherits into it"
+	s := "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  devopsy --say error "$base is a plain directory: nothing of a parent's goes into it"
   exit 1
 fi
 ` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
-file=` + file + `
 # The parent's secrets: never readable by others, on their way either.
 umask 077
-gated_read "$file.tmp"
-chmod 600 "$file.tmp"
-mv -f "$file.tmp" "$file"
+all="$base/shared/.devopsy-parent-vars.$$"
+gated_read "$all"
+`
+	switch {
+	case inherit && copy:
+		s += `: > ` + inheritTarget + `.tmp
+: > ` + copyTarget + `.tmp
+awk -v s=` + Quote(ParentVarsSeparator) + ` -v a=` + inheritTarget + `.tmp -v b=` + copyTarget + `.tmp '$0 == s { f = 1; next } { print > (f ? b : a) }' "$all"
+rm -f "$all"
+`
+	case inherit:
+		s += `mv -f "$all" ` + inheritTarget + `.tmp
+`
+	default:
+		s += `mv -f "$all" ` + copyTarget + `.tmp
+`
+	}
+	if inherit {
+		s += `chmod 600 ` + inheritTarget + `.tmp
+mv -f ` + inheritTarget + `.tmp ` + inheritTarget + `
 [ ! -f "$base/shared/.env" ] || for k in ` + quoteAll(keys) + `; do
   grep -Eq "^[[:space:]]*(export[[:space:]]+)?$k[[:space:]]*[=:]" "$base/shared/.env" && echo "$k" || true
 done
 `
+	}
+	if copy {
+		s += `printf '%s\n' ` + Quote(ParentVarsSeparator) + `
+[ ! -f ` + copyFile + ` ] || sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' ` + copyFile + `
+if [ -s ` + copyTarget + `.tmp ] || [ ` + copyTarget + ` != ` + copyFile + ` ]; then
+  chmod 600 ` + copyTarget + `.tmp
+  mv -f ` + copyTarget + `.tmp ` + copyTarget + `
+else
+  rm -f ` + copyTarget + `.tmp ` + copyFile + `
+fi
+`
+	}
+	return s
+}
+
+// ParseParentVarsWritten reads ParentVarsWriteScript's output: the keys
+// the child's own shared/.env shadows, and those its copy held before.
+func ParseParentVarsWritten(out string) (shadowed, before []string) {
+	a, b, _ := strings.Cut(out, ParentVarsSeparator+"\n")
+	return strings.Fields(a), strings.Fields(b)
 }
 
 // ParentTraceScript prints the variables of a parent's current release
@@ -461,34 +522,8 @@ fi)
 `
 }
 
-// ParentEnvWriteScript writes the lines on stdin (gated: GatedInput,
-// sent once the lock is held) as t's ParentEnvFile, under its release
-// lock and readable by the deploy user alone; empty, removes it. With
-// pendingID, a re-sync's: into that sync's pending copy instead
-// (ParentPendingOf), empty or not, which the sync reads and moves into
-// place on go. It prints the keys t's file held before, one per line,
-// for what is new in it.
+// ParentEnvWriteScript writes the lines on stdin as t's ParentEnvFile
+// alone (ParentVarsWriteScript with copy).
 func ParentEnvWriteScript(t *Target, pendingID string) string {
-	file := `"$base/shared/` + ParentEnvFile + `"`
-	target := file
-	if pendingID != "" {
-		target = `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(pendingID)))
-	}
-	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
-  devopsy --say error "$base is a plain directory: nothing is copied into it"
-  exit 1
-fi
-` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
-file=` + file + `
-target=` + target + `
-umask 077
-gated_read "$target.tmp"
-[ ! -f "$file" ] || sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "$file"
-if [ -s "$target.tmp" ] || [ "$target" != "$file" ]; then
-  chmod 600 "$target.tmp"
-  mv -f "$target.tmp" "$target"
-else
-  rm -f "$target.tmp" "$file"
-fi
-`
+	return ParentVarsWriteScript(t, nil, pendingID, false, true)
 }

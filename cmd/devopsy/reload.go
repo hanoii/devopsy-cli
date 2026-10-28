@@ -46,7 +46,7 @@ func runReload(t *remote.Target, projectDir string, projectEnv func(string) (str
 	// A child's copy of its parent's server's levels, again: what the
 	// reload reads with the rest.
 	if t.Parent != "" {
-		refreshParentEnv(context.Background(), t, projectDir, projectEnv, log)
+		refreshParentEnv(context.Background(), t, projectDir, projectEnv, nil, log)
 	}
 	code := liveSession(t, remote.ReloadScript(t, projectName), rlog, log, reloadWords(t))
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("reload exited %d", code)))
