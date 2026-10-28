@@ -42,7 +42,7 @@ func runEnvTrace(cwd string, args []string) int {
 func varsGet(k string, own map[string]string, read remote.VarsOutput, trace *cli.EnvTraced) (value, level string, ok bool) {
 	if trace != nil {
 		if defs := trace.Lookup(k); len(defs) > 0 {
-			return defs[0].Value, defs[0].Level, true
+			return string(defs[0].Value), defs[0].Level, true
 		}
 		return "", "", false
 	}

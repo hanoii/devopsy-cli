@@ -73,10 +73,12 @@ type EnvTracedVar struct {
 	Defs []EnvTracedDef `json:"defs"`
 }
 
-// EnvTracedDef is one definition: its Level and value.
+// EnvTracedDef is one definition: its Level and value. The value is
+// bytes, which JSON carries in base64: as a string, JSON would replace
+// what is not UTF-8 (a value in Latin-1) and --vars get print another.
 type EnvTracedDef struct {
 	Level string `json:"level"`
-	Value string `json:"value"`
+	Value []byte `json:"value"`
 }
 
 // EnvTrace is TraceEnv for the names given (every variable --env prints
@@ -103,7 +105,7 @@ func EnvTrace(cwd string, environ, names []string) ([]byte, error) {
 		}
 		tv := EnvTracedVar{Name: v.Name, Defs: []EnvTracedDef{}}
 		for _, d := range v.Defs {
-			tv.Defs = append(tv.Defs, EnvTracedDef{Level: d.Level(), Value: d.Value})
+			tv.Defs = append(tv.Defs, EnvTracedDef{Level: d.Level(), Value: []byte(d.Value)})
 		}
 		out.Vars = append(out.Vars, tv)
 	}
