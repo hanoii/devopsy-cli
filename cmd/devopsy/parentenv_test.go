@@ -162,3 +162,81 @@ func TestParentEnvAbortedSync(t *testing.T) {
 		t.Errorf("an aborted sync --from changed parent.env:\n%s\nwas:\n%s", got, before)
 	}
 }
+
+// A sync --from an environment on the child's own server names that
+// source as a --from does elsewhere: a release that does not sync after
+// it never copies the configured parent's server's levels instead.
+func TestParentEnvFromSameServer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	// solo is on dev's server (both fake servers share one release root).
+	if out, code := s.run(agent, "@devopsy@two:dev", "--sync", "--from", "@devopsy@two:solo", "--yes"); code != 0 {
+		t.Fatalf("sync --from on the child's server (%d):\n%s", code, out)
+	}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 || strings.Contains(out, "of @devopsy@one:prod's") {
+		t.Errorf("a release after a sync --from on its own server copies the configured parent's server's levels (%d):\n%s\n%s", code, out, readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")))
+	}
+}
+
+// Down a chain on one server, the child's copy follows its own parent,
+// never a --from its parent's last sync named: once the parent syncs
+// from its own parent again, a release of the child copies what the
+// parent reads now.
+func TestParentEnvChainFromSameServer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, strings.Replace(readString(config), "  dev: {parent: prod}\n", "  dev: {parent: prod}\n  qa: {parent: dev}\n", 1), 0o644)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "DEVOPSY_SERVER_DEV=devopsy@two", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--sync", "--from", "@devopsy@one:solo", "--yes"); code != 0 {
+		t.Fatalf("dev's sync --from (%d):\n%s", code, out)
+	}
+	if out, code := s.run(agent, "@devopsy@two:qa", "--release"); code != 0 {
+		t.Fatalf("qa's release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--sync", "--yes"); code != 0 {
+		t.Fatalf("dev's sync from prod (%d):\n%s", code, out)
+	}
+	dev := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env"))
+	out, code := s.run(agent, "@devopsy@two:qa", "--release")
+	qa := readString(filepath.Join(s.root, "shop", "qa", "shared", "parent.env"))
+	if code != 0 || strings.Contains(out, "of @devopsy@one:solo's") || qa != dev {
+		t.Errorf("qa's release follows the --from of dev's earlier sync, not dev (%d):\n%s\nqa's parent.env:\n%s\ndev's:\n%s", code, out, qa, dev)
+	}
+}
+
+// The parent's server reads its project's .env against its own
+// environment too (the loader's lookup: the caller's variables, HOME
+// among them), so a ${HOME:?} there passes for the parent and never
+// fails a child's release on another server.
+func TestParentEnvCallerInterpolated(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", ".env"), "DATA=${HOME:?}/data\n", 0o600)
+	if out, code := s.run(nil, "@prod", "--vars", "get", "DATA"); code != 0 {
+		t.Fatalf("the parent reads its own DATA (%d):\n%s", code, out)
+	}
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	out, code := s.run(agent, "@devopsy@two:dev", "--release")
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); code != 0 || strings.Contains(got, "DATA='/data'") {
+		t.Errorf("a release whose parent's project .env refers to its server's environment (%d):\n%s\n%s", code, out, got)
+	}
+}
