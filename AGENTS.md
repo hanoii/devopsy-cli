@@ -1218,7 +1218,9 @@ grew a `reload` command (whoami's and drupal11's the same `up -d --wait
   checks.
 - **A release cut off past its switch is refused** (`cutRefusal`,
   `ActivatingFile` while the reload holds the lock): an `up` alone would
-  start its code without its run step. The first refusal of a cut
+  start its code without its run step. In `--status`' words with what
+  finishes it, each kind's case built from `Activating.Cut` (a cut
+  restart of current too). The first refusal of a cut
   activation: the others each run a run step or replace it (a release,
   a rollback finishing a cut one, a sync's run step, a `--no-code`
   restore's run step, which clears a cut release's mark as a sync's
