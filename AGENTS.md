@@ -304,7 +304,8 @@ The section that covers each part is in parentheses.
 - `internal/images/` (Images, behind a `Docker` interface),
   `internal/report/` (Conventions: the format, `Paint`, `Colorize`,
   prompts), `internal/complete/` (completion
-  and the embedded bash, zsh and fish scripts), `internal/probe/`,
+  and the embedded bash, zsh and fish scripts), `internal/skill/` (the
+  agent skill, `--ai-skill`, Other features), `internal/probe/`,
   `internal/update/`.
 - `e2e/`: end-to-end tests against servers in Docker (Checks).
 - `install.sh` (POSIX `sh`, dash and busybox ash), `scripts/devopsy`
@@ -3107,6 +3108,29 @@ Smaller features, each with the rule an agent must keep.
   `cli.RemoteCommandHelp`. `TestCompletionShells` runs the scripts in
   every installed shell (bash, macOS's bash 3.2, zsh with `_describe`
   stubbed, fish); CI installs zsh and fish.
+- **The agent skill is for using devopsy, this file for developing it**
+  (`internal/skill/SKILL.md`, `devopsy --ai-skill`): what an agent needs
+  to write a project's `.devopsy/`, release and operate it, in that
+  order, pointing at `--help`, `--debug schema` and the templates rather
+  than repeating them. It is embedded, so it describes the binary that
+  prints it, and its frontmatter carries that version (`devopsy:
+  <version>`; `stub` for `--stub`, the short form that sends the agent to
+  the command): `Install` replaces only a file so marked. Rules apart
+  from practices: what devopsy enforces is stated as fact, what the
+  templates do (10001, read-only, `alwaysup`) as what new projects should
+  do. `TestContentNamesWhatExists` keeps it honest: every `--flag` it
+  names, anywhere in the text, is in `cli.Flags` or a flag one takes
+  (its `Args`), every `devopsy.*` label is in the test's `publicLabels`
+  (the README's, each checked against the code, so an internal or old
+  name never gets in) and its config.yaml example loads. The install
+  location is `.agents/skills/devopsy` in the project's directory
+  (`FindProjectDir`), which Codex, Cursor and the skills installer
+  share, with a link from `.claude/skills/devopsy`: Claude Code (2.1.x)
+  reads only its own directory (anthropics/claude-code#31005). The link
+  is relative from where the link really is (`EvalSymlinks` of both
+  ends: a `~/.claude` in a dotfiles checkout would dangle otherwise);
+  a dangling one is replaced, anything else there is left and said.
+  Decided 2026-10-27.
 - **`--debug` traces the loading itself, never a second implementation
   of it:** targets carry `From` (each value's origin), and `Env`
   records every definition of a variable as it loads (`EnvDef`,

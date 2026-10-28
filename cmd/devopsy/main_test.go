@@ -552,6 +552,49 @@ func TestCompletion(t *testing.T) {
 	}
 }
 
+// --ai-skill prints the embedded skill, or the stub, and install writes
+// it: the project's with its link for Claude Code, --global the home's.
+func TestAISkill(t *testing.T) {
+	t.Parallel()
+	out, code := runDevopsy(t, t.TempDir(), nil, "--ai-skill")
+	if code != 0 || !strings.HasPrefix(out, "---\nname: devopsy\n") || !strings.Contains(out, "## compose.yaml") {
+		t.Fatalf("--ai-skill (%d):\n%s", code, out)
+	}
+	out, code = runDevopsy(t, t.TempDir(), nil, "--ai-skill", "--stub")
+	if code != 0 || !strings.Contains(out, "devopsy: stub") {
+		t.Fatalf("--ai-skill --stub (%d):\n%s", code, out)
+	}
+	if out, code = runDevopsy(t, t.TempDir(), nil, "--ai-skill", "print"); code != 1 || !strings.Contains(out, "usage:") {
+		t.Fatalf("--ai-skill print (%d):\n%s", code, out)
+	}
+
+	// Resolved: the binary prints the path as it finds the directory.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// From a subdirectory of a project, into the project: a skill in a
+	// subdirectory is one no agent reads.
+	write(t, filepath.Join(dir, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
+	sub := filepath.Join(dir, "web")
+	os.MkdirAll(sub, 0o755)
+	out, code = runDevopsy(t, sub, nil, "--ai-skill", "install")
+	if code != 0 || !strings.Contains(out, "wrote "+filepath.Join(dir, ".agents/skills/devopsy/SKILL.md")+", linked from "+filepath.Join(dir, ".claude/skills/devopsy")) {
+		t.Fatalf("install (%d):\n%s", code, out)
+	}
+	if _, err := os.Readlink(filepath.Join(dir, ".claude/skills/devopsy")); err != nil {
+		t.Error(err)
+	}
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	out, code = runDevopsy(t, dir, []string{"HOME=" + home}, "--ai-skill", "install", "--global", "--stub")
+	if code != 0 || !strings.Contains(out, "wrote "+filepath.Join(home, ".agents/skills/devopsy/SKILL.md")) {
+		t.Fatalf("install --global (%d):\n%s", code, out)
+	}
+	if data, _ := os.ReadFile(filepath.Join(home, ".claude/skills/devopsy/SKILL.md")); !strings.Contains(string(data), "devopsy: stub") {
+		t.Errorf("the global stub through its link:\n%s", data)
+	}
+}
+
 // release and rollback run the environment's steps in phases: before
 // (local, then remote in the current release), the upload, prepare (in the
 // new release), the check of compose's required variables, the switch, run,
