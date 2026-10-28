@@ -49,14 +49,15 @@ func (d EnvDef) Level() string {
 		return LevelComputed
 	}
 	switch base := filepath.Base(d.Source); {
+	// A sync's pending copy is named after its pending inherit file.
+	case base == remote.ParentEnvFile || strings.HasSuffix(base, "."+remote.ParentEnvFile):
+		return LevelParent
 	case base == remote.InheritFile || strings.HasPrefix(base, ".devopsy-sync.inherit."):
 		return LevelInherit
 	case base == "instance.env":
 		return LevelInstance
 	case base == "project.env":
 		return LevelProject
-	case base == remote.ParentEnvFile:
-		return LevelParent
 	case base == remote.TargetEnvFile || base == remote.TargetReloadFile:
 		return LevelTarget
 	}

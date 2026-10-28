@@ -549,6 +549,12 @@ type SyncOptions struct {
 	// chain), or none, into the pending copy, under its lock, before its
 	// checks (sameServerCopy).
 	SameServerFrom string
+	// SameServerHeader is the child's copy's first line then
+	// (ParentEnvHeader: its parent, or a --from), and SameServerKeep
+	// keeps it alone when the parent has no copy (a --from's, followed
+	// later).
+	SameServerHeader string
+	SameServerKeep   bool
 	// NoInherit: the parent's inherit: names nothing, so the child's
 	// inherit.env empties on go, as a sync writing keys replaces it.
 	NoInherit bool
@@ -566,9 +572,7 @@ func (o *SyncOptions) sameServerCopy() string {
 `
 	}
 	if o.SameServerFrom != "" {
-		pending := `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(o.ID)))
-		s += `(umask 077; cp "$root"/` + Quote(o.SameServerFrom+"/shared/"+ParentEnvFile) + ` ` + pending + ` 2>/dev/null || : > ` + pending + `)
-`
+		s += sameServerParentEnv(o.SameServerFrom, o.SameServerHeader, o.SameServerKeep, `"$base"/`+Quote(ParentPendingOf(SyncInheritPending(o.ID))))
 	}
 	return s
 }

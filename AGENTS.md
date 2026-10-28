@@ -2296,7 +2296,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 - **A parent's `inherit:` keys become the child's
   `shared/inherit.env`, whole:** `inheritVars` reads the parent's files
-  in one session (`InheritReadScript`, `parentLevels`: its `shared/.env`,
+  in one session (`ParentTraceScript`, `parentLevels`: its `shared/.env`,
   its own `inherit.env`, so a chain passes what the middle inherited,
   its instance's and project's `.env`, its `parent.env`), takes each key
   from the nearest level, and writes them all (`InheritWriteScript`, on stdin,
@@ -2322,10 +2322,12 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (decided with the user, 2026-10-28): those levels are each server's,
   and two children of one server can have parents on two servers (an
   instance from each), each needing its own. The parent's files are
-  read as its loader reads them (`parentLevels`: each against the
-  nearer, so `${HOST}` from its `shared/.env` is its value, never empty,
-  and its `${X:?}` passes; review: parsed alone, every child's release
-  failed). Its first line names the source (`ParentEnvHeader`): every
+  read by its own devopsy (`ParentTraceScript`: `--env-trace` in its
+  current release, each definition by level), never parsed here: its
+  loader interpolates each file against the server's environment and
+  the nearer files, so `${HOST}` and `${HOME:?}` are its values (reviews
+  1 and 2: parsed alone, or against the files only, they failed every
+  child's release). Its first line names the source (`ParentEnvHeader`): every
   sync writes it from its own, and a release that does not sync,
   `--reload` and `--inherit` copy again (`refreshParentEnv`): from the
   child's parent resolved anew, or the address a `--from` named, kept
@@ -2337,7 +2339,11 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   (review: a sync that aborted left its `--from` as the source). On the
   same server, the parent's own `parent.env` (the child's side copies
   it, under its lock, before its checks: `sameServerCopy`; down a chain
-  whose middle shares the child's server, review), else none. A
+  whose middle shares the child's server, review), else none; always
+  under the child's own header, its source (`sameServerParentEnv`:
+  never the parent's, whose `--from` is not the child's), alone for a
+  `--from` with nothing to copy, so its later copies follow it (review
+  2). A
   release or a reload rewrites it before its checks, as `--vars set`
   writes a file (accepted: the next activation applies it). Every key,
   no exclude list (decided with the user): what must not leave a server

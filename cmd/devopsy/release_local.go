@@ -207,7 +207,7 @@ func runDestroyData(cwd string, args []string, color bool) int {
 }
 
 // runReleaseInherit is the hidden ReleaseInheritFlag, run by
-// InheritReadScript in a parent's current release: the keys its own
+// ParentCheckScript in a parent's current release: the keys its own
 // config's inherit: names for the environment it was made for, one per
 // line.
 func runReleaseInherit(cwd string, args []string) int {

@@ -362,32 +362,17 @@ done
 `
 }
 
-// InheritSeparator starts the line before each file InheritReadScript
-// prints, followed by its level: shared, inherit, instance, project or
-// parent.
-const InheritSeparator = "=devopsy-vars= "
-
-// InheritReadScript prints a parent's variables files, nearest first as
-// it reads them: its environment's shared/.env and inherit.env (what it
-// inherited, passed on down a chain), its instance's and project's .env
-// on its server, then its parent.env (what it copied from its own
-// parent's server), each after an InheritSeparator line naming its
-// level. A child inherits the keys its parent's inherit: names from the
-// nearest (ParseInherit), and copies the instance's, project's and
-// parent's (ParentEnvFile).
-func InheritReadScript(t *Target) string {
-	s := "set -eu\n" + basePrelude(t) + `show() {
-  printf '%s%s\n' ` + Quote(InheritSeparator) + ` "$1"
-  [ ! -f "$2" ] || { cat "$2"; echo; }
-}
-show shared "$base/shared/.env"
-show inherit "$base/shared/` + InheritFile + `"
-`
-	for i := len(t.Levels) - 1; i >= 0; i-- {
-		s += "show " + t.Levels[i].Name + ` "$root"/` + Quote(t.Levels[i].Dir+"/.env") + "\n"
-	}
-	return s + `show parent "$base/shared/` + ParentEnvFile + `"
-`
+// ParentTraceScript prints the variables of a parent's current release
+// as its own devopsy loads them (--env-trace, every one, each with its
+// definitions by level, each interpolated as that loader reads its file,
+// the server's environment and nearer files included): what a child
+// inherits (the keys its inherit: names, from the nearest of its
+// shared/.env, inherit.env, instance's and project's .env and
+// parent.env) and copies (ParentEnvFile).
+func ParentTraceScript(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release"; exit 1; }
+cd "$base/current"
+` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + "\n"
 }
 
 // ParentEnvFile is a child's copy of its parent's instance and project
@@ -443,17 +428,36 @@ fi
 // ParentEnvCopyScript copies, on one server, the ParentEnvFile of the
 // environment at from (its directory under the release root) as t's,
 // under t's release lock: what that parent reads from its own parent's
-// server, down a chain; none, removes t's.
-func ParentEnvCopyScript(t *Target, from string) string {
+// server, down a chain, under t's own header (sameServerParentEnv).
+func ParentEnvCopyScript(t *Target, from, header string, keep bool) string {
 	file := `"$base/shared/` + ParentEnvFile + `"`
 	return "set -eu\n" + basePrelude(t) + releaseLock(false, true) + `mkdir -p "$base/shared"
-umask 077
-if [ -f "$root"/` + Quote(from+"/shared/"+ParentEnvFile) + ` ]; then
-  cp "$root"/` + Quote(from+"/shared/"+ParentEnvFile) + ` ` + file + `.tmp
+` + sameServerParentEnv(from, header, keep, file+".tmp") + `if [ -s ` + file + `.tmp ]; then
   mv -f ` + file + `.tmp ` + file + `
 else
-  rm -f ` + file + `
+  rm -f ` + file + `.tmp ` + file + `
 fi
+`
+}
+
+// sameServerParentEnv writes into target what a child on its parent's
+// server (from, the parent's directory) gets of its ParentEnvFile: the
+// parent's lines under the child's own header, which names the child's
+// source (never the parent's: a --from of the parent's is not the
+// child's); without any, the header alone when keep (a --from, which the
+// child's later copies follow), else nothing (an empty file: none).
+func sameServerParentEnv(from, header string, keep bool, target string) string {
+	src := `"$root"/` + Quote(from+"/shared/"+ParentEnvFile)
+	alone := `: > ` + target
+	if keep {
+		alone = `printf '%s\n' ` + Quote(header) + ` > ` + target
+	}
+	return `(umask 077
+if [ -f ` + src + ` ]; then
+  { printf '%s\n' ` + Quote(header) + `; sed '1{/^# devopsy: copied from /d;}' ` + src + `; } > ` + target + `
+else
+  ` + alone + `
+fi)
 `
 }
 

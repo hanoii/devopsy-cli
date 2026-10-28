@@ -67,13 +67,16 @@ type syncJob struct {
 	inherit []string
 }
 
-// sameServerFrom is the parent's directory when it is on the child's
-// server (remote.SyncOptions.SameServerFrom), else "".
-func (job *syncJob) sameServerFrom() string {
+// sameServer sets what a child's side copies of a parent on its own
+// server (remote.SyncOptions.SameServerFrom): its directory, the child's
+// copy's header naming the sync's source, kept alone for a --from.
+func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	if job.sameHost {
-		return job.parent.Path
+		o.SameServerFrom = job.parent.Path
+		o.SameServerHeader = remote.ParentEnvHeader(job.parent.Address, job.from)
+		o.SameServerKeep = job.from
 	}
-	return ""
+	return o
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -704,7 +707,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, SameServerFrom: job.sameServerFrom(), NoInherit: len(job.inherit) == 0}
+	o := job.sameServer(&remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset, NoInherit: len(job.inherit) == 0})
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)

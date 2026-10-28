@@ -9,65 +9,47 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/compose-spec/compose-go/v2/dotenv"
-
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// parentLevels reads p's variables files in one session
-// (remote.InheritReadScript), by level: shared, inherit, instance,
-// project and parent, each parsed as p's own commands read it (the
-// loader's LoadDotenv): against the nearer files, so a ${VAR} a level
-// takes from a nearer one is what p sees, and a ${VAR:?} a nearer one
-// sets passes.
+// parentLevels reads p's variables by level (shared, inherit, instance,
+// project and parent), as its current release's devopsy loads them
+// (remote.ParentTraceScript, --env-trace): each file interpolated as that
+// loader reads it, against the server's environment and the nearer
+// files, so a ${VAR} there is p's value and a ${VAR:?} that passes for p
+// passes here.
 func parentLevels(ctx context.Context, p *remote.Target) (map[string]map[string]string, error) {
 	var out bytes.Buffer
-	code, err := remote.SSHContext(ctx, p, nil, remote.InheritReadScript(p), bytes.NewReader(nil), &out, false, nil)
+	code, err := remote.SSHContext(ctx, p, nil, remote.ParentTraceScript(p), bytes.NewReader(nil), &out, false, nil)
 	if err != nil {
 		return nil, err
 	}
 	if code != 0 {
 		return nil, fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
 	}
+	trace, err := cli.ParseEnvTrace(bytes.TrimSpace(out.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("the variables of @%s: %w", p.Address, err)
+	}
+	levels := map[string]string{cli.LevelEnv: "shared", cli.LevelInherit: "inherit", cli.LevelInstance: "instance", cli.LevelProject: "project", cli.LevelParent: "parent"}
 	files := map[string]map[string]string{}
-	// What the nearer levels set, the nearest first, as the loader's
-	// environment holds them when it reads the next.
-	seen := map[string]string{}
-	level := ""
-	var content strings.Builder
-	flush := func() error {
-		if level == "" {
-			return nil
-		}
-		vars, err := dotenv.UnmarshalWithLookup(content.String(), func(k string) (string, bool) {
-			v, ok := seen[k]
-			return v, ok
-		})
-		if err != nil {
-			return fmt.Errorf("the %s .env of @%s: %w", level, p.Address, err)
-		}
-		files[level] = vars
-		for k, v := range vars {
-			if _, ok := seen[k]; !ok {
-				seen[k] = v
+	for _, v := range trace.Vars {
+		for _, d := range v.Defs {
+			l, ok := levels[d.Level]
+			if !ok {
+				continue
+			}
+			if files[l] == nil {
+				files[l] = map[string]string{}
+			}
+			if _, ok := files[l][v.Name]; !ok {
+				files[l][v.Name] = string(d.Value)
 			}
 		}
-		content.Reset()
-		return nil
 	}
-	for _, line := range strings.SplitAfter(out.String(), "\n") {
-		if name, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), remote.InheritSeparator); ok {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-			level = name
-			continue
-		}
-		content.WriteString(line)
-	}
-	return files, flush()
+	return files, nil
 }
 
 // parentCopy is what a child copies of its parent's server: the
@@ -157,7 +139,7 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 		return
 	}
 	if sameHost(c.Host, src.Host) {
-		code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvCopyScript(c, src.Path), bytes.NewReader(nil), io.Discard, false, nil)
+		code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvCopyScript(c, src.Path, remote.ParentEnvHeader(src.Address, from), from), bytes.NewReader(nil), io.Discard, false, nil)
 		if err != nil || code != 0 {
 			log.Warn(fmt.Sprintf("could not copy @%s's shared/%s into @%s's (%v, %d): the copy stays as it was", src.Address, remote.ParentEnvFile, c.Address, err, code))
 		}

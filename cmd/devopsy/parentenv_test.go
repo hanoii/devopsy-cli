@@ -217,7 +217,10 @@ func TestParentEnvChainFromSameServer(t *testing.T) {
 	dev := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env"))
 	out, code := s.run(agent, "@devopsy@two:qa", "--release")
 	qa := readString(filepath.Join(s.root, "shop", "qa", "shared", "parent.env"))
-	if code != 0 || strings.Contains(out, "of @devopsy@one:solo's") || qa != dev {
+	// The same variables, under qa's own header, which names its parent.
+	_, qaVars, _ := strings.Cut(qa, "\n")
+	_, devVars, _ := strings.Cut(dev, "\n")
+	if code != 0 || strings.Contains(out, "of @devopsy@one:solo's") || qaVars != devVars || !strings.HasPrefix(qa, "# devopsy: copied from devopsy@two:dev's instance and project .env\n") {
 		t.Errorf("qa's release follows the --from of dev's earlier sync, not dev (%d):\n%s\nqa's parent.env:\n%s\ndev's:\n%s", code, out, qa, dev)
 	}
 }
