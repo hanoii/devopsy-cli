@@ -796,8 +796,9 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		if h.none && h.failed != "" {
 			problems = append(problems, "its first release, "+h.failed+", failed")
 		}
-		if len(h.cut) >= 2 {
-			problems = append(problems, "an activation was cut off past its switch, its run step perhaps never run")
+		if h.cut != nil {
+			what, _ := h.cut.Cut("", "", false)
+			problems = append(problems, what)
 		}
 		switch {
 		case h.busy && !noFlock:

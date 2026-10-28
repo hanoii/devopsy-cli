@@ -146,7 +146,11 @@ func TestServerInfoReport(t *testing.T) {
 		}, "", "shop/dev: its first release, 20261027110000, failed|$ devopsy @vm1:dev --status"},
 		{"cut", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "cut\t20261027115000\trelease\t20261026000000\n"
-		}, "", "shop/prod: an activation was cut off past its switch|devopsy @vm1:prod --status"},
+		}, "", "shop/prod: the release of 20261027115000 was cut off past its switch: its run step may not have run|devopsy @vm1:prod --status"},
+		// In --status' words: a failed run step's restart is no switch.
+		{"cut restart", func(i *remote.ServerInfo) {
+			i.Environments[1].Status += "cut\t20261026000000\trestart\t20261027115000\n"
+		}, "", "shop/prod: the restart of 20261026000000 after 20261027115000 failed was cut off: its run step may not have run|devopsy @vm1:prod --status"},
 		{"sync", func(i *remote.ServerInfo) {
 			i.Environments[1].Status += "partial\t" + remote.IncompleteLine("2026-10-27 11:00:00", "vm1:prod", remote.IncompleteCopy, "the copy was cut")
 		}, "", "shop/prod: a sync did not complete|"},
