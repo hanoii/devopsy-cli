@@ -3097,7 +3097,8 @@ so nothing clones by reflinks there on any host (decided 2026-10-27: on
 OrbStack's btrfs the container's overlay clones, on CI's ext4 not, so a
 sync ran another order locally than in CI and six tests failed only
 locally); a test of reflinks mounts an XFS loop device of its own below
-it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`). A scenario a review finds goes there, unless a unit
+it (`TestSnapshotReflinkE2E`, `TestSyncReflinkE2E`), and one of their
+absence an ext4 (`TestSyncReflinkExt4E2E`). A scenario a review finds goes there, unless a unit
 test can cover it (Principles, "Every change carries its test").
 
 Lanes run the tests at once (`E2E_LANES`, default 4; `runLanes`): each
