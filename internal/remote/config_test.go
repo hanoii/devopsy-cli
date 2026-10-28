@@ -525,7 +525,7 @@ func TestActivateKeepAndLevels(t *testing.T) {
 		t.Fatal(err)
 	}
 	for dot, links := range map[string]map[string]string{
-		"prod/releases/4/code/.devopsy": {"project.env": ".env", ".env": "prod/shared/.env", "mnt": "prod/shared/mnt", "inherit.env": "prod/shared/inherit.env"},
+		"prod/releases/4/code/.devopsy":   {"project.env": ".env", ".env": "prod/shared/.env", "mnt": "prod/shared/mnt", "inherit.env": "prod/shared/inherit.env"},
 		"b/prod/releases/1/code/.devopsy": {"project.env": ".env", "instance.env": "b/.env", ".env": "b/prod/shared/.env", "mnt": "b/prod/shared/mnt"},
 	} {
 		for name, want := range links {
