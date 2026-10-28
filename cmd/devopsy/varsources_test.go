@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -26,7 +27,7 @@ func TestVarsSources(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	config := filepath.Join(s.dot, "config.yaml")
-	write(t, config, strings.Replace(strings.Replace(readString(config), "  prod: {}\n", "  prod: {inherit: [GREETING]}\n", 1), "  dev: {parent: prod}\n", "  dev: {parent: prod, env: {MODE: cfg}}\n", 1), 0o644)
+	write(t, config, strings.Replace(strings.Replace(readString(config), "  prod: {}\n", "  prod: {inherit: [GREETING]}\n", 1), "  dev: {parent: prod}\n", "  dev: {parent: prod, env: {MODE: cfg}, inherit: [GREETING]}\n  qa: {parent: dev}\n", 1), 0o644)
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "GREETING=hello-prod\n", 0o600)
 	s.releaseProd(nil)
 	if out, code := s.run(nil, "@dev", "--release"); code != 0 {
@@ -101,10 +102,12 @@ func TestVarsSources(t *testing.T) {
 		t.Errorf("get of a value that is not UTF-8: %q\n%s", out, says)
 	}
 
-	// The project's, hidden on both: every nearer value named, with what
-	// lets it through.
+	// The project's, hidden on both: every nearer value named; the
+	// inherited one says how it goes, never --vars set where the
+	// environment's own file sets it already.
+	stop := "devopsy: | to stop inheriting it: drop GREETING from prod's inherit: in config.yaml and release prod, then:\ndevopsy: | $ devopsy @devopsy@one:dev --inherit\n"
 	out = set("hello-proj\n", "@prod", "--vars-project", "set", "GREETING")
-	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value from shared/.env and the value inherited from prod (shared/inherit.env) override it\n") || strings.Contains(warned(out), "devopsy: |") ||
+	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value from shared/.env and the value inherited from prod (shared/inherit.env) override it\n"+stop) || strings.Count(warned(out), "devopsy: |") != 2 ||
 		!strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:prod: the value from shared/.env overrides it") {
 		t.Errorf("a project's set hidden:\n%s", out)
 	}
@@ -127,9 +130,22 @@ func TestVarsSources(t *testing.T) {
 	// Hidden by the inherited value alone: the environment's own file is
 	// where its value goes.
 	out = set("hello-proj\n", "@prod", "--vars-project", "set", "GREETING")
-	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value inherited from prod (shared/inherit.env) overrides it\ndevopsy: | to set it there instead, over the inherited value:\ndevopsy: | $ devopsy @devopsy@one:dev --vars set GREETING\n") ||
-		!strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:prod: the value from shared/.env overrides it\n") || strings.Count(warned(out), "devopsy: |") != 2 {
+	if !strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:dev: the value inherited from prod (shared/inherit.env) overrides it\ndevopsy: | to set it there instead, over the inherited value:\ndevopsy: | $ devopsy @devopsy@one:dev --vars set GREETING\n"+stop) ||
+		!strings.Contains(out, "warning: GREETING in the project's .env has no effect on @devopsy@one:prod: the value from shared/.env overrides it\n") || strings.Count(warned(out), "devopsy: |") != 4 {
 		t.Errorf("a project's set hidden by an inherited value:\n%s", out)
+	}
+
+	// Down a chain: what dev inherited reaches its own child, nearer than
+	// the project's .env (which says hello-proj now).
+	if out, code := s.run(nil, "@qa", "--release"); code != 0 {
+		t.Fatalf("qa's release (%d):\n%s", code, out)
+	}
+	if got := readString(filepath.Join(s.root, "shop", "qa", "shared", "inherit.env")); got != "GREETING='hello-prod'\n" {
+		t.Errorf("qa inherited %q", got)
+	}
+	// On one server, nothing is copied: the levels are the same files.
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "qa", "shared", "parent.env")); err == nil {
+		t.Error("a parent.env on the parent's own server")
 	}
 
 	// Before a first release, its files: the project's here.

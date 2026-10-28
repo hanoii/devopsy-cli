@@ -548,9 +548,13 @@ The parent comes from the child's instance and the usual server variables
 (DEVOPSY_SERVER_<PARENT>, DEVOPSY_SERVER), never the child's server:
 without one the sync fails naming the variable, or --from names it.
 Before copying, the variables the parent's inherit: names are read from
-its server's .env files (shared/.env, then the instance's and the
-project's, nearest first) and written as the child's shared/inherit.env;
-names are printed, never values. On a re-sync they go to a pending file
+its server's .env files (shared/.env, its inherit.env, the instance's,
+the project's, then its parent.env, nearest first) and written as the
+child's shared/inherit.env; names are printed, never values. A parent on
+another server: its instance's and project's .env, which are that
+server's, are copied whole as the child's shared/parent.env, naming the
+parent (the sync's source: --from too), which a release that does not
+sync, --reload and --inherit copy from again. On a re-sync they go to a pending file
 the sync reads (labels from them follow the parent's at once) and
 replace shared/inherit.env once the copy is in.
 
@@ -673,9 +677,11 @@ its exit code, then import that.
 
 Writes the variables the parent's inherit: names, read from the parent's
 server, as the child's shared/inherit.env again: a resync of variables
-without a copy of data and without the run step. A sync does the same
-along with the data. The child's own shared/.env wins over the inherited
-file; its server's instance and project .env come below it.
+without a copy of data and without the run step, and on another server
+its instance's and project's .env again as shared/parent.env (from what
+it names: the last sync's source). A sync does the same along with the
+data. The child's own shared/.env wins over the inherited file; its
+server's instance and project .env come below it, then parent.env.
 
   environments:
     prod:
@@ -1063,9 +1069,14 @@ release; config.yaml's env goes to devopsy-target.env instead.
                       project is the checkout's or an alias's, so a server
                       alone does (@vm1)
 
+The instance's and the project's are that server's: another server has
+its own. A child whose parent is on another server gets a copy of the
+parent's (shared/parent.env), below its own server's: keep what must
+not leave a server in the environment's own .env.
+
 Nearest wins: the caller, the environment's, a child's inherit.env, the
-instance's, the project's, then devopsy-target.env and what the release
-imported, then the env capability.
+instance's, the project's, a child's parent.env, then devopsy-target.env
+and what the release imported, then the env capability.
 
   --vars [--show]     every variable of the file, secrets (config.yaml's
                       secrets:, the release's or your checkout's) as ***
@@ -1088,7 +1099,8 @@ set and unset edit their file only, and say what that means against the
 others: a set over another value names the value it overrides now, with
 the unset that brings it back, and one that a nearer file hides, in each
 environment it reaches, names those files (when an inherited value hides
-it, --vars set is where the environment's own goes).
+it: --vars set, where the environment's own goes, and how the inherited
+one goes: the parent's inherit:, then --inherit).
 
 Values never go in arguments: they travel on SSH's stdin, so they stay out
 of ps, shell history and CI logs. Running containers keep their old values
@@ -1298,7 +1310,9 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	// On servers, a child's inherited variables (shared/inherit.env, below
 	// its own .env), then the instance's and the project's .env, shared by
 	// their environments: links releases get, nearest first.
-	for _, shared := range []string{remote.InheritFile, "instance.env", "project.env"} {
+	// Then a child's copy of its parent's server's instance and project
+	// .env (remote.ParentEnvFile), below what its own server says.
+	for _, shared := range []string{remote.InheritFile, "instance.env", "project.env", remote.ParentEnvFile} {
 		file := filepath.Join(projectDir, shared)
 		// During a re-sync on the child, its pending inherited variables
 		// stand in for inherit.env (the labels the sync reads come from

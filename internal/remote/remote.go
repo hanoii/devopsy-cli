@@ -159,7 +159,7 @@ func excluded(rel string) bool {
 	case rel == ".devopsy/.env",
 		rel == ".devopsy/"+LocalConfigFile,
 		rel == ".devopsy/project.env", rel == ".devopsy/instance.env",
-		rel == ".devopsy/"+InheritFile,
+		rel == ".devopsy/"+InheritFile, rel == ".devopsy/"+ParentEnvFile,
 		rel == ".devopsy/compose.override.yaml",
 		rel == ".devopsy/compose.override.yml",
 		rel == ".devopsy/mnt" || strings.HasPrefix(rel, ".devopsy/mnt/"),
@@ -969,9 +969,11 @@ for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   ln -s "` + toBase + `shared/${f##*/}" "$code/.devopsy/${f##*/}"
 done
 `
-	// inherit.env (a child's, from its parent's inherit:) likewise: --inherit
-	// writes it into a running release.
+	// inherit.env (a child's, from its parent's inherit:) and parent.env
+	// (its copy of its parent's server's levels) likewise: --inherit, a
+	// reload and a release write them into a running release.
 	s += `ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
+ln -sfn "` + toBase + `shared/` + ParentEnvFile + `" "$code/.devopsy/` + ParentEnvFile + `"
 `
 	// The project's and the instance's .env, shared by their environments:
 	// linked even when missing, so one created later applies too. Each

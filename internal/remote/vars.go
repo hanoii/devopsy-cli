@@ -37,7 +37,7 @@ fi
 // ReadVarsOutput): the file's content, if any, and the configs of the
 // releases that read it, for their secrets: (every environment's current
 // one under a project's or an instance's directory). An environment's
-// also gets its other files (inherit, instance, project), for --vars get
+// also gets its other files (inherit, instance, project, parent), for --vars get
 // before its first release, and the trace of every variable its current
 // release (or plain directory) gets, devopsy's own --env-trace: what
 // --vars get gives and the listing counts. A trace that fails is left
@@ -66,6 +66,8 @@ done
 		s += `if [ -z "$plain" ] && [ -f "$root"/` + Quote(l.Dir+"/.env") + ` ]; then emit ` + Quote(l.Name) + ` "$root"/` + Quote(l.Dir+"/.env") + `; fi
 `
 	}
+	s += `if [ -z "$plain" ] && [ -f "$base/shared/` + ParentEnvFile + `" ]; then emit parent "$base/shared/` + ParentEnvFile + `"; fi
+`
 	return s + varsTraceDir + `if [ -n "$tdir" ] && vt=$(cd "$tdir" && ` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + ` 2>/dev/null); then
   printf 'trace %s\n' "$(printf '%s' "$vt" | wc -c | tr -d ' ')"
   printf '%s' "$vt"
@@ -361,22 +363,88 @@ done
 }
 
 // InheritSeparator starts the line before each file InheritReadScript
-// prints, followed by its level: shared, instance or project.
+// prints, followed by its level: shared, inherit, instance, project or
+// parent.
 const InheritSeparator = "=devopsy-vars= "
 
-// InheritReadScript prints a parent's variables files for the keys its
-// current release's inherit: names (ParseInherit), its
-// environment's shared/.env, then its instance's and project's .env (those
-// it has), each after a InheritSeparator line naming its level.
+// InheritReadScript prints a parent's variables files, nearest first as
+// it reads them: its environment's shared/.env and inherit.env (what it
+// inherited, passed on down a chain), its instance's and project's .env
+// on its server, then its parent.env (what it copied from its own
+// parent's server), each after an InheritSeparator line naming its
+// level. A child inherits the keys its parent's inherit: names from the
+// nearest (ParseInherit), and copies the instance's, project's and
+// parent's (ParentEnvFile).
 func InheritReadScript(t *Target) string {
 	s := "set -eu\n" + basePrelude(t) + `show() {
   printf '%s%s\n' ` + Quote(InheritSeparator) + ` "$1"
   [ ! -f "$2" ] || { cat "$2"; echo; }
 }
 show shared "$base/shared/.env"
+show inherit "$base/shared/` + InheritFile + `"
 `
 	for i := len(t.Levels) - 1; i >= 0; i-- {
 		s += "show " + t.Levels[i].Name + ` "$root"/` + Quote(t.Levels[i].Dir+"/.env") + "\n"
 	}
-	return s
+	return s + `show parent "$base/shared/` + ParentEnvFile + `"
+`
+}
+
+// ParentEnvFile is a child's copy of its parent's instance and project
+// variables, shared/parent.env, when its parent is on another server:
+// those levels are each server's own, so a child elsewhere would not see
+// them. Read below the child server's instance and project .env (what its
+// own server says wins), linked into each release like inherit.env, and
+// rewritten whole from the parent's server by every sync, release,
+// reload and --inherit of the child; its first line names where from
+// (ParentEnvHeader).
+const ParentEnvFile = "parent.env"
+
+// ParentEnvHeader is ParentEnvFile's first line: the address its
+// variables come from, which a release, a reload and --inherit copy from
+// again (a sync from its own source, and so names it anew).
+func ParentEnvHeader(address string) string {
+	return "# devopsy: copied from " + address + "'s instance and project .env"
+}
+
+var parentEnvRef = regexp.MustCompile(`^# devopsy: copied from (\S+)'s instance and project \.env`)
+
+// ParseParentEnvRef is the address ParentEnvHeader names, "" without one.
+func ParseParentEnvRef(line string) string {
+	if m := parentEnvRef.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// ParentEnvReadScript prints the first line of t's ParentEnvFile, if it
+// has one.
+func ParentEnvReadScript(t *Target) string {
+	return "set -eu\n" + basePrelude(t) + `[ ! -f "$base/shared/` + ParentEnvFile + `" ] || head -n 1 "$base/shared/` + ParentEnvFile + `"
+`
+}
+
+// ParentEnvWriteScript writes the lines on stdin (gated: GatedInput,
+// sent once the lock is held) as t's ParentEnvFile, under its release
+// lock and readable by the deploy user alone; empty, removes it (a parent
+// on the same server: those files are the child's own). It prints the
+// keys the file held before, one per line, for what is new in it.
+func ParentEnvWriteScript(t *Target) string {
+	file := `"$base/shared/` + ParentEnvFile + `"`
+	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+  devopsy --say error "$base is a plain directory: nothing is copied into it"
+  exit 1
+fi
+` + gatedRead + releaseLock(false, true) + `mkdir -p "$base/shared"
+file=` + file + `
+umask 077
+gated_read "$file.tmp"
+[ ! -f "$file" ] || sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "$file"
+if [ -s "$file.tmp" ]; then
+  chmod 600 "$file.tmp"
+  mv -f "$file.tmp" "$file"
+else
+  rm -f "$file.tmp" "$file"
+fi
+`
 }

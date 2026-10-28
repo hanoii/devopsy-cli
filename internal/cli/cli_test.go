@@ -648,6 +648,49 @@ func TestBuildTargetEnvPrecedence(t *testing.T) {
 	}
 }
 
+// A server's levels, nearest first: the environment's .env, a child's
+// inherit.env, the instance's and the project's .env, the child's copy
+// of its parent's server's (parent.env), then devopsy-target.env; each
+// named by its level in the trace --vars reads.
+func TestBuildLevelsPrecedence(t *testing.T) {
+	t.Parallel()
+	root := project(t, "shop", map[string]string{
+		"compose.yaml": minimalCompose,
+		".env":         "K1=env\n",
+		"inherit.env":  "K1=inherit\nK2=inherit\n",
+		"instance.env": "K1=instance\nK2=instance\nK3=instance\n",
+		"project.env":  "K1=project\nK2=project\nK3=project\nK4=project\n",
+		"parent.env":   "# devopsy: copied from vm1:prod's instance and project .env\nK1=parent\nK2=parent\nK3=parent\nK4=parent\nK5=parent\n",
+		"target.env":   "K1=target\nK5=target\nK6=target\n",
+	})
+	plan, err := build(root, []string{"ps"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"K1": "env", "K2": "inherit", "K3": "instance", "K4": "project", "K5": "parent", "K6": "target"}
+	for k, v := range want {
+		if got, _ := envValue(t, plan.Env, k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+	out, err := EnvTrace(root, nil, []string{"K1", "K2", "K3", "K4", "K5", "K6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := ParseEnvTrace(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range want {
+		if defs := tr.Lookup(k); len(defs) == 0 || defs[0].Level != v || string(defs[0].Value) != v {
+			t.Errorf("%s traced as %+v, want level and value %s", k, defs, v)
+		}
+	}
+	if defs := tr.Lookup("K1"); len(defs) != 6 || defs[4].Level != LevelParent {
+		t.Errorf("K1's definitions: %+v", defs)
+	}
+}
+
 func TestBuildCapability(t *testing.T) {
 	t.Parallel()
 	root := project(t, "traefik", map[string]string{
