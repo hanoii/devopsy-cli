@@ -192,11 +192,12 @@ func TestInheritWriteMode(t *testing.T) {
 	t.Parallel()
 	root, bin := t.TempDir(), t.TempDir()
 	tg := &Target{Name: "dev", Host: "h", Path: "app/dev"}
-	in := filepath.Join(root, "app", "dev", "shared", InheritFile+".tmp.in")
+	// The one write's spool, whatever its pid (ParentVarsWriteScript).
+	in := filepath.Join(root, "app", "dev", "shared") + "/.devopsy-parent-vars.*.in"
 	modes := filepath.Join(root, "modes")
 	write(t, filepath.Join(bin, "flock"), "#!/bin/sh\nexit 0\n")
 	// The guard copies stdin, then says what mode its output has.
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln \""+in+"\" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\n"+sayCase()+"if [ \"$1\" = --stdin-guard ]; then cat; ls -ln "+in+" | cut -c1-10 >\""+modes+"\"; exit; fi\nprintf 'root=%s\\nkeep=5\\nmax_keep=5\\nprotocol=8\\n' \""+root+"\"\n")
 	for _, f := range []string{"flock", "devopsy"} {
 		if err := os.Chmod(filepath.Join(bin, f), 0o755); err != nil {
 			t.Fatal(err)

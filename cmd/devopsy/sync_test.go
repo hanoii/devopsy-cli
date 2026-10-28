@@ -1230,9 +1230,11 @@ func TestSyncDifferentHosts(t *testing.T) {
 	}
 	// Every session of the release keeps itself alive: the upload, the
 	// holder, the push, the push's look at the child's services and its
-	// util image (--sync-exec), the receive, and the log's save.
+	// util image (--sync-exec), the receive, the log's save, and the read
+	// of the parent's variables (bounded: an unreachable parent fails in
+	// seconds).
 	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 7 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	if strings.Count(ssh, keep) != 8 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
@@ -1817,10 +1819,10 @@ func TestSyncInherit(t *testing.T) {
 	if i, j := strings.Index(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from @devopsy@one:a/prod for @devopsy@two:a/dev's sync (its shared/inherit.env once the copy is in)\n"), strings.Index(out, "syncing into"); i < 0 || j < i {
 		t.Errorf("not inherited before the holder:\n%s", out)
 	}
-	// The writes take the child's lock before the holder does: the
+	// One write takes the child's lock before the holder does: the
 	// inherited variables and, from another server, the copy of its
-	// instance and project levels (shared/parent.env).
-	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 3 {
+	// instance and project levels (shared/parent.env), together.
+	if docker, _ := s.logs(); strings.Count(docker, "flock -n 9\n") != 2 {
 		t.Errorf("the child's lock during a re-sync:\n%s", docker)
 	}
 	pending := filepath.Join(shop, "a", "dev", ".devopsy-sync.inherit.*")

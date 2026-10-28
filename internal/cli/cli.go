@@ -552,11 +552,12 @@ its server's .env files (shared/.env, its inherit.env, the instance's,
 the project's, then its parent.env, nearest first) and written as the
 child's shared/inherit.env; names are printed, never values. A parent on
 another server: its instance's and project's .env, which are that
-server's, are copied whole as the child's shared/parent.env, naming the
-parent (the sync's source: --from too), which a release that does not
-sync, --reload and --inherit copy from again. On a re-sync they go to a pending file
-the sync reads (labels from them follow the parent's at once) and
-replace shared/inherit.env once the copy is in.
+server's, are copied whole, as written (a ${...} resolves on the
+child), as the child's shared/parent.env, naming the parent (the sync's
+source: --from too), which a release that does not sync, --reload and
+--inherit copy from again. On a sync they go to pending files the sync
+reads (labels from them follow the parent's at once) and replace
+shared/inherit.env and shared/parent.env once the copy is in.
 
 The data capability (capabilities/data): prepare and finish on both
 sides, export on the parent's and import on the child's for the custom

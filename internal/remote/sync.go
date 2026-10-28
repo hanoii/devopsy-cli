@@ -1039,6 +1039,7 @@ func CurrentExistsScript(t *Target, extra []string) string {
 ` + IncompleteCheck + `
 if ` + ImportRunning + `; then echo importing; fi
 case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeature + ` ;; esac
+[ ! -f "$base/shared/` + ParentEnvFile + `" ] || printf 'parentenv\t%s\n' "$(head -n 1 "$base/shared/` + ParentEnvFile + `")"
 `
 }
 
@@ -1109,6 +1110,10 @@ func ClaimWriteScript(base, id string) string {
 type Current struct {
 	Current, Importing, DataLabels bool
 	Mark                           *Incomplete
+	// ParentEnv is the first line of its ParentEnvFile, "" without one:
+	// what a refresh of the copy follows (refreshParentEnv), read here so
+	// a child's release needs no session of its own for it.
+	ParentEnv string
 }
 
 // ParseCurrent reads CurrentExistsScript's output.
@@ -1125,6 +1130,8 @@ func ParseCurrent(out string) Current {
 			c.Importing = true
 		case DataCopyFeature:
 			c.DataLabels = true
+		case "parentenv":
+			c.ParentEnv = value
 		}
 	}
 	return c

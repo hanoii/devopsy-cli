@@ -1,10 +1,13 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
 // A child on another server gets its parent's server's instance and
@@ -32,7 +35,8 @@ func TestParentEnvAcrossServers(t *testing.T) {
 		!strings.Contains(out, "warning: @devopsy@two:dev's shared/parent.env now holds DB_PASSWORD (in secrets:), copied from @devopsy@one:prod's server") {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
-	if got := readString(copied); got != "# devopsy: copied from devopsy@one:prod's instance and project .env\nDB_PASSWORD='pw'\nPROJ='one'\n" {
+	// As written: the child reads them as it would those files.
+	if got := readString(copied); got != "# devopsy: copied from devopsy@one:prod's instance and project .env\nPROJ=one\nDB_PASSWORD=pw\n" {
 		t.Errorf("parent.env:\n%s", got)
 	}
 	// What the child's own server says wins over the copy: here its
@@ -44,7 +48,7 @@ func TestParentEnvAcrossServers(t *testing.T) {
 	// A release that does not sync copies again; the secret is no news.
 	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=two\nDB_PASSWORD=pw\n", 0o600)
 	out, code = s.run(agent, "@devopsy@two:dev", "--release")
-	if code != 0 || !strings.Contains(out, "copied 2 variables of @devopsy@one:prod's") || strings.Contains(out, "now holds") || !strings.Contains(readString(copied), "PROJ='two'\n") {
+	if code != 0 || !strings.Contains(out, "copied 2 variables of @devopsy@one:prod's") || strings.Contains(out, "now holds") || !strings.Contains(readString(copied), "PROJ=two\n") {
 		t.Errorf("a release that does not sync (%d):\n%s\n%s", code, out, readString(copied))
 	}
 
@@ -85,10 +89,11 @@ func getSays(t *testing.T, s *syncSetup, addr, key string) string {
 	return stderr
 }
 
-// The copy keeps a value that refers to another variable: the parent's
-// server reads its project's .env against what is nearer (its
-// environment's shared/.env), so a ${VAR} there is no empty string, and a
-// ${VAR:?} there never fails a child's release.
+// The copy is the parent's server's files as written: a reference in
+// them resolves on the child, as it would were those files on the
+// child's server, against its own variables (its HOST, its server's
+// HOME), never the parent's; and one the parent's server needs (a
+// ${HOST:?}, a ${HOME:?}) fails no child that has it.
 func TestParentEnvInterpolated(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
@@ -96,14 +101,20 @@ func TestParentEnvInterpolated(t *testing.T) {
 	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "HOST=prod.example.com\n", 0o600)
 	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "HOST=dev.example.com\n", 0o600)
 	// Both fake servers share one release root: the parent's server's.
-	write(t, filepath.Join(s.root, "shop", ".env"), "URL=https://${HOST}/\nNEED=${HOST:?}\n", 0o600)
+	write(t, filepath.Join(s.root, "shop", ".env"), "URL=https://${HOST}/\nNEED=${HOST:?}\nDATA=${HOME:?}/data\n", 0o600)
 	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	out, code := s.run(agent, "@devopsy@two:dev", "--release")
 	if code != 0 {
-		t.Fatalf("a release whose parent's project .env refers to its shared/.env (%d):\n%s", code, out)
+		t.Fatalf("a release whose parent's project .env refers to other variables (%d):\n%s", code, out)
 	}
-	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); strings.Contains(got, "URL='https:///'") {
-		t.Errorf("parent.env empties ${HOST}:\n%s", got)
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); !strings.Contains(got, "\nURL=https://${HOST}/\nNEED=${HOST:?}\nDATA=${HOME:?}/data\n") {
+		t.Errorf("parent.env not as written:\n%s", got)
+	}
+	// The shared project .env is the child's server's too, and would
+	// answer first: gone, the copy answers, against the child's HOST.
+	os.Remove(filepath.Join(s.root, "shop", ".env"))
+	if stdout, stderr, code := s.runIO(agent, nil, "@devopsy@two:dev", "--vars", "get", "URL"); code != 0 || string(stdout) != "https://dev.example.com/\n" || !strings.Contains(string(stderr), "copied from its parent's server (shared/parent.env)") {
+		t.Errorf("the child's URL (%d): %q\n%s", code, stdout, stderr)
 	}
 }
 
@@ -150,6 +161,21 @@ func TestParentEnvAbortedSync(t *testing.T) {
 	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
 	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	copied := filepath.Join(s.root, "shop", "dev", "shared", "parent.env")
+	// A reload of a child never released creates nothing of it.
+	if out, code := s.run(agent, "@devopsy@two:dev", "--reload"); code == 0 {
+		t.Fatalf("a reload before any release (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", "shared")); err == nil {
+		t.Error("a reload before any release made the child's shared/")
+	}
+	// A first release whose sync --from aborts leaves no copy naming it:
+	// the copy is pending on a first release too.
+	if out, code := s.run(append(agent, "FAIL_PREPARE=child"), "@devopsy@two:dev", "--release", "--from", "@devopsy@one:solo"); code == 0 {
+		t.Fatalf("a first release whose sync aborts (%d):\n%s", code, out)
+	}
+	if got := readString(copied); got != "" {
+		t.Errorf("a first release whose sync aborted left a copy:\n%s", got)
+	}
 	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}
@@ -160,6 +186,17 @@ func TestParentEnvAbortedSync(t *testing.T) {
 	}
 	if got := readString(copied); got != before {
 		t.Errorf("an aborted sync --from changed parent.env:\n%s\nwas:\n%s", got, before)
+	}
+
+	// A parent with no current release (destroyed) is no source: a
+	// release of the child warns, its copy as it was.
+	current := filepath.Join(s.root, "shop", "prod", "current")
+	if err := os.Rename(current, current+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	out, code = s.run(agent, "@devopsy@two:dev", "--release")
+	if got := readString(copied); code != 0 || !strings.Contains(out, "could not read @devopsy@one:prod's variables") || got != before {
+		t.Errorf("a release whose parent has no current release (%d):\n%s\n%s", code, out, got)
 	}
 }
 
@@ -225,21 +262,115 @@ func TestParentEnvChainFromSameServer(t *testing.T) {
 	}
 }
 
-// The parent's server reads its project's .env against its own
-// environment too (the loader's lookup: the caller's variables, HOME
-// among them), so a ${HOME:?} there passes for the parent and never
-// fails a child's release on another server.
-func TestParentEnvCallerInterpolated(t *testing.T) {
+// A value of the parent's own environment (its shared/.env, which only
+// inherit: copies, key by key) never reaches a child on another server
+// through the copy: a project .env that refers to it (a DSN built from
+// ${DB_PASSWORD}) is copied without the parent's secret in it.
+func TestParentEnvKeepsSharedSecrets(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, "secrets: [DB_PASSWORD]\n"+readString(config), 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=prodsecret\n", 0o600)
+	// Both fake servers share one release root: the parent's server's.
+	write(t, filepath.Join(s.root, "shop", ".env"), "DSN=mysql://app:${DB_PASSWORD}@db/app\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	out, code := s.run(agent, "@devopsy@two:dev", "--release")
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); code != 0 || strings.Contains(got, "prodsecret") {
+		t.Errorf("the parent's shared/.env secret copied to a child on another server (%d):\n%s\n%s", code, out, got)
+	}
+}
+
+// A sync --from names its source as the operator named it: a release
+// later, from CI, resolves that address's server as CI names it, as it
+// does for the configured parent.
+func TestParentEnvFromResolvedAnew(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
-	write(t, filepath.Join(s.root, "shop", ".env"), "DATA=${HOME:?}/data\n", 0o600)
-	if out, code := s.run(nil, "@prod", "--vars", "get", "DATA"); code != 0 {
-		t.Fatalf("the parent reads its own DATA (%d):\n%s", code, out)
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
 	}
-	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
-	out, code := s.run(agent, "@devopsy@two:dev", "--release")
-	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); code != 0 || strings.Contains(got, "DATA='/data'") {
-		t.Errorf("a release whose parent's project .env refers to its server's environment (%d):\n%s\n%s", code, out, got)
+	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
+	laptop := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "DEVOPSY_SERVER_SOLO=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(laptop, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(laptop, "@devopsy@two:dev", "--sync", "--from", "@solo", "--yes"); code != 0 {
+		t.Fatalf("sync --from (%d):\n%s", code, out)
+	}
+	ci := []string{"DEVOPSY_SERVER_PROD=devopsy@uno", "DEVOPSY_SERVER_SOLO=devopsy@uno", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(ci, "@devopsy@two:dev", "--release"); code != 0 || !strings.Contains(out, "copied 1 variables of @devopsy@uno:solo's") {
+		t.Errorf("a release in CI after a sync --from @solo on a laptop (%d):\n%s\n%s", code, out, readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")))
+	}
+}
+
+// The copy is the parent's files as written, merged per key: the nearest
+// of its instance's .env, project's and parent.env, first; a value of
+// several lines whole, whatever it holds; references never resolved.
+func TestCopyText(t *testing.T) {
+	t.Parallel()
+	text, keys, err := copyText(map[string]string{
+		"instance": "# the instance's\nREGION=eu\nDSN=mysql://app:${DB_PASSWORD}@db/${REGION}\n",
+		"project":  "export REGION=us\nCERT=\"-----BEGIN\nREGION=inside\n-----END\"\nNOTE: a 'quoted' word\n\nSINGLE='it\\'s\nsplit'\n",
+		"parent":   "# devopsy: copied from vm1:prod's instance and project .env\nREGION=asia\nFROM_PROD=yes\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "REGION=eu\nDSN=mysql://app:${DB_PASSWORD}@db/${REGION}\nCERT=\"-----BEGIN\nREGION=inside\n-----END\"\nNOTE: a 'quoted' word\nSINGLE='it\\'s\nsplit'\nFROM_PROD=yes\n"
+	if text != want {
+		t.Errorf("copy:\n%s\nwant:\n%s", text, want)
+	}
+	if strings.Join(keys, " ") != "CERT DSN FROM_PROD NOTE REGION SINGLE" {
+		t.Errorf("keys: %v", keys)
+	}
+	if _, _, err := copyText(map[string]string{"project": "BROKEN=\"never closed\n"}); err == nil {
+		t.Error("a copy that does not parse passed")
+	}
+}
+
+// loadAsDevopsy reads files nearest first as cli.LoadDotenv does on a
+// server: each parsed by compose's parser against what is set so far,
+// a key already set kept.
+func loadAsDevopsy(t *testing.T, files ...string) map[string]string {
+	t.Helper()
+	env := map[string]string{}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	for _, f := range files {
+		vars, err := dotenv.UnmarshalWithLookup(f, lookup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range vars {
+			if _, ok := env[k]; !ok {
+				env[k] = v
+			}
+		}
+	}
+	return env
+}
+
+// The copy means to compose's parser what the parent's files meant,
+// loaded in their order (the instance's over the project's): a key a
+// file defines twice is its last definition there, and a reference in
+// the project's .env to a key of its own resolves to that key's value
+// in that file, whatever a nearer file sets it to.
+func TestCopyTextReadsAsTheFiles(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, instance, project string }{
+		{"a key defined twice in one file", "", "A=1\nB=${A}\nA=2\n"},
+		{"a reference to a key the instance's .env shadows", "A=2\n", "A=1\nC=${A}\n"},
+	} {
+		text, _, err := copyText(map[string]string{"instance": c.instance, "project": c.project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := loadAsDevopsy(t, c.instance, c.project)
+		got := loadAsDevopsy(t, text)
+		if !maps.Equal(got, want) {
+			t.Errorf("%s: the copy reads as %v, the files as %v:\n%s", c.name, got, want, text)
+		}
 	}
 }

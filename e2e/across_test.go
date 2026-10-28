@@ -317,3 +317,50 @@ func TestSyncAcrossRestrictedKey(t *testing.T) {
 	}
 	asWas("the parent's key")
 }
+
+// The instance's and project's .env are each server's own: a child on
+// another server gets its own copy of its parent's server's
+// (shared/parent.env), as written, read below what its own server sets
+// and against its own variables; a release that does not sync copies it
+// again.
+func TestParentEnvAcrossServersE2E(t *testing.T) {
+	dir := acrossProject(t, "parentenv")
+	srv(t, "mkdir -p parentenv/prod/shared && echo HOST=prod.example.com >parentenv/prod/shared/.env && printf 'FROM_ONE=one\\nBOTH=one\\nURL=https://${HOST}/\\n' >parentenv/.env")
+	srv2(t, "mkdir -p parentenv/dev/shared && echo BOTH=two >parentenv/.env && echo HOST=dev.example.com >parentenv/dev/shared/.env")
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 || !strings.Contains(out, "copied 3 variables of @server:prod's instance and project .env into @server2:dev's shared/parent.env") {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	copied, _ := srv2(t, "cat parentenv/dev/shared/parent.env")
+	if copied != "# devopsy: copied from server:prod's instance and project .env\nFROM_ONE=one\nBOTH=one\nURL=https://${HOST}/\n" {
+		t.Errorf("dev's parent.env:\n%s", copied)
+	}
+	get := func(key string) string {
+		t.Helper()
+		out, code := op(t, dir, "devopsy @dev --vars get "+key+" 2>&1")
+		if code != 0 {
+			t.Fatalf("get %s (%d):\n%s", key, code, out)
+		}
+		return out
+	}
+	// Its own server's project .env wins; the rest comes from the copy.
+	if out := get("BOTH"); !strings.HasSuffix(out, "\ntwo\n") || !strings.Contains(out, "the value from the project's .env") {
+		t.Errorf("BOTH:\n%s", out)
+	}
+	if out := get("FROM_ONE"); !strings.HasSuffix(out, "\none\n") || !strings.Contains(out, "copied from its parent's server (shared/parent.env)") {
+		t.Errorf("FROM_ONE:\n%s", out)
+	}
+	// A reference resolves on the child, with its own HOST.
+	if out := get("URL"); !strings.HasSuffix(out, "\nhttps://dev.example.com/\n") {
+		t.Errorf("URL:\n%s", out)
+	}
+	srv(t, "sed -i 's/^FROM_ONE=one/FROM_ONE=uno/' parentenv/.env")
+	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	if out := get("FROM_ONE"); !strings.HasSuffix(out, "\nuno\n") {
+		t.Errorf("FROM_ONE after a release that does not sync:\n%s", out)
+	}
+}

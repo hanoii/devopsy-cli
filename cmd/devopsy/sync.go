@@ -54,9 +54,11 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
-	// from: the parent is a --from's address, which the child's copy of
-	// its server's levels names as such (remote.ParentEnvHeader).
-	from bool
+	// from: the parent is a --from's address, fromAddr as typed, which
+	// the child's copy of its server's levels names as such
+	// (remote.ParentEnvHeader), resolved anew by later refreshes.
+	from     bool
+	fromAddr string
 	// images are the parent's data images (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
@@ -73,10 +75,19 @@ type syncJob struct {
 func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	if job.sameHost {
 		o.SameServerFrom = job.parent.Path
-		o.SameServerHeader = remote.ParentEnvHeader(job.parent.Address, job.from)
+		o.SameServerHeader = remote.ParentEnvHeader(job.sourceRef(), job.from)
 		o.SameServerKeep = job.from
 	}
 	return o
+}
+
+// sourceRef is what the child's copy names as its source: a --from's
+// address as typed, else the parent's.
+func (job *syncJob) sourceRef() string {
+	if job.from {
+		return job.fromAddr
+	}
+	return job.parent.Address
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -504,26 +515,27 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		return nil
 	}
 	log := report.Default().Tee(rlog.Line)
-	files, err := parentLevels(ctx, p)
+	read, err := readParent(ctx, p, len(job.inherit) > 0)
 	if err != nil {
 		return err
 	}
-	// Pending like the inherited variables: a sync that aborts leaves the
-	// child's copy, and the source it names, as they were.
+	files := read.levels
+	// The inherited variables pending on a re-sync (a first release's are
+	// kept whatever happens: the next release is a first one again); the
+	// copy pending on every sync, so one that aborts leaves the child's
+	// copy, and the source it names, as they were.
 	pendingID := ""
 	if pending {
 		pendingID = job.id
 	}
-	if copy {
-		if err := writeParentEnv(ctx, c, p, files, job.from, pendingID, log); err != nil {
-			return err
-		}
-	}
 	if len(job.inherit) == 0 {
+		if copy {
+			return writeParentEnv(ctx, c, p, job.sourceRef(), read, job.from, job.id, log)
+		}
 		return nil
 	}
 
-	// Nearest first, as the parent reads them.
+	// Nearest first, as the parent's devopsy read them (its values).
 	var lines strings.Builder
 	var keys, missing []string
 	for _, k := range job.inherit {
@@ -540,14 +552,27 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 			missing = append(missing, k)
 		}
 	}
+	// With the copy, both in one session.
+	var copied []string
+	if copy {
+		var content string
+		if content, copied, err = copyContent(job.sourceRef(), read, job.from); err != nil {
+			return err
+		}
+		lines.WriteString(remote.ParentVarsSeparator + "\n" + content)
+	}
 	var res bytes.Buffer
 	// Gated: the variables go once the child holds its release lock.
-	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.InheritWriteScript(c, keys, pendingID), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
+	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentVarsWriteScript(c, keys, pendingID, job.id, true, copy), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
 		return fmt.Errorf("could not write @%s's inherited variables (%d)", c.Address, code)
+	}
+	shadowed, before := remote.ParseParentVarsWritten(res.String())
+	if copy {
+		saidCopied(c, p, copied, before, log)
 	}
 	switch {
 	case len(keys) > 0 && pending:
@@ -555,7 +580,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	case len(keys) > 0:
 		log.Info(fmt.Sprintf("inherited %s from @%s into @%s's shared/%s", strings.Join(keys, ", "), p.Address, c.Address, remote.InheritFile))
 	}
-	if shadowed := strings.Fields(res.String()); len(shadowed) > 0 {
+	if len(shadowed) > 0 {
 		log.Warn(fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), "to inherit it:", report.CmdMark+"devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " "))
 	}
 	if len(missing) > 0 {
@@ -583,6 +608,7 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 	}
 	p := t.ParentTarget
 	job := &syncJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
+	var parentEnv string
 	for _, x := range []*remote.Target{p, t} {
 		var out bytes.Buffer
 		script := remote.CurrentExistsScript(x, nil)
@@ -601,12 +627,14 @@ func runInherit(t *remote.Target, projectDir string, projectEnv func(string) (st
 		}
 		if x == p {
 			job.inherit = remote.ParseInherit(out.String())
+		} else {
+			parentEnv = remote.ParseCurrent(out.String()).ParentEnv
 		}
 	}
 	rlog := newReleaseLog("inherit", t)
 	// The copy of the parent's server's levels, from where the last sync
 	// copied it, whatever inherit: says.
-	refreshParentEnv(context.Background(), t, projectDir, projectEnv, report.Default().Tee(rlog.Line))
+	refreshParentEnv(context.Background(), t, projectDir, projectEnv, &parentEnv, report.Default().Tee(rlog.Line))
 	if len(job.inherit) == 0 {
 		// Nothing inherited now: what was goes, as a sync naming keys
 		// replaces the file.
@@ -682,7 +710,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if err != nil {
 		return fail(err.Error())
 	}
-	job.from = from != ""
+	job.from, job.fromAddr = from != "", from
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {
