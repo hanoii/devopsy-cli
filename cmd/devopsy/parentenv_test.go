@@ -77,3 +77,81 @@ func getSays(t *testing.T, s *syncSetup, addr, key string) string {
 	}
 	return stderr
 }
+
+// The copy keeps a value that refers to another variable: the parent's
+// server reads its project's .env against what is nearer (its
+// environment's shared/.env), so a ${VAR} there is no empty string, and a
+// ${VAR:?} there never fails a child's release.
+func TestParentEnvInterpolated(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "HOST=prod.example.com\n", 0o600)
+	write(t, filepath.Join(s.root, "shop", "dev", "shared", ".env"), "HOST=dev.example.com\n", 0o600)
+	// Both fake servers share one release root: the parent's server's.
+	write(t, filepath.Join(s.root, "shop", ".env"), "URL=https://${HOST}/\nNEED=${HOST:?}\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	out, code := s.run(agent, "@devopsy@two:dev", "--release")
+	if code != 0 {
+		t.Fatalf("a release whose parent's project .env refers to its shared/.env (%d):\n%s", code, out)
+	}
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); strings.Contains(got, "URL='https:///'") {
+		t.Errorf("parent.env empties ${HOST}:\n%s", got)
+	}
+}
+
+// Down a chain whose middle is on its child's server: the middle reads
+// its own copy of its parent's server's levels (parent.env), so its child
+// on that server gets them too, as the middle reads them.
+func TestParentEnvChainSameServer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, strings.Replace(readString(config), "  dev: {parent: prod}\n", "  dev: {parent: prod}\n  qa: {parent: dev}\n", 1), 0o644)
+	s.releaseProd(nil)
+	// Both fake servers share one release root: the project's .env is
+	// prod's server's here, copied into dev's parent.env, then gone.
+	write(t, filepath.Join(s.root, "shop", ".env"), "FROM_ONE=one\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "DEVOPSY_SERVER_DEV=devopsy@two", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	os.Remove(filepath.Join(s.root, "shop", ".env"))
+	if out := getSays(t, s, "@devopsy@two:dev", "FROM_ONE"); !strings.Contains(out, "copied from its parent's server") {
+		t.Fatalf("dev's FROM_ONE:\n%s", out)
+	}
+	if out, code := s.run(agent, "@devopsy@two:qa", "--release"); code != 0 {
+		t.Fatalf("qa's release (%d):\n%s", code, out)
+	}
+	stdout, stderr, code := s.runIO(agent, nil, "@devopsy@two:qa", "--vars", "get", "FROM_ONE")
+	if code != 0 || string(stdout) != "one\n" {
+		t.Errorf("qa, dev's child on dev's server, misses what dev reads from prod's server (%d): %q\n%s", code, stdout, stderr)
+	}
+}
+
+// A sync that aborts before its copy leaves the child's copy as it was,
+// its source included: the next release does not follow the address an
+// aborted --from named.
+func TestParentEnvAbortedSync(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	write(t, filepath.Join(s.dot, "capabilities", "data", "prepare"), "#!/bin/sh\n[ \"${FAIL_PREPARE:-}\" != \"$1\" ]\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	copied := filepath.Join(s.root, "shop", "dev", "shared", "parent.env")
+	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	before := readString(copied)
+	out, code := s.run(append(agent, "FAIL_PREPARE=child"), "@devopsy@two:dev", "--sync", "--from", "@devopsy@one:solo", "--yes")
+	if code == 0 || !strings.Contains(out, "preparing the sync failed") {
+		t.Fatalf("an aborted sync (%d):\n%s", code, out)
+	}
+	if got := readString(copied); got != before {
+		t.Errorf("an aborted sync --from changed parent.env:\n%s\nwas:\n%s", got, before)
+	}
+}

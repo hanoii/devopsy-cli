@@ -152,4 +152,15 @@ func TestVarsSources(t *testing.T) {
 	if out, says := get("solo", "GREETING"); out != "hello-proj\n" || !strings.Contains(says, "the value from the project's .env") {
 		t.Errorf("get before a first release: %q\n%s", out, says)
 	}
+
+	// The hint followed, for the only key prod's inherit: names: dev no
+	// longer inherits it.
+	write(t, config, strings.Replace(readString(config), "  prod: {inherit: [GREETING]}\n", "  prod: {}\n", 1), 0o644)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--inherit"); code != 0 {
+		t.Fatalf("dev's --inherit (%d):\n%s", code, out)
+	}
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "inherit.env")); strings.Contains(got, "GREETING") {
+		t.Errorf("dev still inherits GREETING once prod's inherit: no longer names it: %q", got)
+	}
 }
