@@ -193,7 +193,8 @@ done
 // prints, followed by its level: shared, instance or project.
 const InheritSeparator = "=devopsy-vars= "
 
-// InheritReadScript prints a parent's variables files for inherit:, its
+// InheritReadScript prints a parent's variables files for the keys its
+// current release's inherit: names (ParseInherit), its
 // environment's shared/.env, then its instance's and project's .env (those
 // it has), each after a InheritSeparator line naming its level.
 func InheritReadScript(t *Target) string {

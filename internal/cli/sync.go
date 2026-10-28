@@ -133,6 +133,10 @@ const DestroyDataFlag = "--destroy-data"
 // the release's own config, hidden: run by ActivateScript.
 const ReleaseStepsFlag = "--release-steps"
 
+// ReleaseInheritFlag prints the keys the inherit: of a server's release
+// names, hidden: run by InheritReadScript in a parent's current release.
+const ReleaseInheritFlag = "--release-inherit"
+
 // --export and --import move one service's data, the way its
 // DataCopyLabel says, locally or with @<target> on a server.
 const (

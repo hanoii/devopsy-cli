@@ -1478,6 +1478,19 @@ func TestSyncInherit(t *testing.T) {
 		t.Errorf("--inherit on prod (%d):\n%s", code, out)
 	}
 
+	// What the parent's current release names decides, never the
+	// checkout's: one naming another key of the parent's takes nothing
+	// more, and one naming none still inherits the deployed keys.
+	config := readString(filepath.Join(s.dot, "config.yaml"))
+	write(t, filepath.Join(shop, "a", "prod", "shared", ".env"), "SHARED_KEY=s2\nOTHER_KEY=secret\n", 0o600)
+	for _, inherit := range []string{"{inherit: [OTHER_KEY]}", "{}"} {
+		write(t, filepath.Join(s.dot, "config.yaml"), strings.Replace(config, "{inherit: [SHARED_KEY, INST_KEY, PROJ_KEY, MISSING_KEY]}", inherit, 1), 0o644)
+		if out, code := s.run(nil, "@a/dev", "--inherit"); code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || readString(childInherit) != "SHARED_KEY='s2'\nINST_KEY='i 1'\nPROJ_KEY='p1'\n" {
+			t.Errorf("--inherit, the checkout's prod %s (%d): %q\n%s", inherit, code, readString(childInherit), out)
+		}
+	}
+	write(t, filepath.Join(s.dot, "config.yaml"), config, 0o644)
+
 	// Across servers a re-sync inherits before the holder, into the
 	// pending file the sync reads, moved into place once the copy is in:
 	// a failed copy leaves the child's file as it was.

@@ -1334,7 +1334,10 @@ like `--sync`.
 
 **Inherited variables:** `inherit: [KEY, ...]` on the parent (or in
 `defaults:`) names variables its children get, whatever the labels say
-about the data: read from the parent's `shared/.env`, instance `.env` and
+about the data, as the parent's current release says: a checkout's
+`inherit:` changes nothing until the parent is released with it, so no
+one syncing a child takes more of the parent's variables than its own
+release gives. They are read from the parent's `shared/.env`, instance `.env` and
 project `.env` on its server (nearest first) and written as the child's
 `shared/inherit.env`, the whole file each time, so a resync replaces it.
 The child reads it below its own `shared/.env` and above its server's

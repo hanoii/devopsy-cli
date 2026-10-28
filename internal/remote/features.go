@@ -22,7 +22,8 @@ import (
 var featureFlags = []string{
 	"check-mounts", "check-names", "destroy-data", "export", "images",
 	"import", "missing-vars", "mnt-owners", "prepare-release",
-	"release-id", "release-settings", "release-steps", "say", "server-facts",
+	"release-id", "release-inherit", "release-settings", "release-steps",
+	"say", "server-facts",
 	"snapshot-step", "status", "stdin-guard", "sync-push",
 	"sync-services", "upgrade", "util-image", "watch-session",
 }
