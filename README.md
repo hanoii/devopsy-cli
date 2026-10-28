@@ -1436,18 +1436,19 @@ were. A parent whose `inherit:` names nothing leaves the child's
 
 **A parent on another server:** the instance's and the project's `.env`
 are each server's own, so a child elsewhere would not see the parent's.
-It gets a copy of them instead, `shared/parent.env`, all of their keys,
-as the parent reads them (its instance's over its project's, over its
-own `parent.env` down a chain), read below the child's own server's
-instance and project files, so what the child's server says wins. Its
+It gets a copy of them instead, `shared/parent.env`: all of their keys
+as written, each from the nearest (its instance's over its project's,
+over its own `parent.env` down a chain), read below the child's own
+server's instance and project files, so what the child's server says
+wins. As written: a `${...}` in them resolves on the child, against
+its own variables, as it would were those files on its server, so
+nothing of the parent's `shared/.env` leaves through a reference. Its
 first line names where it came from: every sync writes it from its
 source (before the copy in a pending file, as `inherit.env`, so a
 failed sync leaves it as it was), and a child's release that does not
 sync, `--reload` and `--inherit` copy it again, from the child's parent
 (as you name its server then) or the address a `--from` gave. A parent
-that cannot be read then is a warning, and the copy stays. Values are
-read as the parent's server reads them (`${HOST}` from its
-`shared/.env` is its value). A secret (`secrets:`) new in the copy is
+that cannot be read then is a warning, and the copy stays. A secret (`secrets:`) new in the copy is
 named: a value that must stay on a server belongs in its environment's
 `shared/.env`, which only `inherit:` copies, key by key. On the
 parent's own server its instance and project files are the child's

@@ -320,12 +320,13 @@ func TestSyncAcrossRestrictedKey(t *testing.T) {
 
 // The instance's and project's .env are each server's own: a child on
 // another server gets its own copy of its parent's server's
-// (shared/parent.env), each value as the parent reads it, below what
-// its own server sets; a release that does not sync copies it again.
+// (shared/parent.env), as written, read below what its own server sets
+// and against its own variables; a release that does not sync copies it
+// again.
 func TestParentEnvAcrossServersE2E(t *testing.T) {
 	dir := acrossProject(t, "parentenv")
 	srv(t, "mkdir -p parentenv/prod/shared && echo HOST=prod.example.com >parentenv/prod/shared/.env && printf 'FROM_ONE=one\\nBOTH=one\\nURL=https://${HOST}/\\n' >parentenv/.env")
-	srv2(t, "mkdir -p parentenv && echo BOTH=two >parentenv/.env")
+	srv2(t, "mkdir -p parentenv/dev/shared && echo BOTH=two >parentenv/.env && echo HOST=dev.example.com >parentenv/dev/shared/.env")
 	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
 		t.Fatalf("prod (%d):\n%s", code, out)
 	}
@@ -333,7 +334,7 @@ func TestParentEnvAcrossServersE2E(t *testing.T) {
 		t.Fatalf("dev's first release (%d):\n%s", code, out)
 	}
 	copied, _ := srv2(t, "cat parentenv/dev/shared/parent.env")
-	if copied != "# devopsy: copied from server:prod's instance and project .env\nBOTH='one'\nFROM_ONE='one'\nURL='https://prod.example.com/'\n" {
+	if copied != "# devopsy: copied from server:prod's instance and project .env\nFROM_ONE=one\nBOTH=one\nURL=https://${HOST}/\n" {
 		t.Errorf("dev's parent.env:\n%s", copied)
 	}
 	get := func(key string) string {
@@ -350,6 +351,10 @@ func TestParentEnvAcrossServersE2E(t *testing.T) {
 	}
 	if out := get("FROM_ONE"); !strings.HasSuffix(out, "\none\n") || !strings.Contains(out, "copied from its parent's server (shared/parent.env)") {
 		t.Errorf("FROM_ONE:\n%s", out)
+	}
+	// A reference resolves on the child, with its own HOST.
+	if out := get("URL"); !strings.HasSuffix(out, "\nhttps://dev.example.com/\n") {
+		t.Errorf("URL:\n%s", out)
 	}
 	srv(t, "sed -i 's/^FROM_ONE=one/FROM_ONE=uno/' parentenv/.env")
 	if out, code := op(t, dir, agent+" devopsy @dev --release"); code != 0 {

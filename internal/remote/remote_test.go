@@ -234,7 +234,7 @@ func allScripts() map[string]string {
 		"vars":            VarsReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}, nil),
 		"vars set":        VarsSetScript(tg, nil, []string{"A", "B"}),
 		"vars unset":      VarsUnsetScript(tg, &Level{Name: "project", Dir: "app"}, []string{"A"}),
-		"parent trace":    ParentTraceScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}),
+		"parent read":     ParentReadScript(&Target{Path: "app/a/prod", Levels: []Level{{Name: "project", Dir: "app"}, {Name: "instance", Dir: "app/a"}}}, true),
 		"parent copy":     ParentEnvCopyScript(tg, "app/a/prod", ParentEnvHeader("vm1:a/prod", true), true),
 		"inherit write":   InheritWriteScript(tg, []string{"A", "B"}, ""),
 		"inherit pending": InheritWriteScript(tg, []string{"A", "B"}, "1.2"),

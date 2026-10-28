@@ -2296,7 +2296,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 - **A parent's `inherit:` keys become the child's
   `shared/inherit.env`, whole:** `inheritVars` reads the parent's files
-  in one session (`ParentTraceScript`, `parentLevels`: its `shared/.env`,
+  in one session (`ParentReadScript`, `readParent`, from its own devopsy's
+  `--env-trace`, so each value is the parent's: its `shared/.env`,
   its own `inherit.env`, so a chain passes what the middle inherited,
   its instance's and project's `.env`, its `parent.env`), takes each key
   from the nearest level, and writes them all (`InheritWriteScript`, on stdin,
@@ -2316,18 +2317,21 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   own `parent:` and run step (`TestSyncInherit`).
 - **A parent on another server is copied whole, per child:**
   `shared/parent.env` (`remote.ParentEnvFile`, `writeParentEnv`), the
-  parent's instance and project levels as it reads them (`parentCopy`),
-  below the child's own server's (what its server says wins). Why per
+  parent's instance and project levels as written (`copyText`: each
+  key's lines from the nearest, merged per key, `dotenvChunks`), below
+  the child's own server's (what its server says wins). Why per
   child, never a copy beside the child server's project `.env`
   (decided with the user, 2026-10-28): those levels are each server's,
   and two children of one server can have parents on two servers (an
-  instance from each), each needing its own. The parent's files are
-  read by its own devopsy (`ParentTraceScript`: `--env-trace` in its
-  current release, each definition by level), never parsed here: its
-  loader interpolates each file against the server's environment and
-  the nearer files, so `${HOST}` and `${HOME:?}` are its values (reviews
-  1 and 2: parsed alone, or against the files only, they failed every
-  child's release). Its first line names the source (`ParentEnvHeader`): every
+  instance from each), each needing its own. As written, never
+  interpolated on the parent's side (decided with the user after review
+  3): a `${...}` resolves on the child against its own variables, as it
+  would were those files on its server, the same as for a child on the
+  parent's server; interpolated, `${DB_PASSWORD}` carried the parent's
+  `shared/.env` secret out through a reference and
+  `${COMPOSE_PROJECT_NAME}` the parent's name in (reviews 1 and 2 had
+  made it the parent's values to keep `${HOST:?}` from failing; it now
+  fails only a child without a `HOST`, as on the parent's server). Its first line names the source (`ParentEnvHeader`): every
   sync writes it from its own, and a release that does not sync,
   `--reload` and `--inherit` copy again (`refreshParentEnv`): from the
   child's parent resolved anew, or the address a `--from` named, kept

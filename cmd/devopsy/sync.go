@@ -515,10 +515,11 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		return nil
 	}
 	log := report.Default().Tee(rlog.Line)
-	files, err := parentLevels(ctx, p)
+	read, err := readParent(ctx, p, len(job.inherit) > 0)
 	if err != nil {
 		return err
 	}
+	files := read.levels
 	// The inherited variables pending on a re-sync (a first release's are
 	// kept whatever happens: the next release is a first one again); the
 	// copy pending on every sync, so one that aborts leaves the child's
@@ -529,12 +530,12 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	}
 	if len(job.inherit) == 0 {
 		if copy {
-			return writeParentEnv(ctx, c, p, job.sourceRef(), files, job.from, job.id, log)
+			return writeParentEnv(ctx, c, p, job.sourceRef(), read, job.from, job.id, log)
 		}
 		return nil
 	}
 
-	// Nearest first, as the parent reads them.
+	// Nearest first, as the parent's devopsy read them (its values).
 	var lines strings.Builder
 	var keys, missing []string
 	for _, k := range job.inherit {
@@ -555,7 +556,9 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	var copied []string
 	if copy {
 		var content string
-		content, copied = copyContent(job.sourceRef(), files, job.from)
+		if content, copied, err = copyContent(job.sourceRef(), read, job.from); err != nil {
+			return err
+		}
 		lines.WriteString(remote.ParentVarsSeparator + "\n" + content)
 	}
 	var res bytes.Buffer

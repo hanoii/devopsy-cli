@@ -6,76 +6,187 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
-// parentLevels reads p's variables by level (shared, inherit, instance,
-// project and parent), as its current release's devopsy loads them
-// (remote.ParentTraceScript, --env-trace): each file interpolated as that
-// loader reads it, against the server's environment and the nearer
-// files, so a ${VAR} there is p's value and a ${VAR:?} that passes for p
-// passes here.
-func parentLevels(ctx context.Context, p *remote.Target) (map[string]map[string]string, error) {
+// parentVars is what a child takes from its parent's server
+// (remote.ParentReadScript): levels, the parent's variables by level
+// (shared, inherit, instance, project, parent) as its own devopsy loads
+// them, for the keys its inherit: names, when read; and raw, its
+// instance's and project's .env and its parent.env as written, for the
+// child's copy.
+type parentVars struct {
+	levels map[string]map[string]string
+	raw    map[string]string
+}
+
+// readParent reads p's parentVars in one session, its trace only when
+// trace (a child inheriting keys: it runs p's devopsy, env capability
+// included, and needs its current release).
+func readParent(ctx context.Context, p *remote.Target, trace bool) (parentVars, error) {
 	var out bytes.Buffer
 	// Bounded: a parent out of reach fails in seconds, never holding up
 	// what refreshes from it.
-	code, err := remote.SSHContext(ctx, p, remote.Bounded, remote.ParentTraceScript(p), bytes.NewReader(nil), &out, false, nil)
+	code, err := remote.SSHContext(ctx, p, remote.Bounded, remote.ParentReadScript(p, trace), bytes.NewReader(nil), &out, false, nil)
+	if err != nil {
+		return parentVars{}, err
+	}
+	if code != 0 {
+		return parentVars{}, fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
+	}
+	v := parentVars{raw: map[string]string{}}
+	section := ""
+	var content strings.Builder
+	flush := func() error {
+		switch section {
+		case "":
+		case "trace":
+			levels, err := traceLevels(content.String())
+			if err != nil {
+				return fmt.Errorf("the variables of @%s: %w", p.Address, err)
+			}
+			v.levels = levels
+		default:
+			v.raw[section] = content.String()
+		}
+		content.Reset()
+		return nil
+	}
+	for _, line := range strings.SplitAfter(out.String(), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), remote.ParentReadSeparator); ok {
+			if err := flush(); err != nil {
+				return v, err
+			}
+			section = name
+			continue
+		}
+		content.WriteString(line)
+	}
+	return v, flush()
+}
+
+// traceLevels is a parent's --env-trace by level: shared, inherit,
+// instance, project and parent, each value as its loader interpolated it.
+func traceLevels(trace string) (map[string]map[string]string, error) {
+	t, err := cli.ParseEnvTrace([]byte(strings.TrimSpace(trace)))
 	if err != nil {
 		return nil, err
 	}
-	if code != 0 {
-		return nil, fmt.Errorf("could not read the variables of @%s (%d)", p.Address, code)
-	}
-	trace, err := cli.ParseEnvTrace(bytes.TrimSpace(out.Bytes()))
-	if err != nil {
-		return nil, fmt.Errorf("the variables of @%s: %w", p.Address, err)
-	}
-	levels := map[string]string{cli.LevelEnv: "shared", cli.LevelInherit: "inherit", cli.LevelInstance: "instance", cli.LevelProject: "project", cli.LevelParent: "parent"}
-	files := map[string]map[string]string{}
-	for _, v := range trace.Vars {
+	names := map[string]string{cli.LevelEnv: "shared", cli.LevelInherit: "inherit", cli.LevelInstance: "instance", cli.LevelProject: "project", cli.LevelParent: "parent"}
+	levels := map[string]map[string]string{}
+	for _, v := range t.Vars {
 		for _, d := range v.Defs {
-			l, ok := levels[d.Level]
+			l, ok := names[d.Level]
 			if !ok {
 				continue
 			}
-			if files[l] == nil {
-				files[l] = map[string]string{}
+			if levels[l] == nil {
+				levels[l] = map[string]string{}
 			}
-			if _, ok := files[l][v.Name]; !ok {
-				files[l][v.Name] = string(d.Value)
+			if _, ok := levels[l][v.Name]; !ok {
+				levels[l][v.Name] = string(d.Value)
 			}
 		}
 	}
-	return files, nil
+	return levels, nil
 }
 
-// parentCopy is what a child copies of its parent's server: the
-// parent's instance and project levels as the parent reads them (its
-// instance's .env over its project's, over its own parent.env down a
-// chain), one KEY=value line each, sorted.
-func parentCopy(files map[string]map[string]string) map[string]string {
-	vars := map[string]string{}
-	for _, l := range []string{"parent", "project", "instance"} {
-		maps.Copy(vars, files[l])
+// copyText is a child's copy of its parent's server's levels, as
+// written: each key's lines from the nearest of the parent's instance's
+// .env, its project's and its own parent.env (as the parent reads them),
+// nearest first, so a value referring to a nearer key finds it before
+// it; never interpolated: the child reads them as it would read those
+// files on its own server, ${...} against its own variables (nothing of
+// the parent's shared/.env leaves through a reference: decided with the
+// user, 2026-10-28). Comments and blank lines are left out. And the
+// keys, sorted.
+func copyText(raw map[string]string) (string, []string, error) {
+	var text strings.Builder
+	seen := map[string]bool{}
+	for _, l := range []string{"instance", "project", "parent"} {
+		for _, c := range dotenvChunks(raw[l]) {
+			if seen[c.key] {
+				continue
+			}
+			seen[c.key] = true
+			text.WriteString(c.text)
+		}
 	}
-	return vars
+	// What the child's loader will parse: refused here rather than there,
+	// whatever its ${...} need (they resolve on the child).
+	if _, err := dotenv.UnmarshalWithLookup(text.String(), func(string) (string, bool) { return "x", true }); err != nil {
+		return "", nil, fmt.Errorf("the parent's instance and project .env do not parse: %w", err)
+	}
+	return text.String(), slices.Sorted(maps.Keys(seen)), nil
 }
 
-// writeParentEnv writes c's remote.ParentEnvFile from the files of src,
-// a parent on another server (a parentLevels read): its instance and
-// project levels (parentCopy) under a header naming src, the copy's
-// reference (from: a --from's, kept as named). With pendingID, a
-// re-sync's: into its pending copy, moved into place once the copy is
-// in. A secret (config.yaml's secrets:) new in the copy is named: a value
-// that must stay on the parent's server belongs in its environment's
-// shared/.env, which only inherit: copies, key by key.
-func writeParentEnv(ctx context.Context, c, src *remote.Target, ref string, files map[string]map[string]string, from bool, pendingID string, log *report.Logger) error {
-	content, keys := copyContent(ref, files, from)
+// envChunk is one key's lines of a .env, as written.
+type envChunk struct{ key, text string }
+
+// dotenvLine is a .env line that defines a key: compose's KEY=value or
+// KEY: value, maybe after export; the value after the separator.
+var dotenvLine = regexp.MustCompile(`^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*[=:][ \t]*(.*)$`)
+
+// dotenvChunks splits a .env into its keys' lines, in order: a quoted
+// value goes on until its quote closes (as --vars' edit reads one,
+// varsEdit), comments and blank lines outside values are left out.
+func dotenvChunks(text string) []envChunk {
+	var chunks []envChunk
+	quote := byte(0)
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasSuffix(line, "\n") {
+			line += "\n"
+		}
+		if quote != 0 {
+			chunks[len(chunks)-1].text += line
+			if closesQuote(strings.TrimSuffix(line, "\n"), quote) {
+				quote = 0
+			}
+			continue
+		}
+		m := dotenvLine.FindStringSubmatch(strings.TrimSuffix(line, "\n"))
+		if m == nil {
+			continue
+		}
+		chunks = append(chunks, envChunk{key: m[1], text: line})
+		if v := m[2]; v != "" && (v[0] == '"' || v[0] == '\'') && !closesQuote(v[1:], v[0]) {
+			quote = v[0]
+		}
+	}
+	return chunks
+}
+
+// closesQuote reports whether s holds q unescaped, which ends a quoted
+// value (varsEdit's closes).
+func closesQuote(s string, q byte) bool {
+	s = strings.ReplaceAll(s, `\\`, "")
+	s = strings.ReplaceAll(s, `\`+string(q), "")
+	return strings.IndexByte(s, q) >= 0
+}
+
+// writeParentEnv writes c's remote.ParentEnvFile from read, the raw
+// files of src, a parent on another server (copyText), under a header
+// naming ref, the copy's reference (from: a --from's, as typed). With
+// pendingID, a sync's: into its pending copy, moved into place once the
+// copy is in. A secret (config.yaml's secrets:) new in the copy is named:
+// a value that must stay on the parent's server belongs in its
+// environment's shared/.env, which only inherit: copies, key by key.
+func writeParentEnv(ctx context.Context, c, src *remote.Target, ref string, read parentVars, from bool, pendingID string, log *report.Logger) error {
+	content, keys, err := copyContent(ref, read, from)
+	if err != nil {
+		return err
+	}
 	var res bytes.Buffer
 	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentEnvWriteScript(c, pendingID), strings.NewReader(remote.GatedInput(content)), &res, false, nil)
 	if err != nil {
@@ -89,18 +200,14 @@ func writeParentEnv(ctx context.Context, c, src *remote.Target, ref string, file
 	return nil
 }
 
-// copyContent is c's remote.ParentEnvFile from src's files: its header,
-// then src's instance and project levels (parentCopy), one line each;
-// and their keys, sorted.
-func copyContent(ref string, files map[string]map[string]string, from bool) (string, []string) {
-	var content strings.Builder
-	vars := parentCopy(files)
-	keys := slices.Sorted(maps.Keys(vars))
-	content.WriteString(remote.ParentEnvHeader(ref, from) + "\n")
-	for _, k := range keys {
-		content.WriteString(cli.DotenvLine(k, vars[k]) + "\n")
+// copyContent is c's remote.ParentEnvFile from read: its header naming
+// ref, then copyText; and its keys.
+func copyContent(ref string, read parentVars, from bool) (string, []string, error) {
+	text, keys, err := copyText(read.raw)
+	if err != nil {
+		return "", nil, err
 	}
-	return content.String(), keys
+	return remote.ParentEnvHeader(ref, from) + "\n" + text, keys, nil
 }
 
 // saidCopied says what a copy wrote: how many keys, and the secrets
@@ -174,12 +281,12 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 		}
 		return
 	}
-	files, err := parentLevels(ctx, src)
+	read, err := readParent(ctx, src, false)
 	if err != nil {
 		log.Warn(fmt.Sprintf("could not read @%s's variables (%v): @%s's copy of them stays as it was", src.Address, err, c.Address))
 		return
 	}
-	if err := writeParentEnv(ctx, c, src, ref, files, from, "", log); err != nil {
+	if err := writeParentEnv(ctx, c, src, ref, read, from, "", log); err != nil {
 		log.Warn(err.Error() + ": the copy stays as it was")
 	}
 }

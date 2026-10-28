@@ -426,17 +426,36 @@ func ParseParentVarsWritten(out string) (shadowed, before []string) {
 	return strings.Fields(a), strings.Fields(b)
 }
 
-// ParentTraceScript prints the variables of a parent's current release
-// as its own devopsy loads them (--env-trace, every one, each with its
-// definitions by level, each interpolated as that loader reads its file,
-// the server's environment and nearer files included): what a child
-// inherits (the keys its inherit: names, from the nearest of its
-// shared/.env, inherit.env, instance's and project's .env and
-// parent.env) and copies (ParentEnvFile).
-func ParentTraceScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release"; exit 1; }
-cd "$base/current"
-` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + "\n"
+// ParentReadSeparator starts the line before each section
+// ParentReadScript prints, followed by its name.
+const ParentReadSeparator = "=devopsy-vars= "
+
+// ParentReadScript prints what a child takes from its parent's server,
+// each section after a ParentReadSeparator line naming it: with trace,
+// "trace", the variables of the parent's current release as its own
+// devopsy loads them (--env-trace: what the keys its inherit: names are,
+// by level); then, as written, never interpolated, its instance's and
+// project's .env and its own parent.env (what it copied from its own
+// parent's server, down a chain), those it has: the child's copy
+// (ParentEnvFile), read on the child as the child would read those files
+// on its own server.
+func ParentReadScript(t *Target, trace bool) string {
+	s := "set -eu\n" + basePrelude(t) + `show() {
+  printf '%s%s\n' ` + Quote(ParentReadSeparator) + ` "$1"
+  [ ! -f "$2" ] || { cat "$2"; echo; }
+}
+`
+	if trace {
+		s += `[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release"; exit 1; }
+printf '%s%s\n' ` + Quote(ParentReadSeparator) + ` trace
+(cd "$base/current" && ` + devopsyCall(t.ComposeName(), []string{envTraceFlag}, false) + `)
+`
+	}
+	for i := len(t.Levels) - 1; i >= 0; i-- {
+		s += "show " + t.Levels[i].Name + ` "$root"/` + Quote(t.Levels[i].Dir+"/.env") + "\n"
+	}
+	return s + `show parent "$base/shared/` + ParentEnvFile + `"
+`
 }
 
 // ParentEnvFile is a child's copy of its parent's instance and project
