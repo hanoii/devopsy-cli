@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,5 +78,62 @@ func TestSyncReflinkE2E(t *testing.T) {
 	}
 	if left, _ := srv(t, "ls -d synref/prod/.devopsy-sync.clone.* 2>/dev/null"); strings.TrimSpace(left) != "" {
 		t.Errorf("the clone left: %s", left)
+	}
+}
+
+// The same on ext4, as most servers' roots, where nothing clones: the
+// child's files labeled devopsy.data.copy.reflink are rsynced, said
+// once, the child's entry never emptied first (a file both sides have
+// keeps its inode: an emptied entry rsynced again was a full copy every
+// sync), and what only the child had removed by the rsync.
+func TestSyncReflinkExt4E2E(t *testing.T) {
+	dir := project(t, "synext", map[string]string{
+		".devopsy/.env":        "DEVOPSY_SERVER=server\n",
+		".devopsy/config.yaml": "project: synext\ndefaults:\n  mode: image\n  release: deploy\n  rollback: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n",
+		".devopsy/compose.yaml": `services:
+  app:
+    image: busybox:1.37
+    command: [sleep, infinity]
+    volumes: [./mnt/files:/files]
+    labels: {devopsy.data: "true", devopsy.data.copy.reflink: "true"}
+`,
+		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
+	})
+	if out, code := execIn(t, []string{server}, "set -e; truncate -s 300M /var/tmp/synext.ext4; mkfs.ext4 -q -F /var/tmp/synext.ext4; mkdir -p /home/devopsy/synext; mount -o loop /var/tmp/synext.ext4 /home/devopsy/synext; chown devopsy:devopsy /home/devopsy/synext"); code != 0 {
+		t.Fatalf("the ext4 (%d): %s", code, out)
+	}
+	t.Cleanup(func() {
+		_, _ = execIn(t, []string{server}, "umount -l /home/devopsy/synext; rm -f /var/tmp/synext.ext4")
+	})
+	if out, code := op(t, dir, "devopsy @prod --release"); code != 0 {
+		t.Fatalf("prod (%d):\n%s", code, out)
+	}
+	files := "\"$PWD/synext/%s/shared/mnt/files:/f\""
+	write := func(env, script string) {
+		t.Helper()
+		if out, code := srv(t, "docker run --rm -v "+fmt.Sprintf(files, env)+" busybox:1.37 sh -c '"+script+"'"); code != 0 {
+			t.Fatalf("writing %s's files: %s", env, out)
+		}
+	}
+	write("prod", "echo one >/f/a.txt")
+	if out, code := op(t, dir, "devopsy @dev --release"); code != 0 || strings.Count(out, "no reflinks between the parent's data and the child's") != 1 || strings.Contains(out, "shared with the parent by reflinks") {
+		t.Fatalf("dev's first release (%d):\n%s", code, out)
+	}
+	inode := func() string {
+		t.Helper()
+		out, _ := srv(t, "stat -c %i synext/dev/shared/mnt/files/a.txt")
+		return strings.TrimSpace(out)
+	}
+	before := inode()
+	write("prod", "echo two >/f/b.txt")
+	write("dev", "echo mine >/f/mine.txt")
+	if out, code := op(t, dir, "devopsy @dev --sync --yes"); code != 0 || strings.Count(out, "no reflinks between the parent's data and the child's") != 1 {
+		t.Fatalf("the sync (%d):\n%s", code, out)
+	}
+	if after := inode(); before == "" || after != before {
+		t.Errorf("a.txt's inode %s, then %s: the child's entry emptied before the rsync", before, after)
+	}
+	if got, _ := srv(t, "ls synext/dev/shared/mnt/files | tr '\\n' ' '"); strings.TrimSpace(got) != "a.txt b.txt" {
+		t.Errorf("the child's files: %q", got)
 	}
 }

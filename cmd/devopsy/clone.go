@@ -63,6 +63,22 @@ done`, "sh")
 // rest; the second pass finds the tree as it is now.
 func cloneData(ctx context.Context, name, into string, d dataSet, opts ...string) error {
 	mounts := []string{"-v", d.mnt + ":/m/mnt:ro", "-v", into + ":/c"}
+	for _, v := range d.volumes {
+		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
+	}
+	if err := os.MkdirAll(into, 0o700); err != nil {
+		return err
+	}
+	if err := dockerRun(ctx, name, append(append(append([]string{"--network", "none"}, opts...), mounts...), remote.UtilImage, "sh", "-c", cloneScript(d))...); err != nil {
+		return fmt.Errorf("the reflink clone: %w", err)
+	}
+	return nil
+}
+
+// cloneScript is cloneData's script, in the util container: d's entries
+// from /m/mnt and its volumes from /m/volumes/<key> into /c, each name
+// quoted for the shell (an entry's may hold $ or a quote).
+func cloneScript(d dataSet) string {
 	script := `set -e
 mkdir -p /c/mnt /c/volumes
 `
@@ -73,17 +89,10 @@ mkdir -p /c/mnt /c/volumes
 		cp("/m/mnt/"+e, "/c/mnt/")
 	}
 	for _, v := range d.volumes {
-		mounts = append(mounts, "-v", v.Name+":/m/volumes/"+v.Key+":ro")
 		script += "mkdir -p " + remote.Quote("/c/volumes/"+v.Key) + "\n"
 		cp("/m/volumes/"+v.Key+"/.", "/c/volumes/"+v.Key+"/")
 	}
-	if err := os.MkdirAll(into, 0o700); err != nil {
-		return err
-	}
-	if err := dockerRun(ctx, name, append(append(append([]string{"--network", "none"}, opts...), mounts...), remote.UtilImage, "sh", "-c", script)...); err != nil {
-		return fmt.Errorf("the reflink clone: %w", err)
-	}
-	return nil
+	return script
 }
 
 // removeClone removes parent/sub, root's, mounting parent: nothing when

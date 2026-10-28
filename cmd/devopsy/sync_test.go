@@ -1403,6 +1403,45 @@ func TestSyncParentRestoreFails(t *testing.T) {
 // directory, the child's import reading it once the export exited 0, in
 // depends_on order; the hooks on both sides with their side and lists;
 // the child's commands run as the child, without the parent's environment.
+// The parent's services start again once every stream is exported,
+// before the child's imports: an import that then fails leaves the child
+// partial, marked, its stopped services down, and the parent running,
+// never stopped again for it.
+func TestSyncImportFailsAfterParentStarts(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	caps := filepath.Join(s.dot, "capabilities", "data")
+	write(t, filepath.Join(caps, "export"), "#!/bin/sh\necho \"dump of $1\"\n", 0o755)
+	// The child's hooks get a clean environment, HOME kept.
+	write(t, filepath.Join(caps, "import"), "#!/bin/sh\ncat >/dev/null\n[ ! -e \"$HOME/fail-import-$1\" ] || exit 3\necho \"import $1 into $COMPOSE_PROJECT_NAME\"\n", 0o755)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev (%d):\n%s", code, out)
+	}
+	s.logs()
+	s.labels("FAKE_APP=stream\nFAKE_DB=stream+own")
+	home := filepath.Dir(s.sshLog)
+	write(t, filepath.Join(home, "fail-import-app"), "", 0o644)
+	out, code := s.run(nil, "@dev", "--sync", "--yes")
+	docker, _ := s.logs()
+	if code == 0 || !fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)) {
+		t.Fatalf("an import that fails (%d), marked %v:\n%s", code, fileExists(filepath.Join(s.root, "shop", "dev", remote.SyncIncompleteFile)), out)
+	}
+	rest := out
+	for _, want := range []string{"devopsy: exporting db", "devopsy: exporting app", "devopsy: starting db app", "import db into shop-dev", "import app: exit status 3"} {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("missing %q in order:\n%s", want, out)
+		}
+		rest = rest[i+len(want):]
+	}
+	// The parent ran on from its start: nothing of it stopped since.
+	start := strings.LastIndex(docker, "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" start db app")
+	if start < 0 || strings.Contains(docker[start:], "shop-prod compose -f "+filepath.Join(s.root, "shop", "prod", "current", ".devopsy", "compose.yaml")+" stop") || strings.TrimSpace(readString(s.log+".stopped.shop-prod")) != "" {
+		t.Errorf("the parent not running after the child's import failed:\n%s", docker)
+	}
+}
+
 func TestSyncCapability(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
