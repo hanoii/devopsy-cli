@@ -350,7 +350,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	waitFile(t, wait, "the import's hook", startWait, errs.String)
 	hook, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ := strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
-	defer func() { _ = syscall.Kill(-hook, syscall.SIGKILL) }()
+	defer func(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }(hook)
 	_ = syscall.Kill(server, syscall.SIGKILL)
 	_ = cmd.Wait()
 	if !s.mark().IsImport() || !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+"\n") {
@@ -403,7 +403,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	waitFile(t, wait, "the second import's hook", startWait, errs.String)
 	hook, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.pid"))))
 	server, _ = strconv.Atoi(strings.TrimSpace(readString(filepath.Join(s.tmp, "hook.ppid"))))
-	defer func() { _ = syscall.Kill(-hook, syscall.SIGKILL) }()
+	defer func(pid int) { _ = syscall.Kill(-pid, syscall.SIGKILL) }(hook)
 	_ = syscall.Kill(server, syscall.SIGKILL)
 	_ = cmd.Wait()
 	if !strings.Contains(s.record(), "writer "+strconv.Itoa(hook)+" down\n") {
