@@ -150,6 +150,21 @@ func TestParentEnvAbortedSync(t *testing.T) {
 	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
 	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
 	copied := filepath.Join(s.root, "shop", "dev", "shared", "parent.env")
+	// A reload of a child never released creates nothing of it.
+	if out, code := s.run(agent, "@devopsy@two:dev", "--reload"); code == 0 {
+		t.Fatalf("a reload before any release (%d):\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "shop", "dev", "shared")); err == nil {
+		t.Error("a reload before any release made the child's shared/")
+	}
+	// A first release whose sync --from aborts leaves no copy naming it:
+	// the copy is pending on a first release too.
+	if out, code := s.run(append(agent, "FAIL_PREPARE=child"), "@devopsy@two:dev", "--release", "--from", "@devopsy@one:solo"); code == 0 {
+		t.Fatalf("a first release whose sync aborts (%d):\n%s", code, out)
+	}
+	if got := readString(copied); got != "" {
+		t.Errorf("a first release whose sync aborted left a copy:\n%s", got)
+	}
 	if out, code := s.run(agent, "@devopsy@two:dev", "--release"); code != 0 {
 		t.Fatalf("first release (%d):\n%s", code, out)
 	}

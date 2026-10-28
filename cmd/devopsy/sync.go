@@ -54,9 +54,11 @@ type syncJob struct {
 	id string
 	// reset wipes the child at the copy's first write (--reset).
 	reset bool
-	// from: the parent is a --from's address, which the child's copy of
-	// its server's levels names as such (remote.ParentEnvHeader).
-	from bool
+	// from: the parent is a --from's address, fromAddr as typed, which
+	// the child's copy of its server's levels names as such
+	// (remote.ParentEnvHeader), resolved anew by later refreshes.
+	from     bool
+	fromAddr string
 	// images are the parent's data images (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
@@ -73,10 +75,19 @@ type syncJob struct {
 func (job *syncJob) sameServer(o *remote.SyncOptions) *remote.SyncOptions {
 	if job.sameHost {
 		o.SameServerFrom = job.parent.Path
-		o.SameServerHeader = remote.ParentEnvHeader(job.parent.Address, job.from)
+		o.SameServerHeader = remote.ParentEnvHeader(job.sourceRef(), job.from)
 		o.SameServerKeep = job.from
 	}
 	return o
+}
+
+// sourceRef is what the child's copy names as its source: a --from's
+// address as typed, else the parent's.
+func (job *syncJob) sourceRef() string {
+	if job.from {
+		return job.fromAddr
+	}
+	return job.parent.Address
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -508,15 +519,17 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	if err != nil {
 		return err
 	}
-	// Pending like the inherited variables: a sync that aborts leaves the
-	// child's copy, and the source it names, as they were.
+	// The inherited variables pending on a re-sync (a first release's are
+	// kept whatever happens: the next release is a first one again); the
+	// copy pending on every sync, so one that aborts leaves the child's
+	// copy, and the source it names, as they were.
 	pendingID := ""
 	if pending {
 		pendingID = job.id
 	}
 	if len(job.inherit) == 0 {
 		if copy {
-			return writeParentEnv(ctx, c, p, files, job.from, pendingID, log)
+			return writeParentEnv(ctx, c, p, job.sourceRef(), files, job.from, job.id, log)
 		}
 		return nil
 	}
@@ -542,12 +555,12 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	var copied []string
 	if copy {
 		var content string
-		content, copied = copyContent(p, files, job.from)
+		content, copied = copyContent(job.sourceRef(), files, job.from)
 		lines.WriteString(remote.ParentVarsSeparator + "\n" + content)
 	}
 	var res bytes.Buffer
 	// Gated: the variables go once the child holds its release lock.
-	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentVarsWriteScript(c, keys, pendingID, true, copy), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
+	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentVarsWriteScript(c, keys, pendingID, job.id, true, copy), strings.NewReader(remote.GatedInput(lines.String())), &res, false, nil)
 	if err != nil {
 		return err
 	}
@@ -694,7 +707,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	if err != nil {
 		return fail(err.Error())
 	}
-	job.from = from != ""
+	job.from, job.fromAddr = from != "", from
 	if !yes {
 		confirm := confirmSync(t, p, "reruns its release's run step there", "nothing synced")
 		if reset {

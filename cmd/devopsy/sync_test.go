@@ -1230,9 +1230,11 @@ func TestSyncDifferentHosts(t *testing.T) {
 	}
 	// Every session of the release keeps itself alive: the upload, the
 	// holder, the push, the push's look at the child's services and its
-	// util image (--sync-exec), the receive, and the log's save.
+	// util image (--sync-exec), the receive, the log's save, and the read
+	// of the parent's variables (bounded: an unreachable parent fails in
+	// seconds).
 	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 7 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	if strings.Count(ssh, keep) != 8 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {

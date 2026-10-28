@@ -22,7 +22,9 @@ import (
 // passes here.
 func parentLevels(ctx context.Context, p *remote.Target) (map[string]map[string]string, error) {
 	var out bytes.Buffer
-	code, err := remote.SSHContext(ctx, p, nil, remote.ParentTraceScript(p), bytes.NewReader(nil), &out, false, nil)
+	// Bounded: a parent out of reach fails in seconds, never holding up
+	// what refreshes from it.
+	code, err := remote.SSHContext(ctx, p, remote.Bounded, remote.ParentTraceScript(p), bytes.NewReader(nil), &out, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +74,8 @@ func parentCopy(files map[string]map[string]string) map[string]string {
 // in. A secret (config.yaml's secrets:) new in the copy is named: a value
 // that must stay on the parent's server belongs in its environment's
 // shared/.env, which only inherit: copies, key by key.
-func writeParentEnv(ctx context.Context, c, src *remote.Target, files map[string]map[string]string, from bool, pendingID string, log *report.Logger) error {
-	content, keys := copyContent(src, files, from)
+func writeParentEnv(ctx context.Context, c, src *remote.Target, ref string, files map[string]map[string]string, from bool, pendingID string, log *report.Logger) error {
+	content, keys := copyContent(ref, files, from)
 	var res bytes.Buffer
 	code, err := remote.SSHContext(remote.WithGate(ctx), c, nil, remote.ParentEnvWriteScript(c, pendingID), strings.NewReader(remote.GatedInput(content)), &res, false, nil)
 	if err != nil {
@@ -90,11 +92,11 @@ func writeParentEnv(ctx context.Context, c, src *remote.Target, files map[string
 // copyContent is c's remote.ParentEnvFile from src's files: its header,
 // then src's instance and project levels (parentCopy), one line each;
 // and their keys, sorted.
-func copyContent(src *remote.Target, files map[string]map[string]string, from bool) (string, []string) {
+func copyContent(ref string, files map[string]map[string]string, from bool) (string, []string) {
 	var content strings.Builder
 	vars := parentCopy(files)
 	keys := slices.Sorted(maps.Keys(vars))
-	content.WriteString(remote.ParentEnvHeader(src.Address, from) + "\n")
+	content.WriteString(remote.ParentEnvHeader(ref, from) + "\n")
 	for _, k := range keys {
 		content.WriteString(cli.DotenvLine(k, vars[k]) + "\n")
 	}
@@ -161,8 +163,12 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 	if src == nil {
 		return
 	}
+	// The configured parent's copy names it as resolved now.
+	if !from {
+		ref = src.Address
+	}
 	if sameHost(c.Host, src.Host) {
-		code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvCopyScript(c, src.Path, remote.ParentEnvHeader(src.Address, from), from), bytes.NewReader(nil), io.Discard, false, nil)
+		code, err := remote.SSHContext(ctx, c, nil, remote.ParentEnvCopyScript(c, src.Path, remote.ParentEnvHeader(ref, from), from), bytes.NewReader(nil), io.Discard, false, nil)
 		if err != nil || code != 0 {
 			log.Warn(fmt.Sprintf("could not copy @%s's shared/%s into @%s's (%v, %d): the copy stays as it was", src.Address, remote.ParentEnvFile, c.Address, err, code))
 		}
@@ -173,7 +179,7 @@ func refreshParentEnv(ctx context.Context, c *remote.Target, projectDir string, 
 		log.Warn(fmt.Sprintf("could not read @%s's variables (%v): @%s's copy of them stays as it was", src.Address, err, c.Address))
 		return
 	}
-	if err := writeParentEnv(ctx, c, src, files, from, "", log); err != nil {
+	if err := writeParentEnv(ctx, c, src, ref, files, from, "", log); err != nil {
 		log.Warn(err.Error() + ": the copy stays as it was")
 	}
 }

@@ -341,7 +341,7 @@ const InheritFile = "inherit.env"
 // what was just written. With pendingID, a re-sync's: into that sync's
 // SyncInheritPending instead, which it reads and moves into place on go.
 func InheritWriteScript(t *Target, keys []string, pendingID string) string {
-	return ParentVarsWriteScript(t, keys, pendingID, true, false)
+	return ParentVarsWriteScript(t, keys, pendingID, "", true, false)
 }
 
 // ParentVarsSeparator is the line between the sections of
@@ -355,20 +355,23 @@ const ParentVarsSeparator = "=devopsy-parent-env="
 // ParentVarsSeparator as its InheritFile (ParentEnvFile's when copy, the
 // whole of stdin otherwise); with copy, the lines after it (all of them
 // without inherit) as its ParentEnvFile, removed when empty. With
-// pendingID, a re-sync's: both into that sync's pending files instead
-// (SyncInheritPending, ParentPendingOf), an empty copy kept (it removes
-// the child's on go). Everything readable by the deploy user alone. It
+// inheritPending (a re-sync's id), the inherited variables into that
+// sync's SyncInheritPending instead; with copyPending (any sync's: a
+// first release's too), the copy into its ParentPendingOf, an empty one
+// kept (it removes the child's on go). Everything readable by the deploy user alone. It
 // prints, with inherit, the keys given that the child's own shared/.env
 // also sets (those win over what was just written), then, with copy,
 // ParentVarsSeparator and the keys the child's copy held before (for what
 // is new in it).
-func ParentVarsWriteScript(t *Target, keys []string, pendingID string, inherit, copy bool) string {
+func ParentVarsWriteScript(t *Target, keys []string, inheritPending, copyPending string, inherit, copy bool) string {
 	inheritFile := `"$base/shared/` + InheritFile + `"`
 	copyFile := `"$base/shared/` + ParentEnvFile + `"`
 	inheritTarget, copyTarget := inheritFile, copyFile
-	if pendingID != "" {
-		inheritTarget = `"$base"/` + Quote(SyncInheritPending(pendingID))
-		copyTarget = `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(pendingID)))
+	if inheritPending != "" {
+		inheritTarget = `"$base"/` + Quote(SyncInheritPending(inheritPending))
+	}
+	if copyPending != "" {
+		copyTarget = `"$base"/` + Quote(ParentPendingOf(SyncInheritPending(copyPending)))
 	}
 	s := "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain directory: nothing of a parent's goes into it"
@@ -472,13 +475,14 @@ func ParseParentEnvRef(line string) (address string, from bool) {
 }
 
 // ParentEnvPlain is what ParentEnvReadScript prints for a plain
-// directory, which no copy goes into.
+// directory, or an environment with no current release, which no
+// refresh writes into.
 const ParentEnvPlain = "plain"
 
 // ParentEnvReadScript prints the first line of t's ParentEnvFile, if it
 // has one, or ParentEnvPlain.
 func ParentEnvReadScript(t *Target) string {
-	return "set -eu\n" + basePrelude(t) + `if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
+	return "set -eu\n" + basePrelude(t) + `if [ ! -d "$base/current/.devopsy" ]; then
   echo ` + ParentEnvPlain + `
 elif [ -f "$base/shared/` + ParentEnvFile + `" ]; then
   head -n 1 "$base/shared/` + ParentEnvFile + `"
@@ -492,7 +496,10 @@ fi
 // server, down a chain, under t's own header (sameServerParentEnv).
 func ParentEnvCopyScript(t *Target, from, header string, keep bool) string {
 	file := `"$base/shared/` + ParentEnvFile + `"`
-	return "set -eu\n" + basePrelude(t) + releaseLock(false, true) + `mkdir -p "$base/shared"
+	// Nothing in a plain directory or an environment never released: a
+	// release refuses the one, and a sync of the other copies anew.
+	return "set -eu\n" + basePrelude(t) + `[ -d "$base/releases" ] || exit 0
+` + releaseLock(false, true) + `mkdir -p "$base/shared"
 ` + sameServerParentEnv(from, header, keep, file+".tmp") + `if [ -s ` + file + `.tmp ]; then
   mv -f ` + file + `.tmp ` + file + `
 else
@@ -525,5 +532,5 @@ fi)
 // ParentEnvWriteScript writes the lines on stdin as t's ParentEnvFile
 // alone (ParentVarsWriteScript with copy).
 func ParentEnvWriteScript(t *Target, pendingID string) string {
-	return ParentVarsWriteScript(t, nil, pendingID, false, true)
+	return ParentVarsWriteScript(t, nil, "", pendingID, false, true)
 }

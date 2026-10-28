@@ -541,7 +541,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
-					job.first, job.from = first, from != ""
+					job.first, job.from, job.fromAddr = first, from != "", from
 				}
 				// Replacing a live child's data asks, as --sync does; a first
 				// release has none to lose.
