@@ -148,7 +148,8 @@ func TestRestoreRebuildsChangedBuild(t *testing.T) {
 
 // The restart after a failed run step whose build again failed puts the
 // release's bookmarks back as built (AsBuilt), whatever the build keys
-// say: never the failed release's image left on the name.
+// say: never the failed release's image left on the name. It says what
+// it runs with the old values.
 func TestRestoreAsBuilt(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -174,5 +175,8 @@ func TestRestoreAsBuilt(t *testing.T) {
 	err := e.set.Restore(e.rel(first), e.rel(second), false)
 	if id, _ := d.ID("app-prod-app"); err != nil || id != "sha256:a1" {
 		t.Errorf("as built: %v, app-prod-app is %s, want sha256:a1\n%s", err, id, out.String())
+	}
+	if !strings.Contains(out.String(), "warning: ") || !strings.Contains(out.String(), "APP_UID") {
+		t.Errorf("as built, nothing says app runs with the old APP_UID:\n%s", out.String())
 	}
 }
