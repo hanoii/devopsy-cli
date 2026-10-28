@@ -68,6 +68,12 @@ func TestVarsSources(t *testing.T) {
 	if out := set("1\n", "@dev", "--vars", "set", "FRESH"); strings.Contains(out, "warning") {
 		t.Errorf("a set over nothing warned:\n%s", out)
 	}
+	// A value's bytes as the file has them, valid UTF-8 or not (a
+	// Latin-1 value): what the environment's commands get.
+	set("caf\xe9\n", "@dev", "--vars", "set", "LATIN")
+	if out, says := get("dev", "LATIN"); out != "caf\xe9\n" {
+		t.Errorf("get of a value that is not UTF-8: %q\n%s", out, says)
+	}
 
 	// The project's, hidden on both: every nearer value named, with what
 	// lets it through.
