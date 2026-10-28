@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
 )
 
 // fakeHost replaces docker with running containers.
@@ -91,7 +93,7 @@ func TestPrepareRelease(t *testing.T) {
 
 	fakeHost(t, proxy, container("shop-prod", "devopsy.role=other"))
 	root := release(map[string]string{"compose.yaml": compose})
-	said, err := PrepareRelease(root, nil)
+	said, err := PrepareRelease(root, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,7 @@ func TestPrepareRelease(t *testing.T) {
 	} {
 		root := release(files)
 		before := targetEnv(root)
-		if _, err := PrepareRelease(root, nil); err != nil {
+		if _, err := PrepareRelease(root, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		if targetEnv(root) != before {
@@ -120,7 +122,7 @@ func TestPrepareRelease(t *testing.T) {
 	// An empty export is a value: no wildcard.
 	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN="))
 	root = release(map[string]string{"compose.yaml": compose})
-	if _, err := PrepareRelease(root, nil); err != nil || !strings.HasSuffix(targetEnv(root), "DEVOPSY_WILDCARD_DOMAIN=''\n") {
+	if _, err := PrepareRelease(root, nil, false); err != nil || !strings.HasSuffix(targetEnv(root), "DEVOPSY_WILDCARD_DOMAIN=''\n") {
 		t.Fatalf("empty export: %v\n%s", err, targetEnv(root))
 	}
 
@@ -133,7 +135,7 @@ func TestPrepareRelease(t *testing.T) {
 		fakeHost(t, running...)
 		root := release(map[string]string{"compose.yaml": compose})
 		before := targetEnv(root)
-		if _, err := PrepareRelease(root, nil); err == nil {
+		if _, err := PrepareRelease(root, nil, false); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 		if targetEnv(root) != before {
@@ -146,25 +148,25 @@ func TestPrepareRelease(t *testing.T) {
 	proxyCompose := "services:\n  traefik:\n    image: x\n    labels: [devopsy.role=proxy]\n"
 	fakeHost(t, proxy)
 	root = project(t, "1", map[string]string{"compose.yaml": proxyCompose, "target.env": "COMPOSE_PROJECT_NAME='traefik'\n"})
-	if _, err := PrepareRelease(root, nil); err != nil {
+	if _, err := PrepareRelease(root, nil, false); err != nil {
 		t.Fatalf("re-release: %v", err)
 	}
 	root = project(t, "1", map[string]string{"compose.yaml": proxyCompose, "target.env": "COMPOSE_PROJECT_NAME='traefik-test'\n"})
-	if _, err := PrepareRelease(root, nil); err == nil || !strings.Contains(err.Error(), "role proxy is held by traefik") {
+	if _, err := PrepareRelease(root, nil, false); err == nil || !strings.Contains(err.Error(), "role proxy is held by traefik") {
 		t.Fatalf("taken role: %v", err)
 	}
 
 	// Not compose's: named as such.
 	fakeHost(t, container("", "devopsy.role=proxy"))
 	root = project(t, "1", map[string]string{"compose.yaml": proxyCompose, "target.env": "COMPOSE_PROJECT_NAME='traefik'\n"})
-	if _, err := PrepareRelease(root, nil); err == nil || !strings.Contains(err.Error(), "held by a container not started by compose (0123456789ab)") {
+	if _, err := PrepareRelease(root, nil, false); err == nil || !strings.Contains(err.Error(), "held by a container not started by compose (0123456789ab)") {
 		t.Fatalf("unmanaged holder: %v", err)
 	}
 
 	// A value that cannot be one line.
 	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=a\nb"))
 	root = release(map[string]string{"compose.yaml": compose})
-	if _, err := PrepareRelease(root, nil); err == nil || !strings.Contains(err.Error(), "control characters") {
+	if _, err := PrepareRelease(root, nil, false); err == nil || !strings.Contains(err.Error(), "control characters") {
 		t.Fatalf("control characters: %v", err)
 	}
 
@@ -182,19 +184,19 @@ func TestPrepareRelease(t *testing.T) {
 	var progress []string
 	Progress = func(s string) { progress = append(progress, s) }
 	defer func() { Progress = func(string) {} }()
-	if _, err := PrepareRelease(root, nil); err != nil || !strings.Contains(strings.Join(progress, "\n"), "waiting up to") {
+	if _, err := PrepareRelease(root, nil, false); err != nil || !strings.Contains(strings.Join(progress, "\n"), "waiting up to") {
 		t.Fatalf("waited: %v %q", err, progress)
 	}
 
 	// Only in a release.
-	if _, err := PrepareRelease(project(t, "local", map[string]string{"compose.yaml": compose}), nil); err == nil {
+	if _, err := PrepareRelease(project(t, "local", map[string]string{"compose.yaml": compose}), nil, false); err == nil {
 		t.Fatal("outside a release: want an error")
 	}
 
 	// A compose project as the source.
 	fakeHost(t, container("mailer", "devopsy.export.HOST=smtp.internal"))
 	root = release(map[string]string{"compose.yaml": "services:\n  app:\n    labels: [devopsy.import.MAIL=mailer/HOST]\n"})
-	if _, err := PrepareRelease(root, nil); err != nil || !strings.Contains(targetEnv(root), "MAIL='smtp.internal'") {
+	if _, err := PrepareRelease(root, nil, false); err != nil || !strings.Contains(targetEnv(root), "MAIL='smtp.internal'") {
 		t.Fatalf("project source: %v\n%s", err, targetEnv(root))
 	}
 }
@@ -207,6 +209,57 @@ func TestParseInspect(t *testing.T) {
 	}
 	if _, err := parseInspect([]byte("abc {broken")); err == nil {
 		t.Fatal("want an error")
+	}
+}
+
+// A reload reads its imports again: a value the release imported counts
+// as unset, the new one goes with the release's own lines into the
+// pending file, which every command reads in place of the release's
+// while TargetPendingEnv names it, and the release's file is left as it
+// was; a value the environment sets itself is kept, whatever was
+// imported before.
+//
+// Not parallel: it sets Running.
+func TestPrepareReleaseReload(t *testing.T) {
+	compose := "services:\n  app:\n    image: x\n    labels: [devopsy.import.WILDCARD=proxy/WILDCARD_DOMAIN]\n"
+	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=vm1.example.com"))
+	root := project(t, "1", map[string]string{"compose.yaml": compose, "target.env": "COMPOSE_PROJECT_NAME='shop-prod'\n"})
+	if _, err := PrepareRelease(root, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	released, _ := os.ReadFile(releaseTargetEnv(root))
+	pending := filepath.Join(filepath.Dir(root), remote.TargetReloadFile)
+
+	fakeHost(t, container("traefik", "devopsy.role=proxy", "devopsy.export.WILDCARD_DOMAIN=vm2.example.com"))
+	said, err := PrepareRelease(root, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(pending)
+	if want := "COMPOSE_PROJECT_NAME='shop-prod'\n" + ImportedMarker + "\nWILDCARD='vm2.example.com'\n"; string(got) != want {
+		t.Errorf("pending:\n%s\nwant:\n%s\n(said %q)", got, want, said)
+	}
+	if now, _ := os.ReadFile(releaseTargetEnv(root)); string(now) != string(released) {
+		t.Errorf("the release's target.env changed:\n%s", now)
+	}
+	p, err := loadProject(root, []string{remote.TargetPendingEnv + "=" + pending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := p.env.Lookup("WILDCARD"); v != "vm2.example.com" {
+		t.Errorf("with the pending file named, WILDCARD is %q, want vm2.example.com", v)
+	}
+	if defs := p.env.trace("WILDCARD"); len(defs) == 0 || defs[0].Kind != EnvImported {
+		t.Errorf("WILDCARD from the pending file is not an import: %+v", defs)
+	}
+
+	// Set by the environment since: kept, nothing imported.
+	write(t, filepath.Join(root, ProjectDirName, ".env"), "WILDCARD=mine.example.com\n")
+	if _, err := PrepareRelease(root, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(pending); string(got) != "COMPOSE_PROJECT_NAME='shop-prod'\n" {
+		t.Errorf("pending with the value set:\n%s", got)
 	}
 }
 

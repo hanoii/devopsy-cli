@@ -201,6 +201,9 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	case "--snapshots":
 		return runSnapshots(t, projectName, args[1:], color)
 
+	case "--reload":
+		return runReload(t, projectName, args[1:])
+
 	case "--sync", "--reset":
 		return runSync(t, projectDir, projectEnv, projectName, args[0] == "--reset", args[1:], color)
 
@@ -298,7 +301,14 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 		} else if steps == nil || len(remote.StepArgs(steps.Run)) == 0 {
 			return fail(missingSteps(t, kind))
 		}
-		if err := checkStepScopes(projectDir, steps); err != nil {
+		// A release carries its reload: and destroy: steps too, which run
+		// on the server: a command that only runs locally fails them only
+		// once they run, past a reload's checks.
+		scoped := []*remote.Steps{steps}
+		if !rollback {
+			scoped = append(scoped, &remote.Steps{Run: t.Reload}, &remote.Steps{Run: t.Destroy})
+		}
+		if err := checkStepScopes(projectDir, scoped...); err != nil {
 			return fail(err.Error())
 		}
 		phases := remote.RemotePhases(steps)

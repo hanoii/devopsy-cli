@@ -48,7 +48,28 @@ const syncFakeDocker = `#!/bin/sh
 # the tests here match the project's compose commands.
 echo "${COMPOSE_PROJECT_NAME:-} $*" | sed 's# -f [^ ]*/devopsy-compose\.yaml##' >> "$DOCKER_LOG"
 [ ! -f "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}" ] || . "$DOCKER_LOG.${COMPOSE_PROJECT_NAME:-}"
-if [ "$1" = compose ] && [ "$2" = -f ]; then dir=$(dirname "$3"); fi
+# The project directory, the first -f's; --env-file, compose's .env in
+# its place.
+if [ "$1" = compose ]; then
+  fa=
+  for a; do
+    case $fa in
+      -f) [ -n "${dir:-}" ] || dir=$(dirname "$a") ;;
+      --env-file) envf=$a ;;
+    esac
+    fa=$a
+  done
+fi
+# FAKE_DOTENV: compose reads the .env beside the first compose file (its
+# project directory), or --env-file's, for what the environment leaves
+# unset, as compose does: plain KEY=value lines.
+dotenv=${envf:-${dir:-}/.env}
+if [ -n "${FAKE_DOTENV:-}" ] && [ -f "$dotenv" ]; then
+  while IFS='=' read -r fk fv; do
+    case $fk in ''|*[!A-Za-z0-9_]*) continue ;; esac
+    eval "[ -n \"\${$fk+x}\" ] || export $fk=\"\$fv\""
+  done <"$dotenv"
+fi
 # The compose calls made holding the release lock (fd 9, which the
 # scripts open): what a devopsy killed outright leaves running holds it,
 # so the next lock-taker waits for it.
@@ -124,6 +145,10 @@ app2=
 # directories of $DOCKER_LOG.vol, by name.
 dbvol= appvol= topvols=
 [ -z "${FAKE_DB_VOLUME:-}" ] || { dbvol=$(printf ',{"type":"volume","source":"%s"}' "$FAKE_DB_VOLUME"); topvols=$(printf '"%s":{"name":"%s_%s"}' "$FAKE_DB_VOLUME" "${COMPOSE_PROJECT_NAME:-}" "$FAKE_DB_VOLUME"); }
+# FAKE_APP_BUILD: app has a build: section, its context the release's
+# code, its argument APP_UID FAKE_APP_UID (10001 by default).
+appbuild=
+[ -z "${FAKE_APP_BUILD:-}" ] || appbuild=$(printf '"build":{"context":"%s/..","dockerfile":".devopsy/Dockerfile","args":{"APP_UID":"%s"}},' "${dir:-}" "${FAKE_APP_UID:-10001}")
 # FAKE_DB_IMAGE: db's image: (none by default: compose names a build).
 dbimg=
 [ -z "${FAKE_DB_IMAGE:-}" ] || dbimg=$(printf '"image":"%s",' "$FAKE_DB_IMAGE")
@@ -139,7 +164,7 @@ vols="$DOCKER_LOG.vol"
 if [ -n "${FAKE_RUN_WAIT:-}" ]; then case "$*" in "run "*"$FAKE_RUN_WAIT_ON"*) : >"$FAKE_RUN_WAIT"; n=0; while [ ! -e "$FAKE_RUN_WAIT.go" ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n + 1)); done ;; esac; fi
 case "$*" in
   *" config --format json")
-    printf '{"name":"%s","volumes":{%s},"services":{"app":{"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
+    printf '{"name":"%s","volumes":{%s},"services":{"app":{%s"labels":%s,"depends_on":{"db":{"condition":"service_started"}},"volumes":[{"type":"bind","source":"%s/mnt%s"}%s%s]},"db":{%s"labels":%s,"restart":"%s","volumes":[%s]}%s},"networks":{"default":{"name":"%s_default"},"traefik":{"name":"traefik","external":true}}}\n' "${COMPOSE_PROJECT_NAME:-}" "$topvols" "$appbuild" "$applab" "$dir" "${FAKE_APP_MOUNT-/storage}" "$app2" "$appvol" "$dbimg" "$dblab" "${FAKE_DB_RESTART:-unless-stopped}" "$dbmounts" "$worker" "${COMPOSE_PROJECT_NAME:-}" ;;
   "volume inspect --format {{.Name}} "*)
     [ -d "$vols/$5" ] || { echo "Error: No such volume: $5" >&2; exit 1; }
     echo "$5" ;;
@@ -1759,7 +1784,7 @@ func TestSyncInherit(t *testing.T) {
 	s.logs()
 	out, code = s.run(nil, "@a/dev", "--inherit")
 	docker, _ := s.logs()
-	if code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
+	if code != 0 || !strings.Contains(out, "devopsy: inherited SHARED_KEY, INST_KEY, PROJ_KEY from") || !strings.Contains(out, "to apply it now,\ndevopsy: | $ devopsy @devopsy@one:a/dev --reload\n") || strings.Contains(out, "deploy in") || strings.Contains(docker, "pause") || !strings.Contains(readString(childInherit), "SHARED_KEY='s2'") {
 		t.Fatalf("--inherit (%d): %q\n%s\n%s", code, readString(childInherit), out, docker)
 	}
 	if out, code := s.run(nil, "@a/prod", "--inherit"); code == 0 || !strings.Contains(out, "is not a child") {

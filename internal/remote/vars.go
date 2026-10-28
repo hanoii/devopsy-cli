@@ -147,12 +147,80 @@ printf '%%s\n' "$file"
 
 // VarsSetScript sets the KEY=value lines given on stdin.
 func VarsSetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set")
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "set") + varsApply(t, level)
 }
 
 // VarsUnsetScript removes the keys given on stdin, one per line.
 func VarsUnsetScript(t *Target, level *Level) string {
-	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset")
+	return varsPrelude(t, level) + fmt.Sprintf(varsEdit, "unset") + varsApply(t, level)
+}
+
+// VarsApplied starts the line an environment's --vars set or unset
+// prints after the file's path: plain for a plain directory, first with
+// nothing released yet, marked when its data is from a sync, an import
+// or a restore that did not complete (a reload and a release refuse
+// there), cut when its release was cut off past its switch (the lock is
+// held: no activation runs), else its --check-images --hint exit (0: a reload
+// applies the change, 3: only a release, 4: compose requires a variable
+// not set), its output on the lines after (ParseVarsApplied). The check
+// reads the imports again as a reload does (--prepare-release reload,
+// its pending file removed after; with a source down, the release's).
+// Still under the release lock, nothing changed by it.
+const VarsApplied = "apply "
+
+func varsApply(t *Target, level *Level) string {
+	if level != nil {
+		return ""
+	}
+	call := func(args ...string) string { return devopsyCall(t.ComposeName(), args, false) }
+	return `if [ -n "$plain" ]; then
+  printf '` + VarsApplied + `plain\n'
+elif [ ! -L "$base/current" ] || [ ! -d "$base/current/.devopsy" ]; then
+  printf '` + VarsApplied + `first\n'
+elif [ -e "$base/` + SyncIncompleteFile + `" ] || [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
+  printf '` + VarsApplied + `marked\n'
+elif [ -f "$base/` + ActivatingFile + `" ]; then
+  printf '` + VarsApplied + `cut\n'
+else
+  # Never a reason for the edit to fail: what it says is a hint.
+  va_rel=$(readlink "$base/current") || va_rel=
+  va_rel="$base/${va_rel%/` + CodeDir + `}"
+  va_pending="$va_rel/` + TargetReloadFile + `"
+  rm -f "$va_pending"
+  (cd "$base/current" && ` + call("--prepare-release", "reload") + ` >/dev/null 2>&1) || rm -f "$va_pending"
+  va=0
+  va_out=$(cd "$base/current" && ` + TargetPendingEnv + `="$va_pending" ` + call("--check-images", "--hint") + ` 2>/dev/null) || va=$?
+  rm -f "$va_pending"
+  printf '` + VarsApplied + `%s\n%s\n' "$va" "$va_out"
+fi
+`
+}
+
+// VarsHintScript is the follow-up alone, for what changed t's variables
+// another way (--inherit): an empty line where --vars prints its file's
+// path, then varsApply's, under the release lock.
+func VarsHintScript(t *Target) string {
+	return varsPrelude(t, nil) + `if [ -z "$plain" ]; then
+  ` + releaseLock(false, false) + `fi
+printf '\n'
+` + varsApply(t, nil)
+}
+
+// ParseVarsApplied reads what a --vars set or unset printed: the file's
+// path, then VarsApplied's word (plain, first, or the check's exit) and
+// the check's lines; "" without them (an instance's or a project's file).
+func ParseVarsApplied(out string) (file, applied string, lines []string) {
+	file, rest, _ := strings.Cut(strings.TrimRight(out, "\n"), "\n")
+	head, more, _ := strings.Cut(rest, "\n")
+	if !strings.HasPrefix(head, VarsApplied) {
+		return file, "", nil
+	}
+	for _, l := range strings.Split(more, "\n") {
+		if l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return file, strings.TrimPrefix(head, VarsApplied), lines
 }
 
 // InheritFile is a child's inherited variables, shared/inherit.env on its

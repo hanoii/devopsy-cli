@@ -192,9 +192,44 @@ func editVars(t *remote.Target, script, stdin, verb string, keys []string, color
 	if code != 0 {
 		return code
 	}
-	report.Info(fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, strings.TrimSpace(out.String())),
-		"running containers keep their old values until they are recreated, as by the next release")
+	file, applied, lines := remote.ParseVarsApplied(out.String())
+	sayApplied(t, fmt.Sprintf("%s %s in %s:%s", verb, strings.Join(keys, ", "), t.Host, file), applied, lines)
 	return 0
+}
+
+// sayApplied says said, and what applies a change of t's variables, from
+// what the server's check found (remote.VarsApplied, ParseVarsApplied).
+func sayApplied(t *remote.Target, said, applied string, lines []string) {
+	var what []string
+	for _, l := range lines {
+		if k, v, ok := strings.Cut(l, " "); ok && (k == "missing" || k == "image") {
+			what = append(what, v)
+		}
+	}
+	switch applied {
+	case "plain":
+		report.Info(said, "running containers keep their old values until they are recreated")
+	case "first":
+		report.Info(said, "nothing is released there yet: its first release applies it")
+	case "marked":
+		report.Info(said, markedSays, report.CmdMark+"devopsy @"+targetRef(t)+" --status")
+	case "cut":
+		report.Info(said, "its release was cut off past its switch: a reload applies it once that is finished, as --status shows:", report.CmdMark+"devopsy @"+targetRef(t)+" --status")
+	case "0":
+		report.Info(said, "running containers keep their old values until they are recreated: to apply it now,", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
+	case "3":
+		report.Info(said, append(append([]string{"it needs another image than the release runs, which only a release fetches:"}, what...), "to apply it:", report.CmdMark+"devopsy @"+targetRef(t)+" --release")...)
+	case "4":
+		report.Warn(said+": compose now requires variables that are not set, and the next reload or release refuses until they are: "+strings.Join(what, ", "),
+			"to set them:", report.CmdMark+"devopsy @"+targetRef(t)+" --vars set <KEY>...")
+	case "":
+		// The instance's or the project's file, several environments'.
+		report.Info(said, "running containers keep their old values until they are recreated: each environment's --reload applies it")
+	default:
+		// The check could not tell (compose's configuration unreadable):
+		// a reload says why.
+		report.Info(said, "running containers keep their old values until they are recreated: a reload applies it once its checks pass", report.CmdMark+"devopsy @"+targetRef(t)+" --reload")
+	}
 }
 
 // varsSecrets masks a --vars listing: the secrets: of the server's
@@ -253,3 +288,8 @@ func localSecrets(projectDir string) []string {
 	}
 	return p.Secrets
 }
+
+// markedSays is what a change of variables says on an environment whose
+// data a sync, an import or a restore did not complete: a reload and a
+// release refuse there until that is settled, as --status shows.
+const markedSays = "its data is from a sync, an import or a restore that did not complete: a reload or a release applies it once that is settled, as --status shows:"

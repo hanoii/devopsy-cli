@@ -121,7 +121,7 @@ func run() int {
 		return runInit(cwd, args[1:], color)
 	}
 	if args[0] == cli.PrepareReleaseFlag {
-		return runPrepareRelease(cwd, color)
+		return runPrepareRelease(cwd, args[1:], color)
 	}
 	if args[0] == cli.CheckNamesFlag {
 		if len(args) != 2 {
@@ -142,6 +142,8 @@ func run() int {
 	switch args[0] {
 	case cli.CheckMountsFlag:
 		return runCheckMounts(cwd, args[1:])
+	case cli.CheckImagesFlag:
+		return runCheckImages(cwd, args[1:])
 	case cli.MntOwnersFlag:
 		return runMntOwners(cwd, args[1:])
 	case cli.SyncPushFlag:
@@ -172,6 +174,8 @@ func run() int {
 		return runLocalRelease(cwd, args[1:], color)
 	case "--destroy":
 		return runLocalDestroy(cwd, args[1:], color)
+	case "--reload":
+		return runLocalReload(cwd, args[1:], color)
 	case cli.ExportFlag:
 		return runExport(cwd, args[1:], color)
 	case cli.ImportFlag:

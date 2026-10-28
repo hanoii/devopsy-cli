@@ -159,7 +159,11 @@ func ListCompose(rel string) ([]Service, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("compose config: %w", err)
 	}
-	return ParseComposeConfig(out.Bytes())
+	svcs, err := ParseComposeConfig(out.Bytes())
+	for i := range svcs {
+		svcs[i].BuildKey = BuildKey(svcs[i].BuildSpec, cmd.Dir)
+	}
+	return svcs, err
 }
 
 // ParseComposeConfig reads compose config --format json: each service's
@@ -195,7 +199,7 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 		if data {
 			method = cmp.Or(c.Labels[DataCopyLabel], CopyVolumes)
 		}
-		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
+		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", BuildSpec: c.Build, Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
 		}

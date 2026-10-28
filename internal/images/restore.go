@@ -92,6 +92,11 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if !haveOld || o.ID == "" || i < 0 {
 				return s.gone(tid, svc)
 			}
+			if s.changed(o, svc) {
+				if err := s.rebuilt(tid, o, svc); err != nil {
+					return err
+				}
+			}
 			if _, err := s.Docker.ID(names[i]); err != nil {
 				return s.gone(tid, svc)
 			}
@@ -127,6 +132,11 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				i := indexOf(old, o)
 				if !haveOld || o.ID == "" || i < 0 {
 					return s.gone(tid, svc)
+				}
+				if s.changed(o, svc) {
+					if err := s.rebuilt(tid, o, svc); err != nil {
+						return err
+					}
 				}
 				if _, err := s.Docker.ID(names[i]); err != nil {
 					return s.gone(tid, svc)
@@ -167,7 +177,13 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					return err
 				}
 			}
-			es = append(es, s.entryOf(svc, svc.Ref))
+			// Its bookmark, put back: built with what its listing said then,
+			// whatever the variables say now.
+			e := s.entryOf(svc, svc.Ref)
+			if o.Build != "" && e.Build != "" {
+				e.Build = o.Build
+			}
+			es = append(es, e)
 		case st.hold != "":
 			if _, err := s.Docker.Inspect(st.hold); err != nil {
 				if err := s.Docker.Pull(st.hold); err != nil {
@@ -221,6 +237,30 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 
 func (s *Set) gone(tid string, svc Service) error {
 	s.say(report.InfoLevel, "%s's image of %s is gone: building it again", tid, svc.Name)
+	return ErrGone
+}
+
+// changed says whether svc's build: section resolves otherwise now than
+// when o's image was built (a build argument changed since): its bookmark
+// holds code built for the old values, which would run under the new
+// ones (an image built for APP_UID 10001 run as 10002). Only where this
+// mode's fetch builds it: image mode's only pulls (a pull_policy: never
+// service with a build: is never built on the server).
+func (s *Set) changed(o entry, svc Service) bool {
+	return svc.Build && s.Mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
+}
+
+// rebuilt says that o's image is built again for what its build: section
+// gives now, and asks for the build (ErrGone, as for an image gone). As
+// built (AsBuilt: that build failed), its bookmark goes back all the
+// same, said, and nil.
+func (s *Set) rebuilt(tid string, o entry, svc Service) error {
+	what := changedArgs(o.Build, svc.BuildKey)
+	if s.AsBuilt {
+		s.say(report.WarnLevel, "%s's image of %s goes back as built, with other values of %s than now: a release builds it for them", tid, svc.Name, what)
+		return nil
+	}
+	s.say(report.InfoLevel, "%s's image of %s was built with other values of %s: building it again", tid, svc.Name, what)
 	return ErrGone
 }
 

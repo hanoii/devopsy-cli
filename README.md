@@ -429,6 +429,7 @@ defaults:                       # what every environment takes unless it sets it
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
   destroy: backup               # optional: what --destroy runs first, while everything is up
+  reload: deploy                # optional: what --reload runs; default: up -d --wait --no-build --pull never
   env: {PROXY_CERTRESOLVER: le-dns01-selfhosted}  # per-environment variables, not secrets
   snapshots: {manual: {keep: 3}, release: false, mirror: false}  # optional: manual ones kept (on, 3), release snapshots (off), a mirror (off)
 environments:
@@ -505,6 +506,7 @@ since a child's first release syncs from a released parent. `devopsy
 ```sh
 devopsy @vm1:prod --release      # upload, switch, run the release steps
 devopsy @vm1:prod --rollback     # back to the previous release, run the rollback steps; the one left is marked rolled back
+devopsy @vm1:prod --reload       # the release again with its variables and imports as they are now, then its reload: step
 devopsy @vm1:prod --releases     # list them and their images (version or short digest), * marks the current one
 devopsy @vm1:prod --releases remove failed   # remove releases (ids or failed) and the images only they hold
 devopsy @vm1:prod --log          # what the last release or rollback printed (or --log <id>)
@@ -669,7 +671,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   its data ran). Data changes, like database updates, are the project's
   to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
-  kept), and `--status` says the release failed.
+  kept), and `--status` says the release failed. A run step that fails
+  while Docker does not answer (the server shutting down, which stops
+  the step, or the daemon gone) is no failure of the release's: nothing
+  goes back or restarts, which could only fail too, and the release is
+  left as one cut off past its switch, which `--status` names and the
+  next `--release` finishes once Docker is back.
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed
@@ -821,7 +828,9 @@ Two modes, `mode:` in the config:
 - **image** mode uploads `.devopsy/` only; images come from a registry. Tag
   them with the commit,
   `image: ghcr.io/me/app:${DEVOPSY_RELEASE_COMMIT:-local}`, so rollbacks
-  run their own image. devopsy pulls them before the release
+  run their own image. In build mode a rollback runs the image its
+  release built, built again from its code when a build argument changed
+  since (`--vars set APP_UID`), before it goes live. devopsy pulls them before the release
   goes live: build and push them first, like a local before step.
 
 **Choosing tags.** Float third-party images on the series upstream
@@ -1747,7 +1756,49 @@ devopsy @vm1 --vars-project set SHARED_KEY        # the project's .env on vm1
 ```
 
 Values travel over SSH's stdin, never as arguments. Running containers see
-changes when recreated (the next release, or the project's own `reload`).
+changes when recreated: `--vars set` and `unset` on an environment say
+what applies them, never refusing one: `--reload`; a release, when the
+variables now give a service another image than the release fetched;
+nothing until a variable compose requires is set again, or until data
+a sync, an import or a restore did not complete is settled.
+
+**Reloads.** `devopsy @<target> --reload` applies what changed since the
+release without another one: its variables (`--vars`, `--inherit`, an
+edit of `shared/.env`) and the facts it imports (a proxy's base domain:
+every site re-imports with its own reload, not a release). It is one
+session under the release lock, in the current release, and changes
+nothing until everything is checked: refused on data a sync, an import
+or a restore did not complete (as a release is), then the imports read
+again, compose's required variables, names and mounts checked as before
+a release's switch, and every service's image: a reload runs the images
+the release fetched, never building or pulling one, so a variable that
+now names another image, changes a build argument (named, never its
+value) or turns a profile on is refused, `--release` as the way. A
+session gone or a Ctrl-C until then changes nothing. From there it goes
+on whatever happens to the session (`--log` shows it): the imports in
+place, the entries of `mnt` to their owners (an owner label may be a
+variable), then the release's `reload:` step, from its own
+`config.yaml` on the server like a rollback's:
+
+```yaml
+environments:
+  prod:
+    reload: deploy    # what applies this project's variables; it must be safe to run again
+```
+
+Without one, devopsy's own `up -d --wait --no-build --pull never`, which
+recreates what changed. Never the run step on its own: a sync reruns it
+because its data moved, but a run step may do far more than apply
+variables (a schema update). A step that fails leaves the release live
+and restarts nothing. A release cut off past its switch is refused, with
+what finishes it. Locally, `devopsy --reload` runs `defaults:`'
+`reload:` step in place (in a release on a server, its environment's),
+else the same up, once compose's required variables are set. A `--sync` and a `--snapshots restore --no-code`
+check the images the same way before anything stops: both run the
+current release's run step on its images again (`--with-env`: under the
+snapshot's variables, refused then with the full restore as the way).
+A full restore `--with-env` reads the snapshot's variables from its
+checks on, so its images are fetched for them.
 
 **Release settings** belong to the server, in its deploy user's
 `~/.config/devopsy/config.yaml`, so your machine and CI always agree:

@@ -27,7 +27,7 @@ import (
 // child's side of a sync, the parent's in images.SyncImagesEnv),
 // record <release> [<release it replaces>] (exit 3 when its checks
 // refuse, 1 when it cannot), restore <release> <release it replaces>
-// [--fetched] (exit 1 when an own image must be built again, 3 when it
+// [--fetched] [--as-built] (exit 1 when an own image must be built again, 3 when it
 // cannot), ran <environment> <release> [cut] (the history of what ran on the
 // data; cut: of an activation cut off past its switch), hold <environment> <release> (its data services held on their
 // data's newest image), remove <release>... (exit 1 when Docker failed: keep the
@@ -62,6 +62,10 @@ func runImages(args []string, color bool) int {
 		switch args[i] {
 		case "--fetched":
 			fetched = true
+		case "--as-built":
+			// The restart's last try: bookmarks back whatever the build
+			// keys say (images.Set.AsBuilt).
+			s.AsBuilt = true
 		case "--name", "--left", "--mode", "--address", "--accept":
 			if i+1 == len(args) {
 				return imagesUsage(color)

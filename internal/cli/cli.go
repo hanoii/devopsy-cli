@@ -345,7 +345,7 @@ func LoadDotenv(env *Env, file string) error {
 	}
 	// A release's devopsy-target.env ends with what it imported.
 	imported := map[string]string{}
-	if filepath.Base(file) == remote.TargetEnvFile {
+	if b := filepath.Base(file); b == remote.TargetEnvFile || b == remote.TargetReloadFile {
 		if data, err := os.ReadFile(file); err == nil {
 			if _, after, ok := strings.Cut(string(data), ImportedMarker); ok {
 				imported, _ = dotenv.UnmarshalWithLookup(after, nil)
@@ -799,6 +799,34 @@ never asks: --yes is accepted, and changes nothing. A rollback cut off
 past its switch (--status says so) is finished by --rollback again, never
 followed by one further back.
 `,
+	"--reload": `Usage: devopsy @<target> --reload
+       devopsy --reload
+
+Applies what changed since the release without another one: variables
+(--vars set, --inherit, an edit of shared/.env) and the facts it imports
+(a proxy's base domain), in the current release, under the release lock.
+It reads the imports again, then checks what a release checks before its
+switch: compose's required variables, names, mounts, and that the
+variables give every service the image the release fetched (a changed
+image: name, build argument or profile needs a release: a reload never
+builds or pulls). A failure changes nothing, and so does a session gone
+before the checks pass. Then, whatever happens to the session, the new
+imports go in, the entries of mnt to their owners, and it runs the
+release's reload step (reload: in its config.yaml on the server):
+
+  environments:
+    prod:
+      reload: deploy
+
+Without one, devopsy's own up -d --wait --no-build --pull never, which
+recreates what changed. Never the run step on its own: it may do more
+than apply variables (a schema update). A reload that fails leaves the
+release live and restarts nothing: --log shows it. Refused on data a
+sync, an import or a restore did not complete, as a release is.
+
+Without a target, --reload runs the reload step under defaults: in place,
+once compose's required variables are set.
+`,
 	"--releases": `Usage: devopsy @<target> --releases
        devopsy @<target> --releases remove <id|failed>... [--yes]
 
@@ -1194,8 +1222,11 @@ devopsy's: devopsy -- --help, devopsy <command> --help.
 // loadedProject is a project with its environment loaded.
 type loadedProject struct {
 	dir, composeFile, dotenvFile string
-	env                          *Env
-	verbose                      []string
+	// envFile is the file a pending stand-in (DotenvPendingEnv) puts in
+	// .env's place, which compose is told to read instead of its own.
+	envFile string
+	env     *Env
+	verbose []string
 	// secrets are config.yaml's secrets: names.
 	secrets []string
 	// address is a local command's, when the devopsy that read it gave one.
@@ -1238,7 +1269,18 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 		return nil
 	}
 	dotenvFile := filepath.Join(projectDir, ".env")
-	if err := load(dotenvFile); err != nil {
+	loaded := dotenvFile
+	// A --no-code restore --with-env checks against the snapshot's.
+	if p, _ := env.Lookup(remote.DotenvPendingEnv); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			loaded = p
+		}
+	}
+	envFile := ""
+	if loaded != dotenvFile {
+		envFile = loaded
+	}
+	if err := load(loaded); err != nil {
 		return nil, err
 	}
 	// On servers, a child's inherited variables (shared/inherit.env, below
@@ -1261,6 +1303,13 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	// Per-target settings, written into each release by `devopsy @target
 	// --release` from config.yaml. Below .env, so a server can override them.
 	targetEnv := remote.ReleaseFile(projectDir, remote.TargetEnvFile)
+	// During a reload's checks, its imports read again stand in for the
+	// release's (PrepareRelease's reload).
+	if p, _ := env.Lookup(remote.TargetPendingEnv); p != "" && targetEnv != "" {
+		if _, err := os.Stat(p); err == nil {
+			targetEnv = p
+		}
+	}
 	if err := load(targetEnv); err != nil {
 		return nil, err
 	}
@@ -1299,7 +1348,7 @@ func loadProject(cwd string, environ []string) (*loadedProject, error) {
 	}
 	env.Mark("COMPOSE_PROJECT_NAME")
 	env.Mark("DEVOPSY_PROJECT_DIR")
-	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
+	return &loadedProject{dir: projectDir, composeFile: composeFile, dotenvFile: dotenvFile, envFile: envFile, env: env, verbose: verbose, secrets: secrets, address: address, addressed: addressed}, nil
 }
 
 // TraceEnv explains the project's environment as every devopsy command
@@ -1516,6 +1565,11 @@ func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {
 		composeArgs = append(composeArgs, "--ansi", "always")
+	}
+	// Compose reads .env beside the compose file on its own, for what the
+	// environment leaves unset: a stand-in for it must be compose's too.
+	if p.envFile != "" {
+		composeArgs = append(composeArgs, "--env-file", p.envFile)
 	}
 	// The release's devopsy-compose.yaml goes right after compose.yaml,
 	// before the override.

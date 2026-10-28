@@ -303,6 +303,15 @@ func TestSnapshotRestore(t *testing.T) {
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", id, "--with-env", "--yes"); code != 0 || readString(filepath.Join(base, "shared", ".env")) != "DB_PASSWORD=old\n" {
 		t.Errorf("--with-env (%d): %q\n%s", code, readString(filepath.Join(base, "shared", ".env")), out)
 	}
+	// Its links to shared/ relative again once the snapshot's values are
+	// in place, as every release's are.
+	for _, name := range []string{".env", remote.InheritFile} {
+		code, _ := filepath.EvalSymlinks(filepath.Join(base, "current"))
+		dot := filepath.Join(code, ".devopsy")
+		if link, err := os.Readlink(filepath.Join(dot, name)); err != nil || filepath.IsAbs(link) || filepath.Clean(filepath.Join(dot, link)) != filepath.Join(base, "shared", name) {
+			t.Errorf("after --with-env, .devopsy/%s is %q (%v), want a relative link to shared/%s", name, link, err, name)
+		}
+	}
 	if out, code := s.run(nil, "@prod", "--snapshots", "restore", "1999", "--yes"); code == 0 || !strings.Contains(out, "has no snapshot 1999: nothing restored") {
 		t.Errorf("a snapshot that is none (%d):\n%s", code, out)
 	}
@@ -3287,14 +3296,20 @@ func TestRestoreRanKeepsHeldImage(t *testing.T) {
 		// the data; its container, stopped by the restore, is still on it,
 		// as the fake's deploy starts nothing.
 		current := filepath.Join(base, "current")
-		write(t, releaseFile(t, current, images.ListFile), "mariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
 		history := filepath.Join(base, images.HistoryFile)
 		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n2\tdb\tforced\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\n", 0o644)
 		write(t, s.log+".containers.shop-prod", "db mariadb@sha256:twelve\n", 0o644)
 		// The code's image (the snapshot's, which a full restore runs, says
 		// mariadb:11.8): a full restore lists it again from the compose
 		// config before the data step holds it.
-		env := []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_IMAGES=sha256:db=mariadb@sha256:twelve sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap mariadb:12=mariadb@sha256:twelve"}
+		// A --no-code restore runs the current code, whose name is the one
+		// the current release fetched.
+		name := "mariadb:11.8"
+		if len(args) > 0 {
+			name = "mariadb:12"
+		}
+		env := []string{"FAKE_DB_IMAGE=" + name, "FAKE_IMAGES=sha256:db=mariadb@sha256:twelve sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap mariadb:12=mariadb@sha256:twelve"}
 		s.logs()
 		out, code = s.run(env, append([]string{"@prod", "--snapshots", "restore", m[1], "--yes"}, args...)...)
 		docker, _ := s.logs()

@@ -243,6 +243,8 @@ func allScripts() map[string]string {
 		"keys add":        KeysAddScript(),
 		"keys remove":     KeysRemoveScript(),
 		"destroy":         DestroyScript(tg, "app"),
+		"reload":          ReloadScript(tg, "app"),
+		"vars hint":       VarsHintScript(tg),
 		"environments":    EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app"}}),
 		"environments+i":  EnvironmentsScript(&Target{Host: "h", Project: &Project{Name: "app", Instances: true}}),
 		"role holders":    RoleHoldersScript(tg, "proxy"),
@@ -363,7 +365,7 @@ func TestSyncReceiveOwners(t *testing.T) {
 func TestDataImagesFeature(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "releases remove" || strings.HasPrefix(name, "restore")
+		wants := strings.HasPrefix(name, "activate") || strings.HasPrefix(name, "holder") || name == "rollback+cmd" || name == "sync only" || name == "parent check" || name == "destroy" || name == "reload" || name == "releases remove" || strings.HasPrefix(name, "restore")
 		if slices.Contains(Needs(s), DataImagesFeature) != wants {
 			t.Errorf("%s: needs %v", name, Needs(s))
 		}

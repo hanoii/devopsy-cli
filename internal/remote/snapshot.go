@@ -248,6 +248,14 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `
+	// Its run step starts the current release's images on the variables
+	// it leaves: with --with-env, the snapshot's.
+	env, flags := "", []string(nil)
+	if r.WithEnv {
+		env = DotenvPendingEnv + `="$snap/` + SnapshotData + `/shared.env" ` + InheritPendingEnv + `="$snap/` + SnapshotData + `/inherit.env" `
+		flags = []string{"--restore", r.Snapshot}
+	}
+	s += checkImages(t, projectName, true, env, "nothing restored", flags...)
 	// With release snapshots on, the data it replaces first, as a
 	// release's: what it stops stays down for the data step, and anything
 	// that ends this before it starts them again (rd_unsnap).
@@ -310,6 +318,9 @@ if [ "$rs" = 0 ]; then
   # Once restored started the set on the images it holds: a data service
   # the run step left as it was still ran the replaced data (ActivateScript).
   [ "$rs" != 0 ] || img ran "$base" "$base/$cur" || true
+  # A release cut off past its switch has had its run step now, the one
+  # it skipped (as a sync's run step clears it).
+  if [ "$rs" = 0 ] && [ "$(cut -f1-2 "$base/` + ActivatingFile + `" 2>/dev/null)" = "$(printf '%s\trelease' "${cur#releases/}")" ]; then rm -f "$base/` + ActivatingFile + `"; fi
 else
 ` + firstDown(projectName) + `  rd_snapshot=` + Quote(r.Snapshot) + `
   devopsy --say error "the run step failed ($rs): what it started is down, the restore stays marked" ` + restoreFixLines(t, "rd_snapshot") + ` || true

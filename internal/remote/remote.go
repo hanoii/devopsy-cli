@@ -47,6 +47,11 @@ const (
 	CodeDir = "code"
 	// TargetEnvFile is the release's environment, from the target's env.
 	TargetEnvFile = "devopsy-target.env"
+	// TargetReloadFile, beside it, is what a reload's imports resolve to
+	// (its own lines, then the imports read again) until its checks pass
+	// and it takes TargetEnvFile's place: TargetPendingEnv names it
+	// meanwhile.
+	TargetReloadFile = TargetEnvFile + ".reload"
 	// RecordFile describes the release: id, commit, branch, who, mode.
 	RecordFile = "devopsy-release.json"
 	// LogFile is the session's log of its release, then of each rollback
@@ -823,11 +828,13 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// get_images <dir> <against>, for the restart after a failed run:
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
-	// is gone.
+	// is gone or was built with other build arguments; that build failing,
+	// its bookmarks as they are (--as-built), never the failed release's
+	// image under the name.
 	s += `get_images() {
   image_lock shared fetching || return $?
   gi=0
-  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || gi=$?
+  img restore "$1" "$2" || { [ $? -eq 1 ] && fetch_images "$1" && img restore --fetched "$1" "$2"; } || img restore --as-built "$1" "$2" || gi=$?
   image_unlock
   return "$gi"
 }
@@ -972,6 +979,15 @@ done
 	for _, l := range t.Levels {
 		up := toBase + strings.Repeat("../", strings.Count(t.Path, "/")-strings.Count(l.Dir, "/"))
 		s += fmt.Sprintf("ln -sfn %s.env \"$code/.devopsy/%s\"\n", up, l.Link)
+	}
+	if restore != nil && restore.WithEnv {
+		// --with-env: the new release reads the snapshot's variables (a
+		// file it carries) from its checks to its data step, which puts
+		// them into shared/: its images are listed and fetched for them,
+		// compose's own .env read included.
+		s += `[ ! -f "$snap/` + SnapshotData + `/shared.env" ] || ln -sfn "$snap/` + SnapshotData + `/shared.env" "$code/.devopsy/.env"
+[ ! -f "$snap/` + SnapshotData + `/inherit.env" ] || ln -sfn "$snap/` + SnapshotData + `/inherit.env" "$code/.devopsy/` + InheritFile + `"
+`
 	}
 	if sync != nil && sync.Images != "" {
 		// The parent's data images, for the check at the end of the fetch
@@ -1155,7 +1171,9 @@ fi
 		// interrupts it, so its output goes to the server's log from here
 		// (followOutput's marker tells the operator's devopsy it goes on),
 		// and a failure puts the images' names back as the log check does.
-		s += "trap '' PIPE\n" + followOutput + `[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
+		s += "trap '' PIPE\n" + followOutput + `ln -sfn "` + toBase + `shared/.env" "$code/.devopsy/.env"
+ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
+[ -z "${rs_id:-}" ] || export ` + RestoreSnapshotEnv + `="$rs_id"
 rd_status=0
 (cd "$base/current" && ` + devopsyCall(projectName, []string{SnapshotStepFlag, "restore-data"}, false) + ` "$snap" "$rel") || rd_status=$?
 if [ "$rd_status" != 0 ]; then
@@ -1322,6 +1340,17 @@ fi
 		s += `img ran "$base" "$rel" || true
 `
 	}
+	// A failure while Docker does not answer (the machine shutting down,
+	// whose stop ended the run step, or the daemon gone): the restart and
+	// the report could only fail too, current back on images nothing
+	// restored. Left as an activation cut off past its switch instead,
+	// its mark kept, which --status names and the next release finishes.
+	// timeout: a daemon stopping can hang a call, under the lock.
+	s += `if [ "$status" != 0 ] && ! { if command -v timeout >/dev/null 2>&1; then timeout 5 docker version; else docker version; fi; } >/dev/null 2>&1; then
+  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --status"
+  exit "$status"
+fi
+`
 	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then

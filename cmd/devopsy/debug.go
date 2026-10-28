@@ -158,6 +158,7 @@ type yamlTarget struct {
 	Release  *yamlSteps        `yaml:"release,omitempty"`
 	Rollback *yamlSteps        `yaml:"rollback,omitempty"`
 	Destroy  string            `yaml:"destroy,omitempty"`
+	Reload   string            `yaml:"reload,omitempty"`
 	Keep     int               `yaml:"keep,omitempty"`
 	Parent   *yamlParent       `yaml:"parent,omitempty"`
 	Inherit  []string          `yaml:"inherit,omitempty"`
@@ -248,7 +249,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 				parent = &yamlParent{Name: name, Address: address}
 			}
 			if err := value.Encode(&yamlTarget{Address: t.Address, Host: t.Host, Path: t.Path, Mode: t.Mode, Source: t.Source,
-				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Keep: t.Keep,
+				Release: toYAMLSteps(t.Release), Rollback: toYAMLSteps(t.Rollback), Destroy: t.Destroy, Reload: t.Reload, Keep: t.Keep,
 				Parent: parent, Inherit: t.Inherit, Env: t.Env}); err != nil {
 				report.Fail(err)
 				return 1
@@ -302,6 +303,7 @@ func debugTargets(st style, projectDir, name string, asYAML, color bool) int {
 		row("release", steps(t.Release), t.From["release"])
 		row("rollback", steps(t.Rollback), t.From["rollback"])
 		row("destroy", t.Destroy, t.From["destroy"])
+		row("reload", t.Reload, t.From["reload"])
 		if t.Keep > 0 {
 			row("keep", fmt.Sprint(t.Keep), t.From["keep"])
 		}

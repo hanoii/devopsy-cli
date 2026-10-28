@@ -612,6 +612,12 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
+	// What applies them, as --vars set says it.
+	var out bytes.Buffer
+	if code, err := remote.SSH(t, remote.VarsHintScript(t), bytes.NewReader(nil), &out, false); err == nil && code == 0 {
+		_, applied, lines := remote.ParseVarsApplied(out.String())
+		sayApplied(t, fmt.Sprintf("inherited into %s (%s:%s)", t.Address, t.Host, t.Path), applied, lines)
+	}
 	return 0
 }
 

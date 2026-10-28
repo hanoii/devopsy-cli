@@ -74,9 +74,14 @@ line to run, like devopsy-template-traefik's domains.
 
 // runPrepareRelease implements the hidden --prepare-release, run by the
 // release script on the server (cli.PrepareRelease).
-func runPrepareRelease(cwd string, color bool) int {
+func runPrepareRelease(cwd string, args []string, color bool) int {
+	reload := len(args) == 1 && args[0] == "reload"
+	if len(args) > 0 && !reload {
+		report.Error("usage: devopsy " + cli.PrepareReleaseFlag + " [reload]")
+		return 2
+	}
 	cli.Progress = func(s string) { report.Info(s) }
-	said, err := cli.PrepareRelease(cwd, os.Environ())
+	said, err := cli.PrepareRelease(cwd, os.Environ(), reload)
 	for _, s := range said {
 		report.Info(s)
 	}
