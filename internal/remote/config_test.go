@@ -474,7 +474,7 @@ environments:
 }
 
 // A release keeps the target's count, else the server's, at most its
-// max_keep; the levels' .env files are linked.
+// max_keep; the levels' .env files and shared/ are linked, relatively.
 func TestActivateKeepAndLevels(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -505,9 +505,6 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	if n := count(tg); n != 2 {
 		t.Errorf("server's keep: %d releases", n)
 	}
-	if link, err := os.Readlink(filepath.Join(root, "app/prod/releases/4/code/.devopsy/project.env")); err != nil || link != filepath.Join(root, "app", ".env") {
-		t.Errorf("project.env: %q %v", link, err)
-	}
 
 	big := &Target{Name: "big", Path: "app/big", Keep: 9}
 	var out string
@@ -516,6 +513,25 @@ func TestActivateKeepAndLevels(t *testing.T) {
 	}
 	if n := count(big); n != 3 || !strings.Contains(out, "keeping 3 releases, this server's max_keep, not 9") {
 		t.Errorf("capped: %d releases\n%s", n, out)
+	}
+
+	// Every link is relative: moved elsewhere, each still leads to its file.
+	inst := &Target{Name: "prod", Path: "app/b/prod", Levels: []Level{{Name: "project", Dir: "app", Link: "project.env"}, {Name: "instance", Dir: "app/b", Link: "instance.env"}}}
+	run(inst, "1")
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(filepath.Join(root, "app"), moved); err != nil {
+		t.Fatal(err)
+	}
+	for dot, links := range map[string]map[string]string{
+		"prod/releases/4/code/.devopsy": {"project.env": ".env", ".env": "prod/shared/.env", "mnt": "prod/shared/mnt", "inherit.env": "prod/shared/inherit.env"},
+		"b/prod/releases/1/code/.devopsy": {"project.env": ".env", "instance.env": "b/.env", ".env": "b/prod/shared/.env", "mnt": "b/prod/shared/mnt"},
+	} {
+		for name, want := range links {
+			link, err := os.Readlink(filepath.Join(moved, dot, name))
+			if err != nil || filepath.IsAbs(link) || filepath.Join(moved, dot, link) != filepath.Join(moved, want) {
+				t.Errorf("%s/%s: %q %v, want a relative link to %s", dot, name, link, err, want)
+			}
+		}
 	}
 }
 

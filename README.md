@@ -1721,6 +1721,12 @@ snapshots:
   mirror: false        # no environment keeps a mirror here, whatever it asks (default: each decides)
 ```
 
+Moving a server's release root: stop each environment (`devopsy down`
+in its `current`), `mv` the projects' directories under the new root,
+change `root:`, then start each again (its `deploy`, or a release).
+Containers keep the paths their bind mounts had, so they must be made
+again; everything in the directories is linked relatively.
+
 Changing a server's `snapshots: root` leaves the snapshots taken before
 where they are, unseen by `--snapshots`, pruning and `--destroy`: move
 each environment's directory under the new root first (their images'

@@ -558,6 +558,8 @@ step's rules):
 3. The pending lock (fd 7), then remote before steps in `current`.
 4. Links into the release: `shared/*`, `inherit.env`, `project.env` and
    `instance.env`, even when missing, so one created later applies.
+   Relative, like `current` (decided 2026-10-27): absolute ones broke
+   every release when a server's release root moved.
 5. Releases only: `--prepare-release` when the compose files use role
    or import labels (`PrepareScript`, Roles, exports and imports).
 6. `prepare` steps, then `--missing-vars` (`cli.MissingVars`: compose's

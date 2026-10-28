@@ -951,22 +951,27 @@ unset rb_code
 		}
 		s += "else\n  devopsy --say warning \"no current release: remote before steps skipped\"\nfi\n"
 	}
+	// Every link is relative, from releases/<id>/code/.devopsy up to $base
+	// (toBase), so the release root moves with a plain mv.
+	const toBase = "../../../../"
 	s += `# Always linked, so editing the server's .env applies without a new release.
 touch "$base/shared/.env"
 for f in "$base"/shared/* "$base"/shared/.[!.]*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
   rm -rf "$code/.devopsy/${f##*/}"
-  ln -s "$f" "$code/.devopsy/${f##*/}"
+  ln -s "` + toBase + `shared/${f##*/}" "$code/.devopsy/${f##*/}"
 done
 `
 	// inherit.env (a child's, from its parent's inherit:) likewise: --inherit
 	// writes it into a running release.
-	s += `ln -sfn "$base/shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
+	s += `ln -sfn "` + toBase + `shared/` + InheritFile + `" "$code/.devopsy/` + InheritFile + `"
 `
 	// The project's and the instance's .env, shared by their environments:
-	// linked even when missing, so one created later applies too.
+	// linked even when missing, so one created later applies too. Each
+	// level is a directory above $base.
 	for _, l := range t.Levels {
-		s += fmt.Sprintf("ln -sfn \"$root\"/%s/.env \"$code/.devopsy/%s\"\n", Quote(l.Dir), l.Link)
+		up := toBase + strings.Repeat("../", strings.Count(t.Path, "/")-strings.Count(l.Dir, "/"))
+		s += fmt.Sprintf("ln -sfn %s.env \"$code/.devopsy/%s\"\n", up, l.Link)
 	}
 	if sync != nil && sync.Images != "" {
 		// The parent's data images, for the check at the end of the fetch

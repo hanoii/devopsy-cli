@@ -2238,7 +2238,7 @@ func TestScriptsLockAndLinks(t *testing.T) {
 		t.Errorf("upload without its pending marker or the stale uploads' cleanup:\n%s", s)
 	}
 	act := ActivateScript(tg, "1", false, "app-prod", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "devopsy@one:prod"})
-	if !strings.Contains(act, `ln -sfn "$base/shared/`+InheritFile+`" "$code/.devopsy/`+InheritFile+`"`) {
+	if !strings.Contains(act, `ln -sfn "../../../../shared/`+InheritFile+`" "$code/.devopsy/`+InheritFile+`"`) {
 		t.Errorf("inherit.env not always linked")
 	}
 	if !strings.Contains(act, "unset "+SyncFromTargetEnv) {
