@@ -87,19 +87,25 @@ func checkImages(t *Target, projectName string, run bool, env, nothing string, f
 
 // cutRefusal refuses a reload of an activation cut off past its switch
 // (ActivatingFile while this script holds the release lock): its run step
-// may not have run, and an up alone would start its code without it. The
-// fix by the kind cut, as --status words it.
+// may not have run, and an up alone would start its code without it. In
+// --status' words, with what finishes it (Activating.Cut, the one place
+// for both: each kind's case made from it, the mark's fields its shell
+// variables). A sync's partial copy never gets here: markRefusal first.
 func cutRefusal(t *Target) string {
 	a := hintAddress(t)
+	cases := ""
+	for _, kind := range []string{"rollback", "restart", "restore", "*"} {
+		what, fix := (&Activating{ID: "$rl_id", Kind: kind, From: "$rl_from", Snapshot: "$rl_snap"}).Cut(a, a, false)
+		cases += "    " + kind + `) devopsy --say error "` + what + `: nothing reloaded" "` + fix + `" ;;
+`
+	}
 	return `if [ -f "$base/` + ActivatingFile + `" ]; then
   rl_cut=$(cat "$base/` + ActivatingFile + `")
   rl_id=$(printf '%s' "$rl_cut" | cut -f1)
+  rl_from=$(printf '%s' "$rl_cut" | cut -f3)
+  rl_snap=$(printf '%s' "$rl_cut" | cut -f4)
   case $(printf '%s' "$rl_cut" | cut -f2) in
-    rollback) rl_what="the rollback to $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --rollback" ;;
-    restore) rl_snap=$(printf '%s' "$rl_cut" | cut -f4); rl_what="the restore of snapshot $rl_snap as $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --snapshots restore $rl_snap" ;;
-    *) rl_what="the release of $rl_id"; rl_fix="` + report.CmdMark + `devopsy @` + a + ` --release" ;;
-  esac
-  devopsy --say error "$rl_what was cut off past its switch, its run step may not have run: nothing reloaded" "to finish it:" "$rl_fix"
+` + cases + `  esac
   exit 1
 fi
 `

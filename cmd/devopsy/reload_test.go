@@ -244,22 +244,26 @@ func TestReloadStepScope(t *testing.T) {
 
 // A release cut off past its switch (its run step may not have run) is
 // no release to reload: an up alone would start its code without it. The
-// reload refuses, naming what finishes it, by the kind of activation cut.
+// reload refuses, in --status' words (Activating.Cut), naming what
+// finishes it by the kind of activation cut: a failed run step's restart
+// of current too.
 func TestReloadCut(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	base := filepath.Join(s.root, "shop", "prod")
 	id := strings.TrimPrefix(s.current("prod"), "releases/")
-	for kind, fix := range map[string]string{
-		"release":  "$ devopsy @devopsy@one:prod --release",
-		"rollback": "$ devopsy @devopsy@one:prod --rollback",
+	for line, want := range map[string][]string{
+		id + "\trelease\t\t\n":               {"the release of " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --release releases it again"},
+		id + "\trollback\t\t\n":              {"the rollback to " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --rollback finishes it"},
+		id + "\trestart\t29990101000000\t\n": {"the restart of " + id + " after 29990101000000 failed was cut off", "devopsy @devopsy@one:prod --release releases it again"},
+		id + "\trestore\t\t20261027000000\n": {"the restore of snapshot 20261027000000 as " + id + " was cut off past its switch", "devopsy @devopsy@one:prod --snapshots restore 20261027000000 runs it again"},
 	} {
-		write(t, filepath.Join(base, remote.ActivatingFile), id+"\t"+kind+"\t\t\n", 0o644)
+		write(t, filepath.Join(base, remote.ActivatingFile), line, 0o644)
 		out, code := s.run(nil, "@prod", "--reload")
 		docker, _ := s.logs()
-		if code == 0 || !strings.Contains(out, "cut off past its switch") || !strings.Contains(out, fix) || strings.Contains(docker, " up ") {
-			t.Errorf("a cut %s (%d):\n%s\ndocker:\n%s", kind, code, out, docker)
+		if code == 0 || !strings.Contains(out, want[0]) || !strings.Contains(out, want[1]) || !strings.Contains(out, "nothing reloaded") || strings.Contains(docker, " up ") {
+			t.Errorf("a cut %q (%d), want %q:\n%s\ndocker:\n%s", line, code, want, out, docker)
 		}
 	}
 }
