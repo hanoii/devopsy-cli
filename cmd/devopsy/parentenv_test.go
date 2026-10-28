@@ -243,3 +243,47 @@ func TestParentEnvCallerInterpolated(t *testing.T) {
 		t.Errorf("a release whose parent's project .env refers to its server's environment (%d):\n%s\n%s", code, out, got)
 	}
 }
+
+// A value of the parent's own environment (its shared/.env, which only
+// inherit: copies, key by key) never reaches a child on another server
+// through the copy: a project .env that refers to it (a DSN built from
+// ${DB_PASSWORD}) is copied without the parent's secret in it.
+func TestParentEnvKeepsSharedSecrets(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	config := filepath.Join(s.dot, "config.yaml")
+	write(t, config, "secrets: [DB_PASSWORD]\n"+readString(config), 0o644)
+	s.releaseProd(nil)
+	write(t, filepath.Join(s.root, "shop", "prod", "shared", ".env"), "DB_PASSWORD=prodsecret\n", 0o600)
+	// Both fake servers share one release root: the parent's server's.
+	write(t, filepath.Join(s.root, "shop", ".env"), "DSN=mysql://app:${DB_PASSWORD}@db/app\n", 0o600)
+	agent := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	out, code := s.run(agent, "@devopsy@two:dev", "--release")
+	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); code != 0 || strings.Contains(got, "prodsecret") {
+		t.Errorf("the parent's shared/.env secret copied to a child on another server (%d):\n%s\n%s", code, out, got)
+	}
+}
+
+// A sync --from names its source as the operator named it: a release
+// later, from CI, resolves that address's server as CI names it, as it
+// does for the configured parent.
+func TestParentEnvFromResolvedAnew(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@solo", "--release"); code != 0 {
+		t.Fatalf("solo's release (%d):\n%s", code, out)
+	}
+	write(t, filepath.Join(s.root, "shop", ".env"), "PROJ=one\n", 0o600)
+	laptop := []string{"DEVOPSY_SERVER_PROD=devopsy@one", "DEVOPSY_SERVER_SOLO=devopsy@one", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(laptop, "@devopsy@two:dev", "--release"); code != 0 {
+		t.Fatalf("first release (%d):\n%s", code, out)
+	}
+	if out, code := s.run(laptop, "@devopsy@two:dev", "--sync", "--from", "@solo", "--yes"); code != 0 {
+		t.Fatalf("sync --from (%d):\n%s", code, out)
+	}
+	ci := []string{"DEVOPSY_SERVER_PROD=devopsy@uno", "DEVOPSY_SERVER_SOLO=devopsy@uno", "SSH_AUTH_SOCK=/tmp/agent.sock"}
+	if out, code := s.run(ci, "@devopsy@two:dev", "--release"); code != 0 || !strings.Contains(out, "copied 1 variables of @devopsy@uno:solo's") {
+		t.Errorf("a release in CI after a sync --from @solo on a laptop (%d):\n%s\n%s", code, out, readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")))
+	}
+}
