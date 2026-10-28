@@ -206,6 +206,27 @@ their descriptions, devopsy's flags and, through compose's own completion,
 compose's commands and services. It never connects to servers. The scripts
 ask devopsy at every Tab, so they follow the installed version.
 
+### Agents
+
+```sh
+devopsy --ai-skill                       # the skill, to stdout
+devopsy --ai-skill install [--global]    # into the project, or ~
+devopsy --ai-skill --stub install        # a stub that sends the agent to --ai-skill
+```
+
+A skill that teaches an agent (Claude Code, Codex, Cursor) to work on a
+project that runs on devopsy: what goes in `.devopsy/`, the labels,
+`config.yaml`, releases and what devopsy refuses. It is part of the
+binary, so it describes the devopsy that prints it. `install` writes it
+to `.agents/skills/devopsy/SKILL.md`, the directory those agents share,
+and links `.claude/skills/devopsy` to it for Claude Code; `--global` does
+the same under your home directory. Run it again after an upgrade: a
+copy devopsy wrote is replaced (its frontmatter says which version), any
+other file is left alone. `--stub` installs the short form instead, a
+file that tells the agent to run `devopsy --ai-skill`: for a template, so
+every copy gets the reference matching its devopsy without carrying the
+text.
+
 ## Locally
 
 ```

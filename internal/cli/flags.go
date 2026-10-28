@@ -100,6 +100,7 @@ var Flags = []FlagGroup{
 		{Name: "--probe", Args: "<host>...", Scope: Local, Desc: "DNS, certificates, HTTPS, checked locally"},
 		{Name: "--upgrade", Args: "[v]", Scope: Local, Desc: "this devopsy, to latest or v"},
 		{Name: "--completion", Args: "<shell>", Scope: Local, Desc: "shell completion: bash, zsh or fish"},
+		{Name: "--ai-skill", Args: "[--stub] [install [--global]]", Scope: Local, Desc: "the skill for agents: print it,\nor install it"},
 		{Name: "--version", Scope: Local, Desc: "devopsy's, docker's and compose's versions"},
 		{Name: "-v", Also: "-vv", Scope: Local, Desc: "first: what devopsy runs; -vv: scripts too"},
 		{Name: "--help", Also: "-h", Scope: LocalOrTarget, Desc: "this help; after a flag, its own"},

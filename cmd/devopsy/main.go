@@ -66,6 +66,8 @@ func run() int {
 			return runUpgradeCheck()
 		case "--completion":
 			return runCompletion(args[1:], color)
+		case "--ai-skill":
+			return runAISkill(args[1:], color)
 		case "--probe":
 			return runProbe(args[1:], color)
 		case "--ssh-keys-generate":
