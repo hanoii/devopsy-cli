@@ -1,10 +1,13 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/compose-spec/compose-go/v2/dotenv"
 )
 
 // A child on another server gets its parent's server's instance and
@@ -107,7 +110,10 @@ func TestParentEnvInterpolated(t *testing.T) {
 	if got := readString(filepath.Join(s.root, "shop", "dev", "shared", "parent.env")); !strings.Contains(got, "\nURL=https://${HOST}/\nNEED=${HOST:?}\nDATA=${HOME:?}/data\n") {
 		t.Errorf("parent.env not as written:\n%s", got)
 	}
-	if stdout, stderr, code := s.runIO(agent, nil, "@devopsy@two:dev", "--vars", "get", "URL"); code != 0 || string(stdout) != "https://dev.example.com/\n" {
+	// The shared project .env is the child's server's too, and would
+	// answer first: gone, the copy answers, against the child's HOST.
+	os.Remove(filepath.Join(s.root, "shop", ".env"))
+	if stdout, stderr, code := s.runIO(agent, nil, "@devopsy@two:dev", "--vars", "get", "URL"); code != 0 || string(stdout) != "https://dev.example.com/\n" || !strings.Contains(string(stderr), "copied from its parent's server (shared/parent.env)") {
 		t.Errorf("the child's URL (%d): %q\n%s", code, stdout, stderr)
 	}
 }
@@ -311,5 +317,49 @@ func TestCopyText(t *testing.T) {
 	}
 	if _, _, err := copyText(map[string]string{"project": "BROKEN=\"never closed\n"}); err == nil {
 		t.Error("a copy that does not parse passed")
+	}
+}
+
+// loadAsDevopsy reads files nearest first as cli.LoadDotenv does on a
+// server: each parsed by compose's parser against what is set so far,
+// a key already set kept.
+func loadAsDevopsy(t *testing.T, files ...string) map[string]string {
+	t.Helper()
+	env := map[string]string{}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	for _, f := range files {
+		vars, err := dotenv.UnmarshalWithLookup(f, lookup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range vars {
+			if _, ok := env[k]; !ok {
+				env[k] = v
+			}
+		}
+	}
+	return env
+}
+
+// The copy means to compose's parser what the parent's files meant,
+// loaded in their order (the instance's over the project's): a key a
+// file defines twice is its last definition there, and a reference in
+// the project's .env to a key of its own resolves to that key's value
+// in that file, whatever a nearer file sets it to.
+func TestCopyTextReadsAsTheFiles(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, instance, project string }{
+		{"a key defined twice in one file", "", "A=1\nB=${A}\nA=2\n"},
+		{"a reference to a key the instance's .env shadows", "A=2\n", "A=1\nC=${A}\n"},
+	} {
+		text, _, err := copyText(map[string]string{"instance": c.instance, "project": c.project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := loadAsDevopsy(t, c.instance, c.project)
+		got := loadAsDevopsy(t, text)
+		if !maps.Equal(got, want) {
+			t.Errorf("%s: the copy reads as %v, the files as %v:\n%s", c.name, got, want, text)
+		}
 	}
 }
