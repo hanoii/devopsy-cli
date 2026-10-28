@@ -1340,6 +1340,17 @@ fi
 		s += `img ran "$base" "$rel" || true
 `
 	}
+	// A failure while Docker does not answer (the machine shutting down,
+	// whose stop ended the run step, or the daemon gone): the restart and
+	// the report could only fail too, current back on images nothing
+	// restored. Left as an activation cut off past its switch instead,
+	// its mark kept, which --status names and the next release finishes.
+	// timeout: a daemon stopping can hang a call, under the lock.
+	s += `if [ "$status" != 0 ] && ! { if command -v timeout >/dev/null 2>&1; then timeout 5 docker version; else docker version; fi; } >/dev/null 2>&1; then
+  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --status"
+  exit "$status"
+fi
+`
 	s += `if [ "$status" != 0 ]; then
   touch "$rel/` + FailedFile + `"
 ` + failureReport(projectName) + restoreDown + `  if [ -n "$prev" ]; then

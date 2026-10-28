@@ -614,7 +614,16 @@ step's rules):
    the report: `down --remove-orphans`, volumes and `mnt` kept, never a stop: `restart:
    always` would bring a container back with Docker, its bind mounts
    through the gone `current` made again as root's) and leaves nothing
-   current; `--status` names it failed.
+   current; `--status` names it failed. Unless Docker does not answer
+   then (`timeout 5 docker version`: a daemon stopping can hang a
+   call): the script exits leaving `ActivatingFile`, the release cut
+   off past its switch (found by hand on OrbStack, 2026-10-27: a
+   machine restart stopped the run step, 143, and Docker; the shell,
+   ignoring signals past the switch, took it for a failed run step,
+   went back and restarted the previous release with no Docker, so
+   current went back on the failed release's images, no mark saying
+   so). Not the step's exit code: a project's own timeout or the OOM
+   killer give 143 and 137 with Docker fine.
 10. A rollback marks the release it left (`RolledBackFile`).
 11. Pruning to `keep` (`img to-prune`, `img remove-releases`), then
     remote after steps (a failure is reported, the release stays

@@ -671,7 +671,12 @@ rollback: deploy         # only a run step: the same phases, in the restored rel
   its data ran). Data changes, like database updates, are the project's
   to undo. A first release has nothing to go
   back to: it takes down what it started (`down`, volumes and `mnt`
-  kept), and `--status` says the release failed.
+  kept), and `--status` says the release failed. A run step that fails
+  while Docker does not answer (the server shutting down, which stops
+  the step, or the daemon gone) is no failure of the release's: nothing
+  goes back or restarts, which could only fail too, and the release is
+  left as one cut off past its switch, which `--status` names and the
+  next `--release` finishes once Docker is back.
 - **A child's first release** syncs its parent's data between switching
   `current` and `run`, so `run` (`deploy`: database updates, cache clears)
   works on the parent's data and no empty site is ever served. A failed

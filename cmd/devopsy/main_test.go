@@ -715,6 +715,9 @@ func TestReleaseSteps(t *testing.T) {
 	// shutting down, the daemon gone): no restart, which could only fail
 	// too, current left on the new release and its activation's mark kept,
 	// as one cut off past its switch, which the next release finishes.
+	// Without rollback: steps, as first: the rollbacks below go back to
+	// the release it leaves.
+	write(t, filepath.Join(dot, "config.yaml"), targets, 0o644)
 	out, code = run([]string{"FAIL_REMOTE=4", "FAKE_DOCKER_DOWN=1"}, "@prod", "--release")
 	if code != 4 || !strings.Contains(out, "Docker does not answer") || strings.Contains(out, "current is back to") || strings.Contains(out, "with its own run step") || current() == first || !fileExists(filepath.Join(server, remote.ActivatingFile)) {
 		t.Fatalf("run failure without Docker (%d), current %s:\n%s", code, current(), out)
@@ -722,6 +725,7 @@ func TestReleaseSteps(t *testing.T) {
 	if out, code := run(nil, "@prod", "--release"); code != 0 || fileExists(filepath.Join(server, remote.ActivatingFile)) {
 		t.Fatalf("the release after it (%d):\n%s", code, out)
 	}
+	write(t, filepath.Join(dot, "config.yaml"), targets+"  rollback: deploy --back\n", 0o644)
 
 	// rollback: back to the release before, running its own rollback:.
 	if out, code := run(nil, "@prod", "--release"); code != 0 || current() == first {
@@ -748,7 +752,7 @@ func TestReleaseSteps(t *testing.T) {
 	}
 
 	// The release rolled back to needs rollback: steps of its own: the
-	// first has none, whatever the checkout has. Nothing changes.
+	// one before has none, whatever the checkout has. Nothing changes.
 	if out, code := run(nil, "@prod", "--rollback"); code == 0 || !strings.Contains(out, "gives environment prod no rollback run step") || current() != second {
 		t.Fatalf("rollback without steps (%d), current %s:\n%s", code, current(), out)
 	}
