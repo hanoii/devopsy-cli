@@ -60,6 +60,10 @@ type syncJob struct {
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
 	images string
+	// inherit is the keys the inherit: of the parent's current release
+	// names (remote.ParseInherit), read in the preflight: inheritVars
+	// writes them, never what the checkout's names.
+	inherit []string
 }
 
 // staleInherit is the age past which another sync's pending inherited
@@ -131,6 +135,7 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool, extra ..
 	}
 	cur := remote.ParseCurrent(out.String())
 	job.images = remote.ParseParentData(out.String())
+	job.inherit = remote.ParseInherit(out.String())
 	switch {
 	case !cur.Current:
 		return nil, fmt.Errorf("the parent @%s (%s:%s) has no current release: release it first", p.Address, p.Host, p.Path)
@@ -461,7 +466,9 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	return code
 }
 
-// inheritVars writes the variables the parent's inherit: names, read from
+// inheritVars writes the variables the parent's inherit: names, as its
+// current release's config says (never the checkout's: a checkout could
+// otherwise take any of the parent's variables into a child), read from
 // its server's files (its shared/.env, then its instance's and project's
 // .env, nearest first), as the child's shared/inherit.env: the whole file,
 // so a resync replaces it. With pending (a re-sync), into the child's
@@ -473,7 +480,7 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 // only names are printed.
 func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool, pending bool) error {
 	c, p := job.child, job.parent
-	if len(p.Inherit) == 0 {
+	if len(job.inherit) == 0 {
 		return nil
 	}
 	log := report.Default().Tee(rlog.Line)
@@ -517,7 +524,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 	// Nearest first, as the server reads them.
 	var lines strings.Builder
 	var keys, missing []string
-	for _, k := range p.Inherit {
+	for _, k := range job.inherit {
 		found := false
 		for _, l := range []string{"shared", "instance", "project"} {
 			if v, ok := files[l][k]; ok {
@@ -554,7 +561,7 @@ func inheritVars(ctx context.Context, job *syncJob, rlog *releaseLog, color bool
 		log.Warn(fmt.Sprintf("@%s's own shared .env also sets %s, which wins there", c.Address, strings.Join(shadowed, ", ")), "to inherit it:", report.CmdMark+"devopsy @"+targetRef(c)+" --vars unset "+strings.Join(shadowed, " "))
 	}
 	if len(missing) > 0 {
-		log.Warn(fmt.Sprintf("@%s does not set %s (its inherit: in %s): not inherited", p.Address, strings.Join(missing, ", "), cmp.Or(p.File, "the project's config")))
+		log.Warn(fmt.Sprintf("@%s does not set %s (its current release's inherit:): not inherited", p.Address, strings.Join(missing, ", ")))
 	}
 	return nil
 }
@@ -577,13 +584,14 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		return 1
 	}
 	p := t.ParentTarget
-	if len(p.Inherit) == 0 {
-		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s", t.Address, p.Name))
-		return 0
-	}
+	job := &syncJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
 	for _, x := range []*remote.Target{p, t} {
 		var out bytes.Buffer
-		code, err := remote.SSH(x, remote.CurrentExistsScript(x, nil), bytes.NewReader(nil), &out, false)
+		script := remote.CurrentExistsScript(x, nil)
+		if x == p {
+			script = remote.ParentInheritScript(p)
+		}
+		code, err := remote.SSH(x, script, bytes.NewReader(nil), &out, false)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -593,8 +601,14 @@ func runInherit(t *remote.Target, projectName string, args []string, color bool)
 		if !remote.ParseCurrent(out.String()).Current {
 			return fail(fmt.Sprintf("@%s (%s:%s) has no current release: release it first", x.Address, x.Host, x.Path))
 		}
+		if x == p {
+			job.inherit = remote.ParseInherit(out.String())
+		}
 	}
-	job := &syncJob{child: t, parent: p, projectName: projectName, parentName: p.ComposeName()}
+	if len(job.inherit) == 0 {
+		report.Warn(fmt.Sprintf("@%s inherits nothing: no inherit: on %s in @%s's current release", t.Address, p.Name, p.Address))
+		return 0
+	}
 	if err := inheritVars(context.Background(), job, newReleaseLog("inherit", t), color, false); err != nil {
 		return fail("inherit: " + err.Error())
 	}
@@ -678,7 +692,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 		log.Fail(fmt.Errorf("inherit: %w: nothing synced", err))
 		return 1
 	}
-	o := &remote.SyncOptions{From: p.Address, Inherit: len(p.Inherit) > 0, ID: job.id, Images: job.images, Reset: reset}
+	o := &remote.SyncOptions{From: p.Address, Inherit: len(job.inherit) > 0, ID: job.id, Images: job.images, Reset: reset}
 	// --yes also lets the child's images through the check against the
 	// parent's data (img sync-check), as it does a release's.
 	code := runSyncSession(job, imagesAccept(accept)+remote.HolderScript(t, projectName, o, len(remote.StepArgs(t.Release.Run)) > 0), false, rlog, color)

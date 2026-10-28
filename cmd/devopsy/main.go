@@ -154,6 +154,8 @@ func run() int {
 		return runDestroyData(cwd, args[1:], color)
 	case cli.ReleaseStepsFlag:
 		return runReleaseSteps(cwd, args[1:], color)
+	case cli.ReleaseInheritFlag:
+		return runReleaseInherit(cwd, args[1:])
 	case remote.SnapshotStepFlag:
 		return runSnapshotStep(cwd, args[1:])
 	}

@@ -976,13 +976,42 @@ case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeatu
 
 // ParentCheckScript is CurrentExistsScript for a sync's parent, then its
 // data images (images.Set.ParentData: lines starting image and ran),
-// which the child's side checks and takes over (images.SyncImagesEnv).
+// which the child's side checks and takes over (images.SyncImagesEnv),
+// and the keys its inherit: names (inheritKeys).
 func ParentCheckScript(t *Target, projectName string, extra []string) string {
 	return CurrentExistsScript(t, extra) + releaseImages(projectName, t, t.Mode) + `if [ -d "$base/current/.devopsy" ]; then
   pc_rel=$(readlink "$base/current")
   img data "$base" "$base/${pc_rel%/` + CodeDir + `}"
 fi
+` + inheritKeys
+}
+
+// ParentInheritScript is CurrentExistsScript for --inherit's parent, then
+// the keys its inherit: names (inheritKeys).
+func ParentInheritScript(t *Target) string {
+	return CurrentExistsScript(t, nil) + inheritKeys
+}
+
+// inheritKeys prints an inherit line for each key the inherit: of the
+// current release names (--release-inherit), if there is one: what is
+// deployed decides, never the operator's checkout, which could otherwise
+// take any variable of the parent's into a child.
+const inheritKeys = `if [ -d "$base/current/.devopsy" ]; then
+  pc_keys=$(cd "$base/current" && devopsy --release-inherit)
+  for k in $pc_keys; do printf 'inherit\t%s\n' "$k"; done
+fi
 `
+
+// ParseInherit is the keys in ParentCheckScript's or
+// ParentInheritScript's output.
+func ParseInherit(out string) []string {
+	var keys []string
+	for _, line := range strings.Split(out, "\n") {
+		if k, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "inherit\t"); ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // ParseParentData is the parent's data images in ParentCheckScript's

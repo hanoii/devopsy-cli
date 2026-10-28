@@ -492,7 +492,8 @@ before changing anything".
   is deployed decides on the server"): a rollback's (hidden
   `--release-steps rollback <phase> [<release>]`, `runReleaseSteps`),
   the restart after a failed run, the run step a `--sync` reruns
-  (`--release-steps release run`) and `--destroy`'s step
+  (`--release-steps release run`), the keys a parent's `inherit:` gives
+  its children (`--release-inherit`) and `--destroy`'s step
   (`destroyStep`) are read from the release's own `config.yaml`, its environment from
   `devopsy-target.env` (`ReleaseEnvironment`). A release's steps come
   from the checkout, which is what is uploaded; a rollback's local
@@ -2073,6 +2074,17 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   release links and the loader reads below `.env`. Notices name the
   keys the child's own `shared/.env` shadows, never values. `--inherit`
   (`runInherit`) runs it alone.
+- **The keys come from the parent's current release, never the
+  checkout:** the preflight's session on the parent
+  (`ParentCheckScript`; `--inherit`'s `ParentInheritScript`) runs the
+  hidden `--release-inherit` in its `current`, which prints what its own
+  config's `inherit:` names for the environment it was made for
+  (`ReleaseEnvironment`), into `job.inherit`; no session more, and none
+  reads the files when it names nothing. Why: a checkout (another
+  branch, an old clone, CI) naming any key would copy that value of the
+  parent's into the child, whatever the parent's release says; the
+  parent's own release decides what leaves it, as a child's decides its
+  own `parent:` and run step (`TestSyncInherit`).
 - **A first release inherits into `shared/inherit.env` before the
   upload,** so `--missing-vars` sees the values; kept on failure, since
   the next release is first again.

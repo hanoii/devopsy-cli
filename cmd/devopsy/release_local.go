@@ -206,6 +206,31 @@ func runDestroyData(cwd string, args []string, color bool) int {
 	return destroyData(filepath.Dir(projectDir), step, color)
 }
 
+// runReleaseInherit is the hidden ReleaseInheritFlag, run by
+// InheritReadScript in a parent's current release: the keys its own
+// config's inherit: names for the environment it was made for, one per
+// line.
+func runReleaseInherit(cwd string, args []string) int {
+	if len(args) > 0 {
+		report.Error(cli.ReleaseInheritFlag + " takes nothing")
+		return 2
+	}
+	projectDir, err := cli.FindProjectDir(cwd)
+	if err != nil {
+		report.Fail(err)
+		return 1
+	}
+	t, err := remote.ReleaseEnvironment(projectDir)
+	if err != nil {
+		report.Error("the release's inherit: " + err.Error())
+		return 1
+	}
+	for _, k := range t.Inherit {
+		fmt.Println(k)
+	}
+	return 0
+}
+
 // runReleaseSteps is the hidden ReleaseStepsFlag:
 // <rollback|restart|release> <phase> [<release>], run by ActivateScript
 // where the phase runs, and by a sync's holder (release run). It runs

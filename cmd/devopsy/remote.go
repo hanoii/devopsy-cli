@@ -645,7 +645,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		} else {
 			log.Info(fmt.Sprintf("syncing @%s's data into it before its run step (--release-no-sync skips it)", job.parent.Address))
-			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.parent.Inherit) > 0, ID: job.id, Images: job.images})
+			script := imagesAccept(accept) + remote.ActivateScript(t, id, false, projectName, phases, &remote.SyncOptions{From: job.parent.Address, Inherit: !job.first && len(job.inherit) > 0, ID: job.id, Images: job.images})
 			if code := runSyncSession(job, script, true, rlog, color); code != 0 {
 				return save(id, code)
 			}
