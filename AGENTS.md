@@ -3247,7 +3247,12 @@ Smaller features, each with the rule an agent must keep.
   command at a terminal (a shell, a project or compose command,
   `--upgrade`; activations and holders never), with
   `ClearAllForwardings=yes`, since the user's `LocalForward` lines
-  clash between sessions. Connection sharing is the user's SSH config,
+  clash between sessions, and no password (`PasswordAuthentication=no`,
+  `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`;
+  decided 2026-10-29: a devopsy server takes keys only, so a prompt meant
+  a missing key, asked again per session of a release, or with a child's
+  set stopped while a sync's push waited for it; never `BatchMode`, which
+  would refuse a passphrase and a new host key too). Connection sharing is the user's SSH config,
   which `--ssh-config` suggests and never writes. Test fakes of ssh run
   their last argument.
 - **`--context-hash` is a pure helper; devopsy builds nothing.** Errors

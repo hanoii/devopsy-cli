@@ -2230,9 +2230,23 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 	return SSHLog(t, script, stdin, stdout, tty, nil)
 }
 
+// SSHAllowPasswordEnv, set to anything but 0 or false, lets a session ask
+// for a password: SSHOptions refuse one otherwise.
+const SSHAllowPasswordEnv = "DEVOPSY_SSH_ALLOW_PASSWORD"
+
 // SSHOptions go before every session's own arguments, also after
 // DEVOPSY_SSH_COMMAND, whose options win: ssh keeps the first value of each.
-var SSHOptions = []string{"-o", "ClearAllForwardings=yes"}
+// No password unless SSHAllowPasswordEnv: a devopsy server takes keys only,
+// so a prompt means a missing key, and it would come in the middle of a
+// release's sessions, or with a child's services stopped for a sync. A
+// passphrase and a new host key are still asked for.
+func SSHOptions() []string {
+	opts := []string{"-o", "ClearAllForwardings=yes"}
+	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
+		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
+	}
+	return opts
+}
 
 // SSHLog is SSH, also copying the session's output, both streams, to log.
 func SSHLog(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool, log io.Writer) (int, error) {
@@ -2274,7 +2288,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		script = "export " + ProtocolCheckEnv + "=warn\n" + script
 	}
 	script = WithNeeds(script, alsoNeeds(ctx)...)
-	args := append(append(append([]string{}, SSHOptions...), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
+	args := append(append(SSHOptions(), extra...), ttyFlag, t.Host, "sh -c "+Quote(script))
 	if Trace != nil {
 		opts := strings.Join(append(extra[:len(extra):len(extra)], ttyFlag), " ")
 		Trace.Debug(fmt.Sprintf("ssh %s %s", opts, t.Host))

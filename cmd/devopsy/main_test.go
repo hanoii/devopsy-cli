@@ -338,7 +338,7 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
 	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
-	if code != 0 || !strings.Contains(out, "-o ClearAllForwardings=yes -T devopsy@from-dotenv sh -c") {
+	if code != 0 || !strings.Contains(out, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }
@@ -1078,6 +1078,14 @@ func TestInstancesEndToEnd(t *testing.T) {
 		out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "argsssh"), "SHELL=" + filepath.Join(bin, "fakeshell")}, addr, "--shell-host", "--root")
 		if code != 0 || !strings.Contains(out, "-l root -T devopsy@server") || !strings.Contains(out, "shell -l") {
 			t.Fatalf("%s --shell-host --root (%d):\n%s", addr, code, out)
+		}
+	}
+	// No session asks for a password, unless DEVOPSY_SSH_ALLOW_PASSWORD.
+	noPassword := "-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no"
+	for allow, want := range map[string]bool{"": true, "0": true, "false": true, "1": false, "yes": false} {
+		out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "argsssh"), "DEVOPSY_SSH_ALLOW_PASSWORD=" + allow, "SHELL=" + filepath.Join(bin, "fakeshell")}, "@devopsy@server", "--shell-host")
+		if code != 0 || strings.Contains(out, noPassword) != want {
+			t.Fatalf("DEVOPSY_SSH_ALLOW_PASSWORD=%q, the password refused: %v (%d):\n%s", allow, want, code, out)
 		}
 	}
 	if out, code := run(nil, "@devopsy@server", "--shell-host", "--rot"); code == 0 || !strings.Contains(out, "--shell-host takes only --root") {

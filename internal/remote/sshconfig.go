@@ -63,7 +63,7 @@ func SSHConfig(t *Target, effective map[string]string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# For @%s (%s). devopsy already passes ClearAllForwardings=yes.\n", t.Name, t.Host)
+	fmt.Fprintf(&b, "# For @%s (%s). devopsy already passes ClearAllForwardings=yes, and\n# PasswordAuthentication=no unless %s is set.\n", t.Name, t.Host, SSHAllowPasswordEnv)
 	fmt.Fprintf(&b, "Host %s\n  Hostname %s\n", host, hostname)
 	if user != "" {
 		fmt.Fprintf(&b, "  User %s\n", user)

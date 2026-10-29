@@ -1219,7 +1219,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o ForwardAgent=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
+	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
 	// The parent's sessions to the child: never the forwarded agent, no

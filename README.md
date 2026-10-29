@@ -1917,6 +1917,14 @@ value of each. devopsy adds `-o ClearAllForwardings=yes` to every session:
 it never needs the host's `LocalForward` lines, and each session would try
 to bind them again while another holds them.
 
+**Keys only:** devopsy's sessions never ask for a password (`-o
+PasswordAuthentication=no -o KbdInteractiveAuthentication=no`, over
+`~/.ssh/config`). A devopsy server takes keys only, so a missing key fails
+at once with ssh's `Permission denied (publickey)`, rather than asking in
+the middle of a release's sessions, or with a child's services stopped for
+a sync. A key's passphrase and a new host key are still asked for. For a
+server you reach by password, set `DEVOPSY_SSH_ALLOW_PASSWORD=1`.
+
 **Environments nobody releases:** floating tags (`mariadb:11.8`,
 `caddy:2-alpine`) and base images get their fixes with a release, which
 pulls them again (Images, above). An environment nobody releases for
