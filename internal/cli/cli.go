@@ -1003,14 +1003,17 @@ step under defaults:, asking for the project's name unless --yes:
 containers, volumes, built images and .devopsy/mnt's data. The checkout
 stays.
 `,
-	"--shell-host": `Usage: devopsy @<server> --shell-host
-       devopsy @<target> --shell-host
+	"--shell-host": `Usage: devopsy @<server> --shell-host [--root]
+       devopsy @<target> --shell-host [--root]
 
 Opens your login shell on the server, over SSH: in its release root for a
 server named alone, else in the environment's current release, or its
 directory for a plain devopsy directory. devopsy and docker compose work
 there as on any project. It never depends on the project: the way in when
 something is broken. For a shell in a container: devopsy @<target> --shell.
+
+--root logs in as root instead, in root's home, whatever user the address
+or ~/.ssh/config names: root's ~/.ssh/authorized_keys must have your key.
 `,
 	"--environments": `Usage: devopsy @<server> --environments
        devopsy --environments

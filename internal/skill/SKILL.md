@@ -181,6 +181,9 @@ what `config.yaml` sets.
   (`get`: the value the environment gets and where it comes from; the
   list, `set` and `unset`: its `shared/.env`, warning of what a value
   overrides or what overrides it), `--env` (what devopsy loads).
+- `devopsy @<server> --shell-host` is a shell on the server, the way in
+  when a project is broken; `--root` logs in as root, with a key in
+  root's `authorized_keys`.
 - CI releases with a restricted key: `devopsy --ssh-keys-generate`, then
   `devopsy @t --ssh-keys add <key>.pub --restricted`; the job loads the
   private key into an agent and runs `devopsy @t --release`.

@@ -1996,6 +1996,13 @@ exec "${SHELL:-/bin/sh}" -l
 `
 }
 
+// RootUserShellScript opens root's login shell in its home: --shell-host
+// --root. Nothing of the deploy user's applies to root (its settings, its
+// release root, devopsy in its PATH), so it reads none of them.
+func RootUserShellScript() string {
+	return `exec "${SHELL:-/bin/sh}" -l` + "\n"
+}
+
 // UpgradeScript replaces the server's devopsy, as the deploy user, who owns
 // it (devopsy-server installs it so): devopsy --upgrade [version].
 func UpgradeScript(args []string) string {

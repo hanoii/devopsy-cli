@@ -1069,6 +1069,20 @@ func TestInstancesEndToEnd(t *testing.T) {
 	if out, code := run(nil, "@devopsy@server", "--ssh-host"); code == 0 || !strings.Contains(out, "--ssh-host is not a devopsy flag (did you mean --shell-host?)") || strings.Contains(out, "needs an environment") {
 		t.Fatalf("@server --ssh-host (%d):\n%s", code, out)
 	}
+	// --shell-host --root logs in as root: -l before the destination, which
+	// wins over its user@, and root's login shell, none of the deploy
+	// user's settings read.
+	write(t, filepath.Join(bin, "argsssh"), "#!/bin/sh\necho \"ssh $*\" | sed 's/ sh -c .*//' >&2\nfor a; do s=$a; done\nexec sh -c \"$s\"\n", 0o755)
+	write(t, filepath.Join(bin, "fakeshell"), "#!/bin/sh\necho \"shell $*\"\n", 0o755)
+	for _, addr := range []string{"@devopsy@server", "@b/prod"} {
+		out, code := run([]string{"DEVOPSY_SSH_COMMAND=" + filepath.Join(bin, "argsssh"), "SHELL=" + filepath.Join(bin, "fakeshell")}, addr, "--shell-host", "--root")
+		if code != 0 || !strings.Contains(out, "-l root -T devopsy@server") || !strings.Contains(out, "shell -l") {
+			t.Fatalf("%s --shell-host --root (%d):\n%s", addr, code, out)
+		}
+	}
+	if out, code := run(nil, "@devopsy@server", "--shell-host", "--rot"); code == 0 || !strings.Contains(out, "--shell-host takes only --root") {
+		t.Fatalf("--shell-host --rot (%d):\n%s", code, out)
+	}
 	// A server whose devopsy is older refuses before anything, the new
 	// instance's question included: its refusal is no answer. Older than
 	// 8, it reports no features.

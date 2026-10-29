@@ -419,7 +419,13 @@ func completeRemote(cwd, projectDir, name string, words []string, environ []stri
 		return showFlag(words, cur)
 	case "--export", "--import":
 		return dataFlags(projectDir, words, cur, true)
-	case "--shell-host", "--ssh-config", "--environments", "--upgrade", "--log", "--help", "-h":
+	case "--shell-host":
+		r := Result{Directive: DirectiveNoFileComp}
+		if len(words) == 2 {
+			r.Candidates = []Candidate{{"--root", "as root, in its home", GroupDevopsy}}
+		}
+		return filter(r, cur)
+	case "--ssh-config", "--environments", "--upgrade", "--log", "--help", "-h":
 		return none
 	case "--":
 		return Result{Delegate: composeDelegate(cwd, projectDir, words[1:], environ)}

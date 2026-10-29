@@ -140,7 +140,8 @@ func TestComplete(t *testing.T) {
 		// --accept-image takes a service.
 		{[]string{"@prod", "--sync", "--accept-image", ""}, []string{"web"}, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--release", "--accept-image", "web", ""}, []string{"--from", "--yes"}, nil, DirectiveNoFileComp},
-		{[]string{"@prod", "--shell-host", ""}, nil, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--shell-host", ""}, []string{"--root"}, nil, DirectiveNoFileComp},
+		{[]string{"@prod", "--shell-host", "--root", ""}, nil, nil, DirectiveNoFileComp},
 		{[]string{"@prod", "--debug", ""}, []string{"env", "capabilities", "labels", "imports"}, nil, DirectiveNoFileComp},
 		{[]string{"--shell", "w"}, []string{"web"}, nil, DirectiveNoFileComp},
 		{[]string{"--sh"}, []string{"--shell"}, []string{"--sh"}, DirectiveNoFileComp},

@@ -83,7 +83,7 @@ var Flags = []FlagGroup{
 	{"Running", []Flag{
 		{Name: "--status", Scope: LocalOrTarget, Desc: "containers, and the project's own status"},
 		{Name: "--shell", Args: "[service] [-- command...]", Scope: LocalOrTarget, Desc: "a shell, or the command, in a container"},
-		{Name: "--shell-host", Scope: Server, Desc: "a shell on the server itself"},
+		{Name: "--shell-host", Args: "[--root]", Scope: Server, Desc: "a shell on the server itself, or root's"},
 		{Name: "--environments", Scope: LocalOrServer, Desc: "the project's environments on its servers"},
 		{Name: "--debug", Args: "[topic]", Scope: LocalOrTarget, Desc: "what devopsy sees (--debug --help)"},
 	}},

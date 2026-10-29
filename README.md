@@ -1899,7 +1899,9 @@ bookmarks go with them).
 **On a server:** `--shell` opens a container shell as locally;
 `--shell-host` your login shell on the server, in the current release
 (in the release root with `@<server>` alone), independent of the project
-(the way in when it is broken). An environment's directory that is a plain
+(the way in when it is broken); `--shell-host --root` root's, in its home,
+whatever user the address or `~/.ssh/config` names (ssh's `-l root`), so
+root's `authorized_keys` needs your key. An environment's directory that is a plain
 `.devopsy/` directory without releases runs commands in place and refuses
 releases. Project commands come from the current release.
 

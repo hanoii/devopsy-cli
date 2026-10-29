@@ -148,8 +148,18 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 
 	switch args[0] {
 	case "--shell-host":
-		if len(args) > 1 {
-			return fail("--shell-host takes no arguments: for one command, use 'devopsy @" + targetRef(t) + " <command>'")
+		root := len(args) == 2 && args[1] == "--root"
+		if len(args) > 1 && !root {
+			return fail("--shell-host takes only --root: for one command, use 'devopsy @" + targetRef(t) + " <command>'")
+		}
+		if root {
+			// -l comes before the destination, so it wins over its user@
+			// and ~/.ssh/config's User.
+			code, err := remote.SSHWith(t, []string{"-l", "root"}, remote.RootUserShellScript(), nil, nil, tty, nil)
+			if err != nil {
+				return fail(err.Error())
+			}
+			return code
 		}
 		if t.Name == "" {
 			return ssh(remote.RootShellScript(t), nil, tty)
