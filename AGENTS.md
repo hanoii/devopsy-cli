@@ -3140,7 +3140,20 @@ Smaller features, each with the rule an agent must keep.
   as the deploy user, removed). The operator formats it and decides
   every warning (`serverInfoReport`: the thresholds, the version
   against its own, fixes naming the server as typed, `ServerRef`), so
-  a judgment changes with the operator's devopsy alone. Exit 3 when it
+  a judgment changes with the operator's devopsy alone. Without a
+  target it reads this machine in process (`serverFacts`), its fixes
+  run here (no `--shell-host`, `--status` in the environment's
+  `current`). Kernel memory (decided 2026-10-30): Kexec HandOver's
+  scratch, which the 7.0 kernel of Ubuntu 26.04 turns on and which is
+  CMA pageblocks no CMA area counts, is `/proc/zoneinfo`'s `cma` less
+  meminfo's `CmaTotal` (checked in the kernel's source:
+  `init_cma_reserved_pageblock` adds to the zone's, `totalcma_pages`
+  only counts areas; `/proc/pagetypeinfo` is root's), warned: the
+  kernel's own allocations ran out with memory free on a 2 GB server
+  (an initramfs out of memory, a deadlocked kernel). kdump's
+  reservation (`/sys/kernel/kexec_crash_size`) is a note, said with
+  its fix and no exit 3 (`serverWarning.note`): crash dumps are a
+  choice. Exit 3 when it
   warned (`serverInfoWarned`), for CI. Environments are the directories
   with `releases/` two or three levels under the release root, through
   links as the scripts reach them (not a cut `--destroy`'s
