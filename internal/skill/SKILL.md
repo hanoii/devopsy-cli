@@ -47,8 +47,9 @@ smallest: routing, certificates, releases), drupal11 (an app with a
 database, built on the server, read-only at runtime), registry (a private
 registry for image mode). They are GitHub template repositories under
 https://github.com/hanoii/ (`devopsy-template-<name>`). An existing compose
-project gets a `config.yaml` with `devopsy --init`. Sites route through the
-server's own Traefik, devopsy-template-traefik, released once per server.
+project gets a `config.yaml` with `devopsy --init`. whoami and drupal11
+route through a proxy on their server, one example of which is
+devopsy-template-traefik, a Traefik released once per server.
 
 ## compose.yaml
 
@@ -87,8 +88,12 @@ What devopsy requires:
   `devopsy.export.<KEY>=<value>` on the running containers (visible to
   anyone with Docker access: never a secret), and
   `devopsy.import.<VAR>=<role or project>/<KEY>[?]`, copied into each
-  release before it goes live (`?`: optional). Sites import the proxy's
-  base domain: `devopsy.import.PROXY_BASE_DOMAIN=proxy/BASE_DOMAIN`.
+  release before it goes live: a source not running is waited for 30
+  seconds, then the release fails, unless the import ends in `?` or the
+  target sets `<VAR>` (empty too: `--vars set <VAR>=`), so a project is
+  released after the projects it requires imports from. For example,
+  whoami imports `PROXY_BASE_DOMAIN=proxy/BASE_DOMAIN` from the project
+  holding `devopsy.role=proxy`; devopsy-template-traefik is one such proxy.
 - `devopsy.shell=true` names the service `--shell` opens, and
   `devopsy.shell.user` as whom.
 - Images with data only go forward: a service with `devopsy.data=true`

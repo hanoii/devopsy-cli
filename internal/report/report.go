@@ -115,7 +115,9 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 			indent := strings.Repeat(" ", len(num))
 			cmds := f.Cmds
 			if f.Text != "" {
-				add(num + f.Text)
+				// A text of several lines (a label, a config example)
+				// goes under its number.
+				add(num + strings.ReplaceAll(strings.TrimRight(f.Text, "\n"), "\n", "\n"+indent))
 			} else if len(cmds) > 0 {
 				add(num + CmdMark + cmds[0])
 				cmds = cmds[1:]
