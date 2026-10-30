@@ -269,6 +269,14 @@ func (e Exporter) Why(imp Import) string {
 	return e.Project + " does not export " + imp.Key
 }
 
+// Fix says what gives imp a source, for the reason Why says.
+func (e Exporter) Fix(imp Import) string {
+	if e.Project == "" {
+		return fmt.Sprintf("release or start the compose project holding %s=%s, or named %s", RoleLabel, imp.Source, imp.Source)
+	}
+	return fmt.Sprintf("export %s from %s (%s%s)", imp.Key, e.Project, ExportPrefix, imp.Key)
+}
+
 // checkValue refuses what cannot be a variable's value on one line.
 func checkValue(v string) error {
 	for _, r := range v {
@@ -371,7 +379,7 @@ func PrepareRelease(cwd string, environ []string, reload bool) ([]string, error)
 		}
 		if !e.Found {
 			if !imp.Optional {
-				return said, &report.Failure{Msg: fmt.Sprintf("%s: %s", imp, e.Why(imp)), Fixes: []report.Remedy{report.Fix("start it"), report.Fix(fmt.Sprintf("set %s for this target (empty for none)", imp.Var))}}
+				return said, &report.Failure{Msg: fmt.Sprintf("%s: %s", imp, e.Why(imp)), Fixes: []report.Remedy{report.Fix(e.Fix(imp)), report.Fix(fmt.Sprintf("set %s for this target (empty for none)", imp.Var)), report.Fix(fmt.Sprintf("make the import optional for every target, a ? at the end of its label in compose.yaml:\n- %s?", imp))}}
 			}
 			said = append(said, fmt.Sprintf("%s: %s, not imported (optional)", imp.Var, e.Why(imp)))
 			continue

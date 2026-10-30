@@ -26,8 +26,8 @@ func TestLines(t *testing.T) {
 			"devopsy: error: no server\ndevopsy: | why\ndevopsy: | and why\ndevopsy: | to fix it:\ndevopsy: | set it\ndevopsy: | $ devopsy @dev --vars set X"},
 		{"a command alone", ErrorLevel, "locked", nil, []Remedy{Fix("", "devopsy @dev --sync")},
 			"devopsy: error: locked\ndevopsy: | to fix it:\ndevopsy: | $ devopsy @dev --sync"},
-		{"fixes", ErrorLevel, "no server", nil, []Remedy{Fix("set DEVOPSY_SERVER_PROD"), Fix("sync from an address instead:", "devopsy @dev --sync --from @vm1:prod", "devopsy @dev --status"), Fix("", "a", "b")},
-			"devopsy: error: no server\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. set DEVOPSY_SERVER_PROD\ndevopsy: | 2. sync from an address instead:\ndevopsy: |    $ devopsy @dev --sync --from @vm1:prod\ndevopsy: |    $ devopsy @dev --status\ndevopsy: | 3. $ a\ndevopsy: |    $ b"},
+		{"fixes", ErrorLevel, "no server", nil, []Remedy{Fix("set it in .devopsy/.env:\nDEVOPSY_SERVER_PROD=vm1"), Fix("sync from an address instead:", "devopsy @dev --sync --from @vm1:prod", "devopsy @dev --status"), Fix("", "a", "b")},
+			"devopsy: error: no server\ndevopsy: | to fix it, do one of these:\ndevopsy: | 1. set it in .devopsy/.env:\ndevopsy: |    DEVOPSY_SERVER_PROD=vm1\ndevopsy: | 2. sync from an address instead:\ndevopsy: |    $ devopsy @dev --sync --from @vm1:prod\ndevopsy: |    $ devopsy @dev --status\ndevopsy: | 3. $ a\ndevopsy: |    $ b"},
 	} {
 		if got := strings.Join(Lines(c.lv, c.msg, c.details, c.fixes), "\n"); got != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, got, c.want)

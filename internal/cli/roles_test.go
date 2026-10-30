@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 // fakeHost replaces docker with running containers.
@@ -126,17 +127,24 @@ func TestPrepareRelease(t *testing.T) {
 		t.Fatalf("empty export: %v\n%s", err, targetEnv(root))
 	}
 
-	// No proxy, or one without the export: the release fails, untouched.
-	for name, running := range map[string][]Container{
-		"no proxy":    nil,
-		"no export":   {container("traefik", "devopsy.role=proxy")},
-		"two proxies": {proxy, container("traefik-test", "devopsy.role=proxy")},
+	// No proxy, or one without the export: the release fails, untouched,
+	// with the fix for its reason first.
+	for name, c := range map[string]struct {
+		running []Container
+		fix     string
+	}{
+		"no proxy":    {nil, "release or start the compose project holding devopsy.role=proxy, or named proxy"},
+		"no export":   {[]Container{container("traefik", "devopsy.role=proxy")}, "export WILDCARD_DOMAIN from traefik (devopsy.export.WILDCARD_DOMAIN)"},
+		"two proxies": {[]Container{proxy, container("traefik-test", "devopsy.role=proxy")}, ""},
 	} {
-		fakeHost(t, running...)
+		fakeHost(t, c.running...)
 		root := release(map[string]string{"compose.yaml": compose})
 		before := targetEnv(root)
-		if _, err := PrepareRelease(root, nil, false); err == nil {
+		_, err := PrepareRelease(root, nil, false)
+		if err == nil {
 			t.Errorf("%s: want an error", name)
+		} else if fixes := report.Fixes(err); c.fix != "" && (len(fixes) != 3 || fixes[0].Text != c.fix || fixes[1].Text != "set DEVOPSY_WILDCARD_DOMAIN for this target (empty for none)" || fixes[2].Text != "make the import optional for every target, a ? at the end of its label in compose.yaml:\n- devopsy.import.DEVOPSY_WILDCARD_DOMAIN=proxy/WILDCARD_DOMAIN?") {
+			t.Errorf("%s: fixes %q", name, fixes)
 		}
 		if targetEnv(root) != before {
 			t.Errorf("%s: target.env changed", name)
