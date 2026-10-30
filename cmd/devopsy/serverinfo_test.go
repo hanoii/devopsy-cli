@@ -93,6 +93,7 @@ func TestServerInfoReport(t *testing.T) {
 		"snapshots    in each environment's directory, keep at most 5",
 		"system       Debian GNU/Linux 13 (trixie), 6.12.48+deb13-amd64, amd64",
 		"2 CPUs, 4.3 GB memory (2.1 GB available), no swap, load 0.10 0.20 0.30, up 3 days",
+		"             clock synchronized\n",
 		"docker       29.9.1, compose 5.5.0, containerd image store (overlayfs), cgroup v2",
 		"security apparmor seccomp",
 		"logs json-file max-file=5 max-size=20m",
@@ -118,7 +119,11 @@ func TestServerInfoReport(t *testing.T) {
 	}{
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "needs a reboot (for linux-image-amd64)|reboot it"},
-		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized|timedatectl set-ntp true"},
+		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized: certificates|timedatectl set-ntp true"},
+		// Its time service on and no answer: a network blocking NTP.
+		{"clock unanswered", func(i *remote.ServerInfo) {
+			i.NTP, i.NTPService, i.Time = "no", "yes", now.Add(-800*time.Millisecond).UnixNano()
+		}, "", "clock is not synchronized (about 0.8 s behind local)|UDP 123 blocked out?"},
 		// Ubuntu 26.04's 7.0 kernel turns it on by default.
 		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
@@ -193,6 +198,22 @@ func TestServerInfoReport(t *testing.T) {
 		if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), said) {
 			t.Errorf("running (%q): %+v\n%s", said, warnings, strings.Join(lines, "\n"))
 		}
+	}
+
+	// How far the server's clock is from the local one, synchronized or
+	// not.
+	for d, want := range map[time.Duration]string{
+		50 * time.Millisecond: "matching local", -800 * time.Millisecond: "about 0.8 s behind local",
+		42 * time.Second: "about 42 s ahead of local", -3 * time.Hour: "about 3 hours behind local",
+	} {
+		if got := clockOffset(d); got != want {
+			t.Errorf("clock %v: %q, want %q", d, got, want)
+		}
+	}
+	info0 := healthy()
+	info0.Time = now.Add(42 * time.Second).UnixNano()
+	if lines, warnings := serverInfoReport(info0, "vm1", "vm1:", "0.53.0", now); len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "clock synchronized, about 42 s ahead of local") {
+		t.Errorf("clock ahead: %+v\n%s", warnings, strings.Join(lines, "\n"))
 	}
 
 	// What kdump keeps is a note, never a warning: crash dumps are a
@@ -280,6 +301,7 @@ func TestServerInfo(t *testing.T) {
 	// Ubuntu 26.04's tail is uutils', which the scripts use as GNU's: no
 	// tool missing (review).
 	write(t, filepath.Join(bin, "tail"), "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'tail (uutils coreutils) 0.2.2'; exit 0; fi\nexec /usr/bin/tail \"$@\"\n", 0o755)
+	write(t, filepath.Join(bin, "timedatectl"), "#!/bin/sh\nprintf 'NTP=yes\\nNTPSynchronized=no\\n'\n", 0o755)
 	write(t, filepath.Join(bin, "docker"), `#!/bin/sh
 case "$1 $2" in
   "info --format") echo '{"ServerVersion":"29.9.1","Driver":"overlayfs","DriverStatus":[["driver-type","io.containerd.snapshotter.v1"]],"DockerRootDir":"/var/lib/docker","SecurityOptions":["name=apparmor"],"CgroupVersion":"2","LoggingDriver":"local"}'; exit 0 ;;
@@ -307,6 +329,9 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 		"shop/dev: its first release, 19990101000000, failed",
 		"devopsy: | in shop's checkout:\ndevopsy: | $ devopsy @devopsy@one:dev --status",
 		"shop/prod: db restarting",
+		// The server's clock, taken last and compared on arrival.
+		"clock not synchronized, ",
+		"$ timedatectl timesync-status",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in (%d):\n%s", want, code, out)

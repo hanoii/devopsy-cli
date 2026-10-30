@@ -578,7 +578,8 @@ devopsy @vm1 --server-info       # what the server is, and what needs attention
 and waits for no lock (without a target, the Linux server it runs on,
 in `--shell-host`; elsewhere it refuses): its devopsy and release settings,
 the system (with the memory the kernel keeps for Kexec HandOver and
-kdump), Docker (image store, security options, logs), the filesystems of the
+kdump, and whether its clock is synchronized and how far it is from
+the local one), Docker (image store, security options, logs), the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and `/`
 (free space, whether the release root makes reflinks), the roles
 projects hold and what they export, and every environment under the release root
