@@ -54,6 +54,9 @@ func runServerFacts() int {
 		report.Fail(err)
 		return 1
 	}
+	// Last, so only the way to the operator is between it and the
+	// operator's clock.
+	info.Time = time.Now().UnixNano()
 	out, err := json.Marshal(info)
 	if err != nil {
 		report.Fail(err)
@@ -143,8 +146,16 @@ func systemFacts(info *remote.ServerInfo) {
 			}
 		}
 	}
-	if out, err := exec.Command("timedatectl", "show", "-p", "NTPSynchronized", "--value").Output(); err == nil {
-		info.NTP = strings.TrimSpace(string(out))
+	if out, err := exec.Command("timedatectl", "show", "-p", "NTP", "-p", "NTPSynchronized").Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
+			switch k {
+			case "NTP":
+				info.NTPService = v
+			case "NTPSynchronized":
+				info.NTP = v
+			}
+		}
 	}
 	if data, err := os.ReadFile("/sys/module/apparmor/parameters/enabled"); err == nil {
 		info.AppArmor = strings.TrimSpace(string(data)) == "Y"
@@ -494,10 +505,12 @@ func runServerInfo(t *remote.Target, args []string) int {
 		if name, err := os.Hostname(); err == nil {
 			head += " (" + name + ")"
 		}
-		return printServerInfo(head, info, "", "")
+		return printServerInfo(head, info, "", "", time.Now())
 	}
-	var out bytes.Buffer
-	code, err := remote.SSH(t, remote.ServerInfoScript(t), bytes.NewReader(nil), &out, false)
+	// The facts' first byte is when the server's clock is compared: the
+	// session's end comes after.
+	out := &firstWrite{}
+	code, err := remote.SSH(t, remote.ServerInfoScript(t), bytes.NewReader(nil), out, false)
 	if err != nil {
 		report.Fail(err)
 		return 1
@@ -515,14 +528,27 @@ func runServerInfo(t *remote.Target, args []string) int {
 	if ref != t.Host+":" {
 		head += " (" + t.Host + ")"
 	}
-	return printServerInfo(head, info, t.Host, ref)
+	return printServerInfo(head, info, t.Host, ref, out.at)
+}
+
+// firstWrite is a buffer that keeps when its first write came.
+type firstWrite struct {
+	bytes.Buffer
+	at time.Time
+}
+
+func (w *firstWrite) Write(p []byte) (int, error) {
+	if w.at.IsZero() {
+		w.at = time.Now()
+	}
+	return w.Buffer.Write(p)
 }
 
 // printServerInfo prints info's report under head, then its notes and
 // warnings: serverInfoWarned when it warned. host and ref are empty for
-// this machine's.
-func printServerInfo(head string, info remote.ServerInfo, host, ref string) int {
-	lines, warnings := serverInfoReport(info, host, ref, version, time.Now())
+// this machine's; now is when its facts came.
+func printServerInfo(head string, info remote.ServerInfo, host, ref string, now time.Time) int {
+	lines, warnings := serverInfoReport(info, host, ref, version, now)
 	fmt.Println(styleFor(os.Stdout).name(head))
 	for _, l := range lines {
 		fmt.Println(l)
@@ -551,8 +577,9 @@ type serverWarning struct {
 // serverInfoReport is what --server-info prints of info, its lines and
 // its warnings, for the server host (as an address's server part) and
 // ref (as typed, for fixes: remote.ServerRef), both empty for this
-// machine's; local is this devopsy's version, now the time ages count
-// from.
+// machine's; local is this devopsy's version, now when the facts came:
+// what ages count from and the server's clock (info.Time) is compared
+// with.
 func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) (lines []string, warnings []serverWarning) {
 	warn := func(msg string, fixes ...report.Remedy) {
 		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes})
@@ -634,8 +661,29 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 		warn(msg, report.Fix("reboot it at a quiet time: its containers come back with Docker"))
 	}
+	// Against the operator's clock, which a laptop or CI keeps
+	// synchronized: off by the way's one-way time at most.
+	clock := map[string]string{"yes": "synchronized", "no": "not synchronized"}[info.NTP]
+	off := ""
+	if info.Time != 0 {
+		off = clockOffset(time.Unix(0, info.Time).Sub(now))
+		clock = strings.TrimPrefix(clock+", "+off, ", ")
+	}
+	if clock != "" {
+		more("clock " + clock)
+	}
 	if info.NTP == "no" {
-		warn("the server's clock is not synchronized: certificates and logs need it", report.Fix("as root:", "timedatectl set-ntp true"))
+		msg := "the server's clock is not synchronized: certificates and logs need it"
+		if off != "" {
+			msg = "the server's clock is not synchronized (" + off + "): certificates and logs need it"
+		}
+		fix := report.Fix("as root:", "timedatectl set-ntp true")
+		if info.NTPService == "yes" {
+			// Its time service runs and no server answers it: a network
+			// that blocks NTP (UDP 123) out.
+			fix = report.Fix("its time service runs and no time server answers (UDP 123 blocked out?): name one the network has, NTP=<host> in /etc/systemd/timesyncd.conf.d/ (or chrony's sources), as root; this says what it tried:", "timedatectl timesync-status")
+		}
+		warn(msg, fix)
 	}
 
 	// Docker.
@@ -915,6 +963,24 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		}
 	}
 	return lines, warnings
+}
+
+// clockOffset says d, the server's clock less the local one, as
+// --server-info shows it: about 0.8 s behind local.
+func clockOffset(d time.Duration) string {
+	way := "ahead of"
+	if d < 0 {
+		way, d = "behind", -d
+	}
+	switch {
+	case d < 100*time.Millisecond:
+		return "matching local"
+	case d < 10*time.Second:
+		return fmt.Sprintf("about %.1f s %s local", d.Seconds(), way)
+	case d < 2*time.Minute:
+		return fmt.Sprintf("about %d s %s local", int(d.Seconds()), way)
+	}
+	return "about " + duration(d) + " " + way + " local"
 }
 
 // reflinkFix is the way to keep services up through a snapshot's copy

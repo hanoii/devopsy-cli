@@ -1034,7 +1034,8 @@ deploy user, who owns it. devopsy --upgrade does the same locally.
 What the server is, read in one session that changes nothing and waits
 for no lock, or without a server the Linux server it runs on (in
 --shell-host): its devopsy and release settings, the system (memory,
-load, uptime, the memory the kernel keeps for Kexec HandOver and kdump),
+load, uptime, the memory the kernel keeps for Kexec HandOver and kdump,
+whether its clock is synchronized and how far it is from the local one),
 Docker (image store, security options, logs), the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and /
 (free space, reflinks on the release root), the roles projects hold and

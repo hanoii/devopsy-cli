@@ -3157,7 +3157,12 @@ Smaller features, each with the rule an agent must keep.
   (an initramfs out of memory, a deadlocked kernel). kdump's
   reservation (`/sys/kernel/kexec_crash_size`) is a note, said with
   its fix and no exit 3 (`serverWarning.note`): crash dumps are a
-  choice. Exit 3 when it
+  choice. The clock (2026-10-30, a server whose network blocks NTP):
+  the server's time taken last (`ServerInfo.Time`), compared with the
+  local clock at the facts' first byte (`firstWrite`), never at the
+  session's end, so it is off by the way's one-way time at most; an
+  unsynchronized clock whose time service runs gets a fix naming a
+  network's own time server, not `set-ntp`. Exit 3 when it
   warned (`serverInfoWarned`), for CI. Environments are the directories
   with `releases/` two or three levels under the release root, through
   links as the scripts reach them (not a cut `--destroy`'s

@@ -32,7 +32,12 @@ type ServerInfo struct {
 	RebootRequired bool     `json:"reboot_required,omitempty"`
 	RebootPackages []string `json:"reboot_packages,omitempty"`
 	// NTP is timedatectl's NTPSynchronized, yes or no; empty unknown.
-	NTP string `json:"ntp,omitempty"`
+	// NTPService is its NTP: a time service is on, yes or no.
+	NTP        string `json:"ntp,omitempty"`
+	NTPService string `json:"ntp_service,omitempty"`
+	// Time is the server's clock once its facts are read, in Unix
+	// nanoseconds, which the operator compares with its own.
+	Time int64 `json:"time,omitempty"`
 	// AppArmor: the kernel has it on (/sys/module/apparmor), whether
 	// Docker uses it or not; AppArmorParser: apparmor_parser is there,
 	// which Docker loads its profile with.
