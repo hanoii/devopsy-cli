@@ -478,6 +478,13 @@ func runServerInfo(t *remote.Target, args []string) int {
 		return 1
 	}
 	if t == nil {
+		// Servers are Linux: elsewhere (the operator's Mac) the facts are
+		// half missing or another machine's (Docker's VM).
+		if runtime.GOOS != "linux" {
+			report.Default().Say(report.ErrorLevel, "--server-info without a server reads the Linux server it runs on, and this is "+runtime.GOOS, nil,
+				[]report.Remedy{report.Fix("", "devopsy @<server> --server-info")})
+			return 1
+		}
 		info, err := serverFacts()
 		if err != nil {
 			report.Fail(err)

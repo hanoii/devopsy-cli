@@ -575,8 +575,8 @@ devopsy @vm1 --server-info       # what the server is, and what needs attention
 ```
 
 `--server-info` reads the server in one session that changes nothing
-and waits for no lock (without a target, the machine it runs on, as a
-server: on one, in `--shell-host`): its devopsy and release settings,
+and waits for no lock (without a target, the Linux server it runs on,
+in `--shell-host`; elsewhere it refuses): its devopsy and release settings,
 the system (with the memory the kernel keeps for Kexec HandOver and
 kdump), Docker (image store, security options, logs), the filesystems of the
 release root, Docker's and containerd's data, the snapshot root and `/`

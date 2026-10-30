@@ -3141,9 +3141,13 @@ Smaller features, each with the rule an agent must keep.
   every warning (`serverInfoReport`: the thresholds, the version
   against its own, fixes naming the server as typed, `ServerRef`), so
   a judgment changes with the operator's devopsy alone. Without a
-  target it reads this machine in process (`serverFacts`), its fixes
-  run here (no `--shell-host`, `--status` in the environment's
-  `current`). Kernel memory (decided 2026-10-30): Kexec HandOver's
+  target it reads the Linux server it runs on in process
+  (`serverFacts`), its fixes run there (no `--shell-host`, `--status`
+  in the environment's `current`); on macOS it refuses (decided
+  2026-10-30: nothing marks a machine a server, and there the facts
+  were half missing or Docker's VM's: no swap, Docker's data on the
+  Mac's `/`, its logs unbounded by a `daemon.json` OrbStack never
+  reads). Kernel memory (decided 2026-10-30): Kexec HandOver's
   scratch, which the 7.0 kernel of Ubuntu 26.04 turns on and which is
   CMA pageblocks no CMA area counts, is `/proc/zoneinfo`'s `cma` less
   meminfo's `CmaTotal` (checked in the kernel's source:
