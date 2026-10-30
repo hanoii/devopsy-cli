@@ -38,6 +38,12 @@ type ServerInfo struct {
 	// which Docker loads its profile with.
 	AppArmor       bool `json:"apparmor,omitempty"`
 	AppArmorParser bool `json:"apparmor_parser,omitempty"`
+	// KHOScratch is the memory Kexec HandOver keeps as CMA, which only
+	// movable pages may use: /proc/zoneinfo's cma pages less meminfo's
+	// CmaTotal, which counts the CMA areas alone. CrashKernel is what
+	// kdump keeps for its kernel (/sys/kernel/kexec_crash_size). Bytes.
+	KHOScratch  int64 `json:"kho_scratch,omitempty"`
+	CrashKernel int64 `json:"crash_kernel,omitempty"`
 
 	Docker DockerFacts `json:"docker"`
 	Disks  []Disk      `json:"disks"`

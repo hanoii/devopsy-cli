@@ -27,6 +27,10 @@ func TestServerFactsParsers(t *testing.T) {
 	if m["MemTotal"] != 8000000*1024 || m["MemAvailable"] != 2000000*1024 || m["SwapTotal"] != 0 || m["HugePages_Total"] != 0 {
 		t.Errorf("meminfo: %v", m)
 	}
+	// Every zone's cma, never nr_free_cma's.
+	if got := zoneCMA("Node 0, zone      DMA\n        managed  3840\n        cma      0\n      nr_free_cma  12\nNode 0, zone   Normal\n        managed  480000\n        cma      320512\n      nr_free_cma  300000\n"); got != 320512 {
+		t.Errorf("zoneinfo: %d", got)
+	}
 	var d remote.DockerFacts
 	if err := parseDockerInfo([]byte(`{"ServerVersion":"29.9.1","Driver":"overlayfs","DriverStatus":[["driver-type","io.containerd.snapshotter.v1"]],"DockerRootDir":"/var/lib/docker","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"],"CgroupVersion":"2","LoggingDriver":"json-file","HttpsProxy":"http://proxy:3128"}`), &d); err != nil {
 		t.Fatal(err)
@@ -114,6 +118,8 @@ func TestServerInfoReport(t *testing.T) {
 		{"older devopsy", func(*remote.ServerInfo) {}, "0.54.0", "older than the local 0.54.0|devopsy @vm1: --upgrade"},
 		{"reboot", func(i *remote.ServerInfo) { i.RebootRequired, i.RebootPackages = true, []string{"linux-image-amd64"} }, "", "needs a reboot (for linux-image-amd64)|reboot it"},
 		{"clock", func(i *remote.ServerInfo) { i.NTP = "no" }, "", "clock is not synchronized|timedatectl set-ntp true"},
+		// Ubuntu 26.04's 7.0 kernel turns it on by default.
+		{"kexec handover", func(i *remote.ServerInfo) { i.KHOScratch = 1252 << 20 }, "", "Kexec HandOver keeps 1.3 GB of memory as CMA, which only movable pages may use|kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it"},
 		{"docker down", func(i *remote.ServerInfo) { i.Docker = remote.DockerFacts{Error: "docker info: Cannot connect"} }, "", "Docker did not answer: docker info: Cannot connect|"},
 		{"no compose", func(i *remote.ServerInfo) { i.Docker.Compose = "" }, "", "docker compose is missing|docker-compose-plugin"},
 		// Docker lists apparmor whenever the kernel has it, and needs
@@ -188,8 +194,30 @@ func TestServerInfoReport(t *testing.T) {
 		}
 	}
 
-	// A kernel without AppArmor is said, not warned: nothing to install.
+	// What kdump keeps is a note, never a warning: crash dumps are a
+	// choice.
 	info := healthy()
+	info.CrashKernel = 512 << 20
+	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
+	if len(warnings) != 1 || !warnings[0].note || !strings.Contains(warnings[0].msg, "kdump keeps 536.9 MB of memory for its crash kernel") ||
+		!strings.Contains(fixText(warnings[0].fixes), "DEVOPSY_KDUMP=off") || !strings.Contains(strings.Join(lines, "\n"), "kernel keeps 536.9 MB for kdump") {
+		t.Errorf("kdump: %+v\n%s", warnings, strings.Join(lines, "\n"))
+	}
+
+	// This machine's: fixes run here, no session to the server.
+	info = healthy()
+	info.Version = "0.54.0"
+	info.Disks[0].Free, info.Disks[0].Used = 4e9, 76e9
+	info.Environments = append(info.Environments, remote.Environment{Path: "shop/dev", Status: "none\t20261027110000\n"})
+	_, warnings = serverInfoReport(info, "", "", "0.54.0", now)
+	if len(warnings) != 2 || !strings.HasPrefix(fixText(warnings[0].fixes), "see what Docker takes, then empty its build cache:\n$ docker system df\n$ docker builder prune\n") ||
+		strings.Contains(fixText(warnings[0].fixes), "--shell-host") ||
+		fixText(warnings[1].fixes) != "\n$ cd /home/devopsy/shop/dev/current && devopsy --status\n" {
+		t.Errorf("local: %+v", warnings)
+	}
+
+	// A kernel without AppArmor is said, not warned: nothing to install.
+	info = healthy()
 	info.Docker.Security, info.AppArmor, info.AppArmorParser = []string{"seccomp"}, false, false
 	lines, warnings = serverInfoReport(info, "vm1", "vm1:", "0.53.0", now)
 	if len(warnings) != 0 || !strings.Contains(strings.Join(lines, "\n"), "security seccomp (no AppArmor in this kernel)") {
@@ -285,6 +313,22 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
+	}
+	// Without a target, this machine's, the same facts read in process.
+	out, code = s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "--server-info")
+	for _, want := range []string{
+		"local (",
+		"releases     " + s.root + ", keep 5",
+		"roles        proxy: traefik-prod BASE_DOMAIN=vm1.example.com",
+		"environments shop/dev  none: 19990101000000 failed",
+		"devopsy: | $ cd " + filepath.Join(s.root, "shop", "dev", "current") + " && devopsy --status",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("local: no %q in (%d):\n%s", want, code, out)
+		}
+	}
+	if code != serverInfoWarned {
+		t.Errorf("local: exit %d:\n%s", code, out)
 	}
 	// It left nothing of its own in the release root.
 	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {

@@ -1029,26 +1029,31 @@ caller's environment, then .devopsy/.env).
 Replaces the server's devopsy with the latest release, or vX.Y.Z, as the
 deploy user, who owns it. devopsy --upgrade does the same locally.
 `,
-	"--server-info": `Usage: devopsy @<server> --server-info
+	"--server-info": `Usage: devopsy [@<server>] --server-info
 
 What the server is, read in one session that changes nothing and waits
-for no lock: its devopsy and release settings, the system (memory, load,
-uptime), Docker (image store, security options, logs), the filesystems
-of the release root, Docker's and containerd's data, the snapshot root
-and / (free space, reflinks on the release root), the roles projects
-hold and what they export, and every environment under the release
-root with its current release, its containers and its state.
+for no lock, or without a server what this machine is, as one (on a
+server itself, in --shell-host): its devopsy and release settings, the
+system (memory, load, uptime, the memory the kernel keeps for Kexec
+HandOver and kdump), Docker (image store, security options, logs), the
+filesystems of the release root, Docker's and containerd's data, the
+snapshot root and / (free space, reflinks on the release root), the
+roles projects hold and what they export, and every environment under
+the release root with its current release, its containers and its state.
 
 What needs attention is a warning with its fix: an older devopsy, a
-reboot the system asks for, a clock out of sync, a kernel with AppArmor
-and no apparmor_parser (no container starts), logs without a size limit, a disk 90% full or with less than 5 GB free, no
-reflinks, a snapshot root on the release root's filesystem, a tool the
-server needs missing, a role held twice, and an environment whose first
-release failed, cut off past its switch, with a sync, an import or a
-restore that did not complete, services an operation left stopped, or
-containers restarting, unhealthy or paused (what is running, a sync, an import
-or a restore, is said, not warned). It then exits 3, for CI: 0 says
-nothing needs attention.
+reboot the system asks for, memory Kexec HandOver keeps as CMA (the
+kernel's own allocations can run out with memory free), a clock out of
+sync, a kernel with AppArmor and no apparmor_parser (no container
+starts), logs without a size limit, a disk 90% full or with less than 5
+GB free, no reflinks, a snapshot root on the release root's filesystem,
+a tool the server needs missing, a role held twice, and an environment
+whose first release failed, cut off past its switch, with a sync, an
+import or a restore that did not complete, services an operation left
+stopped, or containers restarting, unhealthy or paused (what is running,
+a sync, an import or a restore, is said, not warned). It then exits 3,
+for CI: 0 says nothing needs attention. What kdump keeps is said with
+how to free it, never warned: crash dumps are a choice.
 `,
 	"--ssh-config": `Usage: devopsy @<server> --ssh-config
 

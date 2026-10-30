@@ -47,14 +47,29 @@ var serverTools = []struct{ name, without string }{
 }
 
 // runServerFacts implements the hidden --server-facts on a server: its
-// facts as one JSON document on stdout (remote.ServerInfo). It reads
-// and tries, never changes anything but a file of its own it removes,
-// and takes no lock.
+// facts as one JSON document on stdout (remote.ServerInfo).
 func runServerFacts() int {
-	r, err := remote.ReleaseSettings()
+	info, err := serverFacts()
 	if err != nil {
 		report.Fail(err)
 		return 1
+	}
+	out, err := json.Marshal(info)
+	if err != nil {
+		report.Fail(err)
+		return 1
+	}
+	fmt.Println(string(out))
+	return 0
+}
+
+// serverFacts is this machine's facts as a server. It reads and tries,
+// never changes anything but a file of its own it removes, and takes no
+// lock.
+func serverFacts() (remote.ServerInfo, error) {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return remote.ServerInfo{}, err
 	}
 	info := remote.ServerInfo{
 		Version: version, Protocol: remote.Protocol,
@@ -81,13 +96,7 @@ func runServerFacts() int {
 	}
 	info.Containers = hostContainers()
 	info.Environments = environments(info.Root)
-	out, err := json.Marshal(info)
-	if err != nil {
-		report.Fail(err)
-		return 1
-	}
-	fmt.Println(string(out))
-	return 0
+	return info, nil
 }
 
 // systemFacts fills the machine's facts from /etc and /proc; what is
@@ -99,9 +108,20 @@ func systemFacts(info *remote.ServerInfo) {
 	if data, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
 		info.Kernel = strings.TrimSpace(string(data))
 	}
+	cmaAreas := int64(0)
 	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
 		m := meminfo(string(data))
 		info.MemTotal, info.MemAvailable, info.SwapTotal = m["MemTotal"], m["MemAvailable"], m["SwapTotal"]
+		cmaAreas = m["CmaTotal"]
+	}
+	// Kexec HandOver's scratch is CMA pageblocks no CMA area counts
+	// (init_cma_reserved_pageblock): in each zone's cma, not in
+	// CmaTotal. /proc/pagetypeinfo would say it too, but it is root's.
+	if data, err := os.ReadFile("/proc/zoneinfo"); err == nil {
+		info.KHOScratch = max(0, zoneCMA(string(data))*int64(os.Getpagesize())-cmaAreas)
+	}
+	if data, err := os.ReadFile("/sys/kernel/kexec_crash_size"); err == nil {
+		info.CrashKernel, _ = strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	}
 	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
 		if f := strings.Fields(string(data)); len(f) >= 3 {
@@ -180,6 +200,18 @@ func meminfo(data string) map[string]int64 {
 		m[k] = n
 	}
 	return m
+}
+
+// zoneCMA is /proc/zoneinfo's cma pages, every zone's.
+func zoneCMA(data string) int64 {
+	var pages int64
+	for _, line := range strings.Split(data, "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[0] == "cma" {
+			n, _ := strconv.ParseInt(f[1], 10, 64)
+			pages += n
+		}
+	}
+	return pages
 }
 
 // dockerFacts asks docker info, docker compose version and reads the
@@ -432,17 +464,30 @@ func environments(root string) []remote.Environment {
 	return envs
 }
 
-// runServerInfo implements devopsy @<server> --server-info: the facts
-// the server's devopsy reports, then what needs attention, warned with
-// its fix; serverInfoWarned when anything was.
+// runServerInfo implements devopsy [@<server>] --server-info: the facts
+// the server's devopsy reports, or this machine's without a target,
+// then what needs attention, warned with its fix; serverInfoWarned when
+// anything was.
 func runServerInfo(t *remote.Target, args []string) int {
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--server-info"]))
 			return 0
 		}
-		report.Error("usage: devopsy @<server> --server-info")
+		report.Error("usage: devopsy [@<server>] --server-info")
 		return 1
+	}
+	if t == nil {
+		info, err := serverFacts()
+		if err != nil {
+			report.Fail(err)
+			return 1
+		}
+		head := "local"
+		if name, err := os.Hostname(); err == nil {
+			head += " (" + name + ")"
+		}
+		return printServerInfo(head, info, "", "")
 	}
 	var out bytes.Buffer
 	code, err := remote.SSH(t, remote.ServerInfoScript(t), bytes.NewReader(nil), &out, false)
@@ -459,36 +504,55 @@ func runServerInfo(t *remote.Target, args []string) int {
 		return 1
 	}
 	ref := remote.ServerRef(t)
-	lines, warnings := serverInfoReport(info, t.Host, ref, version, time.Now())
 	head := "@" + ref
 	if ref != t.Host+":" {
 		head += " (" + t.Host + ")"
 	}
+	return printServerInfo(head, info, t.Host, ref)
+}
+
+// printServerInfo prints info's report under head, then its notes and
+// warnings: serverInfoWarned when it warned. host and ref are empty for
+// this machine's.
+func printServerInfo(head string, info remote.ServerInfo, host, ref string) int {
+	lines, warnings := serverInfoReport(info, host, ref, version, time.Now())
 	fmt.Println(styleFor(os.Stdout).name(head))
 	for _, l := range lines {
 		fmt.Println(l)
 	}
+	code := 0
 	for _, w := range warnings {
-		report.Default().Say(report.WarnLevel, w.msg, nil, w.fixes)
+		level := report.WarnLevel
+		if w.note {
+			level = report.InfoLevel
+		} else {
+			code = serverInfoWarned
+		}
+		report.Default().Say(level, w.msg, nil, w.fixes)
 	}
-	if len(warnings) > 0 {
-		return serverInfoWarned
-	}
-	return 0
+	return code
 }
 
-// serverWarning is a warning and its fixes.
+// serverWarning is a warning and its fixes; a note is said, not warned,
+// and leaves the exit code alone.
 type serverWarning struct {
 	msg   string
 	fixes []report.Remedy
+	note  bool
 }
 
 // serverInfoReport is what --server-info prints of info, its lines and
 // its warnings, for the server host (as an address's server part) and
-// ref (as typed, for fixes: remote.ServerRef); local is this devopsy's
-// version, now the time ages count from.
+// ref (as typed, for fixes: remote.ServerRef), both empty for this
+// machine's; local is this devopsy's version, now the time ages count
+// from.
 func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.Time) (lines []string, warnings []serverWarning) {
-	warn := func(msg string, fixes ...report.Remedy) { warnings = append(warnings, serverWarning{msg, fixes}) }
+	warn := func(msg string, fixes ...report.Remedy) {
+		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes})
+	}
+	note := func(msg string, fixes ...report.Remedy) {
+		warnings = append(warnings, serverWarning{msg: msg, fixes: fixes, note: true})
+	}
 	row := func(key, value string) {
 		lines = append(lines, fmt.Sprintf("%-12s %s", key, value))
 	}
@@ -500,7 +564,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		v += " (local " + local + ")"
 	}
 	row("devopsy", v)
-	if update.Newer(local, info.Version) {
+	if ref != "" && update.Newer(local, info.Version) {
 		warn("the server's devopsy "+info.Version+" is older than the local "+local, report.Fix("", "devopsy @"+ref+" --upgrade"))
 	}
 	row("releases", fmt.Sprintf("%s, keep %d (at most %d)", info.Root, info.Keep, info.MaxKeep))
@@ -539,6 +603,23 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 		hw = append(hw, "up "+duration(time.Duration(info.Uptime*float64(time.Second))))
 	}
 	more(strings.Join(hw, ", "))
+	// Memory the kernel keeps from the rest, which MemTotal leaves out
+	// (kdump's) or counts (Kexec HandOver's): devopsy-server's setup.sh
+	// frees both.
+	var kept []string
+	if info.KHOScratch > 0 {
+		kept = append(kept, humanBytes(info.KHOScratch)+" for Kexec HandOver")
+		warn("Kexec HandOver keeps "+humanBytes(info.KHOScratch)+" of memory as CMA, which only movable pages may use: the kernel's own allocations can run out with memory free (an initramfs out of memory, a deadlocked kernel)",
+			report.Fix("kho=off on the kernel's command line, then a reboot: devopsy-server's setup.sh adds it, rerun as root"))
+	}
+	if info.CrashKernel > 0 {
+		kept = append(kept, humanBytes(info.CrashKernel)+" for kdump")
+		note("kdump keeps "+humanBytes(info.CrashKernel)+" of memory for its crash kernel, which nothing else may use",
+			report.Fix("without crash dumps: DEVOPSY_KDUMP=off for devopsy-server's setup.sh, rerun as root, then a reboot"))
+	}
+	if len(kept) > 0 {
+		more("kernel keeps " + strings.Join(kept, ", "))
+	}
 	if info.RebootRequired {
 		msg := "the server needs a reboot"
 		if len(info.RebootPackages) > 0 {
@@ -608,13 +689,21 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			return slices.ContainsFunc(disk.Paths, func(p string) bool { return strings.HasPrefix(p, what+"=") })
 		}
 		if has("docker") || has("containerd") {
-			fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+			if ref == "" {
+				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache:", "docker system df", "docker builder prune"))
+			} else {
+				fixes = append(fixes, report.Fix("see what Docker takes, then empty its build cache, on the server:", "devopsy @"+ref+" --shell-host", "docker system df", "docker builder prune"))
+			}
 		}
 		if has("snapshots") || (has("releases") && info.SnapshotRoot == "") {
 			fixes = append(fixes, report.Fix("remove snapshots an environment no longer needs, in its project's checkout:", "devopsy @<target> --snapshots", "devopsy @<target> --snapshots remove <id>"))
 		}
 		if len(fixes) == 0 {
-			fixes = append(fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+			if ref == "" {
+				fixes = append(fixes, report.Fix("see what takes it"))
+			} else {
+				fixes = append(fixes, report.Fix("see what takes it, on the server:", "devopsy @"+ref+" --shell-host"))
+			}
 		}
 		return fixes
 	}
@@ -815,7 +904,7 @@ func serverInfoReport(info remote.ServerInfo, host, ref, local string, now time.
 			problems = append(problems, strings.Join(bad, ", "))
 		}
 		for _, p := range problems {
-			warn(env.Path+": "+p, statusFix(host, env.Path))
+			warn(env.Path+": "+p, statusFix(host, info.Root, env.Path))
 		}
 	}
 	return lines, warnings
@@ -841,8 +930,12 @@ func composeNameOf(path string) string {
 	return strings.Join(parts, "-")
 }
 
-// statusFix is the --status of the environment at path, in its project.
-func statusFix(host, path string) report.Remedy {
+// statusFix is the --status of the environment at path, in its project,
+// or in its current release under root on this machine (no host).
+func statusFix(host, root, path string) report.Remedy {
+	if host == "" {
+		return report.Fix("", "cd "+filepath.Join(root, path, "current")+" && devopsy --status")
+	}
 	project, rest, _ := strings.Cut(path, "/")
 	return report.Fix("in "+project+"'s checkout:", "devopsy @"+host+":"+rest+" --status")
 }
