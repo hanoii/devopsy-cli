@@ -1032,14 +1032,14 @@ deploy user, who owns it. devopsy --upgrade does the same locally.
 	"--server-info": `Usage: devopsy [@<server>] --server-info
 
 What the server is, read in one session that changes nothing and waits
-for no lock, or without a server what this machine is, as one (on a
-server itself, in --shell-host): its devopsy and release settings, the
-system (memory, load, uptime, the memory the kernel keeps for Kexec
-HandOver and kdump), Docker (image store, security options, logs), the
-filesystems of the release root, Docker's and containerd's data, the
-snapshot root and / (free space, reflinks on the release root), the
-roles projects hold and what they export, and every environment under
-the release root with its current release, its containers and its state.
+for no lock, or without a server the Linux server it runs on (in
+--shell-host): its devopsy and release settings, the system (memory,
+load, uptime, the memory the kernel keeps for Kexec HandOver and kdump),
+Docker (image store, security options, logs), the filesystems of the
+release root, Docker's and containerd's data, the snapshot root and /
+(free space, reflinks on the release root), the roles projects hold and
+what they export, and every environment under the release root with its
+current release, its containers and its state.
 
 What needs attention is a warning with its fix: an older devopsy, a
 reboot the system asks for, memory Kexec HandOver keeps as CMA (the

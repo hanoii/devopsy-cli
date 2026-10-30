@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -314,8 +315,20 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	if code != serverInfoWarned || strings.Contains(out, "shop/notes") || strings.Contains(out, "old.rm") || strings.Contains(out, "has no tail") {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
-	// Without a target, this machine's, the same facts read in process.
+	// It left nothing of its own in the release root.
+	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {
+		t.Errorf("left %v", m)
+	}
+
+	// Without a target, the Linux server it runs on, the same facts read
+	// in process; refused elsewhere (macOS: CI runs both).
 	out, code = s.run([]string{"PATH=" + bin + ":" + filepath.Join(filepath.Dir(s.root), "bin") + ":/usr/bin:/bin"}, "--server-info")
+	if runtime.GOOS != "linux" {
+		if code != 1 || !strings.Contains(out, "reads the Linux server it runs on, and this is "+runtime.GOOS) || !strings.Contains(out, "$ devopsy @<server> --server-info") || strings.Contains(out, "local (") {
+			t.Errorf("not on Linux: exit %d:\n%s", code, out)
+		}
+		return
+	}
 	for _, want := range []string{
 		"local (",
 		"releases     " + s.root + ", keep 5",
@@ -329,10 +342,6 @@ exec "$(dirname "$DOCKER_LOG")/bin/docker" "$@"
 	}
 	if code != serverInfoWarned {
 		t.Errorf("local: exit %d:\n%s", code, out)
-	}
-	// It left nothing of its own in the release root.
-	if m, _ := filepath.Glob(filepath.Join(s.root, ".devopsy-reflink.*")); len(m) > 0 {
-		t.Errorf("left %v", m)
 	}
 }
 
