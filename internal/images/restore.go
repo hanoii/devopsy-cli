@@ -332,21 +332,10 @@ func (s *Set) RestoreOwn(rel string) {
 	if len(es) == 0 {
 		return
 	}
-	builds := map[string]bool{}
-	if svcs, err := s.List(rel); err == nil {
-		for _, svc := range svcs {
-			builds[familiar(svc.Ref)] = svc.own(s.Mode)
-		}
-	}
 	names := bookmarks(es, s.Name, id)
 	own := s.own(rel)
 	for i, e := range es {
-		isOwn := e.Kind == KindOwn
-		if e.Kind == "" {
-			b, ok := builds[familiar(e.Ref)]
-			isOwn = !ok || b
-		}
-		if !isOwn || e.ID == "" || strings.Contains(e.Ref, "@") {
+		if e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") {
 			continue
 		}
 		bid, err := s.Docker.ID(names[i])

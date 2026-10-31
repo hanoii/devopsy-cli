@@ -255,23 +255,21 @@ func TestReleaseSnapshotScripts(t *testing.T) {
 	}
 }
 
-// A sync's done line completes it, but over a restore's mark only one a
-// parent that checked the mark wrote (CheckedDoneLine): an older parent,
-// whose done line is plain, leaves the copy partial and the mark there.
+// A sync's done line completes it, over any mark; a copy without one is
+// partial.
 func TestSyncDecisionRestoreMark(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		mark, done, want string
 	}{
 		{"", DoneLine("7.1"), "go"},
-		{"", CheckedDoneLine("7.1"), "go"},
 		{IncompleteImport, DoneLine("7.1"), "go"},
-		{IncompleteRestore, CheckedDoneLine("7.1"), "go"},
-		{IncompleteRestore, DoneLine("7.1"), "partial"},
+		{IncompleteRestore, DoneLine("7.1"), "go"},
+		{IncompleteRestore, "", "partial"},
 	} {
 		dir := t.TempDir()
 		taken, incomplete := filepath.Join(dir, "taken"), filepath.Join(dir, "incomplete")
-		if err := os.WriteFile(taken, []byte("writer db 1 up\n"+c.done+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(taken, []byte("writer db 1 up\n"+c.done), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if c.mark != "" {
@@ -283,22 +281,15 @@ func TestSyncDecisionRestoreMark(t *testing.T) {
 		if err != nil || strings.TrimSpace(string(out)) != c.want {
 			t.Errorf("mark %q, %q: %s (%v), want %s", c.mark, c.done, out, err, c.want)
 		}
-		// An operator's devopsy older than the servers decides by the done
-		// line alone, which a checking parent's record still has as it is:
-		// a complete sync is never taken for a cut one there.
-		if err := exec.Command("grep", "-qx", DoneLine("7.1"), taken).Run(); err != nil {
-			t.Errorf("%q: no plain done line for an older holder (%v)", c.done, err)
-		}
 	}
 
 	// The partial copy over the restore's mark leaves the mark a
 	// restore's: its data is as partial as the restore left it, and only
 	// a restore or a sync writing every service of the snapshot clears
-	// it. Written over as a sync's copy mark, the next plain done line
-	// (the same older parent) would clear it, the snapshot's services
-	// the parent does not copy started on half-restored data.
+	// it. Written over as a sync's copy mark, the next sync's done line
+	// would clear it, whatever it copied.
 	base := t.TempDir()
-	if err := os.WriteFile(filepath.Join(base, SyncTakenFile), []byte("writer db 1 up\n"+DoneLine("7.1")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(base, SyncTakenFile), []byte("writer db 1 up\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mark := filepath.Join(base, SyncIncompleteFile)
@@ -320,6 +311,6 @@ func TestSyncDecisionRestoreMark(t *testing.T) {
 	}
 	data, _ := os.ReadFile(mark)
 	if m := ParseMark(string(data)); !m.IsRestore() || m.From != "20261026000000" {
-		t.Errorf("an older parent's complete copy over a restore's mark wrote it over: %q\n%s", data, out)
+		t.Errorf("a cut copy over a restore's mark wrote it over: %q\n%s", data, out)
 	}
 }

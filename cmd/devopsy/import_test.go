@@ -687,8 +687,9 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 // as no label, so what reads them refuses before anything changes, with
 // the upgrade line (an export, a sync: the parent's check, before the
 // child stops anything; a child's release that syncs, before its
-// upload), and nothing else does (a release that does not sync).
-func TestDataCopyOlderServer(t *testing.T) {
+// upload), and nothing else does (a release that does not sync). So do
+// --reset's and restores' marks' features.
+func TestDataFeaturesRefuseFirst(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
@@ -738,6 +739,16 @@ func TestDataCopyOlderServer(t *testing.T) {
 	}
 	if out, _ := run("@dev", "--sync", "--yes"); strings.Contains(out, "lacks") || !strings.Contains(out, "copying @devopsy@one:prod") {
 		t.Errorf("a sync on a server without reset:\n%s", out)
+	}
+	// One lacking restores' marks: every sync refuses before anything
+	// stops, whether or not the child has one (a parent that cannot read
+	// it would clear it over what it does not copy).
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+restoreMarkNeed+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	s.logs()
+	out, code = run("@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (") || !strings.Contains(out, restoreMarkNeed+")") || strings.Contains(docker, " stop ") {
+		t.Errorf("a sync from a parent without restores' marks (%d):\n%s\n%s", code, out, docker)
 	}
 }
 
@@ -815,17 +826,17 @@ func TestDataStopEnv(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "finish child partial stop=app\n") {
 		t.Errorf("a cut sync (%d):\n%s", code, out)
 	}
-	// A killed holder's record, labels from before devopsy.data: settled
-	// all the same.
+	// A killed holder's record, labels it cannot read: settled all the
+	// same.
 	dev := filepath.Join(s.root, "shop", "dev")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP=pause\n", 0o644)
 	cmd := exec.Command(binary, "--sync-services", "settle")
 	cmd.Dir = filepath.Join(dev, "current")
 	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
 	settled, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(settled), "devopsy: warning: settling with the record alone: service app: devopsy.sync=rsync") || !strings.Contains(string(settled), "finish child partial stop=app") || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
-		t.Errorf("settle with old labels (%v):\n%s", err, settled)
+	if err != nil || !strings.Contains(string(settled), "devopsy: warning: settling with the record alone: service app: devopsy.data=pause") || !strings.Contains(string(settled), "finish child partial stop=app") || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+		t.Errorf("settle with labels it cannot read (%v):\n%s", err, settled)
 	}
 }
 

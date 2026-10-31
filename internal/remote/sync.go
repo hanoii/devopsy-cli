@@ -118,24 +118,6 @@ func WriterLine(service string, pid int, was string) string {
 // sync's id: what --sync-services finish partial and settle remove.
 const SyncContainerPrefix = "devopsy-sync-"
 
-// SyncCheckedEnv, set by a parent's push for the child's devopsy, says the
-// parent checked the child's restore mark (it copies all of every service
-// the restore covers): the child's done line then says so
-// (CheckedDoneLine), and only such a line completes a sync over a
-// restore's mark, so a parent older than restores' marks never clears one
-// with a copy that leaves some of it.
-const SyncCheckedEnv = "DEVOPSY_INTERNAL_SYNC_CHECKED"
-
-// CheckedDoneLine is DoneLine from a parent that checks restores' marks:
-// a line of its own before it (CheckedLine), written together in one
-// append, so the done line stays what an older devopsy's holder looks
-// for (an operator older than the servers took every complete sync for
-// a cut one, review).
-func CheckedDoneLine(id string) string { return CheckedLine(id) + "\n" + DoneLine(id) }
-
-// CheckedLine says the sync's parent checked the child's restore mark.
-func CheckedLine(id string) string { return "checked " + id }
-
 // DoneLine records the copy's last write in SyncStartedFile.
 func DoneLine(id string) string {
 	return "done " + id
@@ -664,9 +646,7 @@ func syncDecision(taken, incomplete string) string {
 	return `  # A push that went through and wrote nothing (the parent's labels
   # copy nothing) is go: no data the labels cover is partial any more.
   sync_word=abort
-  # Over a restore's mark, only a parent that checked it completes it.
-  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null &&
-    { grep -qx "` + CheckedLine("$sync_id") + `" ` + taken + ` 2>/dev/null || [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" != ` + IncompleteRestore + ` ]; }; then
+  if grep -qx "` + DoneLine("$sync_id") + `" ` + taken + ` 2>/dev/null; then
     sync_word=go
   elif [ -e ` + taken + ` ]; then
     # Written in part: the copy was cut.
@@ -708,8 +688,7 @@ func syncBlock(projectName, failed string, release bool) string {
       if [ -e ` + taken + ` ] && [ "$(cut -f3 ` + incomplete + ` 2>/dev/null)" = ` + IncompleteRestore + ` ]; then
         # Over a restore's mark the mark stays the restore's: a sync's
         # would let a later sync clear it without copying every service
-        # of the snapshot (an older parent's complete copy, which could
-        # not check that, included).
+        # of the snapshot.
         devopsy --say error "the copy did not complete what the restore of snapshot $(cut -f2 ` + incomplete + ` 2>/dev/null) left: what it stopped stays down until a sync from a parent that copies every service of it, or a restore, completes, and ` + failed + `" || true
       elif [ -e ` + taken + ` ]; then
         devopsy --say error "the copy was cut: the services it stopped stay down until a sync completes, and ` + failed + `" || true
@@ -1088,7 +1067,7 @@ func ParseInherit(out string) []string {
 func ParseParentData(out string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") || strings.HasPrefix(line, "old\t") {
+		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") {
 			b.WriteString(strings.TrimRight(line, "\r") + "\n")
 		}
 	}
@@ -1255,7 +1234,7 @@ copyvol() {
 		// the copy is not this sync's to complete. (A take between the
 		// check and the append leaves a record of this line alone, which
 		// the next lock-taker settles.)
-		script += "mine && printf '%s\\n' " + Quote(CheckedDoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
+		script += "mine && printf '%s\\n' " + Quote(DoneLine(id)) + " >>" + started + " || { devopsy --say error \"the child's side decided already: the copy does not count\"; exit 1; }\n"
 	}
 	return script
 }

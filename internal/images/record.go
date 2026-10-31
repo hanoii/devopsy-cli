@@ -138,7 +138,7 @@ func (h history) check(old []entry, e entry, img Image) string {
 	if !ok {
 		// Nothing ran on its data that devopsy knows of: a new name for it
 		// cannot be ordered.
-		if o, ok := match(old, e); ok && o.Kind != "" && familiar(o.Ref) != familiar(e.Ref) {
+		if o, ok := match(old, e); ok && familiar(o.Ref) != familiar(e.Ref) {
 			return fmt.Sprintf("%s: %s (%s) never ran on its data, and its image was %s", e.Service, e.Ref, shownEntry(e), o.Ref)
 		}
 		return ""
@@ -155,8 +155,8 @@ func (h history) check(old []entry, e entry, img Image) string {
 }
 
 // seed starts the history of a pulled data service that has none with
-// what its container runs, once started: data an older devopsy ran, or a
-// service that just gained its label. Written under the release lock.
+// what its container runs, once started: a service that just gained its
+// label. Written under the release lock.
 func (s *Set) seed(base string, old, es []entry) history {
 	h := readHistory(base)
 	var cs map[string]Container
@@ -275,16 +275,10 @@ func (s *Set) putNamesBack(rel string, es []entry, refs []string) {
 	}
 }
 
-// match is the entry of old for the service of e: by service, else (a
-// listing from before the service column) by name.
+// match is the entry of old for the service of e.
 func match(old []entry, e entry) (entry, bool) {
 	for _, o := range old {
 		if o.Service != "" && o.Service == e.Service {
-			return o, true
-		}
-	}
-	for _, o := range old {
-		if o.Service == "" && familiar(o.Ref) == familiar(e.Ref) {
 			return o, true
 		}
 	}

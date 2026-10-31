@@ -1208,7 +1208,7 @@ func runImport(cwd string, args []string, color bool) int {
 	// are checked before anything stops, as a sync checks its parent's
 	// (images.ImportCheck), and the service is held on the export's once
 	// the data is in: on a target, where data services are held. A tar
-	// without them (by hand, an older devopsy) starts the history over.
+	// without them (made by hand) starts the history over.
 	var imgs *images.Set
 	var record string
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")

@@ -104,7 +104,7 @@ func newSyncID() string {
 // changes: c is a child with a run step, p another environment of the same
 // project, released; across servers, an SSH agent to forward and a child
 // the parent's server can reach.
-func syncPreflight(c, p *remote.Target, projectName string, reset bool, extra ...string) (*syncJob, error) {
+func syncPreflight(c, p *remote.Target, projectName string, reset bool) (*syncJob, error) {
 	if c.Parent == "" {
 		return nil, fmt.Errorf("@%s is not a child: environment %s has no parent: in %s", c.Address, c.Name, cmp.Or(c.File, "the project's config"))
 	}
@@ -146,10 +146,10 @@ func syncPreflight(c, p *remote.Target, projectName string, reset bool, extra ..
 	if reset {
 		pushEnv = map[string]string{remote.SyncResetEnv: "1"}
 	}
-	// extra: what the child's state needs of the parent too (a restore's
-	// mark: a parent whose list reading predates it would sync and clear
-	// the mark over what it does not copy).
-	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), extra...)
+	// The push also checks a restore's mark on the child (copiesService),
+	// which came with restoreMarkNeed: a parent without it would clear the
+	// mark over what it does not copy.
+	needs := append(remote.Needs(remote.PushScript(p, job.parentName, pushEnv)), restoreMarkNeed)
 	code, err := remote.SSH(p, remote.ParentCheckScript(p, job.parentName, needs), bytes.NewReader(nil), &out, false)
 	if err != nil {
 		return nil, err
@@ -703,9 +703,6 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 			return fail("--from: " + err.Error())
 		}
 	}
-	// A restore's mark on the child needs no session of its own here: only
-	// a parent that checks it writes the done line that completes a sync
-	// over it (remote.CheckedDoneLine).
 	job, err := syncPreflight(t, p, projectName, reset)
 	if err != nil {
 		return fail(err.Error())
@@ -1003,9 +1000,6 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		report.Error(msg)
 		return 1
 	}
-	// This devopsy checks the child's restore mark (copiesService, below):
-	// the child's devopsy says so in the done line it writes.
-	_ = os.Setenv(remote.SyncCheckedEnv, "1")
 	if _, _, err := syncEnv(cli.SyncPushFlag); err != nil {
 		return fail(err.Error())
 	}
@@ -2292,7 +2286,7 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 			return err
 		}
 		if last {
-			return recordWrite(toBase, remote.CheckedDoneLine(os.Getenv(remote.SyncIDEnv)))
+			return recordWrite(toBase, remote.DoneLine(os.Getenv(remote.SyncIDEnv)))
 		}
 		return nil
 	}
@@ -2377,13 +2371,13 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 // project's. The
 // caller's environment wins over a project's .env, so the parent's
 // secrets and compose project must not reach the child's commands.
-var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `|` + remote.SyncCheckedEnv + `)=`)
+var cleanEnvKeys = regexp.MustCompile(`^(PATH|HOME|USER|LOGNAME|LANG|LC_[A-Z]+|TERM|TZ|DOCKER_[A-Z_]+|DEVOPSY_VERBOSE|DEVOPSY_HOME|XDG_CONFIG_HOME|` + remote.SyncFromTargetEnv + `|` + remote.SyncToTargetEnv + `|` + remote.SyncWatchEnv + `|` + remote.HeartbeatEnv + `|` + remote.SyncIDEnv + `|` + remote.SyncResetEnv + `)=`)
 
 // syncExecEnv are the sync's variables the child's devopsy gets across
 // servers, as cleanEnvKeys lets them through on the same one.
 func syncExecEnv() map[string]string {
 	env := map[string]string{}
-	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv, remote.SyncCheckedEnv} {
+	for _, k := range []string{remote.SyncFromTargetEnv, remote.SyncToTargetEnv, remote.SyncWatchEnv, remote.HeartbeatEnv, remote.SyncIDEnv, remote.SyncResetEnv} {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -2958,11 +2952,7 @@ func syncImport(cwd, projectDir, base, name string, last bool, services []cli.Sy
 	if err := runDataHook(ctx, cwd, projectDir, env, f, nil, nil, "import", name); err != nil {
 		code = fail("the data capability's import " + name + ": " + err.Error())
 	} else if last {
-		done := remote.DoneLine(os.Getenv(remote.SyncIDEnv))
-		if os.Getenv(remote.SyncCheckedEnv) != "" {
-			done = remote.CheckedDoneLine(os.Getenv(remote.SyncIDEnv))
-		}
-		if err := recordWrite(base, done); err != nil {
+		if err := recordWrite(base, remote.DoneLine(os.Getenv(remote.SyncIDEnv))); err != nil {
 			code = fail(err.Error())
 		}
 	}

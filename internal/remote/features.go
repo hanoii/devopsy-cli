@@ -70,17 +70,15 @@ var namedFeatures = []struct {
 	// it replaces calls --snapshot-step's release words, which a devopsy
 	// with manual snapshots only refuses as usage once the locks are held.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--snapshot-step[ '\\]{1,8}release-`)},
-	// What came with v0.52.0 beside release snapshots, under their name,
-	// which v0.52.0 reports (a name of their own would refuse a v0.52.0
-	// server that runs them fine: review): the mounts check's words after
-	// restored, restart (the restart after a failed run step) and a
-	// restore's snapshot, which v0.51.0 refuses as usage after the switch
-	// (review: the previous release was never restarted); and the util
-	// image a script runs, devopsy-util:3, whose tag a v0.51.0 child's
-	// --util-image never readies, where a sync's receive runs it after its
-	// claim (the copy then counted as cut). childNeeds carries the latter
-	// to the child's first session, so an older child refuses before
-	// anything stops. Bump the tag here with UtilImage's.
+	// What came with release snapshots, under their name: the mounts
+	// check's words after restored, restart (the restart after a failed
+	// run step) and a restore's snapshot, which a devopsy without them
+	// refuses as usage after the switch; and the util image a script runs,
+	// devopsy-util:3, whose tag a devopsy without it never readies, where a
+	// sync's receive runs it after its claim (the copy then counted as
+	// cut). childNeeds carries the latter to the child's first session, so
+	// a child lacking it refuses before anything stops. A new tag of
+	// UtilImage is a named feature of its own.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
 	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
 }

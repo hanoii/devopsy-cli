@@ -1049,9 +1049,8 @@ lead, since Docker mounts that: a link in the release to below an owned
 entry, or one in `shared/mnt` into the release, is refused as what it
 leads to (links into `shared/`, which is outside the release, are fine).
 
-Labels the owners' step after the switch could not read (a name from
-before a change, a leftover `.devopsy/capabilities/sync/`) refuse the
-release here too. With an entry owned, it also builds `devopsy-util`
+Labels the owners' step after the switch could not read (a value it
+does not know) refuse the release here too. With an entry owned, it also builds `devopsy-util`
 when the server lacks it, so a registry that cannot be reached refuses
 the release before it goes live.
 
@@ -1074,9 +1073,7 @@ whose its files are).
 that it has none, neither copied nor touched. An empty value is an
 error, not `false`: a variable left unset by accident
 (`devopsy.data=${HAS_DATA}`) must not stop copying silently. Any other
-value is an error, and so are the values and labels before these
-(`mnt`, `stream`, `none`, `devopsy.sync...`), naming what replaces
-them.
+value is an error.
 
 `devopsy.data.copy` says how a copy to another environment (a sync,
 `--export`, `--import`) carries it:
@@ -1286,9 +1283,8 @@ made again on it; a name the data never ran, or one from another
 repository (the tar names it, whoever made it, so it never chooses what
 runs), is refused unless `--import <service> --accept-image <service>`,
 which runs its own image on the data, its history starting over. A tar
-without them (made by hand, by an older devopsy), every import locally,
-and `--resolved` start the service's history over from the image that
-runs it.
+without them (made by hand), every import locally, and `--resolved`
+start the service's history over from the image that runs it.
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits
@@ -2058,8 +2054,7 @@ lists them with their contracts):
   handling of the labels; `export` and `import` are required on their side
   when a service is `custom` there, checked before anything stops. Hooks
   run in the foreground: what one leaves running in the background ends
-  when it returns. A capability left in `.devopsy/capabilities/sync/` is
-  an error naming this one.
+  when it returns.
   - `prepare parent|child` runs on each side, in its current release,
     before anything is stopped there: the child's under its release lock,
     before the parent's side starts; the parent's under a shared hold of

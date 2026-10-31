@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,11 +79,6 @@ func TestRecordListing(t *testing.T) {
 	}
 	if got := readList(e2.rel(id2)); got[0].Kind != KindPulled || got[0].Digest != "app-prod-app@sha256:a1" {
 		t.Errorf("image mode app: %+v", got[0])
-	}
-	// v0.48's listing: name and id only.
-	os.WriteFile(filepath.Join(e.rel(id), ListFile), []byte("mariadb:11\tsha256:m1\nx\n"), 0o644)
-	if got := readList(e.rel(id)); len(got) != 2 || got[0] != (entry{Ref: "mariadb:11", ID: "sha256:m1"}) || got[1] != (entry{Ref: "x"}) {
-		t.Errorf("old listing: %+v", got)
 	}
 }
 

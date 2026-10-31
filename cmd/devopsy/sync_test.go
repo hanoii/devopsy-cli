@@ -101,7 +101,6 @@ dl() {
 lab() {
   case $1 in
     none) echo '{}' ;;
-    old) echo '{"devopsy.sync":"rsync"}' ;;
     -+*) echo "{\"devopsy.data.stop\":\"${1#-+}\"}" ;;
     *+*) echo "{$(dl "${1%%+*}"),\"devopsy.data.stop\":\"${1#*+}\"}" ;;
     *) echo "{$(dl "$1")}" ;;
@@ -2137,19 +2136,18 @@ func TestSyncLabels(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "service app: devopsy.data=true mounts ./mnt whole: mount its entries (./mnt/<name>)") || strings.Contains(docker, " stop ") || strings.Contains(docker, "rsync") {
 		t.Errorf("mnt whole (%d):\n%s\n%s", code, out, docker)
 	}
-	// A value devopsy does not know is an error, before anything stops;
-	// so is a label from before devopsy.data on the child alone: its
-	// prepare refuses, naming what replaces it.
+	// A value devopsy does not know is an error, before anything stops,
+	// on the child alone too: its prepare refuses.
 	out, code = s.run([]string{"FAKE_APP=pause"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(out, "service app: devopsy.data=pause: true or false") || strings.Contains(docker, " stop ") {
 		t.Errorf("unknown value (%d):\n%s\n%s", code, out, docker)
 	}
-	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP=pause\n", 0o644)
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data=true (rsync is the default devopsy.data.copy=volumes)") || strings.Contains(docker, " stop ") || parentChanged(docker) {
-		t.Errorf("an old label on the child (%d):\n%s\n%s", code, out, docker)
+	if code == 0 || !strings.Contains(out, "service app: devopsy.data=pause: true or false") || strings.Contains(docker, " stop ") || parentChanged(docker) {
+		t.Errorf("an unknown value on the child (%d):\n%s\n%s", code, out, docker)
 	}
 	os.Remove(s.log + ".shop-dev")
 }
@@ -4259,7 +4257,7 @@ func TestExportNothingRunningIgnoresLeavingBinds(t *testing.T) {
 }
 
 // A feature only the activation needs (leaving-binds: the mounts check's
-// words every activation calls, which a v0.52.0 server lacks) refuses a
+// words every activation calls) refuses a
 // release before anything changes on the server: the upload's own needs
 // are the server's, so the project must not be uploaded first and the
 // activation's prelude refuse it then, leaving a pending release
@@ -4298,8 +4296,8 @@ func TestOlderServerActivationRefusesBeforeUpload(t *testing.T) {
 // An upload checks its activation's needs (remote.WithAlsoNeeds), so a
 // server lacking one refuses before anything changes: before the upload,
 // but only then, after everything else a release does first. A child's
-// first release to a server lacking release-snapshots (a v0.51.0 one,
-// where every activation is refused) runs its local before steps (the
+// first release to a server lacking release-snapshots (where every
+// activation is refused) runs its local before steps (the
 // project's: a build and push, a notice) and writes the parent's
 // inherited variables into the child's shared/inherit.env, creating its
 // directory, and only then is refused: the needs are known before any

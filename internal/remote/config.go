@@ -645,8 +645,6 @@ func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, er
 				if err := checkInherit(n.Content[i+1]); err != nil {
 					return nil, nil, fmt.Errorf("%s: %s: inherit: %w", file, name, err)
 				}
-			case "server":
-				return nil, nil, fmt.Errorf("%s: %s: no server: in a project's config: name it in the address (@<server>:%s), DEVOPSY_SERVER, or an alias", file, name, name)
 			default:
 				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, reload, releases, snapshots, parent, inherit)", file, name, k)
 			}

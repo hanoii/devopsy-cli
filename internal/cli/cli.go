@@ -642,8 +642,8 @@ the same name, goes on, held on the export's image once the data is in;
 an image the data moved past, or a name (or another repository) it
 never ran, is refused. --accept-image <service> runs its own image on
 the data then, its history starting over. A tar without them (made by
-hand, by an older devopsy) and every import locally start the history
-over from the image that runs.
+hand) and every import locally start the history over from the image
+that runs.
 
 Stopped meanwhile: the service when it is labeled devopsy.data.stop=own,
 import or always, every import and always service (an app, a worker),
