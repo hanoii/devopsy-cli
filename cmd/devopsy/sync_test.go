@@ -101,7 +101,6 @@ dl() {
 lab() {
   case $1 in
     none) echo '{}' ;;
-    old) echo '{"devopsy.sync":"rsync"}' ;;
     -+*) echo "{\"devopsy.data.stop\":\"${1#-+}\"}" ;;
     *+*) echo "{$(dl "${1%%+*}"),\"devopsy.data.stop\":\"${1#*+}\"}" ;;
     *) echo "{$(dl "$1")}" ;;
@@ -2137,19 +2136,18 @@ func TestSyncLabels(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "service app: devopsy.data=true mounts ./mnt whole: mount its entries (./mnt/<name>)") || strings.Contains(docker, " stop ") || strings.Contains(docker, "rsync") {
 		t.Errorf("mnt whole (%d):\n%s\n%s", code, out, docker)
 	}
-	// A value devopsy does not know is an error, before anything stops;
-	// so is a label from before devopsy.data on the child alone: its
-	// prepare refuses, naming what replaces it.
+	// A value devopsy does not know is an error, before anything stops,
+	// on the child alone too: its prepare refuses.
 	out, code = s.run([]string{"FAKE_APP=pause"}, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	if code == 0 || !strings.Contains(out, "service app: devopsy.data=pause: true or false") || strings.Contains(docker, " stop ") {
 		t.Errorf("unknown value (%d):\n%s\n%s", code, out, docker)
 	}
-	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP=pause\n", 0o644)
 	out, code = s.run(nil, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(out, "service app: devopsy.sync=rsync: that label is now devopsy.data=true (rsync is the default devopsy.data.copy=volumes)") || strings.Contains(docker, " stop ") || parentChanged(docker) {
-		t.Errorf("an old label on the child (%d):\n%s\n%s", code, out, docker)
+	if code == 0 || !strings.Contains(out, "service app: devopsy.data=pause: true or false") || strings.Contains(docker, " stop ") || parentChanged(docker) {
+		t.Errorf("an unknown value on the child (%d):\n%s\n%s", code, out, docker)
 	}
 	os.Remove(s.log + ".shop-dev")
 }

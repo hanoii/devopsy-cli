@@ -187,40 +187,24 @@ func TestSyncServices(t *testing.T) {
 		t.Errorf("a volume of a service with data: %+v %v", got, err)
 	}
 
-	// Values devopsy does not know are errors naming the service; the
-	// labels and values before devopsy.data.copy name what replaces them;
-	// an empty devopsy.data or copy (a variable left unset) is no way to
+	// Values devopsy does not know are errors naming the service; an
+	// empty devopsy.data or copy (a variable left unset) is no way to
 	// turn copying off; own needs data to stop for.
 	for label, want := range map[string]string{
-		`"devopsy.data":"pause"`:                                "service db: devopsy.data=pause: true or false",
-		`"devopsy.data":""`:                                     "service db: devopsy.data is empty: true, or false for no data",
-		`"devopsy.data":"mnt"`:                                  "service db: devopsy.data=mnt: devopsy.data=true now (its entries of mnt are the default devopsy.data.copy=volumes)",
-		`"devopsy.data":"stream"`:                               "service db: devopsy.data=stream: devopsy.data=true and devopsy.data.copy=custom now",
-		`"devopsy.data":"none"`:                                 "service db: devopsy.data=none: devopsy.data=false now (no data), or devopsy.data=true and devopsy.data.copy=none for data no copy carries",
-		`"devopsy.data":"rsync"`:                                "service db: devopsy.data=rsync: devopsy.data=true now",
-		`"devopsy.data":"files"`:                                "service db: devopsy.data=files: devopsy.data=true now",
-		`"devopsy.data":"skip"`:                                 "service db: devopsy.data=skip: devopsy.data=false now",
-		`"devopsy.data":"true","devopsy.data.copy":"mnt"`:       "service db: devopsy.data.copy=mnt: volumes, custom or none",
-		`"devopsy.data":"true","devopsy.data.copy":""`:          "service db: devopsy.data.copy is empty: volumes, custom or none",
-		`"devopsy.data":"true","devopsy.data.stop":"yes"`:       "service db: devopsy.data.stop=yes: never, own, import or always",
-		`"devopsy.data":"true","devopsy.data.stop":""`:          "service db: devopsy.data.stop=: never, own, import or always",
-		`"devopsy.data":"true","devopsy.data.stop":"true"`:      "(true was own, false never)",
-		`"devopsy.data.stop":"own"`:                             "service db: devopsy.data.stop=own needs a devopsy.data label",
-		`"devopsy.data":"true","devopsy.data.exclude":"a/b"`:    "service db: devopsy.data.exclude=a/b: entries of mnt or named volumes only",
-		`"devopsy.sync":"rsync"`:                                "service db: devopsy.sync=rsync: that label is now devopsy.data=true (rsync is the default devopsy.data.copy=volumes), or false for skip",
-		`"devopsy.data":"true","devopsy.sync.stop":"true"`:      "service db: devopsy.sync.stop=true: that label is now devopsy.data.stop (true is own",
-		`"devopsy.data":"true","devopsy.sync.rsync.exclude":""`: "service db: devopsy.sync.rsync.exclude=: that label is now devopsy.data.exclude",
+		`"devopsy.data":"pause"`:                             "service db: devopsy.data=pause: true or false",
+		`"devopsy.data":""`:                                  "service db: devopsy.data is empty: true, or false for no data",
+		`"devopsy.data":"true","devopsy.data.copy":"mnt"`:    "service db: devopsy.data.copy=mnt: volumes, custom or none",
+		`"devopsy.data":"true","devopsy.data.copy":""`:       "service db: devopsy.data.copy is empty: volumes, custom or none",
+		`"devopsy.data":"true","devopsy.data.stop":"yes"`:    "service db: devopsy.data.stop=yes: never, own, import or always",
+		`"devopsy.data":"true","devopsy.data.stop":""`:       "service db: devopsy.data.stop=: never, own, import or always",
+		`"devopsy.data.stop":"own"`:                          "service db: devopsy.data.stop=own needs a devopsy.data label",
+		`"devopsy.data":"true","devopsy.data.exclude":"a/b"`: "service db: devopsy.data.exclude=a/b: entries of mnt or named volumes only",
 	} {
 		if _, err := parseSyncServices([]byte(`{"services":{"db":{"labels":{`+label+`}}}}`), dot); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", label, err)
 		}
 	}
 
-	// What is left in the sync capability's directory names the new one.
-	write(t, filepath.Join(dot, "capabilities", "sync", "export"), "#!/bin/sh\n")
-	if _, _, err := SyncServices(root, nil); err == nil || !strings.Contains(err.Error(), ".devopsy/capabilities/sync/ is now .devopsy/capabilities/data/: move its files (export) there") {
-		t.Errorf("capabilities/sync: %v", err)
-	}
 }
 
 // devopsy.mnt.owner covers the entries a service mounts writable,

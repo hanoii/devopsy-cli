@@ -37,8 +37,9 @@ conflicts with one is a design question for the user, not a detail.
   `commands/` with `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`,
   the recursion guard, everything else passed to compose). Propose such
   changes rather than work around a design. No migration code: older
-  files and syntax just stop working, with an error that says what to
-  do; a breaking change is marked (`feat!`, `fix!`); a protocol bump
+  files and syntax just stop working, never with an error of their own
+  (an old name is ignored, an old value is as unknown as any); a
+  breaking change is marked (`feat!`, `fix!`); a protocol bump
   or a new feature means upgrading the servers. A 1.0.0 is when
   this gets a compatibility promise. Until then mixed versions (an
   operator and a server, or a parent and a child, on different devopsy)
@@ -1464,8 +1465,8 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   (`ensureUtilImage`), so a registry down refuses the release rather
   than failing `--mnt-owners` after the switch. Not checkable, so
   documented: absolute paths. It reads the labels
-  exactly as `--mnt-owners` does after the switch (`cli.SyncServices`,
-  the leftover `.devopsy/capabilities/sync/` included), so labels that
+  exactly as `--mnt-owners` does after the switch (`cli.SyncServices`),
+  so labels that
   step could not read refuse the release here (review of 2026-10-23,
   round 2: the check parsed compose's output itself, passed a leftover
   sync capability, and the release failed after its switch). A compose
@@ -1771,11 +1772,13 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   sets it; it silences the dependents notice). `own` without any
   `devopsy.data` label is an error (it would never stop); with `false`
   or `copy=none` it is ignored (a variable chose it: no copy moves that
-  data). The labels before these, their old values (`mnt`, `stream`,
-  `none`, `rsync`, `files`, `skip`) and anything left in
-  `.devopsy/capabilities/sync/` are errors naming what replaces them, only where labels are read (`parseSyncServices`,
-  `SyncServices`), never in `Build`: a rollback to an older release, or
-  the restart after a failed one, runs a plain `up`.
+  data). The labels before these (`devopsy.sync...`) are ignored, like
+  any label devopsy does not read, and their old values (`mnt`,
+  `stream`, `none`...) are unknown values, errors as any other; a
+  leftover `.devopsy/capabilities/sync/` is ignored. Label errors come
+  only where labels are read (`parseSyncServices`, `SyncServices`),
+  never in `Build`: a rollback to an older release, or the restart
+  after a failed one, runs a plain `up`.
 - **The stop set is a pure function** (`cli.DataStops`: the operation,
   `ExportOne`, `ImportOne`, `SyncParent`, `SyncChild`, and the services
   in, the set with each one's why out). The table in the README is the

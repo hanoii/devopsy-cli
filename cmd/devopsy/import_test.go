@@ -815,17 +815,17 @@ func TestDataStopEnv(t *testing.T) {
 	if code == 0 || !strings.Contains(out, "finish child partial stop=app\n") {
 		t.Errorf("a cut sync (%d):\n%s", code, out)
 	}
-	// A killed holder's record, labels from before devopsy.data: settled
-	// all the same.
+	// A killed holder's record, labels it cannot read: settled all the
+	// same.
 	dev := filepath.Join(s.root, "shop", "dev")
 	write(t, filepath.Join(dev, remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_APP=old\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_APP=pause\n", 0o644)
 	cmd := exec.Command(binary, "--sync-services", "settle")
 	cmd.Dir = filepath.Join(dev, "current")
 	cmd.Env = append(append([]string{}, s.env...), "COMPOSE_PROJECT_NAME=shop-dev", "PWD="+cmd.Dir)
 	settled, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(settled), "devopsy: warning: settling with the record alone: service app: devopsy.sync=rsync") || !strings.Contains(string(settled), "finish child partial stop=app") || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
-		t.Errorf("settle with old labels (%v):\n%s", err, settled)
+	if err != nil || !strings.Contains(string(settled), "devopsy: warning: settling with the record alone: service app: devopsy.data=pause") || !strings.Contains(string(settled), "finish child partial stop=app") || fileExists(filepath.Join(dev, remote.SyncStartedFile)) {
+		t.Errorf("settle with labels it cannot read (%v):\n%s", err, settled)
 	}
 }
 

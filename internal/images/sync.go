@@ -25,8 +25,8 @@ const (
 )
 
 // ParentData is what a child's sync needs of a parent's data images: per
-// pulled data service whose files a sync copies (devopsy.data=mnt, as
-// the parent's config resolves it now: a stream goes through the child's
+// pulled data service whose files a sync copies (devopsy.data.copy=volumes,
+// as the parent's config resolves it now: a custom copy goes through the child's
 // own image, which keeps its history), the image that wrote its data (its container's,
 // once started: a parent that drifted runs what wrote it; else its
 // history's last), then the history that counts for it (its window).

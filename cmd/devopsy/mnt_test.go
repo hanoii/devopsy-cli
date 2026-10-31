@@ -126,14 +126,14 @@ func TestMntOwnersRelease(t *testing.T) {
 	}
 
 	// A rollback gives owners by the restored release's labels; labels
-	// this devopsy cannot read there (here a name from before
-	// devopsy.data) only warn, before the switch and after it, nothing
+	// this devopsy cannot read there (here a value it does not know)
+	// only warn, before the switch and after it, nothing
 	// given away: a rollback never fails for them, as it never checks
 	// roles or imports (review of 2026-10-23: it failed, and current
 	// went back). Its run step's up reads no labels at all (review of
 	// 2026-10-23, round 2: the local owners' step before up failed it on
-	// them, and the restart after it too: AGENTS.md, old labels are
-	// errors only where labels are read, never in Build).
+	// them, and the restart after it too: labels are errors only where
+	// they are read, never in Build).
 	first := s.current("prod")
 	s.releaseProd(nil)
 	if s.current("prod") == first {
@@ -159,10 +159,10 @@ func TestMntOwnersRelease(t *testing.T) {
 	write(t, s.log+".shop-prod", "", 0o644)
 	s.releaseProd(nil)
 	s.logs()
-	write(t, s.log+".shop-prod", "FAKE_APP=old\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP=pause\n", 0o644)
 	out, code = s.run(nil, "@prod", "--rollback")
-	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync: that label is now devopsy.data") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {
-		t.Errorf("a rollback to a release with older labels (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
+	if code != 0 || s.current("prod") != first || !strings.Contains(out, "devopsy: warning: the restored release's labels cannot be read: the entries of mnt will keep their owners\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(out, "devopsy: warning: the entries of mnt keep their owners: the restored release's labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || strings.Contains(out, "error") || strings.Contains(out, "the entries of mnt are left as they are") || !strings.Contains(out, "deploy in shop-prod") {
+		t.Errorf("a rollback to a release with labels it cannot read (%d), current %q, want %q:\n%s", code, s.current("prod"), first, out)
 	}
 	if docker, _ := s.logs(); strings.Contains(docker, "devopsy-owners-") {
 		t.Errorf("owners given away by labels that cannot be read:\n%s", docker)
@@ -249,15 +249,15 @@ func TestCheckMountsRelease(t *testing.T) {
 	}
 
 	// What the owners' step refuses after the switch, the check refuses
-	// before it (or neither does): here a leftover
-	// .devopsy/capabilities/sync/, which SyncServices refuses and
-	// the check once parsed past. Review of 2026-10-23 (round 2):
+	// before it (or neither does): here a value it does not know,
+	// which the check once parsed past. Review of 2026-10-23 (round 2):
 	// the check passed, the release went live and failed in
 	// --mnt-owners, for a project with no owner at all (on main, a
 	// release that does not sync never read it).
-	write(t, filepath.Join(s.dot, "capabilities", "sync", "prepare"), "#!/bin/sh\nexit 0\n", 0o755)
+	write(t, s.log+".shop-prod", "FAKE_APP=pause\n", 0o644)
 	out, code = s.run(nil, "@prod", "--release")
-	if code == 0 || strings.Contains(out, "current is now") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release, whose labels cannot be read: it does not go live\ndevopsy: | .devopsy/capabilities/sync/ is now .devopsy/capabilities/data/") {
+	write(t, s.log+".shop-prod", "", 0o644)
+	if code == 0 || strings.Contains(out, "current is now") || !strings.Contains(out, "devopsy: error: the mounts check refuses the release, whose labels cannot be read: it does not go live\ndevopsy: | service app: devopsy.data=pause: true or false") {
 		t.Errorf("refused after the switch, not before (%d), current %q:\n%s", code, s.current("prod"), out)
 	}
 }
@@ -336,11 +336,11 @@ func TestMntOwnersLocal(t *testing.T) {
 	if docker, _ := s.logs(); strings.Contains(docker, "config --format json") {
 		t.Errorf("labels read for ps:\n%s", docker)
 	}
-	// Labels devopsy cannot read (a name from before a change) are a
+	// Labels devopsy cannot read (a value it does not know) are a
 	// warning, and compose's command goes on: it says what is wrong with
 	// its own files (review of 2026-10-23, round 2: up failed on them).
-	out, code := s.run(append(slices.Clone(owned), "FAKE_APP=old"), "up", "-d")
-	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: the entries of mnt are left as they are: the labels cannot be read\ndevopsy: | service app: devopsy.sync=rsync") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
+	out, code := s.run(append(slices.Clone(owned), "FAKE_APP=pause"), "up", "-d")
+	if docker, _ := s.logs(); code != 0 || !strings.Contains(out, "devopsy: warning: the entries of mnt are left as they are: the labels cannot be read\ndevopsy: | service app: devopsy.data=pause: true or false") || !strings.Contains(docker, "compose -f "+compose+" up -d") {
 		t.Errorf("up on labels that cannot be read (%d):\n%s\n%s", code, out, docker)
 	}
 	// compose's watch starts the services first too (unless --no-up),

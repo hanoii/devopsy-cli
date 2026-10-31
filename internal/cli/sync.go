@@ -107,14 +107,6 @@ const (
 	StopAlways = "always"
 )
 
-// oldLabels are the labels and capability before devopsy.data, refused
-// where labels are read, with what replaces them (no migration).
-var oldLabels = []struct{ label, now string }{
-	{"devopsy.sync", DataLabel + "=true (rsync is the default " + DataCopyLabel + "=" + CopyVolumes + "), or false for skip"},
-	{"devopsy.sync.stop", DataStopLabel + " (true is " + StopOwn + ", or " + StopImport + " or " + StopAlways + "; false is " + StopNever + ", the default)"},
-	{"devopsy.sync.rsync.exclude", DataExcludeLabel},
-}
-
 // DataCapability is the capability that moves a custom service's data
 // (export, import) and hooks into syncs (prepare, finish).
 const DataCapability = "data"
@@ -284,16 +276,11 @@ var ComposeConfig = func(cwd string, environ []string) ([]byte, error) {
 
 // SyncServices lists the services of the project at cwd, sorted, with
 // their data labels and the entries of .devopsy/mnt their bind mounts
-// hold. projectDir is the project's .devopsy/. The labels before
-// devopsy.data, and the sync capability's directory, are errors naming
-// what replaces them.
+// hold. projectDir is the project's .devopsy/.
 func SyncServices(cwd string, environ []string) (projectDir string, services []SyncService, err error) {
 	projectDir, err = FindProjectDir(cwd)
 	if err != nil {
 		return "", nil, err
-	}
-	if left, _ := os.ReadDir(filepath.Join(projectDir, "capabilities", "sync")); len(left) > 0 {
-		return "", nil, fmt.Errorf(".devopsy/capabilities/sync/ is now .devopsy/capabilities/%s/: move its files (%s) there", DataCapability, left[0].Name())
 	}
 	out, err := ComposeConfig(cwd, environ)
 	if err != nil {
@@ -343,29 +330,17 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	tree := resolvePath(filepath.Dir(projectDir))
 	var services []SyncService
 	for name, s := range config.Services {
-		for _, o := range oldLabels {
-			if v, ok := s.Labels[o.label]; ok {
-				return nil, fmt.Errorf("service %s: %s=%s: that label is now %s", name, o.label, v, o.now)
-			}
-		}
 		cs := SyncService{Name: name, Copy: CopyNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
 		data, labeled := s.Labels[DataLabel]
 		if labeled {
 			// An empty value is an error: a variable left unset by accident
-			// must not stop copying silently. The values before the copy
-			// label are errors naming what replaces them.
+			// must not stop copying silently.
 			switch data {
 			case "true":
 				cs.HasData = true
 			case "false":
 			case "":
 				return nil, fmt.Errorf("service %s: %s is empty: true, or false for no data (a variable left unset?)", name, DataLabel)
-			case "mnt", "rsync", "files":
-				return nil, fmt.Errorf("service %s: %s=%s: %s=true now (its entries of mnt are the default %s=%s)", name, DataLabel, data, DataLabel, DataCopyLabel, CopyVolumes)
-			case "stream":
-				return nil, fmt.Errorf("service %s: %s=%s: %s=true and %s=%s now", name, DataLabel, data, DataLabel, DataCopyLabel, CopyCustom)
-			case "none", "skip":
-				return nil, fmt.Errorf("service %s: %s=%s: %s=false now (no data), or %s=true and %s=%s for data no copy carries", name, DataLabel, data, DataLabel, DataLabel, DataCopyLabel, CopyNone)
 			default:
 				return nil, fmt.Errorf("service %s: %s=%s: true or false", name, DataLabel, data)
 			}
@@ -406,8 +381,6 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 				if !cs.Copies() {
 					v = StopNever
 				}
-			case "true", "false":
-				return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s or %s (true was %s, false %s)", name, DataStopLabel, v, StopNever, StopOwn, StopImport, StopAlways, StopOwn, StopNever)
 			default:
 				return nil, fmt.Errorf("service %s: %s=%s: %s, %s, %s or %s", name, DataStopLabel, v, StopNever, StopOwn, StopImport, StopAlways)
 			}
