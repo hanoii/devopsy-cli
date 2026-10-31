@@ -105,8 +105,7 @@ func ParseAuthorizedKeys(content string) []AuthorizedKey {
 }
 
 // errorHead starts an error line: the --ssh-keys scripts say theirs with
-// a plain echo, since they need nothing of the server's devopsy (an
-// older one too can have its keys edited).
+// a plain echo, since they need nothing of the server's devopsy.
 const errorHead = report.Prefix + "error: "
 
 // keysPrelude is the deploy user's authorized_keys, and a lock next to it:

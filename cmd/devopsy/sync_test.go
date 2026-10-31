@@ -4257,7 +4257,7 @@ func TestExportNothingRunningIgnoresLeavingBinds(t *testing.T) {
 }
 
 // A feature only the activation needs (leaving-binds: the mounts check's
-// words every activation calls, which a v0.52.0 server lacks) refuses a
+// words every activation calls) refuses a
 // release before anything changes on the server: the upload's own needs
 // are the server's, so the project must not be uploaded first and the
 // activation's prelude refuse it then, leaving a pending release
@@ -4296,8 +4296,8 @@ func TestOlderServerActivationRefusesBeforeUpload(t *testing.T) {
 // An upload checks its activation's needs (remote.WithAlsoNeeds), so a
 // server lacking one refuses before anything changes: before the upload,
 // but only then, after everything else a release does first. A child's
-// first release to a server lacking release-snapshots (a v0.51.0 one,
-// where every activation is refused) runs its local before steps (the
+// first release to a server lacking release-snapshots (where every
+// activation is refused) runs its local before steps (the
 // project's: a build and push, a notice) and writes the parent's
 // inherited variables into the child's shared/inherit.env, creating its
 // directory, and only then is refused: the needs are known before any

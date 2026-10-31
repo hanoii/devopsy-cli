@@ -687,8 +687,9 @@ func TestSyncRefusedOverImportMark(t *testing.T) {
 // as no label, so what reads them refuses before anything changes, with
 // the upgrade line (an export, a sync: the parent's check, before the
 // child stops anything; a child's release that syncs, before its
-// upload), and nothing else does (a release that does not sync).
-func TestDataCopyOlderServer(t *testing.T) {
+// upload), and nothing else does (a release that does not sync). So do
+// --reset's and restores' marks' features.
+func TestDataFeaturesRefuseFirst(t *testing.T) {
 	t.Parallel()
 	s := newImportSetup(t)
 	write(t, filepath.Join(s.dot, "config.yaml"), "project: shop\ndefaults:\n  mode: image\n  release: deploy\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  fresh: {parent: prod}\n", 0o644)
@@ -738,6 +739,16 @@ func TestDataCopyOlderServer(t *testing.T) {
 	}
 	if out, _ := run("@dev", "--sync", "--yes"); strings.Contains(out, "lacks") || !strings.Contains(out, "copying @devopsy@one:prod") {
 		t.Errorf("a sync on a server without reset:\n%s", out)
+	}
+	// One lacking restores' marks: every sync refuses before anything
+	// stops, whether or not the child has one (a parent that cannot read
+	// it would clear it over what it does not copy).
+	write(t, filepath.Join(old, "devopsy"), "#!/bin/sh\nif [ \"$1\" = --release-settings ]; then "+binary+" --release-settings | sed 's/ "+restoreMarkNeed+" / /'; exit; fi\nexec "+binary+" \"$@\"\n", 0o755)
+	s.logs()
+	out, code = run("@dev", "--sync", "--yes")
+	docker, _ = s.logs()
+	if code == 0 || !strings.Contains(out, "the server's devopsy lacks what this needs (") || !strings.Contains(out, restoreMarkNeed+")") || strings.Contains(docker, " stop ") {
+		t.Errorf("a sync from a parent without restores' marks (%d):\n%s\n%s", code, out, docker)
 	}
 }
 

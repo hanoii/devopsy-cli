@@ -1,7 +1,6 @@
 package images
 
 import (
-	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -68,11 +67,6 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		pulled = pulled || (copied[svc.Name] && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
-	// A release an older devopsy recorded names no services: which one
-	// runs a database cannot be told, so the child's side refuses.
-	if pulled && len(es) > 0 && es[0].Service == "" {
-		return "old\t" + filepath.Base(rel) + "\n"
-	}
 	var data []entry
 	for _, e := range es {
 		if e.Kind == KindData && copied[e.Service] {
@@ -152,16 +146,10 @@ const ExportKey = "DEVOPSY.data-images"
 // current release) what a sync's parent would send; locally (rel "")
 // the image its started container runs, when that has a registry
 // digest, with no history. Empty when there is nothing to record (a
-// built or custom service, no container, a release an older devopsy
-// recorded, which names no services).
+// built or custom service, no container).
 func (s *Set) ExportData(base, rel, service string) string {
 	if rel != "" {
-		data := s.parentData(base, rel, service, false)
-		if strings.HasPrefix(data, "old\t") {
-			s.say(report.WarnLevel, "%s: release %s predates devopsy's record of each service's image: the export carries no image, and an import starts its history over", service, filepath.Base(rel))
-			return ""
-		}
-		return data
+		return s.parentData(base, rel, service, false)
 	}
 	// Only a pulled data service: a built one's digest, which Docker's
 	// containerd store gives built images too, is a local build's, which
@@ -239,8 +227,6 @@ func parseParentData(data string) map[string]*parentImage {
 	for _, line := range strings.Split(data, "\n") {
 		kind, rest, _ := strings.Cut(line, "\t")
 		switch kind {
-		case "old":
-			ps[""] = &parentImage{Ref: rest}
 		case "image":
 			f := strings.Split(rest, "\t")
 			if len(f) < 3 {
@@ -326,24 +312,6 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
-	// A release recorded by an older devopsy names no services: which
-	// one runs a database cannot be told, so its image could not follow
-	// the data. Released again first.
-	if old := ps[""]; old != nil {
-		s.sayAll(report.ErrorLevel, "the parent's release "+old.Ref+" predates devopsy's record of each service's image: nothing changed", nil,
-			report.Fix("release the parent first, then sync"))
-		return nil, ErrRefused
-	}
-	if len(ps) > 0 && len(es) > 0 && es[0].Service == "" {
-		if w.importing {
-			s.sayAll(report.ErrorLevel, "release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing imported", nil,
-				report.Fix("release it again first, then import:", "devopsy @"+cmp.Or(s.Address, "<target>")+" --release"))
-			return nil, ErrRefused
-		}
-		s.sayAll(report.ErrorLevel, "the child's release "+filepath.Base(rel)+" predates devopsy's record of each service's image: nothing changed", nil,
-			report.Fix("release the child first, with the sync if you want it:", "devopsy @"+cmp.Or(s.Address, "<child>")+" --release-sync"))
-		return nil, ErrRefused
-	}
 	var refused, refusedSvcs, refusedRefs []string
 	var mine []entry
 	for _, e := range es {

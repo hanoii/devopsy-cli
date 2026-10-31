@@ -48,7 +48,7 @@ func snapshotPathsOf(cwd string) snapshotPaths {
 
 // snapshotsOf is where the environment at base keeps its snapshots: what
 // a script's prelude exports (images.SnapshotsEnv), else, outside one
-// (--sync-exec, an older operator's script), from the server's own
+// (--sync-exec), from the server's own
 // settings as basePrelude finds it.
 func snapshotsOf(base string) string {
 	if snaps := os.Getenv(images.SnapshotsEnv); snaps != "" {

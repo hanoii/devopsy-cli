@@ -41,8 +41,6 @@ const (
 	// none), the service, its kind (KindOwn, KindPulled, KindData), the
 	// registry's digest of a pulled image (<repository>@sha256:...) and
 	// its version label (org.opencontainers.image.version), for display.
-	// A listing from before the service column has the first two only:
-	// its kind is unknown.
 	ListFile = "devopsy-images"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
@@ -227,8 +225,7 @@ func (svc Service) own(mode string) bool {
 type entry struct {
 	Ref string
 	// ID is the image Ref had when bookmarked; "" when Docker had none.
-	ID string
-	// Service, Kind, Digest and Version: "" in a listing from before them.
+	ID                             string
 	Service, Kind, Digest, Version string
 	// Build is the BuildKey it was built with, for a service the release
 	// built: what a reload checks (ReloadCheck); "" for any other.

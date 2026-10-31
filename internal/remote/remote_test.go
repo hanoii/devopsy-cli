@@ -1750,8 +1750,8 @@ exit 0
 	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `"db":`+"\n"+`    image: "mariadb@I1"`) || !strings.Contains(got, `"devopsy.digest": "mariadb@I1"`) {
 		t.Errorf("devopsy's compose file:\n%s", got)
 	}
-	// What ran on the data: none here (no container), so as an older
-	// devopsy's, then this one.
+	// What ran on the data: none here (no container), so written by hand,
+	// then this one.
 	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
 	out, err := release("2", "DB=mariadb:11.4", "IMG=I0")
 	var exit *exec.ExitError
@@ -2838,42 +2838,6 @@ func TestSyncImagesOrder(t *testing.T) {
 	order(holder, images.SyncImagesEnv+"=", "img sync-check", "--sync-services' 'prepare", "img sync-done", "sync_finish go", "release-steps", "img ran")
 	activate := ActivateScript(tg, "20261005120000", false, "app-dev", Phases{Run: []string{"deploy"}}, o)
 	order(activate, images.SyncImagesEnv+"=", "img record", "make_current", "img sync-done", "sync_finish go")
-}
-
-// oldParentDocker is a Docker no call reaches: ParentData answers an old
-// listing before asking Docker anything.
-type oldParentDocker struct{ images.Docker }
-
-// Bug: ParentData's "old" line (a parent's release an older devopsy
-// recorded, which the child must refuse: release the parent first) never
-// reaches the child: ParseParentData keeps only image and ran lines from
-// ParentCheckScript's output. The holder then gets no parent images and
-// checks nothing, and the push, recomputing ParentData, finds a checksum
-// other than the empty data's and refuses with "data images changed
-// since the sync started ... sync again", every sync, never saying what
-// fixes it.
-func TestParseParentDataKeepsOldParent(t *testing.T) {
-	t.Parallel()
-	base := t.TempDir()
-	rel := filepath.Join(base, "releases", "20261023000000")
-	if err := os.MkdirAll(rel, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(rel, images.ListFile), []byte("mariadb:11.8\tI2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	set := &images.Set{Docker: oldParentDocker{}, Name: "app-prod", Out: io.Discard, List: func(string) ([]images.Service, error) {
-		return []images.Service{{Name: "database", Ref: "mariadb:11.8", Data: true, Method: images.CopyVolumes}}, nil
-	}}
-	data := set.ParentData(base, rel)
-	if !strings.HasPrefix(data, "old\t") {
-		t.Fatalf("ParentData of an old listing: %q", data)
-	}
-	// As ParentCheckScript prints it: CurrentExistsScript's lines, then
-	// img data's.
-	if got := ParseParentData("current\n" + data); got != data {
-		t.Errorf("the parent's data images the operator passes on: %q, want %q (img data printed it): the child never refuses the old parent, and the push's checksum never matches", got, data)
-	}
 }
 
 // Bug: every script that defines img() passes --mode and --address to

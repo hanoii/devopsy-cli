@@ -543,11 +543,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 					} else if t.ParentErr != nil {
 						return failParent(t, color, args[0])
 					}
-					var extra []string
-					if cur.Mark.IsRestore() {
-						extra = append(extra, restoreMarkNeed)
-					}
-					if job, err = syncPreflight(t, p, projectName, false, extra...); err != nil {
+					if job, err = syncPreflight(t, p, projectName, false); err != nil {
 						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
 						return 1
 					}
@@ -653,7 +649,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			return 130
 		}
 		if err == nil && code == 0 && !remote.ReleaseIDFormat.MatchString(id) {
-			err = fmt.Errorf("the server named no release (%q): its devopsy may be older than this one", id)
+			err = fmt.Errorf("the server named no release (%q)", id)
 		}
 		if err == nil && code == 0 {
 			log.Info(progress.done(id))
@@ -687,7 +683,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	default:
 		// A local command that needs an address runs locally, given it as
 		// typed; one that takes none fails locally, before connecting: the
-		// server's devopsy would refuse it too, an older one would run it.
+		// server's devopsy would refuse it too, once connected.
 		if dir := commandsDir(t, projectDir); dir != "" && slices.Contains(cli.CustomCommands(dir), args[0]) {
 			run, err := cli.CheckCommand(dir, args[0], cli.Addressed)
 			if err != nil {
@@ -959,9 +955,8 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 	terminal := term.IsTerminal(int(os.Stdin.Fd()))
 	if !yes {
 		// Its snapshots go too: how many, said. Only a count for the
-		// prompt, so what the session says goes nowhere (an older server
-		// refuses the listing, naming its upgrade, and --destroy still
-		// runs there).
+		// prompt, so what the session says goes nowhere, and a count that
+		// fails is left out.
 		snaps := ""
 		var out bytes.Buffer
 		if code, err := remote.SSHStreams(context.Background(), t, remote.Bounded, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {

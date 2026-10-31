@@ -421,8 +421,7 @@ func quoteAll(args []string) string {
 	return strings.Join(q, " ")
 }
 
-// Verbose makes devopsy on the server verbose too (DEVOPSY_VERBOSE, which
-// older versions ignore).
+// Verbose makes devopsy on the server verbose too (DEVOPSY_VERBOSE).
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
@@ -595,11 +594,10 @@ if ! [ "$server_protocol" -ge ` + strconv.Itoa(Protocol) + ` ] 2>/dev/null; then
     exit 1
   fi
 fi
-# What this script calls that the server's devopsy lacks (Needs). One
-# that reports no features is older than 8, said above already.
+# What this script calls that the server's devopsy lacks (Needs).
 server_features=" $(printf '%s\n' "$settings" | sed -n 's/^features=//p') "
 missing=
-[ "$server_features" = "  " ] || for f in ${` + needsEnv + `:-}; do
+for f in ${` + needsEnv + `:-}; do
   case "$server_features" in *" $f "*) ;; *) missing="$missing${missing:+, }$f" ;; esac
 done
 if [ -n "$missing" ]; then

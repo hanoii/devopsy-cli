@@ -461,9 +461,9 @@ func TestDataWentBackOutside(t *testing.T) {
 	}
 }
 
-// A data service with a history from an older devopsy's release (no
-// service column) and none of its own: what its container runs seeds
-// it, and a changed name is refused (S33, a service gaining its label).
+// A data service whose release listed it as a plain pulled one, with no
+// history of its own: what its container runs seeds it, and a changed
+// name is refused (S33, a service gaining its label).
 func TestDataSeed(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -472,7 +472,8 @@ func TestDataSeed(t *testing.T) {
 	d.publish("mariadb:11.4", "I0")
 	d.Pull("mariadb:11.4")
 	id := m.e.release(dbSvc("mariadb:11.4"))
-	os.WriteFile(filepath.Join(m.e.rel(id), ListFile), []byte("mariadb:11.4\tI0\n"), 0o644)
+	os.WriteFile(filepath.Join(m.e.rel(id), ListFile), []byte("mariadb:11.4\tI0\tdatabase\tpulled\n"), 0o644)
+	os.Remove(historyPath(m.base()))
 	m.cur = id
 	d.containers = []container{{image: "I0", project: "app-prod", service: "database", ref: "mariadb:11.4"}}
 	d.publish("mariadb:11.8", "I1")
@@ -1660,49 +1661,6 @@ func TestParentDataBounded(t *testing.T) {
 	data := m.e.set.ParentData(m.base(), m.e.rel(m.cur))
 	if n := strings.Count(data, "\nran\t"); n != ParentHistoryLines || !strings.Contains(data, "\tI0\t") {
 		t.Errorf("%d history lines sent, want %d with the newest", n, ParentHistoryLines)
-	}
-}
-
-// A child whose release an older devopsy recorded (no service column)
-// cannot tell which service runs a database: a sync refuses before
-// anything stops, naming the release that fixes it.
-func TestSyncOldChildListing(t *testing.T) {
-	t.Parallel()
-	d := newFake()
-	var out bytes.Buffer
-	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	d.publish("mariadb:11.8", "I1")
-	prod.release(false, db118)
-	dev.release(false, db118)
-	os.WriteFile(filepath.Join(dev.e.rel(dev.cur), ListFile), []byte("mariadb:11.8\tI1\n"), 0o644)
-	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
-	if err := dev.e.set.SyncCheck(dev.e.rel(dev.cur), data); !errors.Is(err, ErrRefused) || !strings.Contains(out.String(), "devopsy @vm1:dev --release-sync") {
-		t.Errorf("an old listing (%v):\n%s", err, out.String())
-	}
-}
-
-// Bug: a parent whose current release an older devopsy recorded (no
-// service column, no kinds) has no data images for ParentData, which
-// skips every entry that is not KindData: the sync then checks nothing
-// and takes nothing over, so a child on an older image runs it on data a
-// newer one wrote (rule 7), where an old child listing refuses
-// (TestSyncOldChildListing). The first sync from prod after the server's
-// upgrade, before prod is released again.
-func TestSyncOldParentListing(t *testing.T) {
-	t.Parallel()
-	d := newFake()
-	var out bytes.Buffer
-	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
-	d.publish("mariadb:11.8", "I1")
-	dev.release(false, db118)
-	d.publish("mariadb:11.8", "I2")
-	prod.release(false, db118)
-	// prod's release as an older devopsy recorded it, and no history yet.
-	os.WriteFile(filepath.Join(prod.e.rel(prod.cur), ListFile), []byte("mariadb:11.8\tI2\n"), 0o644)
-	os.Remove(historyPath(prod.base()))
-	err := syncInto(t, prod, dev, false)
-	if !errors.Is(err, ErrRefused) && dev.runs("database") != "I2" {
-		t.Errorf("a sync from a parent an older devopsy released (%v): the child's database runs %s on data mariadb:11.8 at I2 wrote, want I2 or a refusal\n%s", err, dev.runs("database"), out.String())
 	}
 }
 

@@ -400,8 +400,7 @@ before changing anything".
   after the parent's services stopped. `DEVOPSY_PROTOCOL_CHECK=warn`
   (`ProtocolCheckEnv`, exported to every session, so a push passes it
   on) makes either refusal a warning and goes on: the operator's own
-  risk, for a local build ahead of the servers. A server with no
-  `features=` is older than 8, so only the protocol's warning shows.
+  risk, for a local build ahead of the servers.
 - **The data labels are a named feature, `data-copy`, not a
   protocol bump:** an older devopsy refuses `devopsy.data=true` or
   reads the copy label as no label (a parent's "nothing to sync" that a
@@ -431,19 +430,12 @@ before changing anything".
   `data-copy`. A release's owners and mounts check are flags of their
   own (`--mnt-owners`, `--check-mounts`), so an activation on an older
   server refuses by them.
-- **What came with v0.52.0 is under `release-snapshots`, which v0.52.0
-  reports:** the mounts check's words after `restored` (`restart`, a
-  restore's snapshot) and `devopsy-util:3` in a script's text (bump it
-  in `namedFeatures` with `UtilImage`). A v0.51.0 devopsy refused the
-  words as usage after the switch (the previous release never
-  restarted) and readied its own util tag where a sync's receive ran
-  this one's after its claim (the copy counted as cut); names of their
-  own refused every v0.52.0 server, which runs both (review after
-  v0.52.0). Every activation needs it, and `childNeeds` carries the tag
-  to the child's first session. A reset needs nothing new: v0.52.0's
-  child already skips the check under `SyncResetEnv`, which v0.52.0's
-  holder never exported (a feature for it refused v0.52.0 children that
-  run the reset right: review). The activation's needs are checked in
+- **What came with release snapshots is under `release-snapshots`:**
+  the mounts check's words after `restored` (`restart`, a restore's
+  snapshot) and `devopsy-util:3` in a script's text; a new `UtilImage`
+  tag is a named feature of its own. Every activation needs it, and
+  `childNeeds` carries the tag to the child's first session. The
+  activation's needs are checked in
   the first session to the server too (`remote.WithAlsoNeeds`: the role
   check, a new instance's, a child's current, and the upload): refused
   only at the activation, a pending release and an instance's directory
@@ -452,10 +444,7 @@ before changing anything".
   upload runs its local before steps first (accepted: no session of
   its own for it). Only the plain activation's: a sync's are checked
   where it is decided, and a release that does not sync runs on a
-  server lacking them. Not caught by the
-  newer side, accepted: an older parent's receive on a newer child runs
-  the older util tag after its claim; upgrade parents and children
-  together.
+  server lacking them.
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
@@ -2082,9 +2071,7 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   syncs restores the child's own data, which the release's images, never
   live, must not touch. The line naming the image as the child does is
   added only when the child ran that very image (a mirror), never for
-  another series let through. A parent's release recorded by an
-  older devopsy sends `old`, and the child refuses (release the parent
-  first), as for the child's own. A rollback keeps a pulled data service
+  another series let through. A rollback keeps a pulled data service
   of the release it leaves on its data's newest image even where the
   target builds that service. `ParentHistoryLines` is the total (10 at
   least per service). Holds and labels are spelled as Docker shows
@@ -2937,18 +2924,12 @@ settled every rule here after nine reviews (2026-10-25).
   snapshot it names stays. A sync clears it only by copying every
   service of the snapshot, all of each: the child's list prints a
   `!restore` line per service (from its manifest), the push checks each
-  with `copiesService`, and only a parent that does writes the done
-  line that completes it (`CheckedDoneLine`, through `SyncCheckedEnv`
-  for the child's devopsy; `syncDecision`): an older parent's sync over
-  it stays partial, and the mark stays the restore's (a sync's copy mark
-  over it let the next plain sync clear it, review). The check is a
-  line of its own (`CheckedLine`) before the done line, in the same
-  append: the done line stays what an older operator's holder looks for
-  (review: `done <id> checked` made it take every complete sync for a
-  cut one). A release that syncs refuses such a parent before
-  its upload too (`restoreMarkNeed`, from the child's session it opens
-  anyway). Decided over a session of `--sync`'s own to read the mark
-  (review: every sync paid it, projects without snapshots included).
+  with `copiesService`, refusing before it stops anything otherwise; a
+  cut copy over it stays partial, and the mark stays the restore's (a
+  sync's copy mark over it let the next plain sync clear it, review).
+  Every sync needs `restoreMarkNeed` of the parent's devopsy
+  (`syncPreflight`), so a parent that cannot read the mark refuses
+  before anything changes.
 - **Export and import:** one outer tar of the snapshot's directory, on
   stdout and from stdin; an export holds its snapshot's directory locked
   (fd 4, shared, taken under the snapshot lock, which goes before the

@@ -1283,9 +1283,8 @@ made again on it; a name the data never ran, or one from another
 repository (the tar names it, whoever made it, so it never chooses what
 runs), is refused unless `--import <service> --accept-image <service>`,
 which runs its own image on the data, its history starting over. A tar
-without them (made by hand, by an older devopsy), every import locally,
-and `--resolved` start the service's history over from the image that
-runs it.
+without them (made by hand), every import locally, and `--resolved`
+start the service's history over from the image that runs it.
 
 Order on the child's server, under its release lock for the whole sync:
 the capability's `prepare child`, its side's set stopped; then it waits
