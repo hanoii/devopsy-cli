@@ -147,3 +147,33 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Scripts run on servers are POSIX `sh` (dash) with GNU coreutils (for example `mv -T`), checked with `sh -n` in the tests; `install.sh` runs in dash and busybox ash too.
 - `--debug` traces the loading itself (for example `Target.From`, `EnvDef`), never a second implementation of it, and a new source of variables records its definitions too: a second implementation shows what the real loading does not do.
 - `README.md` is what users see, so a change to behavior changes it in the same commit, and `internal/skill/SKILL.md` and the schemas (`--debug schema`, `TestSchemas`) with it when a flag, a label or a config key changes.
+
+## Checks
+
+- Unit tests are Go tests, and `cmd/devopsy` and `internal/remote` also run the server scripts against a fake `docker` and `ssh` (`fakeBin`): a script bug shows in seconds there, in minutes end to end.
+- Run the checks on Linux in Docker, what servers run, since macOS hides differences that matter (internals/gotchas.md) and runs them three times slower; the caches keep reruns fast:
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src -e GOFLAGS=-buildvcs=false \
+  -v devopsy-gocache:/root/.cache -v devopsy-gomod:/go/pkg/mod \
+  golang:1.26-trixie sh -c 'go vet ./... &&
+  go test -count=1 ./cmd/devopsy ./internal/remote &&
+  go test -count=1 -race $(go list ./... | grep -v -e /cmd/devopsy -e /internal/remote -e /e2e)'
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.sh
+```
+
+- CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs locally, where owners are never checked and there is no GNU `tail`.
+- End to end (`e2e/`, build tag `e2e`) runs servers in Docker: `go test -tags e2e -count=1 -v -timeout 40m ./e2e` runs the suite on four lanes, `-run '^TestName$'` one test; read `internals/e2e.md` before writing or changing one.
+- Never sleep for something to happen: poll for it (`eventually` in `e2e/`, 250 ms; a loop on the file or the state in a unit test), so a test takes as long as the behavior, not the worst case.
+- A wait the heartbeat or a quiet time bounds is shortened through `DEVOPSY_INTERNAL_HEARTBEAT_EVERY` (`HeartbeatEnv=1` in unit tests, `fast()` and `quiet()` in `e2e/`), never by a constant of the test's own: `E2E_BEAT=5` runs the suite with the real timeouts.
+- Extend the fake or the helper that exists (`fakeBin`, the sync tests' docker that remembers stops and starts, `realDevopsy`, `project`, `twoReleases`) rather than write another, and use small images (`busybox:1.37`) for what only needs to run.
+- A unit test starts with `t.Parallel()` and owns everything it changes (a `t.TempDir()`, the command's `Env`, a root or a fake passed as an argument); `TestTestsParallel` (`internal/report`) fails one that neither starts so nor says why not.
+- A test that sets the environment (`t.Setenv`) or a package-level variable (a function swapped for a fake, `ComposeConfig`, `ComposeCommands`) is serial, with a `// Not parallel: <what it sets>` line in its doc comment; a helper that does so makes every caller serial, so helpers take what they change as parameters.
+- A fake that parallel tests share takes a mutex (`baseMu`) or is written once per test binary and read-only (`fakeBin`, `varsBin`); a test that changes a fake has its own in its `t.TempDir()`.
+- A wait for what the test then acts on (a hook started, a lock waited for) polls bounded by `startWait`, a minute; a wait for what the test checks (an import ended within 10 s of the signal) keeps its own bound, the behavior's, never `startWait` and never longer because a run was slow; one that fails under the parallel load goes serial (`// Not parallel: it checks <the latency>`).
+- The race detector runs in CI over the packages that test in process (all but `cmd/devopsy`, `internal/remote` and `e2e`), the same tests; under it the script tests of the other two fail on time, not on a race, so run it there only for a change to their in-process code and read only its race reports.
+- To see where a package's time goes: `go test -count=1 -v ./cmd/devopsy | grep -- '^--- ' | sort -t'(' -k2 -rn | head -20`.
+
+## Releasing devopsy
+
+- Tag `vX.Y.Z` on `main` and push the tag: the release workflow tests, and GoReleaser publishes the binaries and `checksums.txt`.
