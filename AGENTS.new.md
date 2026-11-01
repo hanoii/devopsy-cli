@@ -58,6 +58,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - The root holds what every task in the repository needs; a part only some tasks need is an area, `internals/<area>.md`, with one line in the root's index saying what it covers and when to read it: the root loads with every session, the areas only when their line says so.
 - A rule's history goes in `internals/<area>.history.md`, or `internals/<section>.history.md` for a rule in a section of the root, starting with a line saying it is history, not rules, and its area's file wins where they differ.
 - A history file is read only before changing or questioning one of its rules, when a review finding looks like it contradicts a decision, or when asked why.
+- How a script or a function works, step by step, goes in its comments, never in an AGENTS.md or area: a comment changes with its code.
 - A commit's reason goes in its body; only a decision a later session must respect becomes a rule, in its area or the root, its story in the history, in the same commit: anywhere else, the next session rediscovers it or contradicts it.
 - Before adding a rule, find any line it repeats or contradicts, in its file and the root, and change that line instead: two lines on one thing drift apart.
 - A line written or changed in an AGENTS.md or area is checked before its commit (for example `Push and tag only when asked: a push publishes, a tag releases.`):
@@ -94,7 +95,55 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Nothing from the session stops a release past its switch, its run step included: stopping the step would restart the previous release while the step's compose runs on.
 - A sync goes by what its copy wrote, never by the answer the operator sent: an answer can be lost whatever the copy did.
 - What a cut-off session leaves is marked (for example pending, fetching, failed, a partial copy), shown by `--releases` and `--status`, and settled by whatever takes the lock next, and a removal resumes where it was cut: a connection, a laptop or CI can vanish at any point, and a server must never need someone to log in and guess.
-- A session's end, clean or silent, is noticed on the server within seconds (`--watch-session`, the heartbeat), and every lock wait is announced and bounded (`lockWait`): a dead session must never hold a lock or keep a service down.
+- A session's end, clean or silent, is noticed on the server within seconds (`--watch-session`, the heartbeat): a dead session must never hold a lock or keep a service down.
+- Every lock wait is announced and bounded (`lockWait`): a silent wait reads as a hang, and an endless one keeps whatever waits from ever running.
 - An operator frozen past the quiet time (for example a laptop asleep, Ctrl-Z) is taken for gone and cancels cleanly; that is accepted.
 - Before 1.0.0 anything may change when the change is better in the long run, the basics included (for example project discovery, `.env` loading, `commands/`, passing the rest to compose): one person uses devopsy and runs every server, and 1.0.0 is when compatibility is promised.
 - No migration code: older files and syntax just stop working, a breaking change is marked (`feat!`, `fix!`), and a protocol bump or a new feature means upgrading the servers.
+
+## Conventions
+
+### Output
+
+- stdout is the result (for example compose's output, help, `--env`, `--vars get`, `--export`) and stderr everything devopsy says (for example progress, errors, prompts, the scripts' lines): pipes stay clean.
+- Everything devopsy says, locally or on a server, goes through `internal/report`, never a `"devopsy: "` literal or a stderr `Fprint` of its own (`TestNothingSaysAround`, help excepted): a line said around it misses the format, the level and its color, and the format changes in one place.
+- Each line starts with `devopsy: ` (`report.Prefix`) and its level's tag (none for info, `warning: `, `error: `, `debug: ` at `-v`, `trace: ` at `-vv`), with details and fixes on `devopsy: | ` lines and a command to copy after `$ ` (`report.Fix`), so each line says by itself that it is devopsy's among compose's and Docker's output.
+- `error` means the command fails; anything that goes on is a `warning`.
+- The caller writes the words (lowercase after the prefix, names keeping their case, no final period, one message with its details rather than sentences in a row) and `report` everything else, never rewriting them.
+- Details and fixes travel through wrapping in a `report.Failure` (`report.Fail(err, more...)`), and a command adds only the fixes it alone knows.
+- Prompts (`Logger.Confirm`, `Input`, `ConfirmName`) run only at a terminal; without one the command fails, naming `--yes`.
+- A server script says things through the hidden `devopsy --say <level> <message> [<detail>...]`, and `echo`es a line built by `report` (`echoLine`) only where it cannot rely on the server's devopsy (`basePrelude`'s checks, the `--ssh-keys` scripts).
+- `--say` fails when its write fails, as `echo` does: a release's script relies on that before its switch.
+- A session's script, and an argument of several lines in the "running" notice, show only at `-vv`; below it the notice counts the argument's lines (`Plan.running`).
+- A hint names the address as typed, the alias, else the resolved address (`targetRef`, `hintAddress` in scripts), so the command works when copied.
+- Color only at a terminal without `NO_COLOR`, or when forced (`cli.ColorForced`).
+- A line's color comes from its level, never from the caller (`report.Paint`, errors red, warnings yellow, info cyan, debug and trace dim, a command to copy bold), so a failure is said as an `error` to show red.
+- A session's lines are colored locally as they arrive (`report.Colorize`), compose's progress and another tool's errors included, so a failure on a server stands out among them.
+- devopsy never exports `FORCE_COLOR`, and passes color to its devopsy on a server as `DEVOPSY_INTERNAL_COLOR` (`remote.Color`): in a session every tool would color what the scripts capture.
+- `DEVOPSY_INTERNAL_*` variables are devopsy talking to devopsy, never documented and free to change; settings people set and what projects read keep plain `DEVOPSY_*` names.
+
+### Flags and commands
+
+- Every flag is one entry in `cli.Flags`, by task group, with its scope (`Local`, `[@t]`, `@t`, `@s`, `[@s]`) and description: help, completion, `RemoteOnly` and `ServerScope` all come from it, so they never disagree.
+- A flag that differs locally and on a server (for example `--upgrade`) has one entry per scope.
+- Help lines fit 80 columns (`TestUsage`).
+- A flag needs an environment, unless `cli.ServerScope` lists it (for example `--shell-host`, `--server-info`, `--upgrade`), which needs only a server (`remote.ServerTarget`): server tasks work before any project is released there.
+- An unknown flag alone is an error naming the nearest flag (`cli.LoneUnknownFlag`, in `Build` and in `runRemote` before connecting); arguments that start with any other flag go to compose unchecked (for example `--profile x up`).
+- The bare help is devopsy's own; compose's is `devopsy -- --help` and `devopsy <command> --help`.
+- `@<target> <command> --help` only prints help, resolving the target leniently (`cli.RemoteCommandHelp`, `DescribeTarget`): help never needs a server.
+- A project command says where it runs (`## Run: local|target`, `## Needs: target|server`, `cli.CommandRun`), checked in `Build`, in `runRemote` before connecting and on release steps (`checkStepScopes`).
+- Whether a command runs in a release is decided by its directory (`cli.InRelease`, `devopsy-target.env` beside its `code/`), never by a variable: a shell on the server or a plain `ssh` has none, and a variable would reach every child.
+- A `Needs:` command runs locally, with the address as typed in `DEVOPSY_COMMAND_TARGET` for that command only and never the target's variables; it calls devopsy with the address.
+
+### Secrets
+
+- A secret is only what `secrets:` in `config.yaml` names (names, `*` patterns), whatever set the value, never guessed from names: a guess masks the wrong values and misses others.
+- Values go through `cli.Secrets`, `Value` in listings (`***`, `--show` unmasks) and `Mask` in messages (values of 8 characters or more).
+- A secret-like name `secrets:` does not cover (`secretLike`) only asks, before `--release` and on `--vars set`, and `public:` lets it through; without a terminal it fails, `--yes` included.
+
+### Code
+
+- Linux and macOS only; few dependencies, the standard library first.
+- Scripts run on servers are POSIX `sh` (dash) with GNU coreutils (for example `mv -T`), checked with `sh -n` in the tests; `install.sh` runs in dash and busybox ash too.
+- `--debug` traces the loading itself (for example `Target.From`, `EnvDef`), never a second implementation of it, and a new source of variables records its definitions too: a second implementation shows what the real loading does not do.
+- `README.md` is what users see, so a change to behavior changes it in the same commit, and `internal/skill/SKILL.md` and the schemas (`--debug schema`, `TestSchemas`) with it when a flag, a label or a config key changes.
