@@ -1,0 +1,65 @@
+# Other features
+
+Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go`), `sshkeys.go`, `probe.go`, `update.go`, `skill.go`; `internal/complete/`, `internal/skill/`, `internal/probe/`, `internal/update/`, `internal/cli/contexthash.go`, `internal/cli/capabilities.go`, `internal/remote/keys.go`, `internal/remote/sshconfig.go`, `internal/remote/serverinfo.go`, `internal/remote/status.go`.
+
+## --status
+
+- Locally `--status` prints the containers as a table, then the `status` capability's `show`.
+- With a target, `StatusScript` prints header lines from the server's files (`remote.EnvStatus`, which `--server-info` runs per environment too, both read by `parseStatus`), then `---`, then `devopsy --status` in the current release; the operator formats the header and prints the rest as it came.
+- The header holds the record, the live releases kept, the last completed sync from the child's `SyncedFile` (written by `finish go` once its hook accepted the copy), and a partial or running sync from `partialStatus`: "syncing" while a holder holds the child's lock, from its holding file on (`SyncRunning`), "source" while a push or an export holds the parent's sync lock (`SourceBusy`); `--releases` marks the current release SYNCING the same way.
+- In a release `images.StatusLines` names the services held by digest, those running another image than the current release's `ComposeFile` gives them (another activation's container) and those running another image than their `devopsy.digest` label says (a plain up that followed a moved name).
+
+## --server-info
+
+- One session, `basePrelude` then the hidden `--server-facts` (a feature), which prints `remote.ServerInfo` as JSON, changes nothing and takes no lock (a temporary file in the release root for the reflink try, `FICLONE` as the deploy user, removed).
+- The operator formats the facts and decides every warning (`serverInfoReport`: the thresholds, the version against its own, fixes naming the server as typed, `ServerRef`), so a judgment changes with the operator's devopsy alone; exit 3 when it warned (`serverInfoWarned`), for CI.
+- Without a target it reads the Linux server it runs on in process (`serverFacts`), its fixes run there (no `--shell-host`, `--status` in the environment's `current`); on macOS it refuses: nothing marks a Mac a server, and the facts there were Docker's VM's.
+- Kernel memory the kernel reserves outside any CMA area (Kexec HandOver's scratch on the 7.0 kernel) is `/proc/zoneinfo`'s `cma` less meminfo's `CmaTotal`, warned: the kernel's own allocations ran out with memory free; kdump's reservation (`/sys/kernel/kexec_crash_size`) is a note with its fix and no exit 3 (`serverWarning.note`), since crash dumps are a choice.
+- The server's time is taken last (`ServerInfo.Time`) and compared with the local clock at the facts' first byte (`firstWrite`), never at the session's end; an unsynchronized clock whose time service runs gets a fix naming a network's own time server, not `set-ntp`.
+- Environments are the directories with `releases/` two or three levels under the release root, through links as the scripts reach them, never a cut `--destroy`'s `<base>.rm.<pid>`; their containers come from one `docker inspect` of all, read even when it fails, matched by compose name (`composeNameOf`).
+- Facts agree with what the scripts read: roles from what `docker ps` lists, restarting and paused included (`RoleHoldersScript`, `cli.Running`), a `tail` that answers `--version` (`followOutput`), health only of a running container.
+- Said, never warned: the classic image store, Docker's security options, and what is running (a sync, an import, a snapshot, and a mark while the release lock is held, `EnvStatus`'s `busy`, ignored on a server without `flock`, where every lock reads held).
+- AppArmor is warned about only as a kernel with it and no `apparmor_parser` (looked for in sbin, outside the deploy user's PATH): `docker info` lists AppArmor whenever the kernel has it, and Docker then loads its profile with the parser, without which no container starts.
+- A full disk's fix follows what is on it (Docker's cache, snapshots); the no-reflinks fix names the server's `snapshots: {mirror: false}` first when it refuses every mirror.
+
+## --ssh-keys
+
+- `--ssh-keys` edits only the deploy user's own `~/.ssh/authorized_keys`, over the usual session: no root, so devopsy stays out of host setup except for this file, which that user owns.
+- Lines are parsed locally (`ParseAuthorizedKey`, the fingerprint from the blob, no ssh-keygen) and edited on the server under a lock next to the file, by blob: a comment never identifies a key.
+- `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, refused locally first); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
+- `--ssh-keys-generate [<name>] [--out <file>]` is local and its own flag: `ssh-keygen`, nothing sent; the `.pub` is added per server.
+
+## Completion and the skill
+
+- Completion lives in Go and never connects to a server (`internal/complete`): the shell scripts only pass words to the hidden `--complete` and show what it prints (cobra's protocol), so compose's own completion passes through.
+- After `@` and for `--from` it offers `~/.ssh/config`'s hosts as `@<host>:` (`sshHosts`), read in Go so every shell gets the same; bash splits words at `:`, so its script rebuilds them from `COMP_LINE`.
+- A new subcommand's words go in `complete.go`, its help in `cli.RemoteCommandHelp`; `TestCompletionShells` runs the scripts in every installed shell (bash, macOS's bash 3.2, zsh with `_describe` stubbed, fish), and CI installs zsh and fish.
+- The agent skill (`internal/skill/SKILL.md`, `devopsy --ai-skill`) is for using devopsy, AGENTS.md for developing it: what an agent needs to write a project's `.devopsy/`, release and operate it, pointing at `--help`, `--debug schema` and the templates rather than repeating them.
+- The skill is embedded, so it describes the binary that prints it, its frontmatter carrying that version (`devopsy: <version>`; `stub` for `--stub`, the short form that sends the agent to the command); `Install` replaces only a file so marked.
+- The skill states what devopsy enforces as fact and what the templates do (10001, read-only, `alwaysup`) as what new projects should do.
+- `TestContentNamesWhatExists` keeps the skill honest: every `--flag` it names is in `cli.Flags` or a flag's `Args`, every `devopsy.*` label is in the test's `publicLabels` (the README's, each checked against the code), and its config.yaml example loads.
+- The skill installs into `.agents/skills/devopsy` in the project's directory (`FindProjectDir`), shared by Codex, Cursor and the skills installer, with a link from `.claude/skills/devopsy`, since Claude Code reads only its own directory; the link is relative from where the link really is (`EvalSymlinks` of both ends), a dangling one is replaced, anything else there is left and said.
+
+## Capabilities and the environment
+
+- Capabilities run in the project's own environment and session (`--capability <name> <action>`, hidden; executables in `.devopsy/capabilities/`), so no other project's variables leak in; the catalog (`cli.Capabilities`) lives with the code that calls it.
+- devopsy always sets `COMPOSE_PROJECT_NAME` (locally the config's `project:`, else compose's `name:`, else the folder) and runs the `env` capability (`computeEnv`) before every command but help and completion; its output only fills unset variables, and `DEVOPSY_INTERNAL_ENV_COMPUTE` keeps a devopsy it calls from running it again.
+- `--probe` is a tool with plain arguments, not a contract: it knows no proxy, and proxies print the `--probe` line to run.
+- A server never drives local devopsy: devopsy execs ssh and cannot watch its output, and a server must not make a laptop act.
+
+## SSH sessions
+
+- Every session is `ssh [DEVOPSY_SSH_COMMAND's options] [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for any command at a terminal (a shell, a project or compose command, `--upgrade`), never for activations and holders (internals/sessions.md).
+- Every session passes `ClearAllForwardings=yes` (the user's `LocalForward` lines clash between sessions) and refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
+- Connection sharing is the user's SSH config, which `--ssh-config` suggests and never writes.
+- Test fakes of ssh run their last argument.
+
+## --context-hash
+
+- `--context-hash` is a pure helper, devopsy builds nothing, and errors only ever go towards a new hash (a kept file costs a rebuild, a dropped one would reuse a stale image), hence Docker's own matcher and refusing what it cannot hash.
+- It folds base images in, always (`baseImages`, `BaseDigest`): each external `FROM` (no stage, no `scratch`, global `ARG`s expanded with the build's args) by its registry's current digest (`docker buildx imagetools inspect`, no pull), one pinned by digest as its reference, and no answer fails the hash; `COPY --from` images are not covered.
+
+## --upgrade
+
+- `--upgrade` reads the same release files as `install.sh` (archive names without a version, `checksums.txt`); the daily check runs detached (`--upgrade-check`), and only release builds upgrade or check.
+- To try them by hand, build a release build (`go build -ldflags "-X main.version=0.8.0" -o /tmp/devopsy ./cmd/devopsy`), then `/tmp/devopsy --upgrade`; the notice needs a terminal (`script -q out ./devopsy ps`).
