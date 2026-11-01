@@ -4,7 +4,7 @@
 
 ## inherit.env
 
-- A parent's `inherit:` keys become the child's `shared/inherit.env`, whole: `inheritVars` reads the parent's files in one session (`ParentReadScript`, `readParent`, through the parent's own `--env-trace`: its `shared/.env`, its own `inherit.env`, so a chain passes on what the middle inherited, its instance's and project's `.env`, its `parent.env`), takes each key from the nearest level and writes them all under the child's lock (`InheritWriteScript`, the values on stdin), so a resync replaces the file; every release links it and the loader reads it below `.env`.
+- A parent's `inherit:` keys become the child's `shared/inherit.env`, whole: `inheritVars` reads the parent's files in one session (`ParentReadScript`, `readParent`, through the parent's own `--env-trace` over its `shared/.env`, its own `inherit.env`, so a chain passes on what the middle inherited, its instance's and project's `.env` and its `parent.env`), takes each key from the nearest level and writes them all under the child's lock (`InheritWriteScript`, the values on stdin), so a resync replaces the file; every release links it and the loader reads it below `.env`.
 - A notice names the keys the child's own `shared/.env` shadows, never their values.
 - The keys come from the parent's current release, never the checkout, through the preflight's session on the parent (`ParentCheckScript`; `--inherit`'s `ParentInheritScript`), which runs the hidden `--release-inherit` in its `current` to print what the release's own config names for the environment it was made for (`ReleaseEnvironment`) into `job.inherit` (`TestSyncInherit`): a checkout naming any key would copy that value of the parent's into the child whatever the parent's release says, and the parent's release decides what leaves it, as the child's decides its own `parent:` and run step.
 - An `inherit:` naming nothing empties the child's `inherit.env` (a sync's child side writes an empty pending file, `SyncOptions.NoInherit`; `--inherit` an empty file): otherwise a key dropped from `inherit:` stays inherited for good.
@@ -16,7 +16,7 @@
 
 ## parent.env
 
-- A parent on another server is copied whole, per child, into `shared/parent.env` (`remote.ParentEnvFile`, `writeParentEnv`): the parent's instance and project levels as written (`copyText`: each key's lines from the nearest level, merged per key, `dotenvChunks`; keys as compose's parser takes them), read below the child's own server's levels, so what the child's server says wins.
+- A parent on another server is copied whole, per child, into `shared/parent.env` (`remote.ParentEnvFile`, `writeParentEnv`): the parent's instance and project levels as written (`copyText`, each key's lines from the nearest level, merged per key, `dotenvChunks`; keys as compose's parser takes them), read below the child's own server's levels, so what the child's server says wins.
 - The copy is written as the parent's files are, never interpolated on the parent's side: a `${...}` resolves on the child against its own variables, as it would were those files on its server; interpolated, a reference carried the parent's `shared/.env` secret out and the parent's `COMPOSE_PROJECT_NAME` in.
 - Every key is copied, with no exclude list: what must not leave a server belongs in an environment's `shared/.env`; a secret (`secrets:`, the checkout's) new in the copy is named, never its value.
 - The read needs the parent's current release: a destroyed parent is no source, and the copy stays.

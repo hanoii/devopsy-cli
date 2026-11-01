@@ -12,6 +12,7 @@
 - `stop` defaults to `never` for every copy, so every stop shows in compose.yaml; it applies to services without data too (for example an app needing `import`), and `never` is accepted explicitly, which silences the dependents notice.
 - `own` without any `devopsy.data` label is an error (it would never stop); with `false` or `copy=none` it is ignored, since no copy moves that data.
 - Label errors come only where labels are read (`parseSyncServices`, `SyncServices`), never in `Build`: a rollback to an older release, or the restart after a failed one, runs a plain `up` and must not fail on labels.
+- The labels are a named feature, `data-copy` (internals/releases.md), found by `--sync-push`, `--export`, `--import` (`--resolved` through it) and `--sync-services prepare|finish|import|list`, never by `settle` (which only warns on labels it cannot read) nor by an activation (an older `--check-mounts` refuses the new values before the switch): an older devopsy reads the copy label as no label, so a parent says "nothing to sync", which a holder takes for `go`, and a child's first release goes live on empty data.
 
 ## Entries, volumes and names
 

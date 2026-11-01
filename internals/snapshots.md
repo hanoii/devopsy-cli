@@ -18,7 +18,7 @@
 ## A take
 
 - The tars are made while the set is stopped unless the data clones by reflinks or a mirror is kept, the downtime their time, then the manifest and the rename.
-- The tars (`dataTars`, `tarInto`) hold only files, directories and links (`find ... | tar --null --no-recursion -T -`), hard links as files of their own (`--hard-dereference`), holes kept (`--sparse`, and `RsyncCopy`'s `--sparse` for the mirror and syncs, since holes written as zeros take more disk than the source and than `du` measured), one `.tar.zst` per entry or volume with its members named plainly as the extraction matches them, `zstd -T0` under `nice` in the util image, written into the snapshot's directory mounted into the container and given to the deploy user, never through the container's stdout: Docker's stream is many times slower than a file.
+- The tars (`dataTars`, `tarInto`) hold only files, directories and links (`find ... | tar --null --no-recursion -T -`), hard links as files of their own (`--hard-dereference`), holes kept (`--sparse`, and `RsyncCopy`'s `--sparse` for the mirror and syncs, since holes written as zeros take more disk than the source), one `.tar.zst` per entry or volume with its members named plainly as the extraction matches them, `zstd -T0` under `nice` in the util image, written into the snapshot's directory mounted into the container and given to the deploy user, never through the container's stdout: Docker's stream is many times slower than a file.
 - The tars' sources are mounted read-only where a mirror has them (`/m/mnt`, `/m/volumes/<key>`), so the tars are the same with or without one.
 - One tar per entry, never one for all: an extracting container reads only its own.
 - Each step runs in the release that is current when it starts (a take's steps and an import's `cd "$base/current"` in their subshell): the first pass holds no release lock, and a release switching current meanwhile would leave the stopped pass on the old release's labels with the new one's code.
@@ -122,11 +122,9 @@
 ## Gates
 
 - The hidden `--snapshot-step` is a feature flag, so an older server refuses every snapshot script before anything changes.
-- Release snapshots are a named feature, `release-snapshots`, found by the scripts' `release-` words (`ReleaseSnapshotsFeature`): a server with manual snapshots only refuses a release with them on once its activation starts, after the upload, accepted, since an activation's needs are checked by its own session and the upload's by the upload's.
-- What came with release snapshots is under the same name: the mounts check's words after `restored` (`restart`, a restore's snapshot) and `devopsy-util:3` in a script's text; a new `UtilImage` tag is a named feature of its own.
-- Every activation needs `release-snapshots`, and `childNeeds` carries the util tag to the child's first session, so a child lacking it refuses before anything stops.
-- The plain activation's needs are checked in the first session to the server too (`remote.WithAlsoNeeds`, in the role check, a new instance's, a child's current, and the upload): refused only at the activation, a pending release and an instance's directory were left, and the instance's prompt or a child's inherited variables written; a release opening no session before its upload runs its local before steps first, accepted.
-- Only the plain activation's needs go there: a sync's are checked where it is decided, and a release that does not sync runs on a server lacking them.
+- Release snapshots are a named feature, `release-snapshots`, found by `--snapshot-step release-` (`ReleaseSnapshotsFeature`): a server with manual snapshots only refuses a release with them on once its activation starts, after the upload, accepted, since an activation's needs are checked by its own session and the upload's by the upload's (internals/releases.md).
+- What came with release snapshots is under the same name: the mounts check's words after `restored` (`restart`, a restore's snapshot) and `devopsy-util:3` in a script's text, so every activation needs it; a new `UtilImage` tag is a named feature of its own, since a devopsy without the tag never readies it.
+- `childNeeds` carries the util tag to the child's first session, so a child lacking it refuses before anything stops.
 
 ## Tests
 
