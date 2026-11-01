@@ -95,9 +95,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - Nothing from the session stops a release past its switch, its run step included: stopping the step would restart the previous release while the step's compose runs on.
 - A sync goes by what its copy wrote, never by the answer the operator sent: an answer can be lost whatever the copy did.
 - What a cut-off session leaves is marked (for example pending, fetching, failed, a partial copy), shown by `--releases` and `--status`, and settled by whatever takes the lock next, and a removal resumes where it was cut: a connection, a laptop or CI can vanish at any point, and a server must never need someone to log in and guess.
-- A session's end, clean or silent, is noticed on the server within seconds (`--watch-session`, the heartbeat): a dead session must never hold a lock or keep a service down.
-- Every lock wait is announced and bounded (`lockWait`): a silent wait reads as a hang, and an endless one keeps whatever waits from ever running.
-- An operator frozen past the quiet time (for example a laptop asleep, Ctrl-Z) is taken for gone and cancels cleanly; that is accepted.
+- The server never waits on the operator for long: a session's end, clean or silent, is noticed within seconds (`--watch-session`, the heartbeat), every lock wait is announced and bounded (`lockWait`), and an operator frozen past the quiet time (for example a laptop asleep, Ctrl-Z) is taken for gone and cancels cleanly, accepted, since a dead session must never hold a lock or keep a service down.
 - Before 1.0.0 anything may change when the change is better in the long run, the basics included (for example project discovery, `.env` loading, `commands/`, passing the rest to compose): one person uses devopsy and runs every server, and 1.0.0 is when compatibility is promised.
 - No migration code: older files and syntax just stop working, a breaking change is marked (`feat!`, `fix!`), and a protocol bump or a new feature means upgrading the servers.
 
