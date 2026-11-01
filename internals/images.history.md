@@ -1,0 +1,23 @@
+History, not rules: `internals/images.md` wins where they differ.
+
+- The image rules were generated `sh` at first, where four review rounds found most of the bugs; they moved to Go (`internal/images`), run on the server as `--images`, under "What is deployed decides on the server".
+- Every profile's non-buildable services are pulled by every release (decided 2026-10-23): a profile-only tool was pulled once, on first use, and its tag never got a patch. Accepted: image mode asks the registry twice for its default third-party tags, since Compose cannot pull those and the default buildable ones in one call, and an unchanged image downloads nothing.
+- Own or pulled is decided by compose and the mode, never by `RepoDigests`: checked 2026-10-23 that on Docker's containerd store built and loaded images carry `RepoDigests` too.
+- The build key: a cached build of the same image kept the old key, and every reload refused (reload review 5), so a listing after a fetch records today's key whatever image id the build gave.
+- No version ordering for data images: checked 2026-10-23 that no field is common to images; "newer" is "ran later on this data".
+- The history is appended only after something ran: a release cancelled after `img record` had run nothing. A restore's run step failing (review after v0.52.2): its image became the restored data's newest, since the history was written at the restore; a rule in `Ran` skipping containers of another label instead dropped one a plain `up` had made, which no `img ran` counted.
+- Every activation runs `img ran` on current first, and a settle once it started anything (round 8, by hand on OrbStack): mariadb 12.1 upgraded the data, the history still ended on 11.8 because the release was killed past its switch, and a rollback ran 11.8 on it.
+- `--yes` never accepts an image (decided 2026-10-23): it skips prompts, so CI passed it everywhere and skipped every check; `--accept-image <service>` names what is accepted.
+- A rollback brings back code (decided 2026-10-23): it once restored a changed name's exact image, held or pulled by digest, which cost stateless holds and digest refetches for what a pin or a commit tag gives anyway; a floating tag now goes forward.
+- Never a retag of a pulled name: `others()` once let a rollback move a shared pin back while its other user was down, and a backward retag takes a database back on its upgraded data.
+- A re-listing that drops an image records its names as left: found by `TestDataRandom`, the names other releases counted on it to take leaked.
+- A removal never counts a bookmark the record holds as a holder: its release went, so a name kept for it outlived every release (found by `TestDataRandom`).
+- Never `docker rmi -f`: Docker 29's containerd store only untags with it, but the classic store, which servers upgraded from older Docker keep, may delete an image a stopped container uses (not checked).
+- A restore's check of another project's container uses `docker ps --filter ancestor=`, checked on Docker 29's containerd store.
+- No directory scanning, server-wide sweep or trash directory (decided): a removal reads nothing above its project.
+- `img prune` retries only this project's lines of the record (decided).
+- `img hold` when a restart's `get_images` fails (review after v0.52.2): the restart ran on the failed release's images, so the data services are held on their data's newest image, the listing and the bookmarks following, and a snapshot of that release holds what it runs.
+- `runImages` ignores its signals itself: Go does not keep an inherited ignored SIGPIPE or SIGTERM, so the script's `trap ''` alone let a gone session or a second TERM kill an undo halfway; its steps are short and under the lock.
+- `data-images` is a named feature rather than a protocol bump: a bump would refuse every release, `--status` and `--log` on a server lacking only the history and the holds.
+- Removals keep the release when Docker fails: a removal that went on left a listing nothing could read again, so the next removal could not finish it.
+- The image rules' tests: an in-memory Docker with a registry and containerd's digest names, `TestRandomHistory` (200 random histories of two environments sharing `mariadb:11` and an alias) and `TestDataRandom` (300 random runs, `DEVOPSY_TEST_SEEDS` for more), which found most of the bookmark and record leaks above.
