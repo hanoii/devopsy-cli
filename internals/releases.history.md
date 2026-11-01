@@ -12,9 +12,9 @@ History, not rules: `internals/releases.md` wins where they differ.
 ## Steps
 
 - Local steps never look like a release on a server (decided): the templates' `env` capabilities test `DEVOPSY_TARGET`, `DEVOPSY_ENVIRONMENT` and `DEVOPSY_INSTANCE` to tell a release from local work, and `DEVOPSY_INSTANCE` set would reach the step's own devopsy calls.
-- Remote commands through `current` rather than a release path: compose stores bind-mount paths in containers, so containers made from a release path broke once that release was pruned.
+- Remote commands through `current` rather than a release path: compose stores bind-mount paths in containers, so containers made from a release path would break once that release was pruned.
 - `mode:` defaults to `build` because it works for every project; a wrong `image` fails the release, which says so.
-- Fetching before the switch, never in the run step: a build or pull there ran after the switch, and in a sync after the copy, so a failure left the new release live without its images.
+- Fetching before the switch, never in the run step: a build or pull there would run after the switch, and in a sync after the copy, so a failure would leave the new release live without its images.
 
 ## Upload
 
@@ -49,8 +49,8 @@ History, not rules: `internals/releases.md` wins where they differ.
 
 - The gate on what a session sends: a session cut while its script waited for the lock (Ctrl-C, a drop) left its tar in the server's pipe, and the script extracted it once the lock came, after devopsy had said nothing changed; a removal went on likewise. The scripts now print `LockedMarker` once they hold the lock and devopsy sends stdin only then.
 - The holder's disarm waits for the session's next byte: a session that went silent during the lock wait was otherwise ended only once its quiet time came after the lock, with the child's set stopped meanwhile.
-- Only the upload creates `$base`: an activation whose release went while it waited made the directory again.
-- A lock file removed while awaited is opened again: two releases once held locks on different files. `removeBase` moves `$base` aside before removing it for the same reason.
+- Only the upload creates `$base`: an activation whose release went while it waited would have made the directory again.
+- A lock file removed while awaited is opened again: two releases would otherwise hold locks on different files. `removeBase` moves `$base` aside before removing it for the same reason.
 - Pruning skipping a busy image lock is accepted: servers are not expected to be that busy, and the next release prunes.
 - `--destroy` holding the image lock across its `destroy:` step is accepted: compose's `--rmi local` removes images too, so a slow step makes fetches on the server wait. Docker calls have no timeouts, so a hung daemon holds the lock until killed and waiters give up after 10 minutes.
 - No update check under a lock: the detached `--upgrade-check` inherited fds 8 and 9 (compose has to keep them) and held the locks while it asked GitHub.
