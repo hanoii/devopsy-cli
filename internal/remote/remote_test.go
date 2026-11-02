@@ -1755,7 +1755,7 @@ exit 0
 	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\n")
 	out, err := release("2", "DB=mariadb:11.4", "IMG=I0")
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: mariadb:11.4 (mariadb@I0) never ran on its data") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+hintAddress(tg)+" --release --accept-image db") {
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || current() != "releases/1/code" || !strings.Contains(out, "db: mariadb:11.4 (mariadb@I0) never ran on its data") || !strings.Contains(out, "release 2 not made current") || !strings.Contains(out, "devopsy @"+HintAddress(tg)+" --release --accept-image db") {
 		t.Fatalf("refused release 2 (%v), current %q:\n%s", err, current(), out)
 	}
 	if fakeImage(root, "mariadb:11.4") != "" {

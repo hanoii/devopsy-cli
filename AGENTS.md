@@ -202,7 +202,9 @@ the rule, why, and where it lives.
   compose's), times on lines (the logs have them; a total, when one is
   wanted, from the local devopsy's own clock, in the message).
 - **Hints name the address as typed** (the alias, else the resolved
-  address: `targetRef`, `hintAddress` in scripts). Why: the command
+  address: `targetRef`; a hint to release, roll back or sync, locally or
+  in a script, the alias only with `source:`: `remote.HintAddress`).
+  Why: the command
   works when copied, and an alias with `source:` releases only from its
   checkout.
 - **Every flag is one entry in `cli.Flags`,** by task group, with its

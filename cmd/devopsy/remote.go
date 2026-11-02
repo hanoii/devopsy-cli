@@ -273,7 +273,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				// The services whose image the release's checks let through
 				// against their data's history.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", releaseRef(t), args[0]))
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", remote.HintAddress(t), args[0]))
 				}
 				accept = acceptImage(accept, args[i+1])
 				i++
@@ -281,7 +281,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				// Where a syncing release copies from, instead of the
 				// parent: an address, its @ optional.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", releaseRef(t), args[0]))
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", remote.HintAddress(t), args[0]))
 				}
 				from = strings.TrimPrefix(args[i+1], "@")
 				i++
@@ -290,7 +290,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 		if noSync && from != "" {
-			return fail("--from: --release-no-sync never syncs: devopsy @" + releaseRef(t) + " --release-sync --from @" + from + " syncs from it")
+			return fail("--from: --release-no-sync never syncs: devopsy @" + remote.HintAddress(t) + " --release-sync --from @" + from + " syncs from it")
 		}
 		if (syncFlag || from != "") && t.Parent == "" {
 			flag := args[0]
@@ -457,7 +457,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
 				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
 				if !atTerminal() {
-					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+releaseRef(t)+" --release --yes")}})
+					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
 					return 1
 				}
 				report.Info(q, creates)
@@ -491,29 +491,29 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			first := !current
 			syncs := !noSync && (syncFlag || first)
 			if cur.Importing {
-				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, releaseRef(t)))
+				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, remote.HintAddress(t)))
 			}
 			// A partial copy from a sync is never run on: only a sync
 			// completes it (the activation checks again); a sync is one
 			// of the ways out of an import's too.
 			if cur.Mark != nil && !syncs {
-				reset := remote.ResetFix(releaseRef(t))
-				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync"), report.Fix(reset[0], reset[1])}
+				reset := remote.ResetFix(remote.HintAddress(t))
+				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), report.Fix(reset[0], reset[1])}
 				msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
 				if cur.Mark.IsImport() {
 					msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
 					fixes = nil
-					for _, f := range remote.ImportFixes(releaseRef(t), cur.Mark.From, true) {
+					for _, f := range remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true) {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
 				} else if cur.Mark.IsRestore() {
 					msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
 					fixes = nil
-					for _, f := range remote.RestoreFixes(releaseRef(t), cur.Mark.From, t.Parent != "") {
+					for _, f := range remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != "") {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
 				} else if !current {
-					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
+					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
 				}
 				report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
 				return 1
@@ -531,7 +531,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			if !noSync {
 				if from != "" && !syncFlag && !first {
-					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", releaseRef(t), from))}})
+					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
 					return 1
 				}
 				if syncFlag || first {
@@ -544,7 +544,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						return failParent(t, color, args[0])
 					}
 					if job, err = syncPreflight(t, p, projectName, false); err != nil {
-						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
+						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync"))
 						return 1
 					}
 					job.first, job.from, job.fromAddr = first, from != "", from
@@ -704,8 +704,8 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool, flag string) int {
 	report.Fail(t.ParentErr,
-		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+releaseRef(t)+" "+flag+" --from "+parentGuess(t)),
-		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+releaseRef(t)+" --release-no-sync", "devopsy @"+releaseRef(t)+" --sync --from "+parentGuess(t)))
+		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+remote.HintAddress(t)+" "+flag+" --from "+parentGuess(t)),
+		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync", "devopsy @"+remote.HintAddress(t)+" --sync --from "+parentGuess(t)))
 	return 1
 }
 

@@ -264,18 +264,10 @@ func runSSHKeysGenerate(args []string, color bool) int {
 	return 0
 }
 
-// releaseRef is the address a hint to release or roll back names: an
-// alias only with source:, where it releases from its checkout (one
-// without cannot release at all).
-func releaseRef(t *remote.Target) string {
-	if t.Alias != "" && t.Source == "" {
-		return cmp.Or(t.Address, t.Name)
-	}
-	return targetRef(t)
-}
-
 // targetRef is how the user named the target, for usage lines and
-// hints: its alias, else its resolved address.
+// hints of commands that need no checkout (--status, --log, --vars): its
+// alias, else its resolved address. A hint to release, roll back or sync
+// is remote.HintAddress's: an alias only with source:.
 func targetRef(t *remote.Target) string {
 	switch {
 	case t.Alias != "":

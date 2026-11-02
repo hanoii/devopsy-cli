@@ -165,8 +165,8 @@ func chooseReleases(t *remote.Target, releases []remote.Release, words []string)
 				Msg:     fmt.Sprintf("release %s is the current one of %s: nothing removed", match[0].ID, t.Address),
 				Details: []string{"the release running there stays"},
 				Fixes: []report.Remedy{
-					report.Fix("release again, then remove it:", "devopsy @"+releaseRef(t)+" --release"),
-					report.Fix("roll back, then remove it:", "devopsy @"+releaseRef(t)+" --rollback"),
+					report.Fix("release again, then remove it:", "devopsy @"+remote.HintAddress(t)+" --release"),
+					report.Fix("roll back, then remove it:", "devopsy @"+remote.HintAddress(t)+" --rollback"),
 				},
 			}
 		}

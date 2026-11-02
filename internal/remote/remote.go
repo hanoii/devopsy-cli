@@ -627,14 +627,16 @@ func upgradeRef(t *Target) string {
 	return t.Host + ":"
 }
 
-// hintAddress is the address a hint in a script names: the alias as
-// typed when it has source: (it releases only from its checkout; one
-// without cannot release), else the resolved one, else the server.
-func hintAddress(t *Target) string {
-	if t.Source == "" {
-		return cmp.Or(t.Address, t.Host)
+// HintAddress is the address a hint to release, roll back, sync or
+// restore names, in a script or locally: the alias as typed when it has
+// source: (it releases only from its checkout; one without cannot
+// release at all), else the resolved one (an instance, a server from
+// variables), so the hint works when copied.
+func HintAddress(t *Target) string {
+	if t.Alias != "" && t.Source != "" {
+		return t.Alias
 	}
-	return cmp.Or(t.Alias, t.Address, t.Host)
+	return cmp.Or(t.Address, t.Name, t.Host)
 }
 
 // prelude adds, for release scripts, the checks, the release lock and
@@ -679,7 +681,7 @@ func UploadScript(t *Target, syncs bool) string {
 	guard := ""
 	if !syncs {
 		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
   exit 1
 fi
 ` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
@@ -1234,7 +1236,7 @@ exec 7<&-
         rs_snapshot=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
         devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixLines(t, "rs_snapshot") + `
       else
-        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
@@ -1254,7 +1256,7 @@ exec 7<&-
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
@@ -1348,7 +1350,7 @@ fi
 	// its mark kept, which --status names and the next release finishes.
 	// timeout: a daemon stopping can hang a call, under the lock.
 	s += `if [ "$status" != 0 ] && ! { if command -v timeout >/dev/null 2>&1; then timeout 5 docker version; else docker version; fi; } >/dev/null 2>&1; then
-  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --status"
+  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --status"
   exit "$status"
 fi
 `
@@ -1825,7 +1827,7 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	}
 	return fetch + `left=` + leftPath(t) + `
 il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", HintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1969,7 +1971,7 @@ else
   devopsy --say error "$base has no release and no .devopsy/ project: run 'devopsy @%s --release' first"
   exit 1
 fi
-`, hintAddress(t))
+`, HintAddress(t))
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -2651,7 +2653,7 @@ if [ -n "$dir" ]; then
     s=$?; image_unlock
     # Killed (SIGKILL, the OOM killer), it said nothing of where it was.
     if [ "$s" -gt 128 ]; then
-      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+hintAddress(t)+" --destroy") + `    else
+      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+HintAddress(t)+" --destroy") + `    else
       devopsy --say error "$base is not removed" || true
     fi
     exit "$s"

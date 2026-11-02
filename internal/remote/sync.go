@@ -203,7 +203,7 @@ func RestoreFixes(ref, snapshot string, child bool) [][2]string {
 // shell's $snapshot.
 func restoreFixLines(t *Target, snapshot string) string {
 	var lines []string
-	for _, f := range RestoreFixes(hintAddress(t), "$"+snapshot, t.Parent != "") {
+	for _, f := range RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "") {
 		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
 	}
 	return strings.Join(lines, " ")
@@ -217,13 +217,13 @@ func ResetFix(ref string) [2]string {
 // syncFixLines are a sync mark's ways out as --say's details for a
 // script: a sync, the details in more (each double-quoted), a reset.
 func syncFixLines(t *Target, more ...string) string {
-	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"`}
+	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync"`}
 	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
 }
 
 // resetFixLines is ResetFix as --say's details for a script.
 func resetFixLines(t *Target) string {
-	f := ResetFix(hintAddress(t))
+	f := ResetFix(HintAddress(t))
 	return `"` + f[0] + `" "` + report.CmdMark + f[1] + `"`
 }
 
@@ -232,7 +232,7 @@ func resetFixLines(t *Target) string {
 // report.CmdMark, double-quoted.
 func importFixLines(t *Target, service string) string {
 	var lines []string
-	for _, f := range ImportFixes(hintAddress(t), "$"+service, t.Parent != "") {
+	for _, f := range ImportFixes(HintAddress(t), "$"+service, t.Parent != "") {
 		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
 	}
 	return strings.Join(lines, " ")
@@ -778,7 +778,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
+`, HintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
@@ -858,7 +858,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
 ` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
+  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + HintAddress(p) + ` --sync)"
   exit 1
 fi
 cd "$base/current"
@@ -923,7 +923,7 @@ func ImportScript(t *Target, projectName, service, end, accept string) string {
 	// image lock, the mode.
 	acceptLine += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + "\n"
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
+`, HintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
 trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
@@ -933,7 +933,7 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixLines(t, "im_service") + `
     exit 1
   elif [ "$im_code" != ` + IncompleteImport + ` ]; then
-    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
     devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixLines(t, "im_service") + `
@@ -990,7 +990,7 @@ func ResolvedScript(t *Target, projectName, service string) string {
 # Killed (SIGKILL, the OOM killer), it said nothing: the mark stays, what
 # it started perhaps running under it.
 if [ "$rv_status" -gt 128 ]; then
-  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+hintAddress(t)+" --import "+service+" --resolved") + `fi
+  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+HintAddress(t)+" --import "+service+" --resolved") + `fi
 exit "$rv_status"
 `
 }

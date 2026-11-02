@@ -37,8 +37,8 @@ func ReloadScript(t *Target, projectName string) string {
 	refuse := `{ rm -f "$rl_pending"; devopsy --say error "nothing reloaded"; exit 1; }`
 	// Nothing current: said before the lock, which refuses a missing
 	// $base as one removed while it waited.
-	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"; exit 1; }
-` + strings.TrimPrefix(prelude(t, false), "set -eu\n"+basePrelude(t)) + "exec 1>&2\n" + NoExit255 + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"; exit 1; }
+` + strings.TrimPrefix(prelude(t, false), "set -eu\n"+basePrelude(t)) + "exec 1>&2\n" + NoExit255 + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: nothing to reload" "release it first:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"; exit 1; }
 cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 rel="$base/$cur"
 rl_pending="$rel/` + TargetReloadFile + `"
@@ -54,7 +54,7 @@ export ` + TargetPendingEnv + `="$rl_pending"
 ` + call("--missing-vars") + ` || ` + refuse + `
 ` + call("--check-names") + ` "$base" || ` + refuse + `
 ` + call("--check-mounts") + ` || ` + refuse + `
-` + call("--check-images", hintAddress(t)) + ` || ` + refuse + `
+` + call("--check-images", HintAddress(t)) + ` || ` + refuse + `
 if [ -n "${watch_pid:-}" ]; then
 ` + waitBeat(`{ rm -f "$rl_pending"; devopsy --say error "the session ended: nothing reloaded"; exit 1; }`) + `fi
 trap '' INT TERM HUP PIPE
@@ -63,11 +63,11 @@ trap '' INT TERM HUP PIPE
 out="$rel/` + ServerLogFile + `"
 ` + followOutput + `mv -f "$rl_pending" "$rel/` + TargetEnvFile + `"
 unset ` + TargetPendingEnv + `
-` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt to their owners failed: the reload step does not run" "devopsy @` + hintAddress(t) + ` --log shows it"; exit 1; }
+` + call("--mnt-owners") + ` || { devopsy --say error "giving the entries of mnt to their owners failed: the reload step does not run" "devopsy @` + HintAddress(t) + ` --log shows it"; exit 1; }
 rs=0
 with_tty ` + Quote(call("--release-steps", "reload", "run")) + ` || rs=$?
 img ran "$base" "$rel" || true
-[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --log" || true
+[ "$rs" = 0 ] || devopsy --say error "the reload step failed ($rs): the release stays live, and what it started runs" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --log" || true
 exit "$rs"
 `
 }
@@ -81,7 +81,7 @@ func checkImages(t *Target, projectName string, run bool, env, nothing string, f
 	if !run {
 		return ""
 	}
-	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append(append([]string{"--check-images"}, flags...), hintAddress(t)), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
+	return `(cd "$base/current" && ` + env + devopsyCall(projectName, append(append([]string{"--check-images"}, flags...), HintAddress(t)), false) + `) || { devopsy --say error "` + nothing + `"; exit 1; }
 `
 }
 
@@ -92,7 +92,7 @@ func checkImages(t *Target, projectName string, run bool, env, nothing string, f
 // for both: each kind's case made from it, the mark's fields its shell
 // variables). A sync's partial copy never gets here: markRefusal first.
 func cutRefusal(t *Target) string {
-	a := hintAddress(t)
+	a := HintAddress(t)
 	cases := ""
 	for _, kind := range []string{"rollback", "restart", "restore", "*"} {
 		what, fix := (&Activating{ID: "$rl_id", Kind: kind, From: "$rl_from", Snapshot: "$rl_snap"}).Cut(a, a, false)
