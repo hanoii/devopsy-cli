@@ -446,11 +446,18 @@ func TestImportResolved(t *testing.T) {
 	if _, out, code := s.runIO([]string{"FAIL_START=shop-prod"}, nil, "@prod", "--import", "db", "--resolved", "--yes"); code == 0 || !s.mark().IsImport() || s.record() == "" || !strings.Contains(out, "the mark stays") {
 		t.Errorf("a start that fails (%d):\n%s", code, out)
 	}
+	// What the import's extraction a killed devopsy left goes first, this
+	// environment's only.
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123-extract-0 devopsy-import-shop-prod-eu-9-extract-0'\n", 0o644)
 	_, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes")
 	docker, _ := s.logs()
 	if code != 0 || s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || !strings.Contains(docker, " start app db worker\n") || len(s.stopped()) > 0 {
 		t.Errorf("resolved (%d), mark %+v, stopped %v:\n%s\n%s", code, s.mark(), s.stopped(), out, docker)
 	}
+	if !strings.Contains(docker, "rm -f devopsy-import-shop-prod-123-extract-0\n") || strings.Contains(docker, "shop-prod-eu-9") {
+		t.Errorf("resolved: the import's leftover containers:\n%s", docker)
+	}
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\n", 0o644)
 	// A sync's mark: only a sync.
 	write(t, filepath.Join(s.base, remote.SyncIncompleteFile), remote.IncompleteLine("2026-10-22 10:00:00", "vm1:live", remote.IncompleteCopy, "the copy was cut"), 0o644)
 	if _, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes"); code == 0 || !strings.Contains(out, "only a sync completes it: nothing resolved") || !strings.Contains(out, "--sync") {
@@ -931,6 +938,16 @@ func TestSyncReset(t *testing.T) {
 		if strings.Contains(l, " find /mnt -mindepth 1 -delete") && !strings.Contains(l, "--name "+remote.SyncContainerPrefix) {
 			t.Errorf("the wipe empties mnt in a container no holder ends: %s", l)
 		}
+	}
+
+	// Without a mark, what an import's extraction a killed devopsy left
+	// goes with the wipe (it may still write into mnt), this
+	// environment's only.
+	write(t, s.log+".shop-dev", "FAKE_IMPORT_CONTAINERS='devopsy-import-shop-dev-42-extract-0 devopsy-import-shop-dev-1-42-extract-0'\n", 0o644)
+	out, code = s.run(nil, "@dev", "--reset", "--yes")
+	docker, _ = s.logs()
+	if code != 0 || !strings.Contains(docker, "rm -f devopsy-import-shop-dev-42-extract-0\n") || strings.Contains(docker, "rm -f devopsy-import-shop-dev-1-42") || strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0") > strings.Index(docker, " down --volumes") {
+		t.Errorf("a reset over an import's leftover containers (%d):\n%s\n%s", code, out, docker)
 	}
 }
 

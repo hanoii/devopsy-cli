@@ -335,13 +335,20 @@ func TestMntOwnersLocal(t *testing.T) {
 	// compose's watch starts the services first too (unless --no-up),
 	// and scale creates containers (review of 2026-10-23, round 2: both
 	// left the entries for Docker to make root's).
+	// Another terminal's owners' step of this very project may run: never
+	// removed (no lock holds it off), only one under this devopsy's own
+	// container's name.
+	left := append(slices.Clone(owned), "FAKE_OWNERS_CONTAINERS=devopsy-owners-shop-99-0")
 	for _, args := range [][]string{{"watch"}, {"scale", "app=2"}, {"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}} {
 		os.RemoveAll(filepath.Join(s.dot, "mnt"))
-		out, code := s.run(owned, args...)
+		out, code := s.run(left, args...)
 		docker, _ := s.logs()
 		container := strings.Contains(docker, "run --rm --name devopsy-owners-")
 		if code != 0 || !fileExists(filepath.Join(s.dot, "mnt", "storage")) || container != (runtime.GOOS != "darwin") || !strings.Contains(docker, "compose -f "+compose) {
 			t.Errorf("%v (%d), the util container %v:\n%s\n%s", args, code, container, out, docker)
+		}
+		if strings.Contains(docker, "rm -f devopsy-owners-shop-99-0") {
+			t.Errorf("%v removed another terminal's owners' container:\n%s", args, docker)
 		}
 	}
 	// An owned entry that is a symbolic link (an entry shared between

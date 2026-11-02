@@ -1060,11 +1060,31 @@ func TestSyncReflinkClone(t *testing.T) {
 	// first.
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
 	s.labels("FAKE_APP=keep\nFAKE_DB=stream")
+	write(t, s.log+".shop-prod", "FAKE_APP=keep\nFAKE_DB=stream\nFAKE_STALE_DAEMON=old-push-clone\n", 0o644)
+	s.logs()
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "a clone an earlier copy left") {
 		t.Fatalf("a leftover clone (%d):\n%s", code, out)
 	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-push-clone") || !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") || strings.Index(docker, "rm -f old-push-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("the push did not end the leftover clone's containers, then remove it:\n%s", docker)
+	}
 	s.labels("")
 	noClone("a leftover clone")
+	// And an export on a target, which holds the sync lock as a push does.
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-export-clone\n", 0o644)
+	cmd = exec.Command(binary, "@prod", "--export", "db")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), reflink...)
+	stderr.Reset()
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	if err := cmd.Run(); err != nil || !strings.Contains(stderr.String(), "a clone an earlier copy left") {
+		t.Fatalf("an export over a leftover clone: %v\n%s", err, stderr.String())
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-export-clone") || strings.Index(docker, "rm -f old-export-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("the export did not end the leftover clone's containers, then remove it:\n%s", docker)
+	}
+	os.Remove(s.log + ".shop-prod")
+	noClone("an export's leftover clone")
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
 	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-clone\n", 0o644)
 	s.logs()
@@ -3927,7 +3947,10 @@ func TestSyncEndWriters(t *testing.T) {
 		defer func() { _ = c.cmd.Process.Kill() }()
 	}
 	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n"+remote.WriterLine("db", other.Process.Pid, "running")+"\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
+	// The sync's own containers (its receive, a reset's wipe) go; another
+	// sync's, and the parent's clone of this very sync (its side's, which
+	// the push removes itself), stay.
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-1.2-wipe devopsy-sync-9.9-rsync-0 devopsy-sync-parent-1.2-clone'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
 	s.logs()
 	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
 	cmd.Dir = filepath.Join(dev, "current")
@@ -3941,6 +3964,12 @@ func TestSyncEndWriters(t *testing.T) {
 	}
 	if strings.Contains(docker, "devopsy-sync-9.9") {
 		t.Errorf("another sync's container removed:\n%s", docker)
+	}
+	if !regexp.MustCompile(`rm -f [^\n]*devopsy-sync-1\.2-wipe`).MatchString(docker) {
+		t.Errorf("the sync's wipe container not removed:\n%s", docker)
+	}
+	if strings.Contains(docker, "devopsy-sync-parent-1.2") {
+		t.Errorf("the parent's clone removed by the child's holder:\n%s", docker)
 	}
 	// One whose removal Docker had under way already (the push's own,
 	// cancelled) is gone all the same: no error.
@@ -4012,7 +4041,8 @@ func TestDestroyEndsWriters(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42-extract-0\nFAKE_OWNERS_CONTAINERS=devopsy-owners-shop-dev-42-0\n", 0o644)
+	// Never another environment's (shop-dev-eu's, shop-dev-1's).
+	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-dev-42-extract-0 devopsy-import-shop-dev-eu-42-extract-0'\nFAKE_OWNERS_CONTAINERS='devopsy-owners-shop-dev-42-0 devopsy-owners-shop-dev-1-42-0'\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@dev", "--destroy", "--yes")
 	docker, _ := s.logs()
@@ -4021,6 +4051,11 @@ func TestDestroyEndsWriters(t *testing.T) {
 	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
 	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
+	}
+	for _, other := range []string{"devopsy-import-shop-dev-eu-42-extract-0", "devopsy-owners-shop-dev-1-42-0"} {
+		if strings.Contains(docker, "rm -f "+other) {
+			t.Errorf("--destroy removed %s, not its own:\n%s", other, docker)
+		}
 	}
 }
 
