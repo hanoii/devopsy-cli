@@ -185,14 +185,9 @@ awk -v mode=%s -v sq="'" '
   END { for (i = 1; i <= n; i++) if (!(order[i] in done)) print line[order[i]] }
 ' "$file.vars" "$file" > "$t.tmp"
 # Into place in one rename, with the file's mode, so nothing reads it
-# empty or cut; one owned by another user is written over in place (the
-# deploy user cannot give a file away).
-if [ -O "$t" ]; then
-  chmod "$(stat -c %%a "$t" 2>/dev/null || stat -f %%Lp "$t")" "$t.tmp"
-  mv -f "$t.tmp" "$t"
-else
-  cat "$t.tmp" > "$t"
-fi
+# empty or cut, whoever owned it (nothing makes one another user's).
+chmod "$(stat -c %%a "$t" 2>/dev/null || stat -f %%Lp "$t")" "$t.tmp"
+mv -f "$t.tmp" "$t"
 rm -f "$file.vars" "$t.tmp"
 printf '%%s\n' "$file"
 `

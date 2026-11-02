@@ -672,8 +672,7 @@ step's rules):
   several lines, and `KEY: value`, which compose's parser reads as
   `KEY=value`. The result goes into place in one rename beside what a
   link points to, with the file's mode, so no command reads it empty or
-  cut (a `cat` into it truncated it first); a file of another user's is
-  written over in place. Inherited values are written under `umask 077`.
+  cut (a `cat` into it truncated it first), whoever owned it. Inherited values are written under `umask 077`.
 - **`--vars get` is the environment's value; edits stay in their
   file** (decided 2026-10-27: a child's `get` said "not set" of a value
   `--env` showed, inherited). `get` gives what the environment's commands
