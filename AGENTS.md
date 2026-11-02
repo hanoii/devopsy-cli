@@ -327,11 +327,11 @@ Where a target's names, server and settings come from. Governed by
   Never `~/.devopsy`: discovery would take the home directory for a
   project. Where: `config.go`.
 - **`defaults:` merges, `~` removes:** it gives environments `mode`,
-  steps, `releases`, `snapshots`, `parent`, `inherit` and `env`; `env`
-  merges key by key, `KEY: ~` removes, `""` stays empty, `snapshots`
-  merges by kind and key (`mergeSnapshots`: `snapshots.manual.keep: ~`,
-  `snapshots.mirror: ~`), and `parent: ~` and `inherit: ~` remove
-  theirs. Why YAML nodes are parsed: a plain decode
+  steps, `releases`, `snapshots`, `inherit` and `env`, never `parent`
+  (Syncs); `env` merges key by key, `KEY: ~` removes, `""` stays empty,
+  `snapshots` merges by kind and key (`mergeSnapshots`:
+  `snapshots.manual.keep: ~`, `snapshots.mirror: ~`), and `inherit: ~`
+  removes its list. Why YAML nodes are parsed: a plain decode
   cannot tell `~` from absent (`nullKeys`).
 - **A target is an address,** `@[<server>:][<instance>/]<environment>`
   (`parseAddress`): the server ends at the first `:`, the instance
@@ -1546,10 +1546,13 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Parents and when
 
-- **`parent:` names a concrete environment:** a pattern is an error;
-  one naming itself has none, so `defaults: {parent: prod}` works; a
-  cycle is an error, since neither could be released first (a first
-  release syncs from a released parent).
+- **`parent:` names a concrete environment, per environment only:** a
+  pattern is an error; under `defaults:` it is an unknown key (decided
+  2026-11-01: a child gets its parent's data, secrets and personal data
+  included, so it is named where the child is defined; a pattern
+  environment's is fine); one naming itself is a cycle, an error, since
+  neither could be released first (a first release syncs from a
+  released parent). `parent: ~` is no parent, as any key's null.
 - **A parent resolves one level only, its server never from the
   child's** (`ParentTarget`, whose own stays nil): at the child's
   instance, its server from the usual variables only. Why: a guess

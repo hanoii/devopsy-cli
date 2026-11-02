@@ -37,8 +37,9 @@ releases:
   keep: 5
 
 # What every environment takes unless it sets its own: mode, release,
-# rollback, destroy, reload, releases, snapshots, parent, inherit and env (env and
-# snapshots merge key by key).
+# rollback, destroy, reload, releases, snapshots, inherit and env (env and
+# snapshots merge key by key). Never parent: a child is named as one where
+# it is defined, since it gets its parent's data.
 defaults:
   # build (default): uploads the project as git sees it and builds on the
   # server. image: uploads .devopsy/ only; images come from a registry.
@@ -122,10 +123,11 @@ environments:
     # first release copies prod's data (shared/mnt) once current, before
     # its run step; devopsy @staging --sync copies it again. Resolved at
     # the child's instance, on the server DEVOPSY_SERVER_PROD names, else
-    # DEVOPSY_SERVER, never the child's. In defaults too: the parent itself then has none, and
-    # parent: ~ removes it from another.
+    # DEVOPSY_SERVER, never the child's. Per environment only (a pattern
+    # too), never in defaults:, and never itself.
     parent: prod
   "pr-*":
+    parent: prod
     releases:
       keep: 1
     snapshots:

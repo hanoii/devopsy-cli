@@ -114,8 +114,10 @@ type Target struct {
 	SnapshotsRelease SnapshotSetting  `yaml:"-"`
 	SnapshotsMirror  bool             `yaml:"-"`
 	// Parent is the environment this one is a copy of (a concrete key of
-	// environments:): its first release syncs the parent's data, and
-	// --sync resyncs it. Empty: not a child.
+	// environments:, never itself): its first release syncs the parent's
+	// data, and --sync resyncs it. Empty: not a child. Only an
+	// environment names one, never defaults:, so a child shows where it
+	// is defined: it gets its parent's data, secrets included.
 	Parent string `yaml:"parent"`
 	// ParentTarget is Parent resolved for a command, one level only (its
 	// own ParentTarget stays nil): the child's instance, the server from
@@ -157,7 +159,7 @@ type Target struct {
 	// else the project's, else 0 (the server's default).
 	Keep int `yaml:"-"`
 	// nulls are what it sets to null, removing a default: "env.KEY",
-	// "parent", "inherit".
+	// "inherit", "snapshots...".
 	nulls map[string]bool
 	// From says where each value came from, for --debug: "server", "path",
 	// "mode", "release", "rollback", "destroy", "reload", "keep",
@@ -537,7 +539,7 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 			}
 			f.snapshots = &sn
 		case key == "defaults" && !user:
-			t, nulls, err := decodeTarget(file, "defaults", &node)
+			t, nulls, err := decodeTarget(file, "defaults", &node, false)
 			if err != nil {
 				return nil, err
 			}
@@ -554,7 +556,7 @@ func readConfigFile(file string, user bool) (*configFile, error) {
 				if !envName.MatchString(name) && !envPattern.MatchString(name) {
 					return nil, fmt.Errorf("%s: environments: %q: letters, digits, '.', '_', '-' and * in patterns", file, name)
 				}
-				t, nulls, err := decodeTarget(file, name, &n)
+				t, nulls, err := decodeTarget(file, name, &n, true)
 				if err != nil {
 					return nil, err
 				}
@@ -628,25 +630,31 @@ func ConfigSecrets(data []byte) (secrets []string, ok bool) {
 	return secrets, err == nil
 }
 
-func decodeTarget(file, name string, n *yaml.Node) (*Target, map[string]bool, error) {
+// decodeTarget reads an environment (env) or defaults: (not env), which
+// takes every key but parent: a parent is written where its child is.
+func decodeTarget(file, name string, n *yaml.Node, env bool) (*Target, map[string]bool, error) {
+	keys := "mode, env, release, rollback, destroy, reload, releases, snapshots, inherit"
+	if env {
+		keys = "mode, env, release, rollback, destroy, reload, releases, snapshots, parent, inherit"
+	}
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			switch k := n.Content[i].Value; k {
-			case "mode", "env", "release", "rollback", "destroy", "reload", "releases":
-			case "snapshots":
+			switch k := n.Content[i].Value; {
+			case k == "mode", k == "env", k == "release", k == "rollback", k == "destroy", k == "reload", k == "releases":
+			case k == "snapshots":
 				if err := checkSnapshots(n.Content[i+1]); err != nil {
 					return nil, nil, fmt.Errorf("%s: %s: snapshots: %w", file, name, err)
 				}
-			case "parent":
+			case k == "parent" && env:
 				if v := n.Content[i+1]; v.Tag != "!!null" && (v.Kind != yaml.ScalarNode || !envName.MatchString(v.Value)) {
-					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern), or ~ for none", file, name)
+					return nil, nil, fmt.Errorf("%s: %s: parent: the name of another environment (not a pattern)", file, name)
 				}
-			case "inherit":
+			case k == "inherit":
 				if err := checkInherit(n.Content[i+1]); err != nil {
 					return nil, nil, fmt.Errorf("%s: %s: inherit: %w", file, name, err)
 				}
 			default:
-				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (mode, env, release, rollback, destroy, reload, releases, snapshots, parent, inherit)", file, name, k)
+				return nil, nil, fmt.Errorf("%s: %s: unknown key %q (%s)", file, name, k, keys)
 			}
 		}
 	}
@@ -722,7 +730,7 @@ func origins(t *Target, from string) map[string]string {
 }
 
 // nullKeys lists what a target node sets to null, removing a default:
-// "env.KEY" for env's KEY: ~, "parent" and "inherit", and in snapshots:
+// "env.KEY" for env's KEY: ~, "inherit", and in snapshots:
 // "snapshots", "snapshots.<kind>" and "snapshots.<kind>.<key>" (back to
 // the built-in).
 func nullKeys(n *yaml.Node) map[string]bool {
@@ -732,7 +740,7 @@ func nullKeys(n *yaml.Node) map[string]bool {
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k, v := n.Content[i].Value, n.Content[i+1]; {
-		case (k == "parent" || k == "inherit" || k == "snapshots") && v.Tag == "!!null":
+		case (k == "inherit" || k == "snapshots") && v.Tag == "!!null":
 			nulls[k] = true
 		case k == "snapshots" && v.Kind == yaml.MappingNode:
 			for j := 0; j+1 < len(v.Content); j += 2 {
@@ -820,9 +828,6 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 		t.Releases = base.Releases
 	}
 	t.Snapshots = mergeSnapshots(base.Snapshots, over.Snapshots, nulls)
-	if t.Parent == "" && !nulls["parent"] {
-		t.Parent = base.Parent
-	}
 	if t.Inherit == nil && !nulls["inherit"] {
 		t.Inherit = base.Inherit
 	}
@@ -993,10 +998,9 @@ func LoadConfig(projectDir string) (*Config, error) {
 }
 
 // validateParents checks each environment's parent: a concrete environment
-// of the project, and no cycle. An environment whose parent is itself has
-// none, so defaults: {parent: prod} gives every environment but prod one.
-// Two environments that are each other's parent could never be released:
-// a child's first release syncs from a released parent.
+// of the project, and no cycle, one naming itself included. Two
+// environments that are each other's parent could never be released: a
+// child's first release syncs from a released parent.
 func validateParents(envs map[string]*Target) error {
 	var names []string
 	for n := range envs {
@@ -1006,12 +1010,7 @@ func validateParents(envs map[string]*Target) error {
 	}
 	sort.Strings(names)
 	for n, t := range envs {
-		switch p := t.Parent; {
-		case p == "":
-		case p == n:
-			t.Parent = ""
-			delete(t.From, "parent")
-		default:
+		if p := t.Parent; p != "" {
 			if _, ok := envs[p]; !ok || strings.Contains(p, "*") {
 				return fmt.Errorf("%s: environments: %s: parent %s is not an environment of the project (environments: %s)", t.File, n, p, strings.Join(names, ", "))
 			}

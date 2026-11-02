@@ -448,7 +448,7 @@ instances: true                 # optional: every target names an instance; defa
 releases: {keep: 5}             # optional: releases kept per environment (live ones)
 secrets: [DB_PASSWORD, "*_TOKEN"]  # optional: variables whose values devopsy masks
 public: [SORT_KEY]              # optional: named like secrets, but not
-defaults:                       # what every environment takes unless it sets its own
+defaults:                       # what every environment takes unless it sets its own (never parent:)
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
@@ -472,8 +472,8 @@ environments:
 
 Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
-sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
-remove theirs. `snapshots:` merges key by key too: `true` and `false` only
+sets an empty value and `~` removes a default; `inherit: ~` removes its
+list. `snapshots:` merges key by key too: `true` and `false` only
 turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the
 default. Patterns match one or
 more name characters; an exact name wins, then the most literal characters;
@@ -512,7 +512,10 @@ under the server's release root, and its compose project, containers,
 volumes are named `<project>[-<instance>]-<environment>`
 (`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
-A child's **parent** (`parent:`, a concrete environment of the project)
+A child's **parent** (`parent:`, a concrete environment of the project,
+never itself) is named per environment, a pattern included, never under
+`defaults:`: a child gets its parent's data, secrets and personal data
+included, so that shows where the child is defined. It
 resolves like a target of its own, one level only: at the child's
 instance, on the server its variables name (`DEVOPSY_SERVER_<PARENT>`,
 `DEVOPSY_SERVER`), never the child's: a guess could copy the wrong data,

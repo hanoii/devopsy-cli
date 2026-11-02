@@ -173,7 +173,8 @@ what `config.yaml` sets.
   `current` and runs the run step; a failure before the switch changes
   nothing live, one after switches back. `--rollback` goes back one;
   `--releases` lists; `--log` shows what the last one printed.
-- A child (`parent:`) syncs its parent's data on its first release;
+- A child (`parent:`, set on each child, never under `defaults:`, never
+  itself) syncs its parent's data on its first release;
   `--sync` again; `--reset` wipes it and syncs anew. It gets the keys
   its parent's `inherit:` names, and, from a parent on another server,
   a copy of that server's instance and project variables
