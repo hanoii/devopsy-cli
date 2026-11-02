@@ -1,6 +1,6 @@
 History, not rules: `internals/images.md` wins where they differ.
 
-- The image rules were generated `sh` at first, where four review rounds found most of the bugs; they moved to Go (`internal/images`), run on the server as `--images`, under "What is deployed decides on the server".
+- The image rules were generated `sh` at first, where four review rounds found most of the bugs; they moved to Go (`internal/images`), run on the server as `--images`, so the server's state decides (the root's Principles).
 - Every profile's non-buildable services are pulled by every release (decided 2026-10-23): a profile-only tool was pulled once, on first use, and its tag never got a patch. Accepted: image mode asks the registry twice for its default third-party tags, since Compose cannot pull those and the default buildable ones in one call, and an unchanged image downloads nothing.
 - Own or pulled is decided by compose and the mode, never by `RepoDigests`: checked 2026-10-23 that on Docker's containerd store built and loaded images carry `RepoDigests` too.
 - The build key: a cached build of the same image kept the old key, and every reload refused (reload review 5), so a listing after a fetch records today's key whatever image id the build gave.
@@ -14,8 +14,6 @@ History, not rules: `internals/images.md` wins where they differ.
 - A removal never counts a bookmark the record holds as a holder: its release went, so a name kept for it outlived every release (found by `TestDataRandom`).
 - Never `docker rmi -f`: Docker 29's containerd store only untags with it, but the classic store, which servers upgraded from older Docker keep, may delete an image a stopped container uses (not checked).
 - A restore's check of another project's container uses `docker ps --filter ancestor=`, checked on Docker 29's containerd store.
-- No directory scanning, server-wide sweep or trash directory (decided): a removal reads nothing above its project.
-- `img prune` retries only this project's lines of the record (decided).
 - `img hold` when a restart's `get_images` fails (review after v0.52.2): the restart ran on the failed release's images, so the data services are held on their data's newest image, the listing and the bookmarks following, and a snapshot of that release holds what it runs.
 - `runImages` ignores its signals itself: Go does not keep an inherited ignored SIGPIPE or SIGTERM, so the script's `trap ''` alone let a gone session or a second TERM kill an undo halfway; its steps are short and under the lock.
 - `data-images` is a named feature rather than a protocol bump: a bump would refuse every release, `--status` and `--log` on a server lacking only the history and the holds.

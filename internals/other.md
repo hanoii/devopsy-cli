@@ -26,7 +26,7 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 
 - `--ssh-keys` edits only the deploy user's own `~/.ssh/authorized_keys`, over the usual session: no root, so devopsy stays out of host setup except for this file, which that user owns.
 - Lines are parsed locally (`ParseAuthorizedKey`, the fingerprint from the blob, no ssh-keygen) and edited on the server under a lock next to the file, by blob: a comment never identifies a key.
-- `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, refused locally first); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
+- `add` refuses a duplicate (exit 3) and `remove` the last key (exit 4; commented-out keys are none, and devopsy refuses it locally before opening a session); `--restricted` on `add` writes `RestrictedKeyOptions`, the one place that line is written.
 - `--ssh-keys-generate [<name>] [--out <file>]` is local and its own flag: `ssh-keygen`, nothing sent; the `.pub` is added per server.
 
 ## Completion and the skill
@@ -50,14 +50,15 @@ Code: `cmd/devopsy/status.go`, `serverinfo.go` (and its `_linux.go`, `_darwin.go
 ## SSH sessions
 
 - Every session is `ssh [DEVOPSY_SSH_COMMAND's options] [SSHOptions] -T|-t <host> 'sh -c <script>'` (`remote.SSHLog`), `-t` for any command at a terminal (a shell, a project or compose command, `--upgrade`), never for activations and holders (internals/sessions.md).
-- Every session passes `ClearAllForwardings=yes` (the user's `LocalForward` lines clash between sessions) and refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
-- Connection sharing is the user's SSH config, which `--ssh-config` suggests and never writes.
+- Every session but a sync's rsync session (internals/syncs.md) passes `ClearAllForwardings=yes` (the operator's `LocalForward` lines clash between sessions), and every session refuses passwords (`PasswordAuthentication=no`, `KbdInteractiveAuthentication=no`, unless `DEVOPSY_SSH_ALLOW_PASSWORD`), never `BatchMode`, which would refuse a passphrase and a new host key too: a devopsy server takes keys only, so a prompt means a missing key, asked again per session of a release.
+- Connection sharing is the operator's SSH config, which `--ssh-config` suggests and never writes.
 - Test fakes of ssh run their last argument.
 
 ## --context-hash
 
 - `--context-hash` is a pure helper, devopsy builds nothing, and errors only ever go towards a new hash (a kept file costs a rebuild, a dropped one would reuse a stale image), hence Docker's own matcher and refusing what it cannot hash.
 - It folds base images in, always (`baseImages`, `BaseDigest`): each external `FROM` (no stage, no `scratch`, global `ARG`s expanded with the build's args) by its registry's current digest (`docker buildx imagetools inspect`, no pull), one pinned by digest as its reference, and no answer fails the hash; `COPY --from` images are not covered.
+- A registry request per base, and a hash that needs the network, are accepted.
 
 ## --upgrade
 

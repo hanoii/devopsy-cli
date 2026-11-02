@@ -14,18 +14,31 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - A missing owned entry is made by devopsy first, 0755 (`makeEntry`); one that is a link is refused.
 - A scan that fails is looked at again with `-ignore_readdir_race`, chowning nothing, and fails only when something is left with another owner or that look fails itself (a directory find cannot read): the services may run meanwhile, and a file removed between find and chown is no failure.
 - Every owned entry is scanned whole on a server: what devopsy did not write can have the wrong owner deep under a correct top.
-- On a server owners are given by `--mnt-owners` right after `make_current` in a release (it changes live data, so never before; a failure counts as a failed run step; signals ignored as `runImages` ignores them), from the restored release's labels in a rollback and in the restart after a failed run (`--mnt-owners restored`, where labels this devopsy cannot read, a compose error and `./mnt` whole only warn and nothing is given away), by a sync's rsync (`--chown` per entry from the child's labels, internals/syncs.md), by a `volumes` import and a snapshot's restore after their extracting containers (internals/export-import.md, internals/snapshots.md), and by a reset after `emptyMnt`.
+- On a server owners are given at these points:
+  - by `--mnt-owners` in a release, right after `make_current` (it changes live data, so never before; a failure counts as a failed run step; signals ignored as `runImages` ignores them);
+  - by `--mnt-owners restored` in a rollback and in the restart after a failed run, from the restored release's labels, where labels this devopsy cannot read, a compose error and `./mnt` whole only warn and nothing is given away, while a chown that fails on labels it read fails as a release's does;
+  - by a sync's rsync, `--chown` per entry from the child's labels (internals/syncs.md);
+  - by a `volumes` import and a snapshot's restore, after their extracting containers (internals/export-import.md, internals/snapshots.md);
+  - by a reset, after `emptyMnt`.
 - Locally, before compose's `up`, `start`, `restart`, `run`, `create`, `watch` and `scale` (`Plan.Starts`), devopsy makes the missing owned entries and, on Linux, gives away and scans whole an entry whose top has the wrong owner, never one whose top is right; macOS never checks, since Docker Desktop and OrbStack show containers the owner Docker asks for.
 - `Plan.Starts` is set only when the project's own compose files' YAML holds the label or an `include:` or `extends:` key, comments left out (`mayOwnMnt`), so no compose config runs for every command and a `-f` file the command adds is not read; never for a `--dry-run` where compose parses it (before the command, after it up to `--`, for `run` only before its service: `commandValueFlags`, `dryRun`); never in a release on a server (`cli.InRelease`), where `--mnt-owners` owns it, so a rollback's plain `up` never fails on labels `--mnt-owners restored` only warns about.
 - Locally, labels that cannot be read and an owned entry that is a symbolic link are a warning and compose's command goes on: a label devopsy reads must never stop compose.
 - No owners are fixed for a stream's import (it writes as the service's user), restarts or reboots (owners persist), and no flag fixes owners: a release does it.
 - Containers named after devopsy's pid (`<ownersPrefix><compose name>-<pid>-<n>` for owners, an import's `<ImportContainerPrefix><compose name>-<pid>-extract-<n>` and `-owners-<n>`) start through `dockerRunFresh`, which removes a container of that very name first: only a devopsy killed outright whose pid this one reuses can have left one, still running, and `docker run` refuses the name.
 - On a server the next lock-taker removes the rest of them, a release's owners' by `ownersContainers` in `--mnt-owners` before it scans, an import's by `importContainers`, both in `--destroy-data`; locally only the name's own goes, since another terminal's owners' step may be running.
-- The owners in copies are a named feature, `mnt-owner`, found by `--sync-push`, `--import` and `--sync-services list` and added by `childNeeds` (internals/releases.md): an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
+- The owners in copies are a named feature, `mnt-owner` (internals/releases.md for what `childNeeds` carries), found by `--sync-push`, `--import` and `--sync-services list`: an older parent would rsync its own owners, an older child list none, an older server's import keep the tar's; a release's `--mnt-owners` and `--check-mounts` are flags of their own, so an activation on an older server refuses by them.
 
 ## The mounts check
 
-- `--check-mounts` (`cli.CheckMounts`) runs on the server after the prepare steps and `--missing-vars`, beside `--check-names` (internals/releases.md), and refuses a release before its switch for a writable bind from the project's tree outside `mnt` (`TreeBinds`, which goes with the next release), data copied as `volumes` with no entry mounted or all excluded, an owner of no writable entry, two owners on one entry, `./mnt` whole mounted writable by any service (`WholeMnt`), a bind source below an owned entry (`Binds`), an owned entry that is a symbolic link in `shared/mnt` (`ownedLinks`), and a bind source below an entry that a link in the entry leads out of (`LeavingBinds`, the entry resolved first, so one on another disk is its own place).
+- `--check-mounts` (`cli.CheckMounts`) runs on the server after the prepare steps and `--missing-vars`, beside `--check-names` (internals/releases.md), and refuses a release before its switch for:
+  - a writable bind from the project's tree outside `mnt` (`TreeBinds`), which goes with the next release;
+  - a service copied as `volumes` with no entry of `mnt` and no named volume, which a sync would take for nothing to copy;
+  - an owner of no writable entry;
+  - two owners on one entry;
+  - `./mnt` whole mounted writable by any service (`WholeMnt`);
+  - a bind source below an owned entry (`Binds`);
+  - an owned entry that is a symbolic link in `shared/mnt` (`ownedLinks`);
+  - a bind source below an entry that a link in the entry leads out of (`LeavingBinds`, the entry resolved first, so one on another disk is its own place), or that the deploy user cannot resolve (`HiddenBinds`, below).
 - Labels are read exactly as `--mnt-owners` reads them after the switch (`cli.SyncServices`): a label that step cannot read refuses here, never after the switch.
 - A compose config that cannot be read (`cli.ErrComposeConfig`) is no refusal, as for `--check-names`: after `--missing-vars` that is a broken file, which the run step names.
 - Each bind source counts as written and as where its links lead (`resolvePath`: `filepath.EvalSymlinks` where it exists, else its longest existing prefix, a link whose target is missing followed all the same), both forms for `Binds` and the resolved one alone for `TreeBinds` and `WholeMnt`; links into `shared/` lead out of the release tree and stay fine.
@@ -43,6 +56,16 @@ Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.Ch
 - A path below an entry nobody owns stays allowed, but for one a link in the entry leads out of (`LeavingBinds`): such an entry is written from the host by the deploy user, an owned one by a container.
 - Locally nothing refuses a bind source below an owned entry.
 - `./mnt` whole is no entry: refused where labels are read as a data service's mount or an owned writable one, refused writable on any other service by the mounts check, and ignored read-only (a tool), so nothing downstream sees `.`; a tar carrying `./` itself is refused too.
+
+## The util image
+
+- `UtilImage` (`devopsy-util:3`, built on each host from `UtilDockerfile`, `alpine:3` with rsync, GNU tar, find, chown and zstd) runs every step on the data as root: the owners, a sync's rsync, `--export`'s and `--import`'s tars, a snapshot's tars and `--destroy`'s emptying of `mnt`, so owners and modes survive and the deploy user's permissions do not matter.
+- `ensureUtilImage` readies it before every use (the scripts through the hidden `--util-image`, a feature), built when missing and built again once older than `UtilImageMaxAge` (a week), `build --pull --no-cache`: it runs as root on the data and serves rsync across servers, so `alpine:3`'s patches must reach it.
+- The image a rebuild replaced is removed without `-f`, so a container still running it keeps it.
+- A rebuild that fails warns and goes on with the image there, since a registry out of reach must never stop a sync, an import or `--destroy`; a missing one that fails to build fails.
+- Two rebuilds at once on a host are harmless: a build tags the image only once complete.
+- The tag is bumped whenever `UtilDockerfile` changes, and a new tag is a named feature of its own (internals/snapshots.md's gates): a new tag is built at its first use on each host, where the old one would be rebuilt from the old Dockerfile only once a week old.
+- One implementation, in Go, never in a script: a weekly check in shell needs GNU `date`, which the macOS test runs lack.
 
 ## Destroying and removing
 
