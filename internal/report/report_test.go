@@ -48,6 +48,12 @@ func TestFail(t *testing.T) {
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
 	}
+	// Failures found with it, each said after it, with its own message.
+	out.Reset()
+	l.Fail(fmt.Errorf("x: %w", &Failure{Msg: "a: missing", Details: []string{"why a"}, Also: []*Failure{{Msg: "b: missing", Details: []string{"why b"}}}}))
+	if want := "devopsy: error: x: a: missing\ndevopsy: | why a\ndevopsy: error: b: missing\ndevopsy: | why b\n"; out.String() != want {
+		t.Fatalf("also: got\n%s\nwant\n%s", out.String(), want)
+	}
 	// The fixes the error carries are never changed by more.
 	if f := Fixes(err); len(f) != 1 {
 		t.Fatalf("the error's fixes changed: %v", f)

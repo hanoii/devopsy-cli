@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -528,9 +529,21 @@ func TestLeavingBindsUnreadableDirectory(t *testing.T) {
 }
 
 // The missing version label's error, as settled: fixed text but for the
-// service's name and, by kind, the best practice and the tag clause.
+// service's name and, by kind, the best practice and the tag clause; every
+// unlabeled service gets its own, by name.
 func TestDataVersionMissing(t *testing.T) {
 	t.Parallel()
+	// said is what devopsy says of err (report.Fail).
+	said := func(err error) string {
+		t.Helper()
+		if err == nil {
+			t.Fatal("no error")
+		}
+		var b strings.Builder
+		report.New(&b, false, 0).Fail(err)
+		return b.String()
+	}
+	var blocks []string
 	for labels, want := range map[string]string{
 		`"database":{"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}}`: `devopsy: error: database: devopsy.data.version is missing
 devopsy: | a new image can upgrade its data in place, and an older image can then break it
@@ -547,15 +560,18 @@ devopsy: | - devopsy.data.version=<compatible version>: the version its data nee
 devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image
 devopsy: | with a version, devopsy refuses a lower one unless you pass --accept-image app`,
 	} {
-		// Beside another unlabeled service, later by name: the first by
-		// name is said, whatever the map's order.
-		_, err := parseSyncServices([]byte(`{"services":{`+labels+`,"zz":{"labels":{"devopsy.data":"true"}}}}`), "/x/.devopsy")
-		if err == nil {
-			t.Fatalf("%s: no error", labels)
-		}
-		if got := strings.Join(report.Lines(report.ErrorLevel, err.Error(), report.Details(err), nil), "\n"); got != want {
+		_, err := parseSyncServices([]byte(`{"services":{`+labels+`}}`), "/x/.devopsy")
+		if got := said(err); got != want+"\n" {
 			t.Errorf("%s:\n%s\nwant:\n%s", labels, got, want)
 		}
+		blocks = append(blocks, want)
+	}
+	// Both unlabeled, in one project: each its own message, by name
+	// whatever the map's order (app, then database), as drupal11 had.
+	sort.Strings(blocks)
+	_, err := parseSyncServices([]byte(`{"services":{"database":{"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}},"app":{"image":"shop-prod-app","build":{"context":"."},"labels":{"devopsy.data":"true"}}}}`), "/x/.devopsy")
+	if got, want := said(err), strings.Join(blocks, "\n")+"\n"; got != want {
+		t.Errorf("both unlabeled:\n%s\nwant:\n%s", got, want)
 	}
 }
 

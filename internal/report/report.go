@@ -134,11 +134,14 @@ func Lines(l Level, msg string, details []string, fixes []Remedy) []string {
 
 // Failure is an error with details (why it happens) and fixes (what to
 // do about it). Error() is the message alone, so wrapping keeps the usual
-// "context: message" shape; Fail prints the rest under it.
+// "context: message" shape; Fail prints the rest under it. Also are
+// failures of the same kind found with it (each data service without a
+// label), which Fail says after it, each with its own message, in order.
 type Failure struct {
 	Msg     string
 	Details []string
 	Fixes   []Remedy
+	Also    []*Failure
 }
 
 func (e *Failure) Error() string { return e.Msg }
@@ -153,6 +156,16 @@ func Details(err error) []string {
 	var e *Failure
 	if errors.As(err, &e) {
 		return e.Details
+	}
+	return nil
+}
+
+// Also are the failures err carries after its own (Failure.Also), when a
+// Failure is in its chain.
+func Also(err error) []*Failure {
+	var e *Failure
+	if errors.As(err, &e) {
+		return e.Also
 	}
 	return nil
 }
