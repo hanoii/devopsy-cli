@@ -798,22 +798,19 @@ func (q *quietWriter) keep(base string) {
 	q.mu.Unlock()
 }
 
-// trimSyncLog keeps the last remote.SyncLogKeep lines of the log at
-// path once it grew past remote.SyncLogMax: every sync whose session
-// went appends to it.
+// trimSyncLog keeps the last remote.SyncLogLines lines of the log at
+// path once it has more: every sync whose session went appends to it.
+// The holder's shell does the same (remote's trimSyncLog).
 func trimSyncLog(path string) {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() < remote.SyncLogMax {
-		return
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 	lines := strings.SplitAfter(strings.TrimSuffix(string(data), "\n"), "\n")
-	if len(lines) > remote.SyncLogKeep {
-		lines = lines[len(lines)-remote.SyncLogKeep:]
+	if len(lines) <= remote.SyncLogLines {
+		return
 	}
+	lines = lines[len(lines)-remote.SyncLogLines:]
 	if os.WriteFile(path+".tmp", []byte(strings.Join(lines, "")+"\n"), 0o644) == nil {
 		_ = os.Rename(path+".tmp", path)
 	}

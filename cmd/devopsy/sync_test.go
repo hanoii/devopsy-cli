@@ -3741,20 +3741,21 @@ func TestSyncSettleKeepsKilledHolderStopsDown(t *testing.T) {
 }
 
 // The sync log, appended to by every sync whose session went, keeps its
-// last lines once too big.
+// last lines once longer, as the holder's shell keeps them (remote's
+// TestTrimSyncLogScript).
 func TestTrimSyncLog(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), syncLog)
-	line := strings.Repeat("x", 99) + "\n"
-	write(t, path, strings.Repeat(line, remote.SyncLogMax/len(line)+10)+"last\n", 0o644)
+	write(t, path, strings.Repeat("x\n", remote.SyncLogLines+10)+"last\n", 0o644)
 	trimSyncLog(path)
 	data := readString(path)
-	if n := strings.Count(data, "\n"); n != remote.SyncLogKeep || !strings.HasSuffix(data, "last\n") {
+	if n := strings.Count(data, "\n"); n != remote.SyncLogLines || !strings.HasSuffix(data, "last\n") {
 		t.Errorf("%d lines, ends %q", n, data[len(data)-10:])
 	}
-	write(t, path, "small\n", 0o644)
-	if trimSyncLog(path); readString(path) != "small\n" {
-		t.Errorf("a small log changed: %q", readString(path))
+	small := strings.Repeat("x\n", remote.SyncLogLines-1) + "small\n"
+	write(t, path, small, 0o644)
+	if trimSyncLog(path); readString(path) != small {
+		t.Errorf("a log of %d lines changed", remote.SyncLogLines)
 	}
 }
 

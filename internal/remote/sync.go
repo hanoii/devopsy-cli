@@ -755,16 +755,17 @@ func syncWait() string {
 `
 }
 
-// SyncLogMax is the size past which .devopsy-sync.log, appended to by
-// every sync whose session went, keeps only its last SyncLogKeep lines.
-const (
-	SyncLogMax  = 1 << 20
-	SyncLogKeep = 1000
-)
+// SyncLogLines is how many lines .devopsy-sync.log keeps: appended to by
+// every sync whose session went, it is cut to its last SyncLogLines
+// before each append once longer. Two implementations of one rule: the
+// holder's shell appends once its session went (trimSyncLog, with no
+// devopsy of its own to ask), the push's and an import's devopsy from
+// Go (cmd/devopsy's trimSyncLog).
+const SyncLogLines = 1000
 
-// trimSyncLog cuts .devopsy-sync.log to its last lines once too big,
-// $base set; never fails.
-var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -c <"$base/.devopsy-sync.log")" -lt %d ] || { tail -n %d "$base/.devopsy-sync.log" >"$base/.devopsy-sync.log.tmp" && mv -f "$base/.devopsy-sync.log.tmp" "$base/.devopsy-sync.log"; }; } 2>/dev/null || true`, SyncLogMax, SyncLogKeep)
+// trimSyncLog cuts .devopsy-sync.log to its last SyncLogLines lines once
+// longer, $base set; never fails.
+var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -l <"$base/.devopsy-sync.log")" -le %d ] || { tail -n %d "$base/.devopsy-sync.log" >"$base/.devopsy-sync.log.tmp" && mv -f "$base/.devopsy-sync.log.tmp" "$base/.devopsy-sync.log"; }; } 2>/dev/null || true`, SyncLogLines, SyncLogLines)
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for

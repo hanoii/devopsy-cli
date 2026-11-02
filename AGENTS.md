@@ -1702,8 +1702,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   answer.
 - **Without an answer, the holder writes to a file:** devopsy
   interrupted or the connection lost, its output goes to
-  `$base/.devopsy-sync.log` (trimmed past `SyncLogMax` to `SyncLogKeep`
-  lines, on both sides) and it finishes as the files say. Why: a write
+  `$base/.devopsy-sync.log` (trimmed to its last `SyncLogLines` lines,
+  on both sides) and it finishes as the files say. Why: a write
   to the dead session would kill what restores the services. From
   prepare until the services are restored it ignores SIGPIPE, and it
   restores before it reports.

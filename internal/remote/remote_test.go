@@ -3087,3 +3087,29 @@ func TestParseActivating(t *testing.T) {
 		}
 	}
 }
+
+// The holder's shell trims the sync log by lines as devopsy's Go side
+// does (cmd/devopsy's TestTrimSyncLog): its last SyncLogLines once longer.
+func TestTrimSyncLogScript(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	path := filepath.Join(base, ".devopsy-sync.log")
+	trim := func() {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", "base="+Quote(base)+"\n"+trimSyncLog)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+	}
+	write(t, path, strings.Repeat("x\n", SyncLogLines+10)+"last\n")
+	trim()
+	data := readFile(path)
+	if n := strings.Count(data, "\n"); n != SyncLogLines || !strings.HasSuffix(data, "last\n") {
+		t.Errorf("%d lines, ends %q", n, data[len(data)-10:])
+	}
+	small := strings.Repeat("x\n", SyncLogLines-1) + "small\n"
+	write(t, path, small)
+	if trim(); readFile(path) != small {
+		t.Errorf("a log of %d lines changed", SyncLogLines)
+	}
+}
