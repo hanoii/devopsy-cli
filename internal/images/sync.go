@@ -256,6 +256,18 @@ func parseParentData(data string) map[string]*parentImage {
 	return ps
 }
 
+// window is the parent's history that counts for svc, ending on the
+// image that wrote its data (p.Image) when the history lacks it.
+func (p *parentImage) window(svc string) []ran {
+	w := append([]ran{}, p.History.window(svc)...)
+	for _, r := range w {
+		if r.is(p.Image) {
+			return w
+		}
+	}
+	return append(w, ran{Service: svc, How: Ran, Ref: p.Ref, ID: p.Image.ID, Digests: p.Image.Digests})
+}
+
 // hold is the parent's image as a name to run.
 func (p *parentImage) hold() string {
 	return ran{Ref: p.Ref, Digests: p.Image.Digests}.hold()
@@ -334,20 +346,16 @@ func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 		mine = append(mine, e)
 		n := len(refused)
 		img := s.ownImage(e)
-		last := ran{Ref: p.Ref, ID: p.Image.ID, Digests: p.Image.Digests}
 		switch {
 		case w.importing && repoKey(p.Ref) != repoKey(e.Ref):
 			refused = append(refused, fmt.Sprintf("%s: the export's data last ran %s, from another repository than %s", e.Service, p.Ref, e.Ref))
-		case last.is(img), familiar(p.Ref) == familiar(e.Ref):
-		case p.History.movedPast(e.Service, img):
-			refused = append(refused, fmt.Sprintf("%s: %s (%s) is an image %s data moved past: it last ran %s", e.Service, e.Ref, shownEntry(e), w.source, last.shown()))
+		case familiar(p.Ref) == familiar(e.Ref):
 		default:
-			known := false
-			for _, r := range p.History.window(e.Service) {
-				known = known || familiar(r.Ref) == familiar(e.Ref)
-			}
-			if !known {
-				refused = append(refused, fmt.Sprintf("%s: %s (%s) never ran on %s data, which last ran %s as %s", e.Service, e.Ref, shownEntry(e), w.source, last.shown(), p.Ref))
+			// The parent's window, ending on the image that wrote its data
+			// (its container's, which its history may lack: a drifted
+			// parent), as syncDone takes it over: one check (dataCheck).
+			if why := dataCheck(p.window(e.Service), e.Ref, img, w.source); why != "" {
+				refused = append(refused, e.Service+": "+why)
 			}
 		}
 		if len(refused) > n {

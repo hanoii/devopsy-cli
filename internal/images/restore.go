@@ -64,8 +64,28 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	old, ag := readList(target), readList(against)
 	names := bookmarks(old, s.Name, tid)
 	base := baseOf(target)
-	h := readHistory(base)
 	mode := ModeOf(target)
+	// isData says whether svc runs as a pulled data service here: in
+	// target, or in the release it leaves, even where target builds it
+	// or never pulls it: its data ran the pulled image, which an
+	// unordered own image must not replace.
+	isData := func(svc Service) bool {
+		probe := entry{Service: svc.Name, Ref: svc.Ref}
+		o, _ := match(old, probe)
+		a, _ := match(ag, probe)
+		own := svc.own(mode)
+		return (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
+	}
+	// Seeded as Record seeds, from what runs: a rollback after the
+	// history came (or a label did) would otherwise find none and keep
+	// nothing.
+	var data []entry
+	for _, svc := range svcs {
+		if isData(svc) {
+			data = append(data, entry{Service: svc.Name, Ref: svc.Ref})
+		}
+	}
+	h := s.seed(base, ag, data)
 	var cs map[string]Container
 
 	type step struct {
@@ -81,10 +101,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		a, haveAg := match(ag, probe)
 		st := step{svc: svc}
 		own := svc.own(mode)
-		// A pulled data service in the release it leaves stays one, even
-		// where the target builds it or never pulls it: its data ran the
-		// pulled image, which an unordered own image must not replace.
-		data := (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
+		data := isData(svc)
 		switch {
 		// Built (or never pulled), and either no data service or one whose
 		// data has no history: as the target builds it.

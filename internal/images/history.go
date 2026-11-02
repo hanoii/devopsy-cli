@@ -169,6 +169,37 @@ func (h history) movedPast(svc string, img Image) bool {
 	return false
 }
 
+// dataCheck says why img, running as ref, must not run on data whose
+// history's window is w (window): "" when it may. source is whose data
+// it is, for the reason ("its", "the parent's"). The one check every
+// place data meets an image runs (Record, a sync's or an import's
+// check): the image the data last ran passes, whatever its name; one the
+// data moved past (a tag pushed again backward, a stale mirror, a pin
+// lowered to an image that ran before) is refused, and so is a name the
+// data never ran (a series switched, a pin bumped), whose order the
+// history cannot tell. A tag moving under a name that ran is forward.
+// Without a history nothing is known, so nothing is refused.
+func dataCheck(w []ran, ref string, img Image, source string) string {
+	if len(w) == 0 {
+		return ""
+	}
+	last := w[len(w)-1]
+	if last.is(img) {
+		return ""
+	}
+	for _, r := range w[:len(w)-1] {
+		if r.is(img) {
+			return fmt.Sprintf("%s is %s, an image %s data moved past: it last ran %s", ref, shownImage(ref, img), source, last.shown())
+		}
+	}
+	for _, r := range w {
+		if familiar(r.Ref) == familiar(ref) {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s (%s) never ran on %s data, which last ran %s as %s: devopsy cannot tell a newer image from an older one under another name", ref, shownImage(ref, img), source, last.shown(), last.Ref)
+}
+
 // ranOn makes a line for img running as ref on a service's data.
 func ranOn(svc, how, ref string, img Image, now time.Time) ran {
 	ds := append([]string{}, img.Digests...)

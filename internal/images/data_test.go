@@ -2704,3 +2704,71 @@ func TestDataRanCountsPlainUpOnEarlierHold(t *testing.T) {
 		t.Errorf("the rollback to %s runs the database on %s: its data ran I2 (the plain up after the release that held it), which must stay the newest", r1, got)
 	}
 }
+
+// The one check of an image against a service's data (dataCheck), over
+// the history's window: the image the data last ran passes under any
+// name; one the data moved past is refused; a name the window never ran
+// is refused; a name that ran, on another image, goes (a tag moving
+// forward); without a history nothing is refused.
+func TestDataCheck(t *testing.T) {
+	t.Parallel()
+	line := func(ref, id string) ran {
+		return ran{Service: "database", How: Ran, Ref: ref, ID: id, Digests: []string{repoKey(ref) + "@" + id}}
+	}
+	img := func(ref, id string) Image { return Image{ID: id, Digests: []string{repoKey(ref) + "@" + id}} }
+	w := []ran{line("mariadb:11.8", "I1"), line("mariadb:11.8", "I2")}
+	for _, c := range []struct {
+		name   string
+		w      []ran
+		ref    string
+		img    Image
+		source string
+		want   string
+	}{
+		{"no history", nil, "mariadb:11.8", img("mariadb:11.8", "I1"), "its", ""},
+		{"the newest, under its name", w, "mariadb:11.8", img("mariadb:11.8", "I2"), "its", ""},
+		{"the newest, under another name", w, "mirror.example/mariadb:11.8", img("mirror.example/mariadb:11.8", "I2"), "its", ""},
+		{"forward under a name that ran", w, "mariadb:11.8", img("mariadb:11.8", "I3"), "its", ""},
+		{"moved past", w, "mariadb:11.8", img("mariadb:11.8", "I1"), "its", "mariadb:11.8 is mariadb@I1, an image its data moved past: it last ran mariadb@I2"},
+		{"moved past, under another name", w, "mariadb:11", img("mariadb:11", "I1"), "the parent's", "mariadb:11 is mariadb@I1, an image the parent's data moved past: it last ran mariadb@I2"},
+		{"a name that never ran", w, "mariadb:11.4", img("mariadb:11.4", "J1"), "its", "mariadb:11.4 (mariadb@J1) never ran on its data, which last ran mariadb@I2 as mariadb:11.8: devopsy cannot tell a newer image from an older one under another name"},
+		{"a name that ran earlier in the window", []ran{line("mariadb:11", "I1"), line("mariadb:11.8", "I2")}, "mariadb:11", img("mariadb:11", "I3"), "its", ""},
+	} {
+		if got := dataCheck(c.w, c.ref, c.img, c.source); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A rollback seeds a pulled data service's history from what its
+// container runs when it has none, as a release does (an environment
+// from before the history, a label just added): the history then
+// knows the image the data ran, which the rollback holds.
+func TestRestoreSeeds(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, err := m.release(false, db118)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mariadb:11.8", "I2")
+	if _, err := m.release(false, db118); err != nil || m.runs("database") != "I2" {
+		t.Fatalf("r2 (%v): %s", err, m.runs("database"))
+	}
+	if err := os.Remove(historyPath(m.base())); err != nil {
+		t.Fatal(err)
+	}
+	// The restore alone, before anything runs: the history is seeded.
+	if err := m.e.set.Restore(m.e.rel(r1), m.prev(), false); err != nil {
+		t.Fatalf("rollback: %v\n%s", err, out.String())
+	}
+	if got := strings.Join(m.history("database"), " "); got != "ran:I2" {
+		t.Errorf("history after the restore: %q, want it seeded from the container (ran:I2)", got)
+	}
+	if got := holdsIn(m.e.rel(r1))["database"]; got != "mariadb@I2" {
+		t.Errorf("held on %q, want mariadb@I2", got)
+	}
+}

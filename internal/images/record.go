@@ -48,7 +48,13 @@ func (s *Set) Record(rel, prev string) error {
 	}
 	old := readList(prev)
 	base := baseOf(rel)
-	h := s.seed(base, old, es)
+	var data []entry
+	for _, e := range es {
+		if e.Kind == KindData {
+			data = append(data, e)
+		}
+	}
+	h := s.seed(base, old, data)
 	var refused, refusedSvcs, refusedRefs, accepted, forced []string
 	holds := map[string]string{}
 	// A release that syncs: the parent's data replaces the child's, so
@@ -79,7 +85,19 @@ func (s *Set) Record(rel, prev string) error {
 		if err != nil {
 			img = Image{ID: e.ID}
 		}
-		why := h.check(old, e, img)
+		// Nothing ran on its data that devopsy knows of: a new name for it
+		// cannot be ordered; else the history decides (dataCheck).
+		why := ""
+		if _, ok := h.last(e.Service); !ok {
+			if o, ok := match(old, e); ok && familiar(o.Ref) != familiar(e.Ref) {
+				why = fmt.Sprintf("%s (%s) never ran on its data, and its image was %s", e.Ref, shownEntry(e), o.Ref)
+			}
+		} else {
+			why = dataCheck(h.window(e.Service), e.Ref, img, "its")
+		}
+		if why != "" {
+			why = e.Service + ": " + why
+		}
 		switch {
 		case why == "":
 		case s.Accept[e.Service]:
@@ -132,40 +150,18 @@ func (s *Set) Record(rel, prev string) error {
 	return nil
 }
 
-// check says why img, e's new image, must not run on its data: "" when
-// it may. old is the release before's listing.
-func (h history) check(old []entry, e entry, img Image) string {
-	last, ok := h.last(e.Service)
-	if !ok {
-		// Nothing ran on its data that devopsy knows of: a new name for it
-		// cannot be ordered.
-		if o, ok := match(old, e); ok && familiar(o.Ref) != familiar(e.Ref) {
-			return fmt.Sprintf("%s: %s (%s) never ran on its data, and its image was %s", e.Service, e.Ref, shownEntry(e), o.Ref)
-		}
-		return ""
-	}
-	switch {
-	case last.is(img):
-		return ""
-	case h.movedPast(e.Service, img):
-		return fmt.Sprintf("%s: %s is %s, an image its data moved past: it last ran %s", e.Service, e.Ref, shownEntry(e), last.shown())
-	case familiar(last.Ref) != familiar(e.Ref):
-		return fmt.Sprintf("%s: %s (%s) never ran on its data, which last ran %s as %s: devopsy cannot tell a newer image from an older one under another name", e.Service, e.Ref, shownEntry(e), last.shown(), last.Ref)
-	}
-	return ""
-}
-
-// seed starts the history of a pulled data service that has none with
-// what its container runs, once started: a service that just gained its
-// label. Written under the release lock.
-func (s *Set) seed(base string, old, es []entry) history {
+// seed starts the history of each pulled data service (data: by name,
+// with its reference) that has none with what its container runs, once
+// started: a service that just gained its label, or an environment
+// from before the history. Written under the release lock; run by
+// Record and by Restore (a rollback after the upgrade would otherwise
+// find no history and keep nothing). old is the release before's
+// listing, for the name the container ran as.
+func (s *Set) seed(base string, old []entry, data []entry) history {
 	h := readHistory(base)
 	var cs map[string]Container
 	changed := false
-	for _, e := range es {
-		if e.Kind != KindData {
-			continue
-		}
+	for _, e := range data {
 		if _, ok := h.last(e.Service); ok {
 			continue
 		}
