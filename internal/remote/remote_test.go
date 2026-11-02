@@ -1795,7 +1795,8 @@ exit 0
 // images (images.SyncImagesEnv), exported for the whole activation: the
 // run step and every command and container it starts get the base64 of
 // the parent's history, unbounded, and any devopsy --images it runs
-// checks against a sync that is over.
+// checks against a sync that is over. Nor a --reset's SyncResetEnv: a
+// devopsy the run step ran would take itself for part of a reset.
 func TestSyncImagesNotInRunStep(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
@@ -1805,7 +1806,7 @@ mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
   "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
-  deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
+  deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-} reset=${`+SyncResetEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
 esac
 exit 0
 `)
@@ -1814,7 +1815,7 @@ exit 0
 	tg := &Target{Name: "dev", Address: "vm2:dev", Path: "app/dev", Mode: ModeBuild}
 	write(t, filepath.Join(root, tg.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
 	parent := "image\tdb\tmariadb:11.8\tP1\tmariadb@P1\nran\t1\tdb\tran\tmariadb:11.8\tP1\tmariadb@P1\n"
-	cmd := exec.Command("sh", "-c", ActivateScript(tg, "1", false, "app-dev", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Images: parent}))
+	cmd := exec.Command("sh", "-c", ActivateScript(tg, "1", false, "app-dev", Phases{Run: []string{"deploy"}}, &SyncOptions{From: "vm1:prod", ID: "1.2", Images: parent, Reset: true}))
 	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -1829,8 +1830,8 @@ exit 0
 	if err != nil || !strings.Contains(calls, "deploy from=") {
 		t.Fatalf("the release that syncs (%v), calls %q:\n%s", err, calls, out)
 	}
-	if !strings.Contains(calls, "deploy from= images=\n") {
-		t.Errorf("the run step gets the parent's data images: %q", calls)
+	if !strings.Contains(calls, "deploy from= images= reset=\n") {
+		t.Errorf("the run step gets the sync's variables: %q", calls)
 	}
 }
 
