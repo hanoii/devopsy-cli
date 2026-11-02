@@ -22,11 +22,11 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 - An environment key with `*` (one or more name characters) is a pattern; the exact name wins, then the most literal characters, and a tie is an error.
 - An alias (`{to, source}` or `{to, project}`) matches only a bare `@name`, and a project's exact environment wins over it.
 - An alias with `source:` takes its project, environments and steps from that checkout, and releases run only from there (`ReleasesHere`, symlinks resolved): anywhere else a release would upload whatever project devopsy runs in.
-- `cli.ServerScope` flags take a server alone (`remote.ServerTarget`: `@<server>:`, a bare name that is no environment or alias, or any target leniently), and such a target has no `Name`; every other flag given `@<server>:` says it needs an environment.
+- `remote.ServerTarget` takes `@<server>:` alone, a bare name that is no environment or alias, or any target leniently, and a server named alone has no `Name`; a flag that needs an environment, given `@<server>:`, says so.
 - `parent:` names a concrete environment, never a pattern; one naming itself has none, so `defaults: {parent: prod}` works; a cycle is an error, since neither could be released first.
 - A parent resolves one level only, at the child's instance, its server from the usual variables, never from the child's (`ParentTarget`): a guessed server would copy the wrong data.
 - A parent that cannot be resolved goes into `ParentErr` instead of failing the load, so every other command works on the child; `DescribeTarget` resolves it leniently (internals/syncs.md for what fails with it).
-- Targets carry `From` (each value's origin) and `Env` records every definition (`EnvDef`, `TraceEnv`), which `--debug env` prints.
+- A target's `From` holds each value's origin, and `Env` every definition of a variable as it loads (`EnvDef`, `TraceEnv`), what `--debug env` prints.
 
 ## Release settings
 
@@ -36,4 +36,4 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 ## Secrets on a server
 
 - On a server the release's own config decides what is a secret; `--vars` masks locally from the configs `VarsReadScript` sends plus the checkout's.
-- `confirmUnnamedSecrets` runs before `--release`, locally and without a session, so a secret-like name only in the server's files is left to `--vars set`.
+- `confirmUnnamedSecrets` runs locally, without a session: a secret-like name only in the server's files is left to `--vars set`.
