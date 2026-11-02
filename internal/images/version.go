@@ -109,13 +109,30 @@ func VersionHint(ref string, built bool) string {
 }
 
 // LabelMissing is the label error's details for a data service without
-// DataVersionLabel (cli's, where labels are read), its version suggested
-// from its image (VersionHint).
+// DataVersionLabel (cli's, where labels are read): why the label is
+// needed, then each value with its explanation, the two lines under an
+// option indented, as one item. The version is its image's (VersionHint),
+// the image named its repository; a built service's is <version>, its
+// base image's.
 func LabelMissing(service, ref string, built bool) []string {
 	v := VersionHint(ref, built)
+	practice := "  best practice is to use the version of the base image that writes the data, from the same build argument"
+	refuses := "  devopsy refuses a lower version unless you pass --accept-image " + service
+	if !built {
+		image := repoKey(ref)
+		if v != "<version>" {
+			image += " " + v
+		}
+		practice = "  best practice is to use the version of the image that writes the data, " + image + " here"
+		refuses = "  devopsy refuses a lower version, or a new tag without a new version, unless you pass --accept-image " + service
+	}
 	return []string{
-		fmt.Sprintf("to choose how %s's data follows its image:", service),
-		fmt.Sprintf("- %s=%s: you set its data's version, a release may raise it, a rollback stays within it, lower needs --accept-image %s", DataVersionLabel, v, service),
-		fmt.Sprintf("- %s=%s: devopsy checks nothing, its data's versions are yours to handle, or it does not depend on its image", DataVersionLabel, AnyVersion),
+		"a new image may upgrade its data in place (mariadb 11.8 to 12.1), and an older image may then fail on it or damage it",
+		"devopsy cannot tell from an image what its data needs, so every data service declares it, and devopsy never runs it on data a higher version ran",
+		fmt.Sprintf("choose how %s's data follows its image, with one of these labels:", service),
+		fmt.Sprintf("- %s=%s: the version of its data, which you keep up to date", DataVersionLabel, v),
+		practice,
+		refuses,
+		fmt.Sprintf("- %s=%s: devopsy checks nothing, for data that does not depend on its image", DataVersionLabel, AnyVersion),
 	}
 }

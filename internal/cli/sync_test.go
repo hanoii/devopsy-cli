@@ -107,16 +107,10 @@ func TestSyncServices(t *testing.T) {
 		}
 	}
 	// The version label, required with data: a version of dotted numbers
-	// or any; missing, the error suggests one from the image's tag
-	// (images.VersionHint), a built one's <version>; empty or anything
-	// else refused.
+	// or any; empty or anything else refused (the missing label's lines:
+	// TestDataVersionMissing).
 	for labels, want := range map[string][]string{
-		`"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}`: {"x: devopsy.data is set, but devopsy.data.version is not",
-			"to choose how x's data follows its image:",
-			"- devopsy.data.version=11.8: you set its data's version, a release may raise it, a rollback stays within it, lower needs --accept-image x",
-			"- devopsy.data.version=any: devopsy checks nothing, its data's versions are yours to handle, or it does not depend on its image"},
-		`"image":"app-x","build":{"context":"."},"labels":{"devopsy.data":"true"}`:            {"x: devopsy.data is set, but devopsy.data.version is not", "- devopsy.data.version=<version>: you set"},
-		`"image":"mariadb:lts","labels":{"devopsy.data":"true"}`:                              {"- devopsy.data.version=<version>: you set"},
+		`"image":"mariadb:lts","labels":{"devopsy.data":"true"}`:                              {"- devopsy.data.version=<version>: the version of its data", "best practice is to use the version of the image that writes the data, mariadb here"},
 		`"image":"postgres:16","labels":{"devopsy.data":"true","devopsy.data.version":""}`:    {"service x: devopsy.data.version is empty: a version like 16, or any"},
 		`"image":"postgres:16","labels":{"devopsy.data":"true","devopsy.data.version":"v16"}`: {"service x: devopsy.data.version=v16: a version of dotted numbers like 16, or any"},
 		`"labels":{"devopsy.data":"true","devopsy.data.version":"16."}`:                       {"devopsy.data.version=16.:"},
@@ -531,6 +525,41 @@ func TestLeavingBindsUnreadableDirectory(t *testing.T) {
 	}
 	if err := CheckLeavingBinds(parsed, nil, "the start"); err == nil {
 		t.Errorf("a bind source a link leads out of its entry, in a directory the deploy user cannot search: the start gate lets Docker mount the host's root")
+	}
+}
+
+// The missing version label's error, as settled: why, then each value
+// with its explanation, the version from a pulled image's tag, a built
+// one's <version> and its base image.
+func TestDataVersionMissing(t *testing.T) {
+	t.Parallel()
+	for labels, want := range map[string]string{
+		`"database":{"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}}`: `devopsy: error: database: devopsy.data is set, but devopsy.data.version is not
+devopsy: | a new image may upgrade its data in place (mariadb 11.8 to 12.1), and an older image may then fail on it or damage it
+devopsy: | devopsy cannot tell from an image what its data needs, so every data service declares it, and devopsy never runs it on data a higher version ran
+devopsy: | choose how database's data follows its image, with one of these labels:
+devopsy: | - devopsy.data.version=11.8: the version of its data, which you keep up to date
+devopsy: |   best practice is to use the version of the image that writes the data, mariadb 11.8 here
+devopsy: |   devopsy refuses a lower version, or a new tag without a new version, unless you pass --accept-image database
+devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image`,
+		`"app":{"image":"shop-prod-app","build":{"context":"."},"labels":{"devopsy.data":"true"}}`: `devopsy: error: app: devopsy.data is set, but devopsy.data.version is not
+devopsy: | a new image may upgrade its data in place (mariadb 11.8 to 12.1), and an older image may then fail on it or damage it
+devopsy: | devopsy cannot tell from an image what its data needs, so every data service declares it, and devopsy never runs it on data a higher version ran
+devopsy: | choose how app's data follows its image, with one of these labels:
+devopsy: | - devopsy.data.version=<version>: the version of its data, which you keep up to date
+devopsy: |   best practice is to use the version of the base image that writes the data, from the same build argument
+devopsy: |   devopsy refuses a lower version unless you pass --accept-image app
+devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image`,
+	} {
+		// Beside another unlabeled service, later by name: the first by
+		// name is said, whatever the map's order.
+		_, err := parseSyncServices([]byte(`{"services":{`+labels+`,"zz":{"labels":{"devopsy.data":"true"}}}}`), "/x/.devopsy")
+		if err == nil {
+			t.Fatalf("%s: no error", labels)
+		}
+		if got := strings.Join(report.Lines(report.ErrorLevel, err.Error(), report.Details(err), nil), "\n"); got != want {
+			t.Errorf("%s:\n%s\nwant:\n%s", labels, got, want)
+		}
 	}
 }
 

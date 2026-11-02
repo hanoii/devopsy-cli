@@ -367,6 +367,19 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	// The project's tree, its links resolved: on servers a release's
 	// code/, where shared/'s entries are links out of it.
 	tree := resolvePath(filepath.Dir(projectDir))
+	// A data service without its version first, the first by name, so
+	// the same project always says the same (drupal11 had two).
+	names := make([]string, 0, len(config.Services))
+	for name := range config.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s := config.Services[name]
+		if _, ok := s.Labels[images.DataVersionLabel]; !ok && s.Labels[DataLabel] == "true" {
+			return nil, report.Errorf(images.LabelMissing(name, s.Image, len(s.Build) > 0 && string(s.Build) != "null"), "%s: %s is set, but %s is not", name, DataLabel, images.DataVersionLabel)
+		}
+	}
 	var services []SyncService
 	for name, s := range config.Services {
 		cs := SyncService{Name: name, Copy: CopyNone, Stop: StopNever, DependsOn: []string{}, Restart: s.Restart, Profiles: s.Profiles}
@@ -397,13 +410,11 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			cs.Copy = CopyVolumes
 		}
 		if cs.HasData {
-			// Required: how the data follows its image is the project's to
-			// say (images.Rule), never a default.
-			v, ok := s.Labels[images.DataVersionLabel]
+			// Required (missing: above): how the data follows its image is
+			// the project's to say, never a default.
+			v := s.Labels[images.DataVersionLabel]
 			built := len(s.Build) > 0 && string(s.Build) != "null"
 			switch {
-			case !ok:
-				return nil, report.Errorf(images.LabelMissing(name, s.Image, built), "%s: %s is set, but %s is not", name, DataLabel, images.DataVersionLabel)
 			case v == images.AnyVersion, images.IsVersion(v):
 				cs.Version = v
 			case v == "":
