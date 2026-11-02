@@ -368,7 +368,7 @@ func TestImportLeftoverWriter(t *testing.T) {
 	go func() { otherEnded <- other.Wait() }()
 	defer func() { _ = syscall.Kill(-other.Process.Pid, syscall.SIGKILL) }()
 	write(t, filepath.Join(s.base, syncState), s.record()+"writer "+strconv.Itoa(other.Process.Pid)+"\n", 0o644)
-	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123-extract-0 devopsy-import-shop-prod-123-owners-0 devopsy-import-shop-prod-eu-9-extract-0 devopsy-import-shop-prod-1-9-owners-0'\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_LEFT='devopsy-import-shop-prod-123-extract-0:shop-prod:import devopsy-import-shop-prod-123-owners-0:shop-prod:import devopsy-import-shop-prod-eu-9-extract-0:shop-prod-eu:import devopsy-import-shop-prod-1-9-owners-0:shop-prod-1:import'\n", 0o644)
 	s.logs()
 	os.Remove(wait)
 	_, out, code := s.runIO(s.env, []byte("rows\n"), "@prod", "--import", "db", "--yes")
@@ -448,7 +448,7 @@ func TestImportResolved(t *testing.T) {
 	}
 	// What the import's extraction a killed devopsy left goes first, this
 	// environment's only.
-	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-123-extract-0 devopsy-import-shop-prod-eu-9-extract-0'\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_WORKER=none\nFAKE_LEFT='devopsy-import-shop-prod-123-extract-0:shop-prod:import devopsy-import-shop-prod-eu-9-extract-0:shop-prod-eu:import'\n", 0o644)
 	_, out, code := s.runIO(nil, nil, "@prod", "--import", "db", "--resolved", "--yes")
 	docker, _ := s.logs()
 	if code != 0 || s.mark() != nil || fileExists(filepath.Join(s.base, syncState)) || !strings.Contains(docker, " start app db worker\n") || len(s.stopped()) > 0 {
@@ -603,7 +603,7 @@ func TestSyncOverImportMark(t *testing.T) {
 		t.Errorf("a parent not copying db (%d):\n%s\n%s", code, out, docker)
 	}
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-77\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_LEFT=devopsy-import-shop-dev-77:shop-dev:import\n", 0o644)
 	out, code = s.run(s.env, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
@@ -943,7 +943,7 @@ func TestSyncReset(t *testing.T) {
 	// Without a mark, what an import's extraction a killed devopsy left
 	// goes with the wipe (it may still write into mnt), this
 	// environment's only.
-	write(t, s.log+".shop-dev", "FAKE_IMPORT_CONTAINERS='devopsy-import-shop-dev-42-extract-0 devopsy-import-shop-dev-1-42-extract-0'\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_LEFT='devopsy-import-shop-dev-42-extract-0:shop-dev:import devopsy-import-shop-dev-1-42-extract-0:shop-dev-1:import'\n", 0o644)
 	out, code = s.run(nil, "@dev", "--reset", "--yes")
 	docker, _ = s.logs()
 	if code != 0 || !strings.Contains(docker, "rm -f devopsy-import-shop-dev-42-extract-0\n") || strings.Contains(docker, "rm -f devopsy-import-shop-dev-1-42") || strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0") > strings.Index(docker, " down --volumes") {

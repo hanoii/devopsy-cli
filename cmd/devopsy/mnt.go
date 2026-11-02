@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -80,12 +79,12 @@ func ownerLine(entries []string, owned map[string]string) string {
 
 // ownMnt gives the owned entries of mnt (resolved: on servers
 // shared/mnt), entry to owner, to their owners, each scanned whole in a
-// util container of its own, named name-<n>, that mounts that entry
+// util container of its own, c named c.name-<n>, that mounts that entry
 // alone, without a network (chownEntry). A missing entry is made first,
 // 0755 as Docker would, so the container mounts it; one that is a
 // symbolic link is refused, since Docker would mount what it points to
 // (the mounts check refuses it before a release's switch already).
-func ownMnt(ctx context.Context, mnt string, owned map[string]string, name string) error {
+func ownMnt(ctx context.Context, mnt string, owned map[string]string, c container) error {
 	if len(owned) == 0 {
 		return nil
 	}
@@ -104,7 +103,7 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, name strin
 		if err != nil {
 			return err
 		}
-		if err := dockerRunFresh(ctx, fmt.Sprintf("%s-%d", name, i), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
+		if err := dockerRunFresh(ctx, c.with(fmt.Sprintf("-%d", i)), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
 			return fmt.Errorf("giving mnt/%s to %s (%s): %w", e, owned[e], cli.MntOwnerLabel, err)
 		}
 	}
@@ -117,11 +116,11 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, name strin
 // outright whose pid this one reuses, still running (--rm removes it
 // only once it ends), and docker run would refuse the name. It goes
 // first.
-func dockerRunFresh(ctx context.Context, name string, args ...string) error {
-	if err := removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$"); err != nil {
+func dockerRunFresh(ctx context.Context, c container, args ...string) error {
+	if err := removeNamed(c.name); err != nil {
 		return err
 	}
-	return dockerRunIO(ctx, name, nil, nil, args...)
+	return dockerRunIO(ctx, c, nil, nil, args...)
 }
 
 // ownersPrefix starts the names of the owners' containers of a release's
@@ -129,11 +128,12 @@ func dockerRunFresh(ctx context.Context, name string, args ...string) error {
 // devopsy's pid and -<n>.
 const ownersPrefix = "devopsy-owners-"
 
-// ownersContainers is docker ps' filter for the owners' containers of
-// the project at cwd (ownersPrefix), never another compose project's:
-// shop-prod-1's start shop-prod- too, then three numbers, not two.
-func ownersContainers(cwd string) string {
-	return "name=^/?" + ownersPrefix + composeName(cwd) + "-[0-9]+-[0-9]+$"
+// ownersContainer is the owners' container of a release's switch and of
+// a local command in the project at cwd (ownMnt), remote.TaskOwners: what
+// --mnt-owners removes, a killed devopsy's (never locally, where another
+// terminal's step may run).
+func ownersContainer(cwd string) container {
+	return container{fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()), composeName(cwd), remote.TaskOwners}
 }
 
 // makeEntry makes the entry e of mnt when missing, 0755 whatever the
@@ -218,10 +218,10 @@ func runMntOwners(cwd string, args []string) int {
 	// runs: what one a devopsy killed outright left may still chown, and
 	// goes before this one scans again.
 	if err == nil {
-		err = removeContainers(ownersContainers(cwd))
+		err = removeLeft(composeName(cwd), remote.TaskOwners)
 	}
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()))
+		err = ownMnt(context.Background(), mnt, owners, ownersContainer(cwd))
 	}
 	if err != nil {
 		report.Fail(err)
@@ -421,5 +421,5 @@ func localMnt(cwd string) error {
 			}
 		}
 	}
-	return ownMnt(context.Background(), mnt, wrong, fmt.Sprintf("%s%s-%d", ownersPrefix, composeName(cwd), os.Getpid()))
+	return ownMnt(context.Background(), mnt, wrong, ownersContainer(cwd))
 }

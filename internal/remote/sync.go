@@ -83,11 +83,49 @@ const (
 )
 
 // ImportContainerPrefix and the compose project start the name of the
-// container an mnt --import writes through, then devopsy's pid (and
-// -owners-<n> for those giving what it extracted to its owners): what
-// the next lock-taker removes when a killed devopsy left it, and
-// --destroy before emptying mnt.
+// containers an mnt --import (or a restore) writes through, then
+// devopsy's pid, -extract-<n> or -owners-<n>: a name unique while they
+// run. What finds them is their labels (ContainerLabels, TaskImport).
 const ImportContainerPrefix = "devopsy-import-"
+
+// EnvLabel and TaskLabel label every container devopsy starts itself
+// (ContainerLabels): whose it is, the compose name of the environment
+// whose data it works on, and what it does, a task (TaskOwners and the
+// rest, SyncTask). Every cleanup finds devopsy's containers by them (a
+// docker ps filter on both, or EnvLabel alone for all of an
+// environment's), never by name: each guarantee is a filter value, so a
+// holder's (SyncTask of its id) can never match another sync's or the
+// parent's clone. Not devopsy.data*: those are the project's labels.
+const (
+	EnvLabel  = "devopsy.env"
+	TaskLabel = "devopsy.task"
+)
+
+// The tasks of devopsy's containers (TaskLabel), each its own filter:
+// a release's or a local command's owners' step; an import's or a
+// restore's extraction and its owners'; the source side of a push's or
+// an export's copy (the reflink check, the clone, its removal, the
+// rsync daemon); a snapshot's; an export's tar; --destroy's. What
+// writes a sync's copy into the child is SyncTask's.
+const (
+	TaskOwners   = "owners"
+	TaskImport   = "import"
+	TaskSource   = "source"
+	TaskSnapshot = "snapshot"
+	TaskExport   = "export"
+	TaskDestroy  = "destroy"
+)
+
+// SyncTask is the task of what writes sync id's copy into the child:
+// its rsync, clone and owners' containers, the receive's, a reset's wipe.
+// The child's holder removes those of its own id once it decides.
+func SyncTask(id string) string { return "sync-" + id }
+
+// ContainerLabels are docker run's options labelling a container of
+// devopsy's for env (a compose name) and task.
+func ContainerLabels(env, task string) []string {
+	return []string{"--label", EnvLabel + "=" + env, "--label", TaskLabel + "=" + task}
+}
 
 // ImportMarker is the line devopsy --import on a server prints on stderr
 // right before its first write, and waits for a byte from the session
@@ -112,9 +150,10 @@ func WriterLine(service string, pid int, was string) string {
 	return fmt.Sprintf("writer import %s %d %s", service, pid, cmp.Or(was, "none"))
 }
 
-// SyncContainerPrefix starts the names of the containers a sync runs to
-// write into a child (rsync, on one server or across two), then the
-// sync's id: what --sync-services finish partial and settle remove.
+// SyncContainerPrefix starts the names of the containers a sync runs
+// (rsync, on one server or across two; the parent's clone, as
+// devopsy-sync-parent-<id>), then the sync's id: a name unique while
+// they run. What finds them is their labels (SyncTask, TaskSource).
 const SyncContainerPrefix = "devopsy-sync-"
 
 // DoneLine records the copy's last write in SyncStartedFile.
@@ -1178,6 +1217,11 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []stri
 		open := Quote(path.Join(base, SyncOpenFile(id)))
 		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
+	// Labeled as the holder of sync id finds what writes its copy.
+	labels := ""
+	for _, a := range ContainerLabels(toProject, SyncTask(id)) {
+		labels += " " + Quote(a)
+	}
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
@@ -1189,7 +1233,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -1197,7 +1241,7 @@ copy() {
 copyvol() {
   mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
   devopsy --say info "rsync volume $1"
-  docker run --rm --name "$rs_name" --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
   }

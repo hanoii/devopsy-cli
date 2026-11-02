@@ -212,11 +212,11 @@ func dataMnt(projectDir string) (string, error) {
 }
 
 // dockerRunIO is dockerRun with stdin and stdout of its own (stdout nil
-// is errOut): docker run args as a container named name, removed when ctx
-// ends, since killing the docker client alone leaves its container
-// running.
-func dockerRunIO(ctx context.Context, name string, stdin io.Reader, stdout io.Writer, args ...string) error {
-	full := append([]string{"run", "--rm", "--name", name}, args...)
+// is errOut): docker run args as the container c, removed when ctx ends,
+// since killing the docker client alone leaves its container running.
+func dockerRunIO(ctx context.Context, c container, stdin io.Reader, stdout io.Writer, args ...string) error {
+	name := c.name
+	full := append(append([]string{"run", "--rm"}, c.runArgs()...), args...)
 	trace(append([]string{"docker"}, full...))
 	cmd := exec.CommandContext(ctx, "docker", full...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, errOut
@@ -358,10 +358,10 @@ func runExport(cwd string, args []string, color bool) int {
 	id := fmt.Sprintf("export.%d", os.Getpid())
 	canClone := false
 	if onTarget && s.Copy == cli.CopyVolumes {
-		if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
+		if err := removeLeftoverClones(composeName(cwd), filepath.Dir(cwd)); err != nil {
 			return fail(err.Error())
 		}
-		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, filepath.Dir(cwd), id, d)
+		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, composeName(cwd), filepath.Dir(cwd), id, d)
 	}
 	checked := filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id)
 	if ctx.Err() != nil {
@@ -384,9 +384,9 @@ func runExport(cwd string, args []string, color bool) int {
 	var restoreErr error
 	restored := false
 	if canClone && slices.Contains(stopped, name) {
-		if clone, ok := syncClone(ctx, filepath.Dir(cwd), id, d); ok {
+		if clone, ok := syncClone(ctx, composeName(cwd), filepath.Dir(cwd), id, d); ok {
 			defer func() {
-				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+				if err := removeClone(context.Background(), cloneContainer(composeName(cwd), id).with("-unclone"), filepath.Dir(cwd), filepath.Base(clone)); err != nil {
 					report.Warn("removing the export's clone: " + err.Error())
 				}
 			}()
@@ -434,7 +434,7 @@ func runExport(cwd string, args []string, color bool) int {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
 			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
-			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
+			err = dockerRunIO(ctx, container{fmt.Sprintf("devopsy-export-%d", os.Getpid()), composeName(cwd), remote.TaskExport}, nil, os.Stdout, run...)
 		}
 	}
 	if err != nil {
@@ -944,8 +944,8 @@ esac
 `
 
 // extractEntries empties and extracts each entry of mnt the tar in spool
-// carries (emptyAndExtract), in a util container of its own, named
-// name-extract-<n>, that mounts that entry alone, without a network, and
+// carries (emptyAndExtract), in a util container of its own, c named
+// c.name-extract-<n>, that mounts that entry alone, without a network, and
 // reads the whole spool for that entry's members. Why one per entry: the
 // service whose entry it is may run meanwhile (its stop label says, and
 // never is the default), and its owner can swap a directory the
@@ -957,9 +957,9 @@ esac
 // empty directory or file as the tar has it, for the container to mount;
 // a named volume (project's, by its key) is made when missing as compose
 // would, and mounted by name.
-func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
+func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, c container, project string) error {
 	for i, e := range entries {
-		if err := extractEntry(ctx, mnt, spool, e, fmt.Sprintf("%s-extract-%d", name, i), project); err != nil {
+		if err := extractEntry(ctx, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project); err != nil {
 			return err
 		}
 	}
@@ -968,8 +968,8 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 
 // extractEntry empties and extracts the entry or volume e from the tar
 // file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
-// each, in the util container name, which mounts the file read-only.
-func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, project string) error {
+// each, in the util container c, which mounts the file read-only.
+func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, c container, project string) error {
 	var mount string
 	var err error
 	if e.volume != nil {
@@ -994,7 +994,7 @@ func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, pr
 		return err
 	}
 	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
-	if err := dockerRunFresh(ctx, name, run...); err != nil {
+	if err := dockerRunFresh(ctx, c, run...); err != nil {
 		what := "mnt/" + e.name
 		if e.volume != nil {
 			what = "the volume " + e.name
@@ -1326,7 +1326,7 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(names, ", mnt/") + " replaced")
-			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+			cname := importContainer(cwd)
 			err = extractEntries(ctx, mnt, spool, entries, cname, composeName(cwd))
 			// What it extracted goes to its owner before the import counts
 			// as complete: a tar made anywhere carries its maker's owners.
@@ -1340,7 +1340,7 @@ func runImport(cwd string, args []string, color bool) int {
 				}
 			}
 			if err == nil {
-				err = ownMnt(ctx, mnt, owned, cname+"-owners")
+				err = ownMnt(ctx, mnt, owned, cname.with("-owners"))
 			}
 		}
 	}
@@ -1571,7 +1571,7 @@ func runResolved(cwd, name string) int {
 
 // resolvedOwners gives the owned entries of name, when it is an mnt
 // service, to their owners (ownMnt), in containers named as an import's
-// owners' are (importContainers), for --resolved.
+// owners' are (importContainer), for --resolved.
 func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name string) error {
 	s, ok := cli.SyncFind(services, name)
 	if !ok || s.Copy != cli.CopyVolumes {
@@ -1594,7 +1594,7 @@ func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name str
 	if err != nil {
 		return err
 	}
-	return ownMnt(context.Background(), mnt, owned, fmt.Sprintf("%s%s-%d-owners", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()))
+	return ownMnt(context.Background(), mnt, owned, importContainer(cwd).with("-owners"))
 }
 
 // chunk is a read of a stream: data, or its error.

@@ -82,7 +82,17 @@ var namedFeatures = []struct {
 	// UtilImage is a named feature of its own.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
 	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
+	// devopsy's containers found by their labels (ContainerLabels): the
+	// receive script a push writes runs the child's rsync, which the
+	// child's holder removes by its labels once it decides. An older
+	// parent would start it unlabeled, and a write could outlive its
+	// sync; an older child finds it by its name, still the same.
+	{ContainerLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push\b`)},
 }
+
+// ContainerLabelsFeature is the named feature of devopsy's containers'
+// labels (EnvLabel, TaskLabel).
+const ContainerLabelsFeature = "container-labels"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

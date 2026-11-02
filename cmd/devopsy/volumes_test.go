@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -28,8 +29,12 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "pages\n" {
 		t.Fatalf("first release (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
+	id := regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-rsync-v0 `).FindStringSubmatch(docker)
+	if id == nil {
+		t.Fatalf("no rsync of the volume:\n%s", docker)
+	}
 	order := []string{"volume create --label com.docker.compose.project=shop-dev --label com.docker.compose.volume=dbdata shop-dev_dbdata", "shop-dev compose", "stop db",
-		"-rsync-v0 -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
+		"-rsync-v0 --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " -v shop-prod_dbdata:/src/dbdata:ro -v shop-dev_dbdata:/dst/dbdata devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse /src/dbdata/ /dst/dbdata/"}
 	if !strings.Contains(out, "devopsy: rsync volume dbdata\n") {
 		t.Errorf("the volume's copy not said:\n%s", out)
 	}
@@ -51,7 +56,11 @@ func TestSyncVolumes(t *testing.T) {
 	if code != 0 || readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")) != "newer\n" {
 		t.Fatalf("across servers (%d), volume %q:\n%s\n%s", code, readString(filepath.Join(vol("shop-dev_dbdata"), "ibd")), out, docker)
 	}
-	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --network host -v shop-dev_dbdata:/vol/dbdata devopsy-util:3 rsync", "/dbdata/ /vol/dbdata/"} {
+	id = regexp.MustCompile(`devopsy-sync-([0-9.a-f]+)-receive `).FindStringSubmatch(docker)
+	if id == nil {
+		t.Fatalf("across servers, no receive:\n%s", docker)
+	}
+	for _, want := range []string{"-v shop-prod_dbdata:/vol/dbdata:ro", "[dbdata]\npath = /vol/dbdata\n", "-receive --label devopsy.env=shop-dev --label devopsy.task=sync-" + id[1] + " --network host -v shop-dev_dbdata:/vol/dbdata devopsy-util:3 rsync", "/dbdata/ /vol/dbdata/"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("across servers, missing %q in:\n%s", want, docker)
 		}

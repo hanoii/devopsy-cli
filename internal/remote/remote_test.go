@@ -390,6 +390,21 @@ func TestResetFeature(t *testing.T) {
 	}
 }
 
+// devopsy's containers found by their labels: only the push needs it,
+// since its receive script labels the child's rsync, which the child's
+// holder removes by them; the receive's container is labeled so.
+func TestContainerLabelsFeature(t *testing.T) {
+	t.Parallel()
+	for name, s := range allScripts() {
+		if slices.Contains(Needs(s), ContainerLabelsFeature) != (name == "push") {
+			t.Errorf("%s: needs %v", name, Needs(s))
+		}
+	}
+	if s := allScripts()["receive"]; strings.Count(s, `--name "$rs_name" '--label' 'devopsy.env=it'\''s-dev' '--label' 'devopsy.task=sync-1.2' --network host`) != 2 {
+		t.Errorf("the receive's containers not labeled for its holder:\n%s", s)
+	}
+}
+
 func TestScriptsParse(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {

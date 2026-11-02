@@ -355,14 +355,13 @@ func destroyData(cwd string, step []string, color bool) int {
 		if err := endWriters(root, base, []cli.SyncService{}); err != nil {
 			return fail(err.Error() + ": nothing removed")
 		}
-		// An import a killed devopsy left may still extract into mnt
-		// (not Compose's, so down --remove-orphans leaves it), and its
-		// files as root would fail the removal of $base.
-		if err := removeContainers(importContainers(root)); err != nil {
-			return fail(err.Error() + ": nothing removed")
-		}
-		// And an owners' step's, which would chown in it as root.
-		if err := removeContainers(ownersContainers(root)); err != nil {
+		// Every container of devopsy's this environment has, whatever its
+		// task, is a leftover of a devopsy killed outright (--destroy holds
+		// every lock of it), not Compose's, so down --remove-orphans leaves
+		// it: an import's extraction, an owners' step's chown, a sync's
+		// rsync into it, a clone's, a snapshot's, writing as root into
+		// what goes, would fail the removal of $base.
+		if err := removeLeft(composeName(root), ""); err != nil {
 			return fail(err.Error() + ": nothing removed")
 		}
 	}
@@ -382,7 +381,8 @@ func destroyData(cwd string, step []string, color bool) int {
 	if err := composeContext(ctx, root, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans", "--rmi", "local"); err != nil {
 		return half("docker compose down: " + err.Error())
 	}
-	if err := emptyMnt(ctx, projectDir, fmt.Sprintf("devopsy-destroy-%d", os.Getpid())); err != nil {
+	destroy := container{fmt.Sprintf("devopsy-destroy-%d", os.Getpid()), composeName(root), remote.TaskDestroy}
+	if err := emptyMnt(ctx, projectDir, destroy); err != nil {
 		return half(err.Error())
 	}
 	// The history of the images that ran on the data goes with it: a
@@ -400,25 +400,19 @@ func destroyData(cwd string, step []string, color bool) int {
 		// the server's snapshot root puts them (basePrelude exports it).
 		// A take's reflink clone, root's too, among its own snapshots, and
 		// one a push or an export killed outright left (--destroy holds the
-		// sync lock: none is in use).
-		if err := removeClone(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), filepath.Join(base, "snapshots"), snapshotClone); err != nil {
+		// sync lock: none is in use; their containers went above).
+		if err := removeClone(ctx, destroy.with("-clone"), filepath.Join(base, "snapshots"), snapshotClone); err != nil {
 			return fail("removing the snapshots' clone: " + err.Error())
 		}
 		clones, _ := filepath.Glob(filepath.Join(base, remote.SyncClonePrefix+"*"))
-		if mnt, err := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt")); err == nil && len(clones) > 0 {
-			// What a killed push's or export's containers still write there.
-			if err := removeContainers("label=" + sourceLabel(mnt)); err != nil {
-				return fail(err.Error())
-			}
-		}
 		for _, c := range clones {
-			if err := removeClone(ctx, fmt.Sprintf("devopsy-destroy-%d-clone", os.Getpid()), base, filepath.Base(c)); err != nil {
+			if err := removeClone(ctx, destroy.with("-clone"), base, filepath.Base(c)); err != nil {
 				return fail("removing " + filepath.Base(c) + ": " + err.Error())
 			}
 		}
 		snaps := snapshotsOf(base)
 		if fileExists(filepath.Join(snaps, remote.SnapshotMirror)) {
-			if err := dockerRun(ctx, fmt.Sprintf("devopsy-destroy-%d-mirror", os.Getpid()), "-v", snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror); err != nil {
+			if err := dockerRun(ctx, destroy.with("-mirror"), "-v", snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror); err != nil {
 				return fail("removing the snapshots' mirror: " + err.Error())
 			}
 		}
@@ -426,10 +420,10 @@ func destroyData(cwd string, step []string, color bool) int {
 	return 0
 }
 
-// emptyMnt empties the project's mnt as root in remote.UtilImage, in a
-// container named name (files containers wrote as other users
-// included), never removing it: on servers it is a link to shared/mnt.
-func emptyMnt(ctx context.Context, projectDir, name string) error {
+// emptyMnt empties the project's mnt as root in remote.UtilImage, in the
+// container c (files containers wrote as other users included), never
+// removing it: on servers it is a link to shared/mnt.
+func emptyMnt(ctx context.Context, projectDir string, c container) error {
 	mnt := filepath.Join(projectDir, "mnt")
 	if entries, err := os.ReadDir(mnt); err != nil || len(entries) == 0 {
 		return nil
@@ -442,7 +436,7 @@ func emptyMnt(ctx context.Context, projectDir, name string) error {
 		return err
 	}
 	report.Info("emptying " + mnt)
-	if err := dockerRun(ctx, name, "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
+	if err := dockerRun(ctx, c, "-v", real+":/mnt", remote.UtilImage, "find", "/mnt", "-mindepth", "1", "-delete"); err != nil {
 		return fmt.Errorf("emptying mnt: %w", err)
 	}
 	return nil

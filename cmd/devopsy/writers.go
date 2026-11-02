@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,8 +31,9 @@ var writersWait = 15 * time.Second
 // outright, or inside a container, which never gets the signal: an
 // import's load through docker exec, a one-off run --rm, devopsy's own
 // rsync. So, in order: the recorded imports' devopsy (SIGTERM, only a
-// process still a devopsy import), the sync's own containers (by name,
-// remote.SyncContainerPrefix and its id), the imported services and
+// process still a devopsy import), the sync's own containers (by their
+// labels: this environment's, remote.SyncTask of its id), the imported
+// services and
 // those depending on them (services, cli.WithDependents; stopped: the
 // only way to end what docker exec started in them; one running before
 // the sync is recorded, so the next completing sync starts it, and a
@@ -76,7 +78,7 @@ func endWriters(cwd, base string, services []cli.SyncService) error {
 		}
 	}
 	if len(first) == 2 {
-		if err := removeContainers("name=" + remote.SyncContainerPrefix + first[1] + "-"); err != nil {
+		if err := removeLeft(composeName(cwd), remote.SyncTask(first[1])); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -188,9 +190,56 @@ func waitImports(pids []int, base string) {
 	}
 }
 
-// removeContainers removes every container matching docker ps's filter.
-func removeContainers(filter string) error {
-	out, err := exec.Command("docker", "ps", "-aq", "--filter", filter).Output()
+// container is one of devopsy's own containers (its util image's): its
+// name (none: Docker's), unique while it runs, and its labels
+// (remote.ContainerLabels), which every cleanup finds it by: env, the
+// compose name of the environment whose data it works on, and task,
+// what it does.
+type container struct{ name, env, task string }
+
+// with is c named name+suffix: one of several of a step's.
+func (c container) with(suffix string) container {
+	c.name += suffix
+	return c
+}
+
+// runArgs are docker run's options naming and labelling c.
+func (c container) runArgs() []string {
+	var args []string
+	if c.name != "" {
+		args = []string{"--name", c.name}
+	}
+	return append(args, remote.ContainerLabels(c.env, c.task)...)
+}
+
+// removeLeft removes the containers of devopsy's that the environment
+// env (its compose name) has doing task, every task when "": what a
+// devopsy killed outright left, by their labels. The one way any cleanup
+// finds them: a guarantee is a filter value (a holder's sync id, never
+// another's; one environment's, never another's).
+func removeLeft(env, task string) error {
+	filters := []string{"label=" + remote.EnvLabel + "=" + env}
+	if task != "" {
+		filters = append(filters, "label="+remote.TaskLabel+"="+task)
+	}
+	return removeContainers(filters...)
+}
+
+// removeNamed removes the container of that very name, if any: one a
+// devopsy killed outright whose pid (or snapshot) this one's name
+// repeats left, which docker run would refuse the name for.
+func removeNamed(name string) error {
+	return removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$")
+}
+
+// removeContainers removes every container matching all of docker ps's
+// filters.
+func removeContainers(filters ...string) error {
+	var ps []string
+	for _, f := range filters {
+		ps = append(ps, "--filter", f)
+	}
+	out, err := exec.Command("docker", append([]string{"ps", "-aq"}, ps...)...).Output()
 	if err != nil {
 		return fmt.Errorf("docker ps: %w", err)
 	}
@@ -206,7 +255,7 @@ func removeContainers(filter string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for err != nil && ctx.Err() == nil {
-		out, lerr := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", filter).Output()
+		out, lerr := exec.CommandContext(ctx, "docker", append([]string{"ps", "-aq"}, ps...)...).Output()
 		if lerr == nil && !slices.ContainsFunc(strings.Fields(string(out)), func(id string) bool { return slices.Contains(ids, id) }) {
 			return nil
 		}
@@ -226,20 +275,20 @@ func dockerRm(names []string) error {
 	return nil
 }
 
-// importContainers is docker ps' filter for the containers an mnt
-// --import of the project at cwd writes through:
-// remote.ImportContainerPrefix, its compose project and devopsy's pid,
-// then -extract-<n> for the extracting ones (extractEntries) and
-// -owners-<n> for the owners' after them (ownMnt), one per entry. Never
-// another compose project's: shop-prod-1's start shop-prod- too.
-func importContainers(cwd string) string {
-	return "name=^/?" + remote.ImportContainerPrefix + composeName(cwd) + "-[0-9]+(-(extract|owners)-[0-9]+)?$"
+// importContainer is the container, named after devopsy's pid, an mnt
+// --import (or a restore) of the project at cwd writes through:
+// -extract-<n> for the extracting ones (extractEntries), -owners-<n> for
+// the owners' after them (ownMnt), one per entry; remote.TaskImport, so
+// the next lock-taker removes what a killed devopsy left
+// (removeLeft(..., remote.TaskImport)), never another environment's.
+func importContainer(cwd string) container {
+	return container{fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()), composeName(cwd), remote.TaskImport}
 }
 
 // endImport ends an import into name that failed or was cut, which may
 // still write (a docker exec never gets the cut, a killed devopsy's
 // container extracts on): name's one-off containers and the project's
-// import containers (remote.ImportContainerPrefix) go, and name and what
+// import containers (remote.TaskImport) go, and name and what
 // depends on it (cli.WithDependents) are stopped where they run, never
 // started again: the data may be partial. With record (on a target) what
 // it stops is recorded (syncState), name only when wasRunning (it ran
@@ -251,7 +300,7 @@ func endImport(cwd, name string, services []cli.SyncService, record, wasRunning 
 	if !slices.Contains(closure, name) {
 		closure = append([]string{name}, closure...)
 	}
-	if err := removeContainers(importContainers(cwd)); err != nil {
+	if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
 		errs = append(errs, err)
 	}
 	var stop []string

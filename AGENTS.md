@@ -1525,8 +1525,48 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   down --volumes --remove-orphans --rmi local` and `mnt` emptied as
   root in `UtilImage` (a plain `docker run`: `compose run` would bring
   the network back), a sync's leftover record's writers ended first
-  (`endWriters`: nothing writes into `mnt` while it is emptied); then
+  (`endWriters`) and every container of devopsy's the environment has
+  removed (below): nothing writes into `mnt` while it is emptied; then
   every release's images; then `removeBase`.
+- **devopsy's own containers are found by their labels, never by
+  name** (`remote.ContainerLabels`, `container` and `removeLeft` in
+  `cmd/devopsy/writers.go`; decided 2026-11-01, when four naming
+  schemes each had a remover of their own). Every container devopsy
+  starts in `UtilImage` carries `devopsy.env=<compose name>` (whose data
+  it works on) and `devopsy.task=<task>` (what it does): `owners` (a
+  release's or a local command's owners' step), `import` (an import's or
+  a restore's extraction and its owners'), `sync-<id>` (what writes
+  sync `<id>`'s copy into the child: its rsync, clone and owners'
+  containers on one server, the receive's across, a reset's wipe and its
+  owners'), `source` (the parent's side of a push's or an export's copy:
+  the reflink check, the clone, its removal, the rsync daemon),
+  `snapshot`, `export`, `destroy`. Not `devopsy.data*`: those are the
+  project's. One remover, `removeLeft(env, task)`, a `docker ps` filter
+  on both labels, so each guarantee is a filter value: the child's
+  holder (`endWriters`) takes `sync-<its id>`, never another sync's and
+  never the parent's clone of that very sync (`source`, the parent's
+  env); the next lock-taker an import's or a restore's (`import`: the
+  next import of that service, `--resolved`, a reset's wipe, the next
+  restore on a restore's mark, a child's prepare on an import's or a
+  restore's); `--mnt-owners`, before it scans, `owners`; the next holder
+  of the parent's sync lock (a push, an export) `source`;
+  `--destroy-data` every task of its environment (it holds every lock:
+  each is a leftover), never another environment's. Locally nothing
+  removes by label: nothing holds a lock, and another terminal's
+  owners' step may run. Names stay only where they keep a container
+  unique while it runs (`<prefix><compose name>-<pid>-<n>`, a sync's
+  id), and `dockerRunFresh` (an import's, an owners' step's) and a
+  snapshot check's `unzstd` remove one of that very name first
+  (`removeNamed`: a devopsy killed outright whose pid or snapshot this
+  one repeats left it running, and docker run would refuse the name;
+  review of 2026-10-23, round 3). A container's own devopsy removes it
+  by name when its context ends (`dockerRunIO`). Across servers the
+  push writes the receive script that runs the child's rsync, which the
+  child's holder removes by its labels: a named feature,
+  `container-labels`, found by `--sync-push` (an older parent would start
+  it unlabeled; an older child finds it by its name, unchanged).
+  Containers an older devopsy left carry no labels and are not found
+  (no migration code before 1.0.0).
 - **Leftover levels are asked about, never removed silently:**
   `purgeLeftovers` finds levels' directories left with only their
   `.env` (`LeftoverScript`) and removes them with `--purge` or a yes at
@@ -1658,8 +1698,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   --rm`, devopsy's own rsync). So: the recorded imports' devopsy gets
   SIGTERM (only a pid `/proc` still shows as `--sync-services import`
   in the child's directory, `isSyncImport`: a pid reused after a reboot
-  may be another environment's import; Linux only), the sync's own containers are removed (named
-  `SyncContainerPrefix` + its id, never another sync's), the imported
+  may be another environment's import; Linux only), the sync's own containers are removed (`sync-<id>`,
+  never another sync's: Data, destroying and removing), the imported
   services are stopped (the only way to end what `docker exec` started
   in them) and, when they ran before the sync, recorded so a completing
   sync starts them, their one-off containers removed; then the imports
@@ -2151,14 +2191,14 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   told nothing is stopped (`DEVOPSY_DATA_STOP` empty: review round 2,
   a script following the contract would `run --rm` beside the running
   service); the rsync is then the last write. A cancel during the check
-  stops nothing (round 2). The clone's containers are
-  `<SyncContainerPrefix>parent-<id>-...` (`cloneContainer`), never the
-  sync's own prefix, which the child's holder removes as writers into
-  the child (review: it could kill the clone's removal). Never under `snapshots/.clone`: a take's
+  stops nothing (round 2). The clone's containers are the parent's
+  `source` (`cloneContainer`), never the sync's own task, which the
+  child's holder removes as writers into the child (review: it could
+  kill the clone's removal). Never under `snapshots/.clone`: a take's
   leftovers step, which holds only the snapshot lock, removes a clone
   without its `.tmp`. One a devopsy killed outright left goes with the
   next holder of the sync lock (`removeLeftoverClones`, its containers
-  by `sourceLabel`, as the daemon's) and with `--destroy-data`. An
+  by their `source` task, as the daemon's) and with `--destroy-data`. An
   `--export` of a `volumes` service on a target does the same
   (`export.<pid>`). Accepted cost, measured on XFS (2026-10-27): the
   parent's pages written while the clone exists fragment its files
@@ -2418,9 +2458,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   marked, down). `--sync-services wipe` (`wipeData`): an import's
   leftover containers, `compose --profile '*' down --volumes
   --remove-orphans` (no `--rmi`: the release's images stay),
-  `emptyMnt` (shared with `--destroy-data`; in a container named by the
-  sync, `<SyncContainerPrefix><id>-wipe`, so a holder deciding meanwhile
-  removes it, and in `syncImport` after its writer line), and the record set to
+  `emptyMnt` (shared with `--destroy-data`; in a container of the sync's
+  task, `sync-<id>`, so a holder deciding meanwhile removes it, and in
+  `syncImport` after its writer line), and the record set to
   `first` with nothing stopped, so `finish go` creates the services
   with data and the child's set and the run step the rest. Its
   `shared/.env` and release stay. Accepted (decided 2026-10-27): the
@@ -2464,9 +2504,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   write. A `custom` import of a service not stopped brings it up alone
   and down again if it was down (`upFor`), an `up` that failed too. An
   owned entry it extracted goes to its owner before the import counts
-  as complete, in a container of its own (`ownMnt`, named
-  `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
-  `importContainers` ends it with the extracting ones).
+  as complete, in a container of its own (`ownMnt`, its task `import`,
+  so a leftover import's end removes it with the extracting ones).
 - **A `volumes` import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
@@ -2515,8 +2554,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   tar of data never needs went with them. Then each carried entry is
   emptied, never removed, and extracted with `--overwrite`. Why never removed: a running
   container bind-mounts the directory's inode. Each entry in a util
-  container of its own (`extractEntries`, `<ImportContainerPrefix><compose
-  name>-<pid>-extract-<n>`), `--network none`, that mounts that entry
+  container of its own (`extractEntries`, its task `import`),
+  `--network none`, that mounts that entry
   alone (made first when missing, a directory or an empty file as the
   tar has it; one of the other kind refused before anything changes)
   and extracts only its members from the whole spool, by the names
@@ -2552,7 +2591,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   right before; from then on the import counts as written, a Docker
   error that started nothing included. Before it a failure restores
   the set; from it a failure ends the write (`endImport`, with the
-  closure: one-offs, the project's `ImportContainerPrefix` containers,
+  closure: one-offs, the environment's `import` containers,
   the service and its dependents stopped) and keeps the set down, the
   imported service stopped and recorded too when it ran before (one
   rule with a sync's `endWriters`, "stop, not restart"). Locally no
@@ -2609,20 +2648,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   only when it ran before the import: a writer line ends ` down` when
   `upFor` brought it up), run by an import of that service,
   `--resolved` and a child's prepare; `--destroy-data` removes the
-  containers too (not Compose's: `down --remove-orphans` leaves them),
-  and an owners' step's (`ownersContainers`).
-- **Containers named after devopsy's pid** (an import's extracting and
-  owners' ones, a release's and a local command's owners' ones,
-  `<ownersPrefix><compose name>-<pid>-<n>`) are started through
-  `dockerRunFresh`, which removes a container of that very name first:
-  only a devopsy killed outright whose pid this one reuses can have
-  left one, still running (`--rm` removes it once it ends), and docker
-  run would refuse the name (review of 2026-10-23, round 3). On a
-  server the next lock-taker removes the rest: an import's by
-  `importContainers` (above), a release's owners' by
-  `ownersContainers` in `--mnt-owners` before it scans, and both in
-  `--destroy-data`. Locally nothing holds a lock, so only the name's
-  own is removed: another terminal's owners' step may be running.
+  containers too (not Compose's: `down --remove-orphans` leaves them;
+  their labels: Data, destroying and removing).
 - **While an import's mark is there, only its service can be
   imported** (`ImportScript`, in shell under the lock after its
   `settle`, before devopsy reads stdin, and again in Go), and any
@@ -2671,7 +2698,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   name; a second session under the lock settles a killed holder's sync
   (`settleLeftover`, as `ImportScript` does), checks again, ends a
   leftover writer, gives a `volumes` service's owned entries to their
-  owners (`resolvedOwners`, named as an import's owners' containers:
+  owners (`resolvedOwners`, its containers an import's owners':
   review of 2026-10-23, round 3, it started the services on the tar
   maker's owners), starts the record and only then
   removes the mark and the record. On the server it is `devopsy
@@ -2909,7 +2936,7 @@ settled every rule here after nine reviews (2026-10-25).
   switch does: round 2): the set
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers
-  named with `ImportContainerPrefix`), the data services held on the
+  of the `import` task), the data services held on the
   snapshot's images (`ImportDone`); the mark and the record of what it
   stopped go, the record whole, only once the run step went through
   (`restored`; review of 2026-10-25: cleared by the data step, a shell

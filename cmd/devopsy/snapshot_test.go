@@ -754,7 +754,7 @@ func TestSyncRestoreMark(t *testing.T) {
 	os.Remove(s.log + ".shop-prod")
 	// The cut restore's extracting containers go with the child's prepare,
 	// this environment's only.
-	write(t, s.log+".shop-dev", "FAKE_IMPORT_CONTAINERS='devopsy-import-shop-dev-42-extract-0 devopsy-import-shop-dev-eu-42-extract-0'\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_LEFT='devopsy-import-shop-dev-42-extract-0:shop-dev:import devopsy-import-shop-dev-eu-42-extract-0:shop-dev-eu:import'\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(mark) {
 		t.Errorf("a sync copying it all (%d), marked %v:\n%s", code, fileExists(mark), out)
 	}
@@ -791,7 +791,7 @@ func TestSnapshotRestoreCut(t *testing.T) {
 	}
 	// The cut restore's extracting containers (a devopsy killed outright
 	// leaves them writing) go first, this environment's only.
-	write(t, s.log+".shop-prod", "FAKE_IMPORT_CONTAINERS='devopsy-import-shop-prod-42-extract-0 devopsy-import-shop-prod-eu-42-extract-0'\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_LEFT='devopsy-import-shop-prod-42-extract-0:shop-prod:import devopsy-import-shop-prod-eu-42-extract-0:shop-prod-eu:import'\n", 0o644)
 	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
 	if code != 0 || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || s.current("prod") == current {
 		t.Errorf("the restore again (%d), marked %v:\n%s", code, fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)

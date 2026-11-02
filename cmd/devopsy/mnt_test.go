@@ -41,7 +41,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// first, this project's only, and so does one under the very name
 	// this one's would take (its pid reused: docker run would refuse
 	// the name). Review of 2026-10-23, round 3.
-	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache FAKE_SAME_NAME=1 FAKE_OWNERS_CONTAINERS='devopsy-owners-shop-prod-99-0 devopsy-owners-shop-prod-1-99-0 devopsy-owners-shop-prod-eu-9-0'\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_APP_OWNER=10001:10001 FAKE_APP_MOUNT2=/cache FAKE_SAME_NAME=1 FAKE_LEFT='devopsy-owners-shop-prod-99-0:shop-prod:owners devopsy-owners-shop-prod-1-99-0:shop-prod-1:owners devopsy-owners-shop-prod-eu-9-0:shop-prod-eu:owners'\n", 0o644)
 	if err := os.MkdirAll(filepath.Join(s.mnt("prod"), "storage"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	for _, want := range []string{
 		"run --rm --name devopsy-owners-shop-prod-", " --network none --mount type=bind,source=" + s.mnt("prod") + "/cache,target=/mnt/cache devopsy-util:3 sh -c set -eu\n",
 		`find "/mnt/$1" -ignore_readdir_race \( -type f -o -type d -o -type l \) \( ! -user "${2%%:*}" -o ! -group "${2#*:}" \) -exec chown -h "$2" {} +`, "chown_entry \"$1\" \"$2\"\n sh cache 10001:10001\n",
-		"-1 --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
+		"-1 --label devopsy.env=shop-prod --label devopsy.task=owners --network none --mount type=bind,source=" + s.mnt("prod") + "/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu\n", "chown_entry \"$1\" \"$2\"\n sh storage 10001:10001\n",
 	} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
@@ -105,7 +105,7 @@ func TestMntOwnersRelease(t *testing.T) {
 	// (TestExportImport).
 	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
 	docker, _ = s.logs()
-	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu`).MatchString(docker) {
+	if code != 0 || !strings.Contains(errs, "devopsy: importing app: mnt/storage replaced\ndevopsy: giving mnt/storage to 10001:10001\n") || !regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --label devopsy.env=shop-dev --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu`).MatchString(docker) {
 		t.Errorf("an owned import on a target (%d):\n%s\n%s", code, errs, docker)
 	}
 	// Its owners' step failing keeps the mark, and --resolved, the way
@@ -115,12 +115,12 @@ func TestMntOwnersRelease(t *testing.T) {
 	// a laptop or root's, which an app running as 10001, or MariaDB's
 	// mode-600 files, cannot use until the next release).
 	_, errs, code = s.runIO([]string{"FAIL_OWNERS=1"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
-	if docker, _ := s.logs(); code == 0 || !strings.Contains(docker, "-owners-0 --network none") || !strings.Contains(errs, "the import of app did not complete") {
+	if docker, _ := s.logs(); code == 0 || !strings.Contains(docker, "-owners-0 --label devopsy.env=shop-dev --label devopsy.task=import --network none") || !strings.Contains(errs, "the import of app did not complete") {
 		t.Fatalf("an import whose owners' step fails (%d):\n%s\n%s", code, errs, docker)
 	}
 	_, errs, code = s.runIO(nil, nil, "@dev", "--import", "app", "--resolved", "--yes")
 	docker, _ = s.logs()
-	owners, start := regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 `).FindStringIndex(docker), strings.Index(docker, " start ")
+	owners, start := regexp.MustCompile(`run --rm --name devopsy-import-shop-dev-[0-9]+-owners-0 --label devopsy.env=shop-dev --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(s.mnt("dev"))+`/storage,target=/mnt/storage devopsy-util:3 `).FindStringIndex(docker), strings.Index(docker, " start ")
 	if code != 0 || owners == nil || start < owners[0] {
 		t.Errorf("--resolved of an owned import (%d), its owners' step at %v, the start at %d:\n%s\n%s", code, owners, start, errs, docker)
 	}
@@ -276,8 +276,10 @@ func TestMntOwnersReset(t *testing.T) {
 	write(t, s.log+".shop-dev", "FAKE_APP_OWNER=10001:10001\n", 0o644)
 	out, code := s.run(nil, "@dev", "--reset", "--yes")
 	docker, _ := s.logs()
-	wipe, owners := strings.Index(docker, "-wipe -v "), strings.Index(docker, "-owners-0 --network none --mount type=bind,source="+s.mnt("dev")+"/storage,target=/mnt/storage ")
-	if code != 0 || wipe < 0 || owners < wipe || !strings.Contains(docker, "run --rm --name devopsy-sync-") {
+	// Both the sync's own (remote.SyncTask), which its holder ends.
+	wipe := regexp.MustCompile(`-wipe --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ -v `).FindStringIndex(docker)
+	owners := regexp.MustCompile(`-owners-0 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=` + regexp.QuoteMeta(s.mnt("dev")) + `/storage,target=/mnt/storage `).FindStringIndex(docker)
+	if code != 0 || wipe == nil || owners == nil || owners[0] < wipe[0] || !strings.Contains(docker, "run --rm --name devopsy-sync-") {
 		t.Errorf("reset (%d):\n%s\n%s", code, out, docker)
 	}
 }
@@ -338,7 +340,7 @@ func TestMntOwnersLocal(t *testing.T) {
 	// Another terminal's owners' step of this very project may run: never
 	// removed (no lock holds it off), only one under this devopsy's own
 	// container's name.
-	left := append(slices.Clone(owned), "FAKE_OWNERS_CONTAINERS=devopsy-owners-shop-99-0")
+	left := append(slices.Clone(owned), "FAKE_LEFT=devopsy-owners-shop-99-0:shop:owners")
 	for _, args := range [][]string{{"watch"}, {"scale", "app=2"}, {"up", "-d"}, {"--profile", "web", "run", "--rm", "app"}} {
 		os.RemoveAll(filepath.Join(s.dot, "mnt"))
 		out, code := s.run(left, args...)
