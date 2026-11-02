@@ -50,6 +50,10 @@ func TestMntOwnersRelease(t *testing.T) {
 	if !strings.Contains(docker, "rm -f devopsy-owners-shop-prod-99-0\n") || strings.Contains(docker, "-1-99-0") || strings.Contains(docker, "-eu-9-0") {
 		t.Errorf("an owners' step's leftovers:\n%s", docker)
 	}
+	// Before it scans: the leftover may still chown.
+	if rm, scan := strings.Index(docker, "rm -f devopsy-owners-shop-prod-99-0\n"), strings.Index(docker, "run --rm --name devopsy-owners-shop-prod-"); scan < 0 || rm > scan {
+		t.Errorf("an owners' step's leftover removed after the scan started (%d, %d):\n%s", rm, scan, docker)
+	}
 	if m := regexp.MustCompile(`rm -f (devopsy-owners-shop-prod-[0-9]+-1)\n`).FindStringSubmatchIndex(docker); m == nil || !strings.Contains(docker[m[1]:], "run --rm --name "+docker[m[2]:m[3]]+" ") {
 		t.Errorf("a leftover under the owners' container's own name not removed before it runs:\n%s", docker)
 	}
@@ -100,8 +104,8 @@ func TestMntOwnersRelease(t *testing.T) {
 
 	// An mnt import on a target gives what it extracted to its owner,
 	// before it counts as complete, in a container that mounts that
-	// entry alone, named so that a leftover import's end removes it
-	// (importContainers). Locally on macOS it gives nothing away
+	// entry alone, labeled so that a leftover import's end removes it
+	// (remote.TaskImport). Locally on macOS it gives nothing away
 	// (TestExportImport).
 	_, errs, code := s.runIO(nil, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "@dev", "--import", "app", "--yes")
 	docker, _ = s.logs()

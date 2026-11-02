@@ -1518,6 +1518,11 @@ func TestLocalDestroy(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "DESTROYED in "+tmp) || !strings.Contains(out, "[find][/mnt][-mindepth][1][-delete]") {
 		t.Errorf("--destroy --yes (%d):\n%s", code, out)
 	}
+	// Its container labeled as devopsy's, and none removed by their
+	// labels: locally nothing holds a lock, so another terminal's may run.
+	if !strings.Contains(out, "[--label][devopsy.env=app][--label][devopsy.task=destroy]") || strings.Contains(out, "[--filter]") {
+		t.Errorf("--destroy --yes, devopsy's containers:\n%s", out)
+	}
 	write(t, filepath.Join(dir, "commands", "destroy"), "#!/bin/sh\n## Description: d\nexit 3\n", 0o755)
 	out, code = runDevopsy(t, tmp, nil, "--destroy", "--yes")
 	if code != 3 || strings.Contains(out, "[down]") || !strings.Contains(out, "nothing removed") {

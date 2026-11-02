@@ -603,11 +603,11 @@ func TestSyncOverImportMark(t *testing.T) {
 		t.Errorf("a parent not copying db (%d):\n%s\n%s", code, out, docker)
 	}
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\nFAKE_APP=mnt+import\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_LEFT=devopsy-import-shop-dev-77:shop-dev:import\n", 0o644)
+	write(t, s.log+".shop-dev", "FAKE_DB=stream\nFAKE_APP=mnt+import\nFAKE_LEFT='devopsy-import-shop-dev-77:shop-dev:import devopsy-import-shop-dev-eu-77:shop-dev-eu:import'\n", 0o644)
 	out, code = s.run(s.env, "@dev", "--sync", "--yes")
 	docker, _ = s.logs()
 	stopped := strings.Fields(readString(s.log + ".stopped.shop-dev"))
-	if code != 0 || devMark() != nil || fileExists(filepath.Join(dev, syncState)) || slices.Contains(stopped, "app") || slices.Contains(stopped, "db") || !strings.Contains(docker, "rm -f devopsy-import-shop-dev-77") {
+	if code != 0 || devMark() != nil || fileExists(filepath.Join(dev, syncState)) || slices.Contains(stopped, "app") || slices.Contains(stopped, "db") || !strings.Contains(docker, "rm -f devopsy-import-shop-dev-77\n") || strings.Contains(docker, "shop-dev-eu-77") {
 		t.Errorf("a sync copying db (%d), mark %+v, stopped %v:\n%s\n%s", code, devMark(), stopped, out, docker)
 	}
 
