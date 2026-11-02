@@ -33,9 +33,9 @@ type parentVars struct {
 // included, and needs its current release).
 func readParent(ctx context.Context, p *remote.Target, trace bool) (parentVars, error) {
 	var out bytes.Buffer
-	// Bounded: a parent out of reach fails in seconds, never holding up
-	// what refreshes from it.
-	code, err := remote.SSHContext(ctx, p, remote.Bounded, remote.ParentReadScript(p, trace), bytes.NewReader(nil), &out, false, nil)
+	// A parent out of reach fails in seconds (SSHOptions' connect
+	// timeout), never holding up what refreshes from it.
+	code, err := remote.SSHContext(ctx, p, nil, remote.ParentReadScript(p, trace), bytes.NewReader(nil), &out, false, nil)
 	if err != nil {
 		return parentVars{}, err
 	}

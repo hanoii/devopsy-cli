@@ -45,11 +45,12 @@ func (m *sim) prev() string {
 	return m.e.rel(m.cur)
 }
 
-// fetch is a release's fetch: own images built anew, pulled ones pulled
-// as the registry has them now.
+// fetch is a release's fetch, in the environment's mode (its releases'
+// records'): own images built anew, pulled ones pulled as the registry
+// has them now.
 func (m *sim) fetch(svcs []Service) {
 	for _, svc := range svcs {
-		if svc.own(m.e.set.Mode) {
+		if svc.own(m.e.mode) {
 			m.n++
 			m.d.pull(svc.Ref, m.e.set.Name+"-build-"+string(rune('a'+m.n)))
 			continue

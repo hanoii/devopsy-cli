@@ -154,7 +154,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 		fmt.Println(line)
 	}
 	if h.cut != nil {
-		what, fix := h.cut.Cut(targetRef(t), releaseRef(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
+		what, fix := h.cut.Cut(targetRef(t), remote.HintAddress(t), h.partial != "" && !h.mark.IsImport() && !h.mark.IsRestore())
 		fmt.Println(st.bad("release     " + what + ": " + fix))
 	}
 	if t.Parent != "" {
@@ -201,7 +201,7 @@ func runRemoteStatus(t *remote.Target, args []string, color bool) int {
 	case h.partial != "":
 		fix := "devopsy @" + targetRef(t) + " --sync, or devopsy @" + targetRef(t) + " --reset to start it over"
 		if h.id == "" {
-			fix = "devopsy @" + releaseRef(t) + " --release: a first release syncs"
+			fix = "devopsy @" + remote.HintAddress(t) + " --release: a first release syncs"
 		}
 		fmt.Println(st.bad("data        from a sync that did not complete: " + h.partial + ": nothing runs on it until one does: " + fix))
 	case h.left != "":

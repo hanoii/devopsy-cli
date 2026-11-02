@@ -212,11 +212,11 @@ func dataMnt(projectDir string) (string, error) {
 }
 
 // dockerRunIO is dockerRun with stdin and stdout of its own (stdout nil
-// is errOut): docker run args as a container named name, removed when ctx
-// ends, since killing the docker client alone leaves its container
-// running.
-func dockerRunIO(ctx context.Context, name string, stdin io.Reader, stdout io.Writer, args ...string) error {
-	full := append([]string{"run", "--rm", "--name", name}, args...)
+// is errOut): docker run args as the container c, removed when ctx ends,
+// since killing the docker client alone leaves its container running.
+func dockerRunIO(ctx context.Context, c container, stdin io.Reader, stdout io.Writer, args ...string) error {
+	name := c.name
+	full := append(append([]string{"run", "--rm"}, c.runArgs()...), args...)
 	trace(append([]string{"docker"}, full...))
 	cmd := exec.CommandContext(ctx, "docker", full...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, errOut
@@ -358,10 +358,10 @@ func runExport(cwd string, args []string, color bool) int {
 	id := fmt.Sprintf("export.%d", os.Getpid())
 	canClone := false
 	if onTarget && s.Copy == cli.CopyVolumes {
-		if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
+		if err := removeLeftoverClones(composeName(cwd), filepath.Dir(cwd)); err != nil {
 			return fail(err.Error())
 		}
-		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, filepath.Dir(cwd), id, d)
+		canClone = slices.Contains(cli.StoppedNames(set), name) && cloneCheck(ctx, composeName(cwd), filepath.Dir(cwd), id, d)
 	}
 	checked := filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id)
 	if ctx.Err() != nil {
@@ -384,9 +384,9 @@ func runExport(cwd string, args []string, color bool) int {
 	var restoreErr error
 	restored := false
 	if canClone && slices.Contains(stopped, name) {
-		if clone, ok := syncClone(ctx, filepath.Dir(cwd), id, d); ok {
+		if clone, ok := syncClone(ctx, composeName(cwd), filepath.Dir(cwd), id, d); ok {
 			defer func() {
-				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+				if err := removeClone(context.Background(), cloneContainer(composeName(cwd), id).with("-unclone"), filepath.Dir(cwd), filepath.Base(clone)); err != nil {
 					report.Warn("removing the export's clone: " + err.Error())
 				}
 			}()
@@ -434,7 +434,7 @@ func runExport(cwd string, args []string, color bool) int {
 				run = append(run, "-v", v.Name+":/x/"+v.Key+":ro")
 			}
 			run = append(append(run, remote.UtilImage, "sh", "-c", `set -o pipefail; cd /x && find "$@" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T -`, "sh"), append(entries, cli.VolumeKeys(vols)...)...)
-			err = dockerRunIO(ctx, fmt.Sprintf("devopsy-export-%d", os.Getpid()), nil, os.Stdout, run...)
+			err = dockerRunIO(ctx, container{fmt.Sprintf("devopsy-export-%d", os.Getpid()), composeName(cwd), remote.TaskExport}, nil, os.Stdout, run...)
 		}
 	}
 	if err != nil {
@@ -453,10 +453,15 @@ func runExport(cwd string, args []string, color bool) int {
 // exportRecord is what an mnt export of name records of the images that
 // ran on its data: its release's on a target, its container's locally.
 func exportRecord(cwd, projectDir, name string) string {
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
 	if !cli.InRelease(projectDir) {
-		set.List = func(string) ([]images.Service, error) { return localServices(cwd) }
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut,
+			List: func(string) ([]images.Service, error) { return localServices(cwd) }}
 		return set.ExportData("", "", name)
+	}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		report.Warn("not recording the images that ran on " + name + "'s data: " + err.Error())
+		return ""
 	}
 	return set.ExportData(filepath.Dir(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name)
 }
@@ -477,41 +482,49 @@ func localServices(cwd string) ([]images.Service, error) {
 	return images.ParseComposeConfig(out.Bytes())
 }
 
-// imagesShared takes the server's image lock shared (remote.ImagesLockEnv),
+// imagesShared takes the server's image lock shared (imagesLockPath),
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's image: a removal elsewhere, which takes it
 // exclusively, then never frees the image between its pull and its
-// bookmark. Waits up to 10 minutes, saying so; without the variable (a
-// local import) nothing to take.
+// bookmark. Waits up to 10 minutes, saying so.
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	path := os.Getenv(remote.ImagesLockEnv)
-	if path == "" {
-		return func() {}, nil
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("the server's image lock: %w", err)
-	}
-	unlock = func() { f.Close() }
 	deadline := time.Now().Add(10 * time.Minute)
 	for said := false; ; said = true {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
-		if err == nil {
-			return unlock, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			unlock()
-			return nil, fmt.Errorf("the server's image lock: %w", err)
+		unlock, ok, err := imagesLockNow(syscall.LOCK_SH)
+		if err != nil || ok {
+			return unlock, err
 		}
 		if !said {
 			report.Info("waiting for the server's images, held by a removal, up to 10 minutes")
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			unlock()
 			return nil, errors.New("the server's images are still held after 10 minutes")
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// imagesLockNow takes the server's image lock (imagesLockPath) shared
+// or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at once:
+// ok false when busy. Only on a server: every caller runs in a release
+// there.
+func imagesLockNow(how int) (unlock func(), ok bool, err error) {
+	path, err := imagesLockPath()
+	if err != nil {
+		return nil, false, err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+	}
+	return func() { f.Close() }, true, nil
 }
 
 // exportHeader writes an export's record as the tar's first header, a
@@ -935,8 +948,8 @@ esac
 `
 
 // extractEntries empties and extracts each entry of mnt the tar in spool
-// carries (emptyAndExtract), in a util container of its own, named
-// name-extract-<n>, that mounts that entry alone, without a network, and
+// carries (emptyAndExtract), in a util container of its own, c named
+// c.name-extract-<n>, that mounts that entry alone, without a network, and
 // reads the whole spool for that entry's members. Why one per entry: the
 // service whose entry it is may run meanwhile (its stop label says, and
 // never is the default), and its owner can swap a directory the
@@ -948,9 +961,9 @@ esac
 // empty directory or file as the tar has it, for the container to mount;
 // a named volume (project's, by its key) is made when missing as compose
 // would, and mounted by name.
-func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, name, project string) error {
+func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, c container, project string) error {
 	for i, e := range entries {
-		if err := extractEntry(ctx, mnt, spool, e, fmt.Sprintf("%s-extract-%d", name, i), project); err != nil {
+		if err := extractEntry(ctx, mnt, spool, e, c.with(fmt.Sprintf("-extract-%d", i)), project); err != nil {
 			return err
 		}
 	}
@@ -959,8 +972,8 @@ func extractEntries(ctx context.Context, mnt, spool string, entries []tarEntry, 
 
 // extractEntry empties and extracts the entry or volume e from the tar
 // file tarFile (plain, or a snapshot's .tar.zst), as extractEntries does
-// each, in the util container name, which mounts the file read-only.
-func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, project string) error {
+// each, in the util container c, which mounts the file read-only.
+func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, c container, project string) error {
 	var mount string
 	var err error
 	if e.volume != nil {
@@ -985,7 +998,7 @@ func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, pr
 		return err
 	}
 	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
-	if err := dockerRunFresh(ctx, name, nil, run...); err != nil {
+	if err := dockerRunFresh(ctx, c, run...); err != nil {
 		what := "mnt/" + e.name
 		if e.volume != nil {
 			what = "the volume " + e.name
@@ -1011,8 +1024,8 @@ func readyEntry(mnt string, e tarEntry) error {
 	return f.Close()
 }
 
-// runImport implements devopsy --import <service> [--yes] [--resolved]:
-// stdin, spooled to a file until complete, into the service. --yes is
+// runImport implements devopsy --import <service> [--accept-image
+// <service>] [--yes] [--resolved]: stdin, spooled to a file until complete, into the service. --yes is
 // what a target's session passes after asking: locally nothing asks.
 //
 // Nothing is replaced until the data has fully arrived. Before the first
@@ -1071,8 +1084,9 @@ func runImport(cwd string, args []string, color bool) int {
 	base := filepath.Dir(cwd)
 	var prior syncRecord
 	if onTarget {
-		// The writer never holds the release lock (fds 9 and 8, from
-		// ImportScript): one a killed devopsy left would block every
+		// The writer never holds the release lock (fd 9, from
+		// ImportScript), nor fd 8, a script's image lock should one that
+		// holds it run this: one a killed devopsy left would block every
 		// command for its whole load. This devopsy keeps them to its end.
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
@@ -1214,8 +1228,11 @@ func runImport(cwd string, args []string, color bool) int {
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 	if s.Copy == cli.CopyVolumes && onTarget {
 		if record = images.DataFor(tarRecord(spool), name); record != "" {
-			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages(),
-				Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv)}
+			var err error
+			if imgs, err = serverImages(cwd, composeName(cwd), errOut); err != nil {
+				return fail(err.Error() + ": nothing imported")
+			}
+			imgs.Address, imgs.Accept = targetAddress(cwd), acceptedImages()
 			unlock, err := imagesShared(ctx)
 			if err != nil {
 				return fail(err.Error() + ": nothing imported")
@@ -1316,7 +1333,7 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		} else {
 			report.Info("importing " + name + ": mnt/" + strings.Join(names, ", mnt/") + " replaced")
-			cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+			cname := importContainer(cwd)
 			err = extractEntries(ctx, mnt, spool, entries, cname, composeName(cwd))
 			// What it extracted goes to its owner before the import counts
 			// as complete: a tar made anywhere carries its maker's owners.
@@ -1330,7 +1347,7 @@ func runImport(cwd string, args []string, color bool) int {
 				}
 			}
 			if err == nil {
-				err = ownMnt(ctx, mnt, owned, cname+"-owners")
+				err = ownMnt(ctx, mnt, owned, cname.with("-owners"))
 			}
 		}
 	}
@@ -1426,7 +1443,11 @@ func importedImages(cwd, base, name string, services []cli.SyncService, resolved
 		if s.Name != name || s.Copy != cli.CopyVolumes {
 			continue
 		}
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
+			continue
+		}
 		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 		record := set.Imported
 		if !resolvedSince.IsZero() {
@@ -1561,7 +1582,7 @@ func runResolved(cwd, name string) int {
 
 // resolvedOwners gives the owned entries of name, when it is an mnt
 // service, to their owners (ownMnt), in containers named as an import's
-// owners' are (importContainers), for --resolved.
+// owners' are (importContainer), for --resolved.
 func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name string) error {
 	s, ok := cli.SyncFind(services, name)
 	if !ok || s.Copy != cli.CopyVolumes {
@@ -1584,7 +1605,7 @@ func resolvedOwners(cwd, projectDir string, services []cli.SyncService, name str
 	if err != nil {
 		return err
 	}
-	return ownMnt(context.Background(), mnt, owned, fmt.Sprintf("%s%s-%d-owners", remote.ImportContainerPrefix, composeName(cwd), os.Getpid()))
+	return ownMnt(context.Background(), mnt, owned, importContainer(cwd).with("-owners"))
 }
 
 // chunk is a read of a stream: data, or its error.
@@ -1714,7 +1735,8 @@ func projectVar(cwd, key string) string {
 	return ""
 }
 
-// importArgs parses --import's arguments: <service> [--yes] [--resolved].
+// importArgs parses --import's arguments: <service> [--accept-image
+// <service>] [--yes] [--resolved].
 func importArgs(args []string) (name string, yes, resolved bool, accept []string, err error) {
 	usage := errors.New("usage: devopsy [@<target>] " + cli.ImportFlag + " <service> [--accept-image <service>] [--yes] [--resolved]")
 	for i := 0; i < len(args); i++ {
@@ -1762,7 +1784,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	defer r.Close()
 	defer w.Close()
 	defer heartbeat(w)()
-	code, err := remote.SSHWith(t, remote.Bounded, "export "+remote.SyncWatchEnv+"=1\n"+remote.HeartbeatLine()+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
+	code, err := remote.SSHWith(t, nil, "export "+remote.SyncWatchEnv+"=1\n"+remote.HeartbeatLine()+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -1866,7 +1888,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		// Gated: the data goes once the script holds the release lock,
 		// so a session cut while it waits leaves an empty stdin there,
 		// and nothing stops.
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end, strings.Join(accept, " ")), r, nil, mw, false, nil)
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, nil, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end, strings.Join(accept, " ")), r, nil, mw, false, nil)
 		done <- result{code, err}
 	}()
 	var res result
@@ -1928,8 +1950,8 @@ wait:
 
 // runRemoteResolved implements devopsy @<target> --import <service>
 // --resolved: a read-only session finds the mark and what the import
-// kept down (refusing there: no mark, another service's, a sync's, or
-// the import still running), asks for the environment's full name, then
+// kept down (refusing there: no mark, another service's, a sync's, a
+// restore's, or the import still running), asks for the environment's full name, then
 // a session under the release lock checks again and starts them.
 func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int {
 	fail := func(msg string) int {

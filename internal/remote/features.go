@@ -52,10 +52,20 @@ var namedFeatures = []struct {
 	// The images' history and holds: a release's img record, names, ran
 	// and restore against the release it replaces, a sync's data,
 	// sync-check and sync-done, and every script defining img (its
-	// '--images' line, found by its '--mode': it passes --address too,
-	// and an older devopsy refuses either as usage, removals included,
-	// after taking the locks).
-	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images'.*'--mode'`)},
+	// '--images' line, found by its '--name': it passes --address too,
+	// which an older devopsy refuses as usage, removals included, after
+	// taking the locks).
+	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images' '--name'`)},
+	// The server's own images settings: each release's mode from its
+	// record (images.ModeOf), the image lock and the project's record
+	// from the release root, found by the server's devopsy itself
+	// (cmd/devopsy's serverImages) for --images, --export, --import and
+	// --snapshot-step, which the scripts told before (--mode and --left of
+	// --images, three variables exported around the others). An older
+	// server, told nothing, would take build mode for every release
+	// (restoring a release made in image mode as if it had built its
+	// images) and hold no lock and no record.
+	{RecordModeFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--(images|export|import|snapshot-step)\b`)},
 	// devopsy.mnt.owner in copies: the child's list gains each entry's
 	// owner, which the parent's rsync applies (--chown), and an mnt
 	// import gives what it extracted to its owner. An older parent would
@@ -82,7 +92,21 @@ var namedFeatures = []struct {
 	// UtilImage is a named feature of its own.
 	{ReleaseSnapshotsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--check-mounts[ '\\]{1,8}restored[ '\\"]{1,8}(restart|\$snap)`)},
 	{ReleaseSnapshotsFeature, regexp.MustCompile(regexp.QuoteMeta("devopsy-util:3"))},
+	// devopsy's containers found by their labels (ContainerLabels): the
+	// receive script a push writes runs the child's rsync, which the
+	// child's holder removes by its labels once it decides. An older
+	// parent would start it unlabeled, and a write could outlive its
+	// sync; an older child finds it by its name, still the same.
+	{ContainerLabelsFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push\b`)},
 }
+
+// ContainerLabelsFeature is the named feature of devopsy's containers'
+// labels (EnvLabel, TaskLabel).
+const ContainerLabelsFeature = "container-labels"
+
+// RecordModeFeature is the named feature of the server finding its
+// images' settings itself, each release's mode from its record first.
+const RecordModeFeature = "record-mode"
 
 // ReleaseSnapshotsFeature is release snapshots' named feature.
 const ReleaseSnapshotsFeature = "release-snapshots"

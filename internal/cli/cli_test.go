@@ -121,14 +121,14 @@ func TestBuildComposePassthrough(t *testing.T) {
 	if dir, _ := envValue(t, plan.Env, "DEVOPSY_PROJECT_DIR"); dir != filepath.Join(root, ProjectDirName) {
 		t.Fatalf("DEVOPSY_PROJECT_DIR %q", dir)
 	}
-	// ColorEnv: a terminal at the other end of the pipe (a session from a
+	// remote.ColorEnv: a terminal at the other end of the pipe (a session from a
 	// terminal), so Compose colors its output; FORCE_COLOR too, unless 0,
 	// and NO_COLOR wins.
 	for _, c := range []struct {
 		env     []string
 		colored bool
 	}{
-		{[]string{ColorEnv + "=1"}, true},
+		{[]string{remote.ColorEnv + "=1"}, true},
 		{[]string{"FORCE_COLOR=1"}, true},
 		{[]string{"FORCE_COLOR=0"}, false},
 		{[]string{"FORCE_COLOR=false"}, false},

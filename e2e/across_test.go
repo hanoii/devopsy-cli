@@ -76,7 +76,7 @@ func TestSyncAcrossServers(t *testing.T) {
 // The operator cut silently from the parent's server mid-import, the
 // child's still reachable: the push gives up (its heartbeat's silence),
 // which ends the import on the child's server through its session, the
-// operator's ssh to the parent gives up (KeepAlive) and answers abort,
+// operator's ssh to the parent gives up (its keepalive) and answers abort,
 // and the child, written in part, stays down and marked.
 func TestSyncAcrossDropParent(t *testing.T) {
 	dir := acrossProject(t, "acrossdrop")
@@ -145,7 +145,7 @@ func exists2(t *testing.T, path string) bool {
 
 // The operator cut silently from the child's server mid-import, the
 // parent's still reachable: devopsy sees the holder's session gone
-// (KeepAlive) and stops the push, whose import on the child's server
+// (its keepalive) and stops the push, whose import on the child's server
 // ends with the push's session to it; the holder, without an answer,
 // decides from what was written: partial, the child down and marked, the
 // parent restored.

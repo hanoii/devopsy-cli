@@ -5,8 +5,9 @@ package remote
 // reads it with readConfigFile so it never drifts from what devopsy accepts.
 const ProjectSchema = `# .devopsy/config.yaml: a project's devopsy config. Committed; no secrets,
 # no servers. .devopsy/config.local.yaml (not committed) is read over it:
-# top-level keys replace, defaults merge, an environment replaces the one
-# of the same name. Unknown keys are errors.
+# top-level keys replace; defaults, and an environment over the one of the
+# same name, merge as defaults do (~ removes, parent: ~ too). Unknown keys
+# are errors.
 
 # Required for anything remote: the project's name on every server (its
 # directory under the server's release root, and the start of its compose

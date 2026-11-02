@@ -205,27 +205,23 @@ case "$*" in
       fi
       case " ${FAKE_ONEOFF:-} " in *" $s "*) printf '{"Name":"%s-%s-run-1","Service":"%s","State":"running","Labels":"com.docker.compose.oneoff=True"}\n' "${COMPOSE_PROJECT_NAME:-}" "$s" "$s" ;; esac
     done ;;
-  # FAKE_STALE_DAEMON: an rsync daemon an earlier push from this parent
-  # left, listed by its label.
-  "ps -aq --filter label=devopsy.data.parent="*) echo "${FAKE_STALE_DAEMON:-}" ;;
-  # FAKE_IMPORT_CONTAINERS: containers an --import left
-  # (devopsy-import-<compose project>-<pid>-extract|owners-<n>), and
-  # FAKE_OWNERS_CONTAINERS an owners' step's
-  # (devopsy-owners-<compose project>-<pid>-<n>), listed by a name filter,
-  # a regular expression, as Docker's. FAKE_SAME_NAME: a filter naming
-  # one container exactly finds it, as one a killed devopsy whose pid
-  # this one reuses left.
-  "ps -aq --filter name=^/?devopsy-"*)
-    f=${4#name=}
-    case $f in
-      *'[0-9]'*) for c in ${FAKE_IMPORT_CONTAINERS:-} ${FAKE_OWNERS_CONTAINERS:-}; do ! printf '%s\n' "$c" | grep -Eq -- "$f" || echo "$c"; done ;;
-      *) [ -z "${FAKE_SAME_NAME:-}" ] || { f=${f#^/?}; echo "${f%\$}"; } ;;
-    esac ;;
-  # FAKE_SYNC_CONTAINERS: containers a sync left (devopsy-sync-<id>-...),
-  # listed by a name filter.
-  "ps -aq --filter name="*)
+  # FAKE_LEFT: containers of devopsy's a devopsy killed outright left,
+  # <name>:<devopsy.env>:<devopsy.task> each, listed by their labels
+  # (every --filter label= matching, as Docker's).
+  "ps -aq --filter label="*)
     [ ! -e "$DOCKER_LOG.rm-done" ] || exit 0
-    for c in ${FAKE_SYNC_CONTAINERS:-}; do case $c in "${4#name=}"*) echo "$c" ;; esac; done ;;
+    fe= ft=
+    for a; do case $a in label=devopsy.env=*) fe=${a#label=devopsy.env=} ;; label=devopsy.task=*) ft=${a#label=devopsy.task=} ;; label=*) echo "unknown filter $a" >&2; exit 1 ;; esac; done
+    for c in ${FAKE_LEFT:-}; do
+      r=${c#*:}
+      [ "${r%%:*}" = "$fe" ] || continue
+      [ -z "$ft" ] || [ "${r#*:}" = "$ft" ] || continue
+      echo "${c%%:*}"
+    done ;;
+  # FAKE_SAME_NAME: a filter naming one container exactly finds it, as
+  # one a killed devopsy whose pid this one reuses left.
+  "ps -aq --filter name=^/?devopsy-"*)
+    [ -z "${FAKE_SAME_NAME:-}" ] || { f=${4#name=^/?}; echo "${f%\$}"; } ;;
   # FAKE_RM_IN_PROGRESS: a sync's containers removed meanwhile by
   # another (the push's own removal), which Docker refuses as in
   # progress; they are gone right after.
@@ -326,7 +322,7 @@ case "$*" in
   "run --rm --name devopsy-sync-"*"-wipe "*)
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     find "$dst" -mindepth 1 -delete ;;
-  "run --rm --name devopsy-sync-"*"-receive --network host "*" rsync://127.0.0.1:"*"/vol/"*)
+  "run --rm --name devopsy-sync-"*"-receive "*" --network host "*" rsync://127.0.0.1:"*"/vol/"*)
     # A volume, from the daemon's mount of it.
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     m=${last2#rsync://127.0.0.1:*/}; m=${m%/}
@@ -335,7 +331,7 @@ case "$*" in
     for a; do case $a in *:/vol/*) to=${a%%:*} ;; esac; done
     case $from in /*) ;; *) from="$vols/$from" ;; esac
     mkdir -p "$vols/$to" && cp -R "$from/." "$vols/$to" ;;
-  "run --rm --name devopsy-sync-"*"-receive --network host "*)
+  "run --rm --name devopsy-sync-"*"-receive "*" --network host "*)
     [ -z "${FAIL_RSYNC:-}" ] || exit "$FAIL_RSYNC"
     for a; do case $a in *:/mnt) dst=${a%:/mnt} ;; esac; done
     src=$(cat "$DOCKER_LOG.daemon"); d=${last#/mnt/}
@@ -407,7 +403,7 @@ case "$*" in
     if [ -n "$vn" ]; then st=$(mktemp -d); cp -R "$vols/$vn" "$st/$tentry"; ftar "$st" "$tentry"; r=$?; rm -rf "$st"; exit $r; fi
     case $m in */..) ftar "${m%/..}" "$tentry"; exit $? ;; esac
     ftar "$m/$tdir" "$tentry" ;;
-  "run --rm --network none "*" du -sk "*)
+  "run --rm --label "*" du -sk "*)
     w=0; for a; do [ "$w" = 1 ] && printf '%s\t%s\n' "${FAKE_DU:-4}" "$a"; [ "$a" = -sk ] && w=1; done ;;
   # A clone into the child's entry or volume (--mount
   # type=bind|volume,source=<path or volume>,target=/s|/d), emptied first:
@@ -730,7 +726,7 @@ func TestSyncSameHost(t *testing.T) {
 	}
 	// The push holds the parent's release lock shared and its sync lock
 	// exclusively; the holder the child's release lock.
-	if i, j := strings.Index(docker, "flock -n -s 9"), strings.Index(docker, "flock -n 8"); i < 0 || j < i || !strings.Contains(docker, "flock -n 9\n") {
+	if i, j := strings.Index(docker, "flock -n -s 9"), strings.Index(docker, "flock -n 5"); i < 0 || j < i || !strings.Contains(docker, "flock -n 9\n") {
 		t.Errorf("locks:\n%s", docker)
 	}
 	// Files vanished during the copy (rsync's 24, a live service's
@@ -1060,13 +1056,33 @@ func TestSyncReflinkClone(t *testing.T) {
 	// first.
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
 	s.labels("FAKE_APP=keep\nFAKE_DB=stream")
+	write(t, s.log+".shop-prod", "FAKE_APP=keep\nFAKE_DB=stream\nFAKE_LEFT=old-push-clone:shop-prod:source\n", 0o644)
+	s.logs()
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || !strings.Contains(out, "a clone an earlier copy left") {
 		t.Fatalf("a leftover clone (%d):\n%s", code, out)
 	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-push-clone") || !strings.Contains(docker, "/s/"+remote.SyncClonePrefix+"old") || strings.Index(docker, "rm -f old-push-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("the push did not end the leftover clone's containers, then remove it:\n%s", docker)
+	}
 	s.labels("")
 	noClone("a leftover clone")
+	// And an export on a target, which holds the sync lock as a push does.
 	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
-	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-clone\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_LEFT=old-export-clone:shop-prod:source\n", 0o644)
+	cmd = exec.Command(binary, "@prod", "--export", "db")
+	cmd.Dir, cmd.Env = s.project, append(append([]string{}, s.env...), reflink...)
+	stderr.Reset()
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	if err := cmd.Run(); err != nil || !strings.Contains(stderr.String(), "a clone an earlier copy left") {
+		t.Fatalf("an export over a leftover clone: %v\n%s", err, stderr.String())
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f old-export-clone") || strings.Index(docker, "rm -f old-export-clone") > strings.Index(docker, "/s/"+remote.SyncClonePrefix+"old") {
+		t.Errorf("the export did not end the leftover clone's containers, then remove it:\n%s", docker)
+	}
+	os.Remove(s.log + ".shop-prod")
+	noClone("an export's leftover clone")
+	write(t, filepath.Join(clone+"old", "mnt", "db", "ibdata"), "old\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_LEFT=old-clone:shop-prod:source\n", 0o644)
 	s.logs()
 	if out, code := s.run(nil, "@prod", "--destroy", "--yes"); code != 0 {
 		t.Fatalf("--destroy (%d):\n%s", code, out)
@@ -1100,7 +1116,7 @@ func TestSyncReflinkShare(t *testing.T) {
 		t.Fatalf("shared (%d):\n%s\n%s", code, out, docker)
 	}
 	// db rsynced, storage cloned, then given to its owner; never rsynced.
-	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-[0-9.a-f]+-share-1 --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:3`).MatchString(docker) {
+	if !strings.Contains(docker, "/src/db/ /dst/db/") || strings.Contains(docker, "/src/storage/") || !regexp.MustCompile(`run --rm --name devopsy-sync-([0-9.a-f]+)-share-1 --label devopsy\.env=shop-dev --label devopsy\.task=sync-[0-9.a-f]+ --network none --mount type=bind,source=[^ ]*,target=/s,readonly --mount type=bind,source=`+regexp.QuoteMeta(filepath.Join(s.mnt("dev"), "storage"))+`,target=/d devopsy-util:3`).MatchString(docker) {
 		t.Errorf("shared docker:\n%s", docker)
 	}
 	if i, j := strings.Index(docker, "-share-1 "), strings.Index(docker, "-owners-0 "); i < 0 || j < i {
@@ -1197,7 +1213,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 
 	// A daemon an earlier push from prod left (its devopsy killed
 	// outright) goes before this push starts its own.
-	write(t, s.log+".shop-prod", "FAKE_STALE_DAEMON=old-daemon\n", 0o644)
+	write(t, s.log+".shop-prod", "FAKE_LEFT=old-daemon:shop-prod:source\n", 0o644)
 	out, code := s.run(agent, "@devopsy@two:dev", "--release")
 	docker, ssh := s.logs()
 	if rm, run := strings.Index(docker, "rm -f old-daemon"), strings.Index(docker, "run --rm -d --name devopsy-sync-"); rm < 0 || run < rm {
@@ -1218,25 +1234,25 @@ func TestSyncDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
+	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ForwardAgent=yes -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
 	// The parent's sessions to the child: never the forwarded agent, no
 	// password prompt, and a short connect timeout.
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
-	// Every session of the release keeps itself alive: the upload, the
-	// holder, the push, the push's look at the child's services and its
-	// util image (--sync-exec), the receive, the log's save, and the read
-	// of the parent's variables (bounded: an unreachable parent fails in
-	// seconds).
-	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 8 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	// Every session of the release bounds its connection and keeps itself
+	// alive: the upload, the holder, the push, the push's look at the
+	// child's services and its util image (--sync-exec), the receive, the
+	// log's save, and the read of the parent's variables (an unreachable
+	// parent fails in seconds).
+	keep := "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
-	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
+	for _, want := range []string{"-daemon --label devopsy.env=shop-prod --label devopsy.task=source -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
 		if !strings.Contains(docker, want) {
 			t.Errorf("missing %q in:\n%s", want, docker)
 		}
@@ -1288,7 +1304,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if out, code := s.run(execEnv, "--sync-exec", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
 		t.Fatalf("--sync-exec (%d):\n%s", code, out)
 	}
-	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" "+keep+" -T -p 22 devopsy@two") {
+	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") {
 		t.Errorf("--sync-exec session: %s", ssh)
 	}
 
@@ -1589,8 +1605,8 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret") {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 4 {
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") != 4 {
 		t.Errorf("the child's list, its util image (app's storage is rsynced), the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {
@@ -2730,7 +2746,7 @@ func TestExportImport(t *testing.T) {
 	}
 	// The spool mounted read-only and read there, never on the
 	// container's stdin (Docker's stream is slow).
-	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy-util:3 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
+	if docker, _ := s.logs(); !regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-extract-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=`+regexp.QuoteMeta(mnt)+`/storage,target=/mnt/storage --mount type=bind,source=[^ ]*/\.devopsy-sync\.stream\.[^ ,]*,target=/in/\.devopsy-sync\.stream\.[^ ,]*,readonly devopsy-util:3 sh -c `).MatchString(docker) || !strings.Contains(docker, `*) exec tar -C /mnt -xf "$src" --numeric-owner --overwrite --no-wildcards -- "$@" ;;`) || !regexp.MustCompile(` sh /in/\.devopsy-sync\.stream\.[^ ]* storage \./storage storage\n`).MatchString(docker) || strings.Contains(docker, "-extract-0 -i ") || strings.Contains(docker, ":/mnt devopsy-util") || strings.Contains(docker, " stop app") || strings.Contains(docker, "-owners-") {
 		t.Errorf("rsync import:\n%s", docker)
 	}
 	// An entry that is a file: made empty when missing, for its
@@ -2756,7 +2772,7 @@ func TestExportImport(t *testing.T) {
 	// user writes the Mac's files anyway.
 	_, errs, code = s.runIO([]string{"FAKE_APP_OWNER=10001:10001"}, tarOf(t, map[string]string{"storage/new.txt": "new\n"}), "--import", "app")
 	docker, _ = s.logs()
-	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu`).MatchString(docker)
+	owners := regexp.MustCompile(`run --rm --name devopsy-import-shop-[0-9]+-owners-0 --label devopsy.env=shop --label devopsy.task=import --network none --mount type=bind,source=` + regexp.QuoteMeta(mnt) + `/storage,target=/mnt/storage devopsy-util:3 sh -c set -eu`).MatchString(docker)
 	if code != 0 || owners != (runtime.GOOS != "darwin") || strings.Contains(errs, "devopsy: giving mnt/storage to 10001:10001\n") != (runtime.GOOS != "darwin") || strings.Contains(docker, ":/mnt devopsy-util") {
 		t.Errorf("--import of an owned entry (%d), the owners' container %v:\n%s\n%s", code, owners, errs, docker)
 	}
@@ -3029,7 +3045,7 @@ func TestExportImport(t *testing.T) {
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\n", 0o644)
 	out, errs, code = s.runIO(env, nil, "@prod", "--export", "db")
 	docker, _ = s.logs()
-	if code != 0 || string(out) != "dump of db from shop-prod custom=db stop=\n" || !strings.Contains(docker, "flock -n -s 9\nflock -n 8\n") {
+	if code != 0 || string(out) != "dump of db from shop-prod custom=db stop=\n" || !strings.Contains(docker, "flock -n -s 9\nflock -n 5\n") {
 		t.Fatalf("@prod --export (%d): %q\n%s\n%s", code, out, errs, docker)
 	}
 	// An import asks for the environment's name, on the terminal: without
@@ -3741,20 +3757,21 @@ func TestSyncSettleKeepsKilledHolderStopsDown(t *testing.T) {
 }
 
 // The sync log, appended to by every sync whose session went, keeps its
-// last lines once too big.
+// last lines once longer, as the holder's shell keeps them (remote's
+// TestTrimSyncLogScript).
 func TestTrimSyncLog(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), syncLog)
-	line := strings.Repeat("x", 99) + "\n"
-	write(t, path, strings.Repeat(line, remote.SyncLogMax/len(line)+10)+"last\n", 0o644)
+	write(t, path, strings.Repeat("x\n", remote.SyncLogLines+10)+"last\n", 0o644)
 	trimSyncLog(path)
 	data := readString(path)
-	if n := strings.Count(data, "\n"); n != remote.SyncLogKeep || !strings.HasSuffix(data, "last\n") {
+	if n := strings.Count(data, "\n"); n != remote.SyncLogLines || !strings.HasSuffix(data, "last\n") {
 		t.Errorf("%d lines, ends %q", n, data[len(data)-10:])
 	}
-	write(t, path, "small\n", 0o644)
-	if trimSyncLog(path); readString(path) != "small\n" {
-		t.Errorf("a small log changed: %q", readString(path))
+	small := strings.Repeat("x\n", remote.SyncLogLines-1) + "small\n"
+	write(t, path, small, 0o644)
+	if trimSyncLog(path); readString(path) != small {
+		t.Errorf("a log of %d lines changed", remote.SyncLogLines)
 	}
 }
 
@@ -3926,7 +3943,10 @@ func TestSyncEndWriters(t *testing.T) {
 		defer func() { _ = c.cmd.Process.Kill() }()
 	}
 	write(t, filepath.Join(dev, remote.SyncTakenFile), "devopsy@one:prod 1.2\n"+remote.WriterLine("db", imp.Process.Pid, "running")+"\n"+remote.WriterLine("db", other.Process.Pid, "running")+"\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_SYNC_CONTAINERS='devopsy-sync-1.2-receive devopsy-sync-9.9-rsync-0'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
+	// The sync's own containers (its receive, a reset's wipe) go; another
+	// sync's, and the parent's clone of this very sync (its side's, which
+	// the push removes itself), stay.
+	write(t, s.log+".shop-dev", "FAKE_ONEOFF=db\nFAKE_LEFT='devopsy-sync-1.2-receive:shop-dev:sync-1.2 devopsy-sync-1.2-wipe:shop-dev:sync-1.2 devopsy-sync-9.9-rsync-0:shop-dev:sync-9.9 devopsy-sync-parent-1.2-clone:shop-prod:source'\nFAKE_RM_IN_PROGRESS=1\n", 0o644)
 	s.logs()
 	cmd := exec.Command(binary, "--sync-services", "finish", "partial")
 	cmd.Dir = filepath.Join(dev, "current")
@@ -3940,6 +3960,12 @@ func TestSyncEndWriters(t *testing.T) {
 	}
 	if strings.Contains(docker, "devopsy-sync-9.9") {
 		t.Errorf("another sync's container removed:\n%s", docker)
+	}
+	if !regexp.MustCompile(`rm -f [^\n]*devopsy-sync-1\.2-wipe`).MatchString(docker) {
+		t.Errorf("the sync's wipe container not removed:\n%s", docker)
+	}
+	if strings.Contains(docker, "devopsy-sync-parent-1.2") {
+		t.Errorf("the parent's clone removed by the child's holder:\n%s", docker)
 	}
 	// One whose removal Docker had under way already (the push's own,
 	// cancelled) is gone all the same: no error.
@@ -4011,15 +4037,35 @@ func TestDestroyEndsWriters(t *testing.T) {
 		t.Fatalf("release (%d):\n%s", code, out)
 	}
 	write(t, filepath.Join(s.root, "shop", "dev", remote.SyncStartedFile), "devopsy@one:prod 1.2\n", 0o644)
-	write(t, s.log+".shop-dev", "FAKE_SYNC_CONTAINERS=devopsy-sync-1.2-rsync-0\nFAKE_IMPORT_CONTAINERS=devopsy-import-shop-dev-42-extract-0\nFAKE_OWNERS_CONTAINERS=devopsy-owners-shop-dev-42-0\n", 0o644)
+	// Every container of devopsy's this environment has goes, whatever
+	// it does (another sync's into it, a snapshot's: --destroy holds every
+	// lock, so each is a leftover); never another environment's
+	// (shop-dev-eu's, shop-dev-1's).
+	write(t, s.log+".shop-dev", "FAKE_LEFT='devopsy-sync-1.2-rsync-0:shop-dev:sync-1.2 devopsy-import-shop-dev-42-extract-0:shop-dev:import devopsy-import-shop-dev-eu-42-extract-0:shop-dev-eu:import devopsy-owners-shop-dev-42-0:shop-dev:owners devopsy-owners-shop-dev-1-42-0:shop-dev-1:owners devopsy-sync-9.9-rsync-0:shop-dev:sync-9.9 devopsy-snapshot-shop-dev-1-tar:shop-dev:snapshot'\n", 0o644)
 	s.logs()
 	out, code := s.run(nil, "@dev", "--destroy", "--yes")
 	docker, _ := s.logs()
 	// And an --import's container a killed devopsy left, and an owners'
 	// step's: not Compose's.
-	rm, rmImport, rmOwners, down := strings.Index(docker, "rm -f devopsy-sync-1.2-rsync-0"), strings.Index(docker, "rm -f devopsy-import-shop-dev-42-extract-0"), strings.Index(docker, "rm -f devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
+	removed := func(name string) int {
+		if m := regexp.MustCompile(`rm -f [^\n]*` + regexp.QuoteMeta(name) + `( |\n)`).FindStringIndex(docker); m != nil {
+			return m[0]
+		}
+		return -1
+	}
+	rm, rmImport, rmOwners, down := removed("devopsy-sync-1.2-rsync-0"), removed("devopsy-import-shop-dev-42-extract-0"), removed("devopsy-owners-shop-dev-42-0"), strings.Index(docker, " down ")
 	if code != 0 || rm < 0 || rmImport < 0 || rmOwners < 0 || down < 0 || rm > down || rmImport > down || rmOwners > down {
 		t.Errorf("--destroy with a sync's record left (%d):\n%s\n%s", code, out, docker)
+	}
+	for _, own := range []string{"devopsy-sync-9.9-rsync-0", "devopsy-snapshot-shop-dev-1-tar"} {
+		if i := removed(own); i < 0 || i > down {
+			t.Errorf("--destroy did not remove %s before down:\n%s", own, docker)
+		}
+	}
+	for _, other := range []string{"devopsy-import-shop-dev-eu-42-extract-0", "devopsy-owners-shop-dev-1-42-0"} {
+		if removed(other) >= 0 {
+			t.Errorf("--destroy removed %s, not its own:\n%s", other, docker)
+		}
 	}
 }
 

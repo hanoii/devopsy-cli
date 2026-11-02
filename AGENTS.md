@@ -202,7 +202,9 @@ the rule, why, and where it lives.
   compose's), times on lines (the logs have them; a total, when one is
   wanted, from the local devopsy's own clock, in the message).
 - **Hints name the address as typed** (the alias, else the resolved
-  address: `targetRef`, `hintAddress` in scripts). Why: the command
+  address: `targetRef`; a hint to release, roll back or sync, locally or
+  in a script, the alias only with `source:`: `remote.HintAddress`).
+  Why: the command
   works when copied, and an alias with `source:` releases only from its
   checkout.
 - **Every flag is one entry in `cli.Flags`,** by task group, with its
@@ -256,13 +258,13 @@ the rule, why, and where it lives.
 - **Few dependencies, standard library first. Linux and macOS only.**
 - **Color only on a terminal** without `NO_COLOR` (`styleFor`), or
   forced (`cli.ColorForced`: `FORCE_COLOR` not `0` or `false`, or the
-  internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
+  internal `remote.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
   in a session it would reach every tool there, which would then color
   what scripts capture. Colors go by what a line starts with, never its
   words (`report.Paint`): devopsy's errors red, warnings yellow, info
   cyan, debug, trace and the `| ` bar dim, a `$ ` command bold;
-  Compose's done steps green, steps on the way dim, another tool's
-  errors red. A session's lines are colored locally as they arrive
+  Compose's done steps green, steps on the way dim; another tool's
+  lines as they are. A session's lines are colored locally as they arrive
   (`report.Colorize`, line-buffered, terminal writers only), lines
   colored already left as they are; `remote.Color` exports
   `DEVOPSY_INTERNAL_COLOR`, so devopsy on the server colors its own the
@@ -321,7 +323,9 @@ Where a target's names, server and settings come from. Governed by
 - **Three files, and unknown keys are errors:** the project's
   `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`,
   `public:`, `releases: {keep}`, `defaults:`, `environments:`), its
-  `config.local.yaml` over it, and the user's
+  `config.local.yaml` over it (top-level keys replace; `defaults:` and
+  an environment of the same name merge as below, `parent: ~` too,
+  `mergeEnvironment`), and the user's
   `~/.config/devopsy/config.yaml` (`aliases:`; on servers `releases:`
   and `snapshots: {root, max_keep, mirror}`).
   Never `~/.devopsy`: discovery would take the home directory for a
@@ -448,11 +452,30 @@ before changing anything".
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
-  `--mode` and `--address`, which an older `--images` refuses as usage
+  `--name` and `--address`, which an older `--images` refuses as usage
   after the locks: every activation, holder, parent check and removal
   needs it, so an older server refuses before anything changes, naming
   the upgrade. `childNeeds` does not add it: the parent's sessions to the
   child call none of them, and the child's holder needs it itself.
+- **The server's images find their settings themselves, a named
+  feature, `record-mode`** (decided 2026-11-02): each release's mode
+  from its own record (`images.ModeOf`, `RecordFile`), the image lock
+  and the project's record of names left (`images.LeftFile`) from the
+  release root (`ReleaseSettings`) and the environment's directory
+  (`images.BaseEnv`), in one constructor, `serverImages`
+  (`cmd/devopsy/images.go`), behind every `Set` on a server; `img`
+  passes only `--name` and `--address`. Why: the scripts passed the
+  operator's checkout's mode (`--mode`) to every `img`, rollbacks,
+  restores and removals of releases made in the other mode included,
+  so a release made in build mode was restored as pulled from a
+  checkout now in image mode (the newer build left under its code),
+  and the reverse put a stale bookmark on a pushed name; and three
+  variables carried the lock and the record, which one script
+  (`SnapshotImportScript`) lacked. Found by every script that runs the
+  server's images (`--images`, `--export`, `--import`,
+  `--snapshot-step`): an older server, told nothing, would take build
+  mode for every release and hold no lock. The scripts' fetch asks
+  `img mode <release>` for the same reason (`fetchImages`).
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -670,8 +693,7 @@ step's rules):
   several lines, and `KEY: value`, which compose's parser reads as
   `KEY=value`. The result goes into place in one rename beside what a
   link points to, with the file's mode, so no command reads it empty or
-  cut (a `cat` into it truncated it first); a file of another user's is
-  written over in place. Inherited values are written under `umask 077`.
+  cut (a `cat` into it truncated it first), whoever owned it. Inherited values are written under `umask 077`.
 - **`--vars get` is the environment's value; edits stay in their
   file** (decided 2026-10-27: a child's `get` said "not set" of a value
   `--env` showed, inherited). `get` gives what the environment's commands
@@ -773,12 +795,13 @@ bugs. The scripts keep what needs the shell (`releaseImages`): the
 locks, and fetching on a terminal (`fetch_images`, `with_tty`).
 
 - **Fetching happens before the switch** (`fetchImages`, through
-  `devopsy --`, past project commands): build mode `ProfilePull`
+  `devopsy --`, past project commands), by the release's own mode (`img
+  mode`, its record's): build mode `ProfilePull`
   (`--profile '*' pull --ignore-buildable`) then `build --pull`; image
   mode `pull`, which pulls buildable services with an `image:` too and
   fails on a missing tag, then `ProfilePull`. A rollback or a restart
   restores its images (`img restore`) and fetches only when an image
-  it builds is gone.
+  it builds is gone, as the restored release's mode did.
 - **Every release pulls every profile's non-buildable services,** pull
   only: the listing and the bookmarks stay the default
   services'. Why: a profile-only tool was pulled once, on first
@@ -793,7 +816,10 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   service, kind, registry digest, version label), from `compose config
   --format json` without profiles and without devopsy's own file
   (`NoReleaseComposeEnv`). Own or pulled is decided by compose and the
-  mode (`Service.own`: a build in build mode, or `pull_policy: never`;
+  mode of the release listed, from its own record (`images.ModeOf`:
+  the new release's at a record, the restored one's at a restore,
+  never the checkout's; `Set` has no mode) (`Service.own`: a build in
+  build mode, or `pull_policy: never`;
   and a pulled image without a registry digest, which nothing could hold,
   is restored as own), never by `RepoDigests` alone: on Docker's
   containerd store built and loaded
@@ -1030,19 +1056,20 @@ interrupts" and "The server never waits on the operator for long".
 - **Sync hooks never get `SyncWatchEnv` or `HeartbeatEnv`:** a hook
   running `devopsy --export` would take its own `/dev/null` stdin for a
   session gone.
-- **SSH options:** `KeepAlive` (`ServerAliveInterval` 3 beats, 15
-  seconds, `ServerAliveCountMax=3`) on activations, uploads and a
-  sync's sessions; `Bounded` (`KeepAlive` plus `ConnectTimeout=30`) on
-  a log's save, `--export` and `--import`, which otherwise waited
-  minutes on a dead connection.
+- **SSH options:** every session, and the parent's to a child, bounds
+  its connection (`connectOptions`, in `SSHOptions` and `ChildSSH`):
+  `ConnectTimeout=30` and `ServerAliveInterval` 3 beats, 15 seconds,
+  `ServerAliveCountMax=3`. Why one place: chosen per call site, a log's
+  save, `--export` and `--import` once waited minutes on a dead
+  connection.
 - **devopsy takes Ctrl-C itself** (`session` in `runRemote`; ssh ignores
   it). The first closes the pipe: before the switch the watcher cancels
   the release and devopsy waits (saying so after 5 seconds: the server
   takes the cancel once it holds the release lock); after it, devopsy
   says the release goes on, and a second ends the session; the log is
-  saved either way. "After the switch" is `SSHStreams`' flag on
-  `SwitchMarker` (`WithSwitched`), never the release log, which stops
-  at its cap, or the disarm's byte answered (`WithBeaten`): from it the
+  saved either way. "After the switch" is `SSHStreams`' one flag
+  (`WithLive`), set on `SwitchMarker`, never the release log, which stops
+  at its cap, or on the disarm's byte answered: from it the
   script goes on to its switch on its own, so a Ctrl-C or a session
   lost between the two says the release goes on, at or past its switch,
   never that nothing went live (review round 9); a switch already under
@@ -1521,8 +1548,49 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   down --volumes --remove-orphans --rmi local` and `mnt` emptied as
   root in `UtilImage` (a plain `docker run`: `compose run` would bring
   the network back), a sync's leftover record's writers ended first
-  (`endWriters`: nothing writes into `mnt` while it is emptied); then
+  (`endWriters`) and every container of devopsy's the environment has
+  removed (below): nothing writes into `mnt` while it is emptied; then
   every release's images; then `removeBase`.
+- **devopsy's own containers are found by their labels, never by
+  name** (`remote.ContainerLabels`, `container` and `removeLeft` in
+  `cmd/devopsy/writers.go`; decided 2026-11-01, when four naming
+  schemes each had a remover of their own). Every container devopsy
+  starts in `UtilImage` carries `devopsy.env=<compose name>` (whose data
+  it works on) and `devopsy.task=<task>` (what it does): `owners` (a
+  release's or a local command's owners' step), `import` (an import's or
+  a restore's extraction and its owners'), `sync-<id>` (what writes
+  sync `<id>`'s copy into the child: its rsync, clone and owners'
+  containers on one server, the receive's across, a reset's wipe and its
+  owners'), `source` (the parent's side of a push's or an export's copy:
+  the reflink check, the clone, its removal, the rsync daemon),
+  `snapshot`, `export`, `destroy`. Not `devopsy.data*`: those are the
+  project's. One remover, `removeLeft(env, task)`, a `docker ps` filter
+  on both labels, so each guarantee is a filter value: the child's
+  holder (`endWriters`) takes `sync-<its id>`, never another sync's and
+  never the parent's clone of that very sync (`source`, the parent's
+  env); the next lock-taker an import's or a restore's (`import`: the
+  next import of that service, `--resolved`, a reset's wipe, the next
+  restore on a restore's mark, a child's prepare on an import's or a
+  restore's); `--mnt-owners`, before it scans, `owners`; the next holder
+  of the parent's sync lock (a push, an export) `source`;
+  `--destroy-data` every task of its environment (it holds every lock:
+  each is a leftover), never another environment's. Locally only a
+  failed import's end does (`endImport`, `import`), never a local
+  `--destroy` and never `owners`: nothing holds a lock, and another
+  terminal's owners' step may run. Names stay only where they keep a
+  container unique while it runs (`<prefix><compose name>-<pid>-<n>`, a sync's
+  id), and `dockerRunFresh` (an import's, an owners' step's) and a
+  snapshot check's `unzstd` remove one of that very name first
+  (`removeNamed`: a devopsy killed outright whose pid or snapshot this
+  one repeats left it running, and docker run would refuse the name;
+  review of 2026-10-23, round 3). A container's own devopsy removes it
+  by name when its context ends (`dockerRunIO`). Across servers the
+  push writes the receive script that runs the child's rsync, which the
+  child's holder removes by its labels: a named feature,
+  `container-labels`, found by `--sync-push` (an older parent would start
+  it unlabeled; an older child finds it by its name, unchanged).
+  Containers an older devopsy left carry no labels and are not found
+  (no migration code before 1.0.0).
 - **Leftover levels are asked about, never removed silently:**
   `purgeLeftovers` finds levels' directories left with only their
   `.env` (`LeftoverScript`) and removes them with `--purge` or a yes at
@@ -1654,8 +1722,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   --rm`, devopsy's own rsync). So: the recorded imports' devopsy gets
   SIGTERM (only a pid `/proc` still shows as `--sync-services import`
   in the child's directory, `isSyncImport`: a pid reused after a reboot
-  may be another environment's import; Linux only), the sync's own containers are removed (named
-  `SyncContainerPrefix` + its id, never another sync's), the imported
+  may be another environment's import; Linux only), the sync's own containers are removed (`sync-<id>`,
+  never another sync's: Data, destroying and removing), the imported
   services are stopped (the only way to end what `docker exec` started
   in them) and, when they ran before the sync, recorded so a completing
   sync starts them, their one-off containers removed; then the imports
@@ -1700,8 +1768,8 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   answer.
 - **Without an answer, the holder writes to a file:** devopsy
   interrupted or the connection lost, its output goes to
-  `$base/.devopsy-sync.log` (trimmed past `SyncLogMax` to `SyncLogKeep`
-  lines, on both sides) and it finishes as the files say. Why: a write
+  `$base/.devopsy-sync.log` (trimmed to its last `SyncLogLines` lines,
+  on both sides) and it finishes as the files say. Why: a write
   to the dead session would kill what restores the services. From
   prepare until the services are restored it ignores SIGPIPE, and it
   restores before it reports.
@@ -2049,10 +2117,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   environment first ran the image, came before any mark here). The check and the take-over run
   under the server's image lock, shared, taken from Go in two short
   windows (`imagesShared`), never across the load: a removal elsewhere
-  waits only for them. `ImportScript` passes the project's record, the
-  lock and the mode (`ImagesLeftEnv`, `ImagesLockEnv`, `ImagesModeEnv`),
-  as `img` gets them: without the record, the names the take-over gave
-  up leaked (review of 2026-10-24). A local export records only a
+  waits only for them. The import's `Set` is `serverImages`', with the
+  project's record, as `img`'s: without the record, the names the
+  take-over gave up leaked (review of 2026-10-24). A local export records only a
   pulled data service (`List`: a built one's containerd digest is a
   local build's). A record line without its reference, id or a registry
   digest (`<repository>@sha256:...`, not a name) counts as none
@@ -2147,14 +2214,14 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   told nothing is stopped (`DEVOPSY_DATA_STOP` empty: review round 2,
   a script following the contract would `run --rm` beside the running
   service); the rsync is then the last write. A cancel during the check
-  stops nothing (round 2). The clone's containers are
-  `<SyncContainerPrefix>parent-<id>-...` (`cloneContainer`), never the
-  sync's own prefix, which the child's holder removes as writers into
-  the child (review: it could kill the clone's removal). Never under `snapshots/.clone`: a take's
+  stops nothing (round 2). The clone's containers are the parent's
+  `source` (`cloneContainer`), never the sync's own task, which the
+  child's holder removes as writers into the child (review: it could
+  kill the clone's removal). Never under `snapshots/.clone`: a take's
   leftovers step, which holds only the snapshot lock, removes a clone
   without its `.tmp`. One a devopsy killed outright left goes with the
   next holder of the sync lock (`removeLeftoverClones`, its containers
-  by `sourceLabel`, as the daemon's) and with `--destroy-data`. An
+  by their `source` task, as the daemon's) and with `--destroy-data`. An
   `--export` of a `volumes` service on a target does the same
   (`export.<pid>`). Accepted cost, measured on XFS (2026-10-27): the
   parent's pages written while the clone exists fragment its files
@@ -2263,16 +2330,17 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   can use every key in the agent for the session, prod's included when
   a chain's middle environment is the parent, which only the
   operator's agent limits (README). Also `BatchMode=yes` (a refused key
-  fails instead of prompting), `ConnectTimeout=30` (an unreachable
+  fails instead of prompting), `StrictHostKeyChecking=accept-new`, and
+  the connect timeout and keepalive every session has (an unreachable
   child fails before the TCP timeout, with the parent's services
-  stopped meanwhile) and `StrictHostKeyChecking=accept-new`.
+  stopped meanwhile).
 - **The rsync session keeps its forwarding:** `-R` to the parent's
   daemon, `--network host` on the child, `ExitOnForwardFailure=yes`,
   and never `ClearAllForwardings`, which clears command-line
   forwardings too (`ssh_config(5)`); a taken port retries another (3
   tries, 20000-60000). `--sync-exec`'s session and a stream's `cat`
-  keep `ClearAllForwardings`. All of a sync's sessions pass
-  `KeepAlive`: the holder is quiet for the whole copy.
+  keep `ClearAllForwardings`. The keepalive matters most here: the
+  holder is quiet for the whole copy.
 - **Say what a refusal means:** no agent on the parent with
   `DEVOPSY_SYNC_TO` set means a `restrict`ed key or sshd's
   `AllowAgentForwarding no`. A `restrict`ed key also refuses the `-R`
@@ -2413,9 +2481,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   marked, down). `--sync-services wipe` (`wipeData`): an import's
   leftover containers, `compose --profile '*' down --volumes
   --remove-orphans` (no `--rmi`: the release's images stay),
-  `emptyMnt` (shared with `--destroy-data`; in a container named by the
-  sync, `<SyncContainerPrefix><id>-wipe`, so a holder deciding meanwhile
-  removes it, and in `syncImport` after its writer line), and the record set to
+  `emptyMnt` (shared with `--destroy-data`; in a container of the sync's
+  task, `sync-<id>`, so a holder deciding meanwhile removes it, and in
+  `syncImport` after its writer line), and the record set to
   `first` with nothing stopped, so `finish go` creates the services
   with data and the child's set and the run step the rest. Its
   `shared/.env` and release stay. Accepted (decided 2026-10-27): the
@@ -2459,9 +2527,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   write. A `custom` import of a service not stopped brings it up alone
   and down again if it was down (`upFor`), an `up` that failed too. An
   owned entry it extracted goes to its owner before the import counts
-  as complete, in a container of its own (`ownMnt`, named
-  `<ImportContainerPrefix><compose name>-<pid>-owners-<n>`, so
-  `importContainers` ends it with the extracting ones).
+  as complete, in a container of its own (`ownMnt`, its task `import`,
+  so a leftover import's end removes it with the extracting ones).
 - **A `volumes` import checks the whole tar before changing anything**
   (`tarEntries`, read with `archive/tar`): a truncated tar fails, and
   so does one without its end-of-archive blocks, which every tar
@@ -2510,8 +2577,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   tar of data never needs went with them. Then each carried entry is
   emptied, never removed, and extracted with `--overwrite`. Why never removed: a running
   container bind-mounts the directory's inode. Each entry in a util
-  container of its own (`extractEntries`, `<ImportContainerPrefix><compose
-  name>-<pid>-extract-<n>`), `--network none`, that mounts that entry
+  container of its own (`extractEntries`, its task `import`),
+  `--network none`, that mounts that entry
   alone (made first when missing, a directory or an empty file as the
   tar has it; one of the other kind refused before anything changes)
   and extracts only its members from the whole spool, by the names
@@ -2547,7 +2614,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   right before; from then on the import counts as written, a Docker
   error that started nothing included. Before it a failure restores
   the set; from it a failure ends the write (`endImport`, with the
-  closure: one-offs, the project's `ImportContainerPrefix` containers,
+  closure: one-offs, the environment's `import` containers,
   the service and its dependents stopped) and keeps the set down, the
   imported service stopped and recorded too when it ran before (one
   rule with a sync's `endWriters`, "stop, not restart"). Locally no
@@ -2604,20 +2671,8 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   only when it ran before the import: a writer line ends ` down` when
   `upFor` brought it up), run by an import of that service,
   `--resolved` and a child's prepare; `--destroy-data` removes the
-  containers too (not Compose's: `down --remove-orphans` leaves them),
-  and an owners' step's (`ownersContainers`).
-- **Containers named after devopsy's pid** (an import's extracting and
-  owners' ones, a release's and a local command's owners' ones,
-  `<ownersPrefix><compose name>-<pid>-<n>`) are started through
-  `dockerRunFresh`, which removes a container of that very name first:
-  only a devopsy killed outright whose pid this one reuses can have
-  left one, still running (`--rm` removes it once it ends), and docker
-  run would refuse the name (review of 2026-10-23, round 3). On a
-  server the next lock-taker removes the rest: an import's by
-  `importContainers` (above), a release's owners' by
-  `ownersContainers` in `--mnt-owners` before it scans, and both in
-  `--destroy-data`. Locally nothing holds a lock, so only the name's
-  own is removed: another terminal's owners' step may be running.
+  containers too (not Compose's: `down --remove-orphans` leaves them;
+  their labels: Data, destroying and removing).
 - **While an import's mark is there, only its service can be
   imported** (`ImportScript`, in shell under the lock after its
   `settle`, before devopsy reads stdin, and again in Go), and any
@@ -2666,7 +2721,7 @@ label says, with the sync's scripts. Code: `cmd/devopsy/data.go`,
   name; a second session under the lock settles a killed holder's sync
   (`settleLeftover`, as `ImportScript` does), checks again, ends a
   leftover writer, gives a `volumes` service's owned entries to their
-  owners (`resolvedOwners`, named as an import's owners' containers:
+  owners (`resolvedOwners`, its containers an import's owners':
   review of 2026-10-23, round 3, it started the services on the tar
   maker's owners), starts the record and only then
   removes the mark and the record. On the server it is `devopsy
@@ -2803,8 +2858,7 @@ settled every rule here after nine reviews (2026-10-25).
   first pass holds no release lock, and a release switching current
   meanwhile left the stopped pass on the old release's labels with the
   new one's code (round 3).
-- **Locks, one order everywhere:** release (fd 9), sync (fd 5 in
-  snapshot scripts: `image_lock` and `syncSourceLock` use 8), snapshot
+- **Locks, one order everywhere:** release (fd 9), sync (fd 5), snapshot
   (`.devopsy-snapshot.lock`, fd 6), image; none waited for while a later
   one is held. A take: pass 1 under the snapshot lock alone, then the
   release, sync and snapshot locks for the stopped pass, then the
@@ -2905,7 +2959,7 @@ settled every rule here after nine reviews (2026-10-25).
   switch does: round 2): the set
   stopped, a restore mark right before the first write, each entry and
   volume extracted by the import's own code (`extractEntry`, containers
-  named with `ImportContainerPrefix`), the data services held on the
+  of the `import` task), the data services held on the
   snapshot's images (`ImportDone`); the mark and the record of what it
   stopped go, the record whole, only once the run step went through
   (`restored`; review of 2026-10-25: cleared by the data step, a shell
@@ -3000,8 +3054,8 @@ settled every rule here after nine reviews (2026-10-25).
   restore, full or `--no-code`, takes one of the data it replaces.
   `releaseSnapshotSetup` before the fetch: a killed holder's files
   settled (`settleSync`: a release that syncs runs no `partialGuard`),
-  the server's image lock, record and mode exported (the bookmarks and
-  the detached pruning hold the lock: review), the effective releases
+  the server's image lock held by the bookmarks and the detached
+  pruning (review), the effective releases
   `keep` checked (1 would prune the snapshot with its own release;
   `releases: keep: 1` with them on is a config error too), the sync and
   snapshot locks (release, sync, snapshot, then the fetch's image lock),
@@ -3274,7 +3328,10 @@ Smaller features, each with the rule an agent must keep.
   decided 2026-10-29: a devopsy server takes keys only, so a prompt meant
   a missing key, asked again per session of a release, or with a child's
   set stopped while a sync's push waited for it; never `BatchMode`, which
-  would refuse a passphrase and a new host key too). Connection sharing is the user's SSH config,
+  would refuse a passphrase and a new host key too), and the connect
+  timeout and keepalive (SSH options, Sessions); `DEVOPSY_SSH_COMMAND`'s
+  options come first, so they win (ssh keeps the first value). Connection
+  sharing is the user's SSH config,
   which `--ssh-config` suggests and never writes. Test fakes of ssh run
   their last argument.
 - **`--context-hash` is a pure helper; devopsy builds nothing.** Errors
@@ -3370,8 +3427,8 @@ drive them with `docker exec` and check from outside. Locally with any
 Docker, on GitHub on demand and nightly when `main` moved since the
 last run that passed (`e2e.yml`); the release workflow does not run
 them. Drop tests shorten the heartbeat (`E2E_BEAT`, default 1, passed
-as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the operator's
-`KeepAlive` count in beats, which keeps their order); `E2E_BEAT=5`
+as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the sessions'
+keepalive count in beats, which keeps their order); `E2E_BEAT=5`
 runs everything with the real timeouts, and one test always does. The
 test server's deploy user has `/bin/sh` (dash) as login shell, stricter
 than devopsy-server's bash (it found the watcher signalling only the

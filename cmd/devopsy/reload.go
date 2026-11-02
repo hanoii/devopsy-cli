@@ -52,7 +52,7 @@ func runReload(t *remote.Target, projectDir string, projectEnv func(string) (str
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("reload exited %d", code)))
 	text := rlog.Text()
 	if m := reloadingIn.FindSubmatch(text); m != nil {
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn("could not save the reload's log on the server")
 		}
 	}

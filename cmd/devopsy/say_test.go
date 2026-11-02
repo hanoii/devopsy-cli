@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// --say formats as everything devopsy says, filters by the verbosity,
+// --say formats as everything devopsy says, at the levels scripts use,
 // and fails when its write does (a session gone), as echo would, which
 // the scripts rely on before a switch; never by SIGPIPE.
 func TestSay(t *testing.T) {
@@ -19,14 +19,10 @@ func TestSay(t *testing.T) {
 	if out, code := runDevopsy(t, dir, nil, "--say", "info", "current is now 1"); code != 0 || out != "devopsy: current is now 1\n" {
 		t.Errorf("info (%d): %q", code, out)
 	}
-	if out, code := runDevopsy(t, dir, nil, "--say", "debug", "hidden"); code != 0 || out != "" {
-		t.Errorf("debug without -v (%d): %q", code, out)
-	}
-	if out, code := runDevopsy(t, dir, []string{"DEVOPSY_VERBOSE=1"}, "--say", "debug", "shown"); code != 0 || out != "devopsy: debug: shown\n" {
-		t.Errorf("debug with DEVOPSY_VERBOSE (%d): %q", code, out)
-	}
-	if out, code := runDevopsy(t, dir, nil, "--say", "loud", "x"); code != 2 || !strings.Contains(out, "devopsy: error: usage: devopsy --say ") {
-		t.Errorf("unknown level (%d): %q", code, out)
+	for _, lv := range []string{"loud", "debug", "trace"} {
+		if out, code := runDevopsy(t, dir, nil, "--say", lv, "x"); code != 2 || !strings.Contains(out, "devopsy: error: usage: devopsy --say info|warning|error ") {
+			t.Errorf("level %s (%d): %q", lv, code, out)
+		}
 	}
 
 	// Its stderr gone: exit 1, not a signal.

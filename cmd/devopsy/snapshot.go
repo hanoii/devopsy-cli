@@ -94,13 +94,13 @@ func snapshotCheckCopy(ctx context.Context, cwd string, p snapshotPaths, d *snap
 		// The clone shares the data's blocks only until the services write
 		// over them, then takes room of its own on the data's filesystem
 		// while the tars are made: said when that room is short.
-		if data, err := duData(ctx, d.dataSet); err == nil && freeBytes(p.clone()) < data {
+		if data, err := duData(ctx, snapshotContainer(cwd, ""), d.dataSet); err == nil && freeBytes(p.clone()) < data {
 			report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while its tars are made", size(freeBytes(p.clone())), size(data), p.clone()))
 		}
 	case refused:
 		report.Warn("this server keeps no snapshot mirrors (its snapshots: {mirror: false}): the services stay stopped while the tars are written")
 	}
-	return snapshotCheck(ctx, p, d, how == "mirror")
+	return snapshotCheck(ctx, cwd, p, d, how == "mirror")
 }
 
 // snapshotClone, in the environment's own snapshots/ directory (the
@@ -132,14 +132,26 @@ func snapshotReflinks(ctx context.Context, cwd string, p snapshotPaths, d *snaps
 	if len(d.entries)+len(d.volumes) == 0 || ensureUtilImage(ctx) != nil {
 		return false
 	}
-	return reflinks(ctx, "devopsy-snapshot-"+composeName(cwd)+"-reflink", p.clone(), d.dataSet)
+	return reflinks(ctx, snapshotContainer(cwd, "-reflink"), p.clone(), d.dataSet)
+}
+
+// snapshotContainer is the container of a snapshot's step in the
+// environment at cwd, named devopsy-snapshot-<compose name><suffix>
+// (unique while it runs: every take and restore holds the snapshot lock;
+// no name when suffix is ""), remote.TaskSnapshot.
+func snapshotContainer(cwd, suffix string) container {
+	c := container{"", composeName(cwd), remote.TaskSnapshot}
+	if suffix != "" {
+		c.name = "devopsy-snapshot-" + c.env + suffix
+	}
+	return c
 }
 
 // snapshotCloneData clones d into the clone's <id> (cloneData), then
 // marks it complete.
 func snapshotCloneData(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData, id string) error {
 	dir := filepath.Join(p.clone(), id)
-	if err := cloneData(ctx, "devopsy-snapshot-"+composeName(cwd)+"-"+id+"-clone", dir, d.dataSet); err != nil {
+	if err := cloneData(ctx, snapshotContainer(cwd, "-"+id+"-clone"), dir, d.dataSet); err != nil {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
@@ -147,7 +159,7 @@ func snapshotCloneData(ctx context.Context, cwd string, p snapshotPaths, d *snap
 
 // snapshotRemoveClone removes the clone of id (every clone, id "").
 func snapshotRemoveClone(ctx context.Context, cwd string, p snapshotPaths, id string) error {
-	return removeClone(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unclone", filepath.Join(p.base, "snapshots"), filepath.Join(snapshotClone, id))
+	return removeClone(ctx, snapshotContainer(cwd, "-unclone"), filepath.Join(p.base, "snapshots"), filepath.Join(snapshotClone, id))
 }
 
 // removeMirror removes the environment's mirror, root's, as root: a take
@@ -157,7 +169,7 @@ func removeMirror(ctx context.Context, cwd string, p snapshotPaths) error {
 		return nil
 	}
 	report.Info("removing the snapshots' mirror: this environment keeps none (snapshots: {mirror: true} keeps one)")
-	return dockerRun(ctx, "devopsy-snapshot-"+composeName(cwd)+"-unmirror", "--network", "none", "-v", p.snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror)
+	return dockerRun(ctx, snapshotContainer(cwd, "-unmirror"), "--network", "none", "-v", p.snaps+":/s", remote.UtilImage, "rm", "-rf", "/s/"+remote.SnapshotMirror)
 }
 
 // snapshotData is what a snapshot takes: every service with data, its
@@ -256,7 +268,7 @@ func runSnapshotStep(cwd string, args []string) int {
 			return 0
 		}
 		_ = os.Remove(filepath.Join(p.mirror, remote.SnapshotComplete))
-		if err := copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-mirror"); err != nil {
+		if err := copyMirror(ctx, p, d, snapshotContainer(cwd, "-mirror")); err != nil {
 			return fail(interrupted(ctx, err).Error())
 		}
 		return 0
@@ -427,7 +439,7 @@ func runSnapshotStep(cwd string, args []string) int {
 // exclude label leaves nothing chose so), and too little space for the
 // mirror and the tars, the data measured as root in the util image
 // (volumes are root's).
-func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror bool) error {
+func snapshotCheck(ctx context.Context, cwd string, p snapshotPaths, d *snapshotData, mirror bool) error {
 	if len(d.data) == 0 {
 		return errors.New("nothing to snapshot: no service has data (" + cli.DataLabel + "=true)")
 	}
@@ -446,7 +458,7 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	data, err := duData(ctx, d.dataSet)
+	data, err := duData(ctx, snapshotContainer(cwd, ""), d.dataSet)
 	if err != nil {
 		return err
 	}
@@ -455,7 +467,7 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 	// each, a margin.
 	need := data * 11 / 10
 	if mirror {
-		mirrored, err := duDirs(ctx, p.mirror)
+		mirrored, err := duDirs(ctx, snapshotContainer(cwd, ""), p.mirror)
 		if err != nil {
 			return err
 		}
@@ -468,8 +480,8 @@ func snapshotCheck(ctx context.Context, p snapshotPaths, d *snapshotData, mirror
 }
 
 // duData is the size of d's entries and volumes, in bytes, from du -sk
-// as root in the util image.
-func duData(ctx context.Context, d dataSet) (int64, error) {
+// as root in the util image, in the container c.
+func duData(ctx context.Context, c container, d dataSet) (int64, error) {
 	if len(d.entries)+len(d.volumes) == 0 {
 		return 0, nil
 	}
@@ -482,11 +494,11 @@ func duData(ctx context.Context, d dataSet) (int64, error) {
 		run = append(run, "-v", v.Name+":/v/"+v.Key+":ro")
 		paths = append(paths, "/v/"+v.Key)
 	}
-	return du(ctx, run, paths)
+	return du(ctx, c, run, paths)
 }
 
 // duDirs is the size of dirs that exist, as duData measures.
-func duDirs(ctx context.Context, dirs ...string) (int64, error) {
+func duDirs(ctx context.Context, c container, dirs ...string) (int64, error) {
 	var run, paths []string
 	for i, dir := range dirs {
 		if _, err := os.Stat(dir); err != nil {
@@ -498,11 +510,11 @@ func duDirs(ctx context.Context, dirs ...string) (int64, error) {
 	if len(paths) == 0 {
 		return 0, nil
 	}
-	return du(ctx, run, paths)
+	return du(ctx, c, run, paths)
 }
 
-func du(ctx context.Context, mounts, paths []string) (int64, error) {
-	args := append(append([]string{"run", "--rm", "--network", "none"}, mounts...), append([]string{remote.UtilImage, "du", "-sk"}, paths...)...)
+func du(ctx context.Context, c container, mounts, paths []string) (int64, error) {
+	args := append(append(append(append([]string{"run", "--rm"}, c.runArgs()...), "--network", "none"), mounts...), append([]string{remote.UtilImage, "du", "-sk"}, paths...)...)
 	trace(append([]string{"docker"}, args...))
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
@@ -552,7 +564,7 @@ func size(n int64) string {
 // a sync does (rsyncEntry, rsyncVolume: --delete, so the mirror ends
 // equal), and removes what the mirror has that d no longer does. Run
 // twice by a take: while everything runs, then stopped.
-func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, name string) error {
+func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, c container) error {
 	mnt, vols := filepath.Join(p.mirror, "mnt"), filepath.Join(p.mirror, "volumes")
 	if err := os.MkdirAll(mnt, 0o700); err != nil {
 		return err
@@ -574,12 +586,12 @@ func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, name stri
 		}
 	}
 	if len(stale) > 0 {
-		if err := dockerRun(ctx, name+"-stale", append([]string{"--network", "none", "-v", p.mirror + ":/m", remote.UtilImage, "rm", "-rf"}, stale...)...); err != nil {
+		if err := dockerRun(ctx, c.with("-stale"), append([]string{"--network", "none", "-v", p.mirror + ":/m", remote.UtilImage, "rm", "-rf"}, stale...)...); err != nil {
 			return fmt.Errorf("the mirror's old entries: %w", err)
 		}
 	}
 	for i, e := range d.entries {
-		if err := rsyncEntry(ctx, fmt.Sprintf("%s-%d", name, i), d.mnt, mnt, e, slices.Contains(d.files, e)); err != nil {
+		if err := rsyncEntry(ctx, c.with(fmt.Sprintf("-%d", i)), d.mnt, mnt, e, slices.Contains(d.files, e)); err != nil {
 			return err
 		}
 	}
@@ -588,7 +600,7 @@ func copyMirror(ctx context.Context, p snapshotPaths, d *snapshotData, name stri
 		if err := os.MkdirAll(dst, 0o700); err != nil {
 			return err
 		}
-		if err := rsyncVolume(ctx, fmt.Sprintf("%s-v%d", name, i), v.Name+":/src/"+v.Key+":ro", dst+":/dst/"+v.Key, v.Key); err != nil {
+		if err := rsyncVolume(ctx, c.with(fmt.Sprintf("-v%d", i)), v.Name+":/src/"+v.Key+":ro", dst+":/dst/"+v.Key, v.Key); err != nil {
 			return err
 		}
 	}
@@ -669,7 +681,7 @@ func snapshotStopped(cwd string, p snapshotPaths, id, rel, next string) int {
 			}
 		}
 	case mirror:
-		err = copyMirror(ctx, p, d, "devopsy-snapshot-"+composeName(cwd)+"-stopped")
+		err = copyMirror(ctx, p, d, snapshotContainer(cwd, "-stopped"))
 		if err == nil {
 			err = os.WriteFile(filepath.Join(p.mirror, remote.SnapshotComplete), []byte(id+"\n"), 0o600)
 		}
@@ -793,7 +805,10 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 	for _, v := range d.volumes {
 		fmt.Fprintf(&m, "volume\t%s\t%s\n", v.Key, v.Name)
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(tmp, remote.SnapshotData, "images"), []byte(set.SnapshotData(p.base, rel)), 0o600); err != nil {
 		return err
 	}
@@ -902,7 +917,7 @@ func snapshotTar(cwd string, p snapshotPaths, id string) error {
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	name := "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-tar"
+	name := snapshotContainer(cwd, "-"+id+"-tar")
 	// From its clone when it has one, else from the mirror.
 	clone := filepath.Join(p.clone(), id)
 	cloned := strings.TrimSpace(fileText(filepath.Join(clone, remote.SnapshotComplete))) == id
@@ -945,7 +960,7 @@ func dataTars(ctx context.Context, cwd string, d *snapshotData, tmp, id string) 
 	if err := ensureUtilImage(ctx); err != nil {
 		return err
 	}
-	name := "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-tar"
+	name := snapshotContainer(cwd, "-"+id+"-tar")
 	for _, e := range d.entries {
 		report.Info("snapshot " + id + ": mnt/" + e)
 		if err := tarInto(ctx, name, filepath.Join(tmp, remote.SnapshotData, "mnt."+e+".tar.zst"), []string{"-v", d.mnt + ":/m/mnt:ro"}, "mnt", e); err != nil {
@@ -962,12 +977,12 @@ func dataTars(ctx context.Context, cwd string, d *snapshotData, tmp, id string) 
 }
 
 // tarInto writes file, the tar of /m/<dir>/<entry> compressed, from a
-// util container (name) with mounts, under nice, as root (the mirror and
+// util container (c) with mounts, under nice, as root (the mirror and
 // the volumes are root's), into file's directory mounted, then gives it to
 // the deploy user (0600). Never through the container's stdout: Docker's
 // stream ran at about 12 MB/s on a small server where the same tar to a
 // file took a tenth of the time (measured on DigitalOcean, 2026-10-26).
-func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry string) error {
+func tarInto(ctx context.Context, c container, file string, mounts []string, dir, entry string) error {
 	args := append(append([]string{"--network", "none"}, mounts...), "-v", filepath.Dir(file)+":/o", remote.UtilImage,
 		// Only files, directories and links, as the mirror's rsync --no-D:
 		// a FIFO or a device node is nothing a restore takes (tarTypes).
@@ -978,7 +993,7 @@ func tarInto(ctx context.Context, name, file string, mounts []string, dir, entry
 		// as zeros, more disk than the data took.
 		"sh", "-c", `set -o pipefail; cd "/m/$1" && find "$2" \( -type f -o -type d -o -type l \) -print0 | tar -cf - --numeric-owner --hard-dereference --sparse --null --no-recursion -T - | nice zstd -q -T0 -f -o "/o/$3" && chown "$4" "/o/$3" && chmod 600 "/o/$3"`,
 		"sh", dir, entry, filepath.Base(file), fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()))
-	if err := dockerRun(ctx, name, args...); err != nil {
+	if err := dockerRun(ctx, c, args...); err != nil {
 		_ = os.Remove(file)
 		return fmt.Errorf("the tar of %s/%s: %w", dir, entry, err)
 	}
@@ -1072,7 +1087,7 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 	// The image lock, exclusive, waited for up to wait and kept to the end.
 	var unlock func()
 	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
-		u, ok, err := imagesExclusiveNow()
+		u, ok, err := imagesLockNow(syscall.LOCK_EX)
 		if err != nil {
 			return err
 		}
@@ -1088,7 +1103,10 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 		}
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := set.Remove(dir); err != nil {
 		return err
 	}
@@ -1164,27 +1182,6 @@ func snapshotList(p snapshotPaths) {
 	if _, err := os.Lstat(p.mirror); err == nil {
 		fmt.Println("mirror\tkept")
 	}
-}
-
-// imagesExclusiveNow takes the server's image lock exclusively when it is
-// free at once (ok false when busy).
-func imagesExclusiveNow() (unlock func(), ok bool, err error) {
-	path := os.Getenv(remote.ImagesLockEnv)
-	if path == "" {
-		return func() {}, true, nil
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
-	}
-	return func() { f.Close() }, true, nil
 }
 
 // manualSnapshots are the ids of p's manual snapshots, oldest first.
@@ -1486,7 +1483,11 @@ func ranOnData(cwd, base string) {
 	if rel == "" {
 		return
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		report.Warn("not recording what runs on the data: " + err.Error())
+		return
+	}
 	_ = set.RanCut(base, rel)
 }
 
@@ -1558,7 +1559,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		if code != 0 {
 			return code
 		}
-		code, err := remote.SSHWith(t, remote.Bounded, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
+		code, err := remote.SSHWith(t, nil, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
 		if err != nil {
 			report.Fail(err)
 			return 1
@@ -1577,7 +1578,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			report.Error("--snapshots import reads a snapshot from stdin: < snapshot.tar, or a pipe (aws s3 cp s3://... - |)")
 			return 1
 		}
-		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, remote.Bounded, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
+		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
 		if err != nil {
 			report.Fail(err)
 			return 1
@@ -1738,7 +1739,7 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("snapshot exited %d", code)))
 	text := rlog.Text()
 	if m := takingSnapshot.FindSubmatch(text); m != nil {
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn("could not save the snapshot's log on the server")
 		}
 	}
@@ -1853,7 +1854,10 @@ func snapshotMakeRelease(cwd string, p snapshotPaths, snap, rel string) error {
 		return err
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	return set.BookmarkFrom(rel, snap)
 }
 
@@ -1890,11 +1894,11 @@ const fifoPrefix = ".fifo."
 // (keep), so it never waits for the container to open the FIFO, and
 // gives it up once the container is gone: then r ends (EOF), however
 // the container ended, and wait says how.
-func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait func() error, err error) {
+func unzstd(ctx context.Context, snap, file string, c container) (r io.ReadCloser, wait func() error, err error) {
 	// A container of that name is one a check killed outright left
 	// (blocked opening the FIFO nobody reads): every check holds the
 	// snapshot lock, so none runs beside this one.
-	if err := removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$"); err != nil {
+	if err := removeNamed(c.name); err != nil {
 		return nil, nil, err
 	}
 	dir := filepath.Join(filepath.Dir(snap), fifoPrefix+strconv.Itoa(os.Getpid()))
@@ -1921,8 +1925,8 @@ func unzstd(ctx context.Context, snap, file, name string) (r io.ReadCloser, wait
 		keep.Close()
 		return fail(err)
 	}
-	args := []string{"run", "--rm", "--name", name, "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData) + ":/s:ro", "-v", dir + ":/o", remote.UtilImage,
-		"sh", "-c", `zstd -dcq -- "/s/$1" >/o/tar`, "sh", file}
+	args := append(append([]string{"run", "--rm"}, c.runArgs()...), "--network", "none", "-v", filepath.Join(snap, remote.SnapshotData)+":/s:ro", "-v", dir+":/o", remote.UtilImage,
+		"sh", "-c", `zstd -dcq -- "/s/$1" >/o/tar`, "sh", file)
 	trace(append([]string{"docker"}, args...))
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout, cmd.Stderr = errOut, errOut
@@ -1994,7 +1998,7 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (
 	}
 	sizes := map[snapshotTarFile]int64{}
 	for _, t := range snapshotTars(m) {
-		r, wait, err := unzstd(ctx, snap, t.file, "devopsy-snapshot-"+composeName(cwd)+"-"+filepath.Base(snap)+"-check")
+		r, wait, err := unzstd(ctx, snap, t.file, snapshotContainer(cwd, "-"+filepath.Base(snap)+"-check"))
 		if err != nil {
 			return err
 		}
@@ -2038,7 +2042,10 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (
 		return err
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := set.SnapshotPull(snap, string(data)); err != nil {
 		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
 	}
@@ -2100,7 +2107,7 @@ func restoreSpace(ctx context.Context, cwd, id, projectDir string, services []cl
 	// Per path: its filesystem (its parent's while missing), that one's
 	// free kilobytes, and the path's own use.
 	script := `for p; do d=$p; [ -e "$d" ] || d=${d%/*}; set -- $(df -Pk "$d" | tail -n 1); u=0; [ ! -e "$p" ] || u=$(du -sk "$p" | cut -f1); printf '%s\t%s\t%s\t%s\n' "$p" "$1" "$4" "$u"; done`
-	args := append(append([]string{"run", "--rm", "--name", "devopsy-snapshot-" + composeName(cwd) + "-" + id + "-space", "--network", "none"}, run...), append([]string{remote.UtilImage, "sh", "-c", script, "sh"}, paths...)...)
+	args := append(append(append(append([]string{"run", "--rm"}, snapshotContainer(cwd, "-"+id+"-space").runArgs()...), "--network", "none"), run...), append([]string{remote.UtilImage, "sh", "-c", script, "sh"}, paths...)...)
 	trace(append([]string{"docker"}, args...))
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
@@ -2253,7 +2260,11 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	if err != nil {
 		return err
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: io.Discard, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), io.Discard)
+	if err != nil {
+		unlock()
+		return err
+	}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
 	report.Info("imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", "to restore it:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id)
@@ -2379,7 +2390,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			return fail(err.Error())
 		}
 	case mk != nil && mk.Code == remote.IncompleteRestore:
-		if err := removeContainers(importContainers(cwd)); err != nil {
+		if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -2503,7 +2514,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	}
 	// From the mark on, the restore rule: whatever fails keeps the set
 	// down under the mark, its ways out a restore again or another.
-	cname := fmt.Sprintf("%s%s-%d", remote.ImportContainerPrefix, composeName(cwd), os.Getpid())
+	cname := importContainer(cwd)
 	for i, t := range tars {
 		e := tarEntry{name: t.name, forms: []string{t.name}, file: t.isFile}
 		if t.volume != "" {
@@ -2511,7 +2522,7 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			e.volume = &v
 		}
 		report.Info("restoring " + map[bool]string{true: "the volume ", false: "mnt/"}[t.volume != ""] + t.name)
-		if err := extractEntry(ctx, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, fmt.Sprintf("%s-extract-%d", cname, i), composeName(cwd)); err != nil {
+		if err := extractEntry(ctx, mnt, filepath.Join(snap, remote.SnapshotData, t.file), e, cname.with(fmt.Sprintf("-extract-%d", i)), composeName(cwd)); err != nil {
 			report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 			return 1
 		}
@@ -2524,14 +2535,17 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 			owned[e] = o
 		}
 	}
-	if err := ownMnt(ctx, mnt, owned, cname+"-owners"); err != nil {
+	if err := ownMnt(ctx, mnt, owned, cname.with("-owners")); err != nil {
 		report.Fail(&report.Failure{Msg: err.Error() + ": the services stay down", Fixes: restoreRemedies(cwd, id)})
 		return 1
 	}
 	// The images that ran on the data, held, with their history.
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
 	if len(data) > 0 {
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			return fail(err.Error())
+		}
 		unlock, err := imagesShared(ctx)
 		if err != nil {
 			return fail(err.Error())
@@ -2815,7 +2829,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 		text := rlog.Text()
 		if m := restoringUnder.FindSubmatch(text); m != nil {
-			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+			if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
 				report.Warn("could not save the restore's log on the server")
 			}
 		}
@@ -2825,7 +2839,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), false), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), false), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn("could not save the restore's log on the server")
 		}
 	}

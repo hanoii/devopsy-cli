@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
-	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -78,7 +77,11 @@ func runCheckImages(cwd string, args []string) int {
 			return checkImagesMissing
 		}
 	}
-	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
+	s, err := serverImages(cwd, composeName(cwd), os.Stderr)
+	if err != nil {
+		report.Fail(err)
+		return 1
+	}
 	needs, err := s.ReloadCheck(rel)
 	if err != nil {
 		report.Fail(err)

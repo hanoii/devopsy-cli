@@ -249,7 +249,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 	holderCtx, endHolder := context.WithCancel(context.Background())
 	defer endHolder()
 	go func() {
-		code, err := remote.SSHStreams(remote.WithBeat(remote.WithoutInterrupt(holderCtx), w), job.child, remote.KeepAlive, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithBeat(remote.WithoutInterrupt(holderCtx), w), job.child, nil, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy answers abort at once and
@@ -458,10 +458,10 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	if color {
 		env[remote.ColorEnv] = "1"
 	}
-	extra := remote.KeepAlive
+	var extra []string
 	where := "same server"
 	if !job.sameHost {
-		extra = append([]string{"-o", "ForwardAgent=yes"}, remote.KeepAlive...)
+		extra = []string{"-o", "ForwardAgent=yes"}
 		where = "from " + p.Host + " to " + job.to
 	}
 	log := report.Default().Tee(rlog.Line)
@@ -742,7 +742,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	text := rlog.Text()
 	if m := remote.SyncingInto.FindSubmatch(text); m != nil {
 		text = append([]byte("\n"), text...)
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn(fmt.Sprintf("could not save the sync log on the server (%v, %d)", err, c))
 		}
 	}
@@ -798,22 +798,19 @@ func (q *quietWriter) keep(base string) {
 	q.mu.Unlock()
 }
 
-// trimSyncLog keeps the last remote.SyncLogKeep lines of the log at
-// path once it grew past remote.SyncLogMax: every sync whose session
-// went appends to it.
+// trimSyncLog keeps the last remote.SyncLogLines lines of the log at
+// path once it has more: every sync whose session went appends to it.
+// The holder's shell does the same (remote's trimSyncLog).
 func trimSyncLog(path string) {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() < remote.SyncLogMax {
-		return
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 	lines := strings.SplitAfter(strings.TrimSuffix(string(data), "\n"), "\n")
-	if len(lines) > remote.SyncLogKeep {
-		lines = lines[len(lines)-remote.SyncLogKeep:]
+	if len(lines) <= remote.SyncLogLines {
+		return
 	}
+	lines = lines[len(lines)-remote.SyncLogLines:]
 	if os.WriteFile(path+".tmp", []byte(strings.Join(lines, "")+"\n"), 0o644) == nil {
 		_ = os.Rename(path+".tmp", path)
 	}
@@ -881,10 +878,10 @@ func watchSession(ctx context.Context) context.Context {
 	return ctx
 }
 
-// dockerRun runs docker run args as a container named name, removed when
-// ctx ends: killing the docker client alone leaves its container running.
-func dockerRun(ctx context.Context, name string, args ...string) error {
-	return dockerRunIO(ctx, name, nil, nil, args...)
+// dockerRun runs docker run args as the container c, removed when ctx
+// ends: killing the docker client alone leaves its container running.
+func dockerRun(ctx context.Context, c container, args ...string) error {
+	return dockerRunIO(ctx, c, nil, nil, args...)
 }
 
 // docker runs docker args, its output to errOut.
@@ -1044,7 +1041,10 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// environment since would copy data another image wrote).
 	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
 		rel := remote.ReleaseFile(projectDir, "")
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			return fail(err.Error())
+		}
 		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
 			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
 		}
@@ -1209,8 +1209,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	}
 	// What an earlier push or export left (its devopsy killed outright):
 	// this push holds the sync lock, so nothing else is using it.
-	mnt, _ := filepath.EvalSymlinks(filepath.Join(projectDir, "mnt"))
-	if err := removeLeftoverClones(filepath.Dir(cwd), mnt); err != nil {
+	if err := removeLeftoverClones(composeName(cwd), filepath.Dir(cwd)); err != nil {
 		return finish(fail(err.Error()), false)
 	}
 	var src dataSet
@@ -1232,7 +1231,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	}
 	id := os.Getenv(remote.SyncIDEnv)
 	checked := filepath.Join(filepath.Dir(cwd), remote.SyncClonePrefix+id)
-	canClone := copiesStopped(cli.StoppedNames(set)) && cloneCheck(ctx, filepath.Dir(cwd), id, src)
+	canClone := copiesStopped(cli.StoppedNames(set)) && cloneCheck(ctx, composeName(cwd), filepath.Dir(cwd), id, src)
 	if ctx.Err() != nil {
 		// Cancelled during the check: nothing stopped, nothing copied.
 		_ = os.Remove(checked)
@@ -1249,14 +1248,13 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 		return finish(code, false)
 	}
-	parentMnt := src.mnt
 	from, cloned := src, false
 	if canClone && copiesStopped(stopped) {
 		var clone string
-		if clone, cloned = syncClone(ctx, filepath.Dir(cwd), id, src); cloned {
+		if clone, cloned = syncClone(ctx, composeName(cwd), filepath.Dir(cwd), id, src); cloned {
 			from = src.in(clone)
 			defer func() {
-				if err := removeClone(context.Background(), cloneContainer(id)+"-unclone", filepath.Dir(cwd), filepath.Base(clone)); err != nil {
+				if err := removeClone(context.Background(), cloneContainer(composeName(cwd), id).with("-unclone"), filepath.Dir(cwd), filepath.Base(clone)); err != nil {
 					report.Warn("removing the sync's clone: " + err.Error())
 				}
 			}()
@@ -1284,7 +1282,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 				code = fail("interrupted: the files not copied")
 				return
 			}
-			if err := syncRsync(ctx, from, parentMnt, childOwners(child), childShares(child), last); err != nil {
+			if err := syncRsync(ctx, from, composeName(cwd), childOwners(child), childShares(child), last); err != nil {
 				code = fail(err.Error())
 			}
 		}
@@ -1352,22 +1350,27 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	return finish(code, copied)
 }
 
-// cloneContainer starts the names of the containers of a push's or an
-// export's clone (id: its sync's, export.<pid>), never as the sync's own
-// (remote.SyncContainerPrefix<id>-): the child's holder removes those,
-// writers into the child, and must not end the parent's clone removal.
-func cloneContainer(id string) string { return remote.SyncContainerPrefix + "parent-" + id }
+// cloneContainer starts the containers of a push's or an export's clone
+// (id: its sync's, export.<pid>) in the parent env: remote.TaskSource,
+// never the sync's own task (remote.SyncTask), which the child's holder
+// removes as writers into the child: it must not end the parent's clone
+// removal. The next holder of the parent's sync lock removes what a
+// killed devopsy left (removeLeftoverClones).
+func cloneContainer(env, id string) container {
+	return container{remote.SyncContainerPrefix + "parent-" + id, env, remote.TaskSource}
+}
 
-// cloneCheck says, before anything stops, whether src clones into
-// base's SyncClonePrefix<id> by reflinks (reflinks), and warns when the
-// room for the clone is short there: neither belongs in the downtime.
-func cloneCheck(ctx context.Context, base, id string, src dataSet) bool {
+// cloneCheck says, before anything stops, whether src, the data of the
+// environment env, clones into base's SyncClonePrefix<id> by reflinks
+// (reflinks), and warns when the room for the clone is short there:
+// neither belongs in the downtime.
+func cloneCheck(ctx context.Context, env, base, id string, src dataSet) bool {
 	dir := filepath.Join(base, remote.SyncClonePrefix+id)
-	if !reflinks(ctx, cloneContainer(id)+"-reflink", dir, src, "--label", sourceLabel(src.mnt)) {
+	if !reflinks(ctx, cloneContainer(env, id).with("-reflink"), dir, src) {
 		_ = os.Remove(dir)
 		return false
 	}
-	if data, err := duData(ctx, src); err == nil && freeBytes(base) < data {
+	if data, err := duData(ctx, container{"", env, remote.TaskSource}, src); err == nil && freeBytes(base) < data {
 		report.Warn(fmt.Sprintf("%s free beside %s of data at %s: the clone takes room as the services write while the copy is made", size(freeBytes(base)), size(data), base))
 	}
 	return true
@@ -1377,14 +1380,13 @@ func cloneCheck(ctx context.Context, base, id string, src dataSet) bool {
 // it clones), saying so, and reports where; false for a clone that fails
 // though the check passed (another filesystem inside an entry), warned
 // and removed: the copy is made from the stopped data then.
-func syncClone(ctx context.Context, base, id string, src dataSet) (string, bool) {
+func syncClone(ctx context.Context, env, base, id string, src dataSet) (string, bool) {
 	dir := filepath.Join(base, remote.SyncClonePrefix+id)
-	label := []string{"--label", sourceLabel(src.mnt)}
-	if err := cloneData(ctx, cloneContainer(id)+"-clone", dir, src, label...); err != nil {
+	if err := cloneData(ctx, cloneContainer(env, id).with("-clone"), dir, src); err != nil {
 		if ctx.Err() == nil {
 			report.Warn(err.Error() + ": copying from the stopped data instead")
 		}
-		if rerr := removeClone(context.Background(), cloneContainer(id)+"-unclone", base, filepath.Base(dir), label...); rerr != nil {
+		if rerr := removeClone(context.Background(), cloneContainer(env, id).with("-unclone"), base, filepath.Base(dir)); rerr != nil {
 			report.Warn("removing the sync's clone: " + rerr.Error())
 		}
 		return "", false
@@ -1393,23 +1395,21 @@ func syncClone(ctx context.Context, base, id string, src dataSet) (string, bool)
 	return dir, true
 }
 
-// removeLeftoverClones removes the clones a push or an export killed
-// outright left in base (remote.SyncClonePrefix), and their containers
-// (sourceLabel of mnt, the parent's resolved mnt; none when ""), as
-// root: the caller holds the sync lock, so none is in use.
-func removeLeftoverClones(base, mnt string) error {
+// removeLeftoverClones removes the clones a push or an export of the
+// environment env killed outright left in base (remote.SyncClonePrefix),
+// and their containers (remote.TaskSource), as root: the caller holds
+// the sync lock, so none is in use.
+func removeLeftoverClones(env, base string) error {
 	left, _ := filepath.Glob(filepath.Join(base, remote.SyncClonePrefix+"*"))
 	if len(left) == 0 {
 		return nil
 	}
-	if mnt != "" {
-		if err := removeContainers("label=" + sourceLabel(mnt)); err != nil {
-			return err
-		}
+	if err := removeLeft(env, remote.TaskSource); err != nil {
+		return err
 	}
 	for _, dir := range left {
 		report.Info("removing " + filepath.Base(dir) + ", a clone an earlier copy left")
-		if err := removeClone(context.Background(), fmt.Sprintf("%s%d-unclone", remote.SyncContainerPrefix, os.Getpid()), base, filepath.Base(dir)); err != nil {
+		if err := removeClone(context.Background(), container{fmt.Sprintf("%s%d-unclone", remote.SyncContainerPrefix, os.Getpid()), env, remote.TaskSource}, base, filepath.Base(dir)); err != nil {
 			return fmt.Errorf("removing %s: %w", dir, err)
 		}
 	}
@@ -1650,10 +1650,10 @@ func importStream(ctx context.Context, name string, last bool) error {
 // childSSHArgs are ssh's arguments for a session from the parent's
 // server to the child's (to) running script behind the check of the
 // child's devopsy (remote.ChildCheck, needs the later sessions'): -o
-// option, remote.ChildSSH, remote.KeepAlive, -T, extra, the sync's port;
+// option, remote.ChildSSH, nil, -T, extra, the sync's port;
 // traced, script aside.
 func childSSHArgs(to, script string, needs []string, option string, extra ...string) []string {
-	args := append(append([]string{"-o", option}, remote.ChildSSH...), remote.KeepAlive...)
+	args := append([]string{"-o", option}, remote.ChildSSH()...)
 	args = append(append(args, "-T"), extra...)
 	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
 		args = append(args, "-p", p)
@@ -1983,12 +1983,12 @@ func exitCode(err error) int {
 }
 
 // rsyncEntry copies the entry d of the mnt srcMnt into dstMnt's, as
-// root in the util image (remote.RsyncCopy, opts after it), in a
-// container named name: a file entry in place (a container bind-mounts
+// root in the util image (remote.RsyncCopy, opts after it), in the
+// container c: a file entry in place (a container bind-mounts
 // the file's inode, and a replaced file would leave it reading the old
 // one until recreated). Files vanished during the copy (rsync's 24) are
 // a notice; a failure says the entry is half copied.
-func rsyncEntry(ctx context.Context, name, srcMnt, dstMnt, d string, file bool, opts ...string) error {
+func rsyncEntry(ctx context.Context, c container, srcMnt, dstMnt, d string, file bool, opts ...string) error {
 	report.Info("rsync mnt/" + d)
 	run := append(append([]string{"-v", srcMnt + ":/src:ro", "-v", dstMnt + ":/dst", remote.UtilImage}, remote.RsyncCopy...), opts...)
 	src, dst := "/src/"+d+"/", "/dst/"+d+"/"
@@ -1996,22 +1996,22 @@ func rsyncEntry(ctx context.Context, name, srcMnt, dstMnt, d string, file bool, 
 		src, dst = "/src/"+d, "/dst/"
 		run = append(run, "--inplace")
 	}
-	return rsyncRun(ctx, name, append(run, src, dst), "mnt/"+d)
+	return rsyncRun(ctx, c, append(run, src, dst), "mnt/"+d)
 }
 
 // rsyncVolume copies the named volume key from its mount src
 // (<name>:/src/<key>:ro) into dst's (<name or dir>:/dst/<key>), as
 // rsyncEntry copies an entry.
-func rsyncVolume(ctx context.Context, name, src, dst, key string) error {
+func rsyncVolume(ctx context.Context, c container, src, dst, key string) error {
 	report.Info("rsync volume " + key)
 	run := append([]string{"-v", src, "-v", dst, remote.UtilImage}, remote.RsyncCopy...)
-	return rsyncRun(ctx, name, append(run, "/src/"+key+"/", "/dst/"+key+"/"), "the volume "+key)
+	return rsyncRun(ctx, c, append(run, "/src/"+key+"/", "/dst/"+key+"/"), "the volume "+key)
 }
 
-// rsyncRun runs args as the util container name, what being what it
+// rsyncRun runs args as the util container c, what being what it
 // copies, for its notices.
-func rsyncRun(ctx context.Context, name string, args []string, what string) error {
-	if err := dockerRun(ctx, name, args...); err != nil {
+func rsyncRun(ctx context.Context, c container, args []string, what string) error {
+	if err := dockerRun(ctx, c, args...); err != nil {
 		if ctx.Err() == nil && exitCode(err) == remote.RsyncVanished {
 			report.Info("rsync " + what + ": " + remote.RsyncVanishedNotice)
 			return nil
@@ -2090,12 +2090,12 @@ func shareMount(x, target string) (string, error) {
 // when src does not clone into dst: nothing changed, the caller rsyncs
 // it and the rest. Any other failure: false, said, and the caller
 // rsyncs it, which replaces whatever the clone left.
-func shareInto(ctx context.Context, name, src, dst, what string) (ok, cloneless bool) {
+func shareInto(ctx context.Context, c container, src, dst, what string) (ok, cloneless bool) {
 	from, err := shareMount(src, "/s")
 	if err == nil {
 		var into string
 		if into, err = shareMount(dst, "/d"); err == nil {
-			err = dockerRun(ctx, name, "--network", "none", "--mount", from+",readonly", "--mount", into, remote.UtilImage, "sh", "-c", shareScript, "sh", "/s", "/d")
+			err = dockerRun(ctx, c, "--network", "none", "--mount", from+",readonly", "--mount", into, remote.UtilImage, "sh", "-c", shareScript, "sh", "/s", "/d")
 		}
 	}
 	switch {
@@ -2171,11 +2171,6 @@ func syncData(ctx context.Context, projectDir string, dirs []string, vols []cli.
 	return d, nil
 }
 
-// sourceLabel labels the containers a push or an export runs on the
-// parent's data at mnt (its rsync daemon, its clone's), so the next
-// holder of the sync lock removes one a devopsy killed outright left.
-func sourceLabel(mnt string) string { return "devopsy.data.parent=" + mnt }
-
 // in is d as cloneData cloned it into dir: its entries in dir/mnt, each
 // volume's files in dir/volumes/<key>, which a copy mounts by path where
 // it mounted the volume by name.
@@ -2196,12 +2191,12 @@ func (d dataSet) in(dir string) dataSet {
 // volume keeps the owners it is copied with: its files are its image's
 // users'. The child's volumes are there already (its prepare, or a
 // reset's wipe, made them): one missing fails before anything is
-// written. parentMnt is the parent's own mnt, which names a daemon an
-// earlier push left.
+// written. parent is the parent's compose name, whose daemon an earlier
+// push may have left (remote.TaskSource).
 // Same server: one container with both mounts. Across servers: an rsync
 // daemon on this server, reached by the child's server through a reverse forward of
 // an SSH session the forwarded agent opens.
-func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[string]string, shares map[string]bool, last bool) error {
+func syncRsync(ctx context.Context, src dataSet, parent string, owners map[string]string, shares map[string]bool, last bool) error {
 	toDir, _, err := syncEnv(cli.SyncPushFlag)
 	if err != nil {
 		return err
@@ -2241,12 +2236,14 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 			}
 		}
 		id := os.Getenv(remote.SyncIDEnv)
+		// The sync's writes into the child: what its holder ends.
+		write := container{remote.SyncContainerPrefix + id, toProject, remote.SyncTask(id)}
 		shares = shareable(src, childMnt, shares)
 		shared := map[string]string{}
 		// The first that will not clone says so for all, and the rest are
 		// rsynced too, without a try.
-		share := func(name, from, into, what string) bool {
-			ok, cloneless := shareInto(ctx, name, from, into, what)
+		share := func(c container, from, into, what string) bool {
+			ok, cloneless := shareInto(ctx, c, from, into, what)
 			if cloneless {
 				report.Info("no reflinks between the parent's data and the child's: " + cli.DataCopyReflinkLabel + " rsynced as any")
 				shares = nil
@@ -2255,34 +2252,32 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 		}
 		for i, d := range present {
 			if shares[d] {
-				if share(fmt.Sprintf("%s%s-share-%d", remote.SyncContainerPrefix, id, i), filepath.Join(src.mnt, d), filepath.Join(childMnt, d), "mnt/"+d) {
+				if share(write.with(fmt.Sprintf("-share-%d", i)), filepath.Join(src.mnt, d), filepath.Join(childMnt, d), "mnt/"+d) {
 					if o := owners[d]; o != "" {
 						shared[d] = o
 					}
 					continue
 				}
 			}
-			name := fmt.Sprintf("%s%s-rsync-%d", remote.SyncContainerPrefix, id, i)
 			var opts []string
 			if o := owners[d]; o != "" {
 				opts = append(opts, "--chown="+o)
 			}
-			if err := rsyncEntry(ctx, name, src.mnt, childMnt, d, slices.Contains(files, d), opts...); err != nil {
+			if err := rsyncEntry(ctx, write.with(fmt.Sprintf("-rsync-%d", i)), src.mnt, childMnt, d, slices.Contains(files, d), opts...); err != nil {
 				return err
 			}
 		}
 		for i, v := range volumes {
-			if shares[v.Key] && share(fmt.Sprintf("%s%s-share-v%d", remote.SyncContainerPrefix, id, i), v.Name, toProject+"_"+v.Key, "the volume "+v.Key) {
+			if shares[v.Key] && share(write.with(fmt.Sprintf("-share-v%d", i)), v.Name, toProject+"_"+v.Key, "the volume "+v.Key) {
 				continue
 			}
-			name := fmt.Sprintf("%s%s-rsync-v%d", remote.SyncContainerPrefix, id, i)
-			if err := rsyncVolume(ctx, name, v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
+			if err := rsyncVolume(ctx, write.with(fmt.Sprintf("-rsync-v%d", i)), v.Name+":/src/"+v.Key+":ro", toProject+"_"+v.Key+":/dst/"+v.Key, v.Key); err != nil {
 				return err
 			}
 		}
 		// A clone keeps the parent's owners: the child's own, as the
 		// rsync's --chown gives them.
-		if err := ownMnt(ctx, childMnt, shared, remote.SyncContainerPrefix+id+"-owners"); err != nil {
+		if err := ownMnt(ctx, childMnt, shared, write.with("-owners")); err != nil {
 			return err
 		}
 		if last {
@@ -2293,11 +2288,10 @@ func syncRsync(ctx context.Context, src dataSet, parentMnt string, owners map[st
 
 	// A daemon an earlier push left (its devopsy killed outright) goes:
 	// this push holds the parent's sync lock, so no other is serving.
-	parentLabel := sourceLabel(parentMnt)
-	if err := removeContainers("label=" + parentLabel); err != nil {
+	if err := removeLeft(parent, remote.TaskSource); err != nil {
 		return err
 	}
-	daemon := []string{"run", "--rm", "-d", "--name", remote.SyncContainerPrefix + os.Getenv(remote.SyncIDEnv) + "-daemon", "--label", parentLabel, "-v", src.mnt + ":/mnt:ro"}
+	daemon := append(append([]string{"run", "--rm", "-d"}, container{remote.SyncContainerPrefix + os.Getenv(remote.SyncIDEnv) + "-daemon", parent, remote.TaskSource}.runArgs()...), "-v", src.mnt+":/mnt:ro")
 	var keys []string
 	for _, v := range volumes {
 		daemon = append(daemon, "-v", v.Name+":/vol/"+v.Key+":ro")
@@ -2622,7 +2616,7 @@ func runSyncServices(cwd string, args []string, color bool) int {
 				return fail(err.Error())
 			}
 		} else if m.IsRestore() {
-			if err := removeContainers(importContainers(cwd)); err != nil {
+			if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
 				return fail(err.Error())
 			}
 		}
@@ -3255,15 +3249,17 @@ func wipeData(cwd, projectDir, base string) error {
 		who = "@" + to
 	}
 	report.Info("resetting " + who + ": every container and volume goes and mnt is emptied; its shared/.env stays")
-	if err := removeContainers(importContainers(cwd)); err != nil {
+	if err := removeLeft(composeName(cwd), remote.TaskImport); err != nil {
 		return err
 	}
 	if err := compose(cwd, errOut, "--profile", "*", "down", "--volumes", "--remove-orphans"); err != nil {
 		return fmt.Errorf("docker compose down: %w", err)
 	}
-	// Named by the sync, so a holder deciding meanwhile removes it
+	// The sync's task, so a holder deciding meanwhile removes it
 	// (endWriters): no write outlives its sync.
-	if err := emptyMnt(context.Background(), projectDir, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-wipe"); err != nil {
+	id := os.Getenv(remote.SyncIDEnv)
+	wipe := container{remote.SyncContainerPrefix + id + "-wipe", composeName(cwd), remote.SyncTask(id)}
+	if err := emptyMnt(context.Background(), projectDir, wipe); err != nil {
 		return err
 	}
 	// Its owned entries back, as a release left them: finish go creates
@@ -3272,7 +3268,7 @@ func wipeData(cwd, projectDir, base string) error {
 	// too, for the rsync to write into.
 	owners, mnt, err := projectOwners(cwd)
 	if err == nil {
-		err = ownMnt(context.Background(), mnt, owners, remote.SyncContainerPrefix+os.Getenv(remote.SyncIDEnv)+"-owners")
+		err = ownMnt(context.Background(), mnt, owners, container{remote.SyncContainerPrefix + id + "-owners", composeName(cwd), remote.SyncTask(id)})
 	}
 	if err != nil {
 		return err

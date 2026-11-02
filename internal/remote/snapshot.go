@@ -84,10 +84,6 @@ rm -f "$base/` + SnapshotHoldingFile + `"
 // writes the snapshot's manifest and code); then the release and sync
 // locks go, and the tars are made under the snapshot lock alone.
 func SnapshotScript(t *Target, projectName string, keep int) string {
-	mode := t.Mode
-	if mode == "" {
-		mode = ModeBuild
-	}
 	// A step, its word and then shell words as they are ("$id"). Up to
 	// the stopped pass's end each runs in the background, the script
 	// waiting: a signal the watcher sends the script alone (it leads no
@@ -117,11 +113,10 @@ trap - INT TERM HUP
 : >"$base/` + SnapshotHoldingFile + `"
 `
 	s := "set -eu\n" + basePrelude(t) + "exec 1>&2\n" + NoExit255
-	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + hintAddress(t) + ` --release')"; exit 1; }
+	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release')"; exit 1; }
 `
-	s += watchSession(false, true)
-	s += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
-export ` + snapshotEnv(t, keep) + `
+	s += watchSession(false)
+	s += "export " + snapshotEnv(t, keep) + `
 umask 077
 mkdir -p "$snaps"
 cd "$base/current"
@@ -205,13 +200,8 @@ cd "$base/current" 2>/dev/null || cd "$base"
 // bookmarks, the images only it held freed as a release's removal does.
 // A snapshot a restore's mark names stays.
 func SnapshotsRemoveScript(t *Target, projectName string, ids []string) string {
-	mode := t.Mode
-	if mode == "" {
-		mode = ModeBuild
-	}
 	return "set -eu\n" + basePrelude(t) + `[ -d "$snaps" ] || { devopsy --say error "$base has no snapshots"; exit 1; }
 [ -L "$base/current" ] || { devopsy --say error "$base has no current release"; exit 1; }
-export ` + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
 ` + snapshotLock(false) + `cd "$base/current"
 ` + devopsyCall(projectName, append([]string{SnapshotStepFlag, "remove"}, ids...), true) + "\n"
 }
@@ -225,10 +215,6 @@ export ` + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` 
 // the deployed run step again, its output in the current release's
 // server log, as a sync's.
 func RestoreDataScript(t *Target, projectName string, r *RestoreOptions) string {
-	mode := t.Mode
-	if mode == "" {
-		mode = ModeBuild
-	}
 	step := func(word string, args ...string) string {
 		return "(cd \"$base/current\" && " + devopsyCall(projectName, []string{SnapshotStepFlag, word}, false) + " " + strings.Join(args, " ") + ")"
 	}
@@ -236,15 +222,15 @@ func RestoreDataScript(t *Target, projectName string, r *RestoreOptions) string 
 	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first, then restore"; exit 1; }
 snap="$snaps"/` + Quote(r.Snapshot) + `
 [ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + r.Snapshot + `"; exit 1; }
-export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(mode) + ` ` + RestoreByEnv + `=` + Quote(r.By)
+export ` + RestoreByEnv + `=` + Quote(r.By)
 	if r.WithEnv {
 		s += " " + RestoreEnvEnv + "=1"
 	}
 	s += `
-` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
+` + watchSession(false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
-` + releaseImages(projectName, t, mode) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
+` + releaseImages(projectName, t) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `
@@ -357,7 +343,7 @@ exec tar -C "$snaps" -cf - ` + Quote(id) + `
 // its tars (--snapshot-step imported), renamed into place. It needs a
 // current release, as a restore does: on a new server, release first.
 func SnapshotImportScript(t *Target, projectName string) string {
-	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + hintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
+	return "set -eu\n" + basePrelude(t) + `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release'), then import the snapshot and restore it (--with-env brings its shared/.env back)"; exit 1; }
 umask 077
 mkdir -p "$snaps"
 ` + snapshotLock(false) + lockedGate(false, "") + `tmp="$snaps/.import.$$"

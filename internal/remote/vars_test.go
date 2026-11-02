@@ -262,3 +262,36 @@ func TestVarsEditInPlace(t *testing.T) {
 		t.Errorf("the edit: link %v, %q, mode %v", fi.Mode(), readFile(real), rfi.Mode())
 	}
 }
+
+// A .env another user owns goes into place in one rename too, with its
+// mode (once, a cat wrote over it in place, so a reader could find it
+// empty or cut). Only root can give the file away to set it up: Linux
+// in Docker, as Checks runs it.
+func TestVarsRenamesForeignFile(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to make a file of another user's")
+	}
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Host: "h", Path: "app/prod"}
+	file := filepath.Join(root, "app", "prod", "shared", ".env")
+	write(t, file, "A=old\n")
+	if err := os.Chmod(file, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(file, 12345, 12345); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runVarsScript(t, root, VarsSetScript(tg, nil, nil), "A='new'\n")
+	after, err := os.Stat(file)
+	if err != nil || readFile(file) != "A='new'\n" || after.Mode().Perm() != 0o640 {
+		t.Fatalf("%q, %v, %v", readFile(file), after, err)
+	}
+	if os.SameFile(before, after) {
+		t.Errorf("written over in place, not renamed")
+	}
+}

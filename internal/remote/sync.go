@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -84,11 +83,49 @@ const (
 )
 
 // ImportContainerPrefix and the compose project start the name of the
-// container an mnt --import writes through, then devopsy's pid (and
-// -owners-<n> for those giving what it extracted to its owners): what
-// the next lock-taker removes when a killed devopsy left it, and
-// --destroy before emptying mnt.
+// containers an mnt --import (or a restore) writes through, then
+// devopsy's pid, -extract-<n> or -owners-<n>: a name unique while they
+// run. What finds them is their labels (ContainerLabels, TaskImport).
 const ImportContainerPrefix = "devopsy-import-"
+
+// EnvLabel and TaskLabel label every container devopsy starts itself
+// (ContainerLabels): whose it is, the compose name of the environment
+// whose data it works on, and what it does, a task (TaskOwners and the
+// rest, SyncTask). Every cleanup finds devopsy's containers by them (a
+// docker ps filter on both, or EnvLabel alone for all of an
+// environment's), never by name: each guarantee is a filter value, so a
+// holder's (SyncTask of its id) can never match another sync's or the
+// parent's clone. Not devopsy.data*: those are the project's labels.
+const (
+	EnvLabel  = "devopsy.env"
+	TaskLabel = "devopsy.task"
+)
+
+// The tasks of devopsy's containers (TaskLabel), each its own filter:
+// a release's or a local command's owners' step; an import's or a
+// restore's extraction and its owners'; the source side of a push's or
+// an export's copy (the reflink check, the clone, its removal, the
+// rsync daemon); a snapshot's; an export's tar; --destroy's. What
+// writes a sync's copy into the child is SyncTask's.
+const (
+	TaskOwners   = "owners"
+	TaskImport   = "import"
+	TaskSource   = "source"
+	TaskSnapshot = "snapshot"
+	TaskExport   = "export"
+	TaskDestroy  = "destroy"
+)
+
+// SyncTask is the task of what writes sync id's copy into the child:
+// its rsync, clone and owners' containers, the receive's, a reset's wipe.
+// The child's holder removes those of its own id once it decides.
+func SyncTask(id string) string { return "sync-" + id }
+
+// ContainerLabels are docker run's options labelling a container of
+// devopsy's for env (a compose name) and task.
+func ContainerLabels(env, task string) []string {
+	return []string{"--label", EnvLabel + "=" + env, "--label", TaskLabel + "=" + task}
+}
 
 // ImportMarker is the line devopsy --import on a server prints on stderr
 // right before its first write, and waits for a byte from the session
@@ -113,9 +150,10 @@ func WriterLine(service string, pid int, was string) string {
 	return fmt.Sprintf("writer import %s %d %s", service, pid, cmp.Or(was, "none"))
 }
 
-// SyncContainerPrefix starts the names of the containers a sync runs to
-// write into a child (rsync, on one server or across two), then the
-// sync's id: what --sync-services finish partial and settle remove.
+// SyncContainerPrefix starts the names of the containers a sync runs
+// (rsync, on one server or across two; the parent's clone, as
+// devopsy-sync-parent-<id>), then the sync's id: a name unique while
+// they run. What finds them is their labels (SyncTask, TaskSource).
 const SyncContainerPrefix = "devopsy-sync-"
 
 // DoneLine records the copy's last write in SyncStartedFile.
@@ -126,9 +164,9 @@ func DoneLine(id string) string {
 // Why an environment is marked (SyncIncompleteFile), the line's code: a
 // copy cut, a holder killed before it decided (settled by the next
 // lock-taker), a complete copy its project's finish child go refused,
-// or an --import that did not complete (from its first write on). A
-// sync's mark replaces an import's, never the reverse: from then on the
-// data is partly a sync's.
+// or an --import that did not complete (from its first write on); a
+// restore's is IncompleteRestore. A sync's mark replaces an import's,
+// never the reverse: from then on the data is partly a sync's.
 const (
 	IncompleteCopy    = "copy"
 	IncompleteSettled = "settled"
@@ -138,8 +176,9 @@ const (
 
 // IncompleteLine is SyncIncompleteFile's content: since when (UTC, the
 // first mark's: a later one keeps it), the parent's address (for an
-// import, IncompleteImport, the service's name), the code and why, for
-// people, tab separated.
+// import, IncompleteImport, the service's name; for a restore,
+// IncompleteRestore, the snapshot's id), the code and why, for people,
+// tab separated.
 func IncompleteLine(since, from, code, why string) string {
 	return since + "\t" + from + "\t" + code + "\t" + why + "\n"
 }
@@ -203,7 +242,7 @@ func RestoreFixes(ref, snapshot string, child bool) [][2]string {
 // shell's $snapshot.
 func restoreFixLines(t *Target, snapshot string) string {
 	var lines []string
-	for _, f := range RestoreFixes(hintAddress(t), "$"+snapshot, t.Parent != "") {
+	for _, f := range RestoreFixes(HintAddress(t), "$"+snapshot, t.Parent != "") {
 		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
 	}
 	return strings.Join(lines, " ")
@@ -217,13 +256,13 @@ func ResetFix(ref string) [2]string {
 // syncFixLines are a sync mark's ways out as --say's details for a
 // script: a sync, the details in more (each double-quoted), a reset.
 func syncFixLines(t *Target, more ...string) string {
-	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync"`}
+	lines := []string{`"to fix it, sync it again:"`, `"` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync"`}
 	return strings.Join(append(append(lines, more...), resetFixLines(t)), " ")
 }
 
 // resetFixLines is ResetFix as --say's details for a script.
 func resetFixLines(t *Target) string {
-	f := ResetFix(hintAddress(t))
+	f := ResetFix(HintAddress(t))
 	return `"` + f[0] + `" "` + report.CmdMark + f[1] + `"`
 }
 
@@ -232,7 +271,7 @@ func resetFixLines(t *Target) string {
 // report.CmdMark, double-quoted.
 func importFixLines(t *Target, service string) string {
 	var lines []string
-	for _, f := range ImportFixes(hintAddress(t), "$"+service, t.Parent != "") {
+	for _, f := range ImportFixes(HintAddress(t), "$"+service, t.Parent != "") {
 		lines = append(lines, `"`+f[0]+`"`, `"`+report.CmdMark+f[1]+`"`)
 	}
 	return strings.Join(lines, " ")
@@ -240,7 +279,8 @@ func importFixLines(t *Target, service string) string {
 
 // markRefusal is shell refusing on the environment's mark ($base set),
 // then running refuse: an import's says which service and the ways out,
-// a sync's what syncFix says (--say details). what is what does not
+// a restore's which snapshot and its ways out, a sync's what syncFix
+// says (--say details). what is what does not
 // happen ("nothing released"). Without a mark, nothing.
 func markRefusal(t *Target, what, syncFix, refuse string) string {
 	mark := `"$base/` + SyncIncompleteFile + `"`
@@ -330,32 +370,18 @@ const SyncResetEnv = "DEVOPSY_INTERNAL_SYNC_RESET"
 // release whose log the sync's is appended to.
 var SyncingInto = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `syncing into ([0-9]{14})`)
 
-// KeepAlive are the ssh options of a sync's sessions (the holder, the
-// push, and the parent's sessions to the child): a session can stay quiet
-// for the whole copy, and a NAT or firewall dropping it would abort the
-// sync halfway, or leave a push writing into a child already restored.
-//
-// Every 3 beats of the heartbeat (HeartbeatEvery: 15 seconds), so the
-// end-to-end tests' shorter beat keeps the order between the push's
-// silence, the operator noticing and the holder's silence.
-var KeepAlive = []string{"-o", "ServerAliveInterval=" + strconv.Itoa(3*int(HeartbeatEvery().Seconds())), "-o", "ServerAliveCountMax=3"}
-
-// Bounded are KeepAlive plus a connect timeout: for sessions devopsy
-// must not hang on, a release log's save after a dropped connection
-// (it waited on connect, minutes, with nobody to tell), --export and
-// --import (their data can pause, and a dead connection otherwise
-// lasts until TCP gives up).
-var Bounded = append([]string{"-o", "ConnectTimeout=30"}, KeepAlive...)
-
 // ChildSSH are the options of the parent's sessions to the child (the
-// rsync session and --sync-exec), with KeepAlive: the operator's agent,
-// forwarded to the parent for the push, never goes one hop further
-// (the child is the unreviewed side, and a ForwardAgent in the parent's
-// ssh config would send it), a key the child refuses fails at once
-// instead of waiting for a password nobody can type, and a child the
-// parent cannot reach fails in seconds, not after the TCP timeout, with
-// its services stopped meanwhile.
-var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=accept-new"}
+// rsync session and --sync-exec), with connectOptions as every session
+// has them: the operator's agent, forwarded to the parent for the push,
+// never goes one hop further (the child is the unreviewed side, and a
+// ForwardAgent in the parent's ssh config would send it), a key the
+// child refuses fails at once instead of waiting for a password nobody
+// can type, and a child the parent cannot reach fails in seconds, not
+// after the TCP timeout, with its services stopped meanwhile. Not
+// SSHOptions: the rsync session keeps its forwarding.
+func ChildSSH() []string {
+	return append([]string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"}, connectOptions()...)
+}
 
 // UtilImage is devopsy's own image for what needs root on a host's files,
 // built there from UtilDockerfile when missing: syncs' rsync, the tar of
@@ -501,9 +527,6 @@ const (
 	// long as devopsy's push session lives: EOF means the session is gone,
 	// and the push stops.
 	SyncWatchEnv = "DEVOPSY_INTERNAL_SYNC_WATCH"
-	// ColorEnv tells --sync-push that the operator's terminal takes
-	// colors: servers have no terminal of their own to ask.
-	ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 )
 
 // SyncOptions make ActivateScript sync the parent's data into the new
@@ -632,13 +655,6 @@ fi
 `
 }
 
-// syncBlock is a sync's part on the child, in its current release with
-// $status 0, the sync's variables exported (SyncOptions.exports): prepare
-// (services stopped), the gate (SyncOpenFile) and the marker, the push's
-// end (devopsy's answer, or none), then finish with what the files say
-// was written; $status says how it went. failed says what a failure
-// means here; release is an activation's, which may be a first release
-// (syncPrepare).
 // syncDecision sets $sync_word from what the copy wrote (taken, the
 // writers' record the holder took), the environment's mark (incomplete)
 // and the answer ($reply): go, partial or abort.
@@ -661,6 +677,13 @@ func syncDecision(taken, incomplete string) string {
 `
 }
 
+// syncBlock is a sync's part on the child, in its current release with
+// $status 0, the sync's variables exported (SyncOptions.exports): prepare
+// (services stopped), the gate (SyncOpenFile) and the marker, the push's
+// end (devopsy's answer, or none), then finish with what the files say
+// was written; $status says how it went. failed says what a failure
+// means here; release is an activation's, which may be a first release
+// (syncPrepare).
 func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
@@ -736,7 +759,7 @@ rm -f "$base/` + SyncHoldingFile + `"
 // syncRestorePipe ends syncPrepare's SIGPIPE exemption, before the run
 // step, which runs as release steps always do, and the sync's variables
 // (SyncOptions.exports): the run and after steps are no sync's.
-const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + images.SyncImagesEnv + "\n"
+const syncRestorePipe = "trap - PIPE\nunset " + SyncFromTargetEnv + " " + SyncToTargetEnv + " " + InheritPendingEnv + " " + SyncIDEnv + " " + SyncResetEnv + " " + images.SyncImagesEnv + "\n"
 
 // syncWait prints the marker and reads devopsy's answer into $reply.
 // Without one, devopsy is gone (interrupted, its connection lost): nobody
@@ -755,16 +778,17 @@ func syncWait() string {
 `
 }
 
-// SyncLogMax is the size past which .devopsy-sync.log, appended to by
-// every sync whose session went, keeps only its last SyncLogKeep lines.
-const (
-	SyncLogMax  = 1 << 20
-	SyncLogKeep = 1000
-)
+// SyncLogLines is how many lines .devopsy-sync.log keeps: appended to by
+// every sync whose session went, it is cut to its last SyncLogLines
+// before each append once longer. Two implementations of one rule: the
+// holder's shell appends once its session went (trimSyncLog, with no
+// devopsy of its own to ask), the push's and an import's devopsy from
+// Go (cmd/devopsy's trimSyncLog).
+const SyncLogLines = 1000
 
-// trimSyncLog cuts .devopsy-sync.log to its last lines once too big,
-// $base set; never fails.
-var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -c <"$base/.devopsy-sync.log")" -lt %d ] || { tail -n %d "$base/.devopsy-sync.log" >"$base/.devopsy-sync.log.tmp" && mv -f "$base/.devopsy-sync.log.tmp" "$base/.devopsy-sync.log"; }; } 2>/dev/null || true`, SyncLogMax, SyncLogKeep)
+// trimSyncLog cuts .devopsy-sync.log to its last SyncLogLines lines once
+// longer, $base set; never fails.
+var trimSyncLog = fmt.Sprintf(`{ [ ! -f "$base/.devopsy-sync.log" ] || [ "$(wc -l <"$base/.devopsy-sync.log")" -le %d ] || { tail -n %d "$base/.devopsy-sync.log" >"$base/.devopsy-sync.log.tmp" && mv -f "$base/.devopsy-sync.log.tmp" "$base/.devopsy-sync.log"; }; } 2>/dev/null || true`, SyncLogLines, SyncLogLines)
 
 // HolderScript is the child's side of --sync: under the child's release
 // lock, in its current release, it prepares, prints the marker, waits for
@@ -778,7 +802,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, hintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
+`, HintAddress(t)) + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
@@ -829,10 +853,10 @@ exit "$rs"
 // holds (PushScript, ExportScript): its release lock shared (a release
 // waits) and its sync lock exclusively (each stops and restores what the
 // environment's labels say, so two at once would restore them under the
-// other).
+// other). On fd 5, as in every script holding it.
 func syncSourceLock() string {
-	return releaseLock(true, false) + `exec 8>"$base/` + SyncLockFile + `"
-` + lockWait(8, false, "another sync from $base") + "\n"
+	return releaseLock(true, false) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "another sync from $base") + "\n"
 }
 
 // PushScript is the parent's side of a sync: under a shared hold of the
@@ -858,7 +882,7 @@ func PushScript(p *Target, projectName string, env map[string]string) string {
 	}
 	return "set -eu\n" + basePrelude(p) + `[ -d "$base/current/.devopsy" ] || { devopsy --say error "the parent $base has no current release"; exit 1; }
 ` + syncSourceLock() + markRefusal(p, "nothing synced from it", syncFixLines(p), "exit 1") + `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + hintAddress(p) + ` --sync)"
+  devopsy --say error "the parent $base holds data from a sync that did not complete: sync it first (devopsy @` + HintAddress(p) + ` --sync)"
   exit 1
 fi
 cd "$base/current"
@@ -889,22 +913,12 @@ fi
 // complete data.
 const ImportEndEnv = "DEVOPSY_INTERNAL_IMPORT_END"
 
-// ImagesLeftEnv, ImagesLockEnv and ImagesModeEnv give an import on a
-// server what it needs to change the server's images (ImportScript):
-// the project's record (images.Set.Left), the image lock it takes,
-// shared, around its check and its take-over, and the environment's mode.
-const (
-	ImagesLeftEnv = "DEVOPSY_INTERNAL_IMAGES_LEFT"
-	ImagesLockEnv = "DEVOPSY_INTERNAL_IMAGES_LOCK"
-	ImagesModeEnv = "DEVOPSY_INTERNAL_IMAGES_MODE"
-)
-
 // ImportScript replaces service's data with stdin (devopsy --import), in
 // the target's current release under its release lock, as a sync holds it.
 // end is what the data must end with (ImportEndEnv). A mark refuses
 // before devopsy reads stdin, so a dump is never sent only to be refused:
-// a sync's (only a sync completes it), and an import's of another service
-// (only its own completes it). While it holds the lock, SyncImportingFile
+// a sync's (only a sync completes it), a restore's (only a restore
+// does), and an import's of another service (only its own completes it). While it holds the lock, SyncImportingFile
 // says an import runs (ImportRunning). accept are the services
 // --accept-image named (ImagesAcceptEnv), space separated: an mnt
 // import whose export recorded an image its data never ran is refused
@@ -914,16 +928,8 @@ func ImportScript(t *Target, projectName, service, end, accept string) string {
 	if accept != "" {
 		acceptLine = "export " + ImagesAcceptEnv + "=" + Quote(accept) + "\n"
 	}
-	mode := t.Mode
-	if mode == "" {
-		mode = ModeBuild
-	}
-	// What an import holding the export's image needs of the server's
-	// images, as img gets it (releaseImages): the project's record, the
-	// image lock, the mode.
-	acceptLine += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + "\n"
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`[ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first"; exit 1; }
-`, hintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
+`, HintAddress(t)) + releaseLock(false, false) + lockedGate(false, "") + `cd "$base/current"
 : >"$base/` + SyncImportingFile + `"
 trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
 ` + settleLeftover(projectName) + `if [ -e "$base/` + SyncIncompleteFile + `" ]; then
@@ -933,7 +939,7 @@ trap 'rm -f "$base/` + SyncImportingFile + `"' EXIT
     devopsy --say error "the restore of snapshot $im_service into @` + t.Address + ` did not complete, and only a restore completes it: nothing imported" ` + restoreFixLines(t, "im_service") + `
     exit 1
   elif [ "$im_code" != ` + IncompleteImport + ` ]; then
-    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+    devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and only a sync completes it: nothing imported: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
     exit 1
   elif [ "$im_service" != ` + Quote(service) + ` ]; then
     devopsy --say error "the import of $im_service into @` + t.Address + ` did not complete, and only $im_service can be imported until one does: nothing imported" ` + importFixLines(t, "im_service") + `
@@ -990,24 +996,30 @@ func ResolvedScript(t *Target, projectName, service string) string {
 # Killed (SIGKILL, the OOM killer), it said nothing: the mark stays, what
 # it started perhaps running under it.
 if [ "$rv_status" -gt 128 ]; then
-  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+hintAddress(t)+" --import "+service+" --resolved") + `fi
+  ` + killedLine("rv_status", "", "the import of "+service+" is not resolved, its mark still there and what it started perhaps running", "devopsy @"+HintAddress(t)+" --import "+service+" --resolved") + `fi
 exit "$rv_status"
 `
 }
 
-// SyncStateFile is the record of what a sync or an import stopped, in the
-// environment's directory ("stop <service>" lines; cmd/devopsy's
-// syncRecord): what restoring brings back, and what --resolved names.
+// SyncStateFile is the record of what a sync, an import or a snapshot
+// stopped, in the environment's directory (cmd/devopsy's syncRecord):
+// "stop <service>" lines, what restoring brings back and what --resolved
+// names; "own <sync id> <service>" for what a sync stopped itself,
+// "snapshot <id> <service>" for a take's or a release snapshot's stops,
+// "writer <pgid> [down]" for an import's writer, and "first" for a
+// child's first release.
 const SyncStateFile = ".devopsy-sync.services"
 
 // CurrentExistsScript prints "current" when the target has a current
 // release, else "none": whether a release is its first, and whether a
 // parent was released. Then "incomplete", a tab and the mark's line when
-// a sync or an import left its data partial (SyncIncompleteFile;
-// "incomplete" alone for a sync's files no holder settled), "importing"
-// while an import runs, and DataCopyFeature when the server's devopsy
-// has it: a release that does not sync refuses before uploading, and one
-// that syncs on a server without it. extra are needs to check besides
+// a sync, an import or a restore left its data partial
+// (SyncIncompleteFile; "incomplete" alone for a sync's files no holder
+// settled), "importing" while an import runs, DataCopyFeature when the
+// server's devopsy has it (a release that does not sync refuses before
+// uploading, and one that syncs on a server without it), and
+// "parentenv", a tab and its copy's header, when the environment has a
+// copy of its parent's server's levels (ParentEnvFile). extra are needs to check besides
 // the script's own (the push's, for a parent).
 func CurrentExistsScript(t *Target, extra []string) string {
 	needs := ""
@@ -1027,7 +1039,7 @@ case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeatu
 // which the child's side checks and takes over (images.SyncImagesEnv),
 // and the keys its inherit: names (inheritKeys).
 func ParentCheckScript(t *Target, projectName string, extra []string) string {
-	return CurrentExistsScript(t, extra) + releaseImages(projectName, t, t.Mode) + `if [ -d "$base/current/.devopsy" ]; then
+	return CurrentExistsScript(t, extra) + releaseImages(projectName, t) + `if [ -d "$base/current/.devopsy" ]; then
   pc_rel=$(readlink "$base/current")
   img data "$base" "$base/${pc_rel%/` + CodeDir + `}"
 fi
@@ -1187,6 +1199,11 @@ func SyncReceiveScript(toDir, base, id, port string, dirs, files, volumes []stri
 		open := Quote(path.Join(base, SyncOpenFile(id)))
 		claim = "if mv -f " + open + " " + started + " 2>/dev/null; then\n  ( " + strings.ReplaceAll(strings.TrimSpace(wipe), "\n", "\n  ") + " ) || { devopsy --say error \"wiping the child failed: it holds a partial copy now\"; exit 1; }\nelse\n  " + claim + "fi\n"
 	}
+	// Labeled as the holder of sync id finds what writes its copy.
+	labels := ""
+	for _, a := range ContainerLabels(toProject, SyncTask(id)) {
+		labels += " " + Quote(a)
+	}
 	script := "set -eu\nmnt=$(cd " + Quote(path.Join(toDir, "mnt")) + " && pwd -P)\ndevopsy " + UtilImageFlag + "\n" + claim +
 		`rs_name=` + Quote(SyncContainerPrefix+id+"-receive") + `
 mine() { [ "$(head -n 1 ` + started + ` 2>/dev/null | cut -d' ' -f2)" = ` + Quote(id) + ` ]; }
@@ -1198,7 +1215,7 @@ trap 'kill "$rs_watch" 2>/dev/null || true' EXIT
 copy() {
   mine || { devopsy --say error "the child's side decided already: mnt/$1 not copied"; exit 1; }
   devopsy --say info "rsync mnt/$1"
-  docker run --rm --name "$rs_name" --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$mnt:/mnt" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + " $4 " + `"rsync://127.0.0.1:` + port + `/$2" "/mnt/$3"` + ` >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "mnt/$1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync mnt/$1: ` + RsyncVanishedNotice + `"
   }
@@ -1206,7 +1223,7 @@ copy() {
 copyvol() {
   mine || { devopsy --say error "the child's side decided already: the volume $1 not copied"; exit 1; }
   devopsy --say info "rsync volume $1"
-  docker run --rm --name "$rs_name" --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
+  docker run --rm --name "$rs_name"` + labels + ` --network host -v "$2:/vol/$1" ` + Quote(UtilImage) + " " + strings.Join(RsyncCopy, " ") + ` "rsync://127.0.0.1:` + port + `/$1/" "/vol/$1/" >&2 || {
     [ "$?" = ` + fmt.Sprint(RsyncVanished) + ` ] || { devopsy --say error "the volume $1 ` + HalfCopiedNotice + `"; exit 1; }
     devopsy --say warning "rsync volume $1: ` + RsyncVanishedNotice + `"
   }

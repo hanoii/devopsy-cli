@@ -1554,19 +1554,12 @@ func capability(p *loadedProject, args []string) (*Plan, error) {
 	}, nil
 }
 
-// ColorEnv set means the output ends on a terminal that takes colors,
-// even through a pipe: devopsy on a server, whose session has none, so
-// its messages and Compose's output (--ansi always) come colored to the
-// operator. Internal: devopsy exports it into every session when it
-// colors locally; what a person sets is FORCE_COLOR (ColorForced).
-const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
-
 // ColorForced reports whether colors are wanted without a terminal:
-// ColorEnv, or FORCE_COLOR set to anything but 0 or false (chalk's
+// remote.ColorEnv, or FORCE_COLOR set to anything but 0 or false (chalk's
 // convention, honored by many tools). NO_COLOR, checked by the callers,
 // wins over both.
 func ColorForced(lookup func(string) (string, bool)) bool {
-	if v, _ := lookup(ColorEnv); v != "" {
+	if v, _ := lookup(remote.ColorEnv); v != "" {
 		return true
 	}
 	v, _ := lookup("FORCE_COLOR")

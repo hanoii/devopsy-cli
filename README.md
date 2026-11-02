@@ -473,7 +473,10 @@ environments:
 ```
 
 Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
-committed, never uploaded) is read over it for one machine. In `env`, `""`
+committed, never uploaded) is read over it for one machine: its `defaults:`
+and each environment merge over the project's of the same name as
+`defaults:` merge into environments, so it changes a key and keeps the
+rest, and `parent: ~` there removes a parent. In `env`, `""`
 sets an empty value and `~` removes a default; `inherit: ~` removes its
 list. `snapshots:` merges key by key too: `true` and `false` only
 turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the
@@ -1351,8 +1354,8 @@ only the entries being copied, no published port) and reaches the child's
 over SSH, through a reverse forward, with your SSH agent forwarded for
 that session only, and never on to the child; a stream goes to the child's
 file through an SSH session of the parent's too. Data goes server to
-server, never through your machine. The sync's SSH sessions send
-keepalives every 15 seconds, so a firewall does not drop a quiet copy, and
+server, never through your machine. The sync's SSH sessions, like every
+session devopsy opens, send keepalives every 15 seconds, so a firewall does not drop a quiet copy, and
 the parent gives up on a child it cannot reach, or that refuses its key,
 within 30 seconds rather than keeping its services stopped for minutes.
 So, across servers:

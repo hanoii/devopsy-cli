@@ -752,8 +752,14 @@ func TestSyncRestoreMark(t *testing.T) {
 		t.Errorf("a sync leaving app out (%d):\n%s\n%s", code, out, docker)
 	}
 	os.Remove(s.log + ".shop-prod")
+	// The cut restore's extracting containers go with the child's prepare,
+	// this environment's only.
+	write(t, s.log+".shop-dev", "FAKE_LEFT='devopsy-import-shop-dev-42-extract-0:shop-dev:import devopsy-import-shop-dev-eu-42-extract-0:shop-dev-eu:import'\n", 0o644)
 	if out, code := s.run(nil, "@dev", "--sync", "--yes"); code != 0 || fileExists(mark) {
 		t.Errorf("a sync copying it all (%d), marked %v:\n%s", code, fileExists(mark), out)
+	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f devopsy-import-shop-dev-42-extract-0\n") || strings.Contains(docker, "shop-dev-eu-42") {
+		t.Errorf("a sync over a restore's mark: the cut restore's containers:\n%s", docker)
 	}
 }
 
@@ -783,10 +789,17 @@ func TestSnapshotRestoreCut(t *testing.T) {
 	if !regexp.MustCompile(`restore it again:\n.*\$ devopsy @\S+ --snapshots restore ` + m[1]).MatchString(out) {
 		t.Errorf("the cut restore's way out not said:\n%s", out)
 	}
+	// The cut restore's extracting containers (a devopsy killed outright
+	// leaves them writing) go first, this environment's only.
+	write(t, s.log+".shop-prod", "FAKE_LEFT='devopsy-import-shop-prod-42-extract-0:shop-prod:import devopsy-import-shop-prod-eu-42-extract-0:shop-prod-eu:import'\n", 0o644)
 	out, code = s.run(nil, "@prod", "--snapshots", "restore", m[1], "--yes")
 	if code != 0 || fileExists(filepath.Join(base, remote.SyncIncompleteFile)) || s.current("prod") == current {
 		t.Errorf("the restore again (%d), marked %v:\n%s", code, fileExists(filepath.Join(base, remote.SyncIncompleteFile)), out)
 	}
+	if docker, _ := s.logs(); !strings.Contains(docker, "rm -f devopsy-import-shop-prod-42-extract-0\n") || strings.Contains(docker, "shop-prod-eu-42") {
+		t.Errorf("the restore again: the cut one's containers:\n%s", docker)
+	}
+	os.Remove(s.log + ".shop-prod")
 	if rec := readString(filepath.Join(base, ".devopsy-sync.services")); strings.Contains(rec, "stop ") {
 		t.Errorf("the cut restore's stop lines left after the complete one:\n%s", rec)
 	}

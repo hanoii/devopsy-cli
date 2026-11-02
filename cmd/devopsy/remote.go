@@ -273,7 +273,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				// The services whose image the release's checks let through
 				// against their data's history.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", releaseRef(t), args[0]))
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", remote.HintAddress(t), args[0]))
 				}
 				accept = acceptImage(accept, args[i+1])
 				i++
@@ -281,7 +281,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				// Where a syncing release copies from, instead of the
 				// parent: an address, its @ optional.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", releaseRef(t), args[0]))
+					return fail(fmt.Sprintf("usage: devopsy @%s %s --from @<address> [--yes]", remote.HintAddress(t), args[0]))
 				}
 				from = strings.TrimPrefix(args[i+1], "@")
 				i++
@@ -290,7 +290,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 		}
 		if noSync && from != "" {
-			return fail("--from: --release-no-sync never syncs: devopsy @" + releaseRef(t) + " --release-sync --from @" + from + " syncs from it")
+			return fail("--from: --release-no-sync never syncs: devopsy @" + remote.HintAddress(t) + " --release-sync --from @" + from + " syncs from it")
 		}
 		if (syncFlag || from != "") && t.Parent == "" {
 			flag := args[0]
@@ -353,7 +353,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				id = string(m[1])
 				text = append([]byte("\n"), text...)
 			}
-			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+			if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 				why := fmt.Sprint(c)
 				if err != nil {
 					why = err.Error()
@@ -457,7 +457,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				q := fmt.Sprintf("a new instance: %s has no %q instance of %s yet", t.Host, t.Instance, t.Project.Name)
 				creates := fmt.Sprintf("this release creates it: %s, compose project %s, its own data and URL", t.Path, t.ComposeName())
 				if !atTerminal() {
-					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+releaseRef(t)+" --release --yes")}})
+					report.Fail(&report.Failure{Msg: q + ", and there is no terminal to confirm it on", Details: []string{creates}, Fixes: []report.Remedy{report.Fix("add --yes:", "devopsy @"+remote.HintAddress(t)+" --release --yes")}})
 					return 1
 				}
 				report.Info(q, creates)
@@ -491,29 +491,29 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			first := !current
 			syncs := !noSync && (syncFlag || first)
 			if cur.Importing {
-				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, releaseRef(t)))
+				return fail(fmt.Sprintf("an import into @%s is running: release once it is done (devopsy @%s --status shows it): nothing changed", t.Address, remote.HintAddress(t)))
 			}
 			// A partial copy from a sync is never run on: only a sync
 			// completes it (the activation checks again); a sync is one
 			// of the ways out of an import's too.
 			if cur.Mark != nil && !syncs {
-				reset := remote.ResetFix(releaseRef(t))
-				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+releaseRef(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+releaseRef(t)+" --sync"), report.Fix(reset[0], reset[1])}
+				reset := remote.ResetFix(remote.HintAddress(t))
+				fixes := []report.Remedy{report.Fix("release and sync:", "devopsy @"+remote.HintAddress(t)+" --release-sync"), report.Fix("sync alone:", "devopsy @"+remote.HintAddress(t)+" --sync"), report.Fix(reset[0], reset[1])}
 				msg := fmt.Sprintf("@%s's data is from a sync that did not complete, and nothing runs on it until one does: nothing changed", t.Address)
 				if cur.Mark.IsImport() {
 					msg = fmt.Sprintf("the import of %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
 					fixes = nil
-					for _, f := range remote.ImportFixes(releaseRef(t), cur.Mark.From, true) {
+					for _, f := range remote.ImportFixes(remote.HintAddress(t), cur.Mark.From, true) {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
 				} else if cur.Mark.IsRestore() {
 					msg = fmt.Sprintf("the restore of snapshot %s into @%s did not complete, and nothing runs on its data until one does: nothing changed", cur.Mark.From, t.Address)
 					fixes = nil
-					for _, f := range remote.RestoreFixes(releaseRef(t), cur.Mark.From, t.Parent != "") {
+					for _, f := range remote.RestoreFixes(remote.HintAddress(t), cur.Mark.From, t.Parent != "") {
 						fixes = append(fixes, report.Fix(f[0], f[1]))
 					}
 				} else if !current {
-					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+releaseRef(t)+" --release")}
+					fixes = []report.Remedy{report.Fix("release it: a first release syncs", "devopsy @"+remote.HintAddress(t)+" --release")}
 				}
 				report.Fail(&report.Failure{Msg: msg, Fixes: fixes})
 				return 1
@@ -531,7 +531,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			}
 			if !noSync {
 				if from != "" && !syncFlag && !first {
-					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", releaseRef(t), from))}})
+					report.Fail(&report.Failure{Msg: fmt.Sprintf("--from: @%s has a release already, and --release only syncs a child's first one", t.Address), Fixes: []report.Remedy{report.Fix("sync on any release:", fmt.Sprintf("devopsy @%s --release-sync --from @%s", remote.HintAddress(t), from))}})
 					return 1
 				}
 				if syncFlag || first {
@@ -544,7 +544,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 						return failParent(t, color, args[0])
 					}
 					if job, err = syncPreflight(t, p, projectName, false); err != nil {
-						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+releaseRef(t)+" --release-no-sync"))
+						report.Fail(fmt.Errorf("%w: nothing changed", err), report.Fix("release without the parent's data:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync"))
 						return 1
 					}
 					job.first, job.from, job.fromAddr = first, from != "", from
@@ -635,7 +635,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			syncOpts = &remote.SyncOptions{}
 		}
 		upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
-		code, err := remote.SSHStreams(upSession, t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
+		code, err := remote.SSHStreams(upSession, t, nil, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
 		id := strings.TrimSpace(idOut.String())
 		pr.Close()
 		upInterrupted := upCtx.Err() != nil
@@ -697,15 +697,13 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	}
 }
 
-// needsServer reports whether name is a local project command that needs
-// only a server: its address resolves as a server's.
 // failParent reports a child whose parent could not be resolved
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
 func failParent(t *remote.Target, color bool, flag string) int {
 	report.Fail(t.ParentErr,
-		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+releaseRef(t)+" "+flag+" --from "+parentGuess(t)),
-		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+releaseRef(t)+" --release-no-sync", "devopsy @"+releaseRef(t)+" --sync --from "+parentGuess(t)))
+		report.Fix("name "+t.Parent+"'s address for this release:", "devopsy @"+remote.HintAddress(t)+" "+flag+" --from "+parentGuess(t)),
+		report.Fix("release without "+t.Parent+"'s data for now, and sync it whenever you are ready:", "devopsy @"+remote.HintAddress(t)+" --release-no-sync", "devopsy @"+remote.HintAddress(t)+" --sync --from "+parentGuess(t)))
 	return 1
 }
 
@@ -718,6 +716,8 @@ func parentGuess(t *remote.Target) string {
 	return "@" + t.Host + ":" + t.Parent
 }
 
+// needsServer reports whether name is a local project command that needs
+// only a server: its address resolves as a server's.
 func needsServer(projectDir, name string) bool {
 	if projectDir == "" || !slices.Contains(cli.CustomCommands(projectDir), name) {
 		return false
@@ -878,8 +878,9 @@ and after steps can go around it. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 
-// targetEnv renders a target's env as the release's .devopsy/target.env.
-// commit is the release's git commit, if any.
+// targetEnv renders a target's env as the release's devopsy-target.env
+// (remote.TargetEnvFile, beside its code/). commit is the release's git
+// commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by devopsy from the %q environment in config.yaml. Do not edit:\n", t.Name)
@@ -959,7 +960,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		// fails is left out.
 		snaps := ""
 		var out bytes.Buffer
-		if code, err := remote.SSHStreams(context.Background(), t, remote.Bounded, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
+		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
 			n := 0
 			for _, line := range strings.Split(out.String(), "\n") {
 				if len(strings.Split(line, "\t")) >= 6 {
@@ -1115,14 +1116,14 @@ func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.
 	}
 	done := make(chan result, 1)
 	defer heartbeat(w)()
-	// Past the point of no return: the disarm's byte answered (beaten),
-	// or the switch's marker seen; between the two the script goes on on
-	// its own, its switch under way (review round 9: a session lost
-	// there said nothing went live).
-	var switched, beaten atomic.Bool
-	live := func() bool { return switched.Load() || beaten.Load() }
+	// Past the point of no return: the disarm's byte answered, or the
+	// switch's marker seen; between the two the script goes on on its
+	// own, its switch under way (review round 9: a session lost there
+	// said nothing went live).
+	var past atomic.Bool
+	live := past.Load
 	go func() {
-		code, err := remote.SSHContext(remote.WithBeat(remote.WithBeaten(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), &beaten), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+		code, err := remote.SSHContext(remote.WithBeat(remote.WithLive(remote.WithoutInterrupt(ctx), &past), w), t, nil, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 		done <- result{code, err}
 	}()
 	var res result

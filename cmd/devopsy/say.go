@@ -21,7 +21,7 @@ import (
 func runSay(args []string) int {
 	lv, ok := remote.SayLevels[strings.Join(args[:min(1, len(args))], "")]
 	if len(args) < 2 || !ok {
-		report.Error("usage: devopsy " + remote.SayFlag + " trace|debug|info|warning|error <message> [<detail>...]")
+		report.Error("usage: devopsy " + remote.SayFlag + " info|warning|error <message> [<detail>...]")
 		return 2
 	}
 	signal.Ignore(syscall.SIGPIPE)

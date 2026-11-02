@@ -53,7 +53,8 @@ const (
 	// meanwhile.
 	TargetReloadFile = TargetEnvFile + ".reload"
 	// RecordFile describes the release: id, commit, branch, who, mode.
-	RecordFile = "devopsy-release.json"
+	// The server's images read its mode (images.ModeOf).
+	RecordFile = images.RecordFile
 	// LogFile is the session's log of its release, then of each rollback
 	// to it and sync into it: what the operator's devopsy said and saw,
 	// the server's lines up to the switch, each after its time, saved by
@@ -425,9 +426,17 @@ func quoteAll(args []string) string {
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
-// colored locally as they arrive (report.Colorize), and ColorEnv is exported into
-// every session for what the server can color itself.
+// colored locally as they arrive (report.Colorize), and ColorEnv is
+// exported into every session for what the server can color itself.
 var Color bool
+
+// ColorEnv set means the output ends on a terminal that takes colors,
+// even through a pipe: devopsy on a server, whose session has none, so
+// its messages and Compose's output (--ansi always) come colored to the
+// operator (a sync's push gets it too). Internal: devopsy exports it into
+// every session when it colors locally; what a person sets is
+// FORCE_COLOR (cli.ColorForced).
+const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 
 // TTY is the operator's terminal size, "<cols> <rows>", when stderr is one
 // (whatever the colors), exported into every session as TTYEnv: a session
@@ -557,8 +566,8 @@ func basePrelude(t *Target) string {
 ` + serverCheck(upgradeRef(t)) + `with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
-  if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
-    ${tty_detach:+setsid -w} script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
+  if [ -n "${` + TTYEnv + `:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
+    ${tty_detach:+setsid -w} script -qec "stty cols ${` + TTYEnv + `%% *} rows ${` + TTYEnv + `#* } 2>/dev/null; $1" /dev/null
   else
     eval "$1"
   fi
@@ -627,14 +636,16 @@ func upgradeRef(t *Target) string {
 	return t.Host + ":"
 }
 
-// hintAddress is the address a hint in a script names: the alias as
-// typed when it has source: (it releases only from its checkout; one
-// without cannot release), else the resolved one, else the server.
-func hintAddress(t *Target) string {
-	if t.Source == "" {
-		return cmp.Or(t.Address, t.Host)
+// HintAddress is the address a hint to release, roll back, sync or
+// restore names, in a script or locally: the alias as typed when it has
+// source: (it releases only from its checkout; one without cannot
+// release at all), else the resolved one (an instance, a server from
+// variables), so the hint works when copied.
+func HintAddress(t *Target) string {
+	if t.Alias != "" && t.Source != "" {
+		return t.Alias
 	}
-	return cmp.Or(t.Alias, t.Address, t.Host)
+	return cmp.Or(t.Address, t.Name, t.Host)
 }
 
 // prelude adds, for release scripts, the checks, the release lock and
@@ -679,7 +690,7 @@ func UploadScript(t *Target, syncs bool) string {
 	guard := ""
 	if !syncs {
 		guard = `if [ -e "$base/` + SyncStartedFile + `" ] || [ -e "$base/` + SyncTakenFile + `" ]; then
-  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+  devopsy --say error "@` + t.Address + `'s data is from a sync that did not complete, and nothing runs on it until one does: nothing released" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
   exit 1
 fi
 ` + markRefusal(t, "nothing released", syncFixLines(t, `"or --release-sync to release with it"`), "exit 1")
@@ -820,9 +831,9 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
 	s := prelude(t, false) + "exec 1>&2\n" + NoExit255
-	s += watchSession(sync != nil, true)
+	s += watchSession(sync != nil)
 	// Defined first: the fetch and not_live's callers use them.
-	s += releaseImages(projectName, t, t.Mode)
+	s += releaseImages(projectName, t)
 	// get_images <dir> <against>, for the restart after a failed run:
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
@@ -879,7 +890,6 @@ fi
 ` + settleSync(projectName) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
-export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
 export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
@@ -1234,7 +1244,7 @@ exec 7<&-
         rs_snapshot=$(cut -f2 "$base/` + SyncIncompleteFile + `" 2>/dev/null) || true
         devopsy --say warning "not restarting ${prev#releases/}: the restore of snapshot $rs_snapshot did not complete, and nothing runs on its data until one does" ` + restoreFixLines(t, "rs_snapshot") + `
       else
-        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --sync" ` + resetFixLines(t) + `
+        devopsy --say warning "not restarting ${prev#releases/}: the data is from a sync that did not complete, and nothing runs on it until one does: ` + IncompleteWhy + `" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --sync" ` + resetFixLines(t) + `
       fi
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
@@ -1254,7 +1264,7 @@ exec 7<&-
 	// the data as the failed release left it (a sync's copy, a restore's):
 	// as a rollback checks before its switch (review).
 	restart += `    if ! (cd "$base/current" && ` + devopsyCall(projectName, []string{"--check-mounts", "restored", "restart"}, false) + `); then
-      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --release"
+      devopsy --say error "not restarting ${prev#releases/}: what the failed release started still runs, from its code, until a release goes live" "once what the check says is fixed:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --release"
       rm -f "$base/` + ActivatingFile + `"; exit "$status"
     fi
 `
@@ -1348,7 +1358,7 @@ fi
 	// its mark kept, which --status names and the next release finishes.
 	// timeout: a daemon stopping can hang a call, under the lock.
 	s += `if [ "$status" != 0 ] && ! { if command -v timeout >/dev/null 2>&1; then timeout 5 docker version; else docker version; fi; } >/dev/null 2>&1; then
-  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + hintAddress(t) + ` --status"
+  devopsy --say error "$failed failed ($status) and Docker does not answer: nothing restarted, the release is left as one cut off past its switch" "once Docker answers again, to see how to finish it:" "` + report.CmdMark + `devopsy @` + HintAddress(t) + ` --status"
   exit "$status"
 fi
 `
@@ -1431,11 +1441,12 @@ fi
 // so their state, health checks and logs would go with them, and --log
 // would only say that something failed. It goes where the script's
 // output goes, the server's log from the switch on: one detail line per
-// container, then, for each one neither running and healthy nor exited
-// 0 (a one-shot init's), its last health checks (Docker keeps five) and
-// its last 100 log lines. A restarting container shows its last exit
-// code, 0 too when what it runs exits cleanly: still a failure. A function, so set -- only changes its own
-// arguments.
+// container, then, for each one but those running without a failing
+// health check (none, or healthy) and those exited or created with 0 (a
+// one-shot init's, one never started), its last health checks (Docker
+// keeps five) and its last 100 log lines. A restarting container shows
+// its last exit code, 0 too when what it runs exits cleanly: still a
+// failure. A function, so set -- only changes its own arguments.
 func failureReport(projectName string) string {
 	ps := devopsyCall(projectName, []string{"--", "--profile", "*", "ps", "-a", "--format", "{{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}"}, false)
 	logs := devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false)
@@ -1556,10 +1567,11 @@ const WatchSessionFlag = "--watch-session"
 // armed when its stdin is the operator's pipe (WatchEnv: always, from
 // devopsy; until October 2026 a -t session was armed on its terminal,
 // whose hangup reached the shell alone, which ran its trap only once the
-// build ended), a syncing one always (its stdin is the answer's pipe), a
-// sync's holder never: a SIGTERM would stop it halfway through
-// restoring.
-func watchSession(answer, armed bool) string {
+// build ended); with answer (a release that syncs, a sync's holder)
+// always, its stdin the answer's pipe. A holder disarms once it holds
+// the release lock and the parent's image (waitBeat): past that a
+// SIGTERM would stop it halfway through restoring.
+func watchSession(answer bool) string {
 	args := `"$$"`
 	s := `ws_armed="$base/.devopsy-watch.$$"
 rm -f "$ws_armed" "$ws_armed.off" "$ws_armed.fired"
@@ -1585,27 +1597,21 @@ rm -f "$ws_fifo"
 	}
 	args += ` ${` + HeartbeatEnv + `:+--heartbeat $((` + HeartbeatEnv + ` * ` + strconv.Itoa(beats) + `))}`
 	start := `exec 4<&0 </dev/null
-devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
+devopsy ` + WatchSessionFlag + ` ` + args + ` --armed "$ws_armed" <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
 watch_pid=$!
 exec 4<&-
 `
 	if answer {
 		start += "exec 5>&-\n"
 	}
-	cancel := ` --armed "$ws_armed"`
-	switch {
-	case armed && answer:
-		s += `: >"$ws_armed"
-` + fmt.Sprintf(start, cancel)
-	case armed:
-		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
-  : >"$ws_armed"
-` + fmt.Sprintf(start, cancel) + `fi
-`
-	default:
-		s += fmt.Sprintf(start, "")
+	if answer {
+		return s + `: >"$ws_armed"
+` + start
 	}
-	return s
+	return s + `if [ -n "${` + WatchEnv + `:-}" ]; then
+  : >"$ws_armed"
+` + start + `fi
+`
 }
 
 // partialGuard refuses a release or rollback (then runs refuse) on a
@@ -1654,9 +1660,6 @@ if [ -n "$prev" ]; then
   # A release that syncs runs no partialGuard: a killed holder's files are
   # settled (into a mark) before the check reads it.
 ` + settleSync(projectName) + `  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
-  # The server's image lock, record and mode, for the snapshot's bookmarks
-  # and the detached tar's pruning.
-  export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
   rs_k=` + strconv.Itoa(t.Keep) + `
   [ "$rs_k" -gt 0 ] || rs_k=$keep
   [ "$rs_k" -le "$max_keep" ] || rs_k=$max_keep
@@ -1787,21 +1790,28 @@ const ImagesHolders = ".devopsy-images.holders"
 const ImagesLeftFile = images.LeftFile
 
 // leftPath is ImagesLeftFile's path in a script, in t's project's directory
-// under the release root.
+// under the release root: what --releases lists. The server's devopsy
+// finds it the same way for everything that writes it (cmd/devopsy's
+// serverImages), told nothing by the scripts.
 func leftPath(t *Target) string {
 	return `"$root"/` + Quote(strings.SplitN(t.Path, "/", 2)[0]) + `/` + ImagesLeftFile
 }
 
 // releaseImages defines the shell functions that give each release its own
-// images, for mode (build when empty: only tests build a target without
-// one). The rules are the server's
-// devopsy's (--images, internal/images: bookmarks, restores, removals,
-// the record); the script keeps what needs the shell: the lock, which a
-// fetch's children inherit, and fetching on a terminal.
+// images. The rules are the server's devopsy's (--images,
+// internal/images: bookmarks, restores, removals, the record), and so
+// are the settings: the server's image lock and the project's record
+// from its release root, the mode of each release from that release's
+// own record (images.ModeOf); the script passes only the environment's
+// name and the address for hints (an older server, which took them from
+// the script, refuses: RecordModeFeature). The script keeps what needs
+// the shell: the lock, which a fetch's children inherit, and fetching on
+// a terminal.
 //
 //   - img <action> ...: devopsy --images for the environment (its compose
-//     name, its project's record).
-//   - fetch_images <dir>: builds or pulls a release's images (fetchImages).
+//     name).
+//   - fetch_images <dir>: builds or pulls a release's images, by the
+//     release's own mode (fetchImages).
 //   - image_lock shared|exclusive <doing> [now] and image_unlock: the
 //     server's image lock (ImagesLock) on fd 8, always taken after the
 //     release lock (fd 9). With now it never waits; otherwise up to 10
@@ -1810,11 +1820,8 @@ func leftPath(t *Target) string {
 //     to answer, or every image would look gone. A flock ends with its
 //     processes, so a holder that dies frees it; a fetch's children keep
 //     it until they end, as they keep the release lock.
-func releaseImages(projectName string, t *Target, mode string) string {
-	if mode == "" {
-		mode = ModeBuild
-	}
-	fetch := fetchImages(projectName, mode)
+func releaseImages(projectName string, t *Target) string {
+	fetch := fetchImages(projectName)
 	name := t.ComposeName()
 	if name == "" {
 		name = projectName
@@ -1823,9 +1830,8 @@ func releaseImages(projectName string, t *Target, mode string) string {
 	if holder == "" {
 		holder = "a release"
 	}
-	return fetch + `left=` + leftPath(t) + `
-il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", hintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
+	return fetch + `il_busy=
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--address", HintAddress(t)}, false) + ` ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1881,12 +1887,14 @@ image_unlock() {
 }
 
 // fetchImages defines fetch_images <dir>, which gets a release's images
-// before it goes live, by mode: build pulls the services without a build
-// and builds the others, refreshing their base images; image pulls every
-// service with an image, buildable ones included, so a tag missing from
-// the registry fails there. Through `devopsy --`, past project commands
-// named pull or build, on a pseudo-terminal (with_tty) for BuildKit's live
-// progress. Empty for any other mode.
+// before it goes live, by the release's own mode (img mode: its record's,
+// so a rollback's or a restart's fetch of a release made in another mode
+// than the checkout's does what that release's did): build pulls the
+// services without a build and builds the others, refreshing their base
+// images; image pulls every service with an image, buildable ones
+// included, so a tag missing from the registry fails there. Through
+// `devopsy --`, past project commands named pull or build, on a
+// pseudo-terminal (with_tty) for BuildKit's live progress.
 //
 // Either way every profile's services without a build are pulled too
 // (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
@@ -1898,27 +1906,25 @@ image_unlock() {
 // third-party images twice (a manifest request each, nothing
 // downloaded), since Compose cannot pull a profile's non-buildable
 // services and the default buildable ones in one call.
-func fetchImages(projectName, mode string) string {
-	var what, cmd string
-	switch mode {
-	case ModeBuild:
-		what = "pulling and building images (build mode)"
-		cmd = devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
-			" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
-	case ModeImage:
-		what = "pulling images (image mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull"}, false) +
-			" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
-	default:
-		return ""
-	}
+func fetchImages(projectName string) string {
+	build := devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
+		" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
+	image := devopsyCall(projectName, []string{"--", "pull"}, false) +
+		" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
 	// Without devopsy's own compose file (images.NoReleaseComposeEnv): a
 	// rollback's or a restart's fetch is of the project's images, never of
 	// the holds the release's last activation wrote, which may name an
 	// image nothing runs any more (the restore decides the holds after).
 	return `fetch_images() {
-  devopsy --say info "` + what + `"
-  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty ` + Quote(cmd) + `)
+  fi_mode=$(img mode "$1") || return
+  if [ "$fi_mode" = ` + ModeImage + ` ]; then
+    devopsy --say info "pulling images (image mode)"
+    fi_cmd=` + Quote(image) + `
+  else
+    devopsy --say info "pulling and building images (build mode)"
+    fi_cmd=` + Quote(build) + `
+  fi
+  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty "$fi_cmd")
 }
 `
 }
@@ -1969,7 +1975,7 @@ else
   devopsy --say error "$base has no release and no .devopsy/ project: run 'devopsy @%s --release' first"
   exit 1
 fi
-`, hintAddress(t))
+`, HintAddress(t))
 }
 
 // RunScript runs args in the current release, or in a plain directory.
@@ -2007,9 +2013,11 @@ func UpgradeScript(args []string) string {
 	return "set -eu\nexec " + devopsyCall("", append([]string{"--upgrade"}, args...), false) + "\n"
 }
 
-// ReleasesScript prints one line per release: id, current flag, failed flag,
-// its images (ImagesFile, space separated) and the record JSON, tab
-// separated. First, the project's ImagesLeftFile, each line after left.
+// ReleasesScript prints one line per release, newest first: id, current
+// or -, its state (- , failed, rolled-back, incomplete, in-progress,
+// syncing or cut), its images (ImagesFile's names, each with =version or
+// a short digest, space separated) and the record JSON, tab separated.
+// First, the project's ImagesLeftFile, each line after left.
 func ReleasesScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, without releases"
@@ -2099,7 +2107,8 @@ func ParseReleases(out string) []Release {
 }
 
 // Line is the release as --releases lists it: * for the current one, id,
-// who, mode, branch@commit, FAILED.
+// who, mode, branch@commit, a restore's snapshot, and its state in
+// capitals (FAILED, ROLLED BACK, INCOMPLETE, IN PROGRESS, SYNCING, CUT).
 func (r Release) Line() string {
 	mark := " "
 	if r.Current {
@@ -2206,7 +2215,7 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
   devopsy --say error "$base has no releases"
   exit 1
 fi
-` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + releaseImages(projectName, t) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
@@ -2232,18 +2241,37 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 // for a password: SSHOptions refuse one otherwise.
 const SSHAllowPasswordEnv = "DEVOPSY_SSH_ALLOW_PASSWORD"
 
-// SSHOptions go before every session's own arguments, also after
-// DEVOPSY_SSH_COMMAND, whose options win: ssh keeps the first value of each.
+// SSHOptions go before every session's own arguments, after
+// DEVOPSY_SSH_COMMAND, whose own options come first on the command line
+// (SSHCommand) and so win: ssh keeps the first value of each.
 // No password unless SSHAllowPasswordEnv: a devopsy server takes keys only,
 // so a prompt means a missing key, and it would come in the middle of a
 // release's sessions, or with a child's services stopped for a sync. A
-// passphrase and a new host key are still asked for.
+// passphrase and a new host key are still asked for. Then connectOptions.
 func SSHOptions() []string {
+	// devopsy's sessions never need the host's port forwardings from
+	// ~/.ssh/config: each one would try to bind them again, and warn that
+	// they are in use while another session (or the user's own) holds them.
 	opts := []string{"-o", "ClearAllForwardings=yes"}
 	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
 		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
 	}
-	return opts
+	return append(opts, connectOptions()...)
+}
+
+// connectOptions bound every session's connection, the operator's and the
+// parent's to a child (ChildSSH): a host out of reach fails in 30
+// seconds, not after the TCP timeout (a log's save once waited minutes
+// with nobody to tell, a sync with the parent's services stopped); and a
+// keepalive, since a session can stay quiet for long (a sync's holder for
+// the whole copy, an export's data pausing) and a NAT or firewall dropping
+// it would abort a sync halfway, or leave a push writing into a child
+// already restored. Every 3 beats of the heartbeat (HeartbeatEvery: 15
+// seconds), 3 missed ending it, so the end-to-end tests' shorter beat
+// keeps the order between the push's silence, the operator noticing and
+// the holder's silence.
+func connectOptions() []string {
+	return []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=" + strconv.Itoa(3*int(HeartbeatEvery().Seconds())), "-o", "ServerAliveCountMax=3"}
 }
 
 // SSHLog is SSH, also copying the session's output, both streams, to log.
@@ -2271,9 +2299,6 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if tty {
 		ttyFlag = "-t"
 	}
-	// devopsy's sessions never need the host's port forwardings from
-	// ~/.ssh/config: each one would try to bind them again, and warn that
-	// they are in use while another session (or the user's own) holds them.
 	if Color {
 		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
 	}
@@ -2340,7 +2365,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		shown := &LineMarker{Prefix: SwitchMarker}
 		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(tag string) {
 			_, _ = log.Write([]byte(LogAnchor + tag + "\n"))
-			if f, ok := ctx.Value(switchedKey{}).(*atomic.Bool); ok {
+			if f, ok := ctx.Value(liveKey{}).(*atomic.Bool); ok {
 				f.Store(true)
 			}
 		}}
@@ -2355,7 +2380,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
 		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) {
 			_, _ = w.Write([]byte{0})
-			if f, ok := ctx.Value(beatenKey{}).(*atomic.Bool); ok {
+			if f, ok := ctx.Value(liveKey{}).(*atomic.Bool); ok {
 				f.Store(true)
 			}
 		}}
@@ -2482,18 +2507,17 @@ const gatedRead = `gated_read() {
 }
 `
 
-type switchedKey struct{}
+type liveKey struct{}
 
 type beatKey struct{}
 
-type beatenKey struct{}
-
-// WithBeaten is ctx for a session that sets beaten once devopsy answered
-// its BeatMarker: an activation's or a --no-code restore's disarm, past
-// which the script goes on on its own (its point of no return), before
-// it prints SwitchMarker.
-func WithBeaten(ctx context.Context, beaten *atomic.Bool) context.Context {
-	return context.WithValue(ctx, beatenKey{}, beaten)
+// WithLive is ctx for a session that sets live once it is past its point
+// of no return: devopsy answered its BeatMarker (an activation's or a
+// --no-code restore's disarm, past which the script goes on on its own,
+// before its switch), or, logged, it printed SwitchMarker (its release
+// went live, whatever the release log's cap kept).
+func WithLive(ctx context.Context, live *atomic.Bool) context.Context {
+	return context.WithValue(ctx, liveKey{}, live)
 }
 
 // WithBeat is ctx for a session whose stdin devopsy writes through w, the
@@ -2504,8 +2528,10 @@ func WithBeat(ctx context.Context, w io.Writer) context.Context {
 }
 
 // BeatMarker is the line a script prints on stderr when its watcher waits
-// for the session's next byte before it disarms (<armed>.next): past a
-// sync holder's lock wait, and right before a release's switch. Why: a
+// for the session's next byte before it disarms (<armed>.next, waitBeat):
+// past a sync holder's lock wait, right before an activation's switch,
+// and before a reload's or a --no-code restore's point of no return.
+// Why: a
 // live session and one that died silently look the same until a byte
 // comes, and the next heartbeat would take up to a beat; devopsy answers
 // the marker at once, so only a silent session waits, until its quiet
@@ -2535,13 +2561,6 @@ elif ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
   ` + gone + `
 fi
 `
-}
-
-// WithSwitched is ctx for a logged session that sets switched once the
-// script printed SwitchMarker: its release went live, whatever the
-// release log's cap kept.
-func WithSwitched(ctx context.Context, switched *atomic.Bool) context.Context {
-	return context.WithValue(ctx, switchedKey{}, switched)
 }
 
 // WithoutInterrupt is ctx for a session devopsy ends itself on Ctrl-C (a
@@ -2645,7 +2664,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
 fi
 ` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
-` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + snapshotLock(false) + releaseImages(projectName, t) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then
@@ -2659,7 +2678,7 @@ if [ -n "$dir" ]; then
     s=$?; image_unlock
     # Killed (SIGKILL, the OOM killer), it said nothing of where it was.
     if [ "$s" -gt 128 ]; then
-      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+hintAddress(t)+" --destroy") + `    else
+      ` + killedLine("s", "", "$base is not removed, and the destroy may have stopped halfway, its containers and volumes perhaps gone", "devopsy @"+HintAddress(t)+" --destroy") + `    else
       devopsy --say error "$base is not removed" || true
     fi
     exit "$s"
