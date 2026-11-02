@@ -13,6 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The agents' root loads with every session: flagged past 200 lines,
+      # never failed. Its name is the one TestAgentsNamesWhatExists reads.
+      - name: agents root size
+        run: |
+          root=AGENTS.new.md
+          lines=$(wc -l < "$root")
+          if [ "$lines" -gt 200 ]; then
+            echo "::warning file=$root::$root has $lines lines, over 200: move what only some tasks need into an area"
+          fi
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
