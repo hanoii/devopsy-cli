@@ -756,9 +756,10 @@ func LeavingLines(services []SyncService, carried []string) (bad, fixes []string
 // the child guard and the stop sets see none of it (read-only, a tool,
 // it is ignored); a writable bind mount from inside the project's tree
 // outside mnt, which goes with the next release; a service copied as
-// CopyVolumes that copies no entry of mnt (none mounted, or all excluded),
-// which a sync would take for nothing to copy; an MntOwnerLabel on one
-// that mounts no entry writable; an entry two owners write (MntOwners);
+// CopyVolumes that copies neither an entry of mnt nor a named volume
+// (none mounted, or all excluded), which a sync would take for nothing to
+// copy; an MntOwnerLabel on one that mounts no entry writable; an entry
+// two owners write (MntOwners);
 // and a bind source below an owned entry (./mnt/storage/files), by any
 // service, read-only too: the entry's owner can replace that path with a
 // symbolic link, and Docker resolves a bind source on the host (a link

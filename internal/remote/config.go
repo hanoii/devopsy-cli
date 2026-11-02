@@ -121,9 +121,10 @@ type Target struct {
 	Parent string `yaml:"parent"`
 	// ParentTarget is Parent resolved for a command, one level only (its
 	// own ParentTarget stays nil): the child's instance, the server from
-	// the usual variables, else the child's. nil without a parent; under
-	// DescribeTarget it may have no server yet, and is nil when it cannot
-	// be resolved at all.
+	// the usual variables only, never the child's (strictly, none is an
+	// error in ParentErr). nil without a parent; under DescribeTarget it
+	// may have no server yet, and is nil when it cannot be resolved at
+	// all.
 	ParentTarget *Target `yaml:"-"`
 	// ParentErr is why LoadTarget could not resolve Parent (ParentTarget
 	// is nil then): an error only for what syncs, so every other command
