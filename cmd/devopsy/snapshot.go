@@ -805,7 +805,10 @@ func writeSnapshotDir(cwd string, p snapshotPaths, d *snapshotData, tmp, id, rel
 	for _, v := range d.volumes {
 		fmt.Fprintf(&m, "volume\t%s\t%s\n", v.Key, v.Name)
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(tmp, remote.SnapshotData, "images"), []byte(set.SnapshotData(p.base, rel)), 0o600); err != nil {
 		return err
 	}
@@ -1100,7 +1103,10 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 		}
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := set.Remove(dir); err != nil {
 		return err
 	}
@@ -1477,7 +1483,11 @@ func ranOnData(cwd, base string) {
 	if rel == "" {
 		return
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		report.Warn("not recording what runs on the data: " + err.Error())
+		return
+	}
 	_ = set.RanCut(base, rel)
 }
 
@@ -1844,7 +1854,10 @@ func snapshotMakeRelease(cwd string, p snapshotPaths, snap, rel string) error {
 		return err
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	return set.BookmarkFrom(rel, snap)
 }
 
@@ -2029,7 +2042,10 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (
 		return err
 	}
 	defer unlock()
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		return err
+	}
 	if err := set.SnapshotPull(snap, string(data)); err != nil {
 		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
 	}
@@ -2244,7 +2260,11 @@ func snapshotImported(cwd string, p snapshotPaths, tmp string) error {
 	if err != nil {
 		return err
 	}
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: io.Discard, Left: os.Getenv(remote.ImagesLeftEnv), Base: p.base, Snapshots: p.snaps}
+	set, err := serverImages(cwd, composeName(cwd), io.Discard)
+	if err != nil {
+		unlock()
+		return err
+	}
 	_ = set.BookmarkFrom(filepath.Join(p.snaps, id), filepath.Join(p.snaps, id))
 	unlock()
 	report.Info("imported snapshot "+old+" as "+id+" (taken "+m.taken+" in release "+m.release+")", "to restore it:", report.CmdMark+"devopsy @"+targetAddress(cwd)+" --snapshots restore "+id)
@@ -2522,7 +2542,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 	// The images that ran on the data, held, with their history.
 	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
 	if len(data) > 0 {
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv), Base: p.base, Snapshots: p.snaps}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			return fail(err.Error())
+		}
 		unlock, err := imagesShared(ctx)
 		if err != nil {
 			return fail(err.Error())

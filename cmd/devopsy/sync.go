@@ -1041,7 +1041,10 @@ func runSyncPush(cwd string, args []string, color bool) int {
 	// environment since would copy data another image wrote).
 	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
 		rel := remote.ReleaseFile(projectDir, "")
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			return fail(err.Error())
+		}
 		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
 			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
 		}

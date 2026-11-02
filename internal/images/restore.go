@@ -40,6 +40,10 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // Never a pulled name retagged: another environment may run it. Every
 // service that does not go back says why. Every check comes before any
 // change, so a failure changes nothing but pulls.
+//
+// Own against pulled, and whether a build changed, go by target's own
+// mode (ModeOf): it was fetched in it, whatever mode the project is in
+// now.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
@@ -61,6 +65,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	names := bookmarks(old, s.Name, tid)
 	base := baseOf(target)
 	h := readHistory(base)
+	mode := ModeOf(target)
 	var cs map[string]Container
 
 	type step struct {
@@ -75,7 +80,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		o, haveOld := match(old, probe)
 		a, haveAg := match(ag, probe)
 		st := step{svc: svc}
-		own := svc.own(s.Mode)
+		own := svc.own(mode)
 		// A pulled data service in the release it leaves stays one, even
 		// where the target builds it or never pulls it: its data ran the
 		// pulled image, which an unordered own image must not replace.
@@ -92,7 +97,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			if !haveOld || o.ID == "" || i < 0 {
 				return s.gone(tid, svc)
 			}
-			if s.changed(o, svc) {
+			if s.changed(o, svc, mode) {
 				if err := s.rebuilt(tid, o, svc); err != nil {
 					return err
 				}
@@ -133,7 +138,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				if !haveOld || o.ID == "" || i < 0 {
 					return s.gone(tid, svc)
 				}
-				if s.changed(o, svc) {
+				if s.changed(o, svc, mode) {
 					if err := s.rebuilt(tid, o, svc); err != nil {
 						return err
 					}
@@ -168,7 +173,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				if err == nil {
 					if who := s.others(cur, own); len(who) > 0 {
 						s.say(report.WarnLevel, "%s stays on its newer image, which other environments use (%s): %s runs it too", svc.Ref, strings.Join(who, ", "), tid)
-						es = append(es, s.entryOf(svc, svc.Ref))
+						es = append(es, s.entryOf(svc, svc.Ref, mode))
 						continue
 					}
 				}
@@ -179,7 +184,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			}
 			// Its bookmark, put back: built with what its listing said then,
 			// whatever the variables say now.
-			e := s.entryOf(svc, svc.Ref)
+			e := s.entryOf(svc, svc.Ref, mode)
 			if o.Build != "" && e.Build != "" {
 				e.Build = o.Build
 			}
@@ -194,7 +199,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				pulled = append(pulled, st.hold)
 				s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
 			}
-			e := s.entryOf(svc, st.hold)
+			e := s.entryOf(svc, st.hold, mode)
 			e.Kind, e.Digest = KindData, st.hold
 			es = append(es, e)
 			holds[svc.Name] = st.hold
@@ -209,7 +214,7 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					return err
 				}
 			}
-			e := s.entryOf(svc, svc.Ref)
+			e := s.entryOf(svc, svc.Ref, mode)
 			if st.kind == KindData {
 				e.Kind = KindData
 			}
@@ -243,11 +248,12 @@ func (s *Set) gone(tid string, svc Service) error {
 // changed says whether svc's build: section resolves otherwise now than
 // when o's image was built (a build argument changed since): its bookmark
 // holds code built for the old values, which would run under the new
-// ones (an image built for APP_UID 10001 run as 10002). Only where this
-// mode's fetch builds it: image mode's only pulls (a pull_policy: never
-// service with a build: is never built on the server).
-func (s *Set) changed(o entry, svc Service) bool {
-	return svc.Build && s.Mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
+// ones (an image built for APP_UID 10001 run as 10002). Only where the
+// release's mode's fetch builds it: image mode's only pulls (a
+// pull_policy: never service with a build: is never built on the
+// server).
+func (s *Set) changed(o entry, svc Service, mode string) bool {
+	return svc.Build && mode != ModeImage && o.Build != "" && svc.BuildKey != "" && o.Build != svc.BuildKey
 }
 
 // rebuilt says that o's image is built again for what its build: section

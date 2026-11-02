@@ -453,10 +453,15 @@ func runExport(cwd string, args []string, color bool) int {
 // exportRecord is what an mnt export of name records of the images that
 // ran on its data: its release's on a target, its container's locally.
 func exportRecord(cwd, projectDir, name string) string {
-	set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose}
 	if !cli.InRelease(projectDir) {
-		set.List = func(string) ([]images.Service, error) { return localServices(cwd) }
+		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut,
+			List: func(string) ([]images.Service, error) { return localServices(cwd) }}
 		return set.ExportData("", "", name)
+	}
+	set, err := serverImages(cwd, composeName(cwd), errOut)
+	if err != nil {
+		report.Warn("not recording the images that ran on " + name + "'s data: " + err.Error())
+		return ""
 	}
 	return set.ExportData(filepath.Dir(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), ""), name)
 }
@@ -477,12 +482,11 @@ func localServices(cwd string) ([]images.Service, error) {
 	return images.ParseComposeConfig(out.Bytes())
 }
 
-// imagesShared takes the server's image lock shared (remote.ImagesLockEnv),
+// imagesShared takes the server's image lock shared (imagesLockPath),
 // as a sync's img sync-check and sync-done do, for an import's check and
 // take-over of the export's image: a removal elsewhere, which takes it
 // exclusively, then never frees the image between its pull and its
-// bookmark. Waits up to 10 minutes, saying so; without the variable (a
-// local import) nothing to take.
+// bookmark. Waits up to 10 minutes, saying so.
 func imagesShared(ctx context.Context) (unlock func(), err error) {
 	deadline := time.Now().Add(10 * time.Minute)
 	for said := false; ; said = true {
@@ -500,14 +504,14 @@ func imagesShared(ctx context.Context) (unlock func(), err error) {
 	}
 }
 
-// imagesLockNow takes the server's image lock (remote.ImagesLockEnv)
-// shared or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at
-// once: ok false when busy. Without the variable (outside a script that
-// exports it) nothing to take.
+// imagesLockNow takes the server's image lock (imagesLockPath) shared
+// or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at once:
+// ok false when busy. Only on a server: every caller runs in a release
+// there.
 func imagesLockNow(how int) (unlock func(), ok bool, err error) {
-	path := os.Getenv(remote.ImagesLockEnv)
-	if path == "" {
-		return func() {}, true, nil
+	path, err := imagesLockPath()
+	if err != nil {
+		return nil, false, err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
@@ -1224,8 +1228,11 @@ func runImport(cwd string, args []string, color bool) int {
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 	if s.Copy == cli.CopyVolumes && onTarget {
 		if record = images.DataFor(tarRecord(spool), name); record != "" {
-			imgs = &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut, List: images.ListCompose, Address: targetAddress(cwd), Accept: acceptedImages(),
-				Left: os.Getenv(remote.ImagesLeftEnv), Mode: os.Getenv(remote.ImagesModeEnv)}
+			var err error
+			if imgs, err = serverImages(cwd, composeName(cwd), errOut); err != nil {
+				return fail(err.Error() + ": nothing imported")
+			}
+			imgs.Address, imgs.Accept = targetAddress(cwd), acceptedImages()
 			unlock, err := imagesShared(ctx)
 			if err != nil {
 				return fail(err.Error() + ": nothing imported")
@@ -1436,7 +1443,11 @@ func importedImages(cwd, base, name string, services []cli.SyncService, resolved
 		if s.Name != name || s.Copy != cli.CopyVolumes {
 			continue
 		}
-		set := &images.Set{Docker: images.CLI{}, Name: composeName(cwd), Out: errOut}
+		set, err := serverImages(cwd, composeName(cwd), errOut)
+		if err != nil {
+			report.Warn("could not record the image that runs " + name + "'s imported data: " + err.Error())
+			continue
+		}
 		rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
 		record := set.Imported
 		if !resolvedSince.IsZero() {

@@ -53,7 +53,8 @@ const (
 	// meanwhile.
 	TargetReloadFile = TargetEnvFile + ".reload"
 	// RecordFile describes the release: id, commit, branch, who, mode.
-	RecordFile = "devopsy-release.json"
+	// The server's images read its mode (images.ModeOf).
+	RecordFile = images.RecordFile
 	// LogFile is the session's log of its release, then of each rollback
 	// to it and sync into it: what the operator's devopsy said and saw,
 	// the server's lines up to the switch, each after its time, saved by
@@ -889,7 +890,6 @@ fi
 ` + settleSync(projectName) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + snapshotLock(false) + `[ -f "$snap/` + SnapshotManifest + `" ] || { devopsy --say error "$base has no snapshot ` + restore.Snapshot + `"; exit 1; }
-export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
 export ` + RestoreByEnv + `=` + Quote(restore.By) + map[bool]string{true: " " + RestoreEnvEnv + "=1"}[restore.WithEnv] + `
 id=$(devopsy ` + ReleaseIDFlag + ` "$base/releases")
 devopsy --say info "restoring snapshot ` + restore.Snapshot + ` as release $id"
@@ -1660,9 +1660,6 @@ if [ -n "$prev" ]; then
   # A release that syncs runs no partialGuard: a killed holder's files are
   # settled (into a mark) before the check reads it.
 ` + settleSync(projectName) + `  export ` + snapshotEnv(t, t.SnapshotsManual.Keep) + `
-  # The server's image lock, record and mode, for the snapshot's bookmarks
-  # and the detached tar's pruning.
-  export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` + leftPath(t) + ` ` + ImagesModeEnv + `=` + Quote(cmp.Or(t.Mode, ModeBuild)) + `
   rs_k=` + strconv.Itoa(t.Keep) + `
   [ "$rs_k" -gt 0 ] || rs_k=$keep
   [ "$rs_k" -le "$max_keep" ] || rs_k=$max_keep
@@ -1793,21 +1790,28 @@ const ImagesHolders = ".devopsy-images.holders"
 const ImagesLeftFile = images.LeftFile
 
 // leftPath is ImagesLeftFile's path in a script, in t's project's directory
-// under the release root.
+// under the release root: what --releases lists. The server's devopsy
+// finds it the same way for everything that writes it (cmd/devopsy's
+// serverImages), told nothing by the scripts.
 func leftPath(t *Target) string {
 	return `"$root"/` + Quote(strings.SplitN(t.Path, "/", 2)[0]) + `/` + ImagesLeftFile
 }
 
 // releaseImages defines the shell functions that give each release its own
-// images, for t's mode (build when empty: only tests build a target
-// without one). The rules are the server's
-// devopsy's (--images, internal/images: bookmarks, restores, removals,
-// the record); the script keeps what needs the shell: the lock, which a
-// fetch's children inherit, and fetching on a terminal.
+// images. The rules are the server's devopsy's (--images,
+// internal/images: bookmarks, restores, removals, the record), and so
+// are the settings: the server's image lock and the project's record
+// from its release root, the mode of each release from that release's
+// own record (images.ModeOf); the script passes only the environment's
+// name and the address for hints (an older server, which took them from
+// the script, refuses: RecordModeFeature). The script keeps what needs
+// the shell: the lock, which a fetch's children inherit, and fetching on
+// a terminal.
 //
 //   - img <action> ...: devopsy --images for the environment (its compose
-//     name, its project's record).
-//   - fetch_images <dir>: builds or pulls a release's images (fetchImages).
+//     name).
+//   - fetch_images <dir>: builds or pulls a release's images, by the
+//     release's own mode (fetchImages).
 //   - image_lock shared|exclusive <doing> [now] and image_unlock: the
 //     server's image lock (ImagesLock) on fd 8, always taken after the
 //     release lock (fd 9). With now it never waits; otherwise up to 10
@@ -1817,8 +1821,7 @@ func leftPath(t *Target) string {
 //     processes, so a holder that dies frees it; a fetch's children keep
 //     it until they end, as they keep the release lock.
 func releaseImages(projectName string, t *Target) string {
-	mode := cmp.Or(t.Mode, ModeBuild)
-	fetch := fetchImages(projectName, mode)
+	fetch := fetchImages(projectName)
 	name := t.ComposeName()
 	if name == "" {
 		name = projectName
@@ -1827,9 +1830,8 @@ func releaseImages(projectName string, t *Target) string {
 	if holder == "" {
 		holder = "a release"
 	}
-	return fetch + `left=` + leftPath(t) + `
-il_busy=
-img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--mode", mode, "--address", HintAddress(t)}, false) + ` --left "$left" ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
+	return fetch + `il_busy=
+img() { ` + devopsyCall(projectName, []string{"--images", "--name", name, "--address", HintAddress(t)}, false) + ` ${` + ImagesAcceptEnv + `:+--accept "$` + ImagesAcceptEnv + `"} "$@"; }
 image_holders() {
   ih=
   ih_now=$(date +%s)
@@ -1885,12 +1887,14 @@ image_unlock() {
 }
 
 // fetchImages defines fetch_images <dir>, which gets a release's images
-// before it goes live, by mode: build pulls the services without a build
-// and builds the others, refreshing their base images; image pulls every
-// service with an image, buildable ones included, so a tag missing from
-// the registry fails there. Through `devopsy --`, past project commands
-// named pull or build, on a pseudo-terminal (with_tty) for BuildKit's live
-// progress. Empty for any other mode.
+// before it goes live, by the release's own mode (img mode: its record's,
+// so a rollback's or a restart's fetch of a release made in another mode
+// than the checkout's does what that release's did): build pulls the
+// services without a build and builds the others, refreshing their base
+// images; image pulls every service with an image, buildable ones
+// included, so a tag missing from the registry fails there. Through
+// `devopsy --`, past project commands named pull or build, on a
+// pseudo-terminal (with_tty) for BuildKit's live progress.
 //
 // Either way every profile's services without a build are pulled too
 // (ProfilePull): a tool run now and then (`--profile tools run --rm jq`)
@@ -1902,27 +1906,25 @@ image_unlock() {
 // third-party images twice (a manifest request each, nothing
 // downloaded), since Compose cannot pull a profile's non-buildable
 // services and the default buildable ones in one call.
-func fetchImages(projectName, mode string) string {
-	var what, cmd string
-	switch mode {
-	case ModeBuild:
-		what = "pulling and building images (build mode)"
-		cmd = devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
-			" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
-	case ModeImage:
-		what = "pulling images (image mode)"
-		cmd = devopsyCall(projectName, []string{"--", "pull"}, false) +
-			" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
-	default:
-		return ""
-	}
+func fetchImages(projectName string) string {
+	build := devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false) +
+		" && " + devopsyCall(projectName, []string{"--", "build", "--pull"}, false)
+	image := devopsyCall(projectName, []string{"--", "pull"}, false) +
+		" && " + devopsyCall(projectName, append([]string{"--"}, ProfilePull...), false)
 	// Without devopsy's own compose file (images.NoReleaseComposeEnv): a
 	// rollback's or a restart's fetch is of the project's images, never of
 	// the holds the release's last activation wrote, which may name an
 	// image nothing runs any more (the restore decides the holds after).
 	return `fetch_images() {
-  devopsy --say info "` + what + `"
-  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty ` + Quote(cmd) + `)
+  fi_mode=$(img mode "$1") || return
+  if [ "$fi_mode" = ` + ModeImage + ` ]; then
+    devopsy --say info "pulling images (image mode)"
+    fi_cmd=` + Quote(image) + `
+  else
+    devopsy --say info "pulling and building images (build mode)"
+    fi_cmd=` + Quote(build) + `
+  fi
+  (cd "$1/` + CodeDir + `" && export ` + images.NoReleaseComposeEnv + `=1 && with_tty "$fi_cmd")
 }
 `
 }

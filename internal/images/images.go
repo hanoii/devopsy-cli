@@ -56,6 +56,9 @@ const (
 	// release id, name, image id, reason. The project's later removals
 	// retry them (Prune).
 	LeftFile = ".devopsy-images-left"
+	// RecordFile is a release's record, written at its upload
+	// (remote.Record): its mode is the one its images follow (ModeOf).
+	RecordFile = "devopsy-release.json"
 
 	failedFile = "devopsy-failed"
 	codeDir    = "code"
@@ -135,6 +138,25 @@ const (
 	ModeImage = "image"
 )
 
+// ModeOf is the mode rel was released in, from its own record
+// (RecordFile; a snapshot's directory holds its release's copy): what its
+// fetch did, and so whether a service with a build: section is the
+// project's own image or a registry's (Service.own). Never the
+// operator's checkout's, which may be in another mode by the time rel
+// is rolled back to, restored or removed (decided 2026-11-02: "what is
+// deployed decides on the server"). ModeBuild without a record or a
+// mode in it (the default; a test's bare directory).
+func ModeOf(rel string) string {
+	var r struct {
+		Mode string `json:"mode"`
+	}
+	data, err := os.ReadFile(filepath.Join(rel, RecordFile))
+	if err != nil || json.Unmarshal(data, &r) != nil || r.Mode == "" {
+		return ModeBuild
+	}
+	return r.Mode
+}
+
 // Kinds of a listed image.
 const (
 	// KindOwn is an image the project builds (build mode), or one compose
@@ -160,8 +182,8 @@ type Set struct {
 	Out io.Writer
 	// List lists the services a release runs (ListCompose).
 	List func(rel string) ([]Service, error)
-	// Mode is the environment's (ModeBuild when empty).
-	Mode string
+	// No mode: each release's own record says its (ModeOf), so one set
+	// serves releases made in either.
 	// Now is the time, for tests (time.Now when nil).
 	Now func() time.Time
 	// Accept are the services whose image Record or a sync's check lets
@@ -216,8 +238,9 @@ type Service struct {
 
 // own says whether a service's image is the project's own: built (in
 // build mode, where devopsy builds what has a build: section) or never
-// pulled. Decided by compose and the mode, never by the image: Docker's
-// containerd store gives built and loaded images registry digests too.
+// pulled. Decided by compose and the mode of the release it is read in
+// (ModeOf), never by the image: Docker's containerd store gives built
+// and loaded images registry digests too.
 func (svc Service) own(mode string) bool {
 	return svc.NeverPull || (svc.Build && mode != ModeImage)
 }
@@ -407,26 +430,28 @@ func (s *Set) Bookmark(rel string) {
 }
 
 // entries are the images a release runs now, one per service (List),
-// each as Docker has it under its name.
+// each as Docker has it under its name, own or pulled by the release's
+// own mode.
 func (s *Set) entries(rel string) ([]entry, error) {
 	svcs, err := s.List(rel)
 	if err != nil {
 		return nil, err
 	}
+	mode := ModeOf(rel)
 	es := make([]entry, 0, len(svcs))
 	s.built, s.data = map[string]bool{}, map[string]bool{}
 	for _, svc := range svcs {
 		s.built[svc.Name], s.data[svc.Name] = svc.Build, svc.Data
-		es = append(es, s.entryOf(svc, digestRef(svc.Ref)))
+		es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
 	}
 	return es, nil
 }
 
 // entryOf is svc's entry, its image the one Docker has as ref (its own
-// name, or a digest holding it).
-func (s *Set) entryOf(svc Service, ref string) entry {
+// name, or a digest holding it), in a release of mode.
+func (s *Set) entryOf(svc Service, ref, mode string) entry {
 	e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
-	if svc.own(s.Mode) {
+	if svc.own(mode) {
 		e.Kind = KindOwn
 		if svc.Build {
 			e.Build = svc.BuildKey

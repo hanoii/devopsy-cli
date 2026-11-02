@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,15 +13,16 @@ import (
 
 // recEnv is one environment whose releases list services given by the
 // test: a build-mode app, a pulled database with data, a stateless
-// pulled proxy.
+// pulled proxy. Each release's record says its mode (RecordFile, as the
+// upload writes it): the environment's, unless a test writes another.
 type recEnv struct {
 	*env
 	svcs map[string][]Service
+	mode string
 }
 
 func newRecEnv(t *testing.T, d *fakeDocker, name, mode string, out *bytes.Buffer) *recEnv {
-	e := &recEnv{env: newEnv(t, d, name, filepath.Join(t.TempDir(), LeftFile), out), svcs: map[string][]Service{}}
-	e.set.Mode = mode
+	e := &recEnv{env: newEnv(t, d, name, filepath.Join(t.TempDir(), LeftFile), out), svcs: map[string][]Service{}, mode: mode}
 	e.set.List = func(rel string) ([]Service, error) { return e.svcs[filepath.Base(rel)], nil }
 	return e
 }
@@ -28,7 +30,16 @@ func newRecEnv(t *testing.T, d *fakeDocker, name, mode string, out *bytes.Buffer
 func (e *recEnv) release(svcs ...Service) string {
 	id := e.newRelease()
 	e.svcs[id] = svcs
+	writeRecord(e.rel(id), e.mode)
 	return id
+}
+
+// writeRecord writes rel's record (RecordFile) saying mode, as the
+// upload does.
+func writeRecord(rel, mode string) {
+	if err := os.WriteFile(filepath.Join(rel, RecordFile), []byte(`{"mode":"`+mode+`","time":"2026-11-02T00:00:00Z","by":"ci"}`), 0o644); err != nil {
+		panic(err)
+	}
 }
 
 var (
@@ -214,5 +225,70 @@ func TestParseComposeConfig(t *testing.T) {
 	}
 	if _, err := ParseComposeConfig([]byte("")); err == nil {
 		t.Error("no error for no config")
+	}
+}
+
+// Own against pulled follows the release's own record (its mode, written
+// at its upload), never the mode the operator's checkout has now: a
+// release made in image mode lists its built-and-pushed app as pulled,
+// and a rollback to it from a checkout now in build mode keeps it so (it
+// runs what its name holds, nothing built again); one made in build mode
+// lists it as own, and a rollback from a checkout now in image mode puts
+// its bookmark back on the name. The scripts' side (the fetch by the
+// record's mode) is remote's TestRollbackModeByRecord.
+func TestModeFromRecord(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	app := func(ref string) Service { return Service{Name: "app", Ref: ref, Build: true} }
+	record := func(e *recEnv, id, mode string) { writeRecord(e.rel(id), mode) }
+
+	// Image-mode releases, a build-mode checkout (the default Set).
+	e := newRecEnv(t, d, "app-prod", ModeBuild, &out)
+	d.pull("registry/app:1", "sha256:p1")
+	r1 := e.release(app("registry/app:1"))
+	record(e, r1, ModeImage)
+	if err := e.set.Record(e.rel(r1), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readList(e.rel(r1)); len(got) != 1 || got[0].Kind != KindPulled || got[0].Digest != "registry/app@sha256:p1" {
+		t.Errorf("an image-mode release recorded from a build-mode checkout: %+v, want pulled", got)
+	}
+	d.pull("registry/app:2", "sha256:p2")
+	r2 := e.release(app("registry/app:2"))
+	record(e, r2, ModeImage)
+	if err := e.set.Record(e.rel(r2), e.rel(r1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.set.Restore(e.rel(r1), e.rel(r2), false); err != nil {
+		t.Fatalf("rollback to an image-mode release from a build-mode checkout: %v\n%s", err, out.String())
+	}
+	if got := readList(e.rel(r1)); got[0].Kind != KindPulled || strings.Contains(out.String(), "building") {
+		t.Errorf("after the rollback: %+v, want pulled, nothing built\n%s", got[0], out.String())
+	}
+
+	// Build-mode releases, an image-mode checkout.
+	i := newRecEnv(t, d, "app-stage", ModeImage, &out)
+	d.pull("registry/app:prod", "sha256:b1")
+	b1 := i.release(app("registry/app:prod"))
+	record(i, b1, ModeBuild)
+	if err := i.set.Record(i.rel(b1), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readList(i.rel(b1)); len(got) != 1 || got[0].Kind != KindOwn {
+		t.Errorf("a build-mode release recorded from an image-mode checkout: %+v, want own", got)
+	}
+	d.pull("registry/app:prod", "sha256:b2")
+	b2 := i.release(app("registry/app:prod"))
+	record(i, b2, ModeBuild)
+	if err := i.set.Record(i.rel(b2), i.rel(b1)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := i.set.Restore(i.rel(b1), i.rel(b2), false); err != nil {
+		t.Fatalf("rollback to a build-mode release from an image-mode checkout: %v\n%s", err, out.String())
+	}
+	if id, _ := d.ID("registry/app:prod"); id != "sha256:b1" {
+		t.Errorf("after the rollback registry/app:prod is %s, want sha256:b1, the bookmark put back\n%s", id, out.String())
 	}
 }

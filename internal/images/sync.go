@@ -53,8 +53,10 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		s.say(report.WarnLevel, "could not list the services of %s (%v): the child keeps its images", filepath.Base(rel), err)
 		return ""
 	}
+	// Which of rel's listed data services (KindData: pulled, no build:,
+	// whatever rel's mode) are copied; no mode read here: the listing
+	// decided own against pulled when rel was recorded.
 	copied := map[string]bool{}
-	pulled := false
 	for _, svc := range svcs {
 		// A service whose entries are all missing here has nothing a
 		// copy writes: the child keeps its own data, and its image.
@@ -64,7 +66,6 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		// A named volume counts as there: one a service never ran with
 		// leaves no image to send anyway.
 		copied[svc.Name] = (all && svc.Data || svc.Method == CopyVolumes) && (!svc.EntriesKnown || hasEntry(rel, svc.Entries) || len(svc.Volumes) > 0)
-		pulled = pulled || (copied[svc.Name] && !svc.Build && !svc.own(s.Mode))
 	}
 	es := readList(rel)
 	var data []entry
@@ -153,7 +154,8 @@ func (s *Set) ExportData(base, rel, service string) string {
 	}
 	// Only a pulled data service: a built one's digest, which Docker's
 	// containerd store gives built images too, is a local build's, which
-	// no registry has.
+	// no registry has. Locally everything with a build: is built (a
+	// release in place is always build mode), so own is read as such.
 	if s.List == nil {
 		return ""
 	}
@@ -163,7 +165,7 @@ func (s *Set) ExportData(base, rel, service string) string {
 	}
 	pulled := false
 	for _, svc := range svcs {
-		pulled = pulled || (svc.Name == service && svc.Method == CopyVolumes && !svc.own(s.Mode))
+		pulled = pulled || (svc.Name == service && svc.Method == CopyVolumes && !svc.own(ModeBuild))
 	}
 	if !pulled {
 		return ""
@@ -400,7 +402,7 @@ func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 			pulled = append(pulled, hold)
 			s.say(report.InfoLevel, "%s: pulled %s image %s", e.Service, w.source, hold)
 		}
-		extra = append(extra, s.entryOf(Service{Name: syncPrefix + e.Service, Ref: hold}, hold))
+		extra = append(extra, s.entryOf(Service{Name: syncPrefix + e.Service, Ref: hold}, hold, ModeOf(rel)))
 	}
 	if len(extra) == 0 {
 		return nil, nil
@@ -606,6 +608,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		holds = map[string]string{}
 	}
 	h := readHistory(base)
+	mode := ModeOf(rel)
 	changed := false
 	var out []entry
 	var cs map[string]Container
@@ -639,7 +642,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 				out = append(out, e)
 				continue
 			}
-			n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
+			n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold, mode)
 			n.Kind, n.Digest = KindData, hold
 			out = append(out, n)
 			holds[e.Service] = hold
@@ -657,7 +660,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 		if importing {
 			hold = s.ownHold(e, p)
 		}
-		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold)
+		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold, mode)
 		n.Kind, n.Digest = KindData, hold
 		if n.ID == "" {
 			n.ID = p.Image.ID

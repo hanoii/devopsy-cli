@@ -1,8 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,10 +20,13 @@ import (
 // imagesFlag is the hidden flag release scripts run on a server, under
 // the server's image lock, for a release's images (internal/images):
 //
-//	devopsy --images --name <compose name> --left <record> [--mode <mode>]
-//	  [--address <target>] [--accept <services>] [--fetched] <action> ...
+//	devopsy --images --name <compose name> [--address <target>]
+//	  [--accept <services>] [--fetched] <action> ...
 //
-// names <release> (what its pulled names hold, before its fetch),
+// Its settings are the server's own (serverImages): the scripts pass
+// only the environment's name and the address for hints. mode <release>
+// (its record's mode, for the script's fetch), names <release> (what its
+// pulled names hold, before its fetch),
 // data <environment> <release> (the parent's data images, for a sync),
 // sync-check <release> and sync-done <environment> <release> (the
 // child's side of a sync, the parent's in images.SyncImagesEnv),
@@ -40,23 +45,83 @@ import (
 // stays).
 const imagesFlag = "--images"
 
+// serverImages is the images.Set of the environment a server's devopsy
+// runs in, for everything on a server that reads or changes the
+// server's images (--images, --export, --import, --snapshot-step, a
+// settle): one constructor, from what the server knows of itself and
+// nothing a script passes (RecordModeFeature). Its compose name is
+// name (a script's --name, else the release's own, composeName); its
+// directory is what every script exports (images.BaseEnv), else cwd's
+// parent (a command in its current); where its snapshots go is
+// snapshotsOf; and its project's record of the names removals could
+// not take (images.LeftFile) sits in the project's directory under the
+// release root, the server's own setting (remote.ReleaseSettings), which
+// every environment of the project shares (remote's leftPath, for the
+// listing). No mode: each release's own record says its (images.ModeOf).
+// The image lock is imagesLockPath's, in the same root.
+func serverImages(cwd, name string, out io.Writer) (*images.Set, error) {
+	root, err := imagesRoot()
+	if err != nil {
+		return nil, err
+	}
+	base := cmp.Or(os.Getenv(images.BaseEnv), filepath.Dir(cwd))
+	project, err := projectUnder(root, base)
+	if err != nil {
+		return nil, err
+	}
+	return &images.Set{Docker: images.CLI{}, Name: name, Out: out, List: images.ListCompose,
+		Left: filepath.Join(root, project, images.LeftFile), Base: base, Snapshots: snapshotsOf(base)}, nil
+}
+
+// imagesRoot is the server's release root, under which its image lock
+// and every project's record sit (remote.ReleaseSettings, as the
+// scripts' prelude reads it).
+func imagesRoot() (string, error) {
+	r, err := remote.ReleaseSettings()
+	if err != nil {
+		return "", fmt.Errorf("the server's release settings: %w", err)
+	}
+	return r.Root, nil
+}
+
+// imagesLockPath is the server's image lock (remote.ImagesLock, in the
+// release root), which imagesLockNow takes.
+func imagesLockPath() (string, error) {
+	root, err := imagesRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, remote.ImagesLock), nil
+}
+
+// projectUnder is the project whose directory base is in, under root
+// (<root>/<project>/[<instance>/]<environment>): the first part of the
+// path from one to the other, resolved both when base is written
+// otherwise than root (the release root through a link).
+func projectUnder(root, base string) (string, error) {
+	rel, err := filepath.Rel(root, base)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		r, rerr := filepath.EvalSymlinks(root)
+		b, berr := filepath.EvalSymlinks(base)
+		if rerr == nil && berr == nil {
+			rel, err = filepath.Rel(r, b)
+		}
+	}
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("%s is not an environment under the release root %s", base, root)
+	}
+	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0], nil
+}
+
 func runImages(args []string, color bool) int {
 	// Short steps that change what releases run, under the image lock:
 	// they finish whatever happens to the session. Go would die of a
 	// SIGPIPE writing to a gone one, and of a SIGTERM, even ignored by
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	s := &images.Set{Docker: images.CLI{}, Out: os.Stderr, List: images.ListCompose}
-	rollback, named, quiet, goneOK, fetched := false, false, false, false, false
-	s.Mode = images.ModeBuild
-	if v := os.Getenv(images.SyncImagesEnv); v != "" {
-		data, err := images.DecodeData(v)
-		if err != nil {
-			report.Error("the parent's images (" + images.SyncImagesEnv + "): " + err.Error())
-			return 2
-		}
-		s.SyncData = data
-	}
+	rollback, named, quiet, goneOK, fetched, asBuilt := false, false, false, false, false, false
+	var name, address string
+	var accept map[string]bool
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -65,26 +130,22 @@ func runImages(args []string, color bool) int {
 		case "--as-built":
 			// The restart's last try: bookmarks back whatever the build
 			// keys say (images.Set.AsBuilt).
-			s.AsBuilt = true
-		case "--name", "--left", "--mode", "--address", "--accept":
+			asBuilt = true
+		case "--name", "--address", "--accept":
 			if i+1 == len(args) {
 				return imagesUsage(color)
 			}
 			switch args[i] {
 			case "--name":
-				s.Name, named = args[i+1], true
-			case "--left":
-				s.Left = args[i+1]
+				name, named = args[i+1], true
 			case "--address":
-				s.Address = args[i+1]
+				address = args[i+1]
 			case "--accept":
 				// The services --accept-image named (remote.ImagesAcceptEnv).
-				s.Accept = map[string]bool{}
+				accept = map[string]bool{}
 				for _, svc := range strings.FieldsFunc(args[i+1], func(r rune) bool { return r == ',' || r == ' ' }) {
-					s.Accept[svc] = true
+					accept[svc] = true
 				}
-			default:
-				s.Mode = args[i+1]
 			}
 			i++
 		case "--rollback":
@@ -99,8 +160,27 @@ func runImages(args []string, color bool) int {
 	}
 	// The name decides the bookmarks: one forgotten would make
 	// devopsy-<id> ones every environment shares.
-	if len(words) == 0 || s.Left == "" || !named {
+	if len(words) == 0 || !named {
 		return imagesUsage(color)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		report.Error(err.Error())
+		return 1
+	}
+	s, err := serverImages(cwd, name, os.Stderr)
+	if err != nil {
+		report.Error(err.Error())
+		return 1
+	}
+	s.Address, s.Accept, s.AsBuilt = address, accept, asBuilt
+	if v := os.Getenv(images.SyncImagesEnv); v != "" {
+		data, err := images.DecodeData(v)
+		if err != nil {
+			report.Error("the parent's images (" + images.SyncImagesEnv + "): " + err.Error())
+			return 2
+		}
+		s.SyncData = data
 	}
 	rest := words[1:]
 	arg := func(i int) string {
@@ -110,6 +190,12 @@ func runImages(args []string, color bool) int {
 		return ""
 	}
 	switch words[0] {
+	case "mode":
+		// The release's own mode, for the script's fetch (fetchImages).
+		if len(rest) != 1 {
+			return imagesUsage(color)
+		}
+		fmt.Println(images.ModeOf(rest[0]))
 	case "names":
 		if len(rest) != 1 {
 			return imagesUsage(color)
@@ -229,6 +315,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> --left <record> names|record|restore|ran|hold|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|names|record|restore|ran|hold|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

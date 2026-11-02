@@ -452,11 +452,30 @@ before changing anything".
 - **The images' history and holds are a named feature, `data-images`,**
   found by the `img` words they added (`names`, `record`, `restore`,
   `ran`, `hold`, `data`, `sync-check`, `sync-done`) and by `img`'s
-  `--mode` and `--address`, which an older `--images` refuses as usage
+  `--name` and `--address`, which an older `--images` refuses as usage
   after the locks: every activation, holder, parent check and removal
   needs it, so an older server refuses before anything changes, naming
   the upgrade. `childNeeds` does not add it: the parent's sessions to the
   child call none of them, and the child's holder needs it itself.
+- **The server's images find their settings themselves, a named
+  feature, `record-mode`** (decided 2026-11-02): each release's mode
+  from its own record (`images.ModeOf`, `RecordFile`), the image lock
+  and the project's record of names left (`images.LeftFile`) from the
+  release root (`ReleaseSettings`) and the environment's directory
+  (`images.BaseEnv`), in one constructor, `serverImages`
+  (`cmd/devopsy/images.go`), behind every `Set` on a server; `img`
+  passes only `--name` and `--address`. Why: the scripts passed the
+  operator's checkout's mode (`--mode`) to every `img`, rollbacks,
+  restores and removals of releases made in the other mode included,
+  so a release made in build mode was restored as pulled from a
+  checkout now in image mode (the newer build left under its code),
+  and the reverse put a stale bookmark on a pushed name; and three
+  variables carried the lock and the record, which one script
+  (`SnapshotImportScript`) lacked. Found by every script that runs the
+  server's images (`--images`, `--export`, `--import`,
+  `--snapshot-step`): an older server, told nothing, would take build
+  mode for every release and hold no lock. The scripts' fetch asks
+  `img mode <release>` for the same reason (`fetchImages`).
 - **What the server needs:** `devopsy`, `tar`, `flock`, `setsid`,
   `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
   Without `script` there is no live build progress; without `setsid`
@@ -776,12 +795,13 @@ bugs. The scripts keep what needs the shell (`releaseImages`): the
 locks, and fetching on a terminal (`fetch_images`, `with_tty`).
 
 - **Fetching happens before the switch** (`fetchImages`, through
-  `devopsy --`, past project commands): build mode `ProfilePull`
+  `devopsy --`, past project commands), by the release's own mode (`img
+  mode`, its record's): build mode `ProfilePull`
   (`--profile '*' pull --ignore-buildable`) then `build --pull`; image
   mode `pull`, which pulls buildable services with an `image:` too and
   fails on a missing tag, then `ProfilePull`. A rollback or a restart
   restores its images (`img restore`) and fetches only when an image
-  it builds is gone.
+  it builds is gone, as the restored release's mode did.
 - **Every release pulls every profile's non-buildable services,** pull
   only: the listing and the bookmarks stay the default
   services'. Why: a profile-only tool was pulled once, on first
@@ -796,7 +816,10 @@ locks, and fetching on a terminal (`fetch_images`, `with_tty`).
   service, kind, registry digest, version label), from `compose config
   --format json` without profiles and without devopsy's own file
   (`NoReleaseComposeEnv`). Own or pulled is decided by compose and the
-  mode (`Service.own`: a build in build mode, or `pull_policy: never`;
+  mode of the release listed, from its own record (`images.ModeOf`:
+  the new release's at a record, the restored one's at a restore,
+  never the checkout's; `Set` has no mode) (`Service.own`: a build in
+  build mode, or `pull_policy: never`;
   and a pulled image without a registry digest, which nothing could hold,
   is restored as own), never by `RepoDigests` alone: on Docker's
   containerd store built and loaded
@@ -2094,10 +2117,9 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   environment first ran the image, came before any mark here). The check and the take-over run
   under the server's image lock, shared, taken from Go in two short
   windows (`imagesShared`), never across the load: a removal elsewhere
-  waits only for them. `ImportScript` passes the project's record, the
-  lock and the mode (`ImagesLeftEnv`, `ImagesLockEnv`, `ImagesModeEnv`),
-  as `img` gets them: without the record, the names the take-over gave
-  up leaked (review of 2026-10-24). A local export records only a
+  waits only for them. The import's `Set` is `serverImages`', with the
+  project's record, as `img`'s: without the record, the names the
+  take-over gave up leaked (review of 2026-10-24). A local export records only a
   pulled data service (`List`: a built one's containerd digest is a
   local build's). A record line without its reference, id or a registry
   digest (`<repository>@sha256:...`, not a name) counts as none
@@ -3032,8 +3054,8 @@ settled every rule here after nine reviews (2026-10-25).
   restore, full or `--no-code`, takes one of the data it replaces.
   `releaseSnapshotSetup` before the fetch: a killed holder's files
   settled (`settleSync`: a release that syncs runs no `partialGuard`),
-  the server's image lock, record and mode exported (the bookmarks and
-  the detached pruning hold the lock: review), the effective releases
+  the server's image lock held by the bookmarks and the detached
+  pruning (review), the effective releases
   `keep` checked (1 would prune the snapshot with its own release;
   `releases: keep: 1` with them on is a config error too), the sync and
   snapshot locks (release, sync, snapshot, then the fetch's image lock),

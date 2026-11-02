@@ -107,10 +107,11 @@ func (s *Set) Record(rel, prev string) error {
 		s.say(report.ErrorLevel, "could not record what --accept-image let through: %v", err)
 		return err
 	}
+	mode := ModeOf(rel)
 	if prev != "" {
-		s.moved(old, es)
+		s.moved(old, es, mode)
 	}
-	s.stale(es, old)
+	s.stale(es, old, mode)
 	if err := s.keep(rel, es); err != nil {
 		s.say(report.ErrorLevel, "could not record the images of %s: %v", filepath.Base(rel), err)
 		return err
@@ -221,9 +222,10 @@ func (s *Set) SaveNames(rel string) error {
 		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
 		return err
 	}
+	mode := ModeOf(rel)
 	var b strings.Builder
 	for _, svc := range svcs {
-		if svc.own(s.Mode) || strings.Contains(svc.Ref, "@") {
+		if svc.own(mode) || strings.Contains(svc.Ref, "@") {
 			continue
 		}
 		// Docker failing: unknown, so never put back (a refusal would take
@@ -288,9 +290,9 @@ func match(old []entry, e entry) (entry, bool) {
 // moved says, one line per service, which images changed from the
 // release before: a pulled one by version when both have one, else by
 // short digest, an own one rebuilt; and an image the project builds that
-// changed under the same name in image mode, which no rollback takes
-// back.
-func (s *Set) moved(old, es []entry) {
+// changed under the same name in image mode (mode: the new release's),
+// which no rollback takes back.
+func (s *Set) moved(old, es []entry, mode string) {
 	var lines []string
 	var sameTag []string
 	for _, e := range es {
@@ -307,7 +309,7 @@ func (s *Set) moved(old, es []entry) {
 			name = o.Ref + " -> " + e.Ref
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s -> %s", name, shown(o), shown(e)))
-		if s.Mode == ModeImage && s.builds(e) && familiar(o.Ref) == familiar(e.Ref) {
+		if mode == ModeImage && s.builds(e) && familiar(o.Ref) == familiar(e.Ref) {
 			sameTag = append(sameTag, e.Service)
 		}
 	}
@@ -346,11 +348,11 @@ func short(d string) string {
 	return d
 }
 
-// stale says when an image the project builds and pulls (image mode)
-// is the release before's, unchanged for StaleAfter: a rebuild would
-// take its base's patches.
-func (s *Set) stale(es, old []entry) {
-	if s.Mode != ModeImage {
+// stale says when an image the project builds and pulls (image mode:
+// the new release's) is the release before's, unchanged for StaleAfter:
+// a rebuild would take its base's patches.
+func (s *Set) stale(es, old []entry, mode string) {
+	if mode != ModeImage {
 		return
 	}
 	for _, e := range es {

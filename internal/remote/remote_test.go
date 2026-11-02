@@ -453,10 +453,10 @@ func TestFeaturesCoverScripts(t *testing.T) {
 	}
 	// Quoted, inside with_tty's quotes too; once each; the data labels'
 	// feature by what reads them, quoted or not.
-	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", "release-steps", "say"}) {
+	if got := Needs("devopsy --say x; with_tty 'COMPOSE_PROJECT_NAME=a devopsy '\\''--release-steps'\\'' run'; devopsy --say y; devopsy '--images' x"); !slices.Equal(got, []string{"images", RecordModeFeature, "release-steps", "say"}) {
 		t.Errorf("needs: %v", got)
 	}
-	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataCopyFeature, "export", ExportImagesFeature, MntOwnerFeature, "sync-services"}) {
+	if got := Needs("with_tty 'devopsy '\\''--export'\\'' db'; devopsy '--sync-services' 'list'"); !slices.Equal(got, []string{DataCopyFeature, "export", ExportImagesFeature, MntOwnerFeature, RecordModeFeature, "sync-services"}) {
 		t.Errorf("needs, quoted: %v", got)
 	}
 }
@@ -1251,13 +1251,15 @@ esac
 `)
 	write(t, filepath.Join(bin, "mv"), "#!/bin/sh\nif [ \"$1\" = -Tf ]; then rm -f \"$3\"; exec /bin/mv -f \"$2\" \"$3\"; fi\nexec /bin/mv \"$@\"\n")
 	// The rules are devopsy's own: --images goes to the real one, built
-	// for the tests, the rest to the test's fake.
+	// for the tests, the rest to the test's fake. The real one finds the
+	// server's release root itself (its home, without a user config), so
+	// its home is the fake's root (FAKE_ROOT), where a test sets one.
 	if err := os.Rename(filepath.Join(bin, "devopsy"), filepath.Join(bin, "devopsy.fake")); err != nil {
 		t.Fatal(err)
 	}
 	// A fake that lists nothing (it prints no compose config) runs no
 	// services.
-	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") exec "+Quote(realDevopsy)+" \"$@\" ;; esac\n"+
+	write(t, filepath.Join(bin, "devopsy"), "#!/bin/sh\ncase \"$1\" in --images|"+WatchSessionFlag+") HOME=\"${FAKE_ROOT:-${HOME:-}}\" exec "+Quote(realDevopsy)+" \"$@\" ;; esac\n"+
 		`if [ "$*" = '-- config --format json' ]; then out=$("$(dirname "$0")/devopsy.fake" "$@") || exit; [ -n "$out" ] || out='{"services":{}}'; printf '%s\n' "$out"; exit; fi`+"\n"+
 		"exec \"$(dirname \"$0\")/devopsy.fake\" \"$@\"\n")
 	for _, f := range []string{"devopsy", "devopsy.fake", "docker", "flock", "mv"} {
@@ -1285,6 +1287,14 @@ func cfgJSON(refs ...string) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+// writeRecord writes release id's record under base saying mode, as the
+// upload does: the server's images follow it (images.ModeOf), never the
+// target's Mode, which only says what the operator's checkout is in.
+func writeRecord(t *testing.T, base, id, mode string) {
+	t.Helper()
+	write(t, filepath.Join(base, "releases", id, RecordFile), `{"mode":"`+mode+`","time":"2026-11-02T00:00:00Z","by":"ci"}`+"\n")
 }
 
 // fakeImage is the id a tag holds in fakeImageTools' store, "" without
@@ -1485,9 +1495,12 @@ exit 0
 		t.Errorf("failed first release, lock taken after the fetch (%v):\n%s", err, out)
 	}
 
+	// Image mode: what the release's record says (written by the upload),
+	// never the target's (the server decides from the record).
 	image2 := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
 	root = t.TempDir()
 	write(t, filepath.Join(root, image2.Path, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	writeRecord(t, filepath.Join(root, image2.Path), "1", ModeImage)
 	if out, err := run(root, script(image2, "1", false)); err != nil {
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
@@ -1498,6 +1511,7 @@ exit 0
 	// A profile's image that fails to pull fails the release before it
 	// goes live, like any pull.
 	write(t, filepath.Join(root, image2.Path, "releases", "2", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+	writeRecord(t, filepath.Join(root, image2.Path), "2", ModeImage)
 	if out, err := run(root, script(image2, "2", false), "FAIL_PROFILE_PULL=1"); err == nil || !strings.Contains(out, "release 2 not made current") || strings.Contains(calls(root), "deploy") {
 		t.Errorf("a profile's pull failing (%v):\n%s", err, out)
 	}
@@ -1544,6 +1558,7 @@ exit 0
 		t.Helper()
 		tg := target(instance)
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		writeRecord(t, filepath.Join(root, tg.Path), id, ModeImage)
 		out, err := run(ActivateScript(tg, id, false, "", Phases{Run: []string{"deploy"}}, nil), append([]string{"TAG=" + tag, "IMG=" + img}, env...)...)
 		if err != nil {
 			t.Fatalf("release %s of %s (%v):\n%s", id, instance, err, out)
@@ -1878,6 +1893,7 @@ exit 0
 	}
 	for _, id := range []string{"1", "2"} {
 		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		writeRecord(t, filepath.Join(root, tg.Path), id, ModeImage)
 		run(ActivateScript(tg, id, false, "", Phases{Run: []string{"deploy"}}, nil), "IMG="+id)
 	}
 	cksum := func(ref string) string {
@@ -2203,7 +2219,9 @@ func TestRebookmark(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	run := func(listing string) {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg)+`img record "$REL"`)
+		// What the prelude would set: the root and the environment's
+		// directory, from which the real --images finds the project's record.
+		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\nexport "+images.BaseEnv+"=\"$root/app/prod\"\n"+releaseImages("", tg)+`img record "$REL"`)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "REL=" + rel, "LISTING=" + listing}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v:\n%s", err, out)
@@ -2856,20 +2874,30 @@ func TestSyncImagesOrder(t *testing.T) {
 	order(activate, images.SyncImagesEnv+"=", "img record", "make_current", "img sync-done", "sync_finish go")
 }
 
-// Bug: every script that defines img() passes --mode and --address to
+// Every script that defines img() passes --name and --address to
 // devopsy --images, options a devopsy without data-images refuses (its
-// --images takes "--mode" for its action: usage, exit 2), yet --destroy's
+// --images took "--name" for its action: usage, exit 2), yet --destroy's
 // and --releases remove's scripts call none of the words the feature's
-// regexp finds: on an older server they fail on a usage error after
-// taking the locks, instead of the prelude naming the upgrade.
+// regexp finds: on an older server they would fail on a usage error
+// after taking the locks, instead of the prelude naming the upgrade. And
+// every script that runs the server's images (img, --export, --import,
+// --snapshot-step) needs the server to find their settings itself
+// (record-mode): one told them by the scripts, as before, would take
+// build mode for every release, and pass nothing on. No script passes
+// them any more.
 func TestImgOptionsNeedDataImages(t *testing.T) {
 	t.Parallel()
 	for name, s := range allScripts() {
-		if !strings.Contains(s, "'--mode'") {
-			continue
+		if strings.Contains(s, "'--mode'") || strings.Contains(s, "'--left'") || strings.Contains(s, "DEVOPSY_INTERNAL_IMAGES_LEFT") || strings.Contains(s, "DEVOPSY_INTERNAL_IMAGES_LOCK") || strings.Contains(s, "DEVOPSY_INTERNAL_IMAGES_MODE") {
+			t.Errorf("%s passes the images' settings to the server", name)
 		}
-		if !slices.Contains(Needs(s), DataImagesFeature) {
-			t.Errorf("%s passes --mode to devopsy --images but does not need %s: %v", name, DataImagesFeature, Needs(s))
+		needs := Needs(s)
+		if strings.Contains(s, "'--images' '--name'") && !slices.Contains(needs, DataImagesFeature) {
+			t.Errorf("%s defines img but does not need %s: %v", name, DataImagesFeature, needs)
+		}
+		runs := slices.ContainsFunc([]string{"--images", "--export", "--import", "--snapshot-step"}, func(f string) bool { return strings.Contains(s, "'"+f+"'") })
+		if runs != slices.Contains(needs, RecordModeFeature) {
+			t.Errorf("%s runs the server's images %v, needs %s %v", name, runs, RecordModeFeature, !runs)
 		}
 	}
 }
@@ -3126,5 +3154,122 @@ func TestTrimSyncLogScript(t *testing.T) {
 	write(t, path, small)
 	if trim(); readFile(path) != small {
 		t.Errorf("a log of %d lines changed", SyncLogLines)
+	}
+}
+
+// A rollback restores a release's images by the mode that release was
+// made in (its record, images.ModeOf), never the mode the checkout is
+// in now, which the scripts no longer pass: releases made in image mode
+// rolled back to from a checkout now in build mode keep the pushed
+// image as pulled (the name goes forward, nothing built), releases made
+// in build mode rolled back to from a checkout now in image mode get
+// their bookmark back on the name, and the fetch a rollback needs when
+// that image is gone builds, as the release's mode did, instead of
+// pulling. Fails before the server read the record: the operator's mode
+// decided, so the first rollback put a stale bookmark on a pushed name,
+// and the second left the newer build under the restored release.
+func TestRollbackModeByRecord(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	// app is built and pushed (build: and image:) under one name: a
+	// pull gets the registry's image, a build the release's own, each
+	// stored as the id of the release that got it.
+	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
+if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+id=$(pwd -P); id=${id%/code}; id=${id##*/}
+echo "$id: $*" >> "$FAKE_ROOT/calls"
+mkdir -p "$FAKE_ROOT/images"
+case "$*" in
+  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."},"image":"registry/app:prod"}}}' ;;
+  "-- pull") echo "pulled-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
+  "-- build --pull") echo "built-$id" >"$FAKE_ROOT/images/registry_app:prod" ;;
+esac
+exit 0
+`)
+	fakeImageTools(t, bin)
+	phases := Phases{Run: []string{"deploy"}}
+	build := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild}
+	image := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage}
+	run := func(root string, tg *Target, id string, rollback bool) (string, error) {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, rollback, "app-prod", phases, nil))
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	release := func(root string, tg *Target, id, mode string) {
+		t.Helper()
+		write(t, filepath.Join(root, tg.Path, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		writeRecord(t, filepath.Join(root, tg.Path), id, mode)
+		if out, err := run(root, tg, id, false); err != nil {
+			t.Fatalf("release %s (%v):\n%s", id, err, out)
+		}
+	}
+	kind := func(root, id string) string {
+		data, _ := os.ReadFile(filepath.Join(root, "app", "prod", "releases", id, images.ListFile))
+		f := strings.Split(strings.TrimSpace(string(data)), "\t")
+		if len(f) < 4 {
+			return string(data)
+		}
+		return f[3]
+	}
+	calls := func(root string) string {
+		data, _ := os.ReadFile(filepath.Join(root, "calls"))
+		os.Remove(filepath.Join(root, "calls"))
+		return string(data)
+	}
+
+	// Made in image mode, rolled back to from a build-mode checkout.
+	root := t.TempDir()
+	release(root, image, "1", ModeImage)
+	release(root, image, "2", ModeImage)
+	if fakeImage(root, "registry/app:prod") != "pulled-2" || kind(root, "1") != images.KindPulled {
+		t.Fatalf("image-mode releases: registry/app:prod %q, release 1's app %q", fakeImage(root, "registry/app:prod"), kind(root, "1"))
+	}
+	calls(root)
+	out, err := run(root, build, "", true)
+	if err != nil || !strings.Contains(out, "app runs what registry/app:prod holds now") {
+		t.Fatalf("rollback to an image-mode release from a build-mode checkout (%v):\n%s", err, out)
+	}
+	if got := fakeImage(root, "registry/app:prod"); got != "pulled-2" || kind(root, "1") != images.KindPulled {
+		t.Errorf("after it registry/app:prod is %q, release 1's app %q: want the pulled name left forward", got, kind(root, "1"))
+	}
+	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
+		t.Errorf("the rollback fetched:\n%s", got)
+	}
+
+	// Made in build mode, rolled back to from an image-mode checkout.
+	root = t.TempDir()
+	release(root, build, "1", ModeBuild)
+	release(root, build, "2", ModeBuild)
+	if fakeImage(root, "registry/app:prod") != "built-2" || kind(root, "1") != images.KindOwn {
+		t.Fatalf("build-mode releases: registry/app:prod %q, release 1's app %q", fakeImage(root, "registry/app:prod"), kind(root, "1"))
+	}
+	calls(root)
+	if out, err := run(root, image, "", true); err != nil {
+		t.Fatalf("rollback to a build-mode release from an image-mode checkout (%v):\n%s", err, out)
+	}
+	if got := fakeImage(root, "registry/app:prod"); got != "built-1" || kind(root, "1") != images.KindOwn {
+		t.Errorf("after it registry/app:prod is %q, release 1's app %q: want its bookmark back on the name", got, kind(root, "1"))
+	}
+	if got := calls(root); strings.Contains(got, "pull") || strings.Contains(got, "build") {
+		t.Errorf("the rollback fetched:\n%s", got)
+	}
+
+	// Its image gone (the bookmark too), the rollback builds it again
+	// from the release's code, as its mode did: never image mode's pull.
+	release(root, build, "3", ModeBuild)
+	if err := os.Remove(filepath.Join(root, "images", "registry_app:devopsy-app-prod-1")); err != nil {
+		t.Fatal(err)
+	}
+	calls(root)
+	if out, err := run(root, image, "", true); err != nil || !strings.Contains(out, "building it again") {
+		t.Fatalf("rollback to a build-mode release whose image is gone, from an image-mode checkout (%v):\n%s", err, out)
+	}
+	if got := calls(root); !strings.Contains(got, "1: -- build --pull\n") || strings.Contains(got, "1: -- pull\n") {
+		t.Errorf("the gone image's fetch, want build mode's:\n%s", got)
+	}
+	if got := fakeImage(root, "registry/app:prod"); got != "built-1" {
+		t.Errorf("after it registry/app:prod is %q, want built-1", got)
 	}
 }
