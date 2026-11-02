@@ -204,6 +204,13 @@ environments:
       DEVOPSY_WILDCARD_DOMAIN: ""
       CERTRESOLVER: ~
   staging: {}
+  child:
+    parent: prod
+    inherit: [DB]
+    snapshots: {manual: {keep: 2}}
+    env:
+      A: one
+      B: two
 `)
 	write(t, filepath.Join(dir, LocalConfigFile), `
 defaults:
@@ -212,6 +219,14 @@ defaults:
 environments:
   staging:
     mode: build
+  demo:
+    env:
+      SITE: mine
+  child:
+    parent: ~
+    env:
+      A: ~
+      B: local
   mine: {}
 `)
 	prod, err := LoadTarget(dir, "vm1:prod", nil)
@@ -234,11 +249,25 @@ environments:
 	if _, ok := demo.Env["CERTRESOLVER"]; ok {
 		t.Errorf("null removes a default: %v", demo.Env)
 	}
-	if demo.Env["SITE"] != "local" || demo.Keep != 1 || demo.Release.Run != "deploy --fast" || demo.Reload != "reload --quick" || len(demo.Release.Before) != 0 {
+	// The local file's demo changes one key, merged over the project's
+	// demo as defaults: are: the rest stays the project's, and says so.
+	if demo.Env["SITE"] != "mine" || demo.Keep != 1 || demo.Release.Run != "deploy --fast" || demo.Reload != "reload --quick" || len(demo.Release.Before) != 0 {
 		t.Errorf("demo: %+v", demo)
 	}
-	if staging, err := LoadTarget(dir, "vm1:staging", nil); err != nil || staging.Mode != ModeBuild {
-		t.Errorf("local replaces an environment: %+v %v", staging, err)
+	local, project := filepath.Join(dir, LocalConfigFile), filepath.Join(dir, ConfigFile)
+	if demo.From["env.SITE"] != local || demo.From["release"] != project || demo.From["env.DEVOPSY_WILDCARD_DOMAIN"] != project {
+		t.Errorf("demo's origins: %v", demo.From)
+	}
+	if staging, err := LoadTarget(dir, "vm1:staging", nil); err != nil || staging.Mode != ModeBuild || staging.Release == nil || staging.Release.Run != "deploy" {
+		t.Errorf("local merges over an environment: %+v %v", staging, err)
+	}
+	// ~ removes what the project's environment sets, a parent included.
+	child, err := LoadTarget(dir, "vm1:child", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := child.Env["A"]; ok || child.Env["B"] != "local" || child.Env["SITE"] != "local" || child.Parent != "" || child.From["parent"] != "" || len(child.Inherit) != 1 || child.SnapshotsManual.Keep != 2 {
+		t.Errorf("child: parent %q, env %v, inherit %v, snapshots %+v, origins %v", child.Parent, child.Env, child.Inherit, child.SnapshotsManual, child.From)
 	}
 	if _, err := LoadTarget(dir, "vm1:mine", nil); err != nil {
 		t.Errorf("local-only environment: %v", err)

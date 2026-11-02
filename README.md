@@ -473,7 +473,10 @@ environments:
 ```
 
 Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
-committed, never uploaded) is read over it for one machine. In `env`, `""`
+committed, never uploaded) is read over it for one machine: its `defaults:`
+and each environment merge over the project's of the same name as
+`defaults:` merge into environments, so it changes a key and keeps the
+rest, and `parent: ~` there removes a parent. In `env`, `""`
 sets an empty value and `~` removes a default; `inherit: ~` removes its
 list. `snapshots:` merges key by key too: `true` and `false` only
 turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the

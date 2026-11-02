@@ -323,7 +323,9 @@ Where a target's names, server and settings come from. Governed by
 - **Three files, and unknown keys are errors:** the project's
   `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`,
   `public:`, `releases: {keep}`, `defaults:`, `environments:`), its
-  `config.local.yaml` over it, and the user's
+  `config.local.yaml` over it (top-level keys replace; `defaults:` and
+  an environment of the same name merge as below, `parent: ~` too,
+  `mergeEnvironment`), and the user's
   `~/.config/devopsy/config.yaml` (`aliases:`; on servers `releases:`
   and `snapshots: {root, max_keep, mirror}`).
   Never `~/.devopsy`: discovery would take the home directory for a

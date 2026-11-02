@@ -160,7 +160,7 @@ type Target struct {
 	// else the project's, else 0 (the server's default).
 	Keep int `yaml:"-"`
 	// nulls are what it sets to null, removing a default: "env.KEY",
-	// "inherit", "snapshots...".
+	// "inherit", "parent", "snapshots...".
 	nulls map[string]bool
 	// From says where each value came from, for --debug: "server", "path",
 	// "mode", "release", "rollback", "destroy", "reload", "keep",
@@ -731,7 +731,7 @@ func origins(t *Target, from string) map[string]string {
 }
 
 // nullKeys lists what a target node sets to null, removing a default:
-// "env.KEY" for env's KEY: ~, "inherit", and in snapshots:
+// "env.KEY" for env's KEY: ~, "inherit", "parent", and in snapshots:
 // "snapshots", "snapshots.<kind>" and "snapshots.<kind>.<key>" (back to
 // the built-in).
 func nullKeys(n *yaml.Node) map[string]bool {
@@ -741,7 +741,7 @@ func nullKeys(n *yaml.Node) map[string]bool {
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch k, v := n.Content[i].Value, n.Content[i+1]; {
-		case (k == "inherit" || k == "snapshots") && v.Tag == "!!null":
+		case (k == "inherit" || k == "snapshots" || k == "parent") && v.Tag == "!!null":
 			nulls[k] = true
 		case k == "snapshots" && v.Kind == yaml.MappingNode:
 			for j := 0; j+1 < len(v.Content); j += 2 {
@@ -792,7 +792,8 @@ func checkInherit(n *yaml.Node) error {
 }
 
 // mergeDefaults returns over's fields on top of base's: for two defaults,
-// or defaults under an environment. env merges key by key; nulls are over's
+// defaults under an environment, or a local environment over the
+// project's (mergeEnvironment). env merges key by key; nulls are over's
 // keys that remove base's.
 func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	if base == nil {
@@ -832,6 +833,9 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 	if t.Inherit == nil && !nulls["inherit"] {
 		t.Inherit = base.Inherit
 	}
+	if t.Parent == "" && !nulls["parent"] {
+		t.Parent = base.Parent
+	}
 	env := map[string]string{}
 	for k, v := range base.Env {
 		env[k] = v
@@ -848,6 +852,24 @@ func mergeDefaults(base, over *Target, nulls map[string]bool) *Target {
 		t.Env = env
 	}
 	return &t
+}
+
+// mergeEnvironment is the local file's environment over the project's
+// one of the same name, as defaults: merge (mergeDefaults), a parent
+// too, parent: ~ removing it: each value says where it came from. What
+// either removes stays removed below, from defaults:; the file is where
+// it was first defined.
+func mergeEnvironment(base, over *Target) *Target {
+	t := mergeDefaults(base, over, over.nulls)
+	t.nulls = map[string]bool{}
+	for k := range base.nulls {
+		t.nulls[k] = true
+	}
+	for k := range over.nulls {
+		t.nulls[k] = true
+	}
+	t.File = base.File
+	return t
 }
 
 // mergeSnapshots is over's snapshots: on base's, key by key; nulls
@@ -983,6 +1005,9 @@ func LoadConfig(projectDir string) (*Config, error) {
 			defaults = mergeDefaults(defaults, f.defaults, f.defaultsNulls)
 		}
 		for n, t := range f.environments {
+			if prev := c.Environments[n]; prev != nil {
+				t = mergeEnvironment(prev, t)
+			}
 			c.Environments[n] = t
 		}
 	}
