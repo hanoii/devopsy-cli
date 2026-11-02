@@ -1,7 +1,6 @@
 package images
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,22 +23,156 @@ func (s *Set) sayAll(lv report.Level, msg string, details []string, fixes ...rep
 	}
 }
 
+// judged is one data service as a check judged it: why the rule refused
+// it ("" when it allowed it).
+type judged struct {
+	service, why string
+}
+
+// checkWords are what a check says of the data's source and of what it
+// stops: a release's own data, a sync's parent, an import's export, a
+// rollback's.
+type checkWords struct {
+	// source is the data's source, possessive ("its", "the parent's").
+	source string
+	// what is what the refusal says ("the release would run its data on
+	// an image its version does not allow"), nothing what it says
+	// changed ("nothing changed").
+	what, nothing string
+	// flag runs it again (--release, --sync, --import <service>,
+	// --rollback, --snapshots restore <id> --no-code).
+	flag string
+	// rollback adds a rollback's ways out: a release that fixes forward,
+	// the release snapshot from before the change.
+	rollback bool
+}
+
+// judge says what the rule decided over js in w's words: refused (and
+// not accepted: ErrRefused, with the ways out), accepted (--accept-image
+// lets through only what was refused: the services whose history starts
+// over, returned), or an --accept-image naming a service the rule let
+// through (said, nothing forced).
+func (s *Set) judge(js []judged, w checkWords, target string) ([]string, error) {
+	var refused, refusedSvcs, accepted, forced []string
+	for _, j := range js {
+		switch {
+		case j.why == "":
+			if s.Accept[j.service] {
+				s.say(report.InfoLevel, "%s: --accept-image lets through only what the check refuses, and it refuses nothing: it runs as it would", j.service)
+			}
+		case s.Accept[j.service]:
+			accepted = append(accepted, j.service+": "+j.why)
+			forced = append(forced, j.service)
+		default:
+			refused = append(refused, j.service+": "+j.why)
+			refusedSvcs = append(refusedSvcs, j.service)
+		}
+	}
+	if len(refused) > 0 {
+		fixes := []report.Remedy{report.Fix("raise " + DataVersionLabel + " to the image's version, when it is newer than the data's (one variable for the image and the label keeps them together)")}
+		if w.rollback {
+			fixes = append(fixes,
+				report.Fix("or fix forward: a release, which never takes the data back", s.cmd("--release")),
+				s.snapshotFix(target))
+		}
+		fixes = append(fixes, report.Fix("or, knowing its data takes it, accept it, its data's history starting over from it:", s.again(w.flag, refusedSvcs)))
+		s.sayAll(report.ErrorLevel, w.what+": "+w.nothing, refused, fixes...)
+		return nil, ErrRefused
+	}
+	if len(accepted) > 0 {
+		s.sayAll(report.WarnLevel, "accepted (--accept-image): running them anyway, the history of their data starting over from them:", accepted)
+	}
+	return forced, nil
+}
+
+// snapshotFix is a rollback's way back to the data before the change:
+// the newest release snapshot of target's data (its manifest's release),
+// else the snapshots to choose from.
+func (s *Set) snapshotFix(target string) report.Remedy {
+	tid := filepath.Base(target)
+	newest := ""
+	if dir := s.snapshots(); dir != "" {
+		ms, _ := filepath.Glob(filepath.Join(dir, "*", SnapshotManifest))
+		for _, m := range ms {
+			data, err := os.ReadFile(m)
+			if err != nil {
+				continue
+			}
+			kind, rel := "", ""
+			for _, line := range strings.Split(string(data), "\n") {
+				k, v, _ := strings.Cut(line, "\t")
+				switch k {
+				case "kind":
+					kind = v
+				case "release":
+					rel = v
+				}
+			}
+			if id := filepath.Base(filepath.Dir(m)); kind == "release" && rel == tid && id > newest {
+				newest = id
+			}
+		}
+	}
+	if newest != "" {
+		return report.Fix("or restore the snapshot of "+tid+"'s data, taken by the release that replaced it, with its code:", s.cmd("--snapshots restore "+newest))
+	}
+	return report.Fix("or restore a snapshot from before the change, with its code:", s.cmd("--snapshots"))
+}
+
+// SnapshotManifest is a snapshot's manifest (remote's), read for the
+// release snapshot a rollback's refusal names.
+const SnapshotManifest = "manifest"
+
+// Check runs the rule on a new release's data services before anything
+// is built or pulled (img check, before the fetch): their versions come
+// from the labels and their tags from compose's image:, both known
+// before, so a refused release fetches nothing and moves no names. Each
+// against its own data's window, or in a release that syncs (SyncData),
+// one the parent copies against the parent's window: the copy replaces
+// the data. Refused: ErrRefused, said. Accepted services are Record's to
+// force, once their images are there.
+func (s *Set) Check(rel string) error {
+	js, err := s.judgeRelease(rel)
+	if err != nil {
+		return err
+	}
+	_, err = s.judge(js, checkWords{source: "its", what: "the release would run its data on an image its version does not allow", nothing: "nothing changed", flag: "--release"}, rel)
+	return err
+}
+
+// judgeRelease is Check's judgement of rel's data services, from its
+// compose (List).
+func (s *Set) judgeRelease(rel string) ([]judged, error) {
+	svcs, err := s.List(rel)
+	if err != nil {
+		s.say(report.ErrorLevel, "could not list the services of %s: %v", filepath.Base(rel), err)
+		return nil, err
+	}
+	h := readHistory(baseOf(rel))
+	parent := parseParentData(s.SyncData)
+	var js []judged
+	for _, svc := range svcs {
+		if !svc.Data {
+			continue
+		}
+		w, source := h.window(svc.Name), "its"
+		if p := parent[svc.Name]; p != nil {
+			w, source = p.window(), "the parent's"
+		}
+		js = append(js, judged{service: svc.Name, why: rule(w, svc.DataVersion, svc.tag(), source)})
+	}
+	return js, nil
+}
+
 // Record writes what a new release runs, once its images are fetched:
-// the listing (ListFile, with each image's digest and version), the
-// bookmarks and its ComposeFile, which labels each service with the
-// image it was given and holds each pulled data service by digest. prev
-// is the release it replaces ("" for a first one): its listing says what
-// moved, and what each data service's name was.
-//
-// A pulled data service's new image must not be older than the newest
-// its data ran (HistoryFile): one its data moved past (a tag pushed
-// again backward, a stale mirror, a pin lowered) is refused, and so is
-// an image it never ran under a changed name (a series switched, a pin
-// bumped or lowered), whose order the history cannot tell. A tag moving
-// under the same name is forward. Refused, the names the fetch moved go
-// back (SaveNames) and ErrRefused; with yes, it goes on, and the
-// service's history starts over from that image once it runs
-// (ForcedFile, Ran).
+// the listing (ListFile, with each image's digest and version, and each
+// data service's version and tag), the bookmarks and its ComposeFile,
+// which labels each service with the image it was given. prev is the
+// release it replaces ("" for a first one): its listing says what moved.
+// Check came before the fetch; what it let through by --accept-image
+// starts its data's history over once it runs (ForcedFile, Ran), but for
+// a service a release that syncs copies, whose sync does that
+// (SyncDone).
 func (s *Set) Record(rel, prev string) error {
 	es, err := s.entries(rel)
 	if err != nil {
@@ -47,83 +180,15 @@ func (s *Set) Record(rel, prev string) error {
 		return err
 	}
 	old := readList(prev)
-	base := baseOf(rel)
-	// A pulled data service (the labels', never a kind: s.data from
-	// entries), with the registry digest that holds it: an image Docker
-	// could not inspect has nothing to check or hold.
-	pulledData := func(e entry) bool { return e.Kind != KindOwn && s.data[e.Service] && e.Digest != "" }
-	var data []entry
-	for _, e := range es {
-		if pulledData(e) {
-			data = append(data, e)
-		}
-	}
-	h := s.seed(base, old, data)
-	var refused, refusedSvcs, refusedRefs, accepted, forced []string
-	holds := map[string]string{}
-	// A release that syncs: the parent's data replaces the child's, so
-	// its images are checked against the parent's (SyncCheck, below); a
-	// sync that does not complete brings the release before back, on
-	// its own images.
-	parent := parseParentData(s.SyncData)
-	for _, e := range es {
-		// A pulled data service; or a built one whose data has a history
-		// (it ran a pulled image before), checked by its name: a switch
-		// between pulled and built is one its data never ran, its own
-		// builds after go through (no digest to order them by). A
-		// project that always built its database has no history.
-		_, hasHistory := h.last(e.Service)
-		if !pulledData(e) && !(e.Kind == KindOwn && s.data[e.Service] && hasHistory) {
-			continue
-		}
-		var img Image
-		if pulledData(e) {
-			holds[e.Service] = e.Digest
-			if parent[e.Service] != nil {
-				continue
+	var forced []string
+	if len(s.Accept) > 0 {
+		h := readHistory(baseOf(rel))
+		parent := parseParentData(s.SyncData)
+		for _, e := range es {
+			if s.Accept[e.Service] && e.DataVersion != "" && parent[e.Service] == nil && rule(h.window(e.Service), e.DataVersion, e.Tag, "its") != "" {
+				forced = append(forced, e.Service+"\t"+e.ID)
 			}
-			img, err = s.Docker.Inspect(e.Digest)
-		} else {
-			img, err = s.Docker.Inspect(e.ID)
 		}
-		if err != nil {
-			img = Image{ID: e.ID}
-		}
-		// Nothing ran on its data that devopsy knows of: a new name for it
-		// cannot be ordered; else the history decides (dataCheck).
-		why := ""
-		if _, ok := h.last(e.Service); !ok {
-			if o, ok := match(old, e); ok && familiar(o.Ref) != familiar(e.Ref) {
-				why = fmt.Sprintf("%s (%s) never ran on its data, and its image was %s", e.Ref, shownEntry(e), o.Ref)
-			}
-		} else {
-			why = dataCheck(h.window(e.Service), e.Ref, img, "its")
-		}
-		if why != "" {
-			why = e.Service + ": " + why
-		}
-		switch {
-		case why == "":
-		case s.Accept[e.Service]:
-			accepted = append(accepted, why)
-			forced = append(forced, e.Service+"\t"+img.ID)
-		default:
-			refused = append(refused, why)
-			refusedSvcs = append(refusedSvcs, e.Service)
-			refusedRefs = append(refusedRefs, e.Ref)
-		}
-	}
-	if len(refused) > 0 {
-		s.putNamesBack(rel, es, refusedRefs)
-		fixes := []report.Remedy{
-			report.Fix("release an image its data ran, or a newer one under the same name"),
-			report.Fix("or, knowing its data takes it (an upgrade devopsy cannot order), accept it, its data's history starting over from it:", s.again("--release", refusedSvcs)),
-		}
-		s.sayAll(report.ErrorLevel, "the release's images would take data where it never was:", refused, fixes...)
-		return ErrRefused
-	}
-	if len(accepted) > 0 {
-		s.sayAll(report.WarnLevel, "accepted (--accept-image): running them anyway, the history of their data starting over from them:", accepted)
 	}
 	if err := writeForced(rel, forced); err != nil {
 		s.say(report.ErrorLevel, "could not record what --accept-image let through: %v", err)
@@ -138,143 +203,11 @@ func (s *Set) Record(rel, prev string) error {
 		s.say(report.ErrorLevel, "could not record the images of %s: %v", filepath.Base(rel), err)
 		return err
 	}
-	if err := writeCompose(rel, es, holds); err != nil {
+	if err := writeCompose(rel, es, nil); err != nil {
 		s.say(report.ErrorLevel, "could not write %s's %s: %v", filepath.Base(rel), ComposeFile, err)
 		return err
 	}
-	// A release that syncs: the parent's data must take the child's
-	// images, checked against what the release fetched.
-	if s.SyncData != "" {
-		refs, err := s.syncCheck(rel, s.SyncData, "--release")
-		if errors.Is(err, ErrRefused) {
-			s.putNamesBack(rel, es, refs)
-		}
-		return err
-	}
 	return nil
-}
-
-// seed starts the history of each pulled data service (data: by name,
-// with its reference) that has none with what its container runs, once
-// started: a service that just gained its label, or an environment
-// from before the history. Written under the release lock; run by
-// Record and by Restore (a rollback after the upgrade would otherwise
-// find no history and keep nothing). old is the release before's
-// listing, for the name the container ran as.
-func (s *Set) seed(base string, old []entry, data []entry) history {
-	h := readHistory(base)
-	var cs map[string]Container
-	changed := false
-	for _, e := range data {
-		if _, ok := h.last(e.Service); ok {
-			continue
-		}
-		if cs == nil {
-			cs = s.containers()
-		}
-		c, ok := cs[e.Service]
-		if !ok || !c.started() {
-			continue
-		}
-		img, err := s.Docker.Inspect(c.Image)
-		if err != nil {
-			continue
-		}
-		// The name it ran as: its container's, else the release before's.
-		ref := e.Ref
-		if c.Ref != "" && !strings.Contains(c.Ref, "@") {
-			ref = c.Ref
-		} else if o, ok := match(old, e); ok {
-			ref = o.Ref
-		}
-		h = append(h, ranOn(e.Service, Ran, ref, img, s.now()))
-		changed = true
-	}
-	if changed {
-		if err := h.write(base); err != nil {
-			s.say(report.WarnLevel, "could not write the history of the images that ran on the data: %v", err)
-		}
-	}
-	return h
-}
-
-func writeForced(rel string, lines []string) error {
-	path := filepath.Join(rel, ForcedFile)
-	if len(lines) == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return writeFile(path, strings.Join(lines, "\n")+"\n")
-}
-
-// NamesFile, in a new release's directory, is what its pulled names held
-// before its fetch (SaveNames): a refused release puts them back, since
-// its pull moved them for every environment on the server.
-const NamesFile = "devopsy-names"
-
-// SaveNames records what each pulled name of a release held, before its
-// fetch moves them.
-func (s *Set) SaveNames(rel string) error {
-	svcs, err := s.List(rel)
-	if err != nil {
-		s.say(report.ErrorLevel, "could not list the images of %s: %v", filepath.Base(rel), err)
-		return err
-	}
-	mode := ModeOf(rel)
-	var b strings.Builder
-	for _, svc := range svcs {
-		if svc.own(mode) || strings.Contains(svc.Ref, "@") {
-			continue
-		}
-		// Docker failing: unknown, so never put back (a refusal would take
-		// a name that exists for one that was not there).
-		id, err := s.Docker.ID(svc.Ref)
-		if err != nil && !errors.Is(err, ErrNoImage) {
-			continue
-		}
-		b.WriteString(svc.Ref + "\t" + id + "\n")
-	}
-	return writeFile(filepath.Join(rel, NamesFile), b.String())
-}
-
-// putNamesBack points the names of a refused release's refused images
-// (refs) back at what they held before its fetch (NamesFile), so another
-// environment's plain up never runs what was refused here: only while a
-// name still holds the image this release's fetch gave it (es), never
-// one another environment's fetch moved since, and never another name
-// of the release (a stateless image's patch stays). A name that was not
-// there before goes.
-func (s *Set) putNamesBack(rel string, es []entry, refs []string) {
-	data, err := os.ReadFile(filepath.Join(rel, NamesFile))
-	if err != nil {
-		return
-	}
-	fetched := map[string]string{}
-	for _, e := range es {
-		fetched[familiar(e.Ref)] = e.ID
-	}
-	refused := map[string]bool{}
-	for _, r := range refs {
-		refused[familiar(r)] = true
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		ref, id, _ := strings.Cut(line, "\t")
-		if ref == "" || !refused[familiar(ref)] {
-			continue
-		}
-		cur, err := s.Docker.ID(ref)
-		switch {
-		case err != nil || cur == id || cur != fetched[familiar(ref)]:
-		case id == "":
-			_ = s.Docker.Remove(ref)
-		default:
-			if err := s.Docker.Tag(id, ref); err != nil {
-				s.say(report.WarnLevel, "could not put %s back on the image it held (%v): other environments' next up may run what was refused here", ref, err)
-			}
-		}
-	}
 }
 
 // match is the entry of old for the service of e.
@@ -384,9 +317,13 @@ func sanitize(v string) string { return strings.Join(strings.Fields(v), "_") }
 // again is the command that runs it again accepting svcs: devopsy
 // @<address> <flag> --accept-image <svcs>.
 func (s *Set) again(flag string, svcs []string) string {
-	cmd := flag + " --accept-image " + strings.Join(svcs, ",")
+	return s.cmd(flag + " --accept-image " + strings.Join(svcs, ","))
+}
+
+// cmd is devopsy @<address> <args>, or args alone without an address.
+func (s *Set) cmd(args string) string {
 	if s.Address != "" {
-		cmd = "devopsy @" + s.Address + " " + cmd
+		return "devopsy @" + s.Address + " " + args
 	}
-	return cmd
+	return args
 }

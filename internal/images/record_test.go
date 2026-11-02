@@ -43,15 +43,19 @@ func writeRecord(rel, mode string) {
 }
 
 var (
-	appSvc   = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true}
-	dbSvc    = func(ref string) Service { return Service{Name: "database", Ref: ref, Data: true, Method: CopyVolumes} }
+	appSvc = Service{Name: "app", Ref: "app-prod-app", Build: true, Data: true, DataVersion: AnyVersion}
+	// dbSvc's label is its tag's version, one variable for both.
+	dbSvc = func(ref string) Service {
+		return Service{Name: "database", Ref: ref, Data: true, Method: CopyVolumes, DataVersion: VersionHint(ref, false)}
+	}
 	proxySvc = Service{Name: "alwaysup", Ref: "caddy:2-alpine"}
 )
 
 // The listing records each service's kind, digest and version: the app
 // is built (own, whatever its data label), the database and the proxy
-// pulled (data is the labels', never a kind); a listing from before
-// them still reads.
+// pulled (data is the labels', never a kind); a data service's version
+// and, without build:, its tag (the built app has none); a listing from
+// before them still reads.
 func TestRecordListing(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -67,8 +71,8 @@ func TestRecordListing(t *testing.T) {
 	}
 	got := readList(e.rel(id))
 	want := []entry{
-		{Ref: "app-prod-app", ID: "sha256:a1", Service: "app", Kind: KindOwn},
-		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindPulled, Digest: "mariadb@sha256:m1", Version: "11.8.9"},
+		{Ref: "app-prod-app", ID: "sha256:a1", Service: "app", Kind: KindOwn, DataVersion: AnyVersion},
+		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindPulled, Digest: "mariadb@sha256:m1", Version: "11.8.9", DataVersion: "11.8", Tag: "11.8"},
 		{Ref: "caddy:2-alpine", ID: "sha256:c1", Service: "alwaysup", Kind: KindPulled, Digest: "caddy@sha256:c1"},
 	}
 	if len(got) != len(want) {

@@ -1054,7 +1054,7 @@ func runImport(cwd string, args []string, color bool) int {
 	// remote.ImagesAcceptEnv; locally nothing is held, so nothing to
 	// accept.
 	if len(accept) > 0 {
-		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are held on their data's images: locally nothing is checked")
+		return fail(cli.ImportFlag + " --accept-image is for a target, whose data services are checked against their data's history: locally nothing is checked")
 	}
 	if resolved {
 		return runResolved(cwd, name)
@@ -1218,11 +1218,11 @@ func runImport(cwd string, args []string, color bool) int {
 			}
 		}
 	}
-	// The images that ran on the data, when its export recorded them,
-	// are checked before anything stops, as a sync checks its parent's
-	// (images.ImportCheck), and the service is held on the export's once
-	// the data is in: on a target, where data services are held. A tar
-	// without them (made by hand) starts the history over.
+	// The data's history, when its export recorded it: the service's
+	// version and tag are checked against it before anything stops, as a
+	// sync checks its parent's (images.ImportCheck), and it is taken over
+	// once the data is in, on a target. A tar without it (made by hand, a
+	// custom export) starts the history over.
 	var imgs *images.Set
 	var record string
 	rel := remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")
@@ -1384,7 +1384,7 @@ func runImport(cwd string, args []string, color bool) int {
 			unlock()
 		}
 		if err != nil {
-			return fail(err.Error() + ": the import completed, and " + name + " is not held on the image that wrote its data: what it stopped stays down, and the mark until an import of " + name + " completes")
+			return fail(err.Error() + ": the import completed, and " + name + "'s history of its data could not be taken over: what it stopped stays down, and the mark until an import of " + name + " completes")
 		}
 	}
 	// Running through the import (devopsy.data.stop never): made again on

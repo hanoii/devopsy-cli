@@ -240,11 +240,12 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 }
 
 // DataLabel and DataCopyLabel are cli's, which this package cannot
-// import, and CopyVolumes the copy of the service's files
-// (cli.CopyVolumes).
+// import, CopyVolumes the copy of the service's files and CopyCustom the
+// data capability's (cli.CopyVolumes, cli.CopyCustom).
 const (
 	DataLabel        = "devopsy.data"
 	DataCopyLabel    = "devopsy.data.copy"
 	CopyVolumes      = "volumes"
+	CopyCustom       = "custom"
 	DataExcludeLabel = "devopsy.data.exclude"
 )

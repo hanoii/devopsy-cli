@@ -269,9 +269,10 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			// pass it to every command.
 			case a == "--yes" || a == "-y":
 				yes = true
-			case !rollback && a == "--accept-image":
-				// The services whose image the release's checks let through
-				// against their data's history.
+			case a == "--accept-image":
+				// The services whose image the release's or the rollback's
+				// checks let through against their data's history when they
+				// refuse it.
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 					return fail(fmt.Sprintf("usage: devopsy @%s %s --accept-image <service>[,<service>...]", remote.HintAddress(t), args[0]))
 				}
@@ -378,7 +379,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				return fail(fmt.Sprintf("a before step failed (%d): nothing changed on %s", code, t.Name))
 			}
 			log.Info(fmt.Sprintf("rolling back %s (%s:%s)", t.Address, t.Host, t.Path))
-			if code := session(remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
+			if code := session(imagesAccept(accept) + remote.ActivateScript(t, "", true, projectName, phases, nil)); code != 0 {
 				return save("", code)
 			}
 			if code := local("after", remote.Commands(steps.After, false), ""); code != 0 {

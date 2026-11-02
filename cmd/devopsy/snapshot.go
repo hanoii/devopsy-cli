@@ -1265,10 +1265,9 @@ func startLeftDown(cwd string, names []string) {
 		return
 	}
 	report.Warn("the run step left " + strings.Join(left, ", ") + " stopped, which devopsy stopped before it: starting them")
-	// One whose container another image than the release now holds it on
-	// made (a restore's data held on the image it ran, a release's
-	// accepted one) is made again, as restoreServices does: compose start
-	// would run the old image on that data (review).
+	// One whose container another image than the release now gives it
+	// made (another activation's) is made again, as restoreServices does:
+	// compose start would run the old image on that data (review).
 	again := intersect(left, images.Recreate(images.CLI{}, composeName(cwd), remote.ReleaseFile(filepath.Join(cwd, cli.ProjectDirName), "")))
 	var start []string
 	for _, s := range left {
@@ -1524,11 +1523,14 @@ func startStops(cwd string, names []string) error {
 // runSnapshots implements devopsy @<target> --snapshots [remove
 // <id>... [--yes]]: the snapshots there, or some removed.
 func runSnapshots(t *remote.Target, projectName string, args []string, color bool) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes] | restore <id> [--no-code] [--with-env] [--yes]]"
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots [remove <id>... [--yes] | restore <id> [--no-code [--accept-image <service>]] [--with-env] [--yes]]"
 	yes := false
 	var words []string
-	for _, a := range args {
-		switch a {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--accept-image":
+			// Its value is runRestore's.
+			i++
 		case "--help", "-h":
 			fmt.Print(styleFor(os.Stdout).help(cli.RemoteCommandHelp["--snapshots"]))
 			return 0
@@ -2033,22 +2035,9 @@ func snapshotCheckTars(cwd string, p snapshotPaths, snap string, restore bool) (
 	if !restore {
 		return nil
 	}
+	// Its images are a release's: a full restore's fetch pulls its pulled
+	// names as they are now and builds what is gone.
 	restoreSpace(ctx, cwd, filepath.Base(snap), projectDir, services, sizes)
-	data, _ := os.ReadFile(filepath.Join(snap, remote.SnapshotData, "images"))
-	// Under the server's image lock, shared, as a fetch: a removal
-	// elsewhere waits until the pull is bookmarked.
-	unlock, err := imagesShared(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	set, err := serverImages(cwd, composeName(cwd), errOut)
-	if err != nil {
-		return err
-	}
-	if err := set.SnapshotPull(snap, string(data)); err != nil {
-		return fmt.Errorf("snapshot %s: %w", filepath.Base(snap), err)
-	}
 	return nil
 }
 
@@ -2352,8 +2341,8 @@ func snapshotCheckFit(cwd string, p snapshotPaths, snap string) error {
 // release rel being restored, as an import writes its tar: the current
 // release's services with data and their dependents stopped (recorded),
 // a restore mark right before the first write, each entry and volume
-// emptied and extracted in its own util container, the data services
-// held on the images that ran on the data, with its history; then the
+// emptied and extracted in its own util container, the data's history
+// taken over from the snapshot's; then the
 // mark goes (it covers every service with data the restored code runs),
 // and so do its stop lines: the run step starts them.
 func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode bool) int {
@@ -2550,6 +2539,10 @@ func snapshotRestoreData(cwd string, p snapshotPaths, snap, rel string, noCode b
 		if err != nil {
 			return fail(err.Error())
 		}
+		// A --no-code restore's --accept-image (remote.ImagesAcceptEnv):
+		// a service its check refused starts its history over (a full
+		// restore takes none: nothing is checked).
+		set.Accept = acceptedImages()
 		err = set.ImportDone(p.base, rel, string(data))
 		unlock()
 		if err != nil {
@@ -2780,23 +2773,38 @@ func resolveSnapshot(t *remote.Target, projectName, word, nothing string) (strin
 }
 
 func runRestore(t *remote.Target, projectName string, args []string) int {
-	usage := "usage: devopsy @" + targetRef(t) + " --snapshots restore <id> [--no-code] [--with-env] [--yes]"
-	var words []string
+	usage := "usage: devopsy @" + targetRef(t) + " --snapshots restore <id> [--no-code [--accept-image <service>[,<service>...]]] [--with-env] [--yes]"
+	var words, accept []string
 	yes, noCode, withEnv := false, false, false
-	for _, a := range args {
-		switch a {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
 		case "--yes", "-y":
 			yes = true
 		case "--no-code":
 			noCode = true
 		case "--with-env":
 			withEnv = true
+		case "--accept-image":
+			// The services whose image the restore's check lets through
+			// against the snapshot's data (remote.ImagesAcceptEnv).
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				report.Error(usage)
+				return 2
+			}
+			i++
+			accept = acceptImage(accept, args[i])
 		default:
 			words = append(words, a)
 		}
 	}
 	if len(words) != 2 {
 		report.Error(usage)
+		return 2
+	}
+	if len(accept) > 0 && !noCode {
+		// A full restore brings the data back with its code, images and
+		// history: nothing is checked, so nothing to accept.
+		report.Error("--accept-image is for --no-code: a full restore brings the snapshot's code and images back with its data, and checks nothing")
 		return 2
 	}
 	id, code := resolveSnapshot(t, projectName, words[1], "nothing restored")
@@ -2825,7 +2833,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 	log.Info(fmt.Sprintf("restoring %s (%s:%s) from snapshot %s", t.Address, t.Host, t.Path, id))
 	opts := &remote.RestoreOptions{Snapshot: id, WithEnv: withEnv, By: remote.Whoami()}
 	if noCode {
-		code = liveSession(t, remote.RestoreDataScript(t, projectName, opts), rlog, log, restoreWords(t, true))
+		code = liveSession(t, imagesAccept(accept)+remote.RestoreDataScript(t, projectName, opts), rlog, log, restoreWords(t, true))
 		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 		text := rlog.Text()
 		if m := restoringUnder.FindSubmatch(text); m != nil {

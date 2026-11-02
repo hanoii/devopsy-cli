@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
+	"github.com/hanoii/devopsy-cli/internal/images"
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -30,8 +32,10 @@ const (
 // name, a build argument, a profile turned on) is refused, naming it,
 // exit 3, the release to run as the fix (address, as the operator typed
 // it; --sync, a sync's holder: a release that syncs, which inherits
-// first; --restore <snapshot>, a --no-code restore --with-env: the full
-// restore, or the restore without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
+// first; --restore <snapshot>, a --no-code restore: its data services
+// checked against the snapshot's data first (images.RestoreCheck, exit
+// 3), and with --with-env the fixes the full restore, or the restore
+// without the snapshot's variables). With --hint (after --vars set or unset, which refuse nothing), it
 // says nothing and prints on stdout, for the operator to word the
 // follow-up: "missing <name>" lines, exit 4, when compose requires a
 // variable that is not set; else "image <what>" lines, exit 3, when a
@@ -82,6 +86,20 @@ func runCheckImages(cwd string, args []string) int {
 		report.Fail(err)
 		return 1
 	}
+	if snapshot != "" {
+		// A --no-code restore: the current release's data services against
+		// the snapshot's data's history, as a sync's against the parent's
+		// (images.RestoreCheck), the operator's --accept-image letting a
+		// refused one through.
+		s.Address, s.Accept = strings.TrimPrefix(address, "@"), acceptedImages()
+		data, _ := os.ReadFile(filepath.Join(s.Snapshots, snapshot, remote.SnapshotData, "images"))
+		if err := s.RestoreCheck(rel, string(data), snapshot); errors.Is(err, images.ErrRefused) {
+			return checkImagesExit
+		} else if err != nil {
+			report.Fail(err)
+			return 1
+		}
+	}
 	needs, err := s.ReloadCheck(rel)
 	if err != nil {
 		report.Fail(err)
@@ -105,7 +123,7 @@ func runCheckImages(cwd string, args []string) int {
 		fix = report.Fix("release with the sync, which inherits the parent's variables, then builds or pulls it:", "devopsy @"+addr+" --release-sync")
 	}
 	fixes := []report.Remedy{fix}
-	if snapshot != "" {
+	if snapshot != "" && os.Getenv(remote.RestoreEnvEnv) != "" {
 		// A --no-code restore --with-env: the snapshot's variables, which
 		// a release from here would not have; its full restore brings its
 		// code and images with them.

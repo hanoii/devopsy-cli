@@ -1906,6 +1906,31 @@ func TestSyncAcceptReachesHolder(t *testing.T) {
 	}
 }
 
+// A rollback takes --accept-image (refused before the data's versions
+// came): it reaches the activation's img, whose rollback-target and
+// restore check the restored release against its data.
+func TestRollbackAcceptReachesServer(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	s.releaseProd(nil)
+	scripts := filepath.Join(t.TempDir(), "scripts")
+	// The setup's releases have no rollback step: it ends there, after
+	// its check said what it made of --accept-image.
+	if out, _ := s.run([]string{"FAKE_SSH_SCRIPTS=" + scripts}, "@prod", "--rollback", "--accept-image", "db"); !strings.Contains(out, "db: --accept-image lets through only what the check refuses") {
+		t.Fatalf("--rollback --accept-image:\n%s", out)
+	}
+	activation := ""
+	for _, sc := range strings.Split(readString(scripts), "----\n") {
+		if strings.Contains(sc, "img rollback-target") {
+			activation = sc
+		}
+	}
+	if !strings.Contains(activation, remote.ImagesAcceptEnv+`='\''db'\''`) {
+		t.Errorf("the rollback's activation does not get --accept-image's services (%s):\n%s", remote.ImagesAcceptEnv, activation[:min(600, len(activation))])
+	}
+}
+
 // Interrupted during an export, devopsy ends the push session first, then
 // aborts: the export is ended, its spool removed, both sides' stopped
 // services come back, nothing is imported and the run step does not run.

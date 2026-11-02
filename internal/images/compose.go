@@ -11,21 +11,33 @@ import (
 // ComposeFile is devopsy's own compose file, in a release's directory
 // beside its code: the facts of its activation a project could not write
 // in advance, and nothing the project chooses. Every service the
-// activation fetched gets DigestLabel, the image it gave it; a pulled
-// data service, and a pulled service a rollback keeps on an image its
-// name no longer points to, are held by digest (image:
-// <repository>@sha256:...), so nothing but the environment's own next
-// activation moves them: not another environment's pull, not a plain up.
-// devopsy runs compose with it between the project's compose.yaml and
-// the operator's compose.override.yaml, on the server only.
+// activation fetched gets DigestLabel, the image it gave it; a data
+// service the restart after a failed run step keeps on the failed
+// release's image (Restore's holds) gets HeldLabel, and image: the
+// reference that holds it (its digest, the failed release's own name, a
+// bookmark) unless its own name was put on it. devopsy runs compose with
+// it between the project's compose.yaml and the operator's
+// compose.override.yaml, on the server only.
 const ComposeFile = "devopsy-compose.yaml"
 
-// writeCompose writes rel's ComposeFile: each entry's label, and holds
-// (service to digest name).
-func writeCompose(rel string, es []entry, holds map[string]string) error {
+// HeldLabel marks a service the restart holds on the failed release's
+// image, that release's id as its value: --status says so, and a reload
+// takes the hold for the listing's image (ReloadCheck).
+const HeldLabel = "devopsy.held"
+
+// composeHold is how ComposeFile holds a service: Image its image: (""
+// when its own name holds it), From the failed release whose image it is.
+// bookmark: by the release's own bookmark, once known (Restore).
+type composeHold struct {
+	Image, From string
+	bookmark    bool
+}
+
+// writeCompose writes rel's ComposeFile: each entry's label, and holds.
+func writeCompose(rel string, es []entry, holds map[string]composeHold) error {
 	var b strings.Builder
 	b.WriteString("# devopsy's own: the image each service was given by this release's\n" +
-		"# last activation, and the ones it holds by digest. Rewritten by every\n" +
+		"# last activation, and the ones it holds. Rewritten by every\n" +
 		"# activation: never edit it (shared/compose.override.yaml is yours).\n")
 	var svcs strings.Builder
 	seen := map[string]bool{}
@@ -39,17 +51,20 @@ func writeCompose(rel string, es []entry, holds map[string]string) error {
 			label = e.Digest
 		}
 		hold := holds[e.Service]
-		if hold != "" {
-			label = hold
-		}
-		if label == "" {
+		if label == "" && hold.Image == "" {
 			continue
 		}
+		if label == "" {
+			label = hold.Image
+		}
 		svcs.WriteString("  " + strconv.Quote(e.Service) + ":\n")
-		if hold != "" {
-			svcs.WriteString("    image: " + strconv.Quote(hold) + "\n")
+		if hold.Image != "" {
+			svcs.WriteString("    image: " + strconv.Quote(hold.Image) + "\n")
 		}
 		svcs.WriteString("    labels:\n      " + strconv.Quote(DigestLabel) + ": " + strconv.Quote(label) + "\n")
+		if hold.From != "" {
+			svcs.WriteString("      " + strconv.Quote(HeldLabel) + ": " + strconv.Quote(hold.From) + "\n")
+		}
 	}
 	if svcs.Len() == 0 {
 		b.WriteString("services: {}\n")
@@ -59,51 +74,55 @@ func writeCompose(rel string, es []entry, holds map[string]string) error {
 	return writeFile(filepath.Join(rel, ComposeFile), b.String())
 }
 
-// holdsIn reads the holds of rel's ComposeFile (service to digest name):
-// what its last activation held.
-func holdsIn(rel string) map[string]string {
-	holds, _ := composeFacts(rel)
-	return holds
+// heldIn reads rel's ComposeFile's holds: service to the failed release
+// whose image it runs.
+func heldIn(rel string) map[string]string {
+	_, _, held := composeFacts(rel)
+	return held
 }
 
 // labelsIn reads the DigestLabel of each service in rel's ComposeFile.
 func labelsIn(rel string) map[string]string {
-	_, labels := composeFacts(rel)
+	_, labels, _ := composeFacts(rel)
 	return labels
 }
 
-// composeFacts reads rel's ComposeFile as writeCompose writes it: nil
-// without one.
-func composeFacts(rel string) (holds, labels map[string]string) {
+// composeFacts reads rel's ComposeFile as writeCompose writes it: each
+// service's image:, DigestLabel and HeldLabel; nil without one.
+func composeFacts(rel string) (images, labels, held map[string]string) {
 	data, err := os.ReadFile(filepath.Join(rel, ComposeFile))
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	holds, labels = map[string]string{}, map[string]string{}
+	images, labels, held = map[string]string{}, map[string]string{}, map[string]string{}
 	svc := ""
 	label := "      " + strconv.Quote(DigestLabel) + ": "
+	heldLabel := "      " + strconv.Quote(HeldLabel) + ": "
 	for _, line := range strings.Split(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(line, ":"):
 			svc, _ = strconv.Unquote(strings.TrimSuffix(strings.TrimSpace(line), ":"))
 		case strings.HasPrefix(line, "    image: ") && svc != "":
-			holds[svc], _ = strconv.Unquote(strings.TrimPrefix(line, "    image: "))
+			images[svc], _ = strconv.Unquote(strings.TrimPrefix(line, "    image: "))
 		case strings.HasPrefix(line, label) && svc != "":
 			labels[svc], _ = strconv.Unquote(strings.TrimPrefix(line, label))
+		case strings.HasPrefix(line, heldLabel) && svc != "":
+			held[svc], _ = strconv.Unquote(strings.TrimPrefix(line, heldLabel))
 		}
 	}
-	return holds, labels
+	return images, labels, held
 }
 
 // StatusLines are --status's lines on rel's images, one per service
-// worth a word: held by digest (its activation's), running another image
-// than rel gives it (its container another activation's: one cut off
-// past its switch, a rollback's whose newer containers run on; OrbStack
-// cuts, round 8), or another image than its activation gave it
-// (DigestLabel: a plain up followed a name another environment's pull
-// moved, or something outside devopsy).
+// worth a word: running another image than rel gives it (its container
+// another activation's: one cut off past its switch, a rollback's whose
+// newer containers run on; OrbStack cuts, round 8), another image than
+// its activation gave it (DigestLabel: a plain up followed a name another
+// environment's pull moved, or something outside devopsy), or held by
+// the restart after a failed run step on the failed release's image
+// (HeldLabel), own names included.
 func StatusLines(d Docker, project, rel string) []string {
-	holds, labels := composeFacts(rel)
+	_, labels, held := composeFacts(rel)
 	cs, err := d.Containers(project)
 	if err != nil {
 		return []string{"could not list the containers: " + err.Error()}
@@ -134,11 +153,24 @@ func StatusLines(d Docker, project, rel string) []string {
 			lines = append(lines, l)
 			continue
 		}
-		if h := holds[c.Service]; h != "" {
-			lines = append(lines, fmt.Sprintf("%s held on %s", c.Service, shortName(h)))
+		if from := held[c.Service]; from != "" {
+			on := shortName(labels[c.Service])
+			if r := refs[c.Service]; r != "" && digestOf(labels[c.Service]) == "" {
+				on = r + " (" + on + ")"
+			}
+			lines = append(lines, fmt.Sprintf("%s held on %s, the image release %s ran on its data, which the current release's would not allow: a release that fixes forward is the way on", c.Service, on, from))
 		}
 	}
 	return lines
+}
+
+// shownImage is an image for messages: its digest in ref's repository,
+// short, else its short id.
+func shownImage(ref string, img Image) string {
+	if d := digestIn(img, ref); d != "" {
+		return repoOf(d) + "@" + short(digestOf(d))
+	}
+	return short(img.ID)
 }
 
 // sameImage says whether img is the one a DigestLabel names: its id, or

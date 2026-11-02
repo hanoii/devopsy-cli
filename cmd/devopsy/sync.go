@@ -59,7 +59,7 @@ type syncJob struct {
 	// (remote.ParentEnvHeader), resolved anew by later refreshes.
 	from     bool
 	fromAddr string
-	// images are the parent's data images (images.Set.ParentData), read
+	// images are the parent's data's windows (images.Set.ParentData), read
 	// in the preflight: the child's side checks and takes them over, the
 	// push refuses when they changed since.
 	images string
@@ -1036,7 +1036,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 		}
 	}()
 
-	// The data images the child's side checked and takes over: this
+	// The data's history the child's side checked and takes over: this
 	// side's must be the ones the preflight read (a release of this
 	// environment since would copy data another image wrote).
 	if sum := os.Getenv(images.SyncImagesSumEnv); sum != "" {
@@ -1046,7 +1046,7 @@ func runSyncPush(cwd string, args []string, color bool) int {
 			return fail(err.Error())
 		}
 		if images.Sum(set.ParentData(filepath.Dir(cwd), rel)) != sum {
-			return fail("this environment's data images changed since the sync started (a release of it, or a container moved): nothing copied; sync again")
+			return fail("this environment's data's history changed since the sync started (a release of it): nothing copied; sync again")
 		}
 	}
 	_, services, err := cli.SyncServices(cwd, os.Environ())
@@ -1713,7 +1713,7 @@ func childNeeds(dirs, streams []string) []string {
 		script += remote.SyncExecScript(toDir, toProject, nil, []string{cli.SyncServicesFlag, "wipe"})
 	}
 	needs := remote.Needs(script)
-	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature} {
+	for _, f := range []string{remote.DataCopyFeature, remote.MntOwnerFeature, remote.DataVersionFeature} {
 		if !slices.Contains(needs, f) {
 			needs = append(needs, f)
 		}

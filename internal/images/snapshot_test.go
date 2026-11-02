@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -39,7 +38,7 @@ func TestSnapshotBookmarks(t *testing.T) {
 	if img, err := d.Inspect("app-prod-app:devopsy-app-prod-s" + r2); err != nil || img.ID != newer {
 		t.Fatalf("the snapshot's bookmark: %+v %v\n%s", img, err, out.String())
 	}
-	if err := prod.rollback(r1); err != nil {
+	if err := prod.rollback(r1, false); err != nil {
 		t.Fatal(err)
 	}
 	if img, _ := d.Inspect("app-prod-app"); img.ID != old || prod.runs("app") != old {
@@ -70,66 +69,5 @@ func TestSnapshotBookmarkLength(t *testing.T) {
 				t.Errorf("a snapshot's bookmark tag of %d characters: %s", len(tag), tag)
 			}
 		}
-	}
-}
-
-// A restore's check pulls a data service's missing image only in the
-// service's own repository, as the snapshot's listing names it, the
-// image the restore's hold then takes (ownHold): an imported snapshot's
-// record naming another repository's digest pulls nothing of it.
-func TestSnapshotPullOwnRepositoryOnly(t *testing.T) {
-	t.Parallel()
-	d := newFake()
-	d.strictRepo = true
-	var out bytes.Buffer
-	prod := newSim(t, d, "app-prod", &out)
-	d.publish("mariadb:11.8", "I1")
-	prod.release(false, db118)
-	rel := prod.e.rel(prod.cur)
-	d.publish("evil.example/x:1", "IX")
-	if err := prod.e.set.SnapshotPull(rel, "image\tdatabase\tmariadb:11.8\tIX\tevil.example/x@IX\n"); err == nil || d.images["IX"] {
-		t.Errorf("another repository's digest: pulled %v (%v)\n%s", d.images["IX"], err, out.String())
-	}
-	// A snapshot among the environment's, its listing the release's.
-	snaps := t.TempDir()
-	snap := filepath.Join(snaps, "20261026000000")
-	listing, err := os.ReadFile(filepath.Join(rel, ListFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(snap, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(snap, ListFile), listing, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	prod.e.set.Snapshots = snaps
-	d.publish("mariadb:11.8", "I2")
-	if err := prod.e.set.SnapshotPull(snap, "image\tdatabase\tmariadb:11.8\tI2\tmariadb@I2\n"); err != nil || !d.images["I2"] {
-		t.Errorf("its own repository's digest: pulled %v (%v)\n%s", d.images["I2"], err, out.String())
-	}
-	// Bookmarked at once as the snapshot's (s<id>): until the restore's
-	// data step holds it, only that keeps another environment's removal
-	// (which takes the names no bookmark holds) off it.
-	tags, err := d.Tags("I2")
-	if err != nil || !slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, ":devopsy-app-prod-s20261026000000") }) {
-		t.Errorf("the pulled image's names: %v (%v)", tags, err)
-	}
-	// An import's, checked where it was extracted (outside the
-	// snapshots): pulled, never bookmarked by its directory's id, a
-	// release nothing would remove; the import bookmarks it once in place.
-	imp := filepath.Join(snaps, ".import.1", "20261026000001")
-	if err := os.MkdirAll(imp, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(imp, ListFile), listing, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	d.publish("mariadb:11.8", "I3")
-	if err := prod.e.set.SnapshotPull(imp, "image\tdatabase\tmariadb:11.8\tI3\tmariadb@I3\n"); err != nil || !d.images["I3"] {
-		t.Errorf("an import's: pulled %v (%v)\n%s", d.images["I3"], err, out.String())
-	}
-	if tags, _ := d.Tags("I3"); slices.ContainsFunc(tags, func(t string) bool { return strings.Contains(t, "20261026000001") }) {
-		t.Errorf("an import's pulled image bookmarked by its directory: %v", tags)
 	}
 }

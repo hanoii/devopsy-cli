@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -973,63 +972,62 @@ func TestSyncResetNothingPresent(t *testing.T) {
 	}
 }
 
-// An mnt export carries the images that ran on its data (a pax global
-// header, before the members), and an import on a target checks them
-// before anything stops, as a sync checks its parent's: the same name
-// goes on, held on the export's image, its history from an import line;
-// a name the data never ran is refused, nothing stopped or written,
-// unless --accept-image, which reaches the server's import. Locally
-// nothing is checked, so --accept-image there is an error.
+// An mnt export carries its data's history (a pax global header, before
+// the members), and an import on a target checks the environment's
+// labels against it before anything stops, as a sync checks its
+// parent's: at the data's version it goes on, nothing held, its history
+// the export's from an import line; a lower version is refused, nothing
+// stopped or written, unless --accept-image, which reaches the server's
+// import. Locally nothing is checked, so --accept-image there is an
+// error.
 func TestImportExportImages(t *testing.T) {
 	t.Parallel()
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
+	base := filepath.Join(s.root, "shop", "prod")
 	list := releaseFile(t, current, images.ListFile)
-	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\t\t11.8\t11.8\n", 0o644)
+	write(t, filepath.Join(base, images.HistoryFile), "1\tapp\tran\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:twelve=mariadb@sha256:twelve"}
+	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
 	if code != 0 {
 		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
 	}
 	h, err := tar.NewReader(bytes.NewReader(out)).Next()
-	if err != nil || h.Typeflag != tar.TypeXGlobalHeader || !strings.HasPrefix(h.PAXRecords[images.ExportKey], "image\tapp\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\n") {
+	if err != nil || h.Typeflag != tar.TypeXGlobalHeader || h.PAXRecords[images.ExportKey] != "data\tapp\nran\t1\tapp\tran\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n" {
 		t.Fatalf("the export's first header (%v): %+v", err, h)
 	}
 	s.logs()
 
-	// The same name: imported, held on the export's image, and app,
-	// running through the import (no stop label), made again on it.
-	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
+	// At the data's version: imported, nothing held, its history the
+	// export's.
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
 	if code != 0 || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
-		t.Fatalf("an import of the same name (%d):\n%s", code, errs)
+		t.Fatalf("an import at the data's version (%d):\n%s", code, errs)
 	}
-	docker, _ := s.logs()
-	if !strings.Contains(errs, "recreating app on the image its release gives it now") || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
-		t.Errorf("app not made again on the export's image:\n%s\n%s", errs, docker)
+	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") {
+		t.Errorf("held on the export's image:\n%s", c)
 	}
-	os.Remove(s.log + ".containers.shop-prod")
-	base := filepath.Join(s.root, "shop", "prod")
-	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
-		t.Errorf("not held on the export's image:\n%s", c)
-	}
-	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
+	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\tmariadb@sha256:own\t11.8\t11.8\n") {
 		t.Errorf("history:\n%s", h)
 	}
 
-	// Another series here: refused before anything stops.
-	write(t, list, "mariadb:12\tsha256:twelve\tapp\tpulled\tmariadb@sha256:twelve\t\n", 0o644)
+	// A lower version here: refused before anything stops.
+	write(t, list, "mariadb:11.4\tsha256:four\tapp\tpulled\tmariadb@sha256:four\t\t\t11.4\t11.4\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
 	s.logs()
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
-	docker, _ = s.logs()
-	if code == 0 || !strings.Contains(errs, "app: mariadb:12 (") || !strings.Contains(errs, "never ran on the export's data") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
-		t.Fatalf("another series (%d):\n%s\n%s", code, errs, docker)
+	docker, _ := s.logs()
+	if code == 0 || !strings.Contains(errs, "app: devopsy.data.version=11.4 is lower than the export's data's version, 11.8") || !strings.Contains(errs, "--import app --accept-image app") || strings.Contains(docker, " stop ") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "prod's own\n" || readMark(base) != nil {
+		t.Fatalf("a lower version (%d):\n%s\n%s", code, errs, docker)
 	}
 	if _, errs, code := s.runIO(env, out, "@prod", "--import", "app", "--accept-image", "app", "--yes"); code != 0 || !strings.Contains(errs, "accepted (--accept-image)") || readString(filepath.Join(s.mnt("prod"), "storage", "file.txt")) != "from prod\n" {
 		t.Fatalf("accepted (%d):\n%s", code, errs)
+	}
+	if h := readString(filepath.Join(base, images.HistoryFile)); !strings.Contains(h, "\tapp\t"+images.Forced+"\tmariadb:11.4\t") {
+		t.Errorf("history after an accepted import:\n%s", h)
 	}
 
 	// Locally: nothing to accept, and the header is no member.
@@ -1038,35 +1036,6 @@ func TestImportExportImages(t *testing.T) {
 	}
 	if _, errs, code := s.runIO(nil, out, "--import", "app"); code != 0 || readString(filepath.Join(s.dot, "mnt", "storage", "file.txt")) != "from prod\n" {
 		t.Errorf("a local import of it (%d):\n%s", code, errs)
-	}
-}
-
-// An import holding its service on the export's image gives up the
-// listing's earlier pair (the name and the image it had), whose names go
-// to the project's record of what could not go yet (images.LeftFile), as
-// a sync's take-over records them: else nothing would ever remove them.
-func TestImportExportImagesRecordsLeft(t *testing.T) {
-	t.Parallel()
-	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	current := filepath.Join(s.root, "shop", "prod", "current")
-	list := releaseFile(t, current, images.ListFile)
-	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
-	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:old=mariadb@sha256:old", "FAKE_NAMES=mariadb:11.8=sha256:old"}
-	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
-	if code != 0 {
-		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
-	}
-	// prod now runs another image under the same name, which the name
-	// still points to.
-	write(t, list, "mariadb:11.8\tsha256:old\tapp\tpulled\tmariadb@sha256:old\t\n", 0o644)
-	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
-	if code != 0 {
-		t.Fatalf("the import (%d):\n%s", code, errs)
-	}
-	if left := readString(filepath.Join(s.root, "shop", images.LeftFile)); strings.Contains(errs, "could not record") || !strings.Contains(left, "mariadb:11.8\tsha256:old") {
-		t.Errorf("mariadb:11.8 on sha256:old, which no release lists any more, is not recorded:\n%s\nrecord:\n%s", errs, left)
 	}
 }
 
@@ -1179,82 +1148,6 @@ func TestTarGlobalHeaders(t *testing.T) {
 		if es, err := tarEntries(spool); !errors.Is(err, errOutside) && !errors.Is(err, errMember) {
 			t.Errorf("%s: not refused (%v): %v", c.name, err, es)
 		}
-	}
-}
-
-// An import that completed and held its stopped service on the export's
-// image (ImportDone) but could not make it again (the recreate's up
-// failed) keeps the mark and the record, and names --resolved as what
-// starts them. --resolved then has to bring the service back on the
-// image its data now needs, as the import would have: compose start of
-// the old container runs the old image on the imported data (the very
-// thing the hold is for), and Imported then starts the history over from
-// that old image, losing the export's record of what wrote the data.
-func TestImportResolvedKeepsExportImage(t *testing.T) {
-	t.Parallel()
-	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:app=mariadb@sha256:app", "FAKE_APP=mnt+own"}
-	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
-	if code != 0 {
-		t.Fatalf("@prod --export app (%d):\n%s", code, errs)
-	}
-	s.logs()
-	// app, stopped for the import (own), its container on another image
-	// than the export's: made again on the export's once the data is in,
-	// which fails here.
-	write(t, s.log+".containers.shop-prod", "app sha256:before\n", 0o644)
-	base := filepath.Join(s.root, "shop", "prod")
-	history := filepath.Join(base, images.HistoryFile)
-	_, errs, code = s.runIO(append(env, "FAIL_UP=shop-prod"), out, "@prod", "--import", "app", "--yes")
-	docker, _ := s.logs()
-	if code == 0 || !strings.Contains(errs, "did not all come back") || !strings.Contains(errs, "--import app --resolved") || readMark(base) == nil || !strings.Contains(docker, " up -d --no-deps --wait app\n") {
-		t.Fatalf("an import whose recreate failed (%d):\n%s\n%s", code, errs, docker)
-	}
-	if c := readString(releaseFile(t, current, images.ComposeFile)); !strings.Contains(c, `image: "mariadb@sha256:own"`) {
-		t.Fatalf("not held on the export's image:\n%s", c)
-	}
-	if h := readString(history); !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
-		t.Fatalf("history after the import:\n%s", h)
-	}
-	// --resolved, as the error says: app comes back on the hold.
-	_, errs, code = s.runIO(env, nil, "@prod", "--import", "app", "--resolved", "--yes")
-	docker, _ = s.logs()
-	if code != 0 || readMark(base) != nil {
-		t.Fatalf("--resolved (%d):\n%s\n%s", code, errs, docker)
-	}
-	if !strings.Contains(docker, " up -d --no-deps --wait app\n") || regexp.MustCompile(` start( \w+)* app\n`).MatchString(docker) {
-		t.Errorf("--resolved started app's old container, on the image it had, not made again on the export's image its data now needs:\n%s", docker)
-	}
-	if h := readString(history); strings.Contains(h, "\tsha256:app\t") || !strings.Contains(h, "\tapp\t"+images.Imported+"\tmariadb:11.8\tsha256:own\t") {
-		t.Errorf("--resolved started app's history over from the old image, losing the export's:\n%s", h)
-	}
-}
-
-// A database running through its import (devopsy.data.stop never) is
-// made again on the export's image before the app the import stopped
-// (devopsy.data.stop=import, depending on it) starts: started first,
-// the app would run on the old image's database and see it restart.
-func TestImportRecreatesBeforeDependents(t *testing.T) {
-	t.Parallel()
-	s := newSyncSetup(t)
-	s.releaseProd(nil)
-	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tdb\tpulled\tmariadb@sha256:own\t\n", 0o644)
-	write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), "rows\n", 0o644)
-	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own", "FAKE_DB=mnt", "FAKE_APP=mnt+import"}
-	out, errs, code := s.runIO(env, nil, "@prod", "--export", "db")
-	if code != 0 {
-		t.Fatalf("@prod --export db (%d):\n%s", code, errs)
-	}
-	write(t, s.log+".containers.shop-prod", "db sha256:before\n", 0o644)
-	s.logs()
-	_, errs, code = s.runIO(env, out, "@prod", "--import", "db", "--yes")
-	docker, _ := s.logs()
-	if i, j := strings.Index(docker, " up -d --no-deps --wait db\n"), strings.Index(docker, " start app\n"); code != 0 || i < 0 || j < i {
-		t.Errorf("app started (at %d) before db was made again on the export's image (at %d), import %d:\n%s\n%s", j, i, code, errs, docker)
 	}
 }
 

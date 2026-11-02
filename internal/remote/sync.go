@@ -540,7 +540,7 @@ type SyncOptions struct {
 	// ID is the sync's, chosen by the operator's devopsy: its pending
 	// inherited variables are written before the holder runs.
 	ID string
-	// Images are the parent's data images (images.Set.ParentData), from
+	// Images are the parent's data's windows (images.Set.ParentData), from
 	// the preflight: checked before anything stops, taken over once the
 	// copy is complete.
 	Images string
@@ -582,7 +582,7 @@ func (o *SyncOptions) sameServerCopy() string {
 	return s
 }
 
-// imagesExport exports the parent's data images for the child's img
+// imagesExport exports the parent's data's windows for the child's img
 // calls (images.SyncImagesEnv).
 func (o *SyncOptions) imagesExport() string {
 	return "export " + images.SyncImagesEnv + "=" + Quote(images.EncodeData(o.Images)) + "\n"
@@ -728,9 +728,9 @@ func syncBlock(projectName, failed string, release bool) string {
   esac
   # finish partial ends what the record names, then it goes.
   if [ "$sync_word" = go ]; then
-    # The data is the parent's: so are its images and their history
-    # (img sync-done), whatever the answer or finish child go says,
-    # before finish starts the services on them.
+    # The data is the parent's: so is its history of versions (img
+    # sync-done), whatever the answer or finish child go says, before
+    # finish starts the services on it.
     if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
       if image_lock shared syncing; then
         img sync-done "$base" "$rel" || status=$?
@@ -739,9 +739,9 @@ func syncBlock(projectName, failed string, release bool) string {
         status=75
       fi
       if [ "$status" != 0 ]; then
-        # The data is the parent's, its images not: nothing runs on it.
-        devopsy --say error "could not take over the parent's images ($status): the services stay down until a sync completes" || true
-        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "the copy is complete, but the parent's images could not be taken over" >` + incomplete + ` || true
+        # The data is the parent's, its history not: nothing runs on it.
+        devopsy --say error "could not take over the parent's history of its data ($status): the services stay down until a sync completes" || true
+        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "the copy is complete, but the parent's history of its data could not be taken over" >` + incomplete + ` || true
         sync_finish partial || true
       fi
     fi
@@ -807,10 +807,9 @@ fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
 rel="$base/releases/$id"
-` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the parent's data must take the
-# child's images, and the parent's image must be here (img sync-check
-# pulls it, maybe for long): an abort or a session gone meanwhile ends
-# this, nothing stopped.
+` + o.sameServerCopy() + recoverFetch(`"$rel"`) + checkImages(t, projectName, run, InheritPendingEnv+`="$base"/`+Quote(SyncInheritPending(o.ID))+" ", "nothing changed", "--sync") + o.imagesExport() + `# Before anything stops, still armed: the child's data services'
+# versions and tags must allow the parent's data (img sync-check): an
+# abort or a session gone meanwhile ends this, nothing stopped.
 if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_lock shared syncing || exit $?
   sc=0
@@ -818,12 +817,12 @@ if [ -n "${` + images.SyncImagesEnv + `:-}" ]; then
   image_unlock
   [ "$sc" = 0 ] || { devopsy --say error "nothing changed"; exit "$sc"; }
 fi
-# Armed only while it waits for the lock and the parent's image, when
+# Armed only while it waits for the lock and its check, when
 # nothing changed yet: a session gone then ends it; from here on it
 # restores on its own. With a heartbeat, disarmed only on the session's
 # next byte (waitBeat): a session that went silent while this waited
 # ends it too, never noticed only once the services are stopped.
-` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock or the parent's image: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
+` + waitBeat(`{ devopsy --say error "the session ended while this waited for the release lock or its check: nothing changed"; exit 1; }`) + `# A holder its watcher ended while it waited leaves its .fired.
 rm -f "$ws_armed.off" "$base"/.devopsy-watch.*.fired
 devopsy --say info "syncing into $id"
 ` + o.exports(t) + `cd "$base/current"
@@ -1035,7 +1034,7 @@ case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeatu
 }
 
 // ParentCheckScript is CurrentExistsScript for a sync's parent, then its
-// data images (images.Set.ParentData: lines starting image and ran),
+// data's windows (images.Set.ParentData: lines starting data and ran),
 // which the child's side checks and takes over (images.SyncImagesEnv),
 // and the keys its inherit: names (inheritKeys).
 func ParentCheckScript(t *Target, projectName string, extra []string) string {
@@ -1074,12 +1073,12 @@ func ParseInherit(out string) []string {
 	return keys
 }
 
-// ParseParentData is the parent's data images in ParentCheckScript's
+// ParseParentData is the parent's data's windows in ParentCheckScript's
 // output (images.Set.ParentData's lines).
 func ParseParentData(out string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "image\t") || strings.HasPrefix(line, "ran\t") {
+		if strings.HasPrefix(line, "data\t") || strings.HasPrefix(line, "ran\t") {
 			b.WriteString(strings.TrimRight(line, "\r") + "\n")
 		}
 	}

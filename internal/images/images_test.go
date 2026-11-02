@@ -408,7 +408,7 @@ func (e *env) run(d *fakeDocker) {
 			cs = append(cs, c)
 		}
 	}
-	holds := holdsIn(e.rel(e.current))
+	holds, _, _ := composeFacts(e.rel(e.current))
 	for _, svc := range services(e.lists[e.current]) {
 		ref := svc.Ref
 		if h := holds[svc.Name]; h != "" {

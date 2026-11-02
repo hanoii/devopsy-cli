@@ -8,9 +8,10 @@
 // bookmarks are the reference count: a release going (Remove) untags
 // its bookmarks, and an image no other bookmark holds loses the names
 // the release ran, so Docker deletes it. A rollback or a restart puts
-// what a release built back from its bookmarks and holds what must not
-// move by digest in devopsy's own compose file (Restore): a pulled data
-// service only ever goes forward (HistoryFile).
+// what a release built back from its bookmarks (Restore). A data
+// service's data follows its image by the version the project gives it
+// (DataVersionLabel) and its tag, against the history of what ran on it
+// (HistoryFile, rule).
 //
 // Rules: internals/images.md.
 package images
@@ -42,8 +43,11 @@ const (
 	// activation), the image it had when bookmarked ("" when Docker had
 	// none), the service, its kind (KindOwn, KindPulled), the
 	// registry's digest of a pulled image (<repository>@sha256:...), its
-	// version label (org.opencontainers.image.version), for display, and
-	// the build key a service the release built was built with (BuildKey).
+	// version label (org.opencontainers.image.version), for display, the
+	// build key a service the release built was built with (BuildKey),
+	// and for a data service its DataVersionLabel and, without build:, its
+	// tag (TagOf of compose's image:, never of a held reference): what its
+	// run records (Ran) and its checks compare (rule).
 	ListFile = "devopsy-images"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
@@ -187,19 +191,26 @@ type Set struct {
 	// serves releases made in either.
 	// Now is the time, for tests (time.Now when nil).
 	Now func() time.Time
-	// Accept are the services whose image Record or a sync's check lets
-	// through what it would refuse (--accept-image); Address is the
-	// target as typed, for the fix lines.
+	// Accept are the services --accept-image named: a check that refuses
+	// one lets it through, its data's history starting over from it
+	// (ForcedFile), and one it lets through stays as it is. Address is
+	// the target as typed, for the fix lines.
 	Accept  map[string]bool
 	Address string
 	// SyncData is a parent's ParentData, in a sync's activation or
-	// holder: Record and SyncCheck check the child against it.
+	// holder: Check and SyncCheck check the child against it.
 	SyncData string
 	// AsBuilt has Restore put own images' bookmarks back even when their
 	// build changed since (changed): the restart after a failed run step
 	// whose build again failed runs what the release built, never the
 	// failed release's image under the name.
 	AsBuilt bool
+	// Restart: Restore is the restart after a failed run step, which
+	// cannot refuse: a data service the rule would refuse stays on the
+	// failed release's image that ran on its data (holds), and
+	// --accept-image never reaches it. NoCheck: a full restore, whose
+	// data and history come back from its snapshot: nothing checked.
+	Restart, NoCheck bool
 	// Base and Snapshots are the environment's directory and where its
 	// snapshots go (SnapshotsEnv, BaseEnv when empty, as every script
 	// exports them): a snapshot's directory holds a release's listing
@@ -207,9 +218,8 @@ type Set struct {
 	// environment's own (own).
 	Base, Snapshots string
 
-	// built are the services with a build: section, data those with
-	// devopsy.data=true, from the last List.
-	built, data map[string]bool
+	// built are the services with a build: section, from the last List.
+	built map[string]bool
 }
 
 // Service is one of the services a release runs, as compose resolves it
@@ -258,6 +268,10 @@ type entry struct {
 	// Build is the BuildKey it was built with, for a service the release
 	// built: what a reload checks (ReloadCheck); "" for any other.
 	Build string
+	// DataVersion is a data service's DataVersionLabel, Tag its TagOf
+	// without build: ("" for any other service), as the release runs them:
+	// the restart's hold records the held image's own (holds).
+	DataVersion, Tag string
 }
 
 func (s *Set) say(lv report.Level, format string, args ...any) {
@@ -384,7 +398,7 @@ func readList(rel string) []entry {
 			return ""
 		}
 		if col(0) != "" {
-			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6)})
+			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6), DataVersion: col(7), Tag: col(8)})
 		}
 	}
 	return es
@@ -393,7 +407,7 @@ func readList(rel string) []entry {
 func writeList(rel string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
-		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build}
+		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag}
 		for len(cols) > 1 && cols[len(cols)-1] == "" {
 			cols = cols[:len(cols)-1]
 		}
@@ -443,9 +457,9 @@ func (s *Set) entries(rel string) ([]entry, error) {
 	}
 	mode := ModeOf(rel)
 	es := make([]entry, 0, len(svcs))
-	s.built, s.data = map[string]bool{}, map[string]bool{}
+	s.built = map[string]bool{}
 	for _, svc := range svcs {
-		s.built[svc.Name], s.data[svc.Name] = svc.Build, svc.Data
+		s.built[svc.Name] = svc.Build
 		es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
 	}
 	return es, nil
@@ -455,6 +469,9 @@ func (s *Set) entries(rel string) ([]entry, error) {
 // name, or a digest holding it), in a release of mode.
 func (s *Set) entryOf(svc Service, ref, mode string) entry {
 	e := entry{Ref: svc.Ref, Service: svc.Name, Kind: KindPulled}
+	if svc.Data {
+		e.DataVersion, e.Tag = svc.DataVersion, svc.tag()
+	}
 	if svc.own(mode) {
 		e.Kind = KindOwn
 		if svc.Build {
@@ -477,25 +494,14 @@ func (s *Set) entryOf(svc Service, ref, mode string) entry {
 	return e
 }
 
-// pulledData says whether svc's data is changed in place by an image a
-// registry serves: devopsy.data=true, no build: section (a built one is
-// the project's own image, in either mode).
-func (svc Service) pulledData() bool { return svc.Data && !svc.Build }
-
-// dataOf lists rel's services with pulled data (pulledData), by name:
-// what a listing alone cannot say (List).
-func (s *Set) dataOf(rel string) (map[string]bool, error) {
-	svcs, err := s.List(rel)
-	if err != nil {
-		return nil, err
+// tag is what the rule compares of a data service's image (TagOf of
+// compose's image:), "" for one with build:, which has no tag check: a
+// built data service is protected by its version alone.
+func (svc Service) tag() string {
+	if svc.Build {
+		return ""
 	}
-	data := map[string]bool{}
-	for _, svc := range svcs {
-		if svc.pulledData() {
-			data[svc.Name] = true
-		}
-	}
-	return data, nil
+	return TagOf(svc.Ref)
 }
 
 // digestIn is img's registry digest for ref's repository, as a name,
@@ -529,11 +535,10 @@ func (s *Set) keep(rel string, es []entry) error {
 	listed := map[string]bool{}
 	// The names es still gives an image in its refs' repositories, by
 	// name and id, which its removal takes (Remove): one of them is no
-	// name left behind (review: an import's sync:<service> entry,
-	// dropped, recorded the release's own mariadb:11.8 and its hold). A
-	// digest in another repository (a sync's hold through the parent's
-	// mirror) no removal of es takes: it is recorded (review: it outlived
-	// every release).
+	// name left behind (review: a dropped entry recorded the release's own
+	// mariadb:11.8 and its hold). A digest in another repository (a hold
+	// through a mirror) no removal of es takes: it is recorded (review:
+	// it outlived every release).
 	named := map[string]bool{}
 	for _, e := range es {
 		listed[familiar(e.Ref)+" "+e.ID] = true

@@ -25,22 +25,28 @@ import (
 //
 // Its settings are the server's own (serverImages): the scripts pass
 // only the environment's name and the address for hints. mode <release>
-// (its record's mode, for the script's fetch), names <release> (what its
-// pulled names hold, before its fetch),
-// data <environment> <release> (the parent's data images, for a sync),
-// sync-check <release> and sync-done <environment> <release> (the
-// child's side of a sync, the parent's in images.SyncImagesEnv),
-// record <release> [<release it replaces>] (exit 3 when its checks
-// refuse, 1 when it cannot), restore <release> <release it replaces>
-// [--fetched] [--as-built] (exit 1 when an own image must be built again, 3 when it
-// cannot; as built, the restart's last try, neither: its data services
-// held on the newest image their data ran, the rest as it is), ran <environment> <release> [cut] (the history of what ran on the
-// data; cut: of an activation cut off past its switch), remove <release>... (exit 1 when Docker failed: keep the
+// (its record's mode, for the script's fetch), check <release> (its data
+// services against their data's history, before anything is built or
+// pulled: exit 3 when refused), data <environment> <release> (the
+// parent's data's windows, for a sync), sync-check <release> and
+// sync-done <environment> <release> (the child's side of a sync, the
+// parent's in images.SyncImagesEnv), record <release> [<release it
+// replaces>] (exit 1 when it cannot), restore [--restart | --restore]
+// <release> <release it replaces> [--fetched] [--as-built] (exit 1 when an
+// own image must be built again, 3 when refused or it cannot; a
+// rollback's checks its data services first; --restart, the restart
+// after a failed run step: none refused, those the rule would refuse held
+// on the failed release's image, --accept-image ignored; --restore, a
+// full restore: nothing checked; as built, the restart's last try,
+// neither exit), ran <environment> <release> [cut] (the history of what
+// ran on the data; cut: of an activation cut off past its switch),
+// remove <release>... (exit 1 when Docker failed: keep the
 // release), undo [--rollback] <release> [<current release>], recover
 // <environment> [<current release>], prune; for an environment's
 // releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
 // <environment> <keep> (the ids, one per line), rollback-target
-// <environment> (exit 1 without one), remove-releases [--quiet]
+// <environment> (exit 1 without one; 3 when the rule refuses it,
+// checked leniently: its config unreadable refuses nothing), remove-releases [--quiet]
 // [--gone-ok] <environment> <id>... (exit 1 when refused or a release
 // stays).
 const imagesFlag = "--images"
@@ -119,7 +125,7 @@ func runImages(args []string, color bool) int {
 	// SIGPIPE writing to a gone one, and of a SIGTERM, even ignored by
 	// the script (it only keeps an inherited SIGINT and SIGHUP ignored).
 	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	rollback, named, quiet, goneOK, fetched, asBuilt := false, false, false, false, false, false
+	rollback, named, quiet, goneOK, fetched, asBuilt, restart, fullRestore := false, false, false, false, false, false, false, false
 	var name, address string
 	var accept map[string]bool
 	var words []string
@@ -131,6 +137,10 @@ func runImages(args []string, color bool) int {
 			// The restart's last try: bookmarks back whatever the build
 			// keys say (images.Set.AsBuilt).
 			asBuilt = true
+		case "--restart":
+			restart = true
+		case "--restore":
+			fullRestore = true
 		case "--name", "--address", "--accept":
 			if i+1 == len(args) {
 				return imagesUsage(color)
@@ -173,7 +183,12 @@ func runImages(args []string, color bool) int {
 		report.Error(err.Error())
 		return 1
 	}
-	s.Address, s.Accept, s.AsBuilt = address, accept, asBuilt
+	s.Address, s.Accept, s.AsBuilt, s.Restart, s.NoCheck = address, accept, asBuilt, restart, fullRestore
+	if restart {
+		// The release accepted its new image, never the old one back on
+		// the new data: the restart holds what the rule refuses.
+		s.Accept = nil
+	}
 	if v := os.Getenv(images.SyncImagesEnv); v != "" {
 		data, err := images.DecodeData(v)
 		if err != nil {
@@ -196,20 +211,20 @@ func runImages(args []string, color bool) int {
 			return imagesUsage(color)
 		}
 		fmt.Println(images.ModeOf(rest[0]))
-	case "names":
+	case "check":
 		if len(rest) != 1 {
 			return imagesUsage(color)
 		}
-		if s.SaveNames(rest[0]) != nil {
+		if err := s.Check(rest[0]); errors.Is(err, images.ErrRefused) {
+			return 3
+		} else if err != nil {
 			return 1
 		}
 	case "record":
 		if len(rest) < 1 || len(rest) > 2 {
 			return imagesUsage(color)
 		}
-		if err := s.Record(rest[0], arg(1)); errors.Is(err, images.ErrRefused) {
-			return 3
-		} else if err != nil {
+		if s.Record(rest[0], arg(1)) != nil {
 			return 1
 		}
 	case "restore":
@@ -293,6 +308,9 @@ func runImages(args []string, color bool) int {
 		if id == "" {
 			return 1
 		}
+		if errors.Is(s.CheckRollback(filepath.Join(rest[0], "releases", id)), images.ErrRefused) {
+			return 3
+		}
 		fmt.Println(id)
 	case "remove-releases":
 		if len(rest) < 2 {
@@ -308,6 +326,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|names|record|restore|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|check|record|restore|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }
