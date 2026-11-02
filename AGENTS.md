@@ -1551,10 +1551,11 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   restore's); `--mnt-owners`, before it scans, `owners`; the next holder
   of the parent's sync lock (a push, an export) `source`;
   `--destroy-data` every task of its environment (it holds every lock:
-  each is a leftover), never another environment's. Locally nothing
-  removes by label: nothing holds a lock, and another terminal's
-  owners' step may run. Names stay only where they keep a container
-  unique while it runs (`<prefix><compose name>-<pid>-<n>`, a sync's
+  each is a leftover), never another environment's. Locally only a
+  failed import's end does (`endImport`, `import`), never a local
+  `--destroy` and never `owners`: nothing holds a lock, and another
+  terminal's owners' step may run. Names stay only where they keep a
+  container unique while it runs (`<prefix><compose name>-<pid>-<n>`, a sync's
   id), and `dockerRunFresh` (an import's, an owners' step's) and a
   snapshot check's `unzstd` remove one of that very name first
   (`removeNamed`: a devopsy killed outright whose pid or snapshot this
