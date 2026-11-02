@@ -42,7 +42,7 @@ History, not rules: `internals/releases.md` wins where they differ.
 - A target's `COMPOSE_PROJECT_NAME` is always its compose name: one exported for local work once put every environment under one compose project.
 - The `--vars` edit's rename: a `cat` into the file truncated it first, so a command reading it meanwhile got it empty or cut.
 - `--vars get` is the environment's value (decided 2026-10-27): a child's `get` said "not set" of a value `--env` showed, inherited. `--vars-instance get` and `--vars-project get` stay their file's because it reaches several environments and has no one value.
-- A `set` warns with no list of unsets (decided with the user): the list was confusing and rarely what is wanted; only the `--vars set` on the environment and how an inherited value goes are named.
+- A `set` warns with no list of unsets (decided with the maintainer): the list was confusing and rarely what is wanted; only the `--vars set` on the environment and how an inherited value goes are named.
 - The trace comes from `--env-trace` rather than a second reading of the files: a second reading was what `--debug env` already showed, done again and drifting from it.
 
 ## Locks
