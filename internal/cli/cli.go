@@ -58,10 +58,10 @@ type Plan struct {
 	// are masked.
 	Verbose []string
 	// Starts is set for a compose command that starts containers
-	// (startingCommands) locally, in a project whose compose files may
-	// carry MntOwnerLabel: the caller readies mnt's owned entries first.
-	// Never in a release on a server, where --mnt-owners gives them away
-	// at each switch, nor for --dry-run, which starts nothing.
+	// (startingCommands) locally: the caller reads the labels and readies
+	// mnt's owned entries (MntOwnerLabel) first. Never in a release on a
+	// server, where --mnt-owners gives them away at each switch, nor for
+	// --dry-run, which starts nothing.
 	Starts bool
 	// StartsInRelease is set for such a command, or cp (which mounts bind
 	// sources afresh), in a release on a server:
@@ -145,44 +145,16 @@ func dryRun(args []string) bool {
 	return dry
 }
 
-// mayOwnMnt reports whether files, the project's compose files
-// (composeFiles: what the labels are read from, ComposeConfig), may
-// carry MntOwnerLabel: the label, or a file they include or extend. A
-// file a command adds with -f is in neither, so it is never half seen.
-// Read as text, so a project without the label pays no compose config
-// before every command: YAML's keys only, comments left out (every
-// template's say "included" somewhere).
-func mayOwnMnt(files []string) bool {
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			// A comment starts a line or follows a blank.
-			if strings.HasPrefix(line, "#") {
-				continue
-			}
-			for _, c := range []string{" #", "\t#"} {
-				if i := strings.Index(line, c); i >= 0 {
-					line = line[:i]
-				}
-			}
-			if strings.Contains(line, MntOwnerLabel) || strings.HasPrefix(line, "include:") || strings.HasPrefix(line, "extends:") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // starting sets plan.Starts for args, compose's command line after
-// docker compose (Plan.Starts).
+// docker compose (Plan.Starts). Every starting command reads the labels,
+// whatever the compose files say: a compose config costs about 80 ms
+// (measured 2026-11-01), and a scan of the files for the label first
+// had to follow include: and extends: and read exactly ComposeConfig's
+// files, for projects that nearly all carry it.
 func (p *loadedProject) starting(plan *Plan, args []string) {
 	command := composeCommand(args)
 	starts := slices.Contains(startingCommands, command) && !dryRun(args)
-	plan.Starts = starts && !InRelease(p.dir) && mayOwnMnt(composeFiles(p.dir))
+	plan.Starts = starts && !InRelease(p.dir)
 	// cp mounts a container's bind sources afresh too, running or
 	// stopped (checked on Docker 29.8: a copy into a bind whose source
 	// became a link landed where the link leads, as root).
@@ -1603,7 +1575,7 @@ func ColorForced(lookup func(string) (string, bool)) bool {
 
 // compose plans `docker compose` with the project's files and args,
 // named with -f (composeFiles), so compose never reads COMPOSE_FILE:
-// every command, ComposeConfig and mayOwnMnt run on the same files.
+// every command and ComposeConfig run on the same files.
 func (p *loadedProject) compose(args []string) *Plan {
 	composeArgs := []string{"docker", "compose"}
 	if noColor, _ := p.env.Lookup("NO_COLOR"); noColor == "" && ColorForced(p.env.Lookup) {

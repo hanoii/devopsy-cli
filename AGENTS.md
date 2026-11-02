@@ -1374,11 +1374,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   locally before compose's `up`, `start`, `restart`, `run`,
   `create`, `watch` and `scale` (review of 2026-10-23, round 3:
   `restart` starts containers, and Docker makes a missing entry root's)
-  (`Plan.Starts`, only when the compose files' YAML has the label or an
-  `include:` or `extends:` key, comments left out: no compose config for
-  every command, and every template's comments say "included"; the
-  project's own files, the ones `ComposeConfig` reads labels from, so a
-  `-f` the command adds is half seen by neither; never for compose's
+  (`Plan.Starts`, the labels read before every such command, from the
+  project's own files, the ones `ComposeConfig` reads, never a `-f` the
+  command adds; decided 2026-11-01: a compose config costs about 80 ms
+  there, and a scan of the files for the label first, which had to
+  follow `include:` and `extends:`, saved it only for projects without
+  the label, nearly none; never for compose's
   `--dry-run`, which is compose's only where cobra parses it: before
   the command, after it up to a `--`, for `run` only before its service
   (past it the container's command: `run --rm app composer update
