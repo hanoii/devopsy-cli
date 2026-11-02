@@ -3214,9 +3214,13 @@ Smaller features, each with the rule an agent must keep.
   to write a project's `.devopsy/`, release and operate it, in that
   order, pointing at `--help`, `--debug schema` and the templates rather
   than repeating them. It is embedded, so it describes the binary that
-  prints it, and its frontmatter carries that version (`devopsy:
-  <version>`; `stub` for `--stub`, the short form that sends the agent to
-  the command): `Install` replaces only a file so marked. Rules apart
+  prints it, and its frontmatter carries that version and a checksum
+  (`devopsy: <version> sha256:<hex>`, of the file with the line ending
+  at its version; `stub` for `--stub`, the short form that sends the
+  agent to the command): `Install` replaces only a file so marked whose
+  checksum still matches; an edited one is the user's, left and said,
+  `rm` its fix (decided 2026-11-01: a copy refreshed on every upgrade
+  lost the user's own lines). Rules apart
   from practices: what devopsy enforces is stated as fact, what the
   templates do (10001, read-only, `alwaysup`) as what new projects should
   do. `TestContentNamesWhatExists` keeps it honest: every `--flag` it

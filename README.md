@@ -224,8 +224,10 @@ to `.agents/skills/devopsy/SKILL.md` in the project (the directory with
 directory), the directory those agents share, and links
 `.claude/skills/devopsy` to it for Claude Code; `--global` does the same
 under your home directory. Run it again after an upgrade: a copy devopsy
-wrote is replaced (its frontmatter says which version); any other file
-there is refused, so nothing of yours is overwritten. `--stub` installs the short form instead, a
+wrote is replaced while it is as devopsy wrote it (its frontmatter
+carries the version and a checksum); a copy you edited, or any other
+file there, is left as it is and said, so nothing of yours is
+overwritten (remove it to take the new version). `--stub` installs the short form instead, a
 file that tells the agent to run `devopsy --ai-skill`: for a template, so
 every copy gets the reference matching its devopsy without carrying the
 text.
