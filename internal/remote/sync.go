@@ -829,10 +829,10 @@ exit "$rs"
 // holds (PushScript, ExportScript): its release lock shared (a release
 // waits) and its sync lock exclusively (each stops and restores what the
 // environment's labels say, so two at once would restore them under the
-// other).
+// other). On fd 5, as in every script holding it.
 func syncSourceLock() string {
-	return releaseLock(true, false) + `exec 8>"$base/` + SyncLockFile + `"
-` + lockWait(8, false, "another sync from $base") + "\n"
+	return releaseLock(true, false) + `exec 5>"$base/` + SyncLockFile + `"
+` + lockWait(5, false, "another sync from $base") + "\n"
 }
 
 // PushScript is the parent's side of a sync: under a shared hold of the

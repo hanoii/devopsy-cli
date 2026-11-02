@@ -730,7 +730,7 @@ func TestSyncSameHost(t *testing.T) {
 	}
 	// The push holds the parent's release lock shared and its sync lock
 	// exclusively; the holder the child's release lock.
-	if i, j := strings.Index(docker, "flock -n -s 9"), strings.Index(docker, "flock -n 8"); i < 0 || j < i || !strings.Contains(docker, "flock -n 9\n") {
+	if i, j := strings.Index(docker, "flock -n -s 9"), strings.Index(docker, "flock -n 5"); i < 0 || j < i || !strings.Contains(docker, "flock -n 9\n") {
 		t.Errorf("locks:\n%s", docker)
 	}
 	// Files vanished during the copy (rsync's 24, a live service's
@@ -3029,7 +3029,7 @@ func TestExportImport(t *testing.T) {
 	write(t, s.log+".shop-prod", "FAKE_DB=stream\n", 0o644)
 	out, errs, code = s.runIO(env, nil, "@prod", "--export", "db")
 	docker, _ = s.logs()
-	if code != 0 || string(out) != "dump of db from shop-prod custom=db stop=\n" || !strings.Contains(docker, "flock -n -s 9\nflock -n 8\n") {
+	if code != 0 || string(out) != "dump of db from shop-prod custom=db stop=\n" || !strings.Contains(docker, "flock -n -s 9\nflock -n 5\n") {
 		t.Fatalf("@prod --export (%d): %q\n%s\n%s", code, out, errs, docker)
 	}
 	// An import asks for the environment's name, on the terminal: without
