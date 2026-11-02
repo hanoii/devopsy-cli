@@ -262,7 +262,8 @@ func checkStartBinds(cwd string) error {
 // (runMntOwners).
 const mntOwnersRestored = "restored"
 
-// runCheckMounts implements the hidden --check-mounts [restored], run
+// runCheckMounts implements the hidden --check-mounts [restored
+// [<snapshot> | restart]], run
 // by an activation in the new release before its switch, after its
 // prepare steps and --missing-vars (cli.CheckMounts). The labels are
 // read as --mnt-owners reads them after the switch (cli.SyncServices,

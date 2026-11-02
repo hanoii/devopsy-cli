@@ -1020,8 +1020,8 @@ func readyEntry(mnt string, e tarEntry) error {
 	return f.Close()
 }
 
-// runImport implements devopsy --import <service> [--yes] [--resolved]:
-// stdin, spooled to a file until complete, into the service. --yes is
+// runImport implements devopsy --import <service> [--accept-image
+// <service>] [--yes] [--resolved]: stdin, spooled to a file until complete, into the service. --yes is
 // what a target's session passes after asking: locally nothing asks.
 //
 // Nothing is replaced until the data has fully arrived. Before the first
@@ -1080,8 +1080,9 @@ func runImport(cwd string, args []string, color bool) int {
 	base := filepath.Dir(cwd)
 	var prior syncRecord
 	if onTarget {
-		// The writer never holds the release lock (fds 9 and 8, from
-		// ImportScript): one a killed devopsy left would block every
+		// The writer never holds the release lock (fd 9, from
+		// ImportScript), nor fd 8, a script's image lock should one that
+		// holds it run this: one a killed devopsy left would block every
 		// command for its whole load. This devopsy keeps them to its end.
 		syscall.CloseOnExec(8)
 		syscall.CloseOnExec(9)
@@ -1723,7 +1724,8 @@ func projectVar(cwd, key string) string {
 	return ""
 }
 
-// importArgs parses --import's arguments: <service> [--yes] [--resolved].
+// importArgs parses --import's arguments: <service> [--accept-image
+// <service>] [--yes] [--resolved].
 func importArgs(args []string) (name string, yes, resolved bool, accept []string, err error) {
 	usage := errors.New("usage: devopsy [@<target>] " + cli.ImportFlag + " <service> [--accept-image <service>] [--yes] [--resolved]")
 	for i := 0; i < len(args); i++ {
@@ -1937,8 +1939,8 @@ wait:
 
 // runRemoteResolved implements devopsy @<target> --import <service>
 // --resolved: a read-only session finds the mark and what the import
-// kept down (refusing there: no mark, another service's, a sync's, or
-// the import still running), asks for the environment's full name, then
+// kept down (refusing there: no mark, another service's, a sync's, a
+// restore's, or the import still running), asks for the environment's full name, then
 // a session under the release lock checks again and starts them.
 func runRemoteResolved(t *remote.Target, projectName, name string, yes bool) int {
 	fail := func(msg string) int {

@@ -101,7 +101,8 @@ type VarsOutput struct {
 	// Configs are the contents of the configs found.
 	Configs []string
 	// Files are the environment's other variables files, by level
-	// (inherit, instance, project), nearest first as Levels.
+	// (inherit, instance, project, nearest first as Levels, then parent,
+	// the copy of a parent's server's levels).
 	Files map[string]string
 	// Trace is devopsy's --env-trace there, empty without one.
 	Trace string
@@ -290,8 +291,8 @@ printf '\n'
 }
 
 // ParseVarsApplied reads what a --vars set or unset printed: the file's
-// path, then VarsApplied's word (plain, first, or the check's exit) and
-// the check's lines; "" without them (an instance's or a project's file).
+// path, then VarsApplied's word (plain, first, marked, cut, or the
+// check's exit) and the check's lines; "" without them (an instance's or a project's file).
 func ParseVarsApplied(out string) (file, applied string, lines []string) {
 	file, rest, _ := strings.Cut(strings.TrimRight(out, "\n"), "\n")
 	for strings.HasPrefix(rest, VarsTrace) {

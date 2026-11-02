@@ -24,8 +24,8 @@ const (
 	// QuietBeats is a push's, an import's, an export's and a release's
 	// before its switch: 30 seconds.
 	QuietBeats = 6
-	// HolderQuietBeats is a sync's holder's, 90 seconds: longer than the
-	// push's and than the operator's ssh needs to see the connection
+	// HolderQuietBeats is a session's behind an answer's fifo (a sync's
+	// holder, a release that syncs), 90 seconds: longer than the push's and than the operator's ssh needs to see the connection
 	// gone (KeepAlive), so a push still copying is usually cancelled
 	// before the holder decides. That order only shapes the messages:
 	// what a late write does is settled by the record the holder takes

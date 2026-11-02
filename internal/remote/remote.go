@@ -565,8 +565,8 @@ func basePrelude(t *Target) string {
 ` + serverCheck(upgradeRef(t)) + `with_tty() {
   # Past a fetch, script only in a session of its own (tty_detach): it
   # reads the terminal's signals even ignored. Without setsid, plainly.
-  if [ -n "${DEVOPSY_INTERNAL_TTY:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
-    ${tty_detach:+setsid -w} script -qec "stty cols ${DEVOPSY_INTERNAL_TTY%% *} rows ${DEVOPSY_INTERNAL_TTY#* } 2>/dev/null; $1" /dev/null
+  if [ -n "${` + TTYEnv + `:-}" ] && [ ! -t 1 ] && command -v script >/dev/null 2>&1 && { [ -z "${tty_detach:-}" ] || command -v setsid >/dev/null 2>&1; }; then
+    ${tty_detach:+setsid -w} script -qec "stty cols ${` + TTYEnv + `%% *} rows ${` + TTYEnv + `#* } 2>/dev/null; $1" /dev/null
   else
     eval "$1"
   fi
@@ -1441,11 +1441,12 @@ fi
 // so their state, health checks and logs would go with them, and --log
 // would only say that something failed. It goes where the script's
 // output goes, the server's log from the switch on: one detail line per
-// container, then, for each one neither running and healthy nor exited
-// 0 (a one-shot init's), its last health checks (Docker keeps five) and
-// its last 100 log lines. A restarting container shows its last exit
-// code, 0 too when what it runs exits cleanly: still a failure. A function, so set -- only changes its own
-// arguments.
+// container, then, for each one but those running without a failing
+// health check (none, or healthy) and those exited or created with 0 (a
+// one-shot init's, one never started), its last health checks (Docker
+// keeps five) and its last 100 log lines. A restarting container shows
+// its last exit code, 0 too when what it runs exits cleanly: still a
+// failure. A function, so set -- only changes its own arguments.
 func failureReport(projectName string) string {
 	ps := devopsyCall(projectName, []string{"--", "--profile", "*", "ps", "-a", "--format", "{{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}"}, false)
 	logs := devopsyCall(projectName, []string{"--", "--profile", "*", "logs", "--no-color", "--tail", "100"}, false)
@@ -2010,9 +2011,11 @@ func UpgradeScript(args []string) string {
 	return "set -eu\nexec " + devopsyCall("", append([]string{"--upgrade"}, args...), false) + "\n"
 }
 
-// ReleasesScript prints one line per release: id, current flag, failed flag,
-// its images (ImagesFile, space separated) and the record JSON, tab
-// separated. First, the project's ImagesLeftFile, each line after left.
+// ReleasesScript prints one line per release, newest first: id, current
+// or -, its state (- , failed, rolled-back, incomplete, in-progress,
+// syncing or cut), its images (ImagesFile's names, each with =version or
+// a short digest, space separated) and the record JSON, tab separated.
+// First, the project's ImagesLeftFile, each line after left.
 func ReleasesScript(t *Target) string {
 	return "set -eu\n" + basePrelude(t) + fmt.Sprintf(`if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
   devopsy --say error "$base is a plain devopsy directory, without releases"
@@ -2102,7 +2105,8 @@ func ParseReleases(out string) []Release {
 }
 
 // Line is the release as --releases lists it: * for the current one, id,
-// who, mode, branch@commit, FAILED.
+// who, mode, branch@commit, a restore's snapshot, and its state in
+// capitals (FAILED, ROLLED BACK, INCOMPLETE, IN PROGRESS, SYNCING, CUT).
 func (r Release) Line() string {
 	mark := " "
 	if r.Current {
@@ -2242,6 +2246,9 @@ const SSHAllowPasswordEnv = "DEVOPSY_SSH_ALLOW_PASSWORD"
 // release's sessions, or with a child's services stopped for a sync. A
 // passphrase and a new host key are still asked for.
 func SSHOptions() []string {
+	// devopsy's sessions never need the host's port forwardings from
+	// ~/.ssh/config: each one would try to bind them again, and warn that
+	// they are in use while another session (or the user's own) holds them.
 	opts := []string{"-o", "ClearAllForwardings=yes"}
 	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
 		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
@@ -2274,9 +2281,6 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if tty {
 		ttyFlag = "-t"
 	}
-	// devopsy's sessions never need the host's port forwardings from
-	// ~/.ssh/config: each one would try to bind them again, and warn that
-	// they are in use while another session (or the user's own) holds them.
 	if Color {
 		script = ColorEnv + "=1; export " + ColorEnv + "\n" + script
 	}
@@ -2506,8 +2510,10 @@ func WithBeat(ctx context.Context, w io.Writer) context.Context {
 }
 
 // BeatMarker is the line a script prints on stderr when its watcher waits
-// for the session's next byte before it disarms (<armed>.next): past a
-// sync holder's lock wait, and right before a release's switch. Why: a
+// for the session's next byte before it disarms (<armed>.next, waitBeat):
+// past a sync holder's lock wait, right before an activation's switch,
+// and before a reload's or a --no-code restore's point of no return.
+// Why: a
 // live session and one that died silently look the same until a byte
 // comes, and the next heartbeat would take up to a beat; devopsy answers
 // the marker at once, so only a silent session waits, until its quiet

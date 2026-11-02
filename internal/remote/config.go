@@ -85,8 +85,9 @@ type Target struct {
 	// <project>[/<instance>]/<environment>.
 	Path string `yaml:"-"`
 	Mode string `yaml:"mode"`
-	// Env is written into each release as .devopsy/target.env: per-
-	// environment, committed, non-secret settings like PROXY_DOMAINS.
+	// Env is written into each release's devopsy-target.env, beside its
+	// code/ (TargetEnvFile): per-environment, committed, non-secret
+	// settings like PROXY_DOMAINS.
 	Env map[string]string `yaml:"env"`
 	// Release and Rollback are what --release and --rollback run: required
 	// for them, see Steps.
@@ -162,10 +163,12 @@ type Target struct {
 	// nulls are what it sets to null, removing a default: "env.KEY",
 	// "inherit", "parent", "snapshots...".
 	nulls map[string]bool
-	// From says where each value came from, for --debug: "server", "path",
-	// "mode", "release", "rollback", "destroy", "reload", "keep",
-	// "env.KEY". A file,
-	// "defaults in" a file, a variable or the address.
+	// From says where each value came from, for --debug: "server",
+	// "instance", "path", and each value a config sets (origins): "mode",
+	// "release", "rollback", "destroy", "reload", "keep", "parent",
+	// "inherit", "snapshots.manual.enabled", "snapshots.manual.keep",
+	// "env.KEY". A file, "defaults in" or "releases: in" a file, a
+	// variable or the address.
 	From map[string]string `yaml:"-"`
 }
 
@@ -200,7 +203,7 @@ type TargetReleases struct {
 // TargetSnapshots is an environment's snapshots: section: each kind of
 // snapshot, {enabled, keep}, true and false shorthand for {enabled: ...}
 // alone (decided 2026-10-25: defaults: can then give a keep without
-// turning a kind on everywhere). Only manual ones so far.
+// turning a kind on everywhere): manual and release ones, and the mirror.
 type TargetSnapshots struct {
 	Manual  *SnapshotKind `yaml:"manual"`
 	Release *SnapshotKind `yaml:"release"`

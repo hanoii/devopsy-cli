@@ -39,8 +39,9 @@ const (
 	// separated: the name (compose's image, as it resolved at the
 	// activation), the image it had when bookmarked ("" when Docker had
 	// none), the service, its kind (KindOwn, KindPulled, KindData), the
-	// registry's digest of a pulled image (<repository>@sha256:...) and
-	// its version label (org.opencontainers.image.version), for display.
+	// registry's digest of a pulled image (<repository>@sha256:...), its
+	// version label (org.opencontainers.image.version), for display, and
+	// the build key a service the release built was built with (BuildKey).
 	ListFile = "devopsy-images"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
@@ -142,9 +143,9 @@ const (
 	KindOwn = "own"
 	// KindPulled is an image compose pulls from a registry.
 	KindPulled = "pulled"
-	// KindData is a pulled image of a service with a devopsy.data label
-	// (any value, none included) that compose does not build: its data
-	// is changed in place by what runs it.
+	// KindData is a pulled image of a service with devopsy.data=true
+	// that compose does not build: its data is changed in place by what
+	// runs it.
 	KindData = "data"
 )
 
@@ -183,8 +184,8 @@ type Set struct {
 	// environment's own (own).
 	Base, Snapshots string
 
-	// built are the services with a build: section, data those with a
-	// devopsy.data label, from the last List.
+	// built are the services with a build: section, data those with
+	// devopsy.data=true, from the last List.
 	built, data map[string]bool
 }
 

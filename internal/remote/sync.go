@@ -126,9 +126,9 @@ func DoneLine(id string) string {
 // Why an environment is marked (SyncIncompleteFile), the line's code: a
 // copy cut, a holder killed before it decided (settled by the next
 // lock-taker), a complete copy its project's finish child go refused,
-// or an --import that did not complete (from its first write on). A
-// sync's mark replaces an import's, never the reverse: from then on the
-// data is partly a sync's.
+// or an --import that did not complete (from its first write on); a
+// restore's is IncompleteRestore. A sync's mark replaces an import's,
+// never the reverse: from then on the data is partly a sync's.
 const (
 	IncompleteCopy    = "copy"
 	IncompleteSettled = "settled"
@@ -138,8 +138,9 @@ const (
 
 // IncompleteLine is SyncIncompleteFile's content: since when (UTC, the
 // first mark's: a later one keeps it), the parent's address (for an
-// import, IncompleteImport, the service's name), the code and why, for
-// people, tab separated.
+// import, IncompleteImport, the service's name; for a restore,
+// IncompleteRestore, the snapshot's id), the code and why, for people,
+// tab separated.
 func IncompleteLine(since, from, code, why string) string {
 	return since + "\t" + from + "\t" + code + "\t" + why + "\n"
 }
@@ -240,7 +241,8 @@ func importFixLines(t *Target, service string) string {
 
 // markRefusal is shell refusing on the environment's mark ($base set),
 // then running refuse: an import's says which service and the ways out,
-// a sync's what syncFix says (--say details). what is what does not
+// a restore's which snapshot and its ways out, a sync's what syncFix
+// says (--say details). what is what does not
 // happen ("nothing released"). Without a mark, nothing.
 func markRefusal(t *Target, what, syncFix, refuse string) string {
 	mark := `"$base/` + SyncIncompleteFile + `"`
@@ -629,13 +631,6 @@ fi
 `
 }
 
-// syncBlock is a sync's part on the child, in its current release with
-// $status 0, the sync's variables exported (SyncOptions.exports): prepare
-// (services stopped), the gate (SyncOpenFile) and the marker, the push's
-// end (devopsy's answer, or none), then finish with what the files say
-// was written; $status says how it went. failed says what a failure
-// means here; release is an activation's, which may be a first release
-// (syncPrepare).
 // syncDecision sets $sync_word from what the copy wrote (taken, the
 // writers' record the holder took), the environment's mark (incomplete)
 // and the answer ($reply): go, partial or abort.
@@ -658,6 +653,13 @@ func syncDecision(taken, incomplete string) string {
 `
 }
 
+// syncBlock is a sync's part on the child, in its current release with
+// $status 0, the sync's variables exported (SyncOptions.exports): prepare
+// (services stopped), the gate (SyncOpenFile) and the marker, the push's
+// end (devopsy's answer, or none), then finish with what the files say
+// was written; $status says how it went. failed says what a failure
+// means here; release is an activation's, which may be a first release
+// (syncPrepare).
 func syncBlock(projectName, failed string, release bool) string {
 	open, started, taken, incomplete := `"$base/`+SyncOpenPrefix+`$sync_id"`, `"$base/`+SyncStartedFile+`"`, `"$base/`+SyncTakenFile+`"`, `"$base/`+SyncIncompleteFile+`"`
 	// The sync's id, in the gate and in the copy's last write
@@ -901,8 +903,8 @@ const (
 // the target's current release under its release lock, as a sync holds it.
 // end is what the data must end with (ImportEndEnv). A mark refuses
 // before devopsy reads stdin, so a dump is never sent only to be refused:
-// a sync's (only a sync completes it), and an import's of another service
-// (only its own completes it). While it holds the lock, SyncImportingFile
+// a sync's (only a sync completes it), a restore's (only a restore
+// does), and an import's of another service (only its own completes it). While it holds the lock, SyncImportingFile
 // says an import runs (ImportRunning). accept are the services
 // --accept-image named (ImagesAcceptEnv), space separated: an mnt
 // import whose export recorded an image its data never ran is refused
@@ -993,19 +995,25 @@ exit "$rv_status"
 `
 }
 
-// SyncStateFile is the record of what a sync or an import stopped, in the
-// environment's directory ("stop <service>" lines; cmd/devopsy's
-// syncRecord): what restoring brings back, and what --resolved names.
+// SyncStateFile is the record of what a sync, an import or a snapshot
+// stopped, in the environment's directory (cmd/devopsy's syncRecord):
+// "stop <service>" lines, what restoring brings back and what --resolved
+// names; "own <sync id> <service>" for what a sync stopped itself,
+// "snapshot <id> <service>" for a take's or a release snapshot's stops,
+// "writer <pgid> [down]" for an import's writer, and "first" for a
+// child's first release.
 const SyncStateFile = ".devopsy-sync.services"
 
 // CurrentExistsScript prints "current" when the target has a current
 // release, else "none": whether a release is its first, and whether a
 // parent was released. Then "incomplete", a tab and the mark's line when
-// a sync or an import left its data partial (SyncIncompleteFile;
-// "incomplete" alone for a sync's files no holder settled), "importing"
-// while an import runs, and DataCopyFeature when the server's devopsy
-// has it: a release that does not sync refuses before uploading, and one
-// that syncs on a server without it. extra are needs to check besides
+// a sync, an import or a restore left its data partial
+// (SyncIncompleteFile; "incomplete" alone for a sync's files no holder
+// settled), "importing" while an import runs, DataCopyFeature when the
+// server's devopsy has it (a release that does not sync refuses before
+// uploading, and one that syncs on a server without it), and
+// "parentenv", a tab and its copy's header, when the environment has a
+// copy of its parent's server's levels (ParentEnvFile). extra are needs to check besides
 // the script's own (the push's, for a parent).
 func CurrentExistsScript(t *Target, extra []string) string {
 	needs := ""

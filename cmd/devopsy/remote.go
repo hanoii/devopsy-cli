@@ -697,8 +697,6 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 	}
 }
 
-// needsServer reports whether name is a local project command that needs
-// only a server: its address resolves as a server's.
 // failParent reports a child whose parent could not be resolved
 // (ParentErr), with the way around it: a release without the parent's
 // data, then a sync from an address.
@@ -718,6 +716,8 @@ func parentGuess(t *remote.Target) string {
 	return "@" + t.Host + ":" + t.Parent
 }
 
+// needsServer reports whether name is a local project command that needs
+// only a server: its address resolves as a server's.
 func needsServer(projectDir, name string) bool {
 	if projectDir == "" || !slices.Contains(cli.CustomCommands(projectDir), name) {
 		return false
@@ -878,8 +878,9 @@ and after steps can go around it. See 'devopsy @%s --%s --help'.`,
 		t.Name, which, t.File, cmp.Or(t.Pattern, t.Name), which, remoteCmd, t.Name, which)
 }
 
-// targetEnv renders a target's env as the release's .devopsy/target.env.
-// commit is the release's git commit, if any.
+// targetEnv renders a target's env as the release's devopsy-target.env
+// (remote.TargetEnvFile, beside its code/). commit is the release's git
+// commit, if any.
 func targetEnv(t *remote.Target, projectName, commit string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Written by devopsy from the %q environment in config.yaml. Do not edit:\n", t.Name)
