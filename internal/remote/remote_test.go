@@ -2188,7 +2188,7 @@ func TestRebookmark(t *testing.T) {
 	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeImage, Project: &Project{Name: "app"}}
 	run := func(listing string) {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg, ModeImage)+`img record "$REL"`)
+		cmd := exec.Command("sh", "-c", "set -eu\nroot=$FAKE_ROOT\n"+releaseImages("", tg)+`img record "$REL"`)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root, "REL=" + rel, "LISTING=" + listing}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v:\n%s", err, out)

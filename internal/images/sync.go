@@ -830,9 +830,6 @@ func readHistoryText(text string) history {
 	return parseHistory(text)
 }
 
-// baseOfRel is rel's environment directory, for callers outside.
-func BaseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
-
 // ownImage is the image the child's own name for e's service holds on
 // this server (its pin, its mirror's tag), else the image it runs: what
 // its next release would run, which the parent's data must take.

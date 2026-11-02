@@ -822,9 +822,9 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// pipes a line on stdout could reach the log after SwitchMarker on
 	// stderr and be cut from it.
 	s := prelude(t, false) + "exec 1>&2\n" + NoExit255
-	s += watchSession(sync != nil, true)
+	s += watchSession(sync != nil)
 	// Defined first: the fetch and not_live's callers use them.
-	s += releaseImages(projectName, t, t.Mode)
+	s += releaseImages(projectName, t)
 	// get_images <dir> <against>, for the restart after a failed run:
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
@@ -1558,10 +1558,11 @@ const WatchSessionFlag = "--watch-session"
 // armed when its stdin is the operator's pipe (WatchEnv: always, from
 // devopsy; until October 2026 a -t session was armed on its terminal,
 // whose hangup reached the shell alone, which ran its trap only once the
-// build ended), a syncing one always (its stdin is the answer's pipe), a
-// sync's holder never: a SIGTERM would stop it halfway through
-// restoring.
-func watchSession(answer, armed bool) string {
+// build ended); with answer (a release that syncs, a sync's holder)
+// always, its stdin the answer's pipe. A holder disarms once it holds
+// the release lock and the parent's image (waitBeat): past that a
+// SIGTERM would stop it halfway through restoring.
+func watchSession(answer bool) string {
 	args := `"$$"`
 	s := `ws_armed="$base/.devopsy-watch.$$"
 rm -f "$ws_armed" "$ws_armed.off" "$ws_armed.fired"
@@ -1587,27 +1588,21 @@ rm -f "$ws_fifo"
 	}
 	args += ` ${` + HeartbeatEnv + `:+--heartbeat $((` + HeartbeatEnv + ` * ` + strconv.Itoa(beats) + `))}`
 	start := `exec 4<&0 </dev/null
-devopsy ` + WatchSessionFlag + ` ` + args + `%s <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
+devopsy ` + WatchSessionFlag + ` ` + args + ` --armed "$ws_armed" <&4 4<&- 3<&- 8>&- 9>&- >/dev/null 2>&1 &
 watch_pid=$!
 exec 4<&-
 `
 	if answer {
 		start += "exec 5>&-\n"
 	}
-	cancel := ` --armed "$ws_armed"`
-	switch {
-	case armed && answer:
-		s += `: >"$ws_armed"
-` + fmt.Sprintf(start, cancel)
-	case armed:
-		s += `if [ -n "${` + WatchEnv + `:-}" ]; then
-  : >"$ws_armed"
-` + fmt.Sprintf(start, cancel) + `fi
-`
-	default:
-		s += fmt.Sprintf(start, "")
+	if answer {
+		return s + `: >"$ws_armed"
+` + start
 	}
-	return s
+	return s + `if [ -n "${` + WatchEnv + `:-}" ]; then
+  : >"$ws_armed"
+` + start + `fi
+`
 }
 
 // partialGuard refuses a release or rollback (then runs refuse) on a
@@ -1795,8 +1790,8 @@ func leftPath(t *Target) string {
 }
 
 // releaseImages defines the shell functions that give each release its own
-// images, for mode (build when empty: only tests build a target without
-// one). The rules are the server's
+// images, for t's mode (build when empty: only tests build a target
+// without one). The rules are the server's
 // devopsy's (--images, internal/images: bookmarks, restores, removals,
 // the record); the script keeps what needs the shell: the lock, which a
 // fetch's children inherit, and fetching on a terminal.
@@ -1812,10 +1807,8 @@ func leftPath(t *Target) string {
 //     to answer, or every image would look gone. A flock ends with its
 //     processes, so a holder that dies frees it; a fetch's children keep
 //     it until they end, as they keep the release lock.
-func releaseImages(projectName string, t *Target, mode string) string {
-	if mode == "" {
-		mode = ModeBuild
-	}
+func releaseImages(projectName string, t *Target) string {
+	mode := cmp.Or(t.Mode, ModeBuild)
 	fetch := fetchImages(projectName, mode)
 	name := t.ComposeName()
 	if name == "" {
@@ -2208,7 +2201,7 @@ func ReleasesRemoveScript(t *Target, projectName string, ids []string, goneOK bo
   devopsy --say error "$base has no releases"
   exit 1
 fi
-` + releaseLock(false, false) + releaseImages(projectName, t, t.Mode) + `prev=$(readlink "$base/current" 2>/dev/null || true)
+` + releaseLock(false, false) + releaseImages(projectName, t) + `prev=$(readlink "$base/current" 2>/dev/null || true)
 prev=${prev%/` + CodeDir + `}
 image_lock exclusive removing || { devopsy --say error "nothing removed"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base" ${prev:+"$base/$prev"}
@@ -2639,7 +2632,7 @@ if [ -d "$base/.devopsy" ] && [ ! -d "$base/releases" ]; then
 fi
 ` + releaseLock(false, false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
-` + snapshotLock(false) + releaseImages(projectName, t, t.Mode) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
+` + snapshotLock(false) + releaseImages(projectName, t) + `image_lock exclusive removing || { devopsy --say error "$base stays as it was"; exit 75; }
 ` + lockedGate(true, "image_unlock; ") + `img recover "$base"
 dir=
 if [ -d "$base/current" ]; then

@@ -29,10 +29,6 @@ const ReloadingSays = "reloading "
 // A step that fails leaves the release live, said, nothing restarted: the
 // release did not change.
 func ReloadScript(t *Target, projectName string) string {
-	mode := t.Mode
-	if mode == "" {
-		mode = ModeBuild
-	}
 	call := func(args ...string) string { return devopsyCall(projectName, args, false) }
 	refuse := `{ rm -f "$rl_pending"; devopsy --say error "nothing reloaded"; exit 1; }`
 	// Nothing current: said before the lock, which refuses a missing
@@ -43,10 +39,10 @@ cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
 rel="$base/$cur"
 rl_pending="$rel/` + TargetReloadFile + `"
 rm -f "$rl_pending"
-` + watchSession(false, true) + `# Until the point of no return a signal (the watcher's: the session
+` + watchSession(false) + `# Until the point of no return a signal (the watcher's: the session
 # gone) ends it, nothing changed.
 trap 'rm -f "$rl_pending"; devopsy --say error "interrupted: nothing reloaded" || true; exit 130' INT TERM HUP
-` + releaseImages(projectName, t, mode) + recoverFetch(`"$rel"`) + settleSync(projectName) +
+` + releaseImages(projectName, t) + recoverFetch(`"$rel"`) + settleSync(projectName) +
 		markRefusal(t, "nothing reloaded", syncFixLines(t), "exit 1") + cutRefusal(t) + `devopsy --say info "` + ReloadingSays + `${cur#releases/}"
 cd "$base/current"
 ` + call("--prepare-release", "reload") + ` || ` + refuse + `

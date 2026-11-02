@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"os/signal"
@@ -105,23 +104,24 @@ func ownMnt(ctx context.Context, mnt string, owned map[string]string, name strin
 		if err != nil {
 			return err
 		}
-		if err := dockerRunFresh(ctx, fmt.Sprintf("%s-%d", name, i), nil, "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
+		if err := dockerRunFresh(ctx, fmt.Sprintf("%s-%d", name, i), "--network", "none", "--mount", mount, remote.UtilImage, "sh", "-c", ownEntry, "sh", e, owned[e]); err != nil {
 			return fmt.Errorf("giving mnt/%s to %s (%s): %w", e, owned[e], cli.MntOwnerLabel, err)
 		}
 	}
 	return nil
 }
 
-// dockerRunFresh is dockerRunIO, stdout errOut, for a container named
-// after devopsy's pid (ownMnt's, extractEntries'): a container of that
-// name can only be a leftover of a devopsy killed outright whose pid this
-// one reuses, still running (--rm removes it only once it ends), and
-// docker run would refuse the name. It goes first.
-func dockerRunFresh(ctx context.Context, name string, stdin io.Reader, args ...string) error {
+// dockerRunFresh is dockerRunIO, no stdin, stdout errOut, for a
+// container named after devopsy's pid (ownMnt's, extractEntries'): a
+// container of that name can only be a leftover of a devopsy killed
+// outright whose pid this one reuses, still running (--rm removes it
+// only once it ends), and docker run would refuse the name. It goes
+// first.
+func dockerRunFresh(ctx context.Context, name string, args ...string) error {
 	if err := removeContainers("name=^/?" + regexp.QuoteMeta(name) + "$"); err != nil {
 		return err
 	}
-	return dockerRunIO(ctx, name, stdin, nil, args...)
+	return dockerRunIO(ctx, name, nil, nil, args...)
 }
 
 // ownersPrefix starts the names of the owners' containers of a release's

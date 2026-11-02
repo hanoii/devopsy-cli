@@ -779,7 +779,7 @@ func HolderScript(t *Target, projectName string, o *SyncOptions, run bool) strin
   exit 1
 fi
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release: run 'devopsy @%s --release' first: it syncs on its own, or --release-no-sync releases without the data and --sync later fills it"; exit 1; }
-`, HintAddress(t)) + releaseImages(projectName, t, t.Mode) + watchSession(true, true) + releaseLock(false, false) + `exec 1>&2
+`, HintAddress(t)) + releaseImages(projectName, t) + watchSession(true) + releaseLock(false, false) + `exec 1>&2
 # A child's first release failing while this waited takes current away.
 [ -d "$base/current/.devopsy" ] || { devopsy --say error "$base has no current release any more: its release failed while this sync waited"; exit 1; }
 id=$(readlink "$base/current"); id=${id#releases/}; id=${id%/` + CodeDir + `}
@@ -1028,7 +1028,7 @@ case "$server_features" in *" ` + DataCopyFeature + ` "*) echo ` + DataCopyFeatu
 // which the child's side checks and takes over (images.SyncImagesEnv),
 // and the keys its inherit: names (inheritKeys).
 func ParentCheckScript(t *Target, projectName string, extra []string) string {
-	return CurrentExistsScript(t, extra) + releaseImages(projectName, t, t.Mode) + `if [ -d "$base/current/.devopsy" ]; then
+	return CurrentExistsScript(t, extra) + releaseImages(projectName, t) + `if [ -d "$base/current/.devopsy" ]; then
   pc_rel=$(readlink "$base/current")
   img data "$base" "$base/${pc_rel%/` + CodeDir + `}"
 fi

@@ -985,7 +985,7 @@ func extractEntry(ctx context.Context, mnt, tarFile string, e tarEntry, name, pr
 		return err
 	}
 	run := append([]string{"--network", "none", "--mount", mount, "--mount", src + ",readonly", remote.UtilImage, "sh", "-c", emptyAndExtract, "sh", in, e.name}, e.forms...)
-	if err := dockerRunFresh(ctx, name, nil, run...); err != nil {
+	if err := dockerRunFresh(ctx, name, run...); err != nil {
 		what := "mnt/" + e.name
 		if e.volume != nil {
 			what = "the volume " + e.name

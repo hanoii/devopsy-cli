@@ -119,7 +119,7 @@ trap - INT TERM HUP
 	s := "set -eu\n" + basePrelude(t) + "exec 1>&2\n" + NoExit255
 	s += `[ -L "$base/current" ] || { devopsy --say error "$base has no current release: release it first ('devopsy @` + HintAddress(t) + ` --release')"; exit 1; }
 `
-	s += watchSession(false, true)
+	s += watchSession(false)
 	s += "export " + ImagesLeftEnv + "=" + leftPath(t) + " " + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesModeEnv + "=" + Quote(mode) + `
 export ` + snapshotEnv(t, keep) + `
 umask 077
@@ -241,10 +241,10 @@ export ` + ImagesLockEnv + `="$root/` + ImagesLock + `" ` + ImagesLeftEnv + `=` 
 		s += " " + RestoreEnvEnv + "=1"
 	}
 	s += `
-` + watchSession(false, true) + `exec 5>"$base/` + SyncLockFile + `"
+` + watchSession(false) + `exec 5>"$base/` + SyncLockFile + `"
 ` + lockWait(5, false, "a sync or an export from $base") + `
 ` + settleSync(projectName) + snapshotLock(false) + `cur=$(readlink "$base/current"); cur=${cur%/` + CodeDir + `}
-` + releaseImages(projectName, t, mode) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
+` + releaseImages(projectName, t) + recoverFetch(`"$base/$cur"`) + `devopsy --say info "restoring snapshot ` + r.Snapshot + `'s data under ${cur#releases/}"
 ` + step("check-fit", `"$snap"`) + ` || exit 1
 ` + step("check-tars", `"$snap"`) + ` || exit 1
 `
