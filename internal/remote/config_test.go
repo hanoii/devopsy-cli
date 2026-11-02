@@ -567,8 +567,9 @@ func TestServers(t *testing.T) {
 	}
 }
 
-// Parents resolve one level, at the child's instance, on the server their
-// variables name, else the child's.
+// Parents are named per environment, never in defaults:, and resolve one
+// level, at the child's instance, on the server their variables name,
+// never the child's.
 //
 // Not parallel: it sets DEVOPSY_HOME and the server variables
 // (t.Setenv).
@@ -580,12 +581,10 @@ func TestParents(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, ConfigFile), `
 project: shop
-defaults:
-  parent: prod
 environments:
   prod: {}
-  dev: {}
-  "pr-*": {}
+  dev: {parent: prod}
+  "pr-*": {parent: prod}
   a: {parent: b}
   b: {parent: prod}
 `)
@@ -599,7 +598,7 @@ environments:
 	}
 	// The parent's server is never the child's: without a variable it
 	// has none, which only a sync minds.
-	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Fixes(tg.ParentErr)) != 1 || !strings.Contains(report.Fixes(tg.ParentErr)[0].Text, "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || !strings.HasPrefix(tg.From["parent"], "defaults in ") {
+	if tg := load("vm1:dev"); tg.Parent != "prod" || tg.ParentTarget != nil || tg.ParentErr == nil || tg.ParentErr.Error() != "dev's parent, prod, has no server" || len(report.Details(tg.ParentErr)) != 1 || len(report.Fixes(tg.ParentErr)) != 1 || !strings.Contains(report.Fixes(tg.ParentErr)[0].Text, "DEVOPSY_SERVER_PROD=<server> (or DEVOPSY_SERVER") || tg.From["parent"] != filepath.Join(dir, ConfigFile) {
 		t.Fatalf("dev: %+v %v", tg, tg.ParentErr)
 	}
 	t.Setenv("DEVOPSY_SERVER", "vm1")
@@ -607,7 +606,6 @@ environments:
 	if tg.ParentTarget == nil || tg.ParentTarget.Address != "vm1:prod" || tg.ParentTarget.Path != "shop/prod" || tg.ParentTarget.From["server"] != "DEVOPSY_SERVER" {
 		t.Fatalf("dev: %+v %+v", tg, tg.ParentTarget)
 	}
-	// The parent itself has none, though defaults give one.
 	if tg := load("vm1:prod"); tg.Parent != "" || tg.ParentTarget != nil {
 		t.Errorf("prod: %q %+v", tg.Parent, tg.ParentTarget)
 	}
@@ -656,20 +654,24 @@ environments:
 	}
 	t.Setenv("DEVOPSY_SERVER", "vm1")
 
-	for name, config := range map[string]string{
-		"pattern parent": "project: app\nenvironments:\n  prod: {}\n  dev: {parent: \"pr-*\"}\n  \"pr-*\": {}\n",
-		"missing parent": "project: app\nenvironments:\n  prod: {}\n  dev: {parent: nope}\n",
-		"not a name":     "project: app\nenvironments:\n  prod: {}\n  dev: {parent: [prod]}\n",
+	for name, c := range map[string]struct{ config, want string }{
+		"pattern parent": {"project: app\nenvironments:\n  prod: {}\n  dev: {parent: \"pr-*\"}\n  \"pr-*\": {}\n", "dev: parent: the name of another environment"},
+		"missing parent": {"project: app\nenvironments:\n  prod: {}\n  dev: {parent: nope}\n", "dev: parent nope is not an environment"},
+		"not a name":     {"project: app\nenvironments:\n  prod: {}\n  dev: {parent: [prod]}\n", "dev: parent: the name of another environment"},
+		// A parent is written where its child is: defaults: never give one.
+		"in defaults": {"project: app\ndefaults: {parent: prod}\nenvironments:\n  prod: {}\n  dev: {}\n", `defaults: unknown key "parent" (mode, env, release, rollback, destroy, reload, releases, snapshots, inherit)`},
+		"itself":      {"project: app\nenvironments:\n  prod: {parent: prod}\n", "parents form a cycle: prod > prod"},
 	} {
 		d := t.TempDir()
-		write(t, filepath.Join(d, ConfigFile), config)
-		if _, err := LoadTarget(d, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), "parent") {
+		write(t, filepath.Join(d, ConfigFile), c.config)
+		if _, err := LoadTarget(d, "vm1:prod", nil); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// parent: ~ removes a parent defaults give, as env's KEY: ~ does.
+	// parent: ~ is no parent, as for any key; inherit: ~ removes the
+	// defaults' list.
 	d0 := t.TempDir()
-	write(t, filepath.Join(d0, ConfigFile), "project: app\ndefaults: {parent: prod, inherit: [DB]}\nenvironments:\n  prod: {}\n  dev: {}\n  solo: {parent: ~, inherit: ~}\n  qa: {inherit: [A, B]}\n")
+	write(t, filepath.Join(d0, ConfigFile), "project: app\ndefaults: {inherit: [DB]}\nenvironments:\n  prod: {}\n  dev: {parent: prod}\n  solo: {parent: ~, inherit: ~}\n  qa: {inherit: [A, B]}\n")
 	if tg, err := LoadTarget(d0, "vm1:solo", nil); err != nil || tg.Parent != "" || tg.ParentTarget != nil || tg.From["parent"] != "" || tg.Inherit != nil || tg.From["inherit"] != "" {
 		t.Errorf("parent: ~: %+v %v", tg, err)
 	}

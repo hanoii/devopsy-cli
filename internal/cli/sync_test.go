@@ -209,8 +209,8 @@ func TestSyncServices(t *testing.T) {
 
 // devopsy.mnt.owner covers the entries a service mounts writable,
 // excluded ones too, in every profile; a read-only mount claims none;
-// numbers only; two owners on one entry conflict, an unlabeled writer
-// does not.
+// numbers, or user for the service's own numeric user:; two owners on
+// one entry conflict, an unlabeled writer does not.
 func TestMntOwners(t *testing.T) {
 	t.Parallel()
 	dot := filepath.Join(t.TempDir(), ProjectDirName)
@@ -277,6 +277,35 @@ func TestMntOwners(t *testing.T) {
 	}
 	if owners, err := MntOwners(services); err != nil || fmt.Sprint(owners) != "map[logs:10001:10001 max:4294967294:4294967294 top:0:0]" {
 		t.Errorf("owners as numbers: %v %v", owners, err)
+	}
+	// user takes the service's own user:, normalized as any owner, in
+	// every list and check; a user: devopsy cannot read as numbers is an
+	// error where labels are read.
+	services, err = parse(`"app":{"user":"010001:10002","labels":{"devopsy.mnt.owner":"user"},"volumes":[` + bind("mnt/storage", false) + `]},
+"worker":{"user":"10001:10002","labels":{"devopsy.mnt.owner":"10001:10002"},"volumes":[` + bind("mnt/storage", false) + `]},
+"db":{"user":"999:999","labels":{"devopsy.mnt.owner":"user"},"volumes":[` + bind("mnt/database", false) + `]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app, _ := SyncFind(services, "app"); app.Owner != "10001:10002" {
+		t.Errorf("user: %+v", app)
+	}
+	if owners, err := MntOwners(services); err != nil || fmt.Sprint(owners) != "map[database:999:999 storage:10001:10002]" {
+		t.Errorf("owners from user: %v %v", owners, err)
+	}
+	for service, want := range map[string]string{
+		`"labels":{"devopsy.mnt.owner":"user"}`:                       "service x: devopsy.mnt.owner=user, and it has no user (compose's user:): give it user: <uid>:<gid> in numbers",
+		`"user":"","labels":{"devopsy.mnt.owner":"user"}`:             "service x: devopsy.mnt.owner=user, and it has no user",
+		`"user":"10001","labels":{"devopsy.mnt.owner":"user"}`:        "service x: devopsy.mnt.owner=user, and its user: 10001 has no group: write user: 10001:<gid>",
+		`"user":"www-data","labels":{"devopsy.mnt.owner":"user"}`:     "service x: devopsy.mnt.owner=user, and its user: www-data is not <uid>:<gid> in numbers from 0 to 4294967294",
+		`"user":"app:app","labels":{"devopsy.mnt.owner":"user"}`:      "its user: app:app is not <uid>:<gid> in numbers",
+		`"user":"4294967295:1","labels":{"devopsy.mnt.owner":"user"}`: "its user: 4294967295:1 is not <uid>:<gid> in numbers",
+		`"user":"10001:10001","labels":{"devopsy.mnt.owner":"User"}`:  "service x: devopsy.mnt.owner=User: <uid>:<gid> in numbers",
+		`"user":"10001:10001","labels":{"devopsy.mnt.owner":"10001"}`: "or user for the service's own user:",
+	} {
+		if _, err := parse(`"x":{` + service + `}`); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", service, err)
+		}
 	}
 	// mnt whole: refused writable with an owner, ignored read-only.
 	if _, err := parse(`"x":{"labels":{"devopsy.mnt.owner":"1:1"},"volumes":[` + bind("mnt", false) + `]}`); err == nil || !strings.Contains(err.Error(), "service x: devopsy.mnt.owner=1:1 mounts ./mnt whole writable") {

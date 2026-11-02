@@ -448,7 +448,7 @@ instances: true                 # optional: every target names an instance; defa
 releases: {keep: 5}             # optional: releases kept per environment (live ones)
 secrets: [DB_PASSWORD, "*_TOKEN"]  # optional: variables whose values devopsy masks
 public: [SORT_KEY]              # optional: named like secrets, but not
-defaults:                       # what every environment takes unless it sets its own
+defaults:                       # what every environment takes unless it sets its own (never parent:)
   mode: image                   # build (default) or image
   release: deploy               # what --release runs: required for it
   rollback: deploy              # what --rollback runs, as the restored release's config says: required there
@@ -472,8 +472,8 @@ environments:
 
 Commit it: no secret values, no servers. `.devopsy/config.local.yaml` (not
 committed, never uploaded) is read over it for one machine. In `env`, `""`
-sets an empty value and `~` removes a default; `parent: ~` and `inherit: ~`
-remove theirs. `snapshots:` merges key by key too: `true` and `false` only
+sets an empty value and `~` removes a default; `inherit: ~` removes its
+list. `snapshots:` merges key by key too: `true` and `false` only
 turn a kind on or off, `{keep: <n>}` only counts, `~` goes back to the
 default. Patterns match one or
 more name characters; an exact name wins, then the most literal characters;
@@ -512,7 +512,10 @@ under the server's release root, and its compose project, containers,
 volumes are named `<project>[-<instance>]-<environment>`
 (`COMPOSE_PROJECT_NAME`, from which templates build their URLs).
 
-A child's **parent** (`parent:`, a concrete environment of the project)
+A child's **parent** (`parent:`, a concrete environment of the project,
+never itself) is named per environment, a pattern included, never under
+`defaults:`: a child gets its parent's data, secrets and personal data
+included, so that shows where the child is defined. It
 resolves like a target of its own, one level only: at the child's
 instance, on the server its variables name (`DEVOPSY_SERVER_<PARENT>`,
 `DEVOPSY_SERVER`), never the child's: a guess could copy the wrong data,
@@ -945,16 +948,22 @@ services:
     user: "${APP_UID:-10001}:${APP_UID:-10001}"
     volumes: [./mnt/storage:/app/storage, ./mnt/logs:/app/logs]
     labels:
-      devopsy.mnt.owner: "${APP_UID:-10001}:${APP_UID:-10001}"
+      devopsy.mnt.owner: user
 ```
 
-`devopsy.mnt.owner=<uid>:<gid>`, numbers from 0 to 4294967294 (names
-cannot be resolved from the host; `010001` is `10001`), covers every entry of `mnt` the service mounts writable,
-in any profile; a read-only mount (`:ro`, a log reader) claims none, and
-an entry no service owns stays as it is, the deploy user's (right for
-what is written from the host). It is never taken from `user:`, so
-changing that never silently changes the data's owner: a variable keeps
-the two alike. devopsy applies it, as root in `devopsy-util` without a
+`devopsy.mnt.owner=user` takes the service's own `user:`, which must then
+be `<uid>:<gid>` in numbers, as compose interpolates it: no `user:`, a
+name or a uid alone (Docker would take the group from the image) is an
+error wherever the labels are read, so the app and its data can never
+drift apart. `devopsy.mnt.owner=<uid>:<gid>` names the owner itself, for
+an image that drops privileges on its own and has no `user:`. Either
+way numbers from 0 to 4294967294 (names cannot be resolved from the
+host; `010001` is `10001`). The label covers every entry of `mnt` the
+service mounts writable, in any profile; a read-only mount (`:ro`, a log
+reader) claims none, and an entry no service owns stays as it is, the
+deploy user's (right for what is written from the host). Without the
+label nothing is owned, whatever `user:` says: an image with none, or
+tools sharing a mount, would each claim it. devopsy applies it, as root in `devopsy-util` without a
 network, never following a symbolic link, each entry in a container
 that mounts that entry alone, so a directory the app swaps for a link
 meanwhile can lead nowhere else. Only files, directories and links are

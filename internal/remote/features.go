@@ -51,9 +51,10 @@ var namedFeatures = []struct {
 	{ResetFeature, regexp.MustCompile(`devopsy[ '\\]{1,8}--sync-push[ '\\]{1,8}reset\b|devopsy[ '\\]{1,8}--sync-services[ '\\]{1,8}wipe\b`)},
 	// The images' history and holds: a release's img record, names, ran
 	// and restore against the release it replaces, a sync's data,
-	// sync-check and sync-done, and every script defining img, whose
-	// --mode and --address an older devopsy refuses as usage (removals
-	// included), after taking the locks.
+	// sync-check and sync-done, and every script defining img (its
+	// '--images' line, found by its '--mode': it passes --address too,
+	// and an older devopsy refuses either as usage, removals included,
+	// after taking the locks).
 	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images'.*'--mode'`)},
 	// devopsy.mnt.owner in copies: the child's list gains each entry's
 	// owner, which the parent's rsync applies (--chown), and an mnt

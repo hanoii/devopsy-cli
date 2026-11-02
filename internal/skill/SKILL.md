@@ -67,9 +67,17 @@ What devopsy requires:
   concern (`storage`, `database`, `logs`), never `./mnt` whole. On servers
   `mnt` is a link to the environment's `shared/mnt`, so releases and
   rollbacks keep the data. A service that writes an entry says who owns
-  it, `devopsy.mnt.owner=<uid>:<gid>` (numbers; a variable keeps it in
-  step with `user:`): devopsy creates the entry and gives it to the
-  service on every release, so no container needs root to start. A
+  it: give it a numeric `user: "<uid>:<gid>"` and
+  `devopsy.mnt.owner=user`, which takes the owner from that `user:`
+  (`devopsy.mnt.owner=<uid>:<gid>` only for an image that drops
+  privileges itself and has no `user:`). devopsy creates the entry and
+  gives it to the service on every release, a sync, an import and a
+  restore. Without the label Docker creates a missing entry as root, and
+  files from an import, a sync, a restore or an upload by hand keep the
+  owners they came with, so a non-root app cannot write them; the only
+  other way is a root step in the project (an entrypoint's chown with
+  `CAP_CHOWN`, an init service). macOS never shows it: Docker Desktop
+  and OrbStack let any container user write the Mac's files. A
   release refuses, before anything goes live, a writable bind mount from
   the release's tree outside `mnt`, `./mnt` mounted whole and writable, an
   entry two services own differently, and a bind below an owned entry.
@@ -173,7 +181,8 @@ what `config.yaml` sets.
   `current` and runs the run step; a failure before the switch changes
   nothing live, one after switches back. `--rollback` goes back one;
   `--releases` lists; `--log` shows what the last one printed.
-- A child (`parent:`) syncs its parent's data on its first release;
+- A child (`parent:`, set on each child, never under `defaults:`, never
+  itself) syncs its parent's data on its first release;
   `--sync` again; `--reset` wipes it and syncs anew. It gets the keys
   its parent's `inherit:` names, and, from a parent on another server,
   a copy of that server's instance and project variables

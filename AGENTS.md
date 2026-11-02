@@ -327,11 +327,11 @@ Where a target's names, server and settings come from. Governed by
   Never `~/.devopsy`: discovery would take the home directory for a
   project. Where: `config.go`.
 - **`defaults:` merges, `~` removes:** it gives environments `mode`,
-  steps, `releases`, `snapshots`, `parent`, `inherit` and `env`; `env`
-  merges key by key, `KEY: ~` removes, `""` stays empty, `snapshots`
-  merges by kind and key (`mergeSnapshots`: `snapshots.manual.keep: ~`,
-  `snapshots.mirror: ~`), and `parent: ~` and `inherit: ~` remove
-  theirs. Why YAML nodes are parsed: a plain decode
+  steps, `releases`, `snapshots`, `inherit` and `env`, never `parent`
+  (Syncs); `env` merges key by key, `KEY: ~` removes, `""` stays empty,
+  `snapshots` merges by kind and key (`mergeSnapshots`:
+  `snapshots.manual.keep: ~`, `snapshots.mirror: ~`), and `inherit: ~`
+  removes its list. Why YAML nodes are parsed: a plain decode
   cannot tell `~` from absent (`nullKeys`).
 - **A target is an address,** `@[<server>:][<instance>/]<environment>`
   (`parseAddress`): the server ends at the first `:`, the instance
@@ -1295,7 +1295,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   are the project's: only `--destroy`, an `--import` (its entries) and
   a sync into a child remove anything in it, and only the owner label
   changes an owner.
-- **`devopsy.mnt.owner=<uid>:<gid>` owns a service's writable entries**
+- **`devopsy.mnt.owner=<uid>:<gid>|user` owns a service's writable entries**
   (`cli.MntOwnerLabel`, parsed with the data labels into `Owner` and
   `Writable`, every profile; `cli.MntOwners` maps entry to owner;
   `cmd/devopsy/mnt.go`). Why: `shared/mnt` starts empty and the deploy
@@ -1310,10 +1310,18 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   or 4294967295 (chown's -1), an owner passed the checks before the
   switch and failed in `find` and `chown` after it. A read-only mount claims nothing (a log
   reader); two owners on one entry are an error, an unlabeled writer of
-  an owned entry is none (a tool sharing it). Explicit, never from
-  `user:` (decided): changing that must not silently change the data's
-  owner, and a default needs rules for names, root, images that drop
-  privileges themselves and tools; a variable keeps the two alike.
+  an owned entry is none (a tool sharing it). Explicit, never a default
+  from `user:` (decided): a default needs rules for names, root, images
+  that drop privileges themselves and tools sharing a mount. The value
+  `user` takes the service's own `user:` (`cli.OwnerUser`, `labelOwner`;
+  decided 2026-11-01: a `user:` changed without the label left the app
+  on files of its old UID), which must be `<uid>:<gid>` in numbers (a
+  name, a uid alone, whose group Docker takes from the image, or none is
+  a label error). Resolved in the parse, so every consumer and the
+  child's list see numbers, never the word. No named feature: an older
+  devopsy meets the word only in a release it activates, whose
+  `--check-mounts` refuses it before the switch (as for `data-copy`),
+  so no current release, sync, import or list on it has one.
   Rejected: a shared group with setgid directories and default ACLs
   (tar and rsync set owner and mode explicitly, a chmod sets the ACL
   mask), capability hooks (none runs after a `volumes` import, a plain
@@ -1366,11 +1374,12 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   locally before compose's `up`, `start`, `restart`, `run`,
   `create`, `watch` and `scale` (review of 2026-10-23, round 3:
   `restart` starts containers, and Docker makes a missing entry root's)
-  (`Plan.Starts`, only when the compose files' YAML has the label or an
-  `include:` or `extends:` key, comments left out: no compose config for
-  every command, and every template's comments say "included"; the
-  project's own files, the ones `ComposeConfig` reads labels from, so a
-  `-f` the command adds is half seen by neither; never for compose's
+  (`Plan.Starts`, the labels read before every such command, from the
+  project's own files, the ones `ComposeConfig` reads, never a `-f` the
+  command adds; decided 2026-11-01: a compose config costs about 80 ms
+  there, and a scan of the files for the label first, which had to
+  follow `include:` and `extends:`, saved it only for projects without
+  the label, nearly none; never for compose's
   `--dry-run`, which is compose's only where cobra parses it: before
   the command, after it up to a `--`, for `run` only before its service
   (past it the container's command: `run --rm app composer update
@@ -1546,10 +1555,13 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
 
 ### Parents and when
 
-- **`parent:` names a concrete environment:** a pattern is an error;
-  one naming itself has none, so `defaults: {parent: prod}` works; a
-  cycle is an error, since neither could be released first (a first
-  release syncs from a released parent).
+- **`parent:` names a concrete environment, per environment only:** a
+  pattern is an error; under `defaults:` it is an unknown key (decided
+  2026-11-01: a child gets its parent's data, secrets and personal data
+  included, so it is named where the child is defined; a pattern
+  environment's is fine); one naming itself is a cycle, an error, since
+  neither could be released first (a first release syncs from a
+  released parent). `parent: ~` is no parent, as any key's null.
 - **A parent resolves one level only, its server never from the
   child's** (`ParentTarget`, whose own stays nil): at the child's
   instance, its server from the usual variables only. Why: a guess
