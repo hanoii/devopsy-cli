@@ -10,13 +10,14 @@ import (
 
 	"github.com/hanoii/devopsy-cli/internal/cli"
 	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/skill"
 )
 
 func TestContent(t *testing.T) {
 	t.Parallel()
 	c := skill.Content("v1.2.3", false)
-	for _, want := range []string{"---\nname: devopsy\n", "\ndevopsy: v1.2.3\n", "devopsy `v1.2.3`"} {
+	for _, want := range []string{"---\nname: devopsy\n", "\ndevopsy: v1.2.3 sha256:", "devopsy `v1.2.3`"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("content lacks %q", want)
 		}
@@ -24,16 +25,16 @@ func TestContent(t *testing.T) {
 	if strings.Contains(c, "{{") {
 		t.Error("a placeholder left")
 	}
-	if !skill.Written([]byte(c)) {
-		t.Error("the content is not recognized as devopsy's")
+	if !skill.Written([]byte(c)) || skill.Edited([]byte(c)) {
+		t.Error("the content is not recognized as devopsy's, as written")
 	}
 	// A copy checked out with CRLF line ends (core.autocrlf) is still
 	// devopsy's (review: it was refused as the user's own).
-	if !skill.Written([]byte(strings.ReplaceAll(c, "\n", "\r\n"))) {
+	if crlf := []byte(strings.ReplaceAll(c, "\n", "\r\n")); !skill.Written(crlf) || skill.Edited(crlf) {
 		t.Error("devopsy's own copy, with CRLF line ends, is not recognized")
 	}
 	s := skill.Content("v1.2.3", true)
-	if !strings.Contains(s, "devopsy: stub\n") || !strings.Contains(s, "devopsy --ai-skill install") || !skill.Written([]byte(s)) {
+	if !strings.Contains(s, "devopsy: stub sha256:") || !strings.Contains(s, "devopsy --ai-skill install") || !skill.Written([]byte(s)) || skill.Edited([]byte(s)) {
 		t.Errorf("stub:\n%s", s)
 	}
 }
@@ -154,6 +155,33 @@ func TestInstall(t *testing.T) {
 	os.WriteFile(crlfPath, []byte(strings.ReplaceAll(skill.Content("v1", false), "\n", "\r\n")), 0o644)
 	if _, _, _, err := skill.Install(crlf, "v2", false); err != nil {
 		t.Errorf("refreshing devopsy's own copy with CRLF line ends: %v", err)
+	}
+
+	// A copy devopsy wrote and the user edited since, its text or its
+	// frontmatter, the full skill or the stub, is left alone, said with
+	// the way to take the new one; an unedited stub is replaced.
+	for _, from := range []bool{false, true} {
+		for _, edit := range []func(string) string{
+			func(s string) string { return s + "\nAlways run the tests first.\n" },
+			func(s string) string { return strings.Replace(s, "description: ", "description: Mine. ", 1) },
+			// No checksum, as an older devopsy wrote it: no way to tell.
+			func(s string) string { return regexp.MustCompile(` sha256:[0-9a-f]+`).ReplaceAllString(s, "") },
+		} {
+			edited := t.TempDir()
+			editedPath := filepath.Join(edited, skill.Dir, "SKILL.md")
+			os.MkdirAll(filepath.Dir(editedPath), 0o755)
+			mine := edit(skill.Content("v1", from))
+			os.WriteFile(editedPath, []byte(mine), 0o644)
+			_, _, _, err := skill.Install(edited, "v2", false)
+			if err == nil || !strings.Contains(err.Error(), "edited since devopsy wrote it") {
+				t.Errorf("edited (stub %v): %v", from, err)
+			} else if fixes := report.Fixes(err); len(fixes) != 1 || len(fixes[0].Cmds) != 1 || fixes[0].Cmds[0] != "rm '"+editedPath+"'" {
+				t.Errorf("edited (stub %v), the fix: %+v", from, fixes)
+			}
+			if data, _ := os.ReadFile(editedPath); string(data) != mine {
+				t.Errorf("the edited copy (stub %v) changed", from)
+			}
+		}
 	}
 
 	// A file devopsy did not write is refused, and nothing changes.

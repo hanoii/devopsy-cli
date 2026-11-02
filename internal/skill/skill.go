@@ -5,12 +5,17 @@ package skill
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/hanoii/devopsy-cli/internal/remote"
+	"github.com/hanoii/devopsy-cli/internal/report"
 )
 
 //go:embed SKILL.md
@@ -28,30 +33,43 @@ const Dir = ".agents/skills/devopsy"
 const ClaudeDir = ".claude/skills/devopsy"
 
 // versionKey is the frontmatter key that marks a copy devopsy wrote,
-// with the version it came from (`stub` for the stub).
+// with the version it came from (`stub` for the stub) and the checksum
+// of the copy as written (sumPrefix and the SHA-256 of the file with
+// that line ending at its version), so an edit since shows.
 const versionKey = "devopsy:"
 
-// Content is the skill, with version in its frontmatter. The stub is
-// the short form that sends the agent to `devopsy --ai-skill`, for a
-// project that would rather not carry the text.
+const sumPrefix = "sha256:"
+
+// Content is the skill, with version and its checksum in its
+// frontmatter. The stub is the short form that sends the agent to
+// `devopsy --ai-skill`, for a project that would rather not carry the
+// text.
 func Content(version string, stub bool) string {
+	text := strings.ReplaceAll(content, "{{VERSION}}", version)
 	if stub {
-		return stub_
+		text = stub_
 	}
-	return strings.ReplaceAll(content, "{{VERSION}}", version)
+	_, line, _ := versionLine([]byte(text))
+	return strings.Replace(text, line+"\n", line+" "+sumPrefix+checksum([]byte(text))+"\n", 1)
 }
 
 // Install writes the skill under dir (a project, or the home directory
 // with --global) and links Claude Code's location to it. It overwrites
-// a copy devopsy wrote (marked by its version line) and refuses any
-// other file. It returns the file written, the link when Claude Code
-// reads the skill through it ("" when not), and notes for the operator:
-// an entry already at Claude Code's location that is not that link is
-// left alone, and said.
+// a copy devopsy wrote that is still as written (its checksum matches),
+// and refuses any other file: one devopsy did not write, or one edited
+// since. It returns the file written, the link when Claude Code reads
+// the skill through it ("" when not), and notes for the operator: an
+// entry already at Claude Code's location that is not that link is left
+// alone, and said.
 func Install(dir, version string, stub bool) (path, link string, notes []string, err error) {
 	path = filepath.Join(dir, Dir, "SKILL.md")
 	if old, err := os.ReadFile(path); err == nil && !Written(old) {
 		return "", "", nil, fmt.Errorf("%s was not written by devopsy: remove or move it first", path)
+	} else if err == nil && Edited(old) {
+		return "", "", nil, &report.Failure{
+			Msg:   path + " was edited since devopsy wrote it: left as it is",
+			Fixes: []report.Remedy{report.Fix("to take this version instead, remove it and run this command again:", "rm "+remote.Quote(path))},
+		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", "", nil, err
 	}
@@ -116,19 +134,47 @@ func linkClaude(link, target string) (note string, err error) {
 // frontmatter carries the version line. Line ends may be CRLF (a
 // checkout with core.autocrlf).
 func Written(data []byte) bool {
-	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	rest, ok := bytes.CutPrefix(data, []byte("---\n"))
+	_, _, ok := versionLine(data)
+	return ok
+}
+
+// Edited reports whether a SKILL.md devopsy wrote changed since: its
+// checksum is not that of the file as it is (or it has none). CRLF line
+// ends are no change.
+func Edited(data []byte) bool {
+	text, line, ok := versionLine(data)
 	if !ok {
 		return false
 	}
-	front, _, ok := bytes.Cut(rest, []byte("\n---\n"))
-	if !ok {
-		return false
+	head, sum, found := strings.Cut(line, " "+sumPrefix)
+	if !found {
+		return true
 	}
-	for _, line := range bytes.Split(front, []byte("\n")) {
-		if bytes.HasPrefix(line, []byte(versionKey)) {
-			return true
+	return sum != checksum([]byte(strings.Replace(text, line+"\n", head+"\n", 1)))
+}
+
+// versionLine finds the version line in a SKILL.md's frontmatter: the
+// text with LF line ends, the line, and whether there is one.
+func versionLine(data []byte) (text, line string, ok bool) {
+	text = string(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")))
+	rest, found := strings.CutPrefix(text, "---\n")
+	if !found {
+		return text, "", false
+	}
+	front, _, found := strings.Cut(rest, "\n---\n")
+	if !found {
+		return text, "", false
+	}
+	for _, l := range strings.Split(front, "\n") {
+		if strings.HasPrefix(l, versionKey) {
+			return text, l, true
 		}
 	}
-	return false
+	return text, "", false
+}
+
+// checksum is the SHA-256 of a copy as written, in hex.
+func checksum(text []byte) string {
+	sum := sha256.Sum256(text)
+	return hex.EncodeToString(sum[:])
 }

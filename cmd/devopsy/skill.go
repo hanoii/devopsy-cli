@@ -32,8 +32,9 @@ install writes it to ` + skill.Dir + `/SKILL.md in the project (the
 directory with .devopsy/, found from here as every command finds it;
 outside a project, the current directory), or under $HOME with
 --global, and links ` + skill.ClaudeDir + ` to it for Claude Code. Run
-it again after an upgrade: a copy devopsy wrote is replaced; any other
-file there is refused, so nothing of yours is overwritten.
+it again after an upgrade: a copy devopsy wrote is replaced while it is
+as written; one you edited, or any other file there, is refused, so
+nothing of yours is overwritten (remove it to take this version).
 
 --stub is the short form: a file that tells the agent to run
 devopsy --ai-skill, for a project that would rather not carry the text
