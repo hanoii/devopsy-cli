@@ -25,12 +25,12 @@ func TestSyncReflinkE2E(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/db:/db]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.stop: own}
   app:
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
-    labels: {devopsy.data: "true", devopsy.data.copy.reflink: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy.reflink: "true"}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})
@@ -95,7 +95,7 @@ func TestSyncReflinkExt4E2E(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
-    labels: {devopsy.data: "true", devopsy.data.copy.reflink: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy.reflink: "true"}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})

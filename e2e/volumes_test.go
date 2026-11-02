@@ -22,7 +22,7 @@ func TestVolumesAcross(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [dbdata:/data]
-    labels: {devopsy.data: "true", devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.stop: own}
 volumes:
   dbdata: {}
 `,

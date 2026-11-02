@@ -200,6 +200,9 @@ func ParseComposeConfig(data []byte) ([]Service, error) {
 			method = cmp.Or(c.Labels[DataCopyLabel], CopyVolumes)
 		}
 		svc := Service{Name: n, Ref: c.Image, Build: len(c.Build) > 0 && string(c.Build) != "null", BuildSpec: c.Build, Data: data, Method: method, NeverPull: c.PullPolicy == "never"}
+		if data {
+			svc.DataVersion = c.Labels[DataVersionLabel]
+		}
 		if svc.Ref == "" {
 			svc.Ref = cfg.Name + "-" + n
 		}

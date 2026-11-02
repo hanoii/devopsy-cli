@@ -24,13 +24,13 @@ func sqliteProject(t *testing.T, name string) string {
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/db:/data]
-    labels: {devopsy.data: "true", devopsy.data.copy: custom}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: custom}
   app:
     build: .
     command: [sleep, infinity]
     volumes: [./mnt/app:/data]
     depends_on: [db]
-    labels: {devopsy.data: "true", devopsy.data.copy: custom, devopsy.data.stop: own}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: custom, devopsy.data.stop: own}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 		".devopsy/capabilities/data/export": `#!/bin/sh

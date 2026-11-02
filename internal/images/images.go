@@ -224,6 +224,9 @@ type Service struct {
 	// NeverPull: pull_policy: never.
 	Build, Data, NeverPull bool
 	Method                 string
+	// DataVersion is its DataVersionLabel, with data only: a version or
+	// AnyVersion (cli refuses a data service without one).
+	DataVersion string
 	// BuildSpec is its build: section as compose resolves it, BuildKey
 	// what it comes to (BuildKey, from ListCompose, which knows the
 	// release's code).

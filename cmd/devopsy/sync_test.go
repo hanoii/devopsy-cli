@@ -91,9 +91,9 @@ absent() {
 # it), none (false); any other is devopsy.data's value as it is.
 dl() {
   case $1 in
-    mnt) echo '"devopsy.data":"true"' ;;
-    stream) echo '"devopsy.data":"true","devopsy.data.copy":"custom"' ;;
-    keep) echo '"devopsy.data":"true","devopsy.data.copy":"none"' ;;
+    mnt) echo '"devopsy.data":"true","devopsy.data.version":"any"' ;;
+    stream) echo '"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.copy":"custom"' ;;
+    keep) echo '"devopsy.data":"true","devopsy.data.version":"any","devopsy.data.copy":"none"' ;;
     none) echo '"devopsy.data":"false"' ;;
     *) echo "\"devopsy.data\":\"$1\"" ;;
   esac

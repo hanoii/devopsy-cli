@@ -20,13 +20,13 @@ func snapshotProject(t *testing.T, name, prod string) string {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [dbdata:/data]
-    labels: {devopsy.data: "true", devopsy.data.copy: none}
+    labels: {devopsy.data: "true", devopsy.data.version: any, devopsy.data.copy: none}
   app:
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
     depends_on: [db]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 volumes:
   dbdata: {}
 `,
@@ -220,7 +220,7 @@ func TestSnapshotReflinkE2E(t *testing.T) {
     image: busybox:1.37
     command: [sleep, infinity]
     volumes: [./mnt/files:/files]
-    labels: {devopsy.data: "true"}
+    labels: {devopsy.data: "true", devopsy.data.version: any}
 `,
 		".devopsy/commands/deploy": "#!/bin/sh\n## Description: starts the project\nexec devopsy up -d --wait\n",
 	})

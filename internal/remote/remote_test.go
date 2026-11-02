@@ -1084,7 +1084,7 @@ func TestHolderAbortDuringPullStopsNothing(t *testing.T) {
 	// (the labels', never the listing's).
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
-if [ "$*" = '-- config --format json' ]; then printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}'; exit; fi
+if [ "$*" = '-- config --format json' ]; then printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}'; exit; fi
 echo "$*" >> "$FAKE_ROOT/calls"
 exit 0
 `)
@@ -1760,7 +1760,7 @@ func TestActivateDataImages(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true"}}}}' "$DB" ;;
+  "-- config --format json") printf '{"name":"app-prod","services":{"db":{"image":"%s","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' "$DB" ;;
   "-- --profile * pull --ignore-buildable") echo "$IMG" >"$FAKE_ROOT/images/$DB" ;;
 esac
 exit 0
@@ -1838,7 +1838,7 @@ func TestSyncImagesNotInRunStep(t *testing.T) {
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
+  "-- config --format json") printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
   "-- --profile * pull --ignore-buildable") echo P1 >"$FAKE_ROOT/images/mariadb:11.8" ;;
   deploy) echo "deploy from=${DEVOPSY_SYNC_FROM_TARGET:-} images=${`+images.SyncImagesEnv+`:-} reset=${`+SyncResetEnv+`:-}" >>"$FAKE_ROOT/calls" ;;
 esac
@@ -2916,7 +2916,7 @@ if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprot
 id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
-  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}' ;;
+  "-- config --format json") printf '{"name":"app-prod","services":{"app":{"build":{"context":"."}},"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true","devopsy.data.version":"any"}}}}' ;;
   "-- --profile * pull --ignore-buildable")
     # devopsy merges the release's own compose file, unless told not to.
     if [ -z "${DEVOPSY_INTERNAL_NO_RELEASE_COMPOSE:-}" ] && [ -n "${GONE:-}" ] && grep -q "image: \"mariadb@$GONE\"" ../devopsy-compose.yaml 2>/dev/null; then
