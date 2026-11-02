@@ -33,9 +33,9 @@ import (
 // record <release> [<release it replaces>] (exit 3 when its checks
 // refuse, 1 when it cannot), restore <release> <release it replaces>
 // [--fetched] [--as-built] (exit 1 when an own image must be built again, 3 when it
-// cannot), ran <environment> <release> [cut] (the history of what ran on the
-// data; cut: of an activation cut off past its switch), hold <environment> <release> (its data services held on their
-// data's newest image), remove <release>... (exit 1 when Docker failed: keep the
+// cannot; as built, the restart's last try, neither: its data services
+// held on the newest image their data ran, the rest as it is), ran <environment> <release> [cut] (the history of what ran on the
+// data; cut: of an activation cut off past its switch), remove <release>... (exit 1 when Docker failed: keep the
 // release), undo [--rollback] <release> [<current release>], recover
 // <environment> [<current release>], prune; for an environment's
 // releases (images.ToPrune, RollbackTarget, RemoveReleases): to-prune
@@ -221,13 +221,6 @@ func runImages(args []string, color bool) int {
 		} else if err != nil {
 			return 3
 		}
-	case "hold":
-		if len(rest) != 2 {
-			return imagesUsage(color)
-		}
-		if s.HoldData(rest[0], rest[1]) != nil {
-			return 1
-		}
 	case "data":
 		if len(rest) != 2 {
 			return imagesUsage(color)
@@ -315,6 +308,6 @@ func runImages(args []string, color bool) int {
 }
 
 func imagesUsage(color bool) int {
-	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|names|record|restore|ran|hold|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
+	report.Error("usage: devopsy " + imagesFlag + " --name <compose name> mode|names|record|restore|ran|data|sync-check|sync-done|undo|recover|remove|prune|to-prune|rollback-target|remove-releases ...")
 	return 2
 }

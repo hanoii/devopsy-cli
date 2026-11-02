@@ -53,9 +53,9 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 		s.say(report.WarnLevel, "could not list the services of %s (%v): the child keeps its images", filepath.Base(rel), err)
 		return ""
 	}
-	// Which of rel's listed data services (KindData: pulled, no build:,
-	// whatever rel's mode) are copied; no mode read here: the listing
-	// decided own against pulled when rel was recorded.
+	// Which of rel's listed pulled data services (its labels: data, no
+	// build:) are copied; no mode read here: the listing decided own
+	// against pulled when rel was recorded.
 	copied := map[string]bool{}
 	for _, svc := range svcs {
 		// A service whose entries are all missing here has nothing a
@@ -70,7 +70,7 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 	es := readList(rel)
 	var data []entry
 	for _, e := range es {
-		if e.Kind == KindData && copied[e.Service] {
+		if e.Kind != KindOwn && copied[e.Service] {
 			data = append(data, e)
 		}
 	}
@@ -326,11 +326,16 @@ func (s *Set) syncCheck(rel, data, again string) ([]string, error) {
 func (s *Set) check(rel, data, again string, w checkWords) ([]string, error) {
 	ps := parseParentData(data)
 	es := readList(rel)
+	isData, err := s.dataOf(rel)
+	if err != nil {
+		s.say(report.ErrorLevel, "could not list the services of %s: %v", filepath.Base(rel), err)
+		return nil, err
+	}
 	var refused, refusedSvcs, refusedRefs []string
 	var mine []entry
 	for _, e := range es {
 		p := ps[e.Service]
-		if e.Kind != KindData || p == nil {
+		if e.Kind == KindOwn || !isData[e.Service] || p == nil {
 			continue
 		}
 		// Accepted: the child runs its own image on the parent's data
@@ -507,7 +512,7 @@ func (s *Set) SnapshotPull(snap, data string) error {
 	names := bookmarks(es, s.Name, s.idOf(snap))
 	for i, e := range es {
 		p := ps[e.Service]
-		if e.Kind != KindData || p == nil || p.Image.ID == "" {
+		if e.Kind == KindOwn || p == nil || p.Image.ID == "" {
 			continue
 		}
 		// There already only when its own repository has it by digest,
@@ -617,6 +622,11 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 	}
 	h := readHistory(base)
 	mode := ModeOf(rel)
+	isData, err := s.dataOf(rel)
+	if err != nil {
+		s.say(report.ErrorLevel, "could not list the services of %s: %v", filepath.Base(rel), err)
+		return err
+	}
 	changed := false
 	var out []entry
 	var cs map[string]Container
@@ -625,7 +635,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 			continue
 		}
 		p := ps[e.Service]
-		if e.Kind != KindData || p == nil || p.hold() == "" {
+		if e.Kind == KindOwn || !isData[e.Service] || p == nil || p.hold() == "" {
 			out = append(out, e)
 			continue
 		}
@@ -651,7 +661,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 				continue
 			}
 			n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold, mode)
-			n.Kind, n.Digest = KindData, hold
+			n.Kind, n.Digest = KindPulled, hold
 			out = append(out, n)
 			holds[e.Service] = hold
 			var kept history
@@ -669,7 +679,7 @@ func (s *Set) syncDone(base, rel, data, first, accepted string, importing bool) 
 			hold = s.ownHold(e, p)
 		}
 		n := s.entryOf(Service{Name: e.Service, Ref: e.Ref, Data: true}, hold, mode)
-		n.Kind, n.Digest = KindData, hold
+		n.Kind, n.Digest = KindPulled, hold
 		if n.ID == "" {
 			n.ID = p.Image.ID
 		}
@@ -797,11 +807,14 @@ func Recreate(d Docker, project, rel string) []string {
 // elsewhere, and the image now running it is the only one known to have
 // run it.
 func (s *Set) Imported(base, rel, service string) error {
-	es := readList(rel)
+	data, err := s.dataOf(rel)
+	if err != nil {
+		return err
+	}
 	isData := false
 	ref := ""
-	for _, e := range es {
-		if e.Service == service && e.Kind == KindData {
+	for _, e := range readList(rel) {
+		if e.Service == service && e.Kind != KindOwn && data[service] {
 			isData, ref = true, e.Ref
 		}
 	}

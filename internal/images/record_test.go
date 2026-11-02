@@ -49,8 +49,9 @@ var (
 )
 
 // The listing records each service's kind, digest and version: the app
-// is built (own, whatever its data label), the database a pulled data
-// service, the proxy pulled; a listing from before them still reads.
+// is built (own, whatever its data label), the database and the proxy
+// pulled (data is the labels', never a kind); a listing from before
+// them still reads.
 func TestRecordListing(t *testing.T) {
 	t.Parallel()
 	d := newFake()
@@ -67,7 +68,7 @@ func TestRecordListing(t *testing.T) {
 	got := readList(e.rel(id))
 	want := []entry{
 		{Ref: "app-prod-app", ID: "sha256:a1", Service: "app", Kind: KindOwn},
-		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindData, Digest: "mariadb@sha256:m1", Version: "11.8.9"},
+		{Ref: "mariadb:11.8", ID: "sha256:m1", Service: "database", Kind: KindPulled, Digest: "mariadb@sha256:m1", Version: "11.8.9"},
 		{Ref: "caddy:2-alpine", ID: "sha256:c1", Service: "alwaysup", Kind: KindPulled, Digest: "caddy@sha256:c1"},
 	}
 	if len(got) != len(want) {

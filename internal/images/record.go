@@ -48,9 +48,13 @@ func (s *Set) Record(rel, prev string) error {
 	}
 	old := readList(prev)
 	base := baseOf(rel)
+	// A pulled data service (the labels', never a kind: s.data from
+	// entries), with the registry digest that holds it: an image Docker
+	// could not inspect has nothing to check or hold.
+	pulledData := func(e entry) bool { return e.Kind != KindOwn && s.data[e.Service] && e.Digest != "" }
 	var data []entry
 	for _, e := range es {
-		if e.Kind == KindData {
+		if pulledData(e) {
 			data = append(data, e)
 		}
 	}
@@ -69,11 +73,11 @@ func (s *Set) Record(rel, prev string) error {
 		// builds after go through (no digest to order them by). A
 		// project that always built its database has no history.
 		_, hasHistory := h.last(e.Service)
-		if e.Kind != KindData && !(e.Kind == KindOwn && s.data[e.Service] && hasHistory) {
+		if !pulledData(e) && !(e.Kind == KindOwn && s.data[e.Service] && hasHistory) {
 			continue
 		}
 		var img Image
-		if e.Kind == KindData {
+		if pulledData(e) {
 			holds[e.Service] = e.Digest
 			if parent[e.Service] != nil {
 				continue

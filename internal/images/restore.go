@@ -44,6 +44,13 @@ func baseOf(rel string) string { return filepath.Dir(filepath.Dir(rel)) }
 // Own against pulled, and whether a build changed, go by target's own
 // mode (ModeOf): it was fetched in it, whatever mode the project is in
 // now.
+//
+// AsBuilt (the restart's last try, after a build failed) never asks for
+// a build and never fails on a pull: an own image gone stays as its name
+// is, a hold that cannot be pulled is held all the same, so the data
+// services are held on the newest image their data ran, never on what
+// the release's last activation held, and its listing and bookmarks
+// follow the hold: a snapshot of the release copies what it runs.
 func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	// What it pulled by digest goes when it fails: a name by digest alone
 	// that no listing names would never be removed.
@@ -66,15 +73,19 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	base := baseOf(target)
 	mode := ModeOf(target)
 	// isData says whether svc runs as a pulled data service here: in
-	// target, or in the release it leaves, even where target builds it
-	// or never pulls it: its data ran the pulled image, which an
-	// unordered own image must not replace.
+	// target, or in the release it leaves (its labels, agData), even
+	// where target builds it or never pulls it: its data ran the pulled
+	// image, which an unordered own image must not replace.
+	agData := map[string]bool{}
+	if against != "" && len(ag) > 0 {
+		if agData, err = s.dataOf(against); err != nil {
+			s.say(report.WarnLevel, "could not list the services of %s (%v): its data services are taken for none", filepath.Base(against), err)
+			agData = map[string]bool{}
+		}
+	}
 	isData := func(svc Service) bool {
-		probe := entry{Service: svc.Name, Ref: svc.Ref}
-		o, _ := match(old, probe)
-		a, _ := match(ag, probe)
-		own := svc.own(mode)
-		return (!own && ((svc.Data && !svc.Build) || o.Kind == KindData)) || a.Kind == KindData
+		a, haveAg := match(ag, entry{Service: svc.Name, Ref: svc.Ref})
+		return (!svc.own(mode) && svc.pulledData()) || (haveAg && a.Kind != KindOwn && agData[svc.Name])
 	}
 	// Seeded as Record seeds, from what runs: a rollback after the
 	// history came (or a label did) would otherwise find none and keep
@@ -89,10 +100,14 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	var cs map[string]Container
 
 	type step struct {
-		svc   Service
-		kind  string
-		hold  string // a digest name to run, pulled when gone
-		retag string // an own image's bookmark to put back on its name
+		svc    Service
+		kind   string
+		hold   string // a digest name to run, pulled when gone
+		holdID string // the image hold names, for a listing when it cannot be pulled (AsBuilt)
+		retag  string // an own image's bookmark to put back on its name
+		// asIs: as its listing has it, nothing moved (AsBuilt: its
+		// bookmark gone, and nothing to build).
+		asIs bool
 	}
 	var steps []step
 	for _, svc := range svcs {
@@ -112,6 +127,10 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			}
 			i := indexOf(old, o)
 			if !haveOld || o.ID == "" || i < 0 {
+				if st.asIs = s.AsBuilt; st.asIs {
+					s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					break
+				}
 				return s.gone(tid, svc)
 			}
 			if s.changed(o, svc, mode) {
@@ -120,13 +139,17 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				}
 			}
 			if _, err := s.Docker.ID(names[i]); err != nil {
+				if st.asIs = s.AsBuilt; st.asIs {
+					s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+					break
+				}
 				return s.gone(tid, svc)
 			}
 			st.retag = names[i]
 		case data:
-			st.kind = KindData
+			st.kind = KindPulled
 			if last, ok := h.last(svc.Name); ok && last.hold() != "" {
-				st.hold = last.hold()
+				st.hold, st.holdID = last.hold(), last.ID
 				break
 			}
 			if cs == nil {
@@ -153,6 +176,10 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				}
 				i := indexOf(old, o)
 				if !haveOld || o.ID == "" || i < 0 {
+					if st.asIs = s.AsBuilt; st.asIs {
+						s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+						break
+					}
 					return s.gone(tid, svc)
 				}
 				if s.changed(o, svc, mode) {
@@ -161,13 +188,13 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 					}
 				}
 				if _, err := s.Docker.ID(names[i]); err != nil {
+					if st.asIs = s.AsBuilt; st.asIs {
+						s.say(report.WarnLevel, "%s's image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+						break
+					}
 					return s.gone(tid, svc)
 				}
 				st.retag = names[i]
-			} else if st.hold == "" {
-				// Nothing ever ran on its data that devopsy knows of: like any
-				// other pulled image.
-				st.kind = KindPulled
 			}
 		default:
 			st.kind = KindPulled
@@ -184,6 +211,8 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 		svc := st.svc
 		o, haveOld := match(old, entry{Service: svc.Name, Ref: svc.Ref})
 		switch {
+		case st.asIs:
+			es = append(es, s.entryOf(svc, digestRef(svc.Ref), mode))
 		case st.kind == KindOwn && st.retag != "":
 			bid, _ := s.Docker.ID(st.retag)
 			if cur, err := s.Docker.ID(svc.Ref); err != nil || cur != bid {
@@ -208,16 +237,24 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			es = append(es, e)
 		case st.hold != "":
 			if _, err := s.Docker.Inspect(st.hold); err != nil {
-				if err := s.Docker.Pull(st.hold); err != nil {
+				if err := s.Docker.Pull(st.hold); err != nil && !s.AsBuilt {
 					s.sayAll(report.ErrorLevel, fmt.Sprintf("%s: %s is gone from this server and could not be pulled by its digest", svc.Name, st.hold),
 						[]string{err.Error()}, report.Fix("the newest image its data ran must be there: never one older"))
 					return ErrRefused
+				} else if err != nil {
+					// The restart's last try: held all the same, for the run
+					// step's up to pull by its digest.
+					s.say(report.WarnLevel, "%s: %s is gone from this server and could not be pulled by its digest (%v): held on it anyway, for the run step to pull", svc.Name, st.hold, err)
+				} else {
+					pulled = append(pulled, st.hold)
+					s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
 				}
-				pulled = append(pulled, st.hold)
-				s.say(report.InfoLevel, "%s: pulled %s again by its digest", svc.Name, st.hold)
 			}
 			e := s.entryOf(svc, st.hold, mode)
-			e.Kind, e.Digest = KindData, st.hold
+			e.Kind, e.Digest = KindPulled, st.hold
+			if e.ID == "" {
+				e.ID = st.holdID
+			}
 			es = append(es, e)
 			holds[svc.Name] = st.hold
 			if haveOld && o.ID != "" && o.ID != e.ID {
@@ -232,9 +269,6 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 				}
 			}
 			e := s.entryOf(svc, svc.Ref, mode)
-			if st.kind == KindData {
-				e.Kind = KindData
-			}
 			es = append(es, e)
 			if e.Kind != KindOwn && haveOld && o.ID != "" && o.ID != e.ID {
 				lines = append(lines, fmt.Sprintf("%s runs what %s holds now (%s), not the image %s ran (%s): pin a version for a rollback to take it back", svc.Name, svc.Ref, shownEntry(e), tid, shownEntry(o)))
@@ -307,40 +341,6 @@ func shownEntry(e entry) string {
 		s += " (" + e.Version + ")"
 	}
 	return s
-}
-
-// HoldData holds rel's pulled data services on the newest image their
-// data ran (the history's last), in its ComposeFile, when nothing else
-// could restore its images (the restart after a failed run whose fetch
-// failed): what its last activation held may be older. An image gone is
-// pulled by compose's up, by its digest. Its listing and bookmark follow
-// the hold (keep), so what holds the image is what rel runs: a snapshot
-// of rel copies both (review: its bookmark held the image the database
-// no longer ran, and nothing the one it did).
-func (s *Set) HoldData(base, rel string) error {
-	h := readHistory(base)
-	holds, _ := composeFacts(rel)
-	if holds == nil {
-		holds = map[string]string{}
-	}
-	es := readList(rel)
-	changed := false
-	for i, e := range es {
-		last, ok := h.last(e.Service)
-		if e.Kind != KindData || !ok || last.hold() == "" || holds[e.Service] == last.hold() {
-			continue
-		}
-		holds[e.Service] = last.hold()
-		es[i].Digest, es[i].ID = last.hold(), last.ID
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	if err := s.keep(rel, es); err != nil {
-		return err
-	}
-	return writeCompose(rel, es, holds)
 }
 
 // RestoreOwn puts a release's own images back on their names, after a

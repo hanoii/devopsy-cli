@@ -40,7 +40,7 @@ const (
 	// ListFile lists the images a release runs, one per service, tab
 	// separated: the name (compose's image, as it resolved at the
 	// activation), the image it had when bookmarked ("" when Docker had
-	// none), the service, its kind (KindOwn, KindPulled, KindData), the
+	// none), the service, its kind (KindOwn, KindPulled), the
 	// registry's digest of a pulled image (<repository>@sha256:...), its
 	// version label (org.opencontainers.image.version), for display, and
 	// the build key a service the release built was built with (BuildKey).
@@ -165,12 +165,11 @@ const (
 	// never pulls (pull_policy: never): a rollback restores it exactly,
 	// from its bookmark.
 	KindOwn = "own"
-	// KindPulled is an image compose pulls from a registry.
+	// KindPulled is an image compose pulls from a registry. Whether its
+	// service has data (devopsy.data=true: changed in place by what runs
+	// it) is the labels' (Service.Data), never a kind: a listing from
+	// before said "data" for one, read as any kind but own.
 	KindPulled = "pulled"
-	// KindData is a pulled image of a service with devopsy.data=true
-	// that compose does not build: its data is changed in place by what
-	// runs it.
-	KindData = "data"
 )
 
 // Set is one environment's images on a server.
@@ -470,11 +469,30 @@ func (s *Set) entryOf(svc Service, ref, mode string) entry {
 		if e.Digest == "" {
 			// Nothing to hold it by: restored like an own image.
 			e.Kind = KindOwn
-		} else if svc.Data && !svc.Build {
-			e.Kind = KindData
 		}
 	}
 	return e
+}
+
+// pulledData says whether svc's data is changed in place by an image a
+// registry serves: devopsy.data=true, no build: section (a built one is
+// the project's own image, in either mode).
+func (svc Service) pulledData() bool { return svc.Data && !svc.Build }
+
+// dataOf lists rel's services with pulled data (pulledData), by name:
+// what a listing alone cannot say (List).
+func (s *Set) dataOf(rel string) (map[string]bool, error) {
+	svcs, err := s.List(rel)
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]bool{}
+	for _, svc := range svcs {
+		if svc.pulledData() {
+			data[svc.Name] = true
+		}
+	}
+	return data, nil
 }
 
 // digestIn is img's registry digest for ref's repository, as a name,

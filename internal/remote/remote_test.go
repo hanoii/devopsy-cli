@@ -741,8 +741,9 @@ exit 0
 	file := " file=" + filepath.Join(base, SyncInheritPending("1.2"))
 	// The pending files' path from before the checks (where the sync's
 	// inherited variables and its copy of the parent's server's levels
-	// are read, when they exist), to the run step.
-	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n" {
+	// are read, when they exist), to the run step; the record of what
+	// ran on the data after it (img ran) reads the labels again.
+	if got := calls(root); got != "--missing-vars from= to="+file+"\n--check-names "+base+" from= to="+file+"\n--check-mounts from= to="+file+"\n-- config --format json from= to="+file+"\n-- --profile * pull --ignore-buildable from= to="+file+"\n-- build --pull from= to="+file+"\n-- config --format json from= to="+file+"\n--mnt-owners from= to="+file+"\n--sync-services prepare first from=vm1:prod to=vm2:dev"+file+"\n--sync-services finish go from=vm1:prod to=vm2:dev"+file+"\ndeploy from= to=\n-- config --format json from= to=\n" {
 		t.Errorf("go calls:\n%s", got)
 	}
 
@@ -1079,8 +1080,11 @@ exit 0
 func TestHolderAbortDuringPullStopsNothing(t *testing.T) {
 	t.Parallel()
 	bin := t.TempDir()
+	// Its compose config says db has data: what makes it a data service
+	// (the labels', never the listing's).
 	write(t, filepath.Join(bin, "devopsy"), `#!/bin/sh
 if [ "$1" = --release-settings ]; then printf 'root=%s\nkeep=5\nmax_keep=5\nprotocol=8\n' "$FAKE_ROOT"; exit; fi
+if [ "$*" = '-- config --format json' ]; then printf '{"name":"app-dev","services":{"db":{"image":"mariadb:11.8","labels":{"devopsy.data":"true"}}}}'; exit; fi
 echo "$*" >> "$FAKE_ROOT/calls"
 exit 0
 `)
@@ -1107,7 +1111,7 @@ exec "$(dirname "$0")/docker.fake" "$@"
 	root := t.TempDir()
 	base := filepath.Join(root, tg.Path)
 	write(t, filepath.Join(base, "releases", "1", CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
-	write(t, filepath.Join(base, "releases", "1", images.ListFile), "mariadb:11.8\tI1\tdb\tdata\tmariadb@I1\n")
+	write(t, filepath.Join(base, "releases", "1", images.ListFile), "mariadb:11.8\tI1\tdb\tpulled\tmariadb@I1\n")
 	write(t, filepath.Join(root, "images", "mariadb:11.8"), "I1\n")
 	if err := os.Symlink("releases/1/code", filepath.Join(base, "current")); err != nil {
 		t.Fatal(err)
@@ -1376,7 +1380,7 @@ exit 0
 	if out, err := release("1"); err != nil || current() != "releases/1/code" {
 		t.Fatalf("build (%v):\n%s", err, out)
 	}
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+base+"\n1: --check-mounts\n1: -- config --format json\n1: -- --profile * pull --ignore-buildable\n1: -- build --pull\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n1: -- config --format json\n"; got != want {
 		t.Errorf("build calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app:devopsy-app-prod-1") != "1" || image(root, "mariadb:devopsy-app-prod-1") != "1" {
@@ -1407,7 +1411,7 @@ exit 0
 	if out, err := release("3", "FAIL_RUN=4"); err == nil || current() != "releases/1/code" || !strings.Contains(out, "images of 1 restored") {
 		t.Fatalf("failed run (%v), current %q:\n%s", err, current(), out)
 	}
-	if got, want := calls(root), "3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
+	if got, want := calls(root), "1: -- config --format json\n3: --missing-vars\n3: --check-names "+base+"\n3: --check-mounts\n3: -- config --format json\n3: -- --profile * pull --ignore-buildable\n3: -- build --pull\n3: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n3: -- config --format json\ncurrent: -- --profile * ps -a --format {{.Name}} {{.Service}} {{.State}} {{.ExitCode}} {{.Health}}\n1: -- config --format json\n3: -- config --format json\ncurrent: --mnt-owners restored\ncurrent: --check-mounts restored restart\ncurrent: --release-steps restart run\n"; got != want {
 		t.Errorf("failed run calls:\n%s\nwant:\n%s", got, want)
 	}
 	if image(root, "app-prod-app") != "1" || image(root, "mariadb:11") != "3" {
@@ -1505,7 +1509,7 @@ exit 0
 		t.Fatalf("image (%v):\n%s", err, out)
 	}
 	// Every profile's services without a build pulled too, never listed.
-	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n"; got != want {
+	if got, want := calls(root), "1: --missing-vars\n1: --check-names "+filepath.Join(root, image2.Path)+"\n1: --check-mounts\n1: -- config --format json\n1: -- pull\n1: -- --profile * pull --ignore-buildable\n1: -- config --format json\ncurrent: --mnt-owners\ncurrent: deploy\n1: -- config --format json\n"; got != want {
 		t.Errorf("image calls:\n%s\nwant:\n%s", got, want)
 	}
 	// A profile's image that fails to pull fails the release before it
@@ -1677,7 +1681,7 @@ exit 0
 		t.Errorf("releases parsed: %+v", rs)
 	}
 	// Each image with its version, else its short digest.
-	write(t, filepath.Join(root, "app/a/prod/releases/2", ImagesFile), "registry/app:abc\tI1\tapp\tpulled\tregistry/app@sha256:0123456789abcdef\t1.2\nmariadb:11\tI2\tdatabase\tdata\tmariadb@sha256:0123456789abcdef\napp-a-prod-x\tI3\tx\town\n")
+	write(t, filepath.Join(root, "app/a/prod/releases/2", ImagesFile), "registry/app:abc\tI1\tapp\tpulled\tregistry/app@sha256:0123456789abcdef\t1.2\nmariadb:11\tI2\tdatabase\tpulled\tmariadb@sha256:0123456789abcdef\napp-a-prod-x\tI3\tx\town\n")
 	out, _ = run(ReleasesScript(target("a")))
 	if rs := ParseReleases(out); len(rs) != 1 || strings.Join(rs[0].Images, " ") != "registry/app:abc=1.2 mariadb:11=sha256:0123456789ab app-a-prod-x" {
 		t.Errorf("images with versions: %+v", rs)
@@ -3030,7 +3034,7 @@ id=$(pwd -P); id=${id%/code}; id=${id##*/}
 mkdir -p "$FAKE_ROOT/images"
 case "$*" in
   "-- config --format json")
-    if [ -n "${FAKE_SLOW_LIST:-}" ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
+    if [ -n "${FAKE_SLOW_LIST:-}" ] && [ "$id" = 2 ] && [ ! -e "$FAKE_ROOT/listing" ]; then : >"$FAKE_ROOT/listing"; sleep 2; fi
     printf '%s' '`+cfgJSON("app-prod-app", "mariadb:11")+`' ;;
   "-- --profile * pull --ignore-buildable") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/mariadb:11" ;;
   "-- build --pull") echo "$id" >>"$FAKE_ROOT/fetched"; echo "$id" >"$FAKE_ROOT/images/app-prod-app" ;;

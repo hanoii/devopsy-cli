@@ -15,7 +15,7 @@ import (
 // release, which pruning removes, nor in shared/, whose entries are
 // linked into the project's tree and so into build contexts), is the
 // history of the images that ran on each pulled data service's data
-// (KindData): what keeps that data from ever meeting an image older than
+// (Service.pulledData): what keeps that data from ever meeting an image older than
 // the newest it ran. One line per image change, oldest first, tab
 // separated: time (Unix seconds), service, how (Ran, Forced, Imported,
 // or "sync <parent's address>"), the reference it ran as, the image id,
@@ -247,11 +247,12 @@ func (s *Set) Ran(base, rel string) error { return s.ran(base, rel, false) }
 func (s *Set) RanCut(base, rel string) error { return s.ran(base, rel, true) }
 
 func (s *Set) ran(base, rel string, cut bool) error {
-	svcs := map[string]bool{}
-	for _, e := range readList(rel) {
-		if e.Kind == KindData {
-			svcs[e.Service] = true
-		}
+	// rel's pulled data services, from its labels (List); those with a
+	// history count whatever the labels say now.
+	svcs, err := s.dataOf(rel)
+	if err != nil {
+		s.say(report.WarnLevel, "could not list the services of %s (%v): only those with a history are recorded", filepath.Base(rel), err)
+		svcs = map[string]bool{}
 	}
 	h := readHistory(base)
 	for _, r := range h {

@@ -840,8 +840,9 @@ func activateScript(t *Target, id string, rollback bool, projectName string, p P
 	// under the shared image lock, a release's images restored in place
 	// of against's (img restore), fetched again when an image it builds
 	// is gone or was built with other build arguments; that build failing,
-	// its bookmarks as they are (--as-built), never the failed release's
-	// image under the name.
+	// its bookmarks as they are (--as-built: its data services held on
+	// the newest image their data ran, whatever else is missing), never
+	// the failed release's image under the name.
 	s += `get_images() {
   image_lock shared fetching || return $?
   gi=0
@@ -1252,10 +1253,7 @@ exec 7<&-
     fi
     get_images "$base/$prev" "$rel" || {
       gi_s=$?
-      # Its data services still held on the newest image their data ran,
-      # never on what its last activation held (img hold).
-      img hold "$base" "$base/$prev" || true
-      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway, its data services on the newest image their data ran"
+      devopsy --say warning "getting the images of ${prev#releases/} failed ($gi_s): restarting it anyway"
     }
 `
 	// Its entries of mnt to their owners, by its own labels: the new

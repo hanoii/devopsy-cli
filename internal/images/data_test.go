@@ -558,7 +558,15 @@ func dataRandom(t *testing.T, seed int64) {
 	// database as a pulled data service.
 	pulledData := func(m *sim) bool {
 		e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"})
-		return ok && e.Kind == KindData
+		if !ok || e.Kind == KindOwn {
+			return false
+		}
+		for _, svc := range m.e.svcs[m.cur] {
+			if svc.Name == "database" {
+				return svc.pulledData()
+			}
+		}
+		return false
 	}
 	var log []string
 	check := func(step string) {
@@ -725,7 +733,7 @@ func dataRandom(t *testing.T, seed int64) {
 				t.Fatalf("after %v: %s's database runs %s after an import of %s's export, which runs %s", log, m.e.set.Name, m.runs("database"), other.e.set.Name, other.runs("database"))
 			}
 			check(m.e.set.Name + " import of " + other.e.set.Name + "'s export")
-		case 11: // a run step failing, its restart's images not restored (img hold)
+		case 11: // a run step failing, its restart's images not restored (as built)
 			if m.cur == "" {
 				continue
 			}
@@ -744,8 +752,11 @@ func dataRandom(t *testing.T, seed int64) {
 			m.up()
 			m.e.set.Ran(m.base(), m.e.rel(id))
 			os.WriteFile(filepath.Join(m.e.rel(id), failedFile), nil, 0o644)
-			if err := m.e.set.HoldData(m.base(), m.e.rel(prev)); err != nil {
-				t.Fatalf("after %v: hold: %v\n%s", log, err, out.String())
+			m.e.set.AsBuilt = true
+			err := m.e.set.Restore(m.e.rel(prev), m.e.rel(id), false)
+			m.e.set.AsBuilt = false
+			if err != nil {
+				t.Fatalf("after %v: restore as built: %v\n%s", log, err, out.String())
 			}
 			m.cur = prev
 			m.activation = true
@@ -772,7 +783,7 @@ func dataRandom(t *testing.T, seed int64) {
 			}
 			accepted := rng.Intn(3) == 0
 			own := m.runs("database")
-			if e, ok := match(readList(m.e.rel(m.cur)), entry{Service: "database"}); !ok || e.Kind != KindData {
+			if !pulledData(m) {
 				own = "" // a built database: not checked (S56)
 			}
 			err := syncInto(t, other, m, accepted)
@@ -1406,13 +1417,15 @@ func TestDataRefusalLeavesOthersNames(t *testing.T) {
 	}
 }
 
-// A restart whose images could not be restored still holds the data
-// services on the newest image their data ran, never on what the
-// release's last activation held. The release's listing and bookmark
-// follow the hold: what it lists is what it runs, so a snapshot of it
-// (its listing copied, bookmarked as the snapshot's) holds the image its
-// data ran, and its removal frees that one, not the image it left.
-func TestHoldData(t *testing.T) {
+// A restart whose images could not be restored (its last try, as
+// built: an own image's bookmark gone, nothing built) still holds the
+// data services on the newest image their data ran, never on what the
+// release's last activation held, and fails on nothing. The release's
+// listing and bookmark follow the hold: what it lists is what it runs,
+// so a snapshot of it (its listing copied, bookmarked as the snapshot's)
+// holds the image its data ran, and its removal frees that one, not the
+// image it left.
+func TestRestoreAsBuiltHoldsData(t *testing.T) {
 	t.Parallel()
 	d := newFake()
 	var out bytes.Buffer
@@ -1420,9 +1433,23 @@ func TestHoldData(t *testing.T) {
 	d.publish("mariadb:11.8", "I1")
 	r1, _ := m.release(false, appSvc, db118)
 	d.publish("mariadb:11.8", "I2")
-	m.release(false, appSvc, db118)
-	if err := m.e.set.HoldData(m.base(), m.e.rel(r1)); err != nil {
-		t.Fatal(err)
+	r2, _ := m.release(false, appSvc, db118)
+	// r1's app is gone with its bookmark.
+	for _, b := range bookmarks(readList(m.e.rel(r1)), "app-prod", r1) {
+		if repoKey(b) == "app-prod-app" {
+			if err := d.Remove(b); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r2), false); !errors.Is(err, ErrGone) {
+		t.Fatalf("a restore with the app's bookmark gone: %v, want ErrGone", err)
+	}
+	m.e.set.AsBuilt = true
+	err := m.e.set.Restore(m.e.rel(r1), m.e.rel(r2), false)
+	m.e.set.AsBuilt = false
+	if err != nil {
+		t.Fatalf("as built: %v\n%s", err, out.String())
 	}
 	if got := holdsIn(m.e.rel(r1))["database"]; got != "mariadb@I2" {
 		t.Errorf("held on %q, want mariadb@I2", got)
@@ -1470,7 +1497,7 @@ func labeled(t *testing.T, name, ref, copy string) Service {
 
 // Bug: a sync takes over the parent's image and history for every pulled
 // service with any devopsy.data label (ParentData, SyncCheck and SyncDone
-// read only KindData), stream and none included, when only the data an
+// read only pulled data services), stream and none included, when only the data an
 // mnt copy writes is the parent's (S55: a stream service keeps its own
 // history). A child whose stream database runs a newer image than the
 // parent's under the same tag is held on the parent's older one after the
@@ -2383,7 +2410,7 @@ func TestResolvedAfterUnheldImportStartsOver(t *testing.T) {
 // header are whoever made them: an import or a restore holds the service
 // in its own repository only (ownHold), but the history it takes over
 // from the record decides what a later rollback or restart holds the
-// service on (Restore, HoldData: the history's last). A record whose
+// service on (Restore: the history's last). A record whose
 // image line names another repository (a restore checks none: no
 // ImportCheck), or whose history ends on one (an --import's check reads
 // the image line only), must not leave the data's newest image in that
@@ -2508,7 +2535,7 @@ func TestImportedListingNeverRunsAnotherRepositorysImage(t *testing.T) {
 	}
 	// The snapshot's listing, crafted: database on traefik's image, named
 	// as mariadb's; its record the same.
-	if err := writeList(snap, []entry{{Ref: "mariadb:11.8", ID: "IT", Service: "database", Kind: KindData, Digest: "mariadb@IT"}}); err != nil {
+	if err := writeList(snap, []entry{{Ref: "mariadb:11.8", ID: "IT", Service: "database", Kind: KindPulled, Digest: "mariadb@IT"}}); err != nil {
 		t.Fatal(err)
 	}
 	data := "image\tdatabase\tmariadb:11.8\tIT\tmariadb@IT\n"

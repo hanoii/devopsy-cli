@@ -986,7 +986,7 @@ func TestImportExportImages(t *testing.T) {
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
 	list := releaseFile(t, current, images.ListFile)
-	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:twelve=mariadb@sha256:twelve"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
@@ -1020,7 +1020,7 @@ func TestImportExportImages(t *testing.T) {
 	}
 
 	// Another series here: refused before anything stops.
-	write(t, list, "mariadb:12\tsha256:twelve\tapp\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+	write(t, list, "mariadb:12\tsha256:twelve\tapp\tpulled\tmariadb@sha256:twelve\t\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "prod's own\n", 0o644)
 	s.logs()
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
@@ -1051,7 +1051,7 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
 	list := releaseFile(t, current, images.ListFile)
-	write(t, list, "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, list, "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:old=mariadb@sha256:old", "FAKE_NAMES=mariadb:11.8=sha256:old"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
@@ -1060,7 +1060,7 @@ func TestImportExportImagesRecordsLeft(t *testing.T) {
 	}
 	// prod now runs another image under the same name, which the name
 	// still points to.
-	write(t, list, "mariadb:11.8\tsha256:old\tapp\tdata\tmariadb@sha256:old\t\n", 0o644)
+	write(t, list, "mariadb:11.8\tsha256:old\tapp\tpulled\tmariadb@sha256:old\t\n", 0o644)
 	_, errs, code = s.runIO(env, out, "@prod", "--import", "app", "--yes")
 	if code != 0 {
 		t.Fatalf("the import (%d):\n%s", code, errs)
@@ -1081,7 +1081,7 @@ func TestImportExportImagesImageLock(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "storage", "file.txt"), "from prod\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
@@ -1195,7 +1195,7 @@ func TestImportResolvedKeepsExportImage(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tapp\tpulled\tmariadb@sha256:own\t\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own sha256:app=mariadb@sha256:app", "FAKE_APP=mnt+own"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "app")
 	if code != 0 {
@@ -1242,7 +1242,7 @@ func TestImportRecreatesBeforeDependents(t *testing.T) {
 	s := newSyncSetup(t)
 	s.releaseProd(nil)
 	current := filepath.Join(s.root, "shop", "prod", "current")
-	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tdb\tdata\tmariadb@sha256:own\t\n", 0o644)
+	write(t, releaseFile(t, current, images.ListFile), "mariadb:11.8\tsha256:own\tdb\tpulled\tmariadb@sha256:own\t\n", 0o644)
 	write(t, filepath.Join(s.mnt("prod"), "db", "ibdata"), "rows\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:own=mariadb@sha256:own", "FAKE_DB=mnt", "FAKE_APP=mnt+import"}
 	out, errs, code := s.runIO(env, nil, "@prod", "--export", "db")

@@ -433,7 +433,7 @@ func TestSnapshotDestroy(t *testing.T) {
 	if id == "" {
 		t.Fatalf("no snapshot in %s", snaps)
 	}
-	write(t, filepath.Join(snaps, id, images.ListFile), "mariadb@sha256:snap\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+	write(t, filepath.Join(snaps, id, images.ListFile), "mariadb@sha256:snap\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\n", 0o644)
 	env := []string{"FAKE_IMAGES=sha256:snap=mariadb@sha256:snap", "FAKE_NAMES=mariadb@sha256:snap=sha256:snap", "FAKE_USERS=shop-other"}
 	out, code = s.run(env, "@prod", "--destroy", "--yes")
 	docker, _ := s.logs()
@@ -3221,7 +3221,7 @@ func TestSnapshotImportPullsOwnRepository(t *testing.T) {
 		data, _ := io.ReadAll(tr)
 		switch h.Name {
 		case m[1] + "/" + images.ListFile:
-			data = []byte("evil.example/x\tsha256:evilid\tdb\tdata\t" + digest + "\n")
+			data = []byte("evil.example/x\tsha256:evilid\tdb\tpulled\t" + digest + "\n")
 		case m[1] + "/" + remote.SnapshotData + "/images":
 			data = []byte("image\tdb\tevil.example/x@" + digest + "\tsha256:evilid\tevil.example/x@" + digest + "\n")
 		}
@@ -3303,13 +3303,13 @@ func TestRestoreRanKeepsHeldImage(t *testing.T) {
 		base := filepath.Join(s.root, "shop", "prod")
 		snap := filepath.Join(base, "snapshots", m[1])
 		// The snapshot: db ran mariadb:11.8 (sha256:snap) when it was taken.
-		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tdata\tmariadb@sha256:snap\t\n", 0o644)
+		write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\n", 0o644)
 		write(t, filepath.Join(snap, remote.SnapshotData, "images"), "image\tdb\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n", 0o600)
 		// Since: a release of mariadb:12 (sha256:twelve), accepted, ran on
 		// the data; its container, stopped by the restore, is still on it,
 		// as the fake's deploy starts nothing.
 		current := filepath.Join(base, "current")
-		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:12\tsha256:twelve\tdb\tdata\tmariadb@sha256:twelve\t\n", 0o644)
+		write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:12\tsha256:twelve\tdb\tpulled\tmariadb@sha256:twelve\t\n", 0o644)
 		history := filepath.Join(base, images.HistoryFile)
 		write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\n2\tdb\tforced\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\n", 0o644)
 		write(t, s.log+".containers.shop-prod", "db mariadb@sha256:twelve\n", 0o644)
@@ -3618,7 +3618,7 @@ func TestSettleStopsRecordsWhatRanOnTheData(t *testing.T) {
 			// service in its listing; the history's last is y@sha256:old.
 			write(t, filepath.Join(rel, "devopsy-compose.yaml"),
 				"services:\n  \"db\":\n    image: \"y@sha256:new\"\n    labels:\n      \"devopsy.digest\": \"y@sha256:new\"\n", 0o644)
-			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tdata\ty@sha256:new\n", 0o644)
+			write(t, filepath.Join(rel, "devopsy-images"), "y:11\tsha256:new\tdb\tpulled\ty@sha256:new\n", 0o644)
 			write(t, filepath.Join(base, ".devopsy-data-images"), "1793000000\tdb\tran\ty:11\tsha256:old\ty@sha256:old\n", 0o644)
 			write(t, s.log+".containers.shop-prod", c.container, 0o644)
 			if c.record != "" {

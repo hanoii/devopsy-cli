@@ -55,7 +55,7 @@ var namedFeatures = []struct {
 	// '--images' line, found by its '--name': it passes --address too,
 	// which an older devopsy refuses as usage, removals included, after
 	// taking the locks).
-	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|hold|data|sync-check|sync-done)\b|'--images' '--name'`)},
+	{DataImagesFeature, regexp.MustCompile(`\bimg (names|record|restore|ran|data|sync-check|sync-done)\b|'--images' '--name'`)},
 	// The server's own images settings: each release's mode from its
 	// record (images.ModeOf), the image lock and the project's record
 	// from the release root, found by the server's devopsy itself
