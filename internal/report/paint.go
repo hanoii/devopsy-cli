@@ -22,16 +22,16 @@ const (
 )
 
 var (
-	composeDone  = regexp.MustCompile(`^ (Container|Network|Image|Volume) .* (Started|Healthy|Created|Running|Built|Recreated|Unpaused|Resumed)\s*$`)
-	composeStep  = regexp.MustCompile(`^ (Container|Network|Image|Volume) .* (Creating|Starting|Stopping|Stopped|Paused|Pausing|Removing|Removed|Waiting|Building|Recreate|Recreating|Exited|Killing|Killed)\s*$`)
-	foreignError = regexp.MustCompile(`(?i)(^|\s)(error|ERROR|fatal|panic):?\s`)
+	composeDone = regexp.MustCompile(`^ (Container|Network|Image|Volume) .* (Started|Healthy|Created|Running|Built|Recreated|Unpaused|Resumed)\s*$`)
+	composeStep = regexp.MustCompile(`^ (Container|Network|Image|Volume) .* (Creating|Starting|Stopping|Stopped|Paused|Pausing|Removing|Removed|Waiting|Building|Recreate|Recreating|Exited|Killing|Killed)\s*$`)
 )
 
 // Paint colors one line for a terminal, by what it starts with, never by
 // its words: devopsy's error red, warning yellow, info cyan, debug and
 // trace dim, a Bar dim with its text plain and a command bold; Compose's
-// progress green when done and dim on the way; another tool's error red.
-// A line that carries colors already, and anything else, stays as it is.
+// progress green when done and dim on the way (a resource line and its
+// state). Another tool's lines, an error among them, and anything else
+// stay as they are, as does a line that carries colors already.
 func Paint(line string) string {
 	if line == "" || strings.Contains(line, "\x1b[") {
 		return line
@@ -56,8 +56,6 @@ func Paint(line string) string {
 		return green + line + reset
 	case composeStep.MatchString(line):
 		return dim + line + reset
-	case foreignError.MatchString(line):
-		return red + line + reset
 	}
 	return line
 }

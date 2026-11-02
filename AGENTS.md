@@ -261,8 +261,8 @@ the rule, why, and where it lives.
   what scripts capture. Colors go by what a line starts with, never its
   words (`report.Paint`): devopsy's errors red, warnings yellow, info
   cyan, debug, trace and the `| ` bar dim, a `$ ` command bold;
-  Compose's done steps green, steps on the way dim, another tool's
-  errors red. A session's lines are colored locally as they arrive
+  Compose's done steps green, steps on the way dim; another tool's
+  lines as they are. A session's lines are colored locally as they arrive
   (`report.Colorize`, line-buffered, terminal writers only), lines
   colored already left as they are; `remote.Color` exports
   `DEVOPSY_INTERNAL_COLOR`, so devopsy on the server colors its own the

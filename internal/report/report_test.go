@@ -132,7 +132,7 @@ func TestPaint(t *testing.T) {
 		"devopsy: |    $ devopsy @x":     dim + "devopsy: | " + reset + "   " + bold + "$ devopsy @x" + reset,
 		"deploy: https://x":              "deploy: https://x",
 		"\x1b[32mkept\x1b[0m":            "\x1b[32mkept\x1b[0m",
-		"ERROR: boom":                    red + "ERROR: boom" + reset,
+		"ERROR: boom":                    "ERROR: boom",
 		" Container x Started ":          green + " Container x Started " + reset,
 		" Container x Stopping ":         dim + " Container x Stopping " + reset,
 		"devopsy-internal-switch 1":      "devopsy-internal-switch 1",
@@ -159,7 +159,7 @@ func TestColorize(t *testing.T) {
 		"\x1b[0;32m Container x Started \x1b[0m\n" +
 		"\x1b[0;31mdevopsy: error: the copy failed (1)\x1b[0m\n" +
 		"plain line\n#12 CACHED\n\x1b[32mkept\x1b[0m\ndeploy: https://x\n" +
-		"\x1b[0;31mERROR: boom\x1b[0m\n" +
+		"ERROR: boom\n" +
 		"progress 10%\rprogress 100%\ntail"
 	if got := buf.String(); got != want {
 		t.Errorf("got\n%q\nwant\n%q", got, want)
