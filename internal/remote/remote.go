@@ -425,9 +425,17 @@ func quoteAll(args []string) string {
 var Verbose bool
 
 // Color says the operator's terminal takes colors: sessions' lines are
-// colored locally as they arrive (report.Colorize), and ColorEnv is exported into
-// every session for what the server can color itself.
+// colored locally as they arrive (report.Colorize), and ColorEnv is
+// exported into every session for what the server can color itself.
 var Color bool
+
+// ColorEnv set means the output ends on a terminal that takes colors,
+// even through a pipe: devopsy on a server, whose session has none, so
+// its messages and Compose's output (--ansi always) come colored to the
+// operator (a sync's push gets it too). Internal: devopsy exports it into
+// every session when it colors locally; what a person sets is
+// FORCE_COLOR (cli.ColorForced).
+const ColorEnv = "DEVOPSY_INTERNAL_COLOR"
 
 // TTY is the operator's terminal size, "<cols> <rows>", when stderr is one
 // (whatever the colors), exported into every session as TTYEnv: a session

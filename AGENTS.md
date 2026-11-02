@@ -258,7 +258,7 @@ the rule, why, and where it lives.
 - **Few dependencies, standard library first. Linux and macOS only.**
 - **Color only on a terminal** without `NO_COLOR` (`styleFor`), or
   forced (`cli.ColorForced`: `FORCE_COLOR` not `0` or `false`, or the
-  internal `cli.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
+  internal `remote.ColorEnv`). devopsy never exports `FORCE_COLOR`. Why:
   in a session it would reach every tool there, which would then color
   what scripts capture. Colors go by what a line starts with, never its
   words (`report.Paint`): devopsy's errors red, warnings yellow, info
