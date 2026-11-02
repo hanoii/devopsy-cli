@@ -16,8 +16,8 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 
 ## Writing one
 
-- A scenario a review finds goes here only when no unit test can cover it (the root's Checks).
-- Use only the globals (`op`, `srv`, `srv2`, `server`, `operator`, set per process by `lane.use`), `secondServer(t)` for a test across servers, and `@server:` and `server2` as addresses, never a container or network name: they end with the lane's id.
+- A scenario a review finds goes here only when no unit test can cover it (Workflow's Tests and checks).
+- Use only the globals (`run`, `network`, `server` and `operator`, set per process by `lane.use`, and `server2`, set by `secondServer(t)` for a test across servers), the helpers on them (`op`, `srv`, `srv2`) and `@server:` and `server2` as addresses, never a container or network name: they end with the lane's id.
 - Every `project(t, name, ...)` name is unique in the suite, named after the test: a lane's tests share its server.
 - What a test changes outside its project (iptables, `tc`, the login shell, a process on the operator, a file in the deploy user's home) is undone in `t.Cleanup`, and a new kind of leftover goes into `resetLane` too: a cleanup never runs when a test's process dies on its timeout, and the next test on the lane must not see it.
 - No test depends on another's state or on the order.
@@ -25,4 +25,5 @@ Code: `e2e/` (`main_test.go` holds the lanes, the containers and the helpers; `D
 
 ## By hand
 
-- What only a real setup shows (Traefik, certificates, the templates) is checked by hand on a throwaway Linux machine set up with devopsy-server and a build of the checkout installed in it, deleted afterwards: release the Traefik template, then a template importing from it, and check `devopsy-target.env`, `--debug imports`, the Traefik `domains` command, an instance, a pattern environment, `--destroy`, a rollback and a release with Traefik stopped.
+- What only a real setup shows (Traefik, certificates, the templates) is checked by hand on a throwaway Linux machine set up with devopsy-server and a build of the checkout installed in it (for example an OrbStack Debian 13 machine, `orb create debian:trixie devopsy-test`, a linux/arm64 build, and targets like `@devopsy@devopsy-test@orb:prod`, since OrbStack's SSH needs no keys), deleted afterwards.
+- The hand test releases the Traefik template, then a template importing from it, and checks `devopsy-target.env`, `--debug imports`, the Traefik `domains` command, an instance, a pattern environment, `--destroy`, a rollback and a release with Traefik stopped.

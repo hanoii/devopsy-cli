@@ -17,7 +17,7 @@ History, not rules: `internals/sessions.md` wins where they differ.
 
 - Measured: a laptop asleep or a network gone is seen by the server only when TCP gives up, 16 minutes with writes pending and hours for a quiet holder. devopsy-server never sets sshd's `ClientAliveInterval`, and the client's `ServerAlive*` only help the client, hence the zero byte every 5 seconds on every pipe devopsy keeps open.
 - A busy operator (a laptop asleep, Ctrl-Z) is taken for gone and cancels, cleanly; accepted.
-- The quiet times are ordered because one timeout for both let a holder restore while the push still wrote into it.
+- The quiet times were ordered when one timeout for both let a holder restore while the push still wrote into it; since the record the holder takes and `endWriters` settle a late write whatever the timing, the order only shapes the messages.
 - `DataQuietBeats` is 2 minutes with or without a heartbeat because an export piped into an import may stop services first and write nothing meanwhile.
 
 ## Ctrl-C and signals

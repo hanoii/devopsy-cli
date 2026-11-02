@@ -11,9 +11,12 @@ A release uploads the project as a new directory, then one activation session sw
 - A new named feature is one entry in `namedFeatures` with the words that find it, and its area's rule says what finds it and what an older server would do without it: `data-copy` (internals/data-labels.md), `mnt-owner` (internals/data.md), `data-images` (internals/images.md), `release-snapshots` (internals/snapshots.md), `export-images` (internals/export-import.md) and `reset` (internals/syncs.md).
 - Across servers the parent's devopsy checks the child's the same way (`serverCheck`, `ChildCheck`, `childSSHArgs`), and the first session there carries the needs of all of them (`childNeeds`, `SyncNeedsEnv`), `data-copy`, `mnt-owner` and the util image's tag but never `data-images`, which the child's holder needs itself: a refusal in a later session comes after the parent's services stopped.
 - The parent's `CurrentExistsScript` carries the push's needs (`extra`), and the child's prints whether its server has `data-copy`, so the operator refuses a release that will sync before its upload and lets one that does not go on.
-- An activation's needs are checked in the first session to the server too (`remote.WithAlsoNeeds` on the role check, a new instance's, a child's current and the upload), only the plain activation's, since a sync's are checked where it is decided and a release that does not sync runs on a server lacking them: refused at the activation alone, a pending release and an instance's directory are left behind.
+- An activation's needs are checked in the first session to the server too (`remote.WithAlsoNeeds` on the role check, a new instance's, a child's current and the upload): refused at the activation alone, a pending release and an instance's directory are left behind.
+- Only the plain activation's needs are checked so: a sync's are checked where it is decided, and a release that does not sync runs on a server lacking them.
+- A release that opens no session before its upload runs its local before steps first; accepted.
 - `DEVOPSY_PROTOCOL_CHECK=warn` (`ProtocolCheckEnv`, exported into every session so a push passes it on) turns either refusal into a warning, for a local build ahead of the servers.
-- A server needs `devopsy`, `tar`, `flock`, `setsid`, `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`. Without `script` there is no live build progress, without `setsid` the run step runs plainly, and without GNU `tail` only the traps protect a release after its switch (internals/sessions.md).
+- A server needs `devopsy`, `tar`, `flock`, `setsid`, `script` (util-linux), GNU `tail` and `mkfifo`; locally only `ssh`.
+- Without `script` there is no live build progress, without `setsid` the run step runs plainly, and without GNU `tail` only the traps protect a release after its switch (internals/sessions.md).
 
 ## Steps
 
@@ -25,16 +28,19 @@ A release uploads the project as a new directory, then one activation session sw
 - A rollback's steps (`--release-steps rollback <phase> [<release>]`, `runReleaseSteps`), the restart after a failed run, the run step a `--sync` reruns (`--release-steps release run`), a reload's (`--release-steps reload run`), a parent's `inherit:` keys (`--release-inherit`) and `--destroy`'s step (`destroyStep`) come from the release's own `config.yaml` on the server, its environment from `devopsy-target.env` (`ReleaseEnvironment`); a release's steps come from the checkout, and a rollback's local before and after steps stay the checkout's.
 - `mode:` defaults to `build`: it works for every project, where a wrong `image` fails the release.
 - devopsy fetches the images itself before the switch (internals/images.md), so the run step only starts them: a build or pull in the run step runs after the switch, and in a sync after the copy.
-- `--release` without a target is a release in place (`runLocalRelease`), with `defaults:`' release steps, prepare, `--missing-vars`, the images as build mode and run, no before or after steps and no switch; `--destroy` likewise (`runLocalDestroy`) asks the project's name and runs `runDestroyData` in place and `defaults:`' destroy step, never the checkout; the other release flags are target only.
+- `--release` without a target is a release in place (`runLocalRelease`): `defaults:`' release steps, prepare, `--missing-vars`, the images as build mode and run, with no before or after steps and no switch.
+- `--destroy` without a target (`runLocalDestroy`) asks for the project's name (`--yes` skips it), then runs `defaults:`' destroy step if any and `runDestroyData` in place, and never removes the checkout.
+- The other release flags are target only.
 
 ## Upload
 
 - Everything that can be checked locally or in a short session is checked before uploading: the files (`remote.Files`, build mode's list being `git ls-files`, so outside a repository it fails before any session), secret-like names (`confirmUnnamedSecrets`, internals/config.md), a role another compose project holds (`RoleHoldersScript`), a new instance, which asks (`InstanceExistsScript`, `--yes`), and a child's sync (internals/syncs.md).
 - A release is a new directory, never a changed one: `UploadScript` takes the release lock, prints `LockedMarker`, extracts into `releases/<id>.tmp` through `--stdin-guard`, writes `PendingFile` and renames it into place; an existing id is refused, since `mv` would put the new tree inside the old release.
-- The server names a release (the hidden `--release-id`, under the lock, printed on stdout by the upload): a UTC second, or a second past the newest release when that is not earlier (`remote.NextReleaseID`); the record (`RecordFile`) keeps the operator's time for display only. Ids order releases, and an operator's clock can order an older release after a newer one across laptops and CI, or give two releases one id.
+- The server names a release (the hidden `--release-id`, under the lock, printed on stdout by the upload), a UTC second, or a second past the newest release when that is not earlier (`remote.NextReleaseID`): ids order releases, and an operator's clock can order an older release after a newer one across laptops and CI, or give two releases one id.
+- The record (`RecordFile`) keeps the operator's time, for display only.
 - Files go with git's modes (`Pack`, 0755 with any executable bit, else 0644), never the checkout's, and directories get the server's umask from `tar`: a checkout's modes are whatever wrote it, and a 0600 file bind-mounted into a container running as another user fails it.
 - A release is a full tar stream, never rsync: macOS ships openrsync.
-- The progress line (`uploadProgress`, at a terminal only, never logged) counts the project's bytes as `Pack` reads them out of `remote.Size`.
+- The progress line (`uploadProgress`, at a terminal only, never logged) counts the project's bytes as `Pack` reads them, against the total `remote.Size` gives: the gzip's size is unknown until the end.
 
 ## Activation
 
@@ -55,7 +61,7 @@ A release uploads the project as a new directory, then one activation session sw
 - `--check-names` and `--check-mounts` read compose's configuration, which fails while a required variable is unset, so they run after the prepare steps and `--missing-vars`.
 - `--check-names` refuses containers of the same compose project from another directory (`cli.ProjectConflict`, the `-`-joined names coinciding, `a-b`/`c` and `a`/`b-c`) and a network the project names as its own that another compose project owns (`cli.NetworkConflicts`), external networks being how a project joins another's: Compose would silently share it.
 - `--check-mounts` (internals/data.md) readies `UtilImage` when an entry is owned, so a registry down refuses the release rather than failing it after its switch.
-- A rollback runs `--check-mounts restored` in the release it restores instead, where no label refuses and unreadable ones warn, checking only what its `--mnt-owners restored` needs, the util image and no owned entry a link.
+- A rollback runs `--check-mounts restored` in the release it restores instead (internals/data.md): only what its `--mnt-owners restored` needs.
 - `failureReport` writes each container's state and health, then the health checks and last logs of those neither running and healthy nor exited 0, before the restart recreates them.
 - The restart restores the previous release's images as a rollback's are (`get_images`; when that fails `img hold` still holds its data services on their data's newest image), gives its owners (`--mnt-owners restored`, a failure only said) and runs its run step (`--release-steps restart run`, its `rollback:`, else `release:`); a rollback whose run step fails marks the release it restored failed.
 - `firstDown` is `down --remove-orphans` with volumes and `mnt` kept, never a stop: `restart: always` would bring a container back with its bind mounts through the gone `current` made again as root's.
@@ -67,7 +73,8 @@ A release uploads the project as a new directory, then one activation session sw
 
 - `releases/<id>/code/` (`remote.CodeDir`) is the project as uploaded, `current` points there, and the release's own files (`RecordFile`, `TargetEnvFile`, `LogFile`, `PendingFile`, `FailedFile`) sit beside it, never in it: inside the tree they are in every build context, and `COPY . .` misses the cache every release.
 - Scripts keep `$rel` the release's directory and `$code` its tree; Go finds them with `remote.ReleaseFile` (symlinks resolved).
-- Live means none of pending (upload to switch), fetching, failed or rolled back: what `keep` counts and what a rollback goes to. Failed and rolled-back releases go once older than the oldest kept; one that fails before going live stays, a first one included, until `--destroy` or `--releases remove failed`.
+- Live means none of pending (upload to switch), fetching, failed or rolled back: what `keep` counts and what a rollback goes to.
+- Failed and rolled-back releases go once older than the oldest kept; one that fails before going live stays, a first one included, until `--destroy` or `--releases remove failed`.
 - A pending release shows IN PROGRESS only while its activation holds fd 7 on `PendingFile` (`--releases` checks with `flock -n -s`, never waiting), else INCOMPLETE, which `remove failed` takes only when older than current: a newer one may be between its upload and its activation.
 - `devopsy-target.env` is written into each release (the environment's `env`, `COMPOSE_PROJECT_NAME` overriding compose's `name:`, `DEVOPSY_PROJECT`, `DEVOPSY_INSTANCE`, `DEVOPSY_ENVIRONMENT`, `DEVOPSY_TARGET`, `DEVOPSY_RELEASE_COMMIT`, a child's `DEVOPSY_PARENT` and `DEVOPSY_PARENT_TARGET`): it applies however devopsy runs on the server, and a rollback restores it.
 - Precedence on the server: the caller, `shared/.env`, `inherit.env`, `instance.env`, `project.env`, `parent.env`, `devopsy-target.env`.
@@ -77,10 +84,13 @@ A release uploads the project as a new directory, then one activation session sw
 
 - Values reach the server's files over SSH's stdin, never as arguments: `--vars`, `--vars-instance` and `--vars-project` edit one file each, in place under the release lock, since a deploy's steps write secrets into them too.
 - A key's lines are all of its value, quoted over several lines, and `KEY: value`, which compose's parser reads as `KEY=value`.
-- The edited file goes into place in one rename beside what a link points to, keeping the file's mode (a file of another user's is written over in place), and inherited values are written under `umask 077`: a command reading a file while it is written gets it empty or cut.
+- The edited file goes into place in one rename beside what a link points to, keeping the file's mode, and a file of another user's is written over in place: a command reading a file while it is written gets it empty or cut.
+- Inherited values are written under `umask 077`.
 - `--vars get` gives what the environment's commands get, whatever defines it, and says where from; `--vars-instance get` and `--vars-project get` give their file's value; the list stays the file `set` and `unset` edit, counting what reaches the environment from elsewhere.
 - No flag edits `inherit.env`, the parent's, replaced whole on every sync and `--inherit`; the child's `shared/.env` is where an override goes.
-- A `set` warns, never prompts or refuses, since overriding is what levels are for and CI sets without a terminal: over a value it overrides now, naming it with the `unset` that brings it back, and, for each environment its file reaches, against every nearer file that hides it, with `--vars set` there when an inherited value hides it (unless the environment's own file sets it already) and how the inherited value goes (the parent's `inherit:`, its release, then `--inherit`), never a list of unsets.
+- A `set` warns, never prompts or refuses: overriding is what levels are for, and CI sets without a terminal.
+- Over a value it overrides now, the warning names it, with the `unset` that brings it back.
+- For each environment its file reaches, the warning names every nearer file that hides it, with no list of unsets, and, when an inherited value hides it, the `--vars set` there (unless the environment's own file sets it already) and how the inherited value goes (the parent's `inherit:`, its release, then `--inherit`).
 - The trace behind `get` and the warnings is the hidden `--env-trace` (`cli.EnvTrace`, a feature; `cli.TraceEnv` as JSON, what `--debug env` prints), never a second reading of the files, except before a first release, when `get` reads them nearest first; it runs in the release's `current` (a plain directory's `$base`) in the read's session, and after an edit in the edit's (`VarsTrace` lines, every `current` under a level's directory).
 - `--debug env` is for internals, never a hint for an everyday question.
 
@@ -90,7 +100,7 @@ A release uploads the project as a new directory, then one activation session sw
 - What a session sends goes once its script holds the lock (`remote.WithGate`, `lockedGate`): the upload, `--import`, `--destroy` and `--releases remove` print `LockedMarker` on stderr once they hold it (the removals once they hold the image lock too), and devopsy sends stdin only then (the tar, an import's data, the `go` a removal reads through `--stdin-guard` before it starts); a session cut while its script waits leaves an empty or silent stdin, which stops the script, never data in the server's pipe that it acts on once the lock comes.
 - Activations need no gate, since their watcher, started past the lock, reads a closed stdin at once; a sync's holder arms its watcher before the lock, disarms it once held and waits for the session's next byte (`waitBeat`, internals/sessions.md), so a session gone during the wait ends it before anything stops.
 - `--vars` edits and the inherit write are gated too and end their data with `InputEnd` (`GatedInput`), which `gated_read` requires and takes off: the data may be empty.
-- Only the upload creates `$base` among the release scripts (`--vars` edits and the inherit write do too): an activation whose release went while it waited fails instead of making it again.
+- Only the upload creates `$base` among the release scripts (outside them, `--vars` edits and the inherit write do too): an activation whose release went while it waited fails instead of making it again.
 - A lock file removed while awaited is opened again (`[ /dev/fd/9 -ef "$base/.lock" ]`, Linux only), and `removeBase` moves `$base` aside before `rm -rf`, so a session arriving meanwhile makes a new one: otherwise two releases hold locks on different files.
 - The image lock (`ImagesLock` in the release root, fd 8, always taken after fd 9) is the whole server's: shared for fetches, exclusive for removals, which also need Docker to answer, else they count as busy (`il_busy` says which); holders write `ImagesHolders/<pid>`, for messages only; Linux's `flock` lets new shared holders past a queued exclusive one.
 - Pruning skips when the image lock is busy, directories included, and the next release prunes; `--destroy` and `--releases remove` wait 10 minutes, then fail with 75; the restart after a failed run waits too, since on the new release's images it would run them under old code.
