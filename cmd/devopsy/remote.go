@@ -1115,14 +1115,14 @@ func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.
 	}
 	done := make(chan result, 1)
 	defer heartbeat(w)()
-	// Past the point of no return: the disarm's byte answered (beaten),
-	// or the switch's marker seen; between the two the script goes on on
-	// its own, its switch under way (review round 9: a session lost
-	// there said nothing went live).
-	var switched, beaten atomic.Bool
-	live := func() bool { return switched.Load() || beaten.Load() }
+	// Past the point of no return: the disarm's byte answered, or the
+	// switch's marker seen; between the two the script goes on on its
+	// own, its switch under way (review round 9: a session lost there
+	// said nothing went live).
+	var past atomic.Bool
+	live := past.Load
 	go func() {
-		code, err := remote.SSHContext(remote.WithBeat(remote.WithBeaten(remote.WithSwitched(remote.WithoutInterrupt(ctx), &switched), &beaten), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+		code, err := remote.SSHContext(remote.WithBeat(remote.WithLive(remote.WithoutInterrupt(ctx), &past), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 		done <- result{code, err}
 	}()
 	var res result

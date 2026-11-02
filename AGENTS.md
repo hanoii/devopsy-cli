@@ -1040,9 +1040,9 @@ interrupts" and "The server never waits on the operator for long".
   the release and devopsy waits (saying so after 5 seconds: the server
   takes the cancel once it holds the release lock); after it, devopsy
   says the release goes on, and a second ends the session; the log is
-  saved either way. "After the switch" is `SSHStreams`' flag on
-  `SwitchMarker` (`WithSwitched`), never the release log, which stops
-  at its cap, or the disarm's byte answered (`WithBeaten`): from it the
+  saved either way. "After the switch" is `SSHStreams`' one flag
+  (`WithLive`), set on `SwitchMarker`, never the release log, which stops
+  at its cap, or on the disarm's byte answered: from it the
   script goes on to its switch on its own, so a Ctrl-C or a session
   lost between the two says the release goes on, at or past its switch,
   never that nothing went live (review round 9); a switch already under

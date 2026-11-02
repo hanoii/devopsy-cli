@@ -2340,7 +2340,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 		shown := &LineMarker{Prefix: SwitchMarker}
 		logged := &LineMarker{Prefix: SwitchMarker, Cut: true, Found: func(tag string) {
 			_, _ = log.Write([]byte(LogAnchor + tag + "\n"))
-			if f, ok := ctx.Value(switchedKey{}).(*atomic.Bool); ok {
+			if f, ok := ctx.Value(liveKey{}).(*atomic.Bool); ok {
 				f.Store(true)
 			}
 		}}
@@ -2355,7 +2355,7 @@ func SSHStreams(ctx context.Context, t *Target, extra []string, script string, s
 	if w, ok := ctx.Value(beatKey{}).(io.Writer); ok {
 		lm := &LineMarker{Prefix: BeatMarker, Found: func(string) {
 			_, _ = w.Write([]byte{0})
-			if f, ok := ctx.Value(beatenKey{}).(*atomic.Bool); ok {
+			if f, ok := ctx.Value(liveKey{}).(*atomic.Bool); ok {
 				f.Store(true)
 			}
 		}}
@@ -2482,18 +2482,17 @@ const gatedRead = `gated_read() {
 }
 `
 
-type switchedKey struct{}
+type liveKey struct{}
 
 type beatKey struct{}
 
-type beatenKey struct{}
-
-// WithBeaten is ctx for a session that sets beaten once devopsy answered
-// its BeatMarker: an activation's or a --no-code restore's disarm, past
-// which the script goes on on its own (its point of no return), before
-// it prints SwitchMarker.
-func WithBeaten(ctx context.Context, beaten *atomic.Bool) context.Context {
-	return context.WithValue(ctx, beatenKey{}, beaten)
+// WithLive is ctx for a session that sets live once it is past its point
+// of no return: devopsy answered its BeatMarker (an activation's or a
+// --no-code restore's disarm, past which the script goes on on its own,
+// before its switch), or, logged, it printed SwitchMarker (its release
+// went live, whatever the release log's cap kept).
+func WithLive(ctx context.Context, live *atomic.Bool) context.Context {
+	return context.WithValue(ctx, liveKey{}, live)
 }
 
 // WithBeat is ctx for a session whose stdin devopsy writes through w, the
@@ -2535,13 +2534,6 @@ elif ! mv "$ws_armed" "$ws_armed.off" 2>/dev/null; then
   ` + gone + `
 fi
 `
-}
-
-// WithSwitched is ctx for a logged session that sets switched once the
-// script printed SwitchMarker: its release went live, whatever the
-// release log's cap kept.
-func WithSwitched(ctx context.Context, switched *atomic.Bool) context.Context {
-	return context.WithValue(ctx, switchedKey{}, switched)
 }
 
 // WithoutInterrupt is ctx for a session devopsy ends itself on Ctrl-C (a
