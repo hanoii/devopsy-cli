@@ -7,3 +7,4 @@ History, not rules: `internals/config.md` wins where they differ.
 - A parent's server is never guessed from the child's: a guess would copy the wrong data.
 - An unresolvable parent is recorded (`ParentErr`) rather than failing the load, so that every command but a sync works on a child whose parent's server is unknown locally.
 - `confirmUnnamedSecrets` runs locally and without a session, by design: a secret-like name only in the server's files is left to `--vars set`, which asks the same question.
+- `parent:` left `defaults:` on 2026-11-01: `defaults: {parent: prod}` made every environment but prod a child, a new or misspelled one included, copying prod's data with nothing in its own definition saying so.

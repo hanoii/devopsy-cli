@@ -6,7 +6,8 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 
 - A project's config is `.devopsy/config.yaml` (`project:`, `instances:`, `secrets:`, `public:`, `releases: {keep}`, `defaults:`, `environments:`), with `config.local.yaml` over it, and the user's is `~/.config/devopsy/config.yaml` (`aliases:`; on a server `releases:` and `snapshots: {root, max_keep, mirror}`); an unknown key is an error.
 - Never `~/.devopsy`: project discovery would take the home directory for a project.
-- `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `parent`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `parent: ~`, `inherit: ~`), and `""` stays empty.
+- `defaults:` gives environments `mode`, steps, `releases`, `snapshots`, `inherit` and `env`, merged: `env` key by key, `snapshots` by kind and key (`mergeSnapshots`); a `~` value removes the key (`KEY: ~`, `snapshots.manual.keep: ~`, `inherit: ~`), and `""` stays empty.
+- `config.local.yaml`'s `defaults:` merge over the project's, while an environment it defines replaces the project's whole.
 - The config is parsed as YAML nodes (`nullKeys`): a plain decode cannot tell `~` from absent.
 - `.env` is read with compose's parser (`LoadDotenv`), and the caller's environment wins over it.
 - A project command in `.devopsy/commands/` gets `DEVOPSY_PROJECT_DIR` and `DEVOPSY_COMMAND_NAME`, and `devopsy <its own name>` inside it reaches the compose command it wraps, never itself.
@@ -23,7 +24,8 @@ Code: `internal/remote/config.go` (the files, targets, aliases, patterns), `inte
 - An alias (`{to, source}` or `{to, project}`) matches only a bare `@name`, and a project's exact environment wins over it.
 - An alias with `source:` takes its project, environments and steps from that checkout, and releases run only from there (`ReleasesHere`, symlinks resolved): anywhere else a release would upload whatever project devopsy runs in.
 - `remote.ServerTarget` takes `@<server>:` alone, a bare name that is no environment or alias, or any target leniently, and a server named alone has no `Name`; a flag that needs an environment, given `@<server>:`, says so.
-- `parent:` names a concrete environment, never a pattern; one naming itself has none, so `defaults: {parent: prod}` works; a cycle is an error, since neither could be released first.
+- `parent:` is set per environment (a pattern environment's included), never under `defaults:`, where it is an unknown key: a child gets its parent's data, secrets and personal data included, so it is named where the child is defined.
+- `parent:` names a concrete environment, never a pattern; a cycle, one naming itself included, is an error, since neither could be released first; `parent: ~` is no parent, as any key's null.
 - A parent resolves one level only, at the child's instance, its server from the usual variables, never from the child's (`ParentTarget`): a guessed server would copy the wrong data.
 - A parent that cannot be resolved goes into `ParentErr` instead of failing the load, so every other command works on the child; `DescribeTarget` resolves it leniently (internals/syncs.md for what fails with it).
 - A target's `From` holds each value's origin, and `Env` every definition of a variable as it loads (`EnvDef`, `TraceEnv`), what `--debug env` prints.
