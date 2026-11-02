@@ -29,7 +29,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 - One test per behavior: extend the test that covers it before adding another, and never test one thing at both levels.
 - The suites stay fast, locally and in CI, since every change waits on them: a new test runs in parallel with the others where it can, polls rather than sleeps, and reuses the setups that exist.
 - A test made faster checks the same things, never fewer: a speed-up that drops a case or an assertion is a regression.
-- A check or a refusal is only for a setting a tool would otherwise take without a word, on every release; nothing for one upgrade only (for example a refusal of an old name after a rename): an upgrade's own steps cover those, and old names left over are ignored.
+- A check or a refusal is only for a mistake any release can make, a setting a tool would otherwise take without a word; none is added for one upgrade only (for example a refusal of an old name after a rename): an upgrade's own steps cover those, and old names left over are ignored.
 - Until 1.0.0, no tests of specific older versions and no handling of mixed versions (for example an operator and a server on different devopsy): a new behavior an older server lacks refuses before anything changes, and that is all.
 
 ### Refactors
