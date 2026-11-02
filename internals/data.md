@@ -1,6 +1,6 @@
 # Data, destroying and removing
 
-Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.CheckMounts` in `internal/cli/sync.go`, `runDestroyData` in `cmd/devopsy/release_local.go`, `cmd/devopsy/releases.go`, and `DestroyScript`, `LeftoverScript` and `ReleasesRemoveScript` in `internal/remote/remote.go`.
+Code: `cmd/devopsy/mnt.go` (owners, the start gate), `cli.MntOwners` and `cli.CheckMounts` in `internal/cli/sync.go`, `ensureUtilImage` in `cmd/devopsy/sync.go` and `UtilDockerfile` in `internal/remote/sync.go`, `runDestroyData` in `cmd/devopsy/release_local.go`, `cmd/devopsy/releases.go`, and `DestroyScript`, `LeftoverScript` and `ReleasesRemoveScript` in `internal/remote/remote.go`.
 
 ## mnt and owners
 
