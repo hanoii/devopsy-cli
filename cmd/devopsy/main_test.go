@@ -326,6 +326,9 @@ func TestUserTargets(t *testing.T) {
 }
 
 // A target's host can come from the project's .env, read before connecting.
+// Every session, a compose command's too, bounds its connection (a
+// connect timeout, keepalives counted in beats), after
+// DEVOPSY_SSH_COMMAND's own options, which win: ssh keeps the first value.
 func TestTargetHostFromDotenv(t *testing.T) {
 	t.Parallel()
 	tmp, err := filepath.EvalSymlinks(t.TempDir())
@@ -337,8 +340,8 @@ func TestTargetHostFromDotenv(t *testing.T) {
 	write(t, filepath.Join(project, ".devopsy", "config.yaml"), "project: app\nenvironments:\n  prod: {}\n", 0o644)
 	write(t, filepath.Join(project, ".devopsy", ".env"), "DEVOPSY_SERVER=devopsy@from-dotenv\n", 0o644)
 	// echo stands in for ssh: it prints the destination.
-	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo"}, "@prod", "ps")
-	if code != 0 || !strings.Contains(out, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -T devopsy@from-dotenv sh -c") {
+	out, code := runDevopsy(t, project, []string{"DEVOPSY_SSH_COMMAND=echo -o ConnectTimeout=5"}, "@prod", "ps")
+	if code != 0 || !strings.Contains(out, "-o ConnectTimeout=5 -o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@from-dotenv sh -c") {
 		t.Errorf("(%d):\n%s", code, out)
 	}
 }

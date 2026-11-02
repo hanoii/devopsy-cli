@@ -2239,12 +2239,13 @@ func SSH(t *Target, script string, stdin io.Reader, stdout io.Writer, tty bool) 
 // for a password: SSHOptions refuse one otherwise.
 const SSHAllowPasswordEnv = "DEVOPSY_SSH_ALLOW_PASSWORD"
 
-// SSHOptions go before every session's own arguments, also after
-// DEVOPSY_SSH_COMMAND, whose options win: ssh keeps the first value of each.
+// SSHOptions go before every session's own arguments, after
+// DEVOPSY_SSH_COMMAND, whose own options come first on the command line
+// (SSHCommand) and so win: ssh keeps the first value of each.
 // No password unless SSHAllowPasswordEnv: a devopsy server takes keys only,
 // so a prompt means a missing key, and it would come in the middle of a
 // release's sessions, or with a child's services stopped for a sync. A
-// passphrase and a new host key are still asked for.
+// passphrase and a new host key are still asked for. Then connectOptions.
 func SSHOptions() []string {
 	// devopsy's sessions never need the host's port forwardings from
 	// ~/.ssh/config: each one would try to bind them again, and warn that
@@ -2253,7 +2254,22 @@ func SSHOptions() []string {
 	if v := os.Getenv(SSHAllowPasswordEnv); v == "" || v == "0" || strings.EqualFold(v, "false") {
 		opts = append(opts, "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
 	}
-	return opts
+	return append(opts, connectOptions()...)
+}
+
+// connectOptions bound every session's connection, the operator's and the
+// parent's to a child (ChildSSH): a host out of reach fails in 30
+// seconds, not after the TCP timeout (a log's save once waited minutes
+// with nobody to tell, a sync with the parent's services stopped); and a
+// keepalive, since a session can stay quiet for long (a sync's holder for
+// the whole copy, an export's data pausing) and a NAT or firewall dropping
+// it would abort a sync halfway, or leave a push writing into a child
+// already restored. Every 3 beats of the heartbeat (HeartbeatEvery: 15
+// seconds), 3 missed ending it, so the end-to-end tests' shorter beat
+// keeps the order between the push's silence, the operator noticing and
+// the holder's silence.
+func connectOptions() []string {
+	return []string{"-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=" + strconv.Itoa(3*int(HeartbeatEvery().Seconds())), "-o", "ServerAliveCountMax=3"}
 }
 
 // SSHLog is SSH, also copying the session's output, both streams, to log.

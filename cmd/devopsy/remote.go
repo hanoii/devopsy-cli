@@ -353,7 +353,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 				id = string(m[1])
 				text = append([]byte("\n"), text...)
 			}
-			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+			if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, id, rollback), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 				why := fmt.Sprint(c)
 				if err != nil {
 					why = err.Error()
@@ -635,7 +635,7 @@ func runRemote(cwd string, args []string, color bool, verbose int) int {
 			syncOpts = &remote.SyncOptions{}
 		}
 		upSession := remote.WithAlsoNeeds(remote.WithGate(remote.WithoutInterrupt(upCtx)), remote.ActivateScript(t, "0", false, projectName, phases, syncOpts))
-		code, err := remote.SSHStreams(upSession, t, remote.KeepAlive, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
+		code, err := remote.SSHStreams(upSession, t, nil, remote.HeartbeatLine()+remote.UploadScript(t, job != nil), pr, &idOut, progress.before(errOut), false, rlog)
 		id := strings.TrimSpace(idOut.String())
 		pr.Close()
 		upInterrupted := upCtx.Err() != nil
@@ -960,7 +960,7 @@ func runDestroy(t *remote.Target, projectName string, args []string, color bool)
 		// fails is left out.
 		snaps := ""
 		var out bytes.Buffer
-		if code, err := remote.SSHStreams(context.Background(), t, remote.Bounded, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
+		if code, err := remote.SSHStreams(context.Background(), t, nil, remote.SnapshotsScript(t, projectName), bytes.NewReader(nil), &out, io.Discard, false, nil); err == nil && code == 0 {
 			n := 0
 			for _, line := range strings.Split(out.String(), "\n") {
 				if len(strings.Split(line, "\t")) >= 6 {
@@ -1123,7 +1123,7 @@ func liveSession(t *remote.Target, script string, rlog *releaseLog, log *report.
 	var past atomic.Bool
 	live := past.Load
 	go func() {
-		code, err := remote.SSHContext(remote.WithBeat(remote.WithLive(remote.WithoutInterrupt(ctx), &past), w), t, remote.KeepAlive, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
+		code, err := remote.SSHContext(remote.WithBeat(remote.WithLive(remote.WithoutInterrupt(ctx), &past), w), t, nil, remote.WatchEnv+"=1\n"+remote.HeartbeatLine()+script, r, nil, false, rlog)
 		done <- result{code, err}
 	}()
 	var res result

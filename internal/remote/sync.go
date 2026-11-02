@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -332,32 +331,18 @@ const SyncResetEnv = "DEVOPSY_INTERNAL_SYNC_RESET"
 // release whose log the sync's is appended to.
 var SyncingInto = regexp.MustCompile(regexp.QuoteMeta(report.Prefix) + `syncing into ([0-9]{14})`)
 
-// KeepAlive are the ssh options of a sync's sessions (the holder, the
-// push, and the parent's sessions to the child): a session can stay quiet
-// for the whole copy, and a NAT or firewall dropping it would abort the
-// sync halfway, or leave a push writing into a child already restored.
-//
-// Every 3 beats of the heartbeat (HeartbeatEvery: 15 seconds), so the
-// end-to-end tests' shorter beat keeps the order between the push's
-// silence, the operator noticing and the holder's silence.
-var KeepAlive = []string{"-o", "ServerAliveInterval=" + strconv.Itoa(3*int(HeartbeatEvery().Seconds())), "-o", "ServerAliveCountMax=3"}
-
-// Bounded are KeepAlive plus a connect timeout: for sessions devopsy
-// must not hang on, a release log's save after a dropped connection
-// (it waited on connect, minutes, with nobody to tell), --export and
-// --import (their data can pause, and a dead connection otherwise
-// lasts until TCP gives up).
-var Bounded = append([]string{"-o", "ConnectTimeout=30"}, KeepAlive...)
-
 // ChildSSH are the options of the parent's sessions to the child (the
-// rsync session and --sync-exec), with KeepAlive: the operator's agent,
-// forwarded to the parent for the push, never goes one hop further
-// (the child is the unreviewed side, and a ForwardAgent in the parent's
-// ssh config would send it), a key the child refuses fails at once
-// instead of waiting for a password nobody can type, and a child the
-// parent cannot reach fails in seconds, not after the TCP timeout, with
-// its services stopped meanwhile.
-var ChildSSH = []string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "StrictHostKeyChecking=accept-new"}
+// rsync session and --sync-exec), with connectOptions as every session
+// has them: the operator's agent, forwarded to the parent for the push,
+// never goes one hop further (the child is the unreviewed side, and a
+// ForwardAgent in the parent's ssh config would send it), a key the
+// child refuses fails at once instead of waiting for a password nobody
+// can type, and a child the parent cannot reach fails in seconds, not
+// after the TCP timeout, with its services stopped meanwhile. Not
+// SSHOptions: the rsync session keeps its forwarding.
+func ChildSSH() []string {
+	return append([]string{"-o", "ForwardAgent=no", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"}, connectOptions()...)
+}
 
 // UtilImage is devopsy's own image for what needs root on a host's files,
 // built there from UtilDockerfile when missing: syncs' rsync, the tar of

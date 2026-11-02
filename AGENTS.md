@@ -1033,11 +1033,12 @@ interrupts" and "The server never waits on the operator for long".
 - **Sync hooks never get `SyncWatchEnv` or `HeartbeatEnv`:** a hook
   running `devopsy --export` would take its own `/dev/null` stdin for a
   session gone.
-- **SSH options:** `KeepAlive` (`ServerAliveInterval` 3 beats, 15
-  seconds, `ServerAliveCountMax=3`) on activations, uploads and a
-  sync's sessions; `Bounded` (`KeepAlive` plus `ConnectTimeout=30`) on
-  a log's save, `--export` and `--import`, which otherwise waited
-  minutes on a dead connection.
+- **SSH options:** every session, and the parent's to a child, bounds
+  its connection (`connectOptions`, in `SSHOptions` and `ChildSSH`):
+  `ConnectTimeout=30` and `ServerAliveInterval` 3 beats, 15 seconds,
+  `ServerAliveCountMax=3`. Why one place: chosen per call site, a log's
+  save, `--export` and `--import` once waited minutes on a dead
+  connection.
 - **devopsy takes Ctrl-C itself** (`session` in `runRemote`; ssh ignores
   it). The first closes the pipe: before the switch the watcher cancels
   the release and devopsy waits (saying so after 5 seconds: the server
@@ -2266,16 +2267,17 @@ policy". Code: `cmd/devopsy/sync.go`, `internal/remote/sync.go`,
   can use every key in the agent for the session, prod's included when
   a chain's middle environment is the parent, which only the
   operator's agent limits (README). Also `BatchMode=yes` (a refused key
-  fails instead of prompting), `ConnectTimeout=30` (an unreachable
+  fails instead of prompting), `StrictHostKeyChecking=accept-new`, and
+  the connect timeout and keepalive every session has (an unreachable
   child fails before the TCP timeout, with the parent's services
-  stopped meanwhile) and `StrictHostKeyChecking=accept-new`.
+  stopped meanwhile).
 - **The rsync session keeps its forwarding:** `-R` to the parent's
   daemon, `--network host` on the child, `ExitOnForwardFailure=yes`,
   and never `ClearAllForwardings`, which clears command-line
   forwardings too (`ssh_config(5)`); a taken port retries another (3
   tries, 20000-60000). `--sync-exec`'s session and a stream's `cat`
-  keep `ClearAllForwardings`. All of a sync's sessions pass
-  `KeepAlive`: the holder is quiet for the whole copy.
+  keep `ClearAllForwardings`. The keepalive matters most here: the
+  holder is quiet for the whole copy.
 - **Say what a refusal means:** no agent on the parent with
   `DEVOPSY_SYNC_TO` set means a `restrict`ed key or sshd's
   `AllowAgentForwarding no`. A `restrict`ed key also refuses the `-R`
@@ -3276,7 +3278,10 @@ Smaller features, each with the rule an agent must keep.
   decided 2026-10-29: a devopsy server takes keys only, so a prompt meant
   a missing key, asked again per session of a release, or with a child's
   set stopped while a sync's push waited for it; never `BatchMode`, which
-  would refuse a passphrase and a new host key too). Connection sharing is the user's SSH config,
+  would refuse a passphrase and a new host key too), and the connect
+  timeout and keepalive (SSH options, Sessions); `DEVOPSY_SSH_COMMAND`'s
+  options come first, so they win (ssh keeps the first value). Connection
+  sharing is the user's SSH config,
   which `--ssh-config` suggests and never writes. Test fakes of ssh run
   their last argument.
 - **`--context-hash` is a pure helper; devopsy builds nothing.** Errors
@@ -3372,8 +3377,8 @@ drive them with `docker exec` and check from outside. Locally with any
 Docker, on GitHub on demand and nightly when `main` moved since the
 last run that passed (`e2e.yml`); the release workflow does not run
 them. Drop tests shorten the heartbeat (`E2E_BEAT`, default 1, passed
-as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the operator's
-`KeepAlive` count in beats, which keeps their order); `E2E_BEAT=5`
+as `DEVOPSY_INTERNAL_HEARTBEAT_EVERY`: quiet times and the sessions'
+keepalive count in beats, which keeps their order); `E2E_BEAT=5`
 runs everything with the real timeouts, and one test always does. The
 test server's deploy user has `/bin/sh` (dash) as login shell, stricter
 than devopsy-server's bash (it found the watcher signalling only the

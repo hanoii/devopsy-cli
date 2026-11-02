@@ -1537,7 +1537,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 		if code != 0 {
 			return code
 		}
-		code, err := remote.SSHWith(t, remote.Bounded, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
+		code, err := remote.SSHWith(t, nil, remote.SnapshotExportScript(t, id), bytes.NewReader(nil), os.Stdout, false, nil)
 		if err != nil {
 			report.Fail(err)
 			return 1
@@ -1556,7 +1556,7 @@ func runSnapshots(t *remote.Target, projectName string, args []string, color boo
 			report.Error("--snapshots import reads a snapshot from stdin: < snapshot.tar, or a pipe (aws s3 cp s3://... - |)")
 			return 1
 		}
-		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, remote.Bounded, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
+		code, err := remote.SSHContext(remote.WithGate(context.Background()), t, nil, remote.SnapshotImportScript(t, projectName), os.Stdin, nil, false, nil)
 		if err != nil {
 			report.Fail(err)
 			return 1
@@ -1717,7 +1717,7 @@ func runSnapshot(t *remote.Target, projectName string, args []string, color bool
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("snapshot exited %d", code)))
 	text := rlog.Text()
 	if m := takingSnapshot.FindSubmatch(text); m != nil {
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn("could not save the snapshot's log on the server")
 		}
 	}
@@ -2794,7 +2794,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 		rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 		text := rlog.Text()
 		if m := restoringUnder.FindSubmatch(text); m != nil {
-			if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
+			if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(append([]byte("\n"), text...)), io.Discard, false, nil); err != nil || c != 0 {
 				report.Warn("could not save the restore's log on the server")
 			}
 		}
@@ -2804,7 +2804,7 @@ func runRestore(t *remote.Target, projectName string, args []string) int {
 	rlog.Line(report.Line(report.InfoLevel, fmt.Sprintf("restore exited %d", code)))
 	text := rlog.Text()
 	if m := restoringAs.FindSubmatch(text); m != nil {
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), false), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), false), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn("could not save the restore's log on the server")
 		}
 	}

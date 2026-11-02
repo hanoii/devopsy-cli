@@ -1218,22 +1218,22 @@ func TestSyncDifferentHosts(t *testing.T) {
 			receive = line
 		}
 	}
-	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ForwardAgent=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T devopsy@one") {
+	if !strings.Contains(push, "-o ClearAllForwardings=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ForwardAgent=yes -T devopsy@one") {
 		t.Errorf("push session: %q\n%s", push, ssh)
 	}
 	// The parent's sessions to the child: never the forwarded agent, no
 	// password prompt, and a short connect timeout.
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if !strings.Contains(receive, "-o ExitOnForwardFailure=yes "+childSSH+" -T -R 127.0.0.1:") || !strings.Contains(receive, ":172.17.0.9:873 -p 22 devopsy@two") || strings.Contains(receive, "ClearAllForwardings") {
 		t.Errorf("receive session: %q\n%s", receive, ssh)
 	}
-	// Every session of the release keeps itself alive: the upload, the
-	// holder, the push, the push's look at the child's services and its
-	// util image (--sync-exec), the receive, the log's save, and the read
-	// of the parent's variables (bounded: an unreachable parent fails in
-	// seconds).
-	keep := "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-	if strings.Count(ssh, keep) != 8 || !strings.Contains(ssh, "-o ConnectTimeout=30 "+keep+" -T devopsy@two\n") || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" "+keep+" -T -p 22 devopsy@two\n") {
+	// Every session of the release bounds its connection and keeps itself
+	// alive: the upload, the holder, the push, the push's look at the
+	// child's services and its util image (--sync-exec), the receive, the
+	// log's save, and the read of the parent's variables (an unreachable
+	// parent fails in seconds).
+	keep := "-o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if n := strings.Count(ssh, "\n"); strings.Count(ssh, keep) != n || n < 8 || !strings.Contains(ssh, keep+" -T devopsy@two\n") || !strings.Contains(ssh, childSSH+" -T -p 22 devopsy@two\n") {
 		t.Errorf("keepalive on upload, holder, push, exec, receive and the log's save:\n%s", ssh)
 	}
 	for _, want := range []string{"-daemon --label devopsy.data.parent=" + s.mnt("prod") + " -v " + s.mnt("prod") + ":/mnt:ro", "RSYNCD_CONF=uid = 0\ngid = 0\nuse chroot = yes\nread only = yes\n[db]\npath = /mnt/db\n[storage]\npath = /mnt/storage\n", "inspect -f", " --network host -v " + s.mnt("dev") + ":/mnt devopsy-util:3 rsync -a --no-D --delete --numeric-ids --modify-window=-1 --sparse rsync://127.0.0.1:", "/db/ /mnt/db/", "/storage/ /mnt/storage/", " rm -f cid123"} {
@@ -1288,7 +1288,7 @@ func TestSyncDifferentHosts(t *testing.T) {
 	if out, code := s.run(execEnv, "--sync-exec", "show"); code != 0 || !strings.Contains(out, "show project=shop-dev") {
 		t.Fatalf("--sync-exec (%d):\n%s", code, out)
 	}
-	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" "+keep+" -T -p 22 devopsy@two") {
+	if _, ssh := s.logs(); !strings.Contains(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") {
 		t.Errorf("--sync-exec session: %s", ssh)
 	}
 
@@ -1589,8 +1589,8 @@ func TestSyncCapability(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "import db into shop-dev pw=child-secret from=devopsy@one:prod: dump of db from shop-prod pw=parent-secret") {
 		t.Fatalf("stream across servers (%d):\n%s", code, out)
 	}
-	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new"
-	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T -p 22 devopsy@two") != 4 {
+	childSSH := "-o ForwardAgent=no -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+	if strings.Count(ssh, "-o ClearAllForwardings=yes "+childSSH+" -T -p 22 devopsy@two") != 4 {
 		t.Errorf("the child's list, its util image (app's storage is rsynced), the spool's cat and the import, each a session:\n%s", ssh)
 	}
 	if _, err := os.Stat(spool); err == nil {

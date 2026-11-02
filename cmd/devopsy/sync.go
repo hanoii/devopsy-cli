@@ -249,7 +249,7 @@ func runSyncSession(job *syncJob, script string, release bool, rlog *releaseLog,
 	holderCtx, endHolder := context.WithCancel(context.Background())
 	defer endHolder()
 	go func() {
-		code, err := remote.SSHStreams(remote.WithBeat(remote.WithoutInterrupt(holderCtx), w), job.child, remote.KeepAlive, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
+		code, err := remote.SSHStreams(remote.WithBeat(remote.WithoutInterrupt(holderCtx), w), job.child, nil, remote.HeartbeatLine()+script, r, out, mwErr, false, rlog)
 		done <- result{code, err}
 	}()
 	// Interrupted before the marker, devopsy answers abort at once and
@@ -458,10 +458,10 @@ func runPush(ctx context.Context, job *syncJob, base, id string, rlog *releaseLo
 	if color {
 		env[remote.ColorEnv] = "1"
 	}
-	extra := remote.KeepAlive
+	var extra []string
 	where := "same server"
 	if !job.sameHost {
-		extra = append([]string{"-o", "ForwardAgent=yes"}, remote.KeepAlive...)
+		extra = []string{"-o", "ForwardAgent=yes"}
 		where = "from " + p.Host + " to " + job.to
 	}
 	log := report.Default().Tee(rlog.Line)
@@ -742,7 +742,7 @@ func runSync(t *remote.Target, projectDir string, projectEnv func(string) (strin
 	text := rlog.Text()
 	if m := remote.SyncingInto.FindSubmatch(text); m != nil {
 		text = append([]byte("\n"), text...)
-		if c, err := remote.SSHWith(t, remote.Bounded, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
+		if c, err := remote.SSHWith(t, nil, remote.LogSaveScript(t, string(m[1]), true), bytes.NewReader(text), io.Discard, false, nil); err != nil || c != 0 {
 			report.Warn(fmt.Sprintf("could not save the sync log on the server (%v, %d)", err, c))
 		}
 	}
@@ -1647,10 +1647,10 @@ func importStream(ctx context.Context, name string, last bool) error {
 // childSSHArgs are ssh's arguments for a session from the parent's
 // server to the child's (to) running script behind the check of the
 // child's devopsy (remote.ChildCheck, needs the later sessions'): -o
-// option, remote.ChildSSH, remote.KeepAlive, -T, extra, the sync's port;
+// option, remote.ChildSSH, nil, -T, extra, the sync's port;
 // traced, script aside.
 func childSSHArgs(to, script string, needs []string, option string, extra ...string) []string {
-	args := append(append([]string{"-o", option}, remote.ChildSSH...), remote.KeepAlive...)
+	args := append([]string{"-o", option}, remote.ChildSSH()...)
 	args = append(append(args, "-T"), extra...)
 	if p := os.Getenv(remote.SyncSSHPortEnv); p != "" {
 		args = append(args, "-p", p)

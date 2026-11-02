@@ -1773,7 +1773,7 @@ func runRemoteExport(t *remote.Target, projectName string, args []string, color 
 	defer r.Close()
 	defer w.Close()
 	defer heartbeat(w)()
-	code, err := remote.SSHWith(t, remote.Bounded, "export "+remote.SyncWatchEnv+"=1\n"+remote.HeartbeatLine()+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
+	code, err := remote.SSHWith(t, nil, "export "+remote.SyncWatchEnv+"=1\n"+remote.HeartbeatLine()+remote.ExportScript(t, projectName, args[0]), r, os.Stdout, false, nil)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -1877,7 +1877,7 @@ func runRemoteImport(t *remote.Target, projectName string, args []string, color 
 		// Gated: the data goes once the script holds the release lock,
 		// so a session cut while it waits leaves an empty stdin there,
 		// and nothing stops.
-		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, remote.Bounded, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end, strings.Join(accept, " ")), r, nil, mw, false, nil)
+		code, err := remote.SSHStreams(remote.WithGate(remote.WithoutInterrupt(ctx)), t, nil, remote.HeartbeatLine()+remote.ImportScript(t, projectName, name, end, strings.Join(accept, " ")), r, nil, mw, false, nil)
 		done <- result{code, err}
 	}()
 	var res result
