@@ -2,6 +2,8 @@
 // them: DNS through a public resolver, the certificate a server presents,
 // and an HTTPS request. It knows no proxy: `devopsy --probe [--ip <server
 // ip>] <host>...`, which a proxy's own commands can print for people to run.
+//
+// Rules: internals/other.md.
 package probe
 
 import (

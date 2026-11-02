@@ -29,16 +29,16 @@ var externalNames = []string{"ClientAliveInterval", "IdentityAgent", "LocalForwa
 // a server's), not the repository's.
 var projectFiles = []string{"config.yaml", "config.local.yaml", "devopsy-compose.yaml"}
 
-// repoPackages are the repository's packages by the name code calls
-// them with, and their directories.
-var repoPackages = map[string]string{
-	"cli": "internal/cli", "complete": "internal/complete", "images": "internal/images",
-	"probe": "internal/probe", "remote": "internal/remote", "report": "internal/report",
-	"skill": "internal/skill", "update": "internal/update", "main": "cmd/devopsy", "e2e": "e2e",
+// rootRules are the places in the root a package's doc comment may name
+// for its rules, in the words it uses, with the heading that must exist.
+var rootRules = map[string]string{
+	"the Areas index in AGENTS.md":        "## Areas",
+	"the Output conventions in AGENTS.md": "### Output",
 }
 
 // Every file path and every Go name the agents' rules cite in code
-// spans exists: a rename or a removal that leaves the rules
+// spans exists, and every package's doc comment names the rules that
+// hold for it (a line "Rules: internals/<area>.md."), which exist: a rename or a removal that leaves the rules
 // behind fails here. The histories are left out: they tell of names
 // that went on purpose. What is ambiguous (a flag, a variable, a label,
 // a shell word, a value, a project's or a server's path) is left out
@@ -71,6 +71,29 @@ func TestAgentsNamesWhatExists(t *testing.T) {
 			}
 			if ok, checked := src.has(span); checked && !ok {
 				t.Errorf("%s names %s, declared nowhere in the Go source", doc, span)
+			}
+		}
+	}
+
+	root, err := os.ReadFile(filepath.Join(repoRoot, rootDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir, doc := range src.docs {
+		m := regexp.MustCompile(`(?m)^Rules: (.*)\.$`).FindStringSubmatch(doc)
+		if m == nil {
+			t.Errorf("%s's package doc comment names no rules (a line \"Rules: internals/<area>.md.\")", dir)
+			continue
+		}
+		if heading, ok := rootRules[m[1]]; ok {
+			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(heading) + `$`).Match(root) {
+				t.Errorf("%s's rules are in %q, but %s has no %q", dir, m[1], rootDoc, heading)
+			}
+			continue
+		}
+		for _, p := range strings.Split(m[1], ", ") {
+			if !regexp.MustCompile(`^internals/[a-z0-9-]+\.md$`).MatchString(p) || !files[p] {
+				t.Errorf("%s's package doc comment names rules in %s, no area", dir, p)
 			}
 		}
 	}
@@ -164,13 +187,15 @@ type names struct {
 	members map[string]map[string]bool // package name: methods and fields
 	types   map[string][]string        // type name: packages declaring it
 	any     map[string]bool
+	docs    map[string]string // package directory: its doc comment
 }
 
 func goNames(t *testing.T) names {
 	t.Helper()
-	n := names{decls: map[string]map[string]bool{}, members: map[string]map[string]bool{}, types: map[string][]string{}, any: map[string]bool{}}
+	n := names{decls: map[string]map[string]bool{}, members: map[string]map[string]bool{}, types: map[string][]string{}, any: map[string]bool{}, docs: map[string]string{}}
 	word := regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-	for _, dir := range repoPackages {
+	for _, dir := range goDirs(t) {
+		n.docs[dir] = ""
 		fset := token.NewFileSet()
 		pkgs, err := parser.ParseDir(fset, filepath.Join(repoRoot, dir), nil, parser.ParseComments)
 		if err != nil {
@@ -181,7 +206,10 @@ func goNames(t *testing.T) names {
 			if n.decls[name] == nil {
 				n.decls[name], n.members[name] = map[string]bool{}, map[string]bool{}
 			}
-			for _, f := range pkg.Files {
+			for file, f := range pkg.Files {
+				if f.Doc != nil && !strings.HasSuffix(file, "_test.go") {
+					n.docs[dir] += f.Doc.Text()
+				}
 				for _, decl := range f.Decls {
 					switch d := decl.(type) {
 					case *ast.FuncDecl:
@@ -234,6 +262,31 @@ func goNames(t *testing.T) names {
 	return n
 }
 
+// goDirs are the directories of the repository's Go packages, slash
+// separated from its root.
+func goDirs(t *testing.T) []string {
+	t.Helper()
+	var dirs []string
+	for _, top := range []string{"cmd", "internal", "e2e"} {
+		err := filepath.WalkDir(filepath.Join(repoRoot, top), func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return err
+			}
+			if gos, _ := filepath.Glob(filepath.Join(p, "*.go")); len(gos) > 0 {
+				dirs = append(dirs, strings.TrimPrefix(filepath.ToSlash(p), repoRoot+"/"))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(dirs) < 2 {
+		t.Fatal("no Go packages found")
+	}
+	return dirs
+}
+
 var (
 	qualified = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?(?:\(.*\))?$`)
 	// camelCase, or CamelCase of two humps at least (one hump is a word).
@@ -244,7 +297,7 @@ var (
 // false when the span looks like no Go name of the repository's.
 func (n names) has(span string) (ok, checked bool) {
 	if m := qualified.FindStringSubmatch(span); m != nil {
-		if _, ours := repoPackages[m[1]]; ours && m[1] != "main" {
+		if _, ours := n.decls[m[1]]; ours && m[1] != "main" {
 			return n.decls[m[1]][m[2]] && (m[3] == "" || n.members[m[1]][m[3]]), true
 		}
 		if pkgs := n.types[m[1]]; len(pkgs) > 0 && m[3] == "" {

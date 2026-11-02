@@ -1,6 +1,8 @@
 // Package skill is the agent skill for using devopsy: a SKILL.md embedded
 // in the binary, so it describes the devopsy that prints it, and its
 // install into a project or a home directory.
+//
+// Rules: internals/other.md.
 package skill
 
 import (

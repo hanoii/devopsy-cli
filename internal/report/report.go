@@ -16,6 +16,8 @@
 // everything else: the prefix, the tag, the bars, the numbering, the
 // color and the verbosity filter. Results (help, lists, --env, data) go
 // to stdout and never through here.
+//
+// Rules: the Output conventions in AGENTS.md.
 package report
 
 import (

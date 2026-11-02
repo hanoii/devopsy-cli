@@ -11,6 +11,8 @@
 // what a release built back from its bookmarks and holds what must not
 // move by digest in devopsy's own compose file (Restore): a pulled data
 // service only ever goes forward (HistoryFile).
+//
+// Rules: internals/images.md.
 package images
 
 import (

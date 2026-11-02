@@ -2,6 +2,8 @@
 // (`devopsy --upgrade`) and checks, at most daily, whether a newer one
 // exists. It reads the same release files as install.sh:
 // devopsy_<os>_<arch>.tar.gz and checksums.txt.
+//
+// Rules: internals/other.md.
 package update
 
 import (
