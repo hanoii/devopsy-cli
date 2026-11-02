@@ -484,34 +484,43 @@ func localServices(cwd string) ([]images.Service, error) {
 // bookmark. Waits up to 10 minutes, saying so; without the variable (a
 // local import) nothing to take.
 func imagesShared(ctx context.Context) (unlock func(), err error) {
-	path := os.Getenv(remote.ImagesLockEnv)
-	if path == "" {
-		return func() {}, nil
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("the server's image lock: %w", err)
-	}
-	unlock = func() { f.Close() }
 	deadline := time.Now().Add(10 * time.Minute)
 	for said := false; ; said = true {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
-		if err == nil {
-			return unlock, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			unlock()
-			return nil, fmt.Errorf("the server's image lock: %w", err)
+		unlock, ok, err := imagesLockNow(syscall.LOCK_SH)
+		if err != nil || ok {
+			return unlock, err
 		}
 		if !said {
 			report.Info("waiting for the server's images, held by a removal, up to 10 minutes")
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			unlock()
 			return nil, errors.New("the server's images are still held after 10 minutes")
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// imagesLockNow takes the server's image lock (remote.ImagesLockEnv)
+// shared or exclusively (syscall.LOCK_SH or LOCK_EX) when it is free at
+// once: ok false when busy. Without the variable (outside a script that
+// exports it) nothing to take.
+func imagesLockNow(how int) (unlock func(), ok bool, err error) {
+	path := os.Getenv(remote.ImagesLockEnv)
+	if path == "" {
+		return func() {}, true, nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("the server's image lock: %w", err)
+	}
+	return func() { f.Close() }, true, nil
 }
 
 // exportHeader writes an export's record as the tar's first header, a

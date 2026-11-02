@@ -1072,7 +1072,7 @@ func removeSnapshotDir(cwd string, p snapshotPaths, dir string, wait time.Durati
 	// The image lock, exclusive, waited for up to wait and kept to the end.
 	var unlock func()
 	for start := time.Now(); ; time.Sleep(250 * time.Millisecond) {
-		u, ok, err := imagesExclusiveNow()
+		u, ok, err := imagesLockNow(syscall.LOCK_EX)
 		if err != nil {
 			return err
 		}
@@ -1164,27 +1164,6 @@ func snapshotList(p snapshotPaths) {
 	if _, err := os.Lstat(p.mirror); err == nil {
 		fmt.Println("mirror\tkept")
 	}
-}
-
-// imagesExclusiveNow takes the server's image lock exclusively when it is
-// free at once (ok false when busy).
-func imagesExclusiveNow() (unlock func(), ok bool, err error) {
-	path := os.Getenv(remote.ImagesLockEnv)
-	if path == "" {
-		return func() {}, true, nil
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("the server's image lock: %w", err)
-	}
-	return func() { f.Close() }, true, nil
 }
 
 // manualSnapshots are the ids of p's manual snapshots, oldest first.
