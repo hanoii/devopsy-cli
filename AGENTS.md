@@ -1295,7 +1295,7 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   are the project's: only `--destroy`, an `--import` (its entries) and
   a sync into a child remove anything in it, and only the owner label
   changes an owner.
-- **`devopsy.mnt.owner=<uid>:<gid>` owns a service's writable entries**
+- **`devopsy.mnt.owner=<uid>:<gid>|user` owns a service's writable entries**
   (`cli.MntOwnerLabel`, parsed with the data labels into `Owner` and
   `Writable`, every profile; `cli.MntOwners` maps entry to owner;
   `cmd/devopsy/mnt.go`). Why: `shared/mnt` starts empty and the deploy
@@ -1310,10 +1310,18 @@ Two per release, never overlapping, neither rewritten, pruned with it.
   or 4294967295 (chown's -1), an owner passed the checks before the
   switch and failed in `find` and `chown` after it. A read-only mount claims nothing (a log
   reader); two owners on one entry are an error, an unlabeled writer of
-  an owned entry is none (a tool sharing it). Explicit, never from
-  `user:` (decided): changing that must not silently change the data's
-  owner, and a default needs rules for names, root, images that drop
-  privileges themselves and tools; a variable keeps the two alike.
+  an owned entry is none (a tool sharing it). Explicit, never a default
+  from `user:` (decided): a default needs rules for names, root, images
+  that drop privileges themselves and tools sharing a mount. The value
+  `user` takes the service's own `user:` (`cli.OwnerUser`, `labelOwner`;
+  decided 2026-11-01: a `user:` changed without the label left the app
+  on files of its old UID), which must be `<uid>:<gid>` in numbers (a
+  name, a uid alone, whose group Docker takes from the image, or none is
+  a label error). Resolved in the parse, so every consumer and the
+  child's list see numbers, never the word. No named feature: an older
+  devopsy meets the word only in a release it activates, whose
+  `--check-mounts` refuses it before the switch (as for `data-copy`),
+  so no current release, sync, import or list on it has one.
   Rejected: a shared group with setgid directories and default ACLs
   (tar and rsync set owner and mode explicitly, a chmod sets the ACL
   mask), capability hooks (none runs after a `volumes` import, a plain

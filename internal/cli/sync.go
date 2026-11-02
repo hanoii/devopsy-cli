@@ -49,11 +49,19 @@ const DataExcludeLabel = "devopsy.data.exclude"
 
 // MntOwnerLabel is the owner of the entries of mnt a service mounts
 // writable, <uid>:<gid> in numbers (names cannot be resolved from the
-// host): devopsy creates them and gives them to it wherever it creates
-// or writes entries (a release, a sync's rsync, an mnt --import, and
-// locally before compose starts anything). Explicit, never a default
-// from user: (changing that must not silently change the data's owner).
+// host), or OwnerUser: devopsy creates them and gives them to it
+// wherever it creates or writes entries (a release, a sync's rsync, an
+// mnt --import, and locally before compose starts anything). Explicit,
+// never a default from user: (an image with none, tools sharing a mount
+// would each claim it).
 const MntOwnerLabel = "devopsy.mnt.owner"
+
+// OwnerUser is MntOwnerLabel's value for the service's own user:, which
+// must then be <uid>:<gid> in numbers: resolved where the labels are
+// read (parseSyncServices), so every list, check and script sees the
+// numbers, and a user: changed without the label never leaves the app
+// on files of its old UID.
+const OwnerUser = "user"
 
 // maxOwnerID is the largest uid or gid MntOwnerLabel takes: a uid_t
 // holds 32 bits, and its largest value, 4294967295, is chown's -1 ("leave
@@ -77,6 +85,30 @@ func parseOwner(v string) (string, bool) {
 		ids[i] = id
 	}
 	return fmt.Sprintf("%d:%d", ids[0], ids[1]), true
+}
+
+// labelOwner is service's MntOwnerLabel value v as an owner (parseOwner),
+// OwnerUser taking its compose user:, as interpolated: numbers both, a
+// uid alone refused (Docker would take the group from the image, which
+// the host cannot read).
+func labelOwner(service, v, user string) (string, error) {
+	if v != OwnerUser {
+		owner, ok := parseOwner(v)
+		if !ok {
+			return "", fmt.Errorf("service %s: %s=%s: <uid>:<gid> in numbers from 0 to %d, like 10001:10001, or %s for the service's own user: (names cannot be resolved from the host; a variable left unset?)", service, MntOwnerLabel, v, maxOwnerID, OwnerUser)
+		}
+		return owner, nil
+	}
+	if user == "" {
+		return "", fmt.Errorf("service %s: %s=%s, and it has no user (compose's user:): give it user: <uid>:<gid> in numbers, like 10001:10001, or the label the numbers (an image that drops privileges itself)", service, MntOwnerLabel, v)
+	}
+	if owner, ok := parseOwner(user); ok {
+		return owner, nil
+	}
+	if !strings.Contains(user, ":") && strings.Trim(user, "0123456789") == "" {
+		return "", fmt.Errorf("service %s: %s=%s, and its user: %s has no group: write user: %s:<gid> (Docker would take the group from the image, which the host cannot read)", service, MntOwnerLabel, v, user, user)
+	}
+	return "", fmt.Errorf("service %s: %s=%s, and its user: %s is not <uid>:<gid> in numbers from 0 to %d: write it as numbers, like 10001:10001 (names cannot be resolved from the host), or the label the numbers", service, MntOwnerLabel, v, user, maxOwnerID)
 }
 
 // How a copy carries a service's data, DataCopyLabel's values.
@@ -306,6 +338,7 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 		} `json:"volumes"`
 		Services map[string]struct {
 			Labels    map[string]string          `json:"labels"`
+			User      string                     `json:"user"`
 			DependsOn map[string]json.RawMessage `json:"depends_on"`
 			Restart   string                     `json:"restart"`
 			Profiles  []string                   `json:"profiles"`
@@ -396,9 +429,9 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 			}
 		}
 		if v, ok := s.Labels[MntOwnerLabel]; ok {
-			owner, ok := parseOwner(v)
-			if !ok {
-				return nil, fmt.Errorf("service %s: %s=%s: <uid>:<gid> in numbers from 0 to %d, like 10001:10001 (names cannot be resolved from the host; a variable left unset?)", name, MntOwnerLabel, v, maxOwnerID)
+			owner, err := labelOwner(name, v, s.User)
+			if err != nil {
+				return nil, err
 			}
 			cs.Owner = owner
 		}
