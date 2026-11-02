@@ -377,7 +377,8 @@ func parseSyncServices(out []byte, projectDir string) ([]SyncService, error) {
 	for _, name := range names {
 		s := config.Services[name]
 		if _, ok := s.Labels[images.DataVersionLabel]; !ok && s.Labels[DataLabel] == "true" {
-			return nil, report.Errorf(images.LabelMissing(name, s.Image, len(s.Build) > 0 && string(s.Build) != "null"), "%s: %s is set, but %s is not", name, DataLabel, images.DataVersionLabel)
+			msg, details := images.LabelMissing(name, len(s.Build) > 0 && string(s.Build) != "null")
+			return nil, &report.Failure{Msg: msg, Details: details}
 		}
 	}
 	var services []SyncService

@@ -110,7 +110,6 @@ func TestSyncServices(t *testing.T) {
 	// or any; empty or anything else refused (the missing label's lines:
 	// TestDataVersionMissing).
 	for labels, want := range map[string][]string{
-		`"image":"mariadb:lts","labels":{"devopsy.data":"true"}`:                              {"- devopsy.data.version=<version>: the version of its data", "best practice is to use the version of the image that writes the data, mariadb here"},
 		`"image":"postgres:16","labels":{"devopsy.data":"true","devopsy.data.version":""}`:    {"service x: devopsy.data.version is empty: a version like 16, or any"},
 		`"image":"postgres:16","labels":{"devopsy.data":"true","devopsy.data.version":"v16"}`: {"service x: devopsy.data.version=v16: a version of dotted numbers like 16, or any"},
 		`"labels":{"devopsy.data":"true","devopsy.data.version":"16."}`:                       {"devopsy.data.version=16.:"},
@@ -528,28 +527,25 @@ func TestLeavingBindsUnreadableDirectory(t *testing.T) {
 	}
 }
 
-// The missing version label's error, as settled: why, then each value
-// with its explanation, the version from a pulled image's tag, a built
-// one's <version> and its base image.
+// The missing version label's error, as settled: fixed text but for the
+// service's name and, by kind, the best practice and the tag clause.
 func TestDataVersionMissing(t *testing.T) {
 	t.Parallel()
 	for labels, want := range map[string]string{
-		`"database":{"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}}`: `devopsy: error: database: devopsy.data is set, but devopsy.data.version is not
-devopsy: | a new image may upgrade its data in place (mariadb 11.8 to 12.1), and an older image may then fail on it or damage it
-devopsy: | devopsy cannot tell from an image what its data needs, so every data service declares it, and devopsy never runs it on data a higher version ran
-devopsy: | choose how database's data follows its image, with one of these labels:
-devopsy: | - devopsy.data.version=11.8: the version of its data, which you keep up to date
-devopsy: |   best practice is to use the version of the image that writes the data, mariadb 11.8 here
-devopsy: |   devopsy refuses a lower version, or a new tag without a new version, unless you pass --accept-image database
-devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image`,
-		`"app":{"image":"shop-prod-app","build":{"context":"."},"labels":{"devopsy.data":"true"}}`: `devopsy: error: app: devopsy.data is set, but devopsy.data.version is not
-devopsy: | a new image may upgrade its data in place (mariadb 11.8 to 12.1), and an older image may then fail on it or damage it
-devopsy: | devopsy cannot tell from an image what its data needs, so every data service declares it, and devopsy never runs it on data a higher version ran
-devopsy: | choose how app's data follows its image, with one of these labels:
-devopsy: | - devopsy.data.version=<version>: the version of its data, which you keep up to date
-devopsy: |   best practice is to use the version of the base image that writes the data, from the same build argument
-devopsy: |   devopsy refuses a lower version unless you pass --accept-image app
-devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image`,
+		`"database":{"image":"mariadb:11.8-noble","labels":{"devopsy.data":"true"}}`: `devopsy: error: database: devopsy.data.version is missing
+devopsy: | a new image can upgrade its data in place, and an older image can then break it
+devopsy: | devopsy cannot tell what an image does to its data, so each data service declares its data's version
+devopsy: | set one of these labels on database:
+devopsy: | - devopsy.data.version=<compatible version>: the version its data needs, which you keep up to date; best practice is an image tag that accepts compatible upgrades, and the same version here
+devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image
+devopsy: | with a version, devopsy refuses a lower one, or a new tag without a new one, unless you pass --accept-image database`,
+		`"app":{"image":"shop-prod-app","build":{"context":"."},"labels":{"devopsy.data":"true"}}`: `devopsy: error: app: devopsy.data.version is missing
+devopsy: | a new image can upgrade its data in place, and an older image can then break it
+devopsy: | devopsy cannot tell what an image does to its data, so each data service declares its data's version
+devopsy: | set one of these labels on app:
+devopsy: | - devopsy.data.version=<compatible version>: the version its data needs, which you keep up to date; best practice is a base image tag that accepts compatible upgrades, and the same version here, from one build argument
+devopsy: | - devopsy.data.version=any: devopsy checks nothing, for data that does not depend on its image
+devopsy: | with a version, devopsy refuses a lower one unless you pass --accept-image app`,
 	} {
 		// Beside another unlabeled service, later by name: the first by
 		// name is said, whatever the map's order.
