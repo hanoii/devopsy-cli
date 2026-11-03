@@ -395,8 +395,8 @@ environments:
 Without a `reload:` step, devopsy runs its own `up -d --wait --no-build
 --pull never`, which recreates what changed. It never runs the run step
 instead: a sync reruns that because its data moved, but a run step may do
-far more than apply variables (a schema update). A `reload:` step that
-fails leaves the release live and restarts nothing.
+far more than apply variables (a schema update). A reload that fails,
+with either one, leaves the release live and restarts nothing.
 
 Locally, `devopsy --reload` runs the `reload:` step under `defaults:` in
 place (in a release on a server, its environment's), else the same `up`,

@@ -57,10 +57,11 @@ There are two ways to make that moment shorter:
   data (`.mirror` among its snapshots, kept between takes). The data is
   first copied into it while everything runs, then copied again with the
   services stopped, this time only what changed. That second copy is the
-  downtime, and the tars are made from the mirror afterwards. A mirror
+  downtime, and the tars are made from the mirror afterwards, while
+  nobody waits. A mirror
   suits data that stays put between the two passes, like uploaded files.
-  It does not suit a busy database, whose tables change within minutes and
-  are copied again whole; use reflinks there.
+  It does not suit a busy database, whose written tables change within
+  minutes and are copied again whole; use reflinks there.
 
 `--snapshots` says how the last take copied.
 
@@ -154,8 +155,9 @@ steps, else its `release:` steps. In order:
    their data may not fit where it goes (sparse files counted at full
    size), since a disk filled midway leaves the services down and the
    environment marked;
-2. the images are fetched: the pulled ones by their names as they are
-   now, and the snapshot's own builds from its bookmarks;
+2. the images are fetched: the pulled ones by their names, as whatever
+   the names point to now, and the snapshot's own builds from its
+   bookmarks;
 3. every service with data and its dependents stop;
 4. each entry and volume is emptied and extracted, with its history of the
    images that ran on it. Nothing is checked and `--accept-image` plays no
@@ -213,8 +215,8 @@ as the deploy user (its steps, its compose file, its Dockerfiles), and
 restore runs none of its code, and its data is checked as in any restore.
 
 Images stay out of an export: a restore pulls the pulled ones by their
-names as they are now, and builds the built ones from the snapshot's
-code.
+names, as whatever the names point to now, and builds the built ones
+from the snapshot's code.
 
 ## Removing them
 
