@@ -56,6 +56,7 @@ devopsy-cli is `devopsy`, a Go CLI in front of Docker Compose for projects with 
 ### Docs
 
 - The root holds what every task in the repository needs; a part only some tasks need is an area, `internals/<area>.md`, with one line in the root's index saying what it covers and when to read it: the root loads with every session, the areas only when their line says so.
+- A root is kept under about 250 lines, a guide, never a cap: past it, what only some tasks need moves to an area, and no needed rule is cut or squeezed to fit.
 - A rule's history goes in `internals/<area>.history.md`, or `internals/<section>.history.md` for a rule in a section of the root, starting with a line saying it is history, not rules, and its area's file wins where they differ.
 - A history file is read only before changing or questioning one of its rules, when a review finding looks like it contradicts a decision, or when asked why.
 - How a script or a function works, step by step, goes in its comments, never in an AGENTS.md or area: a comment changes with its code.
@@ -165,7 +166,6 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -s sh install.
 ```
 
 - CI (`ci.yml`) runs them on every push, on Linux (with zsh and fish for completion, the race detector and shellcheck) and on macOS; run them on macOS too (`go vet ./... && go test -count=1 ./...`) for a change to what runs locally, where owners are never checked and there is no GNU `tail`.
-- CI warns, never fails, when this file passes 250 lines (`ci.yml`): what only some tasks need moves to an area.
 - End to end (`e2e/`, build tag `e2e`) runs servers in Docker: `go test -tags e2e -count=1 -v -timeout 40m ./e2e` runs the suite on four lanes, `-run '^TestName$'` one test; read `internals/e2e.md` before writing or changing one.
 - Never sleep for something to happen: poll for it (`eventually` in `e2e/`, 250 ms; a loop on the file or the state in a unit test), so a test takes as long as the behavior, not the worst case.
 - A wait the heartbeat or a quiet time bounds is shortened through `DEVOPSY_INTERNAL_HEARTBEAT_EVERY` (`HeartbeatEnv=1` in unit tests, `fast()` and `quiet()` in `e2e/`), never by a constant of the test's own: `E2E_BEAT=5` runs the suite with the real timeouts.
