@@ -75,14 +75,13 @@ Writes a `custom` service's data to stdout, with stdin empty. It runs:
 In a sync, devopsy spools what the exports write. It imports nothing
 until every export has exited 0, and it starts the parent's services
 again before it imports. A service listed in `DEVOPSY_DATA_STOP` is
-stopped: reach it with `devopsy run --rm --no-deps -T <service> ...`
-rather than `exec`, or refuse.
+stopped ([Variables](#variables)).
 
 ### `import <service>`
 
 Reads that data from stdin, complete: on the child's server in a sync,
 and in `devopsy --import`. Unless the service is in `DEVOPSY_DATA_STOP`,
-it is up when the import runs, since devopsy first brings it up alone.
+it is up when the import runs: devopsy first brings it up alone.
 
 ### `finish parent|child go|abort|partial`
 
@@ -120,11 +119,11 @@ runs after it.
   starts what it needs.
 - On a child's first release nothing exists yet, so devopsy first creates
   the services with data and the child side's stop set (`up -d --wait`),
-  as the run step's `up` would a moment later. Either way, the hook finds
-  them running.
+  as the run step's `up` would a moment later. The hook finds them
+  running on a first release too.
 - `finish child partial` also runs outside a sync, when a child's side was
-  killed before it could decide. It runs in whatever takes the lock next:
-  a sync, a release or a rollback (the last two then refuse).
+  killed before it could decide. It runs in the next operation that takes
+  the lock, a sync, a release or a rollback (the last two then refuse).
 
 ### Variables
 
@@ -136,7 +135,9 @@ copy carries them:
 - `DEVOPSY_DATA_STOP`: what the operation stops on that side by the
   labels. They are up again by `finish ... go|abort`, and at `finish
   child partial` they are what stays down. A stopped `custom` service is
-  in both of the last two.
+  in both of the last two. A script reaches a stopped service with
+  `devopsy run --rm --no-deps -T <service> ...` instead of `exec`, and a
+  script whose service must be running refuses.
 
 In a sync, the actions also get `DEVOPSY_SYNC_FROM_TARGET` and
 `DEVOPSY_SYNC_TO_TARGET`, the parent's and the child's addresses. The
@@ -152,6 +153,5 @@ exec devopsy exec -T "$1" sh -c 'mariadb ...'
 ```
 
 Each side's database credentials stay its own: the dump runs with the
-parent's, the import with the child's. Checking that the export exited 0
-is devopsy's job, not the scripts'. A script whose service must be
-running refuses when the service is in `DEVOPSY_DATA_STOP`.
+parent's, the import with the child's. devopsy checks that the export
+exited 0, so the scripts need not.
