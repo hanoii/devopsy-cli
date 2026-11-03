@@ -1,6 +1,6 @@
 ---
 name: devopsy
-description: Working on a project that runs on devopsy (a .devopsy/ directory, or one to be released with devopsy): writing its compose file, Dockerfile and config.yaml the way devopsy expects, releasing it to servers and operating it there.
+description: "Working on a project that runs on devopsy (a .devopsy/ directory, or one to be released with devopsy): writing its compose file, Dockerfile and config.yaml the way devopsy expects, releasing it to servers and operating it there."
 devopsy: stub
 ---
 

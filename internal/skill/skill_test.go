@@ -12,6 +12,7 @@ import (
 	"github.com/hanoii/devopsy-cli/internal/remote"
 	"github.com/hanoii/devopsy-cli/internal/report"
 	"github.com/hanoii/devopsy-cli/internal/skill"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestContent(t *testing.T) {
@@ -36,6 +37,15 @@ func TestContent(t *testing.T) {
 	s := skill.Content("v1.2.3", true)
 	if !strings.Contains(s, "devopsy: stub sha256:") || !strings.Contains(s, "devopsy --ai-skill install") || !skill.Written([]byte(s)) || skill.Edited([]byte(s)) {
 		t.Errorf("stub:\n%s", s)
+	}
+	// The frontmatter is YAML to the agents that read it, and a strict
+	// parser drops a skill whose frontmatter does not parse.
+	for _, text := range []string{c, s} {
+		front, _, _ := strings.Cut(strings.TrimPrefix(text, "---\n"), "\n---\n")
+		var meta struct{ Name, Description string }
+		if err := yaml.Unmarshal([]byte(front), &meta); err != nil || meta.Name != "devopsy" || meta.Description == "" {
+			t.Errorf("frontmatter %+v: %v", meta, err)
+		}
 	}
 }
 
