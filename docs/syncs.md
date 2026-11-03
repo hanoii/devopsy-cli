@@ -28,8 +28,9 @@ A sync copies everything the labels say. What must never be copied is
 left out by label (`devopsy.data.exclude`,
 [Data labels](data.md#data-labels)); a sync takes no options for it.
 
-`--accept-image` lets a child run below its parent's data version on
-purpose ([Syncs and imports](images.md#syncs-and-imports)).
+`--accept-image` lets a child run its own image on the parent's data when
+the version check refuses it, on purpose
+([Syncs and imports](images.md#syncs-and-imports)).
 
 ## What moves
 
@@ -77,9 +78,9 @@ nothing, since the earlier copy's data is still there, and it fails.
 
 ## What stops
 
-For the whole sync, the parent stops its `own` and `always` services with
-data, and the child its `own`, `import` and `always` ones, each with what
-depends on them ([`devopsy.data.stop`](data.md#devopsydatastop)). A stop
+For the whole sync, the parent stops its `own` services with data and
+every `always` one, and the child its `own` services with data and every
+`import` and `always` one, each with what depends on them ([`devopsy.data.stop`](data.md#devopsydatastop)). A stop
 word that differs between the two sides (from a child's own
 `shared/.env`) is named.
 

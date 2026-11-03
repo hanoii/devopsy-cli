@@ -37,7 +37,8 @@ layout only: `<instance>/<environment>` with `instances: true`, else
 
 ## Server commands
 
-Most commands need an environment. These need only a server:
+Every command needs an environment, except these, which need only a
+server:
 `--shell-host`, `--ssh-keys`, `--ssh-config`, `--server-info`,
 `--environments`, `--vars-project` and `--upgrade` (`--environments` and
 `--vars-project` with the checkout's project, or an alias's).

@@ -98,7 +98,7 @@ anything changes.
 
 - `devopsy.data.version=<version>` is its data's version: dotted numbers
   (`11`, `11.8`, `12.1.3`), compared as numbers, missing parts counting as
-  0. You keep it up to date. The simplest way is the image's own version,
+  0. You keep it up to date. Best practice is the image's own version,
   from one variable:
 
   ```yaml
@@ -141,8 +141,8 @@ The refusal names the versions or tags and the ways out:
 - raise the label, unless it is a rollback, whose code is the older
   release's;
 - add `--accept-image <service>` (comma separated, or repeated) to the
-  command you ran, with its other options (`--release-sync`, `--reset`,
-  `--from`): it runs the image anyway, and the history of that data
+  command you ran (`--release-sync`, `--reset`, keeping its `--from`): it
+  runs the image anyway, and the history of that data
   starts over from it.
 
 `--accept-image` lets through only what was refused; a service the rule
@@ -225,15 +225,13 @@ version ([Parent environments and syncs](syncs.md),
 [`--export` and `--import`](data.md#--export-and---import)). Before
 anything stops, the receiving side checks its own labels against the
 source's data, as a release checks its own, for every service whose files
-the copy writes: `volumes` ones, `any` included. A service whose entries
-are all missing on the source gets nothing written, and keeps its
-history.
+the copy writes: `volumes` ones, `any` included.
 
 The receiving side always runs its release's own image on the copy. A
 hold it had goes with its old data, and once the copy is complete, its
-history of that data becomes the source's. A service held on its own
-built image that is gone is refused before anything stops: a copy builds
-nothing.
+history of that data becomes the source's. A service that is held, and
+whose release's own built image is gone, is refused before anything
+stops: a copy builds nothing.
 
 A `custom` copy, a sync's or an import's, checks nothing and leaves the
 service's history, and what it runs, as they were: its script loads the
@@ -242,6 +240,8 @@ not the source's version. The same holds for a `custom` `--resolved`.
 
 For a sync:
 
+- A service whose entries are all missing on the parent gets nothing
+  written, and keeps the child's history.
 - A child below the parent's version, or on another tag at the same
   version, is refused on every sync, unless `--sync --accept-image
   <service>`: the way to try an upgrade path on the parent's data, one

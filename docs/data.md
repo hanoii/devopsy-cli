@@ -271,7 +271,8 @@ Where owners are applied:
 - A sync: an entry the child owns lands with the child's owner, by the
   child's labels (`rsync --chown`), whatever the parent's files have.
 - An `--import` of a `volumes` service: what it extracted goes to its
-  owner before the import completes; locally on macOS, nothing (below).
+  owner before the import completes; locally on macOS, nothing, since
+  Docker Desktop's file sharing may refuse the chown.
 - A reset, once it has emptied `mnt`.
 - Locally, before `up`, `start`, `restart`, `run`, `create`, `watch` and
   `scale`, but not with compose's `--dry-run` (one after `run`'s service
@@ -280,8 +281,7 @@ Where owners are applied:
   owner's is given away and scanned whole; one whose directory is its
   owner's is never scanned, since this runs before every such command.
   On macOS, Docker Desktop and OrbStack let any container user write the
-  Mac's files, so only the directories are made (and Docker Desktop's
-  file sharing may refuse a chown).
+  Mac's files, so only the directories are made.
   - Labels that cannot be read are only a warning: the command goes on,
     and compose says what is wrong with its files. So is an owned entry
     that is a symbolic link (an entry shared between worktrees): it is
@@ -331,8 +331,8 @@ nothing:
   snapshot): Docker would mount that part of the host. A link within the
   entry, and an entry that is itself a link (to another disk), are fine.
 
-That last one is checked everywhere, not only on releases: rollbacks and
-restores refuse it too, and a sync whose copy brings such a link starts
+That last one is checked beyond releases too: rollbacks and restores
+refuse it, and a sync whose copy brings such a link starts
 nothing on it. On a server nothing in a release starts while one is
 there (an `up`, a `start`, a `run`, a `cp`, devopsy's own starts),
 whatever brought it. What stops services to start them again refuses
