@@ -3341,6 +3341,42 @@ func TestRestoreDataVersion(t *testing.T) {
 	}
 }
 
+// A --no-code restore of data from before a hold (db held on 12.1 by a
+// restart, the snapshot's data at 11.8, the release's own label 11.8)
+// runs the release's own image again, its hold gone from its compose
+// file: the held image would upgrade the restored data again (review).
+func TestRestoreDataUnholds(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	out, code := s.run(nil, "@prod", "--snapshot")
+	m := snapshotID.FindStringSubmatch(out)
+	if code != 0 || m == nil {
+		t.Fatalf("take (%d):\n%s", code, out)
+	}
+	base := filepath.Join(s.root, "shop", "prod")
+	snap := filepath.Join(base, "snapshots", m[1])
+	write(t, filepath.Join(snap, images.ListFile), "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap\t\t\t11.8\t11.8\n", 0o644)
+	write(t, filepath.Join(snap, remote.SnapshotData, "images"), "data\tdb\nran\t1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n", 0o600)
+	// Since: the restart held db on release 2's 12.1 image.
+	current := filepath.Join(base, "current")
+	write(t, releaseFile(t, current, images.ListFile), "shop-prod-app\t\tapp\town\nmariadb:11.8\tsha256:twelve\tdb\tpulled\tmariadb@sha256:twelve\t\t\t12.1\t11.8\tmariadb:11.8\tsha256:snap\n", 0o644)
+	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"db\":\n    image: \"mariadb@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"mariadb@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	history := filepath.Join(base, images.HistoryFile)
+	write(t, history, "1\tdb\tran\tmariadb:11.8\tsha256:snap\tmariadb@sha256:snap\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tsha256:twelve\tmariadb@sha256:twelve\t12.1\t11.8\n", 0o644)
+	env := []string{"FAKE_DB_IMAGE=mariadb:11.8", "FAKE_DB_VERSION=11.8", "FAKE_IMAGES=sha256:twelve=mariadb@sha256:twelve sha256:snap=mariadb@sha256:snap", "FAKE_NAMES=mariadb:11.8=sha256:snap"}
+	out, code = s.run(env, "@prod", "--snapshots", "restore", m[1], "--no-code", "--yes")
+	if code != 0 || !strings.Contains(out, "db runs ") || !strings.Contains(out, "own image again") {
+		t.Fatalf("the --no-code restore (%d):\n%s", code, out)
+	}
+	if c := readString(releaseFile(t, current, images.ComposeFile)); strings.Contains(c, "image:") || strings.Contains(c, images.HeldLabel) || !strings.Contains(c, "mariadb@sha256:snap") {
+		t.Errorf("still held after the restore:\n%s", c)
+	}
+	if l := readString(releaseFile(t, current, images.ListFile)); !strings.Contains(l, "mariadb:11.8\tsha256:snap\tdb\tpulled\tmariadb@sha256:snap") {
+		t.Errorf("the listing after the restore:\n%s", l)
+	}
+}
+
 // A take stops every service with data and its dependents, then starts
 // them again: on data where a bind source already leads out of its entry
 // through a link (left by hand, or by a release before the mounts check

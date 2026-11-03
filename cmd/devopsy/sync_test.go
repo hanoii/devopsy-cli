@@ -274,10 +274,13 @@ case "$*" in
     for a; do case $a in *:/mnt:ro) echo "${a%:/mnt:ro}" > "$DOCKER_LOG.daemon" ;; *:/vol/*:ro) v=${a%:ro}; echo "${v##*/} ${a%%:*}" >> "$DOCKER_LOG.daemonvols" ;; RSYNCD_CONF=*) printf '%s\n' "${a#RSYNCD_CONF=}" > "$DOCKER_LOG.rsyncd" ;; esac; done
     echo cid123 ;;
   # Images as devopsy's images rules inspect them (images.CLI): FAKE_IMAGES,
-  # space separated <id>=<registry digest>, found by id or by digest.
+  # space separated <id>=<registry digest>, found by id or by digest, or
+  # by a name FAKE_NAMES points to the id.
   "image inspect --format {{json .}} "*)
+    q=$5
+    for n in ${FAKE_NAMES:-}; do [ "${n%%=*}" != "$q" ] || q=${n#*=}; done
     for i in ${FAKE_IMAGES:-}; do
-      case $5 in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
+      case $q in "${i%%=*}"|*"@${i#*@}") printf '{"Id":"%s","RepoDigests":["%s"]}\n' "${i%%=*}" "${i#*=}"; exit 0 ;; esac
     done
     echo "Error: No such image: $5" >&2; exit 1 ;;
   # FAKE_NAMES: space separated <name>=<id>, the image a name points to
