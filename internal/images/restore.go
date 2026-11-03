@@ -78,11 +78,12 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 	old, ag := readList(target), readList(against)
 	names := bookmarks(old, s.Name, tid)
 	mode := ModeOf(target)
+	wasHeld := heldIn(target)
 	var held map[string]restartHold
 	var accepted []string
 	switch {
 	case s.Restart:
-		held = s.holds(target, against, svcs, ag)
+		held = s.holds(target, against, svcs, ag, old)
 	case s.NoCheck:
 		held = s.restoreHolds(target, svcs, old)
 	default:
@@ -113,7 +114,16 @@ func (s *Set) Restore(target, against string, fetched bool) (err error) {
 			st.kind = KindOwn
 			if !fetched {
 				i := indexOf(old, o)
-				if !haveOld || o.ID == "" || i < 0 {
+				if haveOld && (o.held() || wasHeld[svc.Name] != "") {
+					// Its bookmark holds the image it was held on, never its
+					// own build (review: a rollback to a release the restart
+					// held ran the failed release's build as its own).
+					if st.asIs = s.AsBuilt; !st.asIs {
+						s.say(report.InfoLevel, "%s's image of %s was held on another release's: building its own again", tid, svc.Name)
+						return ErrGone
+					}
+					s.say(report.WarnLevel, "%s's own image of %s is gone, and nothing builds it now: %s stays as it is", tid, svc.Name, svc.Ref)
+				} else if !haveOld || o.ID == "" || i < 0 {
 					if st.asIs = s.AsBuilt; !st.asIs {
 						return s.gone(tid, svc)
 					}
@@ -270,33 +280,76 @@ type restartHold struct {
 	e entry
 	// dir is the directory whose bookmark holds e's image (the failed
 	// release's, the restored release's own, bookmarked from the
-	// snapshot); from what ComposeFile's HeldLabel says (the failed
-	// release's id, "snapshot <id>"); what the image, for messages.
+	// snapshot, or target's own for a hold it keeps); from what
+	// ComposeFile's HeldLabel says (the failed release's id, "snapshot
+	// <id>"); what the image, for messages.
 	dir, from, what, why string
+	// own is target's own image (its name, id and build key), which the
+	// held entry records (entry.OwnRef).
+	own entry
+}
+
+// ownOf is the release's own image of a service, from its listing's
+// entry o (have: it lists one): o itself, or what o records as its own
+// when o is held already; svc's name alone without an entry.
+func ownOf(o entry, have bool, svc Service) entry {
+	switch {
+	case !have:
+		return entry{Ref: svc.Ref}
+	case o.held():
+		return entry{Ref: o.OwnRef, ID: o.OwnID, Build: o.OwnBuild}
+	}
+	return entry{Ref: o.Ref, ID: o.ID, Build: o.Build}
+}
+
+// heldWhat is what a HeldLabel's value says of the image, for messages.
+func heldWhat(from string) string {
+	if snap, ok := strings.CutPrefix(from, snapshotHeld); ok {
+		return "the image its data ran when snapshot " + snap + " was taken"
+	}
+	return "the image release " + from + " ran on its data"
 }
 
 // holds are the data services of target (svcs) the restart after the
-// failed release against keeps on against's image: those the rule refuses
-// against their data's history, once against's image ran on it (its
-// img ran came before: the window's last line is that image). The rule
-// is the one every check runs, so a later rollback finds the same data.
-// --accept-image never reaches it: the release accepted its new image,
-// not the old one back on the new data.
-func (s *Set) holds(target, against string, svcs []Service, ag []entry) map[string]restartHold {
+// failed release against keeps on an image other than target's: those the
+// rule refuses against their data's history, the rule alone deciding,
+// whatever ran (review: a release failing before its database ran, img
+// ran writing nothing, dropped a hold the release before it made, and
+// the older image ran on the newer data). Each is held on the image the
+// window's last line names: against's, once it ran (its img ran came
+// before), else the one target holds it on already (its entry and
+// bookmark in target's listing, its HeldLabel as it was), else
+// against's. The rule is the one every check runs, so a later rollback
+// finds the same data. --accept-image never reaches it: the release
+// accepted its new image, not the old one back on the new data.
+func (s *Set) holds(target, against string, svcs []Service, ag, old []entry) map[string]restartHold {
 	h := readHistory(baseOf(target))
+	already := heldIn(target)
 	held := map[string]restartHold{}
 	for _, svc := range svcs {
 		if !svc.Data {
 			continue
 		}
-		fe, ok := match(ag, entry{Service: svc.Name})
-		last, ran := h.last(svc.Name)
-		if !ok || fe.ID == "" || fe.DataVersion == "" || !ran || last.ID != fe.ID {
+		why := rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its")
+		if why == "" {
 			continue
 		}
-		if why := rule(h.window(svc.Name), svc.DataVersion, svc.tag(), "its"); why != "" {
-			held[svc.Name] = restartHold{e: fe, dir: against, from: filepath.Base(against), what: "the image release " + filepath.Base(against) + " ran on its data", why: "run it on data it does not allow (" + why + ")"}
+		why = "run it on data it does not allow (" + why + ")"
+		fe, ok := match(ag, entry{Service: svc.Name})
+		failed := ok && fe.ID != "" && fe.DataVersion != ""
+		last, ran := h.last(svc.Name)
+		o, haveOld := match(old, entry{Service: svc.Name})
+		own := ownOf(o, haveOld, svc)
+		from := filepath.Base(against)
+		switch {
+		case failed && ran && last.ID == fe.ID:
+		case already[svc.Name] != "" && haveOld && (o.ID != "" || o.Digest != ""):
+			held[svc.Name] = restartHold{e: o, dir: target, from: already[svc.Name], what: heldWhat(already[svc.Name]), why: why, own: own}
+			continue
+		case !failed:
+			continue
 		}
+		held[svc.Name] = restartHold{e: fe, dir: against, from: from, what: heldWhat(from), why: why, own: own}
 	}
 	return held
 }
@@ -333,7 +386,7 @@ func (s *Set) restoreHolds(target string, svcs []Service, old []entry) map[strin
 			w = p.window()
 		}
 		if why := rule(w, svc.DataVersion, svc.tag(), "the snapshot's"); why != "" {
-			held[svc.Name] = restartHold{e: o, dir: target, from: snapshotHeld + snap, what: "the image its data ran when snapshot " + snap + " was taken", why: "run it on data it does not allow (" + why + ")"}
+			held[svc.Name] = restartHold{e: o, dir: target, from: snapshotHeld + snap, what: heldWhat(snapshotHeld + snap), why: "run it on data it does not allow (" + why + ")", own: ownOf(o, true, svc)}
 		}
 	}
 	return held
@@ -433,6 +486,7 @@ func (s *Set) hold(svc Service, hd restartHold, mode string, own map[string]bool
 		}
 	}
 	e.DataVersion, e.Tag = fe.DataVersion, fe.Tag
+	e.OwnRef, e.OwnID, e.OwnBuild = hd.own.Ref, hd.own.ID, hd.own.Build
 	return e, ch, nil
 }
 
@@ -442,13 +496,14 @@ func (s *Set) hold(svc Service, hd restartHold, mode string, own map[string]bool
 // listings and the history alone, it writes into target's listing and
 // ComposeFile the holds the restart would have made where a file can
 // make them: a data service whose version and tag in target's listing
-// the rule refuses against its data's window, once against's image ran on
-// it, held by against's registry digest (pulled), which the run step's up
-// pulls when gone. A built one needs its own name moved onto the image,
-// which only Docker does: said, naming the service and the way on, a
-// release that fixes forward. Why (review): the restart went on with
-// target's own ComposeFile, its older image on the data the newer one
-// ran. Holds already in the file stay.
+// the rule refuses against its data's window (the rule alone, as holds
+// decides), held by against's registry digest (pulled), which the run
+// step's up pulls when gone, the image it replaces in the listing
+// recorded (LeftFile) for the next pruning. A built one needs its own
+// name moved onto the image, which only Docker does: said, naming the
+// service and the way on, a release that fixes forward. Why (review): the
+// restart went on with target's own ComposeFile, its older image on the
+// data the newer one ran. Holds already in the file stay.
 func (s *Set) LastHold(target, against string) error {
 	tid, from := filepath.Base(target), filepath.Base(against)
 	es, ag := readList(target), readList(against)
@@ -463,9 +518,10 @@ func (s *Set) LastHold(target, against string) error {
 		if e.Service == "" || e.DataVersion == "" || holds[e.Service].From != "" {
 			continue
 		}
+		// The rule alone decides, as holds does: whether or not against's
+		// image ran.
 		fe, ok := match(ag, entry{Service: e.Service})
-		last, ran := h.last(e.Service)
-		if !ok || fe.ID == "" || fe.DataVersion == "" || !ran || last.ID != fe.ID {
+		if !ok || fe.ID == "" || fe.DataVersion == "" {
 			continue
 		}
 		why := rule(h.window(e.Service), e.DataVersion, e.Tag, "its")
@@ -476,7 +532,16 @@ func (s *Set) LastHold(target, against string) error {
 			unheld = append(unheld, fmt.Sprintf("%s: %s's image would run it on data it does not allow (%s), and the image release %s built, which its data ran, is held only by moving a name, which needs the images: it runs what %s holds", e.Service, tid, why, from, e.Ref))
 			continue
 		}
+		// The image it replaces in the listing keeps its names, which no
+		// listing gives it now: recorded, as keep records them, or they
+		// would outlive every release (no Docker here: the next pruning
+		// retries them).
+		if e.ID != "" && e.ID != fe.ID {
+			s.record(digestRef(e.Ref), e.ID, tid, "no release lists it any more")
+		}
+		own := ownOf(e, true, Service{})
 		e.ID, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag = fe.ID, KindPulled, fe.Digest, fe.Version, "", fe.DataVersion, fe.Tag
+		e.OwnRef, e.OwnID, e.OwnBuild = own.Ref, own.ID, own.Build
 		es[i] = e
 		holds[e.Service] = composeHold{Image: fe.Digest, From: from}
 		lines = append(lines, fmt.Sprintf("%s stays on the image release %s ran on its data (%s, %s), as %s's would run it on data it does not allow (%s): a release that fixes forward is the way on", e.Service, from, shownEntry(e), shownData(fe), tid, why))

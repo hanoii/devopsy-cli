@@ -92,7 +92,9 @@ func buildArgs(key string) (string, map[string]string) {
 // listing lacks (a profile turned on). A reload, and a sync's or a
 // restore's run step, only start what is there: none of these may pull
 // or build, so each needs a release. Nothing when all match. A service
-// the restart after a failed run step holds (HeldLabel) matches.
+// the restart after a failed run step holds (HeldLabel) is compared by
+// the release's own name and build (entry.OwnRef): its held image is
+// neither.
 func (s *Set) ReloadCheck(rel string) ([]string, error) {
 	recorded := map[string]entry{}
 	listed := readList(rel)
@@ -105,8 +107,10 @@ func (s *Set) ReloadCheck(rel string) ([]string, error) {
 		}
 	}
 	// A service the restart holds runs the failed release's image, which
-	// the listing records: neither its name nor its build is the
-	// release's own, and nothing is fetched for it.
+	// the listing records: its name and build are compared with the
+	// release's own, which the held entry records (entry.OwnRef), so a
+	// variable changing them still needs a release (review: a reload kept
+	// the held image, said to apply it).
 	held := heldIn(rel)
 	svcs, err := s.List(rel)
 	if err != nil {
@@ -115,10 +119,14 @@ func (s *Set) ReloadCheck(rel string) ([]string, error) {
 	var out []string
 	for _, svc := range svcs {
 		e, ok := recorded[svc.Name]
+		if ok && (e.held() || held[svc.Name] != "") {
+			e.Ref, e.Build = e.OwnRef, e.OwnBuild
+		}
 		switch {
 		case !ok:
 			out = append(out, fmt.Sprintf("%s is not one of the services the release fetched images for (a profile turned on?)", svc.Name))
-		case held[svc.Name] != "":
+		case e.Ref == "":
+			// Held, its own not recorded.
 		case familiar(e.Ref) != familiar(svc.Ref):
 			out = append(out, fmt.Sprintf("%s's image is %s now, the release fetched %s", svc.Name, svc.Ref, e.Ref))
 		case e.Build != "" && svc.BuildKey != e.Build:

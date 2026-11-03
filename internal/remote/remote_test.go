@@ -3051,6 +3051,43 @@ func TestRestartLastResortHolds(t *testing.T) {
 	}
 }
 
+// The restart's hold outlives a later failed release whose database
+// never ran (review): release 1 held on I2 by release 2's restart, then
+// release 3 (I3, 12.1) fails before its database ran, so the history
+// still ends on I2. The rule alone decides: release 1 stays held on I2,
+// its HeldLabel release 2's, never back on its own 11.8 image.
+func TestRestartHoldSurvivesFailure(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "devopsy"), oldHoldsFake)
+	fakeImageTools(t, bin)
+	root := t.TempDir()
+	tg := &Target{Name: "prod", Path: "app/prod", Mode: ModeBuild, Address: "vm1:prod", Project: &Project{Name: "app"}}
+	base := filepath.Join(root, tg.Path)
+	release := func(id string, env ...string) (string, error) {
+		t.Helper()
+		write(t, filepath.Join(base, "releases", id, CodeDir, ".devopsy", "compose.yaml"), "services: {}\n")
+		cmd := exec.Command("sh", "-c", ActivateScript(tg, id, false, "app-prod", Phases{Run: []string{"deploy"}}, nil))
+		cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin", "FAKE_ROOT=" + root}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := release("1", "IMG=I1"); err != nil {
+		t.Fatalf("release 1 (%v):\n%s", err, out)
+	}
+	write(t, filepath.Join(base, images.HistoryFile), "1\tdb\tran\tmariadb:11.8\tI1\tmariadb@I1\t11.8\t11.8\n2\tdb\tran\tmariadb:11.8\tI2\tmariadb@I2\t12.1\t11.8\n")
+	if out, err := release("2", "IMG=I2", "FAIL_RUN=4"); err == nil || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Fatalf("release 2's restart did not hold (%v):\n%s", err, out)
+	}
+	out, err := release("3", "IMG=I3", "FAIL_RUN=4")
+	if err == nil {
+		t.Fatalf("release 3's run step did not fail:\n%s", out)
+	}
+	if got := readFile(filepath.Join(base, "releases", "1", images.ComposeFile)); !strings.Contains(got, `image: "mariadb@I2"`) || !strings.Contains(got, `"devopsy.held": "2"`) || !strings.Contains(out, "db stays on the image release 2 ran on its data") {
+		t.Errorf("release 1 restarted without its earlier hold, 11.8 on the data 12.1 ran:\n%s\n%s", got, out)
+	}
+}
+
 // Bug: fetch_release checks fetch_sig only before img names, which
 // ignores signals: a Ctrl-C, or the watcher's SIGTERM for a session gone,
 // landing while img names lists the release goes unseen, and the whole

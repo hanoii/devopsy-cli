@@ -29,6 +29,11 @@ type sim struct {
 	// strict: a restart whose restore fails is the test's failure, never
 	// a fall back to --as-built.
 	strict bool
+	// fetched, when set, is told each image a fetch got for a service:
+	// the claim (version and tag) it was fetched under.
+	fetched func(svc Service, id string)
+	// ups is the image each up ran the database on ("" without one).
+	ups []string
 }
 
 func newSim(t *testing.T, d *fakeDocker, name string, out *bytes.Buffer) *sim {
@@ -54,10 +59,11 @@ func (m *sim) fetch(svcs []Service) {
 		if svc.own(m.e.mode) {
 			m.n++
 			m.d.pull(svc.Ref, fmt.Sprintf("%s-build-%d", m.e.set.Name, m.n))
-			continue
-		}
-		if err := m.d.Pull(svc.Ref); err != nil {
+		} else if err := m.d.Pull(svc.Ref); err != nil {
 			m.t.Fatalf("fetch %s: %v", svc.Ref, err)
+		}
+		if m.fetched != nil {
+			m.fetched(svc, m.d.names[familiar(svc.Ref)])
 		}
 	}
 }
@@ -120,6 +126,7 @@ func (m *sim) up() {
 		cs = append(cs, container{image: img.ID, project: m.e.set.Name, service: svc.Name, digest: labels[svc.Name]})
 	}
 	m.d.containers = cs
+	m.ups = append(m.ups, m.runs("database"))
 }
 
 // rollback restores target in place of current, then runs it.
@@ -169,6 +176,51 @@ func (m *sim) failRun(accept bool, svcs ...Service) (string, error) {
 	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 	m.restart(prev, id)
 	return id, nil
+}
+
+// failEarly is a release whose run step fails before its database ran
+// on its data: the container there is the one before, another
+// activation's, or none at all (gone), so img ran writes nothing for it;
+// then the restart, as failRun's.
+func (m *sim) failEarly(accept, gone bool, svcs ...Service) (string, bool, error) {
+	m.t.Helper()
+	prev := m.cur
+	if accept {
+		m.e.set.Accept = acceptAll(svcs)
+	}
+	defer func() { m.e.set.Accept = nil }()
+	id := m.e.release(svcs...)
+	rel := m.e.rel(id)
+	if err := m.e.set.Check(rel); err != nil {
+		os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+		return id, false, err
+	}
+	m.fetch(svcs)
+	if err := m.e.set.Record(rel, m.prev()); err != nil {
+		m.t.Fatal(err)
+	}
+	m.cur = id
+	if gone {
+		var cs []container
+		for _, c := range m.d.containers {
+			if c.project != m.e.set.Name || c.service != "database" {
+				cs = append(cs, c)
+			}
+		}
+		m.d.containers = cs
+	}
+	// The container before runs the image the release gave it already
+	// (the same digest): img ran counts it, as it ran.
+	ran := false
+	for _, c := range m.d.containers {
+		if c.project == m.e.set.Name && c.service == "database" && c.digest != "" && c.digest == labelsIn(rel)["database"] {
+			ran = true
+		}
+	}
+	m.e.set.Ran(m.base(), rel)
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	m.restart(prev, id)
+	return id, ran, nil
 }
 
 // restart is get_images then the restart's run step: prev restored in
@@ -677,6 +729,16 @@ func TestDataRestartHolds(t *testing.T) {
 	if needs, err := m.e.set.ReloadCheck(m.e.rel(r1)); err != nil || len(needs) > 0 {
 		t.Errorf("a reload after the hold: %v %v", needs, err)
 	}
+	// A variable changing a held service's image or build still needs a
+	// release: a reload keeps the held image (review: it said a reload
+	// applies it).
+	was := m.e.svcs[r1]
+	m.e.svcs[r1] = []Service{dbSvc("mariadb:11.9"), search("9")}
+	needs, err := m.e.set.ReloadCheck(m.e.rel(r1))
+	if got := strings.Join(needs, "\n"); err != nil || !strings.Contains(got, "database's image is mariadb:11.9 now, the release fetched mariadb:11.8") || !strings.Contains(got, "search's build changed since the release built its image: VERSION") {
+		t.Errorf("a reload of held services whose image and build changed: %v\n%s", err, got)
+	}
+	m.e.svcs[r1] = was
 	// The child of a held parent takes the held version.
 	if p := parseParentData(m.e.set.ParentData(m.base(), m.e.rel(r1)))["database"]; p == nil || windowVersion(p.window()) != "12.1" {
 		t.Errorf("ParentData of the held environment: %+v", p)
@@ -730,6 +792,24 @@ func TestDataRestartLastResort(t *testing.T) {
 	m.e.set.Ran(m.base(), m.e.rel(r1))
 	if l, _ := readHistory(m.base()).last("database"); l.Version != "12.1" {
 		t.Errorf("the history ends on %+v, not the held image's version", l)
+	}
+	// The image the hold replaced in r1's listing keeps no name once every
+	// release goes (review: mariadb:11.8 outlived them all).
+	d.publish("mariadb:12.2", "K1")
+	if _, err := m.release(false, dbSvc("mariadb:12.2"), search("9")); err != nil {
+		m.fail("fix forward: %v", err)
+	}
+	d.containers = nil
+	for _, id := range m.e.releases() {
+		if err := m.e.set.Remove(m.e.rel(id)); err != nil {
+			t.Fatal(err)
+		}
+		os.RemoveAll(m.e.rel(id))
+	}
+	m.e.set.Prune()
+	d.Prune()
+	if len(d.images) > 0 {
+		t.Errorf("images left once every release went: %v %v\n%s", d.images, d.names, out.String())
 	}
 }
 
@@ -822,6 +902,88 @@ func TestDataRestartHoldsOnlyWhatRan(t *testing.T) {
 	m.restart(r1, r2)
 	if m.runs("database") != "I1" || len(heldIn(m.e.rel(r1))) > 0 {
 		m.fail("held %v, runs %s", heldIn(m.e.rel(r1)), m.runs("database"))
+	}
+}
+
+// A hold outlives a later failed release whose database never ran: the
+// rule alone decides, so the restart keeps the earlier hold (its entry,
+// bookmark and HeldLabel as they were) whether img ran found the
+// release before's container or none (review: the window's last line
+// was the earlier failed release's, so nothing was held and 11.8 ran on
+// the 12.1 data). A built database likewise.
+func TestDataRestartHoldSurvivesFailures(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	m.strict = true
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118)
+	d.publish("mariadb:12.1", "J1")
+	r2, err := m.failRun(false, dbSvc("mariadb:12.1"))
+	if err != nil || m.runs("database") != "J1" {
+		m.fail("r2 (%v): database %s", err, m.runs("database"))
+	}
+	for _, gone := range []bool{false, true} {
+		d.publish("mariadb:12.1", fmt.Sprintf("J%d", map[bool]int{false: 2, true: 3}[gone]))
+		if _, _, err := m.failEarly(false, gone, dbSvc("mariadb:12.1")); err != nil {
+			m.fail("a failed release (gone %v): %v", gone, err)
+		}
+		imgs, _, held := composeFacts(m.e.rel(r1))
+		if m.runs("database") != "J1" || imgs["database"] != "mariadb@J1" || held["database"] != r2 {
+			m.fail("after a failed release whose database never ran (no container: %v): database runs %s (want J1, the earlier hold), images %v, held %v", gone, m.runs("database"), imgs, held)
+		}
+		es := readList(m.e.rel(r1))
+		for i, b := range bookmarks(es, m.e.set.Name, r1) {
+			if got, _ := d.ID(b); es[i].Service == "database" && (es[i].ID != "J1" || es[i].DataVersion != "12.1" || got != "J1") {
+				t.Errorf("r1's listing %+v, its bookmark %s on %s", es[i], b, got)
+			}
+		}
+	}
+	if l, _ := readHistory(m.base()).last("database"); l.ID != "J1" || l.Version != "12.1" {
+		t.Errorf("the history ends on %+v", l)
+	}
+
+	p := newSim(t, d, "app-stage", &out)
+	p.strict = true
+	s1, _ := p.release(false, builtDB("app-stage", "11.8"))
+	s2, _ := p.failRun(false, builtDB("app-stage", "12.1"))
+	built, _ := match(readList(p.e.rel(s2)), entry{Service: "database"})
+	if _, _, err := p.failEarly(false, false, builtDB("app-stage", "12.1")); err != nil {
+		p.fail("a failed release: %v", err)
+	}
+	if p.runs("database") != built.ID || heldIn(p.e.rel(s1))["database"] != s2 || d.names["app-stage-database:latest"] != built.ID {
+		p.fail("built: database runs %s, its name holds %s, held %v, want %s's %s", p.runs("database"), d.names["app-stage-database:latest"], heldIn(p.e.rel(s1)), s2, built.ID)
+	}
+}
+
+// A rollback (accepted) to a release the restart held on a failed
+// release's build runs its own build, built again, never the held image
+// its bookmark holds: the history records what then runs (review: it ran
+// the failed release's 12.1 build as its own, recorded as 11.8).
+func TestDataRollbackToHeld(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
+	r2, _ := m.failRun(false, builtDB("app-prod", "12.1"))
+	held, _ := match(readList(m.e.rel(r2)), entry{Service: "database"})
+	if m.runs("database") != held.ID {
+		m.fail("the restart runs %s, not %s's %s", m.runs("database"), r2, held.ID)
+	}
+	if _, err := m.release(false, builtDB("app-prod", "12.1")); err != nil {
+		m.fail("fix forward: %v", err)
+	}
+	if err := m.rollback(r1, true); err != nil {
+		m.fail("the accepted rollback to %s: %v", r1, err)
+	}
+	e, _ := match(readList(m.e.rel(r1)), entry{Service: "database"})
+	if m.runs("database") == held.ID || m.runs("database") != e.ID || e.held() || e.DataVersion != "11.8" {
+		m.fail("the rollback to %s runs %s (%s's held build %s), listing %+v", r1, m.runs("database"), r2, held.ID, e)
+	}
+	if l, _ := readHistory(m.base()).last("database"); l.ID != e.ID || l.Version != "11.8" || l.How != Forced {
+		t.Errorf("the history ends on %+v, not %s's own build", l, r1)
 	}
 }
 

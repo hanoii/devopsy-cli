@@ -47,7 +47,9 @@ const (
 	// build key a service the release built was built with (BuildKey),
 	// and for a data service its DataVersionLabel and, without build:, its
 	// tag (TagOf of compose's image:, never of a held reference): what its
-	// run records (Ran) and its checks compare (rule).
+	// run records (Ran) and its checks compare (rule); then, for an entry
+	// held on another release's image, the release's own name, id and
+	// build key (entry.OwnRef).
 	ListFile = "devopsy-images"
 	// FetchingFile marks a new release while it fetches its images: one
 	// left behind was cut off without a signal (a CI session that
@@ -276,7 +278,18 @@ type entry struct {
 	// without build: ("" for any other service), as the release runs them:
 	// the restart's hold records the held image's own (holds).
 	DataVersion, Tag string
+	// OwnRef, OwnID and OwnBuild are the release's own image, for an
+	// entry held on another's (the restart's hold, a full restore's): its
+	// name, id and build key as the release fetched them, what a reload
+	// compares the variables now with (ReloadCheck) and a hold dropped
+	// goes back to (Unhold); "" for an entry not held. Set, they also say
+	// the entry's bookmark holds another release's image, never this
+	// one's build (Restore).
+	OwnRef, OwnID, OwnBuild string
 }
+
+// held says whether e is an entry held on another release's image.
+func (e entry) held() bool { return e.OwnRef != "" }
 
 func (s *Set) say(lv report.Level, format string, args ...any) {
 	// A session gone takes these lines with it: never a reason to stop.
@@ -402,7 +415,7 @@ func readList(rel string) []entry {
 			return ""
 		}
 		if col(0) != "" {
-			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6), DataVersion: col(7), Tag: col(8)})
+			es = append(es, entry{Ref: col(0), ID: col(1), Service: col(2), Kind: col(3), Digest: col(4), Version: col(5), Build: col(6), DataVersion: col(7), Tag: col(8), OwnRef: col(9), OwnID: col(10), OwnBuild: col(11)})
 		}
 	}
 	return es
@@ -411,7 +424,7 @@ func readList(rel string) []entry {
 func writeList(rel string, es []entry) error {
 	var b strings.Builder
 	for _, e := range es {
-		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag}
+		cols := []string{e.Ref, e.ID, e.Service, e.Kind, e.Digest, e.Version, e.Build, e.DataVersion, e.Tag, e.OwnRef, e.OwnID, e.OwnBuild}
 		for len(cols) > 1 && cols[len(cols)-1] == "" {
 			cols = cols[:len(cols)-1]
 		}
