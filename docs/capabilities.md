@@ -69,7 +69,7 @@ when it returns.
   to its data: `go`, complete; `abort`, nothing of the parent's written,
   on data that was complete; `partial`, written in part, or nothing
   written onto data an earlier sync, an import or a restore left
-  incomplete ([Logs and failures](syncs.md#logs-and-failures)). After `go` and
+  incomplete ([When a sync fails](syncs.md#when-a-sync-fails)). After `go` and
   `abort` devopsy has started its stopped services and waited for them
   to be healthy; after `partial` they stay down, and the hook must not
   start them. On the child after `go` it is where a copy of production

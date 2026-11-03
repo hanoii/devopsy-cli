@@ -201,7 +201,7 @@ How the stops happen:
 - Nothing is paused: Traefik drops a paused container's router, and
   `docker pause` flushes nothing.
 - A service kept down (by an import that failed, below, or a sync:
-  [Logs and failures](syncs.md#logs-and-failures)) that has `restart:
+  [When a sync fails](syncs.md#when-a-sync-fails)) that has `restart:
   always` is named: Docker starts it again when its daemon starts, after a
   reboot, on the data as it is. `unless-stopped` keeps it down until
   devopsy starts it.
