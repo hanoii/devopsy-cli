@@ -965,7 +965,11 @@ variables with its own image, not the held one. When the restart's
 images cannot be restored at all (the server's images held by another
 for 10 minutes, Docker failing), a pulled one is still held, by its
 digest; a built one cannot be, and the release's output names it, with
-the release that fixes forward.
+the release that fixes forward. The same goes for a child after a
+release that syncs whose run step failed before its database ran: its
+data is then the parent's, and a database the parent builds ran on an
+image only the parent's server has, so the previous release's own image
+runs on it, said, until a release fixes forward.
 
 **Syncs and imports** check the receiving side's labels against the
 source's data (Parent environments and syncs, `--export` and
