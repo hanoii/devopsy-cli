@@ -693,6 +693,51 @@ func TestDataReleaseSyncChecksFirst(t *testing.T) {
 	}
 }
 
+// A release that syncs, accepted over the parent's higher data, starts
+// its history over from its own image, never the container's, which runs
+// the release before's until the run step: so when that step fails
+// before the database runs, the restart holds the release before on the
+// accepted release's image (review: it ran its own older one on the
+// copy).
+func TestDataReleaseSyncAcceptedRestart(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	prod, dev := newSim(t, d, "app-prod", &out), newSim(t, d, "app-dev", &out)
+	d.publish("mariadb:12", "P1")
+	prod.release(false, dbSvc("mariadb:12"))
+	d.publish("mariadb:11", "R1")
+	r1, _ := dev.release(false, dbSvc("mariadb:11"))
+	d.publish("mariadb:11.8", "R2")
+	data := prod.e.set.ParentData(prod.base(), prod.e.rel(prod.cur))
+	dev.e.set.SyncData, dev.e.set.Accept = data, map[string]bool{"database": true}
+	r2 := dev.e.release(dbSvc("mariadb:11.8"))
+	rel := dev.e.rel(r2)
+	if err := dev.e.set.Check(rel); err != nil {
+		dev.fail("the accepted release that syncs: %v", err)
+	}
+	dev.fetch(dev.e.svcs[r2])
+	if err := dev.e.set.Record(rel, dev.prev()); err != nil {
+		dev.fail("record: %v", err)
+	}
+	dev.cur = r2
+	if err := dev.e.set.SyncDone(dev.base(), rel, data, "vm1:prod"); err != nil {
+		dev.fail("sync-done: %v", err)
+	}
+	if got := strings.Join(dev.history("database"), " "); got != "forced:R2:11.8" {
+		t.Errorf("the accepted sync's history: %s, not the release's own image", got)
+	}
+	// The run step fails before the database is made again: it still
+	// runs R1, which img ran does not count.
+	dev.e.set.Ran(dev.base(), rel)
+	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+	dev.e.set.SyncData, dev.e.set.Accept = "", nil
+	dev.restart(r1, r2)
+	if dev.runs("database") != "R2" || heldIn(dev.e.rel(r1))["database"] == "" {
+		dev.fail("the restart of %s runs %s, held %v: not the accepted release's image", r1, dev.runs("database"), heldIn(dev.e.rel(r1)))
+	}
+}
+
 // The restart after a failed run step cannot refuse: every data service
 // the rule refuses, once the failed release's image ran on its data,
 // stays on that image, a pulled one by digest, a built one by its own
@@ -2052,6 +2097,87 @@ func dataRandom(t *testing.T, seed int64) {
 				run(m, m.runs("database"), db, yes && refused)
 			}
 			check(m.e.set.Name + " sync from " + o.e.set.Name)
+		case 9: // a release that syncs the other's data, its run step going through or failing before its database ran
+			o := other()
+			if m.cur == "" || o.cur == "" {
+				continue
+			}
+			prev, ss := m.cur, svcs()
+			db := dbOf(ss)
+			yes := rng.Intn(3) == 0
+			refused := verdict(model[o], db)
+			data := o.e.set.ParentData(o.base(), o.e.rel(o.cur))
+			m.e.set.SyncData = data
+			if yes {
+				m.e.set.Accept = acceptAll(ss)
+			}
+			id := m.e.release(ss...)
+			rel := m.e.rel(id)
+			err := m.e.set.Check(rel)
+			if !expect("release that syncs "+id, err, refused, yes) {
+				os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+				m.e.set.SyncData, m.e.set.Accept = "", nil
+				check(m.e.set.Name + " refused release that syncs " + id)
+				continue
+			}
+			m.fetch(ss)
+			if err := m.e.set.Record(rel, m.prev()); err != nil {
+				t.Fatalf("after %v: record %s: %v\n%s", log, id, err, out.String())
+			}
+			m.cur = id
+			if err := m.e.set.SyncDone(m.base(), rel, data, "vm1:"+o.e.set.Name); err != nil {
+				t.Fatalf("after %v: sync-done %s: %v\n%s", log, id, err, out.String())
+			}
+			m.e.set.SyncData, m.e.set.Accept = "", nil
+			if yes && refused {
+				model[m] = history{claim(db, Forced)}
+			} else {
+				w := append(history{}, model[o].window("database")...)
+				if len(w) == 0 {
+					w = history{{Service: "database"}}
+				}
+				w[0].How = SyncedFrom + "x"
+				model[m] = w
+			}
+			// Failing before its database ran, the restart holds the release
+			// before on the accepted release's own image, or on nothing; a
+			// hold on the parent's lines, whose images may not be this
+			// server's, is the accepted case the README names, left out.
+			held := verdict(model[m], dbOf(m.e.svcs[prev]))
+			if rng.Intn(2) == 0 || (held && !(yes && refused)) {
+				m.up()
+				m.e.set.Ran(m.base(), rel)
+				run(m, m.runs("database"), db, false)
+				check(m.e.set.Name + " release that syncs " + id)
+				continue
+			}
+			before := m.runs("database")
+			ran := false
+			for _, c := range m.d.containers {
+				if c.project == m.e.set.Name && c.service == "database" && c.digest != "" && c.digest == labelsIn(rel)["database"] {
+					ran = true
+				}
+			}
+			failedImg, _ := match(readList(rel), entry{Service: "database"})
+			m.e.set.Ran(m.base(), rel)
+			os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
+			if ran {
+				run(m, before, db, false)
+			}
+			m.restart(prev, id)
+			held = verdict(model[m], dbOf(m.e.svcs[prev]))
+			if held != (heldIn(m.e.rel(prev))["database"] != "") {
+				t.Fatalf("after %v: the restart of %s after a release that syncs held %v, the model says %v\n%s", log, prev, heldIn(m.e.rel(prev)), held, out.String())
+			}
+			pref := dbOf(m.e.svcs[prev])
+			if held {
+				if m.runs("database") != failedImg.ID {
+					t.Fatalf("after %v: the restart of %s after the release that syncs %s runs its database on %s, not %s\n%s", log, prev, id, m.runs("database"), failedImg.ID, out.String())
+				}
+				pref = db
+			}
+			run(m, m.runs("database"), pref, false)
+			check(m.e.set.Name + " release that syncs failed " + id)
 		case 10: // a complete import of the other's export, or of none
 			o := other()
 			if m.cur == "" {

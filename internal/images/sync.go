@@ -432,7 +432,6 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 	ps := parseParentData(data)
 	h := readHistory(base)
 	changed := false
-	var cs map[string]Container
 	if labels {
 		if err := s.writeClaims(rel); err != nil {
 			return err
@@ -447,23 +446,14 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 		}
 		w := append(history{}, p.window()...)
 		if s.Accept[e.Service] && copyRule(w, e, o, source, running) != "" {
-			// Its own image on the copy, accepted: its history over from it.
+			// Its own image on the copy, accepted: its history over from
+			// it, the release's own (as Record's ForcedFile names it), never
+			// the container's, which in a release that syncs runs the
+			// release before's until the run step (review: a run step
+			// failing before the database ran restarted that one on it).
 			img := Image{ID: o.ID}
-			if e.held() {
-				if i, err := s.Docker.Inspect(o.ID); err == nil {
-					img = i
-				}
-			} else {
-				if cs == nil {
-					cs = s.containers()
-				}
-				if c, ok := cs[e.Service]; ok && c.started() {
-					if i, err := s.Docker.Inspect(c.Image); err == nil {
-						img = i
-					}
-				} else if i, err := s.Docker.Inspect(o.ID); err == nil {
-					img = i
-				}
+			if i, err := s.Docker.Inspect(o.ID); err == nil {
+				img = i
 			}
 			h = append(h.without(e.Service), ranOn(o, Forced, img, s.now()))
 			changed = true
