@@ -392,7 +392,8 @@ func (s *Set) RestoreOwn(rel string) {
 	names := bookmarks(es, s.Name, id)
 	own := s.own(rel)
 	for i, e := range es {
-		if e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") {
+		// (A held service's own build, of no service: withOwnBuilds, holds.)
+		if e.Service == "" || e.Kind != KindOwn || e.ID == "" || strings.Contains(e.Ref, "@") {
 			continue
 		}
 		bid, err := s.Docker.ID(names[i])

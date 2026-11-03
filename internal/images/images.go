@@ -555,6 +555,7 @@ func digestOf(ref string) string {
 // keep records a release's entries (ListFile) and tags each image with
 // its bookmark, giving up what an earlier listing of it no longer has.
 func (s *Set) keep(rel string, es []entry) error {
+	es = withOwnBuilds(es)
 	id := s.idOf(rel)
 	old := readList(rel)
 	// A name and the image it had: a listing again under the same name
@@ -615,6 +616,28 @@ func (s *Set) keep(rel string, es []entry) error {
 		}
 	}
 	return nil
+}
+
+// withOwnBuilds is es with one entry of no service for the own build of
+// each service held on another image: its bookmark keeps that build while
+// the hold lasts. Nothing else would, its name having moved to the held
+// image, and the next pruning anywhere on the server took it, leaving a
+// copy or --resolved no image to give the service back on (review). Entries
+// from a listing before it go first: the hold may have ended.
+func withOwnBuilds(es []entry) []entry {
+	var out, builds []entry
+	seen := map[string]bool{}
+	for _, e := range es {
+		if e.Service == "" && e.Kind == KindOwn {
+			continue
+		}
+		out = append(out, e)
+		if e.held() && e.OwnDigest == "" && e.OwnID != "" && e.OwnID != e.ID && !seen[e.OwnID] {
+			seen[e.OwnID] = true
+			builds = append(builds, entry{Ref: e.OwnRef, ID: e.OwnID, Kind: KindOwn, Build: e.OwnBuild})
+		}
+	}
+	return append(out, builds...)
 }
 
 // own is every bookmark the environment's releases and snapshots make,

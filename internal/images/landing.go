@@ -381,8 +381,8 @@ func (s *Set) copyNeeds(rel string, es, own []entry, svcs map[string]Service, l 
 		if !e.held() {
 			continue
 		}
-		svc, listed := svcs[e.Service]
-		if (listed && svc.own(mode) || !listed && o.Kind == KindOwn) && !s.imagePresent(o.ID) {
+		// One its compose no longer gives: derive keeps it, said.
+		if svc, listed := svcs[e.Service]; listed && svc.own(mode) && !s.imagePresent(o.ID) {
 			gone = append(gone, e.Service+": the current release's own image of it, built by the project, is gone from this server, and the image it is held on ("+shownData(e)+") would upgrade the "+source+" data again")
 		}
 	}

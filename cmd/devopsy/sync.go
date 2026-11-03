@@ -2778,7 +2778,10 @@ func markIncomplete(base, from, code, why string, keep bool) error {
 		if keep && !m.IsImport() {
 			return nil
 		}
-		if m.Since != "" {
+		// An import's mark is timed at its latest write: --resolved keeps a
+		// window that landed since, never one from an import before that a
+		// retry then wrote over (review).
+		if m.Since != "" && code != remote.IncompleteImport {
 			since = m.Since
 		}
 	}

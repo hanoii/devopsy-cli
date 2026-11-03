@@ -179,12 +179,50 @@ func (s *Set) source(rel, service string, l ran) (entry, string) {
 	src := entry{Ref: l.Ref, ID: l.ID, Service: service, Kind: KindOwn}
 	// With a tag pulled; in image mode a build: service's too, which has no
 	// tag and which the registry serves (its digests are no local build's).
+	// By its digest in the service's own repository, never the one the line
+	// names: a window from an export's header is whoever made the tar's
+	// (review), and a mirror has the same digest.
 	if l.Tag != "" || ModeOf(rel) == ModeImage {
 		if d := digestIn(Image{Digests: l.Digests}, l.Ref); d != "" {
-			src.Kind, src.Digest = KindPulled, d
+			repo := repoOf(l.Ref)
+			if e, ok := match(readList(rel), entry{Service: service}); ok {
+				repo = repoOf(ownOf(e).Ref)
+			}
+			src.Kind, src.Digest = KindPulled, repo+"@"+digestOf(d)
 		}
 	}
 	return src, historyHeld
+}
+
+// here says whether Docker has src's image.
+func (s *Set) here(src entry) bool {
+	if src.Kind != KindOwn && src.Digest != "" {
+		_, err := s.Docker.Inspect(src.Digest)
+		return err == nil
+	}
+	return s.imagePresent(src.ID)
+}
+
+// allowedHere finds, for the restart's last try, an image a release of the
+// environment lists on this server that the rule allows on data whose
+// window ends at line (a one-line window reads the same): what a hold on an
+// image this server does not have (the parent's build, its data landed by
+// the failed release's sync) can run instead of the release's older own,
+// newest release first, the failed one's own usually (review).
+func (s *Set) allowedHere(rel, service string, line ran) (entry, string, bool) {
+	dirs, _ := filepath.Glob(filepath.Join(filepath.Dir(rel), "*"))
+	sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
+	for _, d := range dirs {
+		if filepath.Clean(d) == filepath.Clean(rel) || strings.HasSuffix(d, ".tmp") {
+			continue
+		}
+		for _, e := range readList(d) {
+			if e.Service == service && !e.held() && e.DataVersion != "" && e.DataVersion != AnyVersion && s.here(e) && rule([]ran{line}, e.DataVersion, e.Tag, "its") == "" {
+				return e, filepath.Base(d), true
+			}
+		}
+	}
+	return entry{}, "", false
 }
 
 // failedRank orders a failed release after any other.
@@ -213,6 +251,12 @@ func (s *Set) applyHolds(rel string, es []entry, held map[string]hold, pulled *[
 			continue
 		}
 		src, from := s.source(rel, o.Service, h.line)
+		if s.AsBuilt && !s.here(src) {
+			if alt, altFrom, ok := s.allowedHere(rel, o.Service, h.line); ok {
+				src, from = alt, altFrom
+				h.line = ran{Service: o.Service, Ref: alt.Ref, ID: alt.ID, Version: alt.DataVersion, Tag: alt.Tag}
+			}
+		}
 		e, ch, err := s.holdOn(o, h, src, from, own, pulled)
 		if err != nil {
 			return nil, nil, err
@@ -359,6 +403,7 @@ func (s *Set) resolveBookmarks(rel string, es []entry, holds map[string]composeH
 // writeHeld records rel's entries (keep: the listing and its bookmarks)
 // and its ComposeFile with holds.
 func (s *Set) writeHeld(rel string, es []entry, holds map[string]composeHold) error {
+	es = withOwnBuilds(es)
 	tid := s.idOf(rel)
 	s.resolveBookmarks(rel, es, holds)
 	if err := s.keep(rel, es); err != nil {
@@ -533,8 +578,10 @@ func (s *Set) LastHold(target, against string) error {
 	if err != nil {
 		s.say(report.WarnLevel, "could not read the labels of %s (%v): its data services' versions are its listing's", tid, err)
 	}
+	// Its data's window, as the restart's: a ForcedFile a cut activation
+	// left in target is no acceptance of it now (review).
 	own := ownEntries(target, es, svcs, svcs)
-	held := holdsFor(own, windows(baseOf(target), target))
+	held := holdsFor(own, readHistory(baseOf(target)).window)
 	imgs, _, wasHeld := composeFacts(target)
 	// What the file holds now stays but for what this changes: a hold by
 	// its own name has no image:, only its mark.

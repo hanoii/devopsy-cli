@@ -78,17 +78,13 @@ func TestCopyNeedsFixKeepsFrom(t *testing.T) {
 }
 
 // A child on another server than its parent, whose database the parent
-// builds: a release that syncs lands the parent's window (its built
-// image's lines, an image only the parent's server has), and its run
-// step fails before the child's database ran. The restart of the release
-// before, lower than the parent's data, holds; the held image cannot be
-// had here, so the restart's last try (--as-built) should hold on the
-// previous release's own name, that lower image running on the parent's
-// data, said (README, "Data and its images"). Instead holdOn keeps the
-// parent's own name as the hold's image: (the parent's compose name
-// -database), which this server has no image of, so the previous
-// release's compose file points its database at a name nothing here
-// holds, and its run step's up cannot start it.
+// builds: a release that syncs lands the parent's window (its built image's
+// lines, an image only the parent's server has), and its run step fails
+// before the child's database ran. The restart of the release before, lower
+// than the parent's data, holds; the held image cannot be had here, so the
+// restart's last try (--as-built) runs an image of this server the data
+// allows, the failed release's own, never the name of an image nothing here
+// has (review). With none, its release's own, said.
 func TestRestartAsBuiltHoldOnParentsBuiltImage(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
@@ -123,6 +119,10 @@ func TestRestartAsBuiltHoldOnParentsBuiltImage(t *testing.T) {
 	dev.e.set.Ran(dev.base(), rel)
 	os.WriteFile(filepath.Join(rel, failedFile), nil, 0o644)
 	dev.e.set.SyncData = ""
+	failed := dev.runs("database")
+	if id, err := d.ID("app-dev-database"); err == nil {
+		failed = id
+	}
 	// The restart, as get_images runs it: --restart refuses the hold (the
 	// parent's image is not here), then --as-built holds all the same.
 	dev.e.set.Restart = true
@@ -138,11 +138,25 @@ func TestRestartAsBuiltHoldOnParentsBuiltImage(t *testing.T) {
 	imgs, labels, _ := composeFacts(dev.e.rel(r1))
 	if img := imgs["database"]; img != "" {
 		if _, err := d.ID(img); err != nil {
-			t.Errorf("%s's compose file points database at %s, which this server has no image of (%v): its run step cannot start it; the previous release's own name should hold it, %s running on the data, said:\n%s", r1, img, err, own, out.String())
+			t.Errorf("%s's compose file points database at %s, which this server has no image of (%v):\n%s", r1, img, err, out.String())
 		}
 	}
-	if labels["database"] != own {
-		t.Errorf("database's digest label is %s, not %s's own build %s", labels["database"], r1, own)
+	if labels["database"] != failed {
+		t.Errorf("database's digest label is %s, not the failed release's own build %s, which the data allows:\n%s", labels["database"], failed, out.String())
+	}
+	// Without it, its release's own image, said.
+	delete(d.images, failed)
+	for n, id := range d.names {
+		if id == failed {
+			delete(d.names, n)
+		}
+	}
+	out.Reset()
+	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); err != nil {
+		dev.fail("img restore --restart --as-built, the failed release's build gone: %v", err)
+	}
+	if _, labels, _ := composeFacts(dev.e.rel(r1)); labels["database"] != own {
+		t.Errorf("database's digest label is %s, not %s's own build %s:\n%s", labels["database"], r1, own, out.String())
 	}
 }
 
@@ -437,6 +451,14 @@ func TestRestartLastTryOwnByBookmark(t *testing.T) {
 		stage.fail("stage: %v", err)
 	}
 	other := stage.runs("database")
+	// The failed release's own build gone: nothing here the data allows.
+	e, _ := match(readList(rel), entry{Service: "database"})
+	delete(d.images, e.ID)
+	for n, id := range d.names {
+		if id == e.ID {
+			delete(d.names, n)
+		}
+	}
 	dev.e.set.Restart = true
 	defer func() { dev.e.set.Restart, dev.e.set.AsBuilt = false, false }()
 	if err := dev.e.set.Restore(dev.e.rel(r1), rel, false); !errors.Is(err, ErrRefused) {
@@ -940,5 +962,141 @@ func TestRestoreKeepsTheWindowOfAProfileOff(t *testing.T) {
 	d.publish("mariadb:11.8", "I1")
 	if _, err := m.release(false, proxySvc, db118); !errors.Is(err, ErrRefused) {
 		t.Errorf("the restored data is 12.1's, and a release runs 11.8 on it unrefused (%v), its history %v:\n%s", err, m.history("database"), out.String())
+	}
+}
+
+// The last resort derives against the data's window, as the restart it
+// replaces does: a ForcedFile a cut activation left in its target is no
+// acceptance of the image it now restarts on data that moved past it.
+func TestDataLastResortIgnoresStaleForced(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118)
+	// Accepted once, its activation cut before anything ran it.
+	if err := os.WriteFile(filepath.Join(m.e.rel(r1), ForcedFile), []byte("database\tI1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.publish("mariadb:12.1", "J1")
+	r2 := m.e.release(dbSvc("mariadb:12.1"))
+	m.fetch(m.e.svcs[r2])
+	if err := m.e.set.Record(m.e.rel(r2), m.e.rel(r1)); err != nil {
+		m.fail("record: %v", err)
+	}
+	m.cur = r2
+	m.up()
+	if err := m.e.set.Ran(m.base(), m.e.rel(r2)); err != nil {
+		m.fail("ran: %v", err)
+	}
+	if err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r2)); err != nil {
+		m.fail("the last resort: %v", err)
+	}
+	if heldIn(m.e.rel(r1))["database"] == "" {
+		t.Errorf("%s runs its own 11.8 on data 12.1 ran on, a stale %s taken for an acceptance:\n%s", r1, ForcedFile, out.String())
+	}
+}
+
+// A parent that has data and no history of it yet sends its label's version
+// and tag, as a local export does: its copy is not data of no known version
+// while the label says what it is.
+func TestDataNoHistorySendsItsLabel(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:12.1", "J1")
+	m.release(false, dbSvc("mariadb:12.1"))
+	if err := os.Remove(filepath.Join(m.base(), HistoryFile)); err != nil {
+		t.Fatal(err)
+	}
+	data := m.e.set.ParentData(m.base(), m.e.rel(m.cur))
+	p := parseParentData(data)["database"]
+	if p == nil || windowVersion(p.window()) != "12.1" {
+		t.Fatalf("no history, what it sends: %q", data)
+	}
+	if again := m.e.set.ParentData(m.base(), m.e.rel(m.cur)); again != data {
+		t.Errorf("it changes between the preflight and the push, whose checksum would refuse: %q, then %q", data, again)
+	}
+}
+
+// A hold by a line's digest goes through the service's own repository,
+// never the one a line names: an export's header is whoever made the tar's,
+// and a restart would pull and run what it says.
+func TestDataHoldStaysInItsOwnRepository(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	m.release(false, db118)
+	rel := m.e.rel(m.cur)
+	src, _ := m.e.set.source(rel, "database", ran{Service: "database", Ref: "evil/image:12.1", ID: "E1", Digests: []string{"evil/image@sha256:abc"}, Version: "12.1", Tag: "12.1"})
+	if src.Digest != "mariadb@sha256:abc" {
+		t.Errorf("the line's digest is held as %q", src.Digest)
+	}
+}
+
+// While a built data service is held its release's own build stays: once
+// nothing named it, the next pruning anywhere on the server took it, and a
+// sync, an import or --resolved then had no image to give it back on.
+func TestDataHeldKeepsItsOwnBuild(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
+	own := m.runs("database")
+	r2, _ := m.failRun(false, builtDB("app-prod", "12.1"))
+	if heldIn(m.e.rel(r1))["database"] == "" {
+		m.fail("setup: not held")
+	}
+	named := false
+	for n, id := range d.names {
+		if id == own && isBookmark(n) {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("%s's own build %s has no bookmark while held, for any pruning to take: %v", r1, own, d.names)
+	}
+	// Nothing is left of it once its releases go.
+	for _, r := range []string{r2, r1} {
+		if err := m.e.set.Remove(m.e.rel(r)); err != nil {
+			m.fail("remove %s: %v", r, err)
+		}
+	}
+	for n, id := range d.names {
+		if id == own {
+			t.Errorf("%s still names its own build once its releases went", n)
+		}
+	}
+}
+
+// A held service compose no longer gives keeps its hold when its own build
+// is gone, as derive does: a copy's check does not refuse what its landing
+// goes through.
+func TestDataCopyNeedsAgreesWithDerive(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	r1, _ := m.release(false, builtDB("app-prod", "11.8"))
+	own := m.runs("database")
+	m.failRun(false, builtDB("app-prod", "12.1"))
+	delete(d.images, own)
+	for n, id := range d.names {
+		if id == own {
+			delete(d.names, n)
+		}
+	}
+	m.e.svcs[r1] = []Service{proxySvc}
+	l := m.e.set.ImportLanding("", "database")
+	if err := m.e.set.CheckLanding(m.e.rel(r1), l); err != nil {
+		m.fail("the check: %v\n%s", err, out.String())
+	}
+	if err := m.e.set.Land(m.base(), m.e.rel(r1), l); err != nil {
+		m.fail("the landing: %v\n%s", err, out.String())
 	}
 }

@@ -285,3 +285,25 @@ func TestNoCodeMarkedVariablesNeedAnotherImage(t *testing.T) {
 		}
 	}
 }
+
+// An import's mark is timed at its latest write, so --resolved keeps only a
+// window that landed since; a sync's keeps its first time.
+func TestImportMarkTimesItsLatestWrite(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	path := filepath.Join(base, remote.SyncIncompleteFile)
+	write(t, path, "2026-01-01 00:00:00\tapp\t"+remote.IncompleteImport+"\tcut\n", 0o644)
+	if err := markIncomplete(base, "app", remote.IncompleteImport, "cut", false); err != nil {
+		t.Fatal(err)
+	}
+	if m := remote.ParseMark(readString(path)); strings.HasPrefix(m.Since, "2026-01-01") {
+		t.Errorf("a retried import keeps its first time: %q", m.Since)
+	}
+	write(t, path, "2026-01-01 00:00:00\tprod\t"+remote.IncompleteCopy+"\tcut\n", 0o644)
+	if err := markIncomplete(base, "prod", remote.IncompleteCopy, "cut", false); err != nil {
+		t.Fatal(err)
+	}
+	if m := remote.ParseMark(readString(path)); !strings.HasPrefix(m.Since, "2026-01-01") {
+		t.Errorf("a sync's later mark took a new time: %q", m.Since)
+	}
+}

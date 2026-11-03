@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hanoii/devopsy-cli/internal/report"
 )
@@ -78,10 +79,21 @@ func (s *Set) parentData(base, rel, only string, all bool) string {
 	if len(copied) > 0 {
 		lines = max(10, ParentHistoryLines/len(copied))
 	}
+	labels := map[string]Service{}
+	for _, svc := range svcs {
+		labels[svc.Name] = svc
+	}
 	var b strings.Builder
 	for _, svc := range copied {
 		b.WriteString("data\t" + svc + "\n")
-		for _, r := range compact(h.window(svc), lines) {
+		w := h.window(svc)
+		if len(w) == 0 {
+			// No history yet: what its label says, as a local export sends
+			// (timeless: the push compares its checksum with the preflight's).
+			l := labels[svc]
+			w = []ran{ranOn(entry{Ref: l.Ref, Service: svc, DataVersion: l.DataVersion, Tag: l.tag()}, Ran, Image{}, time.Unix(0, 0))}
+		}
+		for _, r := range compact(w, lines) {
 			b.WriteString("ran\t" + r.line())
 		}
 	}
