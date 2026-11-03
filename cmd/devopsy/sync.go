@@ -3288,7 +3288,10 @@ func wipeData(cwd, projectDir, base string) error {
 	}
 	err = set.Wiped(base, remote.ReleaseFile(projectDir, ""))
 	unlock()
-	if err != nil {
+	var holds *images.HoldsError
+	if errors.As(err, &holds) {
+		return fmt.Errorf("the data's history started over, and what runs on it could not be derived again from it: %w", holds.Err)
+	} else if err != nil {
 		return fmt.Errorf("starting the history of the data's images over: %w", err)
 	}
 	// Its owned entries back, as a release left them: finish go creates

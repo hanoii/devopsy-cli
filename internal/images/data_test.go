@@ -1647,6 +1647,25 @@ func TestDataCopyDropsHold(t *testing.T) {
 	uat.up()
 	dropped(uat, "--resolved")
 
+	// The same with no record (Imported) and for a reset's wipe (Wiped):
+	// the history started over, its holds not derived, says so
+	// (HoldsError), never that the history was not written (review round
+	// 4).
+	for i, start := range []func(m *sim) error{
+		func(m *sim) error { return m.e.set.Imported(m.base(), m.e.rel(m.cur), "database") },
+		func(m *sim) error { return m.e.set.Wiped(m.base(), m.e.rel(m.cur)) },
+	} {
+		m := newSim(t, d, fmt.Sprintf("app-gone%d", i), &out)
+		held(m)
+		delete(d.names, "mariadb:11.8")
+		d.fail = map[string]bool{"Pull": true}
+		var he *HoldsError
+		if err := start(m); !errors.As(err, &he) || len(m.history("database")) != 3 {
+			m.fail("a start over with the pull failing: %v, history %v", err, m.history("database"))
+		}
+		d.fail = nil
+	}
+
 	// A reset's wipe starts every history over: the hold goes with it.
 	ci := newSim(t, d, "app-ci", &out)
 	held(ci)

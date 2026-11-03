@@ -276,7 +276,12 @@ func runImages(args []string, color bool) int {
 		if len(rest) != 2 {
 			return imagesUsage(color)
 		}
-		if s.SyncDone(rest[0], rest[1], s.SyncData, os.Getenv(remote.SyncFromTargetEnv)) != nil {
+		// 4: the parent's history taken over, what runs on it not derived
+		// (images.HoldsError), which the holder says apart.
+		var holds *images.HoldsError
+		if err := s.SyncDone(rest[0], rest[1], s.SyncData, os.Getenv(remote.SyncFromTargetEnv)); errors.As(err, &holds) {
+			return 4
+		} else if err != nil {
 			return 1
 		}
 	case "ran":

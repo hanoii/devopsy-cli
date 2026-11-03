@@ -752,9 +752,16 @@ func syncBlock(projectName, failed string, release bool) string {
         status=75
       fi
       if [ "$status" != 0 ]; then
-        # The data is the parent's, its history not: nothing runs on it.
-        devopsy --say error "could not take over the parent's history of its data ($status): the services stay down until a sync completes" || true
-        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "the copy is complete, but the parent's history of its data could not be taken over" >` + incomplete + ` || true
+        # The data is the parent's, its history not, or (4: img
+        # sync-done's images.HoldsError) its history but not what runs on
+        # it: nothing runs on it.
+        if [ "$status" = 4 ]; then
+          sd_why="the copy is complete and its history the parent's, but what runs on it could not be derived again"
+        else
+          sd_why="the copy is complete, but the parent's history of its data could not be taken over"
+        fi
+        devopsy --say error "$sd_why ($status): the services stay down until a sync completes" || true
+        printf '%s\t%s\t` + IncompleteFinish + `\t%s\n' "$(date -u '+%Y-%m-%d %H:%M:%S')" "$` + SyncFromTargetEnv + `" "$sd_why" >` + incomplete + ` || true
         sync_finish partial || true
       fi
     fi

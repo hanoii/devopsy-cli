@@ -514,14 +514,15 @@ func (s *Set) syncDone(base, rel, data, first, source string, labels, running bo
 	return nil
 }
 
-// HoldsError is a copy's take-over of the history written, and the holds
-// it gives not derived again (Rederive failed, Err): the data's window is
-// the copy's, what runs on it not yet what that window allows. An
-// import's --resolved derives them (Resolved).
+// HoldsError is a copy's take-over of the history written (or its start
+// over: Imported, Wiped), and the holds it gives not derived again
+// (Rederive failed, Err): the data's window is the copy's, what runs on
+// it not yet what that window allows. An import's --resolved derives
+// them (Resolved); img sync-done exits 4 for it.
 type HoldsError struct{ Err error }
 
 func (e *HoldsError) Error() string {
-	return "the history was taken over, and its holds could not be derived again: " + e.Err.Error()
+	return "the data's history was written, and what runs on it could not be derived again from it: " + e.Err.Error()
 }
 
 func (e *HoldsError) Unwrap() error { return e.Err }
@@ -572,7 +573,10 @@ func (s *Set) Imported(base, rel, service string) error {
 	if err := append(h, r).write(base); err != nil {
 		return err
 	}
-	return s.Rederive(base, rel)
+	if err := s.Rederive(base, rel); err != nil {
+		return &HoldsError{Err: err}
+	}
+	return nil
 }
 
 // Wiped starts every data service's history over, once a reset wiped
@@ -604,7 +608,10 @@ func (s *Set) Wiped(base, rel string) error {
 			return err
 		}
 	}
-	return s.Rederive(base, rel)
+	if err := s.Rederive(base, rel); err != nil {
+		return &HoldsError{Err: err}
+	}
+	return nil
 }
 
 // Resolved is Imported for --resolved, since the time of the import's

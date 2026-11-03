@@ -1272,3 +1272,44 @@ func TestImportLostBeforeWriteSays(t *testing.T) {
 		t.Errorf("an import whose connection was lost before its first write (%d) said nothing of what happened:\n%s", code, errs)
 	}
 }
+
+// A complete sync whose take-over of the parent's history was written,
+// its holds not derived (the child's own name gone and the registry out
+// of reach), says so and marks the child so, never that the history could
+// not be taken over (review round 4).
+func TestSyncHoldsNotDerived(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	s.releaseProd(nil)
+	if out, code := s.run(nil, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("dev's release (%d):\n%s", code, out)
+	}
+	prod, dev := filepath.Join(s.root, "shop", "prod"), filepath.Join(s.root, "shop", "dev")
+	// Each listing's app line replaced, its other services kept.
+	setApp := func(list, line string) {
+		t.Helper()
+		var ls []string
+		for _, l := range strings.SplitAfter(readString(list), "\n") {
+			if f := strings.Split(l, "\t"); len(f) > 2 && f[2] == "app" {
+				l = line
+			}
+			ls = append(ls, l)
+		}
+		write(t, list, strings.Join(ls, ""), 0o644)
+	}
+	setApp(releaseFile(t, filepath.Join(prod, "current"), images.ListFile), "shop-prod-app\tsha256:own\tapp\tpulled\tshop-prod-app@sha256:own\t\t\t11.8\tlatest\n")
+	write(t, filepath.Join(prod, images.HistoryFile), "1\tapp\tran\tshop-prod-app\tsha256:own\tshop-prod-app@sha256:own\t11.8\tlatest\n", 0o644)
+	// dev held on 12.1, its own 11.8.
+	current := filepath.Join(dev, "current")
+	setApp(releaseFile(t, current, images.ListFile), "shop-dev-app\tsha256:twelve\tapp\tpulled\tshop-dev-app@sha256:twelve\t\t\t12.1\tlatest\tshop-dev-app\tsha256:own\t\tshop-dev-app@sha256:own\t11.8\tlatest\n")
+	write(t, releaseFile(t, current, images.ComposeFile), "services:\n  \"app\":\n    image: \"shop-dev-app@sha256:twelve\"\n    labels:\n      \"devopsy.digest\": \"shop-dev-app@sha256:twelve\"\n      \"devopsy.held\": \"2\"\n", 0o644)
+	write(t, filepath.Join(dev, images.HistoryFile), "1\tapp\tran\tshop-dev-app\tsha256:own\tshop-dev-app@sha256:own\t11.8\tlatest\n2\tapp\tran\tshop-dev-app\tsha256:twelve\tshop-dev-app@sha256:twelve\t12.1\tlatest\n", 0o644)
+	gone := []string{"FAKE_IMAGES=sha256:own=shop-dev-app@sha256:own sha256:twelve=shop-dev-app@sha256:twelve", "FAIL_PULL=1"}
+	out, code := s.run(gone, "@dev", "--sync", "--yes")
+	if code == 0 || !strings.Contains(out, "the copy is complete and its history the parent's, but what runs on it could not be derived again") || strings.Contains(out, "could not take over the parent's history") {
+		t.Fatalf("a sync with its holds not derived (%d):\n%s", code, out)
+	}
+	if _, _, mc, why := remote.ParseIncomplete(readString(filepath.Join(dev, remote.SyncIncompleteFile))); mc != remote.IncompleteFinish || !strings.Contains(why, "what runs on it could not be derived again") {
+		t.Errorf("the mark: %q", readString(filepath.Join(dev, remote.SyncIncompleteFile)))
+	}
+}
