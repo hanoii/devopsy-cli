@@ -950,6 +950,30 @@ func TestSyncReset(t *testing.T) {
 	}
 }
 
+// A reset wipes every entry and volume, so every data service's history
+// starts over, the ones the copy writes nothing for included (here db,
+// devopsy.data.copy=none): its data is gone, and a later lower label is
+// no data's (review: the reset kept db's window, and the release after it
+// was refused for data that no longer existed).
+func TestSyncResetStartsHistoriesOver(t *testing.T) {
+	t.Parallel()
+	s := newSyncSetup(t)
+	env := []string{"FAKE_DB=keep", "FAKE_DB_VERSION=12"}
+	s.releaseProd(env)
+	if out, code := s.run(env, "@dev", "--release-no-sync"); code != 0 {
+		t.Fatalf("release (%d):\n%s", code, out)
+	}
+	dev := filepath.Join(s.root, "shop", "dev")
+	history := filepath.Join(dev, images.HistoryFile)
+	write(t, history, "1\tdb\tran\tmariadb:12\tsha256:twelve\tmariadb@sha256:twelve\t12\t12\n", 0o644)
+	if out, code := s.run(env, "@dev", "--reset", "--yes"); code != 0 {
+		t.Fatalf("the reset (%d):\n%s", code, out)
+	}
+	if out, code := s.run([]string{"FAKE_DB=keep", "FAKE_DB_VERSION=11"}, "@dev", "--release-no-sync"); code != 0 {
+		t.Errorf("a release at 11 after the reset (%d), history:\n%s\n%s", code, readString(history), out)
+	}
+}
+
 // A reset whose parent has none of the entries its labels name (a prod
 // that never wrote its storage) copies nothing, so no write ever claims
 // the child: it must not report a reset done with the child's data

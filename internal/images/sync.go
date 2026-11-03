@@ -432,6 +432,35 @@ func (s *Set) Imported(base, rel, service string) error {
 	return append(h, r).write(base)
 }
 
+// Wiped starts every data service's history over, once a reset wiped
+// the environment's data (every entry and volume): the data each
+// described is gone, the ones the copy writes nothing for included (a
+// devopsy.data.copy=none service, one whose entries are all missing on
+// the parent), so the next release adopts their labels (review: a reset
+// kept their windows, and a later lower label was refused for data that
+// no longer existed). The copy's own take over theirs (SyncDone) once it
+// is complete.
+func (s *Set) Wiped(base, rel string) error {
+	h := readHistory(base)
+	changed := false
+	for _, e := range readList(rel) {
+		if e.Service == "" || e.DataVersion == "" {
+			continue
+		}
+		if w := h.window(e.Service); len(w) == 1 && w[0].How == Imported && w[0].Version == "" {
+			continue
+		}
+		r := ranOn(e, Imported, Image{}, s.now())
+		r.How, r.Version, r.Tag = Imported, "", ""
+		h = append(h, r)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return h.write(base)
+}
+
 // Resolved is Imported for --resolved, since the time of the import's
 // mark: nothing when the history's window starts with an import line
 // written since (the import took the export's window, and only what came
