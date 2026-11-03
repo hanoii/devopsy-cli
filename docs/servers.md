@@ -163,7 +163,7 @@ Floating tags (`mariadb:11.8`, `caddy:2-alpine`) and base images get their
 fixes with a release, which pulls them again
 ([Choosing tags](images.md#choosing-tags)). An environment nobody releases
 for weeks keeps what it pulled last. Schedule a release from CI, weekly
-say, with the same restricted key (`devopsy @prod --release` in a
+for example, with the same restricted key (`devopsy @prod --release` in a
 scheduled job).
 
 ## SSH settings

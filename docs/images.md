@@ -195,9 +195,9 @@ one.
 A release or a rollback is refused or accepted before it runs, so it holds
 nothing. The restart after a failed run step is the one place that cannot
 refuse, since it runs on its own, past the switch. There the previous
-release runs on the image the failed release ran on the data, said in the
-release's output and in `--status` (`held on`), until a release fixes
-forward. The failed release's `--accept-image` does not reach the
+release runs on the image the failed release ran on the data, until a
+release fixes forward. The release's output and `--status` (`held on`)
+say so. The failed release's `--accept-image` does not reach the
 restart: it accepted the new image, not the old one back on the new data.
 
 - A full restore of a snapshot taken during such a hold holds the same
@@ -216,7 +216,7 @@ restart: it accepted the new image, not the old one back on the new data.
   database the parent builds ran on an image only the parent's server
   has, so the child runs an image of its own server that the data allows,
   usually the failed release's own. With none, the previous release's own
-  image runs on it, said, until a release fixes forward.
+  image runs on it, with a message, until a release fixes forward.
 
 ## Syncs and imports
 
