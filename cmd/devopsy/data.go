@@ -484,9 +484,9 @@ func localServices(cwd string) ([]images.Service, error) {
 
 // imagesShared takes the server's image lock shared (imagesLockPath),
 // as a sync's img sync-check and sync-done do, for an import's check and
-// take-over of the export's image: a removal elsewhere, which takes it
-// exclusively, then never frees the image between its pull and its
-// bookmark. Waits up to 10 minutes, saying so.
+// take-over of the export's history of its data, and a restore's pulls
+// and bookmarks: a removal elsewhere, which takes it exclusively, then
+// never runs between them. Waits up to 10 minutes, saying so.
 func imagesShared(ctx context.Context) (unlock func(), err error) {
 	deadline := time.Now().Add(10 * time.Minute)
 	for said := false; ; said = true {
@@ -1374,9 +1374,9 @@ func runImport(cwd string, args []string, color bool) int {
 			code = fail(err.Error())
 		}
 	}
-	// Held on the export's image before anything starts on the data:
-	// started as it was, the service would run the image it had on data
-	// another wrote.
+	// The export's history of its data taken over (ImportDone) before
+	// anything starts on it: the data's version is the export's now,
+	// which the next check compares; the service runs its own image.
 	if imgs != nil {
 		unlock, err := imagesShared(context.Background())
 		if err == nil {
@@ -1387,9 +1387,9 @@ func runImport(cwd string, args []string, color bool) int {
 			return fail(err.Error() + ": the import completed, and " + name + "'s history of its data could not be taken over: what it stopped stays down, and the mark until an import of " + name + " completes")
 		}
 	}
-	// Running through the import (devopsy.data.stop never): made again on
-	// the image that wrote its data before what it stopped starts again
-	// on it (an app, on the old image's restart).
+	// Running through the import (devopsy.data.stop never): made again
+	// when its container runs another image than rel's ComposeFile gives
+	// it (another activation's), before what it stopped starts again.
 	if imgs != nil && !slices.Contains(stopped, name) {
 		if err := recreateRunning(cwd, rel, name); err != nil {
 			return fail(err.Error() + ": the import completed, and " + name + " still runs the image it had: the mark stays until an import of " + name + " completes")
@@ -1562,10 +1562,10 @@ func runResolved(cwd, name string) int {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1
 	}
-	// Made again where devopsy's compose file holds a service on another
-	// image than its container's (an import that held it on its export's
-	// failed after): started, the old container would run the old image
-	// on the imported data.
+	// Made again where devopsy's compose file gives a service another
+	// image than its container's (another activation's container):
+	// started, the old container would run its image on the imported
+	// data.
 	if err := restoreServices(cwd, services, false, true, nil); err != nil {
 		report.Fail(fmt.Errorf("%w: the mark stays", err), again)
 		return 1

@@ -3390,12 +3390,11 @@ func restoreServices(cwd string, services []cli.SyncService, create, recreate bo
 			errs = append(errs, err)
 		}
 		start := intersect(stop, exited)
-		// On a complete copy (recreate: a sync's finish go, an import
-		// holding the export's image), a service whose image devopsy's
-		// compose file changed since its container was made (the copy
-		// took over the parent's or the export's image) is made again,
-		// with no other: compose start would run the old image on the new
-		// data. Never otherwise: an abort in a release that syncs
+		// On a complete copy (recreate: a sync's finish go, a complete
+		// import), a service whose image devopsy's compose file changed
+		// since its container was made (another activation's container,
+		// a hold) is made again, with no other: compose start would run
+		// the old image on the new data. Never otherwise: an abort in a release that syncs
 		// restores the child's own data, which the release's images, not
 		// live, must not touch (the release goes back).
 		var again []string
