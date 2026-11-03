@@ -955,8 +955,9 @@ holds nothing; the restart after a failed run step is the one place
 that cannot refuse: it runs on its own, past the switch, so the
 previous release runs on the image the failed one ran on the data,
 said in the release's output and in `--status` (`held on`), until a
-release fixes forward. Its `--accept-image` never reaches the restart:
-it accepted the new image, never the old one back on the new data. A
+release fixes forward. The failed release's `--accept-image` never
+reaches the restart: it accepted the new image, never the old one back
+on the new data. A
 full restore of a snapshot taken during such a hold holds the same way.
 A rollback to a release that was held runs its own image, built again
 when the project builds it, and a `--reload` of one compares the
