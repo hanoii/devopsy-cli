@@ -908,6 +908,48 @@ func TestDataLastResortKeepsMarks(t *testing.T) {
 	}
 }
 
+// The last resort gives a held pulled service its own image back in the
+// shape every other derivation writes for an unheld one: its own
+// digest's label, no image: (compose runs its name) and no mark.
+func TestDataLastResortUnholds(t *testing.T) {
+	t.Parallel()
+	d := newFake()
+	var out bytes.Buffer
+	m := newSim(t, d, "app-prod", &out)
+	d.publish("mariadb:11.8", "I1")
+	r1, _ := m.release(false, db118)
+	d.publish("mariadb:12.1", "J1")
+	m.failRun(false, dbSvc("mariadb:12.1"))
+	if heldIn(m.e.rel(r1))["database"] == "" {
+		m.fail("setup: database not held")
+	}
+	// Accepted back on 11.8, run, then its run step failed and get_images
+	// too: the data's window allows r1's own again.
+	m.e.set.Accept = map[string]bool{"database": true}
+	r3 := m.e.release(db118)
+	if err := m.e.set.Check(m.e.rel(r3)); err != nil {
+		m.fail("r3: %v", err)
+	}
+	m.fetch(m.e.svcs[r3])
+	m.e.set.Record(m.e.rel(r3), m.prev())
+	m.e.set.Accept = nil
+	m.cur = r3
+	m.up()
+	m.e.set.Ran(m.base(), m.e.rel(r3))
+	if err := m.e.set.LastHold(m.e.rel(r1), m.e.rel(r3)); err != nil {
+		m.fail("the last resort: %v", err)
+	}
+	imgs, labels, held := composeFacts(m.e.rel(r1))
+	if imgs["database"] != "" || held["database"] != "" || labels["database"] != "mariadb@I1" || !strings.Contains(out.String(), "database runs "+r1+"'s own image again") {
+		m.fail("devopsy's compose file: images %v, labels %v, held %v", imgs, labels, held)
+	}
+	m.cur = r1
+	m.up()
+	if m.runs("database") != "I1" {
+		m.fail("runs %s, not r1's own", m.runs("database"))
+	}
+}
+
 // The hold survives a fetch: the restart whose own image is gone builds
 // again (ErrGone, then --fetched), which moves a built database's name to
 // the previous release's build, and the hold puts it back on the image

@@ -479,10 +479,11 @@ func (s *Set) unhold(rel string, e, o entry, svc Service, mode string, own map[s
 // ComposeFile without the image lock and without Docker, where a file can
 // write them: a pulled image held by its registry digest, which the run
 // step's up pulls when gone, the image it replaces in the listing
-// recorded (LeftFile) for the next pruning; a pulled own image back by
-// its own digest. A built one, held or given back, needs a name moved,
-// which only Docker does: said, naming the service and the way on, a
-// release that fixes forward. Why (review): the restart went on with
+// recorded (LeftFile) for the next pruning; a pulled own image back as
+// every derivation writes an unheld one (its own digest's DigestLabel and
+// no image, so compose runs its name). A built one, held or given back,
+// needs a name moved, which only Docker does: said, naming the service
+// and the way on, a release that fixes forward. Why (review): the restart went on with
 // target's own ComposeFile, its older image on the data the newer one ran.
 func (s *Set) LastHold(target, against string) error {
 	tid := filepath.Base(target)
