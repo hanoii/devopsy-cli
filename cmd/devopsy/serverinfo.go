@@ -36,7 +36,7 @@ const (
 )
 
 // serverTools are the tools a server needs beyond Docker and devopsy
-// (AGENTS.md, Releases), with what goes without each.
+// (internals/releases.md), with what goes without each.
 var serverTools = []struct{ name, without string }{
 	{"tar", "no release can be uploaded"},
 	{"flock", "nothing that changes an environment runs"},

@@ -10,6 +10,8 @@
 //
 // Commands always run through `current`, so the paths compose stores in
 // containers (bind mounts) stay valid when old releases are pruned.
+//
+// Rules: the Areas index in AGENTS.md.
 package remote
 
 import (

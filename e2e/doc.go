@@ -22,4 +22,6 @@
 // and the network (the image, then images the test projects pull).
 // E2E_KEEP=1 leaves the containers for a look afterwards, all labeled
 // devopsy-e2e=<the run's process id>.
+//
+// Rules: internals/e2e.md.
 package e2e

@@ -1,6 +1,8 @@
 // Package cli decides what a devopsy invocation runs: a project's custom
 // command or `docker compose`. It only builds a Plan; the caller executes it,
 // which keeps this package testable.
+//
+// Rules: the Areas index in AGENTS.md.
 package cli
 
 import (

@@ -1,0 +1,16 @@
+History, not rules: `internals/reload.md` wins where they differ.
+
+- `--reload` was decided 2026-10-27, after the templates each grew a `reload` command (the whoami and drupal11 ones the same `up -d --wait --no-build`) and `--vars set` had no word to apply what it changed.
+- One flag, no `--stop` or `--start` (decided): a flag needs a mechanic of devopsy's behind it; stopping is compose's word, and a stop with a maintenance page is one template's policy (drupal11's `maintenance`).
+- Its own step rather than the run step (decided with the maintainer): a run step may do far more than apply variables (drush deploy) and is not promised to be idempotent; a sync reruns it only because its data moved.
+- Projects whose deploy is what applies their variables (the Traefik template's, the registry's) set `reload: deploy` themselves.
+- Imports read again before the checks pass: a proxy's base domain changed otherwise needed a release of every site.
+- A reload never builds: drupal11's `APP_UID` is a build argument and `user:` and the owner label at once, so `--no-build` left the container running as the new UID on files of the old; never pulls: a project's step without `--pull never` pulled a new name outside a release, held by no bookmark.
+- Review 2: a `--sync`'s holder running the check with the pending inherited variables names `--release-sync` as its fix, since a plain release keeps the child's `inherit.env`, and the next sync was refused again.
+- Review 3: a `--no-code` restore's check under `--with-env` passes the snapshot's stand-ins to compose as `--env-file`, which otherwise read `.devopsy/.env` itself for what the environment leaves unset; a full restore `--with-env` once fetched its images for today's variables, so its release's `.env` and `inherit.env` now link to the snapshot's from its checks to its data step.
+- Reviews 1, 3 and 4: `--vars set` on a plain directory, an environment not released yet or a marked one (and `--inherit` into one) say so, never `--reload`, which refuses there; any value is a release away from applying, so nothing is refused.
+- Rollbacks build again what was built with other values (decided with the maintainer): refusing or warning left the rollback failing, the image's files the old user's and the container the new one; a rollback brings back code, and variables are today's.
+- Review 5: image mode's fetch builds nothing, so the rebuild happens only in build mode; the restart's build failing restarted on the failed release's image under the name, hence `img restore --as-built`.
+- Review 6: the image a rebuild replaced was left without a name and nothing freed it, so the `img prune` after any removal does.
+- A release cut off past its switch is the one activation a reload refuses: every other activation runs a run step or replaces the release (a release, a rollback finishing a cut one, a sync's run step, a `--no-code` restore's run step, which clears a cut release's mark as a sync's does: review 6).
+- `--vars set|unset`'s follow-up (`--check-images --hint`) was decided over refusing: a release can always apply the value, and the instance's and project's files reach several environments, so they get a plain line only.

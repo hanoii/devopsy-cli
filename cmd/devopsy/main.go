@@ -1,5 +1,7 @@
 // Command devopsy is a thin wrapper around `docker compose` for projects that
 // keep their deployment in a .devopsy/ directory. See README.md.
+//
+// Rules: the Areas index in AGENTS.md.
 package main
 
 import (

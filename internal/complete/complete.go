@@ -9,6 +9,8 @@
 // through unchanged: it knows compose's commands, flags and the project's
 // services. devopsy adds a third field, the group, to its own candidates
 // and compose's, so shells that can show it set them apart.
+//
+// Rules: internals/other.md.
 package complete
 
 import (
